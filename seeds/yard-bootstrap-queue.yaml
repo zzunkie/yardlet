@@ -1,0 +1,94 @@
+schema_version: 1
+queue_id: yard-bootstrap-queue
+intent_id: yard-final-plan
+selection_policy:
+  default_order: priority_then_created_at
+  require_planning_gate: false
+  skip_if_blocked: true
+  skip_if_approval_required: true
+
+tasks:
+  - id: YARD-001
+    title: Create Yard product surface and remove user-facing Internal naming
+    state: queued
+    priority: 10
+    risk: low
+    kind: design_refactor
+    preferred_worker: codex
+    acceptance:
+      - New files use Yard as product name.
+      - internal-system remains reference-only, not dependency.
+      - .agents remains canonical repo state.
+
+  - id: YARD-002
+    title: Add canonical .agents schemas and templates
+    state: queued
+    priority: 20
+    risk: medium
+    kind: implementation
+    preferred_worker: codex
+    acceptance:
+      - .agents/yard.yaml template exists.
+      - Intent, queue, policy, worker, run, and result schemas exist.
+      - A schema validation command exists.
+
+  - id: YARD-003
+    title: Build minimal Yard terminal UI shell
+    state: queued
+    priority: 30
+    risk: medium
+    kind: implementation
+    preferred_worker: codex
+    acceptance:
+      - Running yard opens a local terminal UI.
+      - Home, Workers, Queue, New Work, Run, Handoff placeholders exist.
+      - UI reads .agents state and does not require workers to render.
+
+  - id: YARD-004
+    title: Implement zero-key worker guard
+    state: queued
+    priority: 40
+    risk: high
+    kind: safety
+    preferred_worker: claude-code
+    acceptance:
+      - Yard never asks for AI provider API keys.
+      - Worker invocation uses sanitized AI-billing environment.
+      - Ambiguous worker auth stops safely.
+      - UI shows worker readiness and billing safety state.
+
+  - id: YARD-005
+    title: Implement planning gate through hidden worker
+    state: queued
+    priority: 50
+    risk: medium
+    kind: implementation
+    preferred_worker: claude-code
+    acceptance:
+      - New Work request creates an intent contract and initial queue.
+      - Planning questions are limited and high-level.
+      - Planning result can be accepted/edited in the UI.
+
+  - id: YARD-006
+    title: Implement worker packet compiler
+    state: queued
+    priority: 60
+    risk: medium
+    kind: implementation
+    preferred_worker: codex
+    acceptance:
+      - Codex and Claude Code packets differ by worker profile.
+      - Packets include scope, validation, interaction policy, and output schema.
+      - Dry-run packet preview is available.
+
+  - id: YARD-007
+    title: Implement one-task run ledger and evaluator
+    state: queued
+    priority: 70
+    risk: medium
+    kind: implementation
+    preferred_worker: codex
+    acceptance:
+      - Run Next creates .agents/runs/<run-id>.
+      - Worker output, result, validation, evaluation, checkpoint, and handoff are recorded.
+      - Queue state updates based on evaluator result.

@@ -1,0 +1,56 @@
+schema_version: 1
+
+workers:
+  - id: codex
+    kind: cli_worker
+    role_strengths:
+      - focused_implementation
+      - test_driven_bugfix
+      - shell_heavy_repo_changes
+      - local_code_review
+    billing:
+      mode: subscription_backed_only
+    invocation:
+      command: codex
+      supports_noninteractive: true
+      output_contract: files
+    limits:
+      max_wall_minutes: 45
+      max_retries: 1
+
+  - id: claude-code
+    kind: cli_worker
+    role_strengths:
+      - planning_gate
+      - ambiguity_reduction
+      - acceptance_criteria
+      - review
+      - handoff_quality
+    billing:
+      mode: subscription_backed_only
+    invocation:
+      command: claude
+      supports_noninteractive: true
+      output_contract: json_or_files
+    limits:
+      max_wall_minutes: 45
+      max_retries: 1
+
+# Default routing. One primary worker per normal task; add a second only when
+# risk or repeated failure justifies the usage cost.
+routing:
+  planning_gate:
+    primary: claude-code
+    fallback: codex
+  implementation:
+    primary: codex
+    fallback: claude-code
+  review_or_handoff:
+    primary: claude-code
+    fallback: codex
+  failed_validation_repair:
+    primary: codex
+    fallback: claude-code
+  ambiguous_scope:
+    primary: claude-code
+    fallback: none

@@ -1,0 +1,19 @@
+schema_version: 1
+
+# Research is an evidence tool, not a product manager. It is allowed when
+# needed but must stay locked to the current intent.
+allowed: when_needed
+mode: intent_locked
+
+# Each research event should record this shape (written into run evidence).
+event_template:
+  research_question: ""
+  source_or_anchor: ""
+  used_for: ""
+  decision_impact: ""
+  scope_impact: none        # none | planning_update_required | approval_required
+  drift_detected: false
+
+# An adjacent idea discovered during research becomes a candidate queue item,
+# never a silent expansion of the current task.
+adjacent_idea_handling: record_as_candidate

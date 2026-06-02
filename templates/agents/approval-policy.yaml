@@ -1,0 +1,24 @@
+schema_version: 1
+
+# Approval state machine: not_required -> required -> requested
+#   -> approved_once | denied | expired
+states:
+  - not_required
+  - required
+  - requested
+  - approved_once
+  - denied
+  - expired
+
+# Actions that always require explicit user approval before a worker runs them.
+gated_actions:
+  - production_access
+  - destructive_command
+  - network_mutation
+  - deploy_publish_send
+  - scope_expansion
+  - real_external_api_validation
+  - secret_access
+
+# Approvals are single-use by default; re-asking is required for a new run.
+default_grant: approved_once

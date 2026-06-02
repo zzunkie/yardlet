@@ -1,0 +1,42 @@
+schema_version: 1
+local_tools:
+  shell:
+    allowed: true
+    approval_required_patterns:
+      - "rm -rf"
+      - "sudo"
+      - "git push"
+      - "deploy"
+      - "terraform apply"
+
+  local_db:
+    allowed: true
+    default_mode: read_only
+    allowed_environments:
+      - dev
+      - test
+      - fixture
+    forbidden_environments:
+      - prod
+
+  browser:
+    allowed: true
+    mode: local_or_sandbox
+
+  computer_use:
+    allowed: true
+    mode: local_sandbox
+    forbidden_actions:
+      - purchase
+      - account_change
+      - external_submit_without_approval
+
+network:
+  default: restricted
+  allowed_for:
+    - official_docs
+    - dependency_docs
+    - issue_research
+  approval_required_for:
+    - external_mutation
+    - real_api_validation
