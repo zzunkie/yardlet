@@ -21,27 +21,40 @@ use crate::schemas::WorkerProfile;
 
 /// How a given worker turns a packet file into a subprocess command.
 ///
-/// NOTE: these argument shapes are a first, unverified mapping of the Codex and
-/// Claude Code non-interactive CLIs. They are intentionally isolated here so a
-/// single adapter edit fixes flag drift without touching orchestration. Verify
-/// against the installed CLI versions before relying on a live round trip.
+/// Argument shapes are isolated here so a single adapter edit fixes flag drift
+/// without touching orchestration. Verified against:
+///   - Codex CLI 0.136 (`codex exec`, prompt read from stdin)
+///   - Claude Code 2.1 (`claude -p`, prompt read from stdin)
+///
+/// Both are non-interactive and need write permission to produce the required
+/// result/handoff artifacts:
+///   - codex: `--sandbox workspace-write` bounds writes to the workspace.
+///   - claude: `--permission-mode acceptEdits` allows edits without prompts.
 pub fn build_command(profile: &WorkerProfile, packet_path: &Path, cwd: &Path) -> Command {
     let bin = &profile.invocation.command;
     let mut cmd = Command::new(bin);
+    // The worker must be able to write its artifacts into the run directory.
+    // Codex's workspace-write sandbox treats the hidden `.agents/` tree as
+    // read-only, so the run dir is added as an explicit writable root.
+    let run_dir = packet_path.parent().unwrap_or(cwd);
     match profile.id.as_str() {
         "codex" => {
-            // codex exec runs non-interactively; the prompt is read from stdin.
-            cmd.arg("exec");
+            cmd.args([
+                "exec",
+                "--sandbox",
+                "workspace-write",
+                "--skip-git-repo-check",
+            ]);
+            cmd.arg("--add-dir").arg(run_dir);
         }
         "claude-code" => {
-            // claude -p prints a single non-interactive response.
-            cmd.arg("-p");
+            cmd.args(["-p", "--permission-mode", "acceptEdits"]);
+            cmd.arg("--add-dir").arg(run_dir);
         }
         _ => {}
     }
     cmd.current_dir(cwd);
     cmd.env_clear();
-    let _ = packet_path; // packet is fed via stdin by the caller
     cmd
 }
 
