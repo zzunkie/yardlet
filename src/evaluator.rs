@@ -116,3 +116,44 @@ fn decide_state(reported: &str, all_passed: bool, result: Option<&RunResult>) ->
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_result() -> RunResult {
+        RunResult {
+            schema_version: 1,
+            run_id: "r".into(),
+            task_id: "t".into(),
+            status: "partial".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: String::new(),
+        }
+    }
+
+    #[test]
+    fn done_requires_all_checks_passing() {
+        assert_eq!(decide_state("done", true, None), TaskState::Done);
+        // claimed done but evidence incomplete -> not trusted
+        assert_eq!(decide_state("done", false, None), TaskState::Failed);
+    }
+
+    #[test]
+    fn non_done_states_map_safely() {
+        assert_eq!(decide_state("partial", true, None), TaskState::Queued);
+        assert_eq!(decide_state("blocked", true, None), TaskState::Blocked);
+        assert_eq!(decide_state("needs_user", true, None), TaskState::NeedsUser);
+        assert_eq!(decide_state("failed", true, None), TaskState::Failed);
+    }
+
+    #[test]
+    fn unknown_status_depends_on_evidence() {
+        assert_eq!(decide_state("weird", true, None), TaskState::Failed);
+        let r = dummy_result();
+        assert_eq!(decide_state("weird", true, Some(&r)), TaskState::Blocked);
+    }
+}

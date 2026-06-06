@@ -170,7 +170,10 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
     }
     println!("Planning: {request}\n");
     let report = crate::planner::run_planning(&ws, &request, args.worker.as_deref())?;
-    println!("planning worker: {}  ·  run: {}", report.worker_id, report.run_id);
+    println!(
+        "planning worker: {}  ·  run: {}",
+        report.worker_id, report.run_id
+    );
     for line in &report.lines {
         println!("{line}");
     }

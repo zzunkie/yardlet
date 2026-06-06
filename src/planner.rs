@@ -123,8 +123,8 @@ pub fn run_planning(
             run_dir_rel
         )
     })?;
-    let plan: PlanningResult = serde_json::from_str(&raw)
-        .with_context(|| format!("parsing {}", result_path.display()))?;
+    let plan: PlanningResult =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", result_path.display()))?;
 
     if plan.summary.trim().is_empty() || plan.tasks.is_empty() {
         bail!(

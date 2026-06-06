@@ -158,10 +158,16 @@ pub fn compile_planning(request: &str, repo: &RepoSummary, run_dir_rel: &str) ->
     p.push_str("## Local environment (evidence, not a task list)\n\n");
     p.push_str(&format!("- root: `{}`\n", repo.root));
     if !repo.package_managers.is_empty() {
-        p.push_str(&format!("- package managers: {}\n", repo.package_managers.join(", ")));
+        p.push_str(&format!(
+            "- package managers: {}\n",
+            repo.package_managers.join(", ")
+        ));
     }
     if !repo.test_commands.is_empty() {
-        p.push_str(&format!("- test commands: {}\n", repo.test_commands.join(", ")));
+        p.push_str(&format!(
+            "- test commands: {}\n",
+            repo.test_commands.join(", ")
+        ));
     }
     p.push_str(&format!("- top level: {}\n\n", repo.top_level.join(", ")));
 

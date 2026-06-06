@@ -247,7 +247,10 @@ mod tests {
             ("HOME".to_string(), "/home/u".to_string()),
             ("ANTHROPIC_API_KEY".to_string(), "sk-secret2".to_string()),
         ];
-        let blocked = vec!["OPENAI_API_KEY".to_string(), "ANTHROPIC_API_KEY".to_string()];
+        let blocked = vec![
+            "OPENAI_API_KEY".to_string(),
+            "ANTHROPIC_API_KEY".to_string(),
+        ];
         let out = scrub_env(vars, &blocked);
         let keys: Vec<&str> = out.iter().map(|(k, _)| k.as_str()).collect();
         assert!(keys.contains(&"PATH"));

@@ -326,3 +326,53 @@ pub struct ValidationResult {
     #[serde(default)]
     pub failures: Vec<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::yaml;
+
+    #[test]
+    fn parses_seed_style_queue() {
+        let src = r#"
+schema_version: 1
+queue_id: q
+tasks:
+  - id: YARD-001
+    title: first
+    state: queued
+    priority: 10
+    preferred_worker: codex
+    acceptance:
+      - one
+  - id: YARD-002
+    title: second
+    state: done
+    approval:
+      required: true
+"#;
+        let q: WorkQueue = yaml::from_str(src).unwrap();
+        assert_eq!(q.tasks.len(), 2);
+        assert_eq!(q.tasks[0].state, TaskState::Queued);
+        assert_eq!(q.tasks[1].state, TaskState::Done);
+        assert!(!q.tasks[0].approval_required());
+        assert!(q.tasks[1].approval_required());
+        // selection_policy defaults applied when absent
+        assert!(q.selection_policy.skip_if_approval_required);
+    }
+
+    #[test]
+    fn task_state_snake_case_roundtrip() {
+        let t: TaskState = yaml::from_str("needs_user").unwrap();
+        assert_eq!(t, TaskState::NeedsUser);
+        assert_eq!(yaml::to_string(&t).unwrap().trim(), "needs_user");
+    }
+
+    #[test]
+    fn missing_optional_fields_default() {
+        let t: Task = yaml::from_str("id: X\ntitle: T").unwrap();
+        assert_eq!(t.state, TaskState::Queued); // #[default]
+        assert_eq!(t.priority, 0);
+        assert!(t.preferred_worker.is_empty());
+    }
+}

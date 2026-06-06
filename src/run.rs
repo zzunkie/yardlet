@@ -245,3 +245,76 @@ fn find_worker<'a>(workers: &'a [WorkerProfile], id: &str) -> Result<&'a WorkerP
         .find(|w| w.id == id)
         .ok_or_else(|| anyhow!("worker '{id}' is not defined in .agents/workers.yaml"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schemas::{SelectionPolicy, Task, WorkQueue};
+
+    fn task(id: &str, state: TaskState, priority: i64, needs_approval: bool) -> Task {
+        Task {
+            id: id.into(),
+            title: id.into(),
+            state,
+            priority,
+            risk: String::new(),
+            kind: String::new(),
+            preferred_worker: String::new(),
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: if needs_approval {
+                Some(crate::yaml::from_str("required: true").unwrap())
+            } else {
+                None
+            },
+            interaction: None,
+        }
+    }
+
+    fn queue(tasks: Vec<Task>) -> WorkQueue {
+        WorkQueue {
+            schema_version: 1,
+            queue_id: "q".into(),
+            intent_id: String::new(),
+            selection_policy: SelectionPolicy::default(),
+            tasks,
+        }
+    }
+
+    fn opts() -> RunOptions {
+        RunOptions {
+            execute: false,
+            worker_override: None,
+        }
+    }
+
+    #[test]
+    fn picks_lowest_priority_queued() {
+        let q = queue(vec![
+            task("A", TaskState::Queued, 30, false),
+            task("B", TaskState::Queued, 10, false),
+            task("C", TaskState::Queued, 20, false),
+        ]);
+        assert_eq!(select_next(&q, &opts()).unwrap(), Some(1)); // B, priority 10
+    }
+
+    #[test]
+    fn skips_non_queued_and_approval_required() {
+        let q = queue(vec![
+            task("done", TaskState::Done, 5, false),
+            task("gated", TaskState::Queued, 1, true), // skipped: needs approval
+            task("ready", TaskState::Queued, 40, false),
+        ]);
+        assert_eq!(select_next(&q, &opts()).unwrap(), Some(2)); // ready
+    }
+
+    #[test]
+    fn none_when_no_eligible() {
+        let q = queue(vec![
+            task("a", TaskState::Done, 1, false),
+            task("b", TaskState::Blocked, 2, false),
+        ]);
+        assert_eq!(select_next(&q, &opts()).unwrap(), None);
+    }
+}

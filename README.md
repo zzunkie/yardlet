@@ -22,25 +22,46 @@ User
 
 Yard core does **not** require, request, store, or call AI provider API keys. It drives already-installed, subscription-backed worker CLIs. If no safe local worker is ready, Yard stops with a clear readiness message. It never asks for an API key and never silently falls back to a provider API.
 
-## Status
+## The loop
 
-Early scaffold. The deterministic surfaces run today:
+```bash
+yard init                       # scaffold .agents/ state
+yard new "add admin order search with status, email, and date filters"
+yard queue                      # review the planned tasks
+yard run --next --execute       # run the next task through a hidden worker
+yard handoff                    # read the teammate-readable summary
+yard                            # or do it all from the terminal UI
+```
 
-- `yard init` creates canonical `.agents/` state from templates.
-- `yard status [--json]` reports workspace, intent, and queue state.
-- `yard worker status` probes worker readiness and zero-key billing safety.
-- `yard inspect repo [--json]` gathers cheap deterministic local evidence.
-- `yard packet --task <id> --worker <codex|claude-code> [--dry-run]` compiles a worker-specific task packet.
-- `yard` (no args) opens the terminal UI (read-only Home for now).
+A one-sentence request becomes an intent contract plus a bounded task queue;
+each task runs through a hidden worker, is checked by a deterministic
+evaluator, and leaves a checkpoint and handoff under `.agents/runs/`.
 
-Worker invocation, the planning gate, the evaluator, and compact/handoff are wired as modules and grow from here.
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `yard` | Open the terminal UI (Home / New Work / Handoff). |
+| `yard init [--force]` | Scaffold canonical `.agents/` state. |
+| `yard new "<request>" [--worker <id>]` | Plan a request into an intent contract + queue. |
+| `yard queue` | List the work queue. |
+| `yard status [--json]` | Workspace, intent, queue, and worker summary. |
+| `yard worker status` | Worker readiness and zero-key billing safety. |
+| `yard inspect repo [--json]` | Cheap deterministic local evidence. |
+| `yard packet --task <id> --worker <id> [--dry-run]` | Compile a worker packet. |
+| `yard run --next [--execute] [--worker <id>]` | Prepare (default) or run the next task. |
+| `yard handoff` | Print the latest run's handoff. |
+
+`run --next` prepares a run and stops *before* invoking a worker by default,
+because spawning a subscription-backed worker consumes usage. Pass `--execute`
+to actually run it.
 
 ## Build
 
 ```bash
 cargo build
+cargo test
 cargo run -- init
-cargo run -- status
 ```
 
 ## Canonical state
