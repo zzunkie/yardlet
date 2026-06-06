@@ -136,6 +136,83 @@ pub fn compile(inputs: &PacketInputs) -> String {
     p
 }
 
+/// Compile a planning-gate packet: turn a raw natural-language request into a
+/// structured plan written to `planning-result.json` in the run directory.
+///
+/// The worker authors only the plan content; Yard owns the canonical
+/// `.agents/intent-contract.yaml` and `.agents/work-queue.yaml` files it
+/// derives from the result. The worker therefore only needs write access to
+/// the run directory.
+pub fn compile_planning(request: &str, repo: &RepoSummary, run_dir_rel: &str) -> String {
+    let mut p = String::new();
+    p.push_str("# Yard planning gate\n\n");
+    p.push_str(
+        "You are a hidden Yard planning worker. Turn the request below into a bounded, \
+         checkable work contract. Do NOT implement anything in this run.\n\n",
+    );
+
+    p.push_str("## Request (verbatim)\n\n");
+    p.push_str(request);
+    p.push_str("\n\n");
+
+    p.push_str("## Local environment (evidence, not a task list)\n\n");
+    p.push_str(&format!("- root: `{}`\n", repo.root));
+    if !repo.package_managers.is_empty() {
+        p.push_str(&format!("- package managers: {}\n", repo.package_managers.join(", ")));
+    }
+    if !repo.test_commands.is_empty() {
+        p.push_str(&format!("- test commands: {}\n", repo.test_commands.join(", ")));
+    }
+    p.push_str(&format!("- top level: {}\n\n", repo.top_level.join(", ")));
+
+    p.push_str("## Rules\n\n");
+    p.push_str(
+        "- Produce a goal summary, allowed scope, explicit out-of-scope, and a small tree of \
+         checkable acceptance criteria.\n\
+         - Break the work into a few bounded tasks. Each task: title, kind \
+         (research|implementation|review|safety), risk (low|medium|high), preferred_worker \
+         (codex|claude-code), allowed_scope, acceptance.\n\
+         - Do not expand the goal. Keep out-of-scope strict (payments, auth redesign, production \
+         DB, deploy) unless the request demands them.\n\
+         - Ask at most 2 questions, and only about product intent / scope / acceptance priority. \
+         Put them in `questions_for_user`; do NOT block on them, proceed with explicit \
+         assumptions otherwise.\n\
+         - Never ask the user to review code, architecture, or diffs.\n\n",
+    );
+
+    p.push_str("## Required output\n\n");
+    p.push_str(&format!(
+        "Write exactly one file: `{run_dir_rel}/planning-result.json`, matching this shape:\n\n"
+    ));
+    p.push_str(PLANNING_SCHEMA_HINT);
+    p
+}
+
+const PLANNING_SCHEMA_HINT: &str = r#"```json
+{
+  "summary": "One sentence describing the goal in product terms.",
+  "allowed_scope": ["..."],
+  "out_of_scope": ["..."],
+  "acceptance": [
+    { "id": "AC-001", "statement": "...", "evidence": ["..."] }
+  ],
+  "ambiguity": { "score": "low|medium|high", "open_questions": ["..."] },
+  "tasks": [
+    {
+      "id": "YARD-001",
+      "title": "...",
+      "kind": "research|implementation|review|safety",
+      "risk": "low|medium|high",
+      "preferred_worker": "codex|claude-code",
+      "allowed_scope": ["..."],
+      "acceptance": ["..."]
+    }
+  ],
+  "questions_for_user": []
+}
+```
+"#;
+
 enum Style {
     Execution,
     Planning,

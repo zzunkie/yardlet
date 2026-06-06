@@ -143,6 +143,13 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     }
 
     // ---- execute ---------------------------------------------------------
+    if task.approval_required() {
+        return Err(anyhow!(
+            "task {} requires approval before running. Grant approval first; Yard does not \
+             auto-approve gated work.",
+            task.id
+        ));
+    }
     if status.readiness != Readiness::Ready {
         return Err(anyhow!(
             "worker '{worker_id}' is {}: {}\nYard did not call an AI API and did not ask for an API key.",
@@ -150,6 +157,10 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             status.detail
         ));
     }
+    let bin = status
+        .binary_path
+        .clone()
+        .ok_or_else(|| anyhow!("worker '{worker_id}' binary path not resolved"))?;
     let env = guard::sanitized_worker_env(&billing).map_err(|e| anyhow!(e))?;
     let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
 
@@ -159,6 +170,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 
     let outcome = workers::spawn(
         profile,
+        &bin,
         &packet_text,
         &ws.root,
         &env,

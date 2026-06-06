@@ -88,58 +88,90 @@ pub fn present_billing_env(blocked: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Well-known local install locations to fall back to when the PATH-resolved
+/// binary is missing or its `--version` probe fails (e.g. a shell alias or a
+/// wrapper shadows the real CLI in non-interactive shells). These are the
+/// official local install paths for each worker, not host-specific guesses.
+fn fallback_paths(worker_id: &str) -> Vec<PathBuf> {
+    let home = match env::var_os("HOME") {
+        Some(h) => PathBuf::from(h),
+        None => return Vec::new(),
+    };
+    match worker_id {
+        "claude-code" => vec![
+            home.join(".claude/local/claude"),
+            home.join(".claude/bin/claude"),
+        ],
+        "codex" => vec![home.join(".codex/bin/codex")],
+        _ => Vec::new(),
+    }
+}
+
 /// Probe one worker's readiness. Does not invoke any provider API. Version
 /// probing runs the local CLI's own `--version`, which is offline.
+///
+/// Resolution prefers the first candidate whose `--version` succeeds: the
+/// PATH-resolved binary first, then well-known fallback paths. This keeps a
+/// worker usable even when a wrapper shadows the real CLI on PATH.
 pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
     let command = profile.invocation.command.clone();
-    let binary_path = find_binary(&command);
     let billing_env_present = present_billing_env(&billing.blocked_worker_env_names);
 
-    let (readiness, version, detail) = match &binary_path {
-        None => (
-            Readiness::NotReady,
-            None,
-            format!(
-                "worker CLI '{command}' not found on PATH. Install it and log in with a \
-                 subscription-backed account, then retry. Yard did not call an AI API and \
-                 did not ask for an API key."
-            ),
-        ),
-        Some(path) => {
-            // The guard does not validate provider auth (that would risk a
-            // billed call). It runs only the offline `--version` probe. A clean
-            // probe + binary presence is treated as ready, with auth trusted to
-            // the local CLI login. A failed probe means the resolved binary is
-            // wrong or its runtime is broken, so readiness is ambiguous, not
-            // ready, and we stop rather than guess.
-            match read_version(path) {
-                Some(version) => {
-                    let detail = if billing_env_present.is_empty() {
-                        "binary found; version ok; AI-billing env clean; will run with sanitized environment"
-                            .to_string()
-                    } else {
-                        format!(
-                            "binary found; version ok; {} AI-billing env var(s) present in parent \
-                             and will be scrubbed before the worker runs (policy: {})",
-                            billing_env_present.len(),
-                            billing.worker_invocation.ai_billing_env_policy
-                        )
-                    };
-                    (Readiness::Ready, Some(version), detail)
-                }
-                None => (
-                    Readiness::Ambiguous,
-                    None,
-                    format!(
-                        "binary resolved to {} but `{command} --version` failed; the resolved CLI \
-                         or its runtime is unverified. Set an explicit `command:` path in \
-                         .agents/workers.yaml or fix the login, then retry. Yard did not call an \
-                         AI API and did not ask for an API key.",
-                        path.display()
-                    ),
-                ),
-            }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(p) = find_binary(&command) {
+        candidates.push(p);
+    }
+    for fb in fallback_paths(&profile.id) {
+        if is_executable(&fb) && !candidates.contains(&fb) {
+            candidates.push(fb);
         }
+    }
+
+    // Prefer a candidate that passes the offline version probe.
+    let verified = candidates
+        .iter()
+        .find_map(|p| read_version(p).map(|v| (p.clone(), v)));
+
+    let (binary_path, version, readiness, detail) = match verified {
+        Some((path, version)) => {
+            let detail = if billing_env_present.is_empty() {
+                "binary found; version ok; AI-billing env clean; will run with sanitized environment"
+                    .to_string()
+            } else {
+                format!(
+                    "binary found; version ok; {} AI-billing env var(s) present in parent and will \
+                     be scrubbed before the worker runs (policy: {})",
+                    billing_env_present.len(),
+                    billing.worker_invocation.ai_billing_env_policy
+                )
+            };
+            (Some(path), Some(version), Readiness::Ready, detail)
+        }
+        None => match candidates.into_iter().next() {
+            // A binary exists but no candidate passed `--version`: ambiguous.
+            Some(path) => (
+                Some(path.clone()),
+                None,
+                Readiness::Ambiguous,
+                format!(
+                    "binary resolved to {} but `--version` failed; the resolved CLI or its runtime \
+                     is unverified. Set an explicit `command:` path in .agents/workers.yaml or fix \
+                     the login, then retry. Yard did not call an AI API and did not ask for an API key.",
+                    path.display()
+                ),
+            ),
+            // Nothing found anywhere.
+            None => (
+                None,
+                None,
+                Readiness::NotReady,
+                format!(
+                    "worker CLI '{command}' not found on PATH or known install paths. Install it \
+                     and log in with a subscription-backed account, then retry. Yard did not call \
+                     an AI API and did not ask for an API key."
+                ),
+            ),
+        },
     };
 
     WorkerStatus {
@@ -188,14 +220,39 @@ pub fn sanitized_worker_env(billing: &BillingPolicy) -> Result<Vec<(String, Stri
         ));
     }
 
-    let blocked: std::collections::HashSet<&str> = billing
-        .blocked_worker_env_names
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    Ok(scrub_env(env::vars(), &billing.blocked_worker_env_names))
+}
 
-    let env = env::vars()
+/// Remove every blocked variable from an environment iterator. Pure and
+/// independent of the process environment so it can be unit-tested directly.
+pub fn scrub_env<I>(vars: I, blocked: &[String]) -> Vec<(String, String)>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    let blocked: std::collections::HashSet<&str> = blocked.iter().map(|s| s.as_str()).collect();
+    vars.into_iter()
         .filter(|(k, _)| !blocked.contains(k.as_str()))
-        .collect();
-    Ok(env)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrub_removes_only_blocked_names() {
+        let vars = vec![
+            ("PATH".to_string(), "/usr/bin".to_string()),
+            ("OPENAI_API_KEY".to_string(), "sk-secret".to_string()),
+            ("HOME".to_string(), "/home/u".to_string()),
+            ("ANTHROPIC_API_KEY".to_string(), "sk-secret2".to_string()),
+        ];
+        let blocked = vec!["OPENAI_API_KEY".to_string(), "ANTHROPIC_API_KEY".to_string()];
+        let out = scrub_env(vars, &blocked);
+        let keys: Vec<&str> = out.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"PATH"));
+        assert!(keys.contains(&"HOME"));
+        assert!(!keys.contains(&"OPENAI_API_KEY"));
+        assert!(!keys.contains(&"ANTHROPIC_API_KEY"));
+    }
 }

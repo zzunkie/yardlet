@@ -30,14 +30,12 @@ use crate::schemas::WorkerProfile;
 /// result/handoff artifacts:
 ///   - codex: `--sandbox workspace-write` bounds writes to the workspace.
 ///   - claude: `--permission-mode acceptEdits` allows edits without prompts.
-pub fn build_command(profile: &WorkerProfile, packet_path: &Path, cwd: &Path) -> Command {
-    let bin = &profile.invocation.command;
+pub fn build_command(worker_id: &str, bin: &Path, run_dir: &Path, cwd: &Path) -> Command {
     let mut cmd = Command::new(bin);
     // The worker must be able to write its artifacts into the run directory.
     // Codex's workspace-write sandbox treats the hidden `.agents/` tree as
     // read-only, so the run dir is added as an explicit writable root.
-    let run_dir = packet_path.parent().unwrap_or(cwd);
-    match profile.id.as_str() {
+    match worker_id {
         "codex" => {
             cmd.args([
                 "exec",
@@ -72,6 +70,7 @@ pub struct WorkerOutcome {
 /// the zero-key guard; it never injects an AI provider API key.
 pub fn spawn(
     profile: &WorkerProfile,
+    bin: &Path,
     packet: &str,
     cwd: &Path,
     env: &[(String, String)],
@@ -80,8 +79,8 @@ pub fn spawn(
 ) -> Result<WorkerOutcome> {
     use std::io::Write;
 
-    let packet_path = output_log.with_file_name("task-packet.md");
-    let mut cmd = build_command(profile, &packet_path, cwd);
+    let run_dir = output_log.parent().unwrap_or(cwd);
+    let mut cmd = build_command(&profile.id, bin, run_dir, cwd);
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -91,7 +90,7 @@ pub fn spawn(
 
     let mut child = cmd
         .spawn()
-        .with_context(|| format!("spawning worker '{}'", profile.invocation.command))?;
+        .with_context(|| format!("spawning worker '{}'", bin.display()))?;
 
     if let Some(mut stdin) = child.stdin.take() {
         // Best-effort: a worker that ignores stdin will simply not receive it.

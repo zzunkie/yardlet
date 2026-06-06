@@ -28,8 +28,12 @@ pub struct Cli {
 pub enum Command {
     /// Scaffold canonical .agents/ state into this workspace.
     Init(InitArgs),
+    /// Turn a natural-language request into an intent contract + queue.
+    New(NewArgs),
     /// Report workspace, intent, queue, and worker state.
     Status(StatusArgs),
+    /// List the work queue.
+    Queue,
     /// Worker readiness and zero-key billing safety.
     Worker(WorkerArgs),
     /// Gather cheap deterministic local evidence.
@@ -38,6 +42,17 @@ pub enum Command {
     Packet(PacketArgs),
     /// Prepare (and optionally execute) the next bounded task.
     Run(RunArgs),
+    /// Print the latest run's handoff.
+    Handoff,
+}
+
+#[derive(Args)]
+pub struct NewArgs {
+    /// The work request, in a few natural-language sentences.
+    request: Vec<String>,
+    /// Force a specific planning worker (codex | claude-code).
+    #[arg(long)]
+    worker: Option<String>,
 }
 
 #[derive(Args)]
@@ -114,11 +129,14 @@ pub fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         None => launch_tui(&cwd),
         Some(Command::Init(a)) => cmd_init(&cwd, a),
+        Some(Command::New(a)) => cmd_new(&cwd, a),
         Some(Command::Status(a)) => cmd_status(&cwd, a),
+        Some(Command::Queue) => cmd_queue(&cwd),
         Some(Command::Worker(a)) => cmd_worker(&cwd, a),
         Some(Command::Inspect(a)) => cmd_inspect(&cwd, a),
         Some(Command::Packet(a)) => cmd_packet(&cwd, a),
         Some(Command::Run(a)) => cmd_run(&cwd, a),
+        Some(Command::Handoff) => cmd_handoff(&cwd),
     }
 }
 
@@ -142,6 +160,98 @@ fn cmd_init(cwd: &std::path::Path, args: InitArgs) -> Result<()> {
     }
     println!("\nNext: `yard` opens the workbench, `yard worker status` checks workers.");
     Ok(())
+}
+
+fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
+    let ws = state::require_initialized(cwd)?;
+    let request = args.request.join(" ");
+    if request.trim().is_empty() {
+        anyhow::bail!("provide a request, e.g. `yard new \"add admin order search\"`");
+    }
+    println!("Planning: {request}\n");
+    let report = crate::planner::run_planning(&ws, &request, args.worker.as_deref())?;
+    println!("planning worker: {}  ·  run: {}", report.worker_id, report.run_id);
+    for line in &report.lines {
+        println!("{line}");
+    }
+    println!("\nIntent: {}", report.intent_summary);
+    println!("Created {} task(s) in the queue.", report.task_count);
+    if !report.questions.is_empty() {
+        println!("\nQuestions (non-blocking, assumptions were made):");
+        for q in &report.questions {
+            println!("  - {q}");
+        }
+    }
+    println!("\nNext: `yard queue` to review, `yard run --next --execute` to run.");
+    Ok(())
+}
+
+fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
+    let ws = state::require_initialized(cwd)?;
+    let queue = ws.load_queue()?;
+    if queue.tasks.is_empty() {
+        println!("Queue is empty. Run `yard new \"...\"` to create work.");
+        return Ok(());
+    }
+    for t in &queue.tasks {
+        println!(
+            "{} {:<12} {:<48} {:>6}  {}",
+            t.state.glyph(),
+            t.id,
+            truncate(&t.title, 48),
+            t.risk,
+            t.preferred_worker
+        );
+    }
+    Ok(())
+}
+
+fn cmd_handoff(cwd: &std::path::Path) -> Result<()> {
+    let ws = state::require_initialized(cwd)?;
+    let latest = latest_run_dir(&ws.runs_dir());
+    match latest {
+        Some(dir) => {
+            let h = dir.join("handoff.md");
+            if h.is_file() {
+                print!("{}", std::fs::read_to_string(&h)?);
+            } else {
+                println!("Latest run {} has no handoff yet.", dir.display());
+            }
+            Ok(())
+        }
+        None => {
+            println!("No runs yet. Run `yard run --next --execute` first.");
+            Ok(())
+        }
+    }
+}
+
+fn latest_run_dir(runs_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for entry in std::fs::read_dir(runs_dir).ok()?.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let mtime = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        match &newest {
+            Some((t, _)) if *t >= mtime => {}
+            _ => newest = Some((mtime, entry.path())),
+        }
+    }
+    newest.map(|(_, p)| p)
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('\u{2026}');
+        out
+    }
 }
 
 fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {

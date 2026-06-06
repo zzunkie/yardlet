@@ -12,6 +12,7 @@ mod guard;
 mod init;
 mod inspect;
 mod packet;
+mod planner;
 mod run;
 mod schemas;
 mod snapshot;
