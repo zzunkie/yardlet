@@ -6,6 +6,7 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use super::i18n::L;
 use super::{App, Job, Screen};
@@ -225,13 +226,13 @@ fn render_new_work(frame: &mut Frame, app: &App) {
         Paragraph::new(l.newwork_prompt).block(Block::bordered().title(l.newwork_title)),
         chunks[0],
     );
-    let input = format!("{}\u{2588}", app.input);
     frame.render_widget(
-        Paragraph::new(input)
+        Paragraph::new(app.input.as_str())
             .wrap(Wrap { trim: false })
             .block(Block::bordered().title(l.request_title)),
         chunks[1],
     );
+    place_input_cursor(frame, chunks[1], &app.input);
     render_footer(frame, chunks[2], l.footer_newwork);
 }
 
@@ -261,13 +262,13 @@ fn render_answer(frame: &mut Frame, app: &App) {
             .block(Block::bordered().title(format!(" {task_id} {} ", l.asking_word))),
         chunks[0],
     );
-    let input = format!("{}\u{2588}", app.input);
     frame.render_widget(
-        Paragraph::new(input)
+        Paragraph::new(app.input.as_str())
             .wrap(Wrap { trim: false })
             .block(Block::bordered().title(l.your_answer_title)),
         chunks[1],
     );
+    place_input_cursor(frame, chunks[1], &app.input);
     render_footer(frame, chunks[2], l.footer_answer);
 }
 
@@ -293,6 +294,17 @@ fn render_footer(frame: &mut Frame, area: Rect, keys: &str) {
         .block(Block::bordered()),
         area,
     );
+}
+
+/// Position the real terminal cursor at the end of the input so the terminal's
+/// IME composition (Korean/CJK) renders inline, instead of lagging a character.
+/// Width is measured in display columns (Hangul is 2 wide).
+fn place_input_cursor(frame: &mut Frame, area: Rect, input: &str) {
+    let inner_w = (area.width.saturating_sub(2)).max(1) as usize;
+    let w = UnicodeWidthStr::width(input);
+    let row = (w / inner_w) as u16;
+    let col = (w % inner_w) as u16;
+    frame.set_cursor_position((area.x + 1 + col, area.y + 1 + row));
 }
 
 fn truncate(s: &str, max: usize) -> String {

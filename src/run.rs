@@ -33,19 +33,6 @@ pub struct RunOptions {
     pub full_access: bool,
 }
 
-impl RunOptions {
-    /// Plain "run the next queued task" options.
-    pub fn next(execute: bool) -> RunOptions {
-        RunOptions {
-            execute,
-            worker_override: None,
-            target: None,
-            answer: None,
-            full_access: false,
-        }
-    }
-}
-
 pub struct RunReport {
     pub run_id: String,
     pub task_id: String,
@@ -396,7 +383,13 @@ mod tests {
     }
 
     fn opts() -> RunOptions {
-        RunOptions::next(false)
+        RunOptions {
+            execute: false,
+            worker_override: None,
+            target: None,
+            answer: None,
+            full_access: false,
+        }
     }
 
     #[test]

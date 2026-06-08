@@ -19,6 +19,7 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 
 use crate::run::{self, RunOptions};
+use crate::schemas::TaskState;
 use crate::snapshot::Snapshot;
 use crate::state::Workspace;
 
@@ -292,12 +293,44 @@ fn start_planning(app: &mut App) {
 }
 
 fn start_run(app: &mut App) {
+    // Prefer the next queued task; if none, retry the first stuck (blocked/failed)
+    // one so the user is never dead-ended in the TUI.
+    let (has_queued, stuck) = app
+        .snapshot
+        .as_ref()
+        .map(|s| {
+            let has_queued = s.queue.tasks.iter().any(|t| t.state == TaskState::Queued);
+            let stuck = s
+                .queue
+                .tasks
+                .iter()
+                .find(|t| matches!(t.state, TaskState::Blocked | TaskState::Failed))
+                .map(|t| t.id.clone());
+            (has_queued, stuck)
+        })
+        .unwrap_or((false, None));
+
+    let target = if has_queued { None } else { stuck };
+    if !has_queued && target.is_none() {
+        app.toast = Some((true, app.lang.l().nothing_to_run.into()));
+        return;
+    }
+
     let ws = app.ws.clone();
     let lbl = app.lang.l();
     let (via, failed) = (lbl.via_word, lbl.run_failed);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let res = match run::run_next(&ws, &RunOptions::next(true)) {
+        let res = match run::run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                worker_override: None,
+                target,
+                answer: None,
+                full_access: false,
+            },
+        ) {
             Ok(r) => {
                 let tail = r.lines.last().cloned().unwrap_or_default();
                 JobResult {
