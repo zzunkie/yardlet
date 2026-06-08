@@ -397,7 +397,7 @@ const PLANNING_SCHEMA_HINT: &str = r#"```json
       "acceptance": ["..."]
     }
   ],
-  "questions_for_user": []
+  "questions_for_user": ["a short, high-level question — only if something is genuinely ambiguous"]
 }
 ```
 "#;

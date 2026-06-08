@@ -34,7 +34,7 @@ struct PlanningResult {
     #[serde(default)]
     tasks: Vec<PlanTask>,
     #[serde(default)]
-    questions_for_user: Vec<String>,
+    questions_for_user: Vec<PlanQuestion>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -61,6 +61,40 @@ struct PlanTask {
     acceptance: Vec<String>,
     #[serde(default)]
     worker_rationale: Option<String>,
+}
+
+/// A worker may emit `questions_for_user` either as plain strings or as objects
+/// (e.g. `{ "id": ..., "question": ..., "topic": ... }`) when it mirrors the
+/// object style of the `acceptance` hint. Accept both shapes and keep only the
+/// human-readable text — Yard surfaces just the question string.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PlanQuestion {
+    Text(String),
+    Obj {
+        #[serde(default)]
+        question: String,
+        #[serde(default)]
+        statement: String,
+    },
+}
+
+impl PlanQuestion {
+    fn into_text(self) -> String {
+        match self {
+            PlanQuestion::Text(s) => s,
+            PlanQuestion::Obj {
+                question,
+                statement,
+            } => {
+                if !question.trim().is_empty() {
+                    question
+                } else {
+                    statement
+                }
+            }
+        }
+    }
 }
 
 // ---- report ---------------------------------------------------------------
@@ -169,7 +203,12 @@ pub fn run_planning(
         worker_id,
         intent_summary: intent.summary,
         task_count: queue.tasks.len(),
-        questions: plan.questions_for_user,
+        questions: plan
+            .questions_for_user
+            .into_iter()
+            .map(PlanQuestion::into_text)
+            .filter(|q| !q.trim().is_empty())
+            .collect(),
         lines,
     })
 }
@@ -298,4 +337,41 @@ fn pick_ready_worker(
         "no ready planning worker among {tried:?}. Run `yard worker status` to diagnose. \
          Yard did not call an AI API and did not ask for an API key."
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: a worker emitted `questions_for_user` as objects
+    // ({id, question, topic}) mirroring the `acceptance` hint, which used to
+    // crash serde with `invalid type: map, expected a string`. Accept both
+    // object and string shapes and extract the human-readable text.
+    #[test]
+    fn questions_accept_object_or_string_shape() {
+        let json = r#"{
+            "summary": "do a thing",
+            "tasks": [{ "id": "YARD-001", "title": "t" }],
+            "questions_for_user": [
+                { "id": "Q1", "question": "scope ok?", "topic": "scope" },
+                "plain string question",
+                { "id": "Q2", "statement": "fallback to statement" }
+            ]
+        }"#;
+        let plan: PlanningResult =
+            serde_json::from_str(json).expect("both question shapes must parse");
+        let qs: Vec<String> = plan
+            .questions_for_user
+            .into_iter()
+            .map(PlanQuestion::into_text)
+            .collect();
+        assert_eq!(
+            qs,
+            vec![
+                "scope ok?".to_string(),
+                "plain string question".to_string(),
+                "fallback to statement".to_string(),
+            ]
+        );
+    }
 }
