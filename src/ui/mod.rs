@@ -13,7 +13,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
+};
+use ratatui::crossterm::execute;
 
 use crate::run::{self, RunOptions};
 use crate::snapshot::Snapshot;
@@ -93,7 +96,11 @@ pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
     if just_created {
         app.toast = Some((true, app.lang.l().initialized.to_string()));
     }
+    // Enable bracketed paste so pasted text (incl. composed Korean/CJK) arrives
+    // as one Event::Paste instead of being dropped.
+    let _ = execute!(std::io::stdout(), EnableBracketedPaste);
     let result = main_loop(&mut terminal, app);
+    let _ = execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
 }
@@ -116,7 +123,16 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
         if !event::poll(Duration::from_millis(120))? {
             continue;
         }
-        let Event::Key(key) = event::read()? else {
+        let event = event::read()?;
+        // Pasted text (a reliable path for Korean/CJK that raw-mode IME mangles)
+        // goes straight into the active input field.
+        if let Event::Paste(text) = &event {
+            if !app.is_busy() && matches!(app.screen, Screen::NewWork | Screen::Answer) {
+                app.input.push_str(text);
+            }
+            continue;
+        }
+        let Event::Key(key) = event else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
