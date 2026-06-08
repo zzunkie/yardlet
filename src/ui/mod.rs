@@ -5,6 +5,7 @@
 //! background thread so the UI stays responsive; the event loop polls a channel
 //! for completion and animates a spinner meanwhile.
 
+mod i18n;
 mod view;
 
 use std::sync::mpsc::{self, Receiver};
@@ -48,11 +49,20 @@ pub struct App {
     pub job: Job,
     pub toast: Option<(bool, String)>,
     pub handoff_text: String,
+    pub lang: i18n::Lang,
+}
+
+fn lang_of(snapshot: &Option<Snapshot>) -> i18n::Lang {
+    snapshot
+        .as_ref()
+        .map(|s| i18n::detect(&s.config.language, s.intent_summary()))
+        .unwrap_or(i18n::Lang::En)
 }
 
 impl App {
     fn new(ws: Workspace) -> App {
         let snapshot = Snapshot::load(&ws).ok();
+        let lang = lang_of(&snapshot);
         App {
             ws,
             screen: Screen::Home,
@@ -61,11 +71,13 @@ impl App {
             job: Job::Idle,
             toast: None,
             handoff_text: String::new(),
+            lang,
         }
     }
 
     fn reload(&mut self) {
         if let Ok(s) = Snapshot::load(&self.ws) {
+            self.lang = i18n::detect(&s.config.language, s.intent_summary());
             self.snapshot = Some(s);
         }
     }
@@ -79,7 +91,7 @@ pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
     let mut terminal = ratatui::init();
     let mut app = App::new(ws.clone());
     if just_created {
-        app.toast = Some((true, "initialized Yard workspace (.agents/)".to_string()));
+        app.toast = Some((true, app.lang.l().initialized.to_string()));
     }
     let result = main_loop(&mut terminal, app);
     ratatui::restore();
@@ -155,7 +167,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
                 app.toast = None;
                 app.screen = Screen::Answer;
             } else {
-                app.toast = Some((true, "no task is waiting on you".into()));
+                app.toast = Some((true, app.lang.l().no_pending.into()));
             }
         }
         KeyCode::Char('h') => {
@@ -163,7 +175,8 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             app.screen = Screen::Handoff;
         }
         KeyCode::Char('g') if !app.is_busy() => app.reload(),
-        _ if app.is_busy() => app.toast = Some((true, "a worker is running; please wait".into())),
+        KeyCode::Char('l') if !app.is_busy() => toggle_language(app),
+        _ if app.is_busy() => app.toast = Some((true, app.lang.l().busy.into())),
         _ => {}
     }
     false
@@ -190,6 +203,18 @@ fn handle_new_work_key(app: &mut App, code: KeyCode) {
         KeyCode::Char(c) => app.input.push(c),
         _ => {}
     }
+}
+
+/// Flip the UI language between English and Korean and persist it to yard.yaml.
+fn toggle_language(app: &mut App) {
+    if let Ok(mut cfg) = app.ws.load_config() {
+        cfg.language = match app.lang {
+            i18n::Lang::Ko => "en".to_string(),
+            i18n::Lang::En => "ko".to_string(),
+        };
+        let _ = crate::state::save_yaml(&app.ws.config_path(), &cfg);
+    }
+    app.reload();
 }
 
 fn handle_answer_key(app: &mut App, code: KeyCode) {
@@ -223,25 +248,27 @@ fn start_planning(app: &mut App) {
         .as_ref()
         .map(|s| s.planner.clone())
         .unwrap_or_else(|| "worker".into());
+    let lbl = app.lang.l();
+    let (planned_via, tasks_word, failed) = (lbl.planned_via, lbl.tasks_word, lbl.planning_failed);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let res = match crate::planner::run_planning(&ws, &request, None) {
             Ok(r) => JobResult {
                 ok: true,
                 summary: format!(
-                    "Planned via {}: {} ({} tasks)",
+                    "{planned_via} {}: {} ({} {tasks_word})",
                     r.worker_id, r.intent_summary, r.task_count
                 ),
             },
             Err(e) => JobResult {
                 ok: false,
-                summary: format!("Planning failed: {e}"),
+                summary: format!("{failed} {e}"),
             },
         };
         let _ = tx.send(res);
     });
     app.job = Job::Running {
-        label: format!("planning via {planner}"),
+        label: format!("{} {planner}", lbl.run_word),
         started: Instant::now(),
         rx,
     };
@@ -250,6 +277,8 @@ fn start_planning(app: &mut App) {
 
 fn start_run(app: &mut App) {
     let ws = app.ws.clone();
+    let lbl = app.lang.l();
+    let (via, failed) = (lbl.via_word, lbl.run_failed);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let res = match run::run_next(&ws, &RunOptions::next(true)) {
@@ -257,18 +286,18 @@ fn start_run(app: &mut App) {
                 let tail = r.lines.last().cloned().unwrap_or_default();
                 JobResult {
                     ok: true,
-                    summary: format!("{} via {}: {}", r.task_id, r.worker_id, tail),
+                    summary: format!("{} {via} {}: {}", r.task_id, r.worker_id, tail),
                 }
             }
             Err(e) => JobResult {
                 ok: false,
-                summary: format!("Run failed: {e}"),
+                summary: format!("{failed} {e}"),
             },
         };
         let _ = tx.send(res);
     });
     app.job = Job::Running {
-        label: "run next".into(),
+        label: lbl.run_word.into(),
         started: Instant::now(),
         rx,
     };
@@ -276,11 +305,13 @@ fn start_run(app: &mut App) {
 
 fn start_answer(app: &mut App) {
     let Some((task_id, _)) = app.snapshot.as_ref().and_then(|s| s.pending.clone()) else {
-        app.toast = Some((false, "no task to answer".into()));
+        app.toast = Some((false, app.lang.l().no_answer_target.into()));
         return;
     };
     let ws = app.ws.clone();
     let answer = app.input.trim().to_string();
+    let lbl = app.lang.l();
+    let (resumed_via, failed) = (lbl.resumed_via, lbl.answer_failed);
     let (tx, rx) = mpsc::channel();
     let label_task = task_id.clone();
     thread::spawn(move || {
@@ -298,18 +329,18 @@ fn start_answer(app: &mut App) {
                 let tail = r.lines.last().cloned().unwrap_or_default();
                 JobResult {
                     ok: true,
-                    summary: format!("{} resumed via {}: {}", r.task_id, r.worker_id, tail),
+                    summary: format!("{} {resumed_via} {}: {}", r.task_id, r.worker_id, tail),
                 }
             }
             Err(e) => JobResult {
                 ok: false,
-                summary: format!("Answer/resume failed: {e}"),
+                summary: format!("{failed} {e}"),
             },
         };
         let _ = tx.send(res);
     });
     app.job = Job::Running {
-        label: format!("answering {label_task}"),
+        label: format!("{} {label_task}", lbl.run_word),
         started: Instant::now(),
         rx,
     };

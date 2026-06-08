@@ -1,11 +1,13 @@
-//! Screen rendering for the Yard TUI.
+//! Screen rendering for the Yard TUI. All user-visible strings come from the
+//! active language's label table (`super::i18n`).
 
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
+use super::i18n::L;
 use super::{App, Job, Screen};
 use crate::schemas::TaskState;
 use crate::snapshot::Snapshot;
@@ -22,21 +24,22 @@ pub fn render(frame: &mut Frame, app: &App) {
 }
 
 fn render_home(frame: &mut Frame, app: &App) {
+    let l = app.lang.l();
     let area = frame.area();
     let chunks = Layout::vertical([
-        Constraint::Length(6), // header
-        Constraint::Min(4),    // queue
-        Constraint::Length(5), // workers
-        Constraint::Length(3), // status / job
-        Constraint::Length(3), // footer
+        Constraint::Length(6),
+        Constraint::Min(4),
+        Constraint::Length(5),
+        Constraint::Length(3),
+        Constraint::Length(3),
     ])
     .split(area);
 
     match &app.snapshot {
         Some(snap) => {
-            render_header(frame, chunks[0], snap);
-            render_queue(frame, chunks[1], snap);
-            render_workers(frame, chunks[2], snap);
+            render_header(frame, chunks[0], snap, l);
+            render_queue(frame, chunks[1], snap, l);
+            render_workers(frame, chunks[2], snap, l);
         }
         None => {
             let p = Paragraph::new("No workspace state loaded. Run `yard init`.")
@@ -45,50 +48,49 @@ fn render_home(frame: &mut Frame, app: &App) {
         }
     }
     render_status(frame, chunks[3], app);
-    render_footer(
-        frame,
-        chunks[4],
-        "n new   r run next   a answer   h handoff   g refresh   q quit",
-    );
+    render_footer(frame, chunks[4], l.footer_home);
 }
 
-fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot) {
+fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
     let status = Line::from(vec![
-        Span::raw("Status: "),
+        Span::raw(l.status),
         Span::styled(
-            format!("{} running", snap.count(TaskState::Running)),
+            format!("{} {}", snap.count(TaskState::Running), l.s_running),
             Style::default().fg(Color::Yellow),
         ),
         Span::raw(", "),
-        Span::raw(format!("{} queued", snap.count(TaskState::Queued))),
+        Span::raw(format!("{} {}", snap.count(TaskState::Queued), l.s_queued)),
         Span::raw(", "),
         Span::styled(
-            format!("{} needs-you", snap.count(TaskState::NeedsUser)),
+            format!("{} {}", snap.count(TaskState::NeedsUser), l.s_needs),
             Style::default().fg(Color::Magenta),
         ),
         Span::raw(", "),
         Span::styled(
-            format!("{} blocked", snap.count(TaskState::Blocked)),
+            format!("{} {}", snap.count(TaskState::Blocked), l.s_blocked),
             Style::default().fg(Color::Red),
         ),
         Span::raw(", "),
         Span::styled(
-            format!("{} done", snap.count(TaskState::Done)),
+            format!("{} {}", snap.count(TaskState::Done), l.s_done),
             Style::default().fg(Color::Green),
         ),
     ]);
     let lines = vec![
         Line::from(vec![
-            Span::raw("Workspace: "),
+            Span::raw(l.workspace),
             Span::styled(snap.config.product.clone(), Style::default().bold()),
             Span::raw(format!(
-                "   Workers: {} ready   Planner: {}",
+                "   {}: {} {}   {}: {}",
+                l.workers_word,
                 snap.workers_ready(),
+                l.ready_word,
+                l.planner,
                 snap.planner
             )),
         ]),
         Line::from(vec![
-            Span::raw("Intent: "),
+            Span::raw(l.intent),
             Span::styled(
                 snap.intent_summary().to_string(),
                 Style::default().fg(Color::Cyan),
@@ -96,17 +98,17 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot) {
         ]),
         status,
     ];
-    let block = Block::bordered().title(" Yard \u{00b7} Local AI Workbench ");
+    let block = Block::bordered().title(l.app_title);
     frame.render_widget(
         Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
         area,
     );
 }
 
-fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot) {
+fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
     let items: Vec<ListItem> = if snap.tasks().is_empty() {
         vec![ListItem::new(Line::from(Span::styled(
-            "  (queue empty \u{2014} press n to describe new work)",
+            l.queue_empty,
             Style::default().fg(Color::DarkGray),
         )))]
     } else {
@@ -132,19 +134,19 @@ fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot) {
             })
             .collect()
     };
-    let block = Block::bordered().title(format!(" Queue ({}) ", snap.tasks().len()));
+    let block = Block::bordered().title(format!(" {} ({}) ", l.queue_word, snap.tasks().len()));
     frame.render_widget(List::new(items).block(block), area);
 }
 
-fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot) {
+fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
     let items: Vec<ListItem> = snap
         .workers
         .iter()
         .map(|w| {
-            let (glyph, color) = match w.readiness.as_str() {
-                "ready" => ("\u{2713}", Color::Green),
-                "ambiguous" => ("?", Color::Yellow),
-                _ => ("\u{2715}", Color::Red),
+            let (glyph, color, word) = match w.readiness.as_str() {
+                "ready" => ("\u{2713}", Color::Green, l.w_ready),
+                "ambiguous" => ("?", Color::Yellow, l.w_ambiguous),
+                _ => ("\u{2715}", Color::Red, l.w_notready),
             };
             ListItem::new(Line::from(vec![
                 Span::styled(format!(" {glyph} "), Style::default().fg(color)),
@@ -152,21 +154,22 @@ fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot) {
                     format!("{:<14}", w.id),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!("{:<11}", w.readiness), Style::default().fg(color)),
+                Span::styled(format!("{word:<11}"), Style::default().fg(color)),
                 Span::styled(
                     w.version
                         .clone()
-                        .unwrap_or_else(|| "version unknown".into()),
+                        .unwrap_or_else(|| l.version_unknown.to_string()),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]))
         })
         .collect();
-    let block = Block::bordered().title(" Workers \u{00b7} zero-key ");
+    let block = Block::bordered().title(l.workers_title);
     frame.render_widget(List::new(items).block(block), area);
 }
 
 fn render_status(frame: &mut Frame, area: Rect, app: &App) {
+    let l = app.lang.l();
     let line = match &app.job {
         Job::Running { label, started, .. } => {
             let frame_idx = (started.elapsed().as_millis() / 120) as usize % SPINNER.len();
@@ -176,13 +179,15 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
                     Style::default().fg(Color::Yellow).bold(),
                 ),
                 Span::styled(
-                    format!("{label} running ({}s)\u{2026}", started.elapsed().as_secs()),
+                    format!(
+                        "{label} {} ({}{})\u{2026}",
+                        l.run_word,
+                        started.elapsed().as_secs(),
+                        l.sec_unit
+                    ),
                     Style::default().fg(Color::Yellow),
                 ),
-                Span::styled(
-                    "   worker is subscription-backed; no API key used",
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(l.subscription_note, Style::default().fg(Color::DarkGray)),
             ])
         }
         Job::Idle => match &app.toast {
@@ -193,13 +198,13 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
             None => match app.snapshot.as_ref().and_then(|s| s.pending.as_ref()) {
                 Some((id, q)) => Line::from(vec![
                     Span::styled(
-                        format!(" \u{2691} {id} needs you: "),
+                        format!(" \u{2691} {id} {}: ", l.needs_you),
                         Style::default().fg(Color::Magenta).bold(),
                     ),
-                    Span::raw(truncate(if q.is_empty() { "see handoff" } else { q }, 60)),
-                    Span::styled("  (press a)", Style::default().fg(Color::DarkGray)),
+                    Span::raw(truncate(if q.is_empty() { l.see_handoff } else { q }, 60)),
+                    Span::styled(l.press_a, Style::default().fg(Color::DarkGray)),
                 ]),
-                None => Line::from(Span::styled(" idle", Style::default().fg(Color::DarkGray))),
+                None => Line::from(Span::styled(l.idle, Style::default().fg(Color::DarkGray))),
             },
         },
     };
@@ -207,6 +212,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_new_work(frame: &mut Frame, app: &App) {
+    let l = app.lang.l();
     let area = frame.area();
     let chunks = Layout::vertical([
         Constraint::Length(3),
@@ -216,28 +222,26 @@ fn render_new_work(frame: &mut Frame, app: &App) {
     .split(area);
 
     frame.render_widget(
-        Paragraph::new("Describe the work in a few sentences. Yard plans, queues, and runs it.")
-            .block(Block::bordered().title(" New Work ")),
+        Paragraph::new(l.newwork_prompt).block(Block::bordered().title(l.newwork_title)),
         chunks[0],
     );
-
-    let input = format!("{}\u{2588}", app.input); // block cursor
+    let input = format!("{}\u{2588}", app.input);
     frame.render_widget(
         Paragraph::new(input)
             .wrap(Wrap { trim: false })
-            .block(Block::bordered().title(" Request ")),
+            .block(Block::bordered().title(l.request_title)),
         chunks[1],
     );
-
-    render_footer(frame, chunks[2], "Enter plan   Esc cancel");
+    render_footer(frame, chunks[2], l.footer_newwork);
 }
 
 fn render_answer(frame: &mut Frame, app: &App) {
+    let l = app.lang.l();
     let area = frame.area();
     let chunks = Layout::vertical([
-        Constraint::Min(4),    // the question
-        Constraint::Length(5), // your answer
-        Constraint::Length(3), // footer
+        Constraint::Min(4),
+        Constraint::Length(5),
+        Constraint::Length(3),
     ])
     .split(area);
 
@@ -247,37 +251,37 @@ fn render_answer(frame: &mut Frame, app: &App) {
         .and_then(|s| s.pending.clone())
         .unwrap_or_else(|| ("(none)".into(), String::new()));
     let q_body = if question.is_empty() {
-        "(no recorded question — see the handoff)".to_string()
+        l.no_question.to_string()
     } else {
         question
     };
     frame.render_widget(
         Paragraph::new(q_body)
             .wrap(Wrap { trim: true })
-            .block(Block::bordered().title(format!(" {task_id} is asking "))),
+            .block(Block::bordered().title(format!(" {task_id} {} ", l.asking_word))),
         chunks[0],
     );
-
     let input = format!("{}\u{2588}", app.input);
     frame.render_widget(
         Paragraph::new(input)
             .wrap(Wrap { trim: false })
-            .block(Block::bordered().title(" Your answer ")),
+            .block(Block::bordered().title(l.your_answer_title)),
         chunks[1],
     );
-    render_footer(frame, chunks[2], "Enter send & resume   Esc cancel");
+    render_footer(frame, chunks[2], l.footer_answer);
 }
 
 fn render_handoff(frame: &mut Frame, app: &App) {
+    let l = app.lang.l();
     let area = frame.area();
     let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
     frame.render_widget(
         Paragraph::new(app.handoff_text.clone())
             .wrap(Wrap { trim: false })
-            .block(Block::bordered().title(" Handoff \u{00b7} latest run ")),
+            .block(Block::bordered().title(l.handoff_title)),
         chunks[0],
     );
-    render_footer(frame, chunks[1], "Esc/q back");
+    render_footer(frame, chunks[1], l.footer_handoff);
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, keys: &str) {
@@ -286,7 +290,6 @@ fn render_footer(frame: &mut Frame, area: Rect, keys: &str) {
             keys,
             Style::default().fg(Color::DarkGray),
         )))
-        .alignment(Alignment::Left)
         .block(Block::bordered()),
         area,
     );
