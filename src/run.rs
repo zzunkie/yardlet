@@ -193,11 +193,18 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 
     // ---- execute ---------------------------------------------------------
     if task.approval_required() {
-        return Err(anyhow!(
-            "task {} requires approval before running. Grant approval first; Yard does not \
-             auto-approve gated work.",
-            task.id
-        ));
+        if crate::approvals::is_granted(ws, &task.id) {
+            crate::approvals::consume(ws, &task.id)?; // single-use
+            lines.push(format!("approval consumed for {}", task.id));
+        } else {
+            return Err(anyhow!(
+                "task {} requires approval. Run `yard approve {}` first, then \
+                 `yard run --task {} --execute`.",
+                task.id,
+                task.id,
+                task.id
+            ));
+        }
     }
     let resolved = resolved?; // hard stop if no ready worker
     let reason = resolved.reason;

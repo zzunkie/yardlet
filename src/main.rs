@@ -5,6 +5,7 @@
 //! workers. Yard core never requires, requests, stores, or calls AI provider
 //! API keys.
 
+mod approvals;
 mod cli;
 mod compact;
 mod evaluator;

@@ -44,6 +44,8 @@ pub enum Command {
     Run(RunArgs),
     /// Answer a task that is waiting on you, and resume it.
     Answer(AnswerArgs),
+    /// Grant single-use approval to a gated task.
+    Approve(ApproveArgs),
     /// Print the latest run's handoff.
     Handoff,
     /// Review routing telemetry and apply suggested worker preferences.
@@ -67,6 +69,12 @@ enum RoutingCmd {
         #[arg(long)]
         worker: String,
     },
+}
+
+#[derive(Args)]
+pub struct ApproveArgs {
+    /// The task id to approve (single use).
+    task: String,
 }
 
 #[derive(Args)]
@@ -190,6 +198,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Packet(a)) => cmd_packet(&cwd, a),
         Some(Command::Run(a)) => cmd_run(&cwd, a),
         Some(Command::Answer(a)) => cmd_answer(&cwd, a),
+        Some(Command::Approve(a)) => cmd_approve(&cwd, a),
         Some(Command::Handoff) => cmd_handoff(&cwd),
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
     }
@@ -347,6 +356,20 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
     Ok(())
 }
 
+fn cmd_approve(cwd: &std::path::Path, args: ApproveArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let queue = ws.load_queue()?;
+    if !queue.tasks.iter().any(|t| t.id == args.task) {
+        anyhow::bail!("task '{}' not found in the queue", args.task);
+    }
+    crate::approvals::grant(&ws, &args.task)?;
+    println!(
+        "Approved {} (single use). Run it with `yard run --task {} --execute`.",
+        args.task, args.task
+    );
+    Ok(())
+}
+
 fn cmd_handoff(cwd: &std::path::Path) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let latest = latest_run_dir(&ws.runs_dir());
@@ -446,6 +469,17 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         println!(
             "  retry:     yard run --task <id> --execute   (add --full-access if it needs network/installs)"
         );
+    }
+    let needs_approval: Vec<&str> = snap
+        .queue
+        .tasks
+        .iter()
+        .filter(|t| t.approval_required() && !crate::approvals::is_granted(&ws, &t.id))
+        .map(|t| t.id.as_str())
+        .collect();
+    if !needs_approval.is_empty() {
+        println!("\nneeds approval: {}", needs_approval.join(", "));
+        println!("  approve:   yard approve <id>   then  yard run --task <id> --execute");
     }
     let suggestions = crate::review::pending_count(&ws);
     if suggestions > 0 {
