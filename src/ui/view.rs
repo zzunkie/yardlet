@@ -39,8 +39,79 @@ pub fn render(frame: &mut Frame, app: &App) {
         Screen::NewWork => render_new_work(frame, app),
         Screen::Answer => render_answer(frame, app),
         Screen::Settings => render_settings(frame, app),
+        Screen::Monitor => render_monitor(frame, app),
         Screen::Handoff => render_handoff(frame, app),
     }
+}
+
+fn latest_run_dir(runs: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for e in std::fs::read_dir(runs).ok()?.flatten() {
+        if !e.path().is_dir() {
+            continue;
+        }
+        let t = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        if newest.as_ref().map(|(nt, _)| t > *nt).unwrap_or(true) {
+            newest = Some((t, e.path()));
+        }
+    }
+    newest.map(|(_, p)| p)
+}
+
+fn render_monitor(frame: &mut Frame, app: &App) {
+    let l = app.lang.l();
+    let area = safe_area(frame);
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(4),
+        Constraint::Length(3),
+    ])
+    .split(area);
+
+    let dir = latest_run_dir(&app.ws.runs_dir());
+    let header = match &dir {
+        Some(d) => {
+            let yaml = std::fs::read_to_string(d.join("run.yaml")).unwrap_or_default();
+            let field = |k: &str| {
+                yaml.lines()
+                    .find_map(|ln| ln.trim().strip_prefix(k))
+                    .map(|v| v.trim().trim_matches('"').to_string())
+                    .unwrap_or_default()
+            };
+            format!(
+                "{}   task {}   worker {}   [{}]",
+                d.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                field("task_id:"),
+                field("worker:"),
+                field("state:"),
+            )
+        }
+        None => l.monitor_no_runs.to_string(),
+    };
+    frame.render_widget(
+        Paragraph::new(header).block(Block::bordered().title(l.monitor_title)),
+        chunks[0],
+    );
+
+    let body = match &dir {
+        Some(d) => {
+            let log = std::fs::read_to_string(d.join("worker-output.log")).unwrap_or_default();
+            let visible = chunks[1].height.saturating_sub(2) as usize;
+            let lines: Vec<&str> = log.lines().collect();
+            let start = lines.len().saturating_sub(visible);
+            lines[start..].join("\n")
+        }
+        None => String::new(),
+    };
+    frame.render_widget(
+        Paragraph::new(body).block(Block::bordered()),
+        chunks[1],
+    );
+
+    render_footer(frame, chunks[2], l.footer_monitor);
 }
 
 fn render_settings(frame: &mut Frame, app: &App) {

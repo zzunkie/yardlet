@@ -138,6 +138,29 @@ pub fn spawn(
         let _ = stdin.write_all(packet.as_bytes());
     }
 
+    // Stream stdout to the log file as it arrives so a Run Monitor can tail it
+    // live, instead of capturing everything only after the worker exits.
+    let stdout = child.stdout.take();
+    let log_path = output_log.to_path_buf();
+    let reader = thread::spawn(move || {
+        use std::io::Read;
+        let mut file = std::fs::File::create(&log_path).ok();
+        if let Some(mut out) = stdout {
+            let mut buf = [0u8; 4096];
+            loop {
+                match out.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if let Some(f) = file.as_mut() {
+                            let _ = f.write_all(&buf[..n]);
+                            let _ = f.flush();
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     let start = Instant::now();
     let mut timed_out = false;
     let status = loop {
@@ -151,23 +174,19 @@ pub fn spawn(
         }
         thread::sleep(Duration::from_millis(200));
     };
+    let _ = reader.join();
 
-    // Capture whatever the worker emitted.
-    let mut log = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        use std::io::Read;
-        let _ = out.read_to_string(&mut log);
-    }
+    // Append stderr (usually small / errors) once the worker has exited.
     if let Some(mut err) = child.stderr.take() {
         use std::io::Read;
         let mut e = String::new();
         let _ = err.read_to_string(&mut e);
         if !e.is_empty() {
-            log.push_str("\n--- stderr ---\n");
-            log.push_str(&e);
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(output_log) {
+                let _ = write!(f, "\n--- stderr ---\n{e}");
+            }
         }
     }
-    std::fs::write(output_log, &log).ok();
 
     Ok(WorkerOutcome {
         exit_ok: status.success() && !timed_out,

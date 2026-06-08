@@ -31,6 +31,7 @@ pub enum Screen {
     Answer,
     Handoff,
     Settings,
+    Monitor,
 }
 
 /// One editable settings row. `key` routes the value back to the right file:
@@ -233,7 +234,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             Screen::NewWork => handle_new_work_key(&mut app, key.code),
             Screen::Answer => handle_answer_key(&mut app, key.code),
             Screen::Settings => handle_settings_key(&mut app, key.code),
-            Screen::Handoff => {
+            Screen::Handoff | Screen::Monitor => {
                 if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
                     app.screen = Screen::Home;
                 }
@@ -274,6 +275,8 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             app.screen = Screen::Handoff;
         }
         KeyCode::Char('s') if !app.is_busy() => open_settings(app),
+        // Monitor can be opened mid-run to watch the worker's live output.
+        KeyCode::Char('m') => app.screen = Screen::Monitor,
         KeyCode::Char('g') if !app.is_busy() => app.reload(),
         KeyCode::Char('l') if !app.is_busy() => toggle_language(app),
         // Access can be toggled even mid-run; it takes effect on the next task.
