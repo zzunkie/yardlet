@@ -38,8 +38,53 @@ pub fn render(frame: &mut Frame, app: &App) {
         Screen::Home => render_home(frame, app),
         Screen::NewWork => render_new_work(frame, app),
         Screen::Answer => render_answer(frame, app),
+        Screen::Settings => render_settings(frame, app),
         Screen::Handoff => render_handoff(frame, app),
     }
+}
+
+fn render_settings(frame: &mut Frame, app: &App) {
+    let l = app.lang.l();
+    let area = safe_area(frame);
+    let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
+    let items: Vec<ListItem> = match &app.settings {
+        Some(d) => d
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let selected = i == d.sel;
+                let val = if f.value.is_empty() {
+                    "(default)".to_string()
+                } else {
+                    f.value.clone()
+                };
+                let cursor = if selected { "\u{2588}" } else { "" };
+                let marker = if selected { "> " } else { "  " };
+                let lstyle = if selected {
+                    Style::default().fg(Color::Yellow).bold()
+                } else {
+                    Style::default()
+                };
+                let vstyle = if selected {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(marker, lstyle),
+                    Span::styled(format!("{:<20}", f.label), lstyle),
+                    Span::styled(format!("{val}{cursor}"), vstyle),
+                ]))
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    frame.render_widget(
+        List::new(items).block(Block::bordered().title(l.settings_title)),
+        chunks[0],
+    );
+    render_footer(frame, chunks[1], l.footer_settings);
 }
 
 fn render_home(frame: &mut Frame, app: &App) {

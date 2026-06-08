@@ -29,6 +29,33 @@ pub enum Screen {
     NewWork,
     Answer,
     Handoff,
+    Settings,
+}
+
+/// One editable settings row. `key` routes the value back to the right file:
+/// "access"/"language" -> yard.yaml; "model:<id>"/"effort:<id>" -> workers.yaml.
+pub struct Field {
+    pub label: String,
+    pub key: String,
+    pub value: String,
+}
+
+pub struct SettingsDraft {
+    pub fields: Vec<Field>,
+    pub sel: usize,
+}
+
+/// Known cycle options for a field key (empty = free text, e.g. a model name).
+fn field_options(key: &str) -> &'static [&'static str] {
+    if key == "access" {
+        &["sandboxed", "full"]
+    } else if key == "language" {
+        &["auto", "ko", "en"]
+    } else if key.starts_with("effort:") {
+        &["", "low", "medium", "high"]
+    } else {
+        &[]
+    }
 }
 
 pub struct JobResult {
@@ -60,6 +87,7 @@ pub struct App {
     pub toast: Option<(bool, String)>,
     pub progress: Option<String>,
     pub handoff_text: String,
+    pub settings: Option<SettingsDraft>,
     pub lang: i18n::Lang,
 }
 
@@ -83,6 +111,7 @@ impl App {
             toast: None,
             progress: None,
             handoff_text: String::new(),
+            settings: None,
             lang,
         }
     }
@@ -175,6 +204,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             }
             Screen::NewWork => handle_new_work_key(&mut app, key.code),
             Screen::Answer => handle_answer_key(&mut app, key.code),
+            Screen::Settings => handle_settings_key(&mut app, key.code),
             Screen::Handoff => {
                 if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
                     app.screen = Screen::Home;
@@ -215,6 +245,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             app.handoff_text = load_latest_handoff(app);
             app.screen = Screen::Handoff;
         }
+        KeyCode::Char('s') if !app.is_busy() => open_settings(app),
         KeyCode::Char('g') if !app.is_busy() => app.reload(),
         KeyCode::Char('l') if !app.is_busy() => toggle_language(app),
         // Access can be toggled even mid-run; it takes effect on the next task.
@@ -246,6 +277,114 @@ fn handle_new_work_key(app: &mut App, code: KeyCode) {
         KeyCode::Char(c) => app.input.push(c),
         _ => {}
     }
+}
+
+fn open_settings(app: &mut App) {
+    let cfg = app.ws.load_config().ok();
+    let wf = app.ws.load_workers().ok();
+    let mut fields = vec![
+        Field {
+            label: "Access (sandboxed | full)".into(),
+            key: "access".into(),
+            value: cfg
+                .as_ref()
+                .map(|c| c.default_access.clone())
+                .unwrap_or_default(),
+        },
+        Field {
+            label: "Language (auto | ko | en)".into(),
+            key: "language".into(),
+            value: cfg.map(|c| c.language).unwrap_or_default(),
+        },
+    ];
+    if let Some(wf) = wf {
+        for w in wf.workers {
+            fields.push(Field {
+                label: format!("{} model", w.id),
+                key: format!("model:{}", w.id),
+                value: w.model,
+            });
+            fields.push(Field {
+                label: format!("{} effort", w.id),
+                key: format!("effort:{}", w.id),
+                value: w.effort,
+            });
+        }
+    }
+    app.settings = Some(SettingsDraft { fields, sel: 0 });
+    app.screen = Screen::Settings;
+}
+
+fn handle_settings_key(app: &mut App, code: KeyCode) {
+    let Some(d) = app.settings.as_mut() else {
+        app.screen = Screen::Home;
+        return;
+    };
+    match code {
+        KeyCode::Esc | KeyCode::Enter => {
+            save_settings(app);
+            app.screen = Screen::Home;
+        }
+        KeyCode::Up => d.sel = d.sel.saturating_sub(1),
+        KeyCode::Down => {
+            if d.sel + 1 < d.fields.len() {
+                d.sel += 1;
+            }
+        }
+        KeyCode::Char(' ') => {
+            // Cycle through known options for this field, if any.
+            let f = &mut d.fields[d.sel];
+            let opts = field_options(&f.key);
+            if !opts.is_empty() {
+                let next = opts
+                    .iter()
+                    .position(|o| *o == f.value)
+                    .map(|i| (i + 1) % opts.len())
+                    .unwrap_or(0);
+                f.value = opts[next].to_string();
+            } else {
+                f.value.push(' ');
+            }
+        }
+        KeyCode::Backspace => {
+            d.fields[d.sel].value.pop();
+        }
+        KeyCode::Char(c) => d.fields[d.sel].value.push(c),
+        _ => {}
+    }
+}
+
+fn save_settings(app: &mut App) {
+    let Some(draft) = app.settings.take() else {
+        return;
+    };
+    if let Ok(mut cfg) = app.ws.load_config() {
+        for f in &draft.fields {
+            match f.key.as_str() {
+                "access" if f.value == "full" || f.value == "sandboxed" => {
+                    cfg.default_access = f.value.clone()
+                }
+                "language" if !f.value.is_empty() => cfg.language = f.value.clone(),
+                _ => {}
+            }
+        }
+        let _ = crate::state::save_yaml(&app.ws.config_path(), &cfg);
+    }
+    if let Ok(mut wf) = app.ws.load_workers() {
+        for f in &draft.fields {
+            if let Some(id) = f.key.strip_prefix("model:") {
+                if let Some(w) = wf.workers.iter_mut().find(|w| w.id == id) {
+                    w.model = f.value.clone();
+                }
+            } else if let Some(id) = f.key.strip_prefix("effort:") {
+                if let Some(w) = wf.workers.iter_mut().find(|w| w.id == id) {
+                    w.effort = f.value.clone();
+                }
+            }
+        }
+        let _ = crate::state::save_yaml(&app.ws.workers_path(), &wf);
+    }
+    app.reload();
 }
 
 /// Flip the default worker access (sandboxed <-> full) and persist it. Safe to
