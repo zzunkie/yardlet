@@ -211,17 +211,34 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
                 format!(" {msg}"),
                 Style::default().fg(if *ok { Color::Cyan } else { Color::Red }),
             )),
-            None => match app.snapshot.as_ref().and_then(|s| s.pending.as_ref()) {
-                Some((id, q)) => Line::from(vec![
-                    Span::styled(
-                        format!(" \u{2691} {id} {}: ", l.needs_you),
-                        Style::default().fg(Color::Magenta).bold(),
-                    ),
-                    Span::raw(truncate(if q.is_empty() { l.see_handoff } else { q }, 60)),
-                    Span::styled(l.press_a, Style::default().fg(Color::DarkGray)),
-                ]),
-                None => Line::from(Span::styled(l.idle, Style::default().fg(Color::DarkGray))),
-            },
+            None => {
+                let snap = app.snapshot.as_ref();
+                if let Some((id, q)) = snap.and_then(|s| s.pending.as_ref()) {
+                    Line::from(vec![
+                        Span::styled(
+                            format!(" \u{2691} {id} {}: ", l.needs_you),
+                            Style::default().fg(Color::Magenta).bold(),
+                        ),
+                        Span::raw(truncate(if q.is_empty() { l.see_handoff } else { q }, 60)),
+                        Span::styled(l.press_a, Style::default().fg(Color::DarkGray)),
+                    ])
+                } else if let Some(s) = snap.filter(|s| !s.approvals_needed.is_empty()) {
+                    Line::from(vec![
+                        Span::styled(
+                            format!(
+                                " \u{2691} {} {} ({}) ",
+                                s.approvals_needed.len(),
+                                l.approval_needed,
+                                s.approvals_needed.join(", ")
+                            ),
+                            Style::default().fg(Color::Magenta).bold(),
+                        ),
+                        Span::styled("(p)", Style::default().fg(Color::DarkGray)),
+                    ])
+                } else {
+                    Line::from(Span::styled(l.idle, Style::default().fg(Color::DarkGray)))
+                }
+            }
         },
     };
     frame.render_widget(Paragraph::new(line).block(Block::bordered()), area);

@@ -348,7 +348,9 @@ pub fn run_auto<F: FnMut(&str)>(
         let n = attempts.entry(task_id.clone()).or_default();
         *n += 1;
         if *n > 2 {
-            emit(format!("stopped: {task_id} keeps coming back \u{2014} needs you"));
+            emit(format!(
+                "stopped: {task_id} keeps coming back \u{2014} needs you"
+            ));
             break;
         }
 
@@ -369,7 +371,10 @@ pub fn run_auto<F: FnMut(&str)>(
         match state {
             TaskState::Done | TaskState::Queued => continue,
             TaskState::Blocked => {
-                emit(format!("stopped: {} blocked \u{2014} see `yard handoff`", report.task_id));
+                emit(format!(
+                    "stopped: {} blocked \u{2014} see `yard handoff`",
+                    report.task_id
+                ));
                 break;
             }
             TaskState::NeedsUser => {
@@ -380,7 +385,10 @@ pub fn run_auto<F: FnMut(&str)>(
                 break;
             }
             TaskState::Failed => {
-                emit(format!("stopped: {} failed \u{2014} needs you", report.task_id));
+                emit(format!(
+                    "stopped: {} failed \u{2014} needs you",
+                    report.task_id
+                ));
                 break;
             }
             TaskState::Running => break,

@@ -16,6 +16,8 @@ pub struct Snapshot {
     pub planner: String,
     /// (task id, question) for the first task waiting on the user, if any.
     pub pending: Option<(String, String)>,
+    /// Task ids that are gated and not yet granted approval.
+    pub approvals_needed: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -68,6 +70,13 @@ impl Snapshot {
                 (t.id.clone(), q)
             });
 
+        let approvals_needed = queue
+            .tasks
+            .iter()
+            .filter(|t| t.approval_required() && !crate::approvals::is_granted(ws, &t.id))
+            .map(|t| t.id.clone())
+            .collect();
+
         Ok(Snapshot {
             config,
             intent,
@@ -75,6 +84,7 @@ impl Snapshot {
             workers,
             planner,
             pending,
+            approvals_needed,
         })
     }
 

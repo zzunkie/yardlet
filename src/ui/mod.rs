@@ -196,6 +196,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         }
         KeyCode::Char('r') if !app.is_busy() => start_run(app),
         KeyCode::Char('A') if !app.is_busy() => start_auto(app),
+        KeyCode::Char('p') if !app.is_busy() => start_approve(app),
         KeyCode::Char('a') if !app.is_busy() => {
             let has_pending = app
                 .snapshot
@@ -368,6 +369,53 @@ fn start_run(app: &mut App) {
         };
         let _ = tx.send(JobMsg::Done(res));
     });
+    app.job = Job::Running {
+        label: lbl.run_word.into(),
+        started: Instant::now(),
+        rx,
+    };
+}
+
+fn start_approve(app: &mut App) {
+    let Some(id) = app
+        .snapshot
+        .as_ref()
+        .and_then(|s| s.approvals_needed.first().cloned())
+    else {
+        app.toast = Some((true, app.lang.l().no_approval.into()));
+        return;
+    };
+    let _ = crate::approvals::grant(&app.ws, &id);
+    let ws = app.ws.clone();
+    let lbl = app.lang.l();
+    let (via, failed) = (lbl.via_word, lbl.run_failed);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let res = match run::run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                worker_override: None,
+                target: Some(id.clone()),
+                answer: None,
+                full_access: false,
+            },
+        ) {
+            Ok(r) => {
+                let tail = r.lines.last().cloned().unwrap_or_default();
+                JobResult {
+                    ok: true,
+                    summary: format!("{} {via} {}: {}", r.task_id, r.worker_id, tail),
+                }
+            }
+            Err(e) => JobResult {
+                ok: false,
+                summary: format!("{failed} {e}"),
+            },
+        };
+        let _ = tx.send(JobMsg::Done(res));
+    });
+    app.progress = None;
     app.job = Job::Running {
         label: lbl.run_word.into(),
         started: Instant::now(),
