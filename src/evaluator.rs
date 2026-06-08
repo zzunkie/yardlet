@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::schemas::{RunResult, Task, TaskState};
+use crate::schemas::{Changes, RunResult, Task, TaskState};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Check {
@@ -90,6 +90,16 @@ pub fn evaluate(run_dir: &Path, run_id: &str, task: &Task) -> Evaluation {
                 "worker reported no scope drift".to_string()
             },
         ));
+        let forbidden = forbidden_paths_in(&r.changes);
+        checks.push(check(
+            "forbidden_paths_untouched",
+            forbidden.is_empty(),
+            if forbidden.is_empty() {
+                "no sensitive or out-of-workspace paths changed".to_string()
+            } else {
+                format!("changed forbidden path(s): {}", forbidden.join(", "))
+            },
+        ));
         checks.push(advisory(
             "validation_ran",
             !r.validation.commands_run.is_empty(),
@@ -116,6 +126,35 @@ pub fn evaluate(run_dir: &Path, run_id: &str, task: &Task) -> Evaluation {
         checks,
         next_task_state,
     }
+}
+
+/// Changed paths that are sensitive (secrets/keys) or escape the workspace.
+/// A worker touching these fails the run regardless of its self-report.
+fn forbidden_paths_in(changes: &Changes) -> Vec<String> {
+    const SENSITIVE: &[&str] = &[
+        ".env",
+        ".ssh",
+        "credentials",
+        "secret",
+        ".key",
+        ".pem",
+        ".p12",
+    ];
+    let mut bad = Vec::new();
+    let all = changes
+        .files_modified
+        .iter()
+        .chain(&changes.files_created)
+        .chain(&changes.files_deleted);
+    for f in all {
+        let lower = f.to_lowercase();
+        let escapes = f.starts_with('/') || f.contains("..");
+        let sensitive = SENSITIVE.iter().any(|p| lower.contains(p));
+        if escapes || sensitive {
+            bad.push(f.clone());
+        }
+    }
+    bad
 }
 
 fn decide_state(reported: &str, all_passed: bool, result: Option<&RunResult>) -> TaskState {
@@ -176,6 +215,20 @@ mod tests {
         assert_eq!(decide_state("weird", true, None), TaskState::Failed);
         let r = dummy_result();
         assert_eq!(decide_state("weird", true, Some(&r)), TaskState::Blocked);
+    }
+
+    #[test]
+    fn forbidden_paths_flagged() {
+        let c = Changes {
+            files_modified: vec!["src/main.rs".into(), "../outside.txt".into()],
+            files_created: vec![".env".into()],
+            files_deleted: vec!["/etc/hosts".into()],
+        };
+        let bad = forbidden_paths_in(&c);
+        assert!(bad.contains(&"../outside.txt".to_string()));
+        assert!(bad.contains(&".env".to_string()));
+        assert!(bad.contains(&"/etc/hosts".to_string()));
+        assert!(!bad.contains(&"src/main.rs".to_string()));
     }
 
     // Regression: a done result with no validation commands must stay Done.
