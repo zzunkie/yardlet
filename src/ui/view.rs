@@ -463,8 +463,12 @@ fn render_footer(frame: &mut Frame, area: Rect, keys: &str) {
 /// Width is measured in display columns (Hangul is 2 wide).
 fn place_input_cursor(frame: &mut Frame, area: Rect, input: &str) {
     let inner_w = (area.width.saturating_sub(2)).max(1) as usize;
-    let w = UnicodeWidthStr::width(input);
-    let row = (w / inner_w) as u16;
+    // Account for explicit newlines (Shift/Alt+Enter) plus wrapping of the last
+    // line so the cursor (and the terminal's IME overlay) sit at the caret.
+    let newlines = input.matches('\n').count() as u16;
+    let last_line = input.rsplit('\n').next().unwrap_or("");
+    let w = UnicodeWidthStr::width(last_line);
+    let row = newlines + (w / inner_w) as u16;
     let col = (w % inner_w) as u16;
     frame.set_cursor_position((area.x + 1 + col, area.y + 1 + row));
 }

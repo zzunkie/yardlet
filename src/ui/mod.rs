@@ -14,10 +14,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+    KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::SetTitle;
+use ratatui::crossterm::terminal::{self, SetTitle};
 
 use crate::run::{self, RunOptions};
 use crate::schemas::TaskState;
@@ -141,7 +143,19 @@ pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
     // Enable bracketed paste so pasted text (incl. composed Korean/CJK) arrives
     // as one Event::Paste instead of being dropped.
     let _ = execute!(std::io::stdout(), EnableBracketedPaste);
+    // Ask for keyboard disambiguation so Shift/Alt+Enter are reported distinctly
+    // (needed for newline-in-input). Only on terminals that support it.
+    let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
+    if enhanced {
+        let _ = execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
     let result = main_loop(&mut terminal, app);
+    if enhanced {
+        let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(std::io::stdout(), DisableBracketedPaste, SetTitle(""));
     ratatui::restore();
     result
@@ -231,8 +245,8 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
                     break;
                 }
             }
-            Screen::NewWork => handle_new_work_key(&mut app, key.code),
-            Screen::Answer => handle_answer_key(&mut app, key.code),
+            Screen::NewWork => handle_new_work_key(&mut app, key.code, key.modifiers),
+            Screen::Answer => handle_answer_key(&mut app, key.code, key.modifiers),
             Screen::Settings => handle_settings_key(&mut app, key.code),
             Screen::Handoff | Screen::Monitor => {
                 if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
@@ -287,7 +301,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
     false
 }
 
-fn handle_new_work_key(app: &mut App, code: KeyCode) {
+fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
     if app.is_busy() {
         if code == KeyCode::Esc {
             app.screen = Screen::Home;
@@ -296,6 +310,10 @@ fn handle_new_work_key(app: &mut App, code: KeyCode) {
     }
     match code {
         KeyCode::Esc => app.screen = Screen::Home,
+        // Shift/Alt+Enter inserts a newline (multi-line input); Enter submits.
+        KeyCode::Enter if mods.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
+            app.input.push('\n')
+        }
         KeyCode::Enter => {
             if !app.input.trim().is_empty() {
                 start_planning(app);
@@ -449,7 +467,7 @@ fn toggle_language(app: &mut App) {
     app.reload();
 }
 
-fn handle_answer_key(app: &mut App, code: KeyCode) {
+fn handle_answer_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
     if app.is_busy() {
         if code == KeyCode::Esc {
             app.screen = Screen::Home;
@@ -458,6 +476,9 @@ fn handle_answer_key(app: &mut App, code: KeyCode) {
     }
     match code {
         KeyCode::Esc => app.screen = Screen::Home,
+        KeyCode::Enter if mods.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
+            app.input.push('\n')
+        }
         KeyCode::Enter => {
             if !app.input.trim().is_empty() {
                 start_answer(app);
