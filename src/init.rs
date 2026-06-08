@@ -69,6 +69,19 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
     Ok(written)
 }
 
+/// Resolve a workspace, creating `.agents/` state on first use if none exists
+/// in this directory or any parent. Returns `(workspace, just_created)`.
+///
+/// This is what makes `yard` work in a fresh directory without a separate
+/// setup step: like the worker CLIs, it initializes on demand.
+pub fn ensure_initialized(cwd: &Path) -> Result<(Workspace, bool)> {
+    if let Some(ws) = Workspace::discover(cwd) {
+        return Ok((ws, false));
+    }
+    init(cwd, false)?;
+    Ok((Workspace::at(cwd), true))
+}
+
 /// A stable id derived from the canonical workspace path.
 fn workspace_id(root: &Path) -> String {
     let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());

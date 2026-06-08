@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 
 use crate::schemas::{BillingPolicy, IntentContract, WorkQueue, WorkersFile, YardConfig};
 use crate::yaml;
@@ -127,14 +127,4 @@ pub fn write_str(path: &Path, contents: &str) -> Result<()> {
     }
     fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
-}
-
-/// Resolve the workspace for a command that requires initialized state.
-pub fn require_initialized(cwd: &Path) -> Result<Workspace> {
-    Workspace::discover(cwd).ok_or_else(|| {
-        anyhow!(
-            "no Yard workspace found (no {}/yard.yaml in this directory or any parent).\nRun `yard init` first.",
-            STATE_DIR
-        )
-    })
 }

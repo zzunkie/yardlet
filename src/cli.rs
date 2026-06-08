@@ -10,7 +10,7 @@ use crate::guard;
 use crate::inspect;
 use crate::run::{self, RunOptions};
 use crate::snapshot::Snapshot;
-use crate::state::{self, Workspace};
+use crate::state::Workspace;
 use crate::{init, packet};
 
 #[derive(Parser)]
@@ -141,15 +141,9 @@ pub fn dispatch(cli: Cli) -> Result<()> {
 }
 
 fn launch_tui(cwd: &std::path::Path) -> Result<()> {
-    match Workspace::discover(cwd) {
-        Some(ws) => crate::ui::run(&ws),
-        None => {
-            println!(
-                "No Yard workspace here. Run `yard init` to create .agents/ state, then `yard`."
-            );
-            Ok(())
-        }
-    }
+    // Like the worker CLIs, `yard` just works: it initializes on demand.
+    let (ws, just_created) = init::ensure_initialized(cwd)?;
+    crate::ui::run(&ws, just_created)
 }
 
 fn cmd_init(cwd: &std::path::Path, args: InitArgs) -> Result<()> {
@@ -163,7 +157,10 @@ fn cmd_init(cwd: &std::path::Path, args: InitArgs) -> Result<()> {
 }
 
 fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
-    let ws = state::require_initialized(cwd)?;
+    let (ws, created) = init::ensure_initialized(cwd)?;
+    if created {
+        println!("Initialized Yard workspace (.agents/).");
+    }
     let request = args.request.join(" ");
     if request.trim().is_empty() {
         anyhow::bail!("provide a request, e.g. `yard new \"add admin order search\"`");
@@ -190,7 +187,7 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
 }
 
 fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
-    let ws = state::require_initialized(cwd)?;
+    let ws = init::ensure_initialized(cwd)?.0;
     let queue = ws.load_queue()?;
     if queue.tasks.is_empty() {
         println!("Queue is empty. Run `yard new \"...\"` to create work.");
@@ -210,7 +207,7 @@ fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
 }
 
 fn cmd_handoff(cwd: &std::path::Path) -> Result<()> {
-    let ws = state::require_initialized(cwd)?;
+    let ws = init::ensure_initialized(cwd)?.0;
     let latest = latest_run_dir(&ws.runs_dir());
     match latest {
         Some(dir) => {
@@ -258,7 +255,7 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
-    let ws = state::require_initialized(cwd)?;
+    let ws = init::ensure_initialized(cwd)?.0;
     let snap = Snapshot::load(&ws)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&snap.to_json())?);
@@ -285,7 +282,7 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
 fn cmd_worker(cwd: &std::path::Path, args: WorkerArgs) -> Result<()> {
     match args.cmd {
         WorkerCmd::Status => {
-            let ws = state::require_initialized(cwd)?;
+            let ws = init::ensure_initialized(cwd)?.0;
             let billing = ws.load_billing()?;
             let workers = ws.load_workers()?;
             println!("Zero-key policy: {}", billing.mode);
@@ -336,7 +333,7 @@ fn cmd_inspect(cwd: &std::path::Path, args: InspectArgs) -> Result<()> {
 }
 
 fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
-    let ws = state::require_initialized(cwd)?;
+    let ws = init::ensure_initialized(cwd)?.0;
     let queue = ws.load_queue()?;
     let intent = ws.load_intent()?;
     let task = queue
@@ -360,7 +357,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
 }
 
 fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
-    let ws = state::require_initialized(cwd)?;
+    let ws = init::ensure_initialized(cwd)?.0;
     let _ = (args.next, args.headless); // --next is the only mode today
     let report = run::run_next(
         &ws,

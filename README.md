@@ -25,13 +25,17 @@ Yard core does **not** require, request, store, or call AI provider API keys. It
 ## The loop
 
 ```bash
-yard init                       # scaffold .agents/ state
+cd your-project
 yard new "add admin order search with status, email, and date filters"
 yard queue                      # review the planned tasks
 yard run --next --execute       # run the next task through a hidden worker
 yard handoff                    # read the teammate-readable summary
 yard                            # or do it all from the terminal UI
 ```
+
+Like the worker CLIs, `yard` just works in any directory: the first command
+creates `.agents/` state on demand. `yard init` exists for scripting or to
+re-scaffold, but you do not need to run it first.
 
 A one-sentence request becomes an intent contract plus a bounded task queue;
 each task runs through a hidden worker, is checked by a deterministic
@@ -41,8 +45,8 @@ evaluator, and leaves a checkpoint and handoff under `.agents/runs/`.
 
 | Command | Purpose |
 | --- | --- |
-| `yard` | Open the terminal UI (Home / New Work / Handoff). |
-| `yard init [--force]` | Scaffold canonical `.agents/` state. |
+| `yard` | Open the terminal UI (auto-inits on first use). |
+| `yard init [--force]` | Explicitly scaffold `.agents/` state (optional). |
 | `yard new "<request>" [--worker <id>]` | Plan a request into an intent contract + queue. |
 | `yard queue` | List the work queue. |
 | `yard status [--json]` | Workspace, intent, queue, and worker summary. |

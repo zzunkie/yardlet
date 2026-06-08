@@ -74,9 +74,13 @@ impl App {
     }
 }
 
-pub fn run(ws: &Workspace) -> Result<()> {
+pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
     let mut terminal = ratatui::init();
-    let result = main_loop(&mut terminal, App::new(ws.clone()));
+    let mut app = App::new(ws.clone());
+    if just_created {
+        app.toast = Some((true, "initialized Yard workspace (.agents/)".to_string()));
+    }
+    let result = main_loop(&mut terminal, app);
     ratatui::restore();
     result
 }
