@@ -42,8 +42,19 @@ pub enum Command {
     Packet(PacketArgs),
     /// Prepare (and optionally execute) the next bounded task.
     Run(RunArgs),
+    /// Answer a task that is waiting on you, and resume it.
+    Answer(AnswerArgs),
     /// Print the latest run's handoff.
     Handoff,
+}
+
+#[derive(Args)]
+pub struct AnswerArgs {
+    /// Your answer to the worker's question.
+    reply: Vec<String>,
+    /// The task to answer (defaults to the one waiting on you).
+    #[arg(long)]
+    task: Option<String>,
 }
 
 #[derive(Args)]
@@ -136,6 +147,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Inspect(a)) => cmd_inspect(&cwd, a),
         Some(Command::Packet(a)) => cmd_packet(&cwd, a),
         Some(Command::Run(a)) => cmd_run(&cwd, a),
+        Some(Command::Answer(a)) => cmd_answer(&cwd, a),
         Some(Command::Handoff) => cmd_handoff(&cwd),
     }
 }
@@ -206,6 +218,43 @@ fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let reply = args.reply.join(" ");
+    if reply.trim().is_empty() {
+        anyhow::bail!("provide an answer, e.g. `yard answer \"use postgres\"`");
+    }
+    let queue = ws.load_queue()?;
+    let task_id = match args.task {
+        Some(t) => t,
+        None => queue
+            .tasks
+            .iter()
+            .find(|t| t.state == crate::schemas::TaskState::NeedsUser)
+            .map(|t| t.id.clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no task is waiting for an answer (NeedsUser). Use --task <id> to name one."
+                )
+            })?,
+    };
+    println!("Answering {task_id}: {reply}\n");
+    let report = run::run_next(
+        &ws,
+        &RunOptions {
+            execute: true,
+            worker_override: None,
+            target: Some(task_id),
+            answer: Some(reply),
+        },
+    )?;
+    for line in &report.lines {
+        println!("{line}");
+    }
+    println!("\nrun {} resumed", report.run_id);
+    Ok(())
+}
+
 fn cmd_handoff(cwd: &std::path::Path) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let latest = latest_run_dir(&ws.runs_dir());
@@ -261,21 +310,37 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&snap.to_json())?);
         return Ok(());
     }
+    use crate::schemas::TaskState;
     println!("Yard workspace: {}", snap.config.workspace_id);
     println!("Intent: {}", snap.intent_summary());
     println!(
-        "Queue: {} queued, {} running, {} blocked, {} done, {} total",
-        snap.count(crate::schemas::TaskState::Queued),
-        snap.count(crate::schemas::TaskState::Running),
-        snap.count(crate::schemas::TaskState::Blocked),
-        snap.count(crate::schemas::TaskState::Done),
+        "Queue: {} queued, {} running, {} needs-you, {} blocked, {} failed, {} done, {} total",
+        snap.count(TaskState::Queued),
+        snap.count(TaskState::Running),
+        snap.count(TaskState::NeedsUser),
+        snap.count(TaskState::Blocked),
+        snap.count(TaskState::Failed),
+        snap.count(TaskState::Done),
         snap.queue.tasks.len(),
     );
     println!(
-        "Workers ready: {}/{}",
+        "Workers ready: {}/{}   (planner: {})",
         snap.workers_ready(),
-        snap.workers.len()
+        snap.workers.len(),
+        snap.planner,
     );
+    if let Some((id, q)) = &snap.pending {
+        println!("\n\u{2691} {id} is waiting on you:");
+        println!(
+            "  {}",
+            if q.is_empty() {
+                "(see `yard handoff`)"
+            } else {
+                q
+            }
+        );
+        println!("  answer with:  yard answer \"<your reply>\"");
+    }
     Ok(())
 }
 
@@ -348,6 +413,8 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         intent: intent.as_ref(),
         repo: &summary,
         run_dir_rel: ".agents/runs/<run-id>",
+        prior_question: None,
+        user_answer: None,
     });
     if args.dry_run {
         eprintln!("(dry-run: packet not persisted)\n");
@@ -364,6 +431,8 @@ fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
         &RunOptions {
             execute: args.execute,
             worker_override: args.worker,
+            target: None,
+            answer: None,
         },
     )?;
     for line in &report.lines {

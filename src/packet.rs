@@ -13,6 +13,10 @@ pub struct PacketInputs<'a> {
     pub intent: Option<&'a IntentContract>,
     pub repo: &'a RepoSummary,
     pub run_dir_rel: &'a str,
+    /// A question this worker (or a peer) left on a previous run of this task.
+    pub prior_question: Option<&'a str>,
+    /// The user's answer to that question, when resuming.
+    pub user_answer: Option<&'a str>,
 }
 
 pub fn compile(inputs: &PacketInputs) -> String {
@@ -73,6 +77,18 @@ pub fn compile(inputs: &PacketInputs) -> String {
             }
         }
         p.push('\n');
+    }
+
+    // Resume context: the user answered a question from a prior run.
+    if let Some(answer) = inputs.user_answer {
+        p.push_str("## Continuing after a question\n\n");
+        if let Some(q) = inputs.prior_question {
+            p.push_str(&format!("You previously stopped and asked:\n> {q}\n\n"));
+        }
+        p.push_str(&format!(
+            "The user has now answered:\n> {answer}\n\nUse this answer to finish the task. Do \
+             not ask the same question again.\n\n"
+        ));
     }
 
     // Evidence anchors (not pasted content).

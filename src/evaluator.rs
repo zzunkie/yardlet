@@ -14,6 +14,11 @@ use crate::schemas::{RunResult, Task, TaskState};
 pub struct Check {
     pub name: String,
     pub passed: bool,
+    /// A fatal check gates a `done` result: if any fatal check fails, the task
+    /// cannot be marked Done. Advisory checks are reported but do not downgrade
+    /// the work (e.g. "did validation run" is informative, not an integrity
+    /// violation, since some tasks have nothing to validate).
+    pub fatal: bool,
     pub note: String,
 }
 
@@ -30,6 +35,16 @@ fn check(name: &str, passed: bool, note: impl Into<String>) -> Check {
     Check {
         name: name.into(),
         passed,
+        fatal: true,
+        note: note.into(),
+    }
+}
+
+fn advisory(name: &str, passed: bool, note: impl Into<String>) -> Check {
+    Check {
+        name: name.into(),
+        passed,
+        fatal: false,
         note: note.into(),
     }
 }
@@ -75,18 +90,24 @@ pub fn evaluate(run_dir: &Path, run_id: &str, task: &Task) -> Evaluation {
                 "worker reported no scope drift".to_string()
             },
         ));
-        checks.push(check(
-            "validation_ran_or_noted",
-            !r.validation.commands_run.is_empty()
-                || r.status == "blocked"
-                || r.status == "needs_user",
-            "validation commands were run or a non-running status was recorded",
+        checks.push(advisory(
+            "validation_ran",
+            !r.validation.commands_run.is_empty(),
+            if r.validation.commands_run.is_empty() {
+                "no validation commands were run (may be fine for this task)".to_string()
+            } else {
+                format!(
+                    "{} validation command(s) run",
+                    r.validation.commands_run.len()
+                )
+            },
         ));
         reported_status = r.status.clone();
     }
 
-    let all_passed = checks.iter().all(|c| c.passed);
-    let next_task_state = decide_state(&reported_status, all_passed, result.as_ref());
+    // Only integrity (fatal) checks gate a `done` result.
+    let all_fatal_passed = checks.iter().filter(|c| c.fatal).all(|c| c.passed);
+    let next_task_state = decide_state(&reported_status, all_fatal_passed, result.as_ref());
 
     Evaluation {
         run_id: run_id.to_string(),
@@ -155,5 +176,56 @@ mod tests {
         assert_eq!(decide_state("weird", true, None), TaskState::Failed);
         let r = dummy_result();
         assert_eq!(decide_state("weird", true, Some(&r)), TaskState::Blocked);
+    }
+
+    // Regression: a done result with no validation commands must stay Done.
+    // "did validation run" is advisory, not an integrity gate.
+    #[test]
+    fn done_with_no_validation_is_still_done() {
+        let dir =
+            std::env::temp_dir().join(format!("yard-eval-{}-{}", std::process::id(), "novalidate"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("handoff.md"), "h").unwrap();
+        let result = RunResult {
+            schema_version: 1,
+            run_id: "run-x".into(),
+            task_id: "YARD-9".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(), // no commands run
+            question_for_user: None,
+            compact_summary: "ok".into(),
+        };
+        std::fs::write(
+            dir.join("result.json"),
+            serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+
+        let t = crate::schemas::Task {
+            id: "YARD-9".into(),
+            title: "t".into(),
+            state: TaskState::Running,
+            priority: 0,
+            risk: String::new(),
+            kind: String::new(),
+            preferred_worker: String::new(),
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+        };
+
+        let eval = evaluate(&dir, "run-x", &t);
+        assert_eq!(eval.next_task_state, TaskState::Done);
+        let v = eval
+            .checks
+            .iter()
+            .find(|c| c.name == "validation_ran")
+            .unwrap();
+        assert!(!v.fatal && !v.passed); // reported, advisory, did not gate Done
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

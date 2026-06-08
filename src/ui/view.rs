@@ -16,6 +16,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Home => render_home(frame, app),
         Screen::NewWork => render_new_work(frame, app),
+        Screen::Answer => render_answer(frame, app),
         Screen::Handoff => render_handoff(frame, app),
     }
 }
@@ -47,7 +48,7 @@ fn render_home(frame: &mut Frame, app: &App) {
     render_footer(
         frame,
         chunks[4],
-        "n new work   r run next   h handoff   g refresh   q quit",
+        "n new   r run next   a answer   h handoff   g refresh   q quit",
     );
 }
 
@@ -60,6 +61,11 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot) {
         ),
         Span::raw(", "),
         Span::raw(format!("{} queued", snap.count(TaskState::Queued))),
+        Span::raw(", "),
+        Span::styled(
+            format!("{} needs-you", snap.count(TaskState::NeedsUser)),
+            Style::default().fg(Color::Magenta),
+        ),
         Span::raw(", "),
         Span::styled(
             format!("{} blocked", snap.count(TaskState::Blocked)),
@@ -75,7 +81,11 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot) {
         Line::from(vec![
             Span::raw("Workspace: "),
             Span::styled(snap.config.product.clone(), Style::default().bold()),
-            Span::raw(format!("   Workers: {} ready", snap.workers_ready())),
+            Span::raw(format!(
+                "   Workers: {} ready   Planner: {}",
+                snap.workers_ready(),
+                snap.planner
+            )),
         ]),
         Line::from(vec![
             Span::raw("Intent: "),
@@ -180,7 +190,17 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
                 format!(" {msg}"),
                 Style::default().fg(if *ok { Color::Cyan } else { Color::Red }),
             )),
-            None => Line::from(Span::styled(" idle", Style::default().fg(Color::DarkGray))),
+            None => match app.snapshot.as_ref().and_then(|s| s.pending.as_ref()) {
+                Some((id, q)) => Line::from(vec![
+                    Span::styled(
+                        format!(" \u{2691} {id} needs you: "),
+                        Style::default().fg(Color::Magenta).bold(),
+                    ),
+                    Span::raw(truncate(if q.is_empty() { "see handoff" } else { q }, 60)),
+                    Span::styled("  (press a)", Style::default().fg(Color::DarkGray)),
+                ]),
+                None => Line::from(Span::styled(" idle", Style::default().fg(Color::DarkGray))),
+            },
         },
     };
     frame.render_widget(Paragraph::new(line).block(Block::bordered()), area);
@@ -210,6 +230,42 @@ fn render_new_work(frame: &mut Frame, app: &App) {
     );
 
     render_footer(frame, chunks[2], "Enter plan   Esc cancel");
+}
+
+fn render_answer(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let chunks = Layout::vertical([
+        Constraint::Min(4),    // the question
+        Constraint::Length(5), // your answer
+        Constraint::Length(3), // footer
+    ])
+    .split(area);
+
+    let (task_id, question) = app
+        .snapshot
+        .as_ref()
+        .and_then(|s| s.pending.clone())
+        .unwrap_or_else(|| ("(none)".into(), String::new()));
+    let q_body = if question.is_empty() {
+        "(no recorded question — see the handoff)".to_string()
+    } else {
+        question
+    };
+    frame.render_widget(
+        Paragraph::new(q_body)
+            .wrap(Wrap { trim: true })
+            .block(Block::bordered().title(format!(" {task_id} is asking "))),
+        chunks[0],
+    );
+
+    let input = format!("{}\u{2588}", app.input);
+    frame.render_widget(
+        Paragraph::new(input)
+            .wrap(Wrap { trim: false })
+            .block(Block::bordered().title(" Your answer ")),
+        chunks[1],
+    );
+    render_footer(frame, chunks[2], "Enter send & resume   Esc cancel");
 }
 
 fn render_handoff(frame: &mut Frame, app: &App) {

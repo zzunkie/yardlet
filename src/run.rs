@@ -7,7 +7,7 @@
 //! real usage. Pass `execute: true` to actually invoke the worker.
 
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
 use chrono::Local;
@@ -16,13 +16,30 @@ use serde::Serialize;
 use crate::guard::{self, Readiness};
 use crate::inspect;
 use crate::packet::{self, PacketInputs};
-use crate::schemas::{TaskState, WorkerProfile};
+use crate::schemas::{RunResult, TaskState, WorkerProfile};
 use crate::state::{self, write_str, Workspace};
 use crate::{compact, evaluator, workers};
 
 pub struct RunOptions {
     pub execute: bool,
     pub worker_override: Option<String>,
+    /// Run a specific task by id (bypasses queue selection). Used to resume a
+    /// task that is waiting on the user.
+    pub target: Option<String>,
+    /// The user's answer to a worker's prior question, threaded into the packet.
+    pub answer: Option<String>,
+}
+
+impl RunOptions {
+    /// Plain "run the next queued task" options.
+    pub fn next(execute: bool) -> RunOptions {
+        RunOptions {
+            execute,
+            worker_override: None,
+            target: None,
+            answer: None,
+        }
+    }
 }
 
 pub struct RunReport {
@@ -53,10 +70,25 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let billing = ws.load_billing()?;
     let intent = ws.load_intent()?;
 
-    // ---- select next eligible task --------------------------------------
-    let idx =
-        select_next(&queue, opts)?.ok_or_else(|| anyhow!("no eligible queued task to run"))?;
+    // ---- select task: a named target, or the next eligible queued one ---
+    let idx = match &opts.target {
+        Some(id) => queue
+            .tasks
+            .iter()
+            .position(|t| &t.id == id)
+            .ok_or_else(|| anyhow!("task {id} not found in the queue"))?,
+        None => {
+            select_next(&queue, opts)?.ok_or_else(|| anyhow!("no eligible queued task to run"))?
+        }
+    };
     let task = queue.tasks[idx].clone();
+
+    // If resuming with an answer, recover the worker's prior question for context.
+    let prior_question = if opts.answer.is_some() {
+        latest_question_for(ws, &task.id)
+    } else {
+        None
+    };
 
     // ---- pick worker -----------------------------------------------------
     let worker_id = opts
@@ -97,6 +129,8 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         intent: intent.as_ref(),
         repo: &summary,
         run_dir_rel: &run_dir_rel,
+        prior_question: prior_question.as_deref(),
+        user_answer: opts.answer.as_deref(),
     });
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
@@ -246,6 +280,34 @@ fn find_worker<'a>(workers: &'a [WorkerProfile], id: &str) -> Result<&'a WorkerP
         .ok_or_else(|| anyhow!("worker '{id}' is not defined in .agents/workers.yaml"))
 }
 
+/// The most recent unanswered question a worker left for a given task, if any.
+pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
+    let mut best: Option<(SystemTime, String)> = None;
+    for entry in std::fs::read_dir(ws.runs_dir()).ok()?.flatten() {
+        let result_path = entry.path().join("result.json");
+        let Ok(text) = std::fs::read_to_string(&result_path) else {
+            continue;
+        };
+        let Ok(result) = serde_json::from_str::<RunResult>(&text) else {
+            continue;
+        };
+        if result.task_id != task_id {
+            continue;
+        }
+        let Some(q) = result.question_for_user.filter(|q| !q.trim().is_empty()) else {
+            continue;
+        };
+        let mtime = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(UNIX_EPOCH);
+        if best.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
+            best = Some((mtime, q));
+        }
+    }
+    best.map(|(_, q)| q)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,10 +345,7 @@ mod tests {
     }
 
     fn opts() -> RunOptions {
-        RunOptions {
-            execute: false,
-            worker_override: None,
-        }
+        RunOptions::next(false)
     }
 
     #[test]

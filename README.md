@@ -54,7 +54,12 @@ evaluator, and leaves a checkpoint and handoff under `.agents/runs/`.
 | `yard inspect repo [--json]` | Cheap deterministic local evidence. |
 | `yard packet --task <id> --worker <id> [--dry-run]` | Compile a worker packet. |
 | `yard run --next [--execute] [--worker <id>]` | Prepare (default) or run the next task. |
+| `yard answer "<reply>"` | Answer a task waiting on you (NeedsUser) and resume it. |
 | `yard handoff` | Print the latest run's handoff. |
+
+When a worker needs input it leaves the task in **NeedsUser** with a question.
+`yard status` (and the TUI) shows the question; reply with `yard answer "..."`
+(or press `a` in the TUI) and Yard re-runs the task with your answer.
 
 `run --next` prepares a run and stops *before* invoking a worker by default,
 because spawning a subscription-backed worker consumes usage. Pass `--execute`

@@ -12,6 +12,10 @@ pub struct Snapshot {
     pub intent: Option<IntentContract>,
     pub queue: WorkQueue,
     pub workers: Vec<WorkerLine>,
+    /// The configured planning worker (routing primary).
+    pub planner: String,
+    /// (task id, question) for the first task waiting on the user, if any.
+    pub pending: Option<(String, String)>,
 }
 
 #[derive(Serialize, Clone)]
@@ -46,11 +50,30 @@ impl Snapshot {
             })
             .collect();
 
+        let planner = workers_file
+            .routing
+            .get("planning_gate")
+            .and_then(|r| r.get("primary"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("codex")
+            .to_string();
+
+        let pending = queue
+            .tasks
+            .iter()
+            .find(|t| t.state == TaskState::NeedsUser)
+            .map(|t| {
+                let q = crate::run::latest_question_for(ws, &t.id).unwrap_or_default();
+                (t.id.clone(), q)
+            });
+
         Ok(Snapshot {
             config,
             intent,
             queue,
             workers,
+            planner,
+            pending,
         })
     }
 
@@ -82,6 +105,8 @@ impl Snapshot {
         serde_json::json!({
             "product": self.config.product,
             "workspace_id": self.config.workspace_id,
+            "planner": self.planner,
+            "pending": self.pending.as_ref().map(|(id, q)| serde_json::json!({"task": id, "question": q})),
             "intent": self.intent_summary(),
             "queue": {
                 "queued": self.count(TaskState::Queued),

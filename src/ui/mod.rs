@@ -22,6 +22,7 @@ use crate::state::Workspace;
 pub enum Screen {
     Home,
     NewWork,
+    Answer,
     Handoff,
 }
 
@@ -122,6 +123,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
                 }
             }
             Screen::NewWork => handle_new_work_key(&mut app, key.code),
+            Screen::Answer => handle_answer_key(&mut app, key.code),
             Screen::Handoff => {
                 if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
                     app.screen = Screen::Home;
@@ -142,6 +144,20 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             app.screen = Screen::NewWork;
         }
         KeyCode::Char('r') if !app.is_busy() => start_run(app),
+        KeyCode::Char('a') if !app.is_busy() => {
+            let has_pending = app
+                .snapshot
+                .as_ref()
+                .map(|s| s.pending.is_some())
+                .unwrap_or(false);
+            if has_pending {
+                app.input.clear();
+                app.toast = None;
+                app.screen = Screen::Answer;
+            } else {
+                app.toast = Some((true, "no task is waiting on you".into()));
+            }
+        }
         KeyCode::Char('h') => {
             app.handoff_text = load_latest_handoff(app);
             app.screen = Screen::Handoff;
@@ -176,15 +192,46 @@ fn handle_new_work_key(app: &mut App, code: KeyCode) {
     }
 }
 
+fn handle_answer_key(app: &mut App, code: KeyCode) {
+    if app.is_busy() {
+        if code == KeyCode::Esc {
+            app.screen = Screen::Home;
+        }
+        return;
+    }
+    match code {
+        KeyCode::Esc => app.screen = Screen::Home,
+        KeyCode::Enter => {
+            if !app.input.trim().is_empty() {
+                start_answer(app);
+                app.screen = Screen::Home;
+            }
+        }
+        KeyCode::Backspace => {
+            app.input.pop();
+        }
+        KeyCode::Char(c) => app.input.push(c),
+        _ => {}
+    }
+}
+
 fn start_planning(app: &mut App) {
     let ws = app.ws.clone();
     let request = app.input.trim().to_string();
+    let planner = app
+        .snapshot
+        .as_ref()
+        .map(|s| s.planner.clone())
+        .unwrap_or_else(|| "worker".into());
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let res = match crate::planner::run_planning(&ws, &request, None) {
             Ok(r) => JobResult {
                 ok: true,
-                summary: format!("Planned: {} ({} tasks)", r.intent_summary, r.task_count),
+                summary: format!(
+                    "Planned via {}: {} ({} tasks)",
+                    r.worker_id, r.intent_summary, r.task_count
+                ),
             },
             Err(e) => JobResult {
                 ok: false,
@@ -194,7 +241,7 @@ fn start_planning(app: &mut App) {
         let _ = tx.send(res);
     });
     app.job = Job::Running {
-        label: "planning".into(),
+        label: format!("planning via {planner}"),
         started: Instant::now(),
         rx,
     };
@@ -205,18 +252,12 @@ fn start_run(app: &mut App) {
     let ws = app.ws.clone();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let res = match run::run_next(
-            &ws,
-            &RunOptions {
-                execute: true,
-                worker_override: None,
-            },
-        ) {
+        let res = match run::run_next(&ws, &RunOptions::next(true)) {
             Ok(r) => {
                 let tail = r.lines.last().cloned().unwrap_or_default();
                 JobResult {
                     ok: true,
-                    summary: format!("Run {} done: {}", r.task_id, tail),
+                    summary: format!("{} via {}: {}", r.task_id, r.worker_id, tail),
                 }
             }
             Err(e) => JobResult {
@@ -231,6 +272,47 @@ fn start_run(app: &mut App) {
         started: Instant::now(),
         rx,
     };
+}
+
+fn start_answer(app: &mut App) {
+    let Some((task_id, _)) = app.snapshot.as_ref().and_then(|s| s.pending.clone()) else {
+        app.toast = Some((false, "no task to answer".into()));
+        return;
+    };
+    let ws = app.ws.clone();
+    let answer = app.input.trim().to_string();
+    let (tx, rx) = mpsc::channel();
+    let label_task = task_id.clone();
+    thread::spawn(move || {
+        let res = match run::run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                worker_override: None,
+                target: Some(task_id.clone()),
+                answer: Some(answer),
+            },
+        ) {
+            Ok(r) => {
+                let tail = r.lines.last().cloned().unwrap_or_default();
+                JobResult {
+                    ok: true,
+                    summary: format!("{} resumed via {}: {}", r.task_id, r.worker_id, tail),
+                }
+            }
+            Err(e) => JobResult {
+                ok: false,
+                summary: format!("Answer/resume failed: {e}"),
+            },
+        };
+        let _ = tx.send(res);
+    });
+    app.job = Job::Running {
+        label: format!("answering {label_task}"),
+        started: Instant::now(),
+        rx,
+    };
+    app.input.clear();
 }
 
 fn load_latest_handoff(app: &App) -> String {
