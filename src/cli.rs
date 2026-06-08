@@ -160,6 +160,12 @@ pub struct RunArgs {
     /// Drop the worker sandbox (network, installs, etc.). Use with care.
     #[arg(long)]
     full_access: bool,
+    /// Drain the whole queue autonomously, stopping only at human gates.
+    #[arg(long)]
+    auto: bool,
+    /// With --auto: drop the sandbox (workers still self-gate dangerous actions).
+    #[arg(long)]
+    bypass: bool,
     /// Non-interactive output (no extra prompts).
     #[arg(long)]
     headless: bool,
@@ -527,6 +533,13 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
 fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let _ = (args.next, args.headless); // --next is implied; --task targets one
+    if args.auto {
+        let lines = run::run_auto(&ws, args.bypass || args.full_access)?;
+        for line in &lines {
+            println!("{line}");
+        }
+        return Ok(());
+    }
     let report = run::run_next(
         &ws,
         &RunOptions {

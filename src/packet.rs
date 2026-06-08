@@ -182,13 +182,22 @@ pub fn compile(inputs: &PacketInputs) -> String {
         }
     }
 
-    // Permission boundary: report, do not bypass.
-    p.push_str("## If you are blocked by permissions\n\n");
+    // Boundaries: proceed freely on safe work, stop before dangerous actions.
+    p.push_str("## Boundaries \u{2014} proceed freely, but stop before dangerous actions\n\n");
     p.push_str(
-        "You run in a bounded sandbox. If a needed write or command is denied, or you need \
-         network, package install, production access, or a destructive action, do NOT try to \
-         bypass the sandbox. Stop and report it: set `status` to `needs_user` and put exactly \
-         what access you need in `question_for_user`. The user can then grant it and resume.\n\n",
+        "Work freely on safe, reversible, local changes (edit/create files, run tests and \
+         linters, local read-only queries) without asking. But STOP and report it \u{2014} set \
+         `status` to `needs_user`, explain in `question_for_user` \u{2014} before any of these \
+         dangerous or irreversible actions, and do not attempt them:\n\
+         - deleting/overwriting files outside the workspace, or mass/irreversible deletion\n\
+         - git push, force-push, or tag push\n\
+         - deploy, publish, release, or package publish (npm/cargo/pip publish, etc.)\n\
+         - production database or infrastructure access or changes\n\
+         - sending external messages/emails/posts, or calling external mutating APIs\n\
+         - purchases, payments, or account changes\n\
+         - reading, writing, or exposing secrets/credentials, or editing CI secrets\n\
+         If a needed local action is denied by the sandbox (e.g. network or a package install), \
+         also stop and report what you need instead of trying to bypass it.\n\n",
     );
 
     // Output language.

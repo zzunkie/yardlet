@@ -41,6 +41,8 @@ pub struct RunReport {
     pub prepared: bool,
     pub executed: bool,
     pub lines: Vec<String>,
+    /// The task's state after evaluation (None when only prepared).
+    pub result_state: Option<TaskState>,
 }
 
 #[derive(Serialize)]
@@ -185,6 +187,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             prepared: true,
             executed: false,
             lines,
+            result_state: None,
         });
     }
 
@@ -283,7 +286,99 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         prepared: true,
         executed: true,
         lines,
+        result_state: Some(eval.next_task_state),
     })
+}
+
+/// Autonomous mode: drain the queue, stopping only at genuine human gates.
+///
+/// Runs eligible queued tasks one after another. Done (or partial->re-queued)
+/// advances; Blocked / NeedsUser / Failed stop the loop and hand back to the
+/// user (those need a human). A per-task attempt cap prevents looping on a task
+/// that keeps coming back partial. `bypass` drops the worker sandbox for the
+/// whole run (workers still self-gate dangerous actions per the packet).
+pub fn run_auto(ws: &Workspace, bypass: bool) -> Result<Vec<String>> {
+    use std::collections::HashMap;
+    let mut out = Vec::new();
+    let mut attempts: HashMap<String, u32> = HashMap::new();
+    let probe_opts = RunOptions {
+        execute: false,
+        worker_override: None,
+        target: None,
+        answer: None,
+        full_access: false,
+    };
+
+    loop {
+        let queue = ws.load_queue()?;
+        let Some(idx) = select_next(&queue, &probe_opts)? else {
+            // Nothing queued: either fully drained or waiting on a human gate.
+            let stuck = queue.tasks.iter().find(|t| {
+                matches!(
+                    t.state,
+                    TaskState::Blocked | TaskState::NeedsUser | TaskState::Failed
+                )
+            });
+            match stuck {
+                Some(t) => out.push(format!(
+                    "stopped: {} is {:?} \u{2014} needs you (see `yard handoff`)",
+                    t.id, t.state
+                )),
+                None => out.push("done: queue drained, all tasks complete".to_string()),
+            }
+            break;
+        };
+
+        let task_id = queue.tasks[idx].id.clone();
+        let n = attempts.entry(task_id.clone()).or_default();
+        *n += 1;
+        if *n > 2 {
+            out.push(format!(
+                "stopped: {task_id} keeps coming back \u{2014} needs you"
+            ));
+            break;
+        }
+
+        let report = run_next(
+            ws,
+            &RunOptions {
+                execute: true,
+                worker_override: None,
+                target: None,
+                answer: None,
+                full_access: bypass,
+            },
+        )?;
+        let state = report.result_state.unwrap_or(TaskState::Failed);
+        out.push(format!("{} \u{2192} {:?}", report.task_id, state));
+
+        match state {
+            TaskState::Done | TaskState::Queued => continue,
+            TaskState::Blocked => {
+                out.push(format!(
+                    "stopped: {} blocked \u{2014} see `yard handoff`",
+                    report.task_id
+                ));
+                break;
+            }
+            TaskState::NeedsUser => {
+                out.push(format!(
+                    "stopped: {} needs you \u{2014} `yard answer \"...\"`",
+                    report.task_id
+                ));
+                break;
+            }
+            TaskState::Failed => {
+                out.push(format!(
+                    "stopped: {} failed \u{2014} needs you",
+                    report.task_id
+                ));
+                break;
+            }
+            TaskState::Running => break,
+        }
+    }
+    Ok(out)
 }
 
 /// Pick the highest-priority eligible queued task index.

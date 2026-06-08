@@ -173,6 +173,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             app.screen = Screen::NewWork;
         }
         KeyCode::Char('r') if !app.is_busy() => start_run(app),
+        KeyCode::Char('A') if !app.is_busy() => start_auto(app),
         KeyCode::Char('a') if !app.is_busy() => {
             let has_pending = app
                 .snapshot
@@ -347,6 +348,43 @@ fn start_run(app: &mut App) {
     });
     app.job = Job::Running {
         label: lbl.run_word.into(),
+        started: Instant::now(),
+        rx,
+    };
+}
+
+fn start_auto(app: &mut App) {
+    let has_work = app
+        .snapshot
+        .as_ref()
+        .map(|s| s.queue.tasks.iter().any(|t| t.state == TaskState::Queued))
+        .unwrap_or(false);
+    if !has_work {
+        app.toast = Some((true, app.lang.l().nothing_to_run.into()));
+        return;
+    }
+    let ws = app.ws.clone();
+    let lbl = app.lang.l();
+    let failed = lbl.run_failed;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let res = match run::run_auto(&ws, false) {
+            Ok(lines) => {
+                let last = lines.last().cloned().unwrap_or_default();
+                JobResult {
+                    ok: last.starts_with("done"),
+                    summary: last,
+                }
+            }
+            Err(e) => JobResult {
+                ok: false,
+                summary: format!("{failed} {e}"),
+            },
+        };
+        let _ = tx.send(res);
+    });
+    app.job = Job::Running {
+        label: format!("{} (auto)", lbl.run_word),
         started: Instant::now(),
         rx,
     };
