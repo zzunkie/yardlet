@@ -23,7 +23,7 @@ fn safe_area(frame: &Frame) -> Rect {
     let margin: u16 = std::env::var("YARD_RIGHT_MARGIN")
         .ok()
         .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(1);
+        .unwrap_or(2);
     let a = frame.area();
     Rect {
         x: a.x,
