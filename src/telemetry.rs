@@ -50,7 +50,6 @@ pub fn append_run(ws: &Workspace, rec: &RunTelemetry) -> Result<()> {
 }
 
 /// Read all run records (skips malformed lines).
-#[allow(dead_code)] // used by `yard routing review` (phase 3)
 pub fn read_runs(ws: &Workspace) -> Vec<RunTelemetry> {
     let Ok(text) = std::fs::read_to_string(log_path(ws)) else {
         return Vec::new();

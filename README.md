@@ -56,6 +56,8 @@ evaluator, and leaves a checkpoint and handoff under `.agents/runs/`.
 | `yard run --next [--execute] [--worker <id>]` | Prepare (default) or run the next task. |
 | `yard answer "<reply>"` | Answer a task waiting on you (NeedsUser) and resume it. |
 | `yard handoff` | Print the latest run's handoff. |
+| `yard routing review` | Per-kind worker success stats + suggested preferences. |
+| `yard routing apply --kind K --worker W` | Pin a worker for a task kind (human-approved). |
 
 When a worker needs input it leaves the task in **NeedsUser** with a question.
 `yard status` (and the TUI) shows the question; reply with `yard answer "..."`
@@ -80,6 +82,17 @@ This is layered:
 3. **Explicit escalation** — `yard run --next --execute --full-access` (or
    `yard answer --full-access`) drops the sandbox for that run only. Off by
    default; it is a human-granted permission, never automatic.
+
+## Worker routing
+
+The planner picks a worker per task from an editable rubric in
+`.agents/workers.yaml` (each worker's `best_for` + a `cost_bias` dial). At run
+time the choice is deterministic: preferred worker → readiness check → fall back
+to the next ready worker. Every run logs its outcome to
+`.agents/telemetry/runs.jsonl`; `yard routing review` aggregates that and
+*suggests* profile changes (e.g. "claude-code wins refactors"), which you apply
+with `yard routing apply` — telemetry never changes routing on its own. Design:
+[docs/routing-and-telemetry.md](docs/routing-and-telemetry.md).
 
 `run --next` prepares a run and stops *before* invoking a worker by default,
 because spawning a subscription-backed worker consumes usage. Pass `--execute`

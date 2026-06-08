@@ -143,6 +143,9 @@ mod tests {
             "claude-code"
         );
         // default when nothing else
-        assert_eq!(candidate_for(&w, &ov, None, "", "implementation").0, "codex");
+        assert_eq!(
+            candidate_for(&w, &ov, None, "", "implementation").0,
+            "codex"
+        );
     }
 }

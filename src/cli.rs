@@ -46,6 +46,27 @@ pub enum Command {
     Answer(AnswerArgs),
     /// Print the latest run's handoff.
     Handoff,
+    /// Review routing telemetry and apply suggested worker preferences.
+    Routing(RoutingArgs),
+}
+
+#[derive(Args)]
+pub struct RoutingArgs {
+    #[command(subcommand)]
+    cmd: RoutingCmd,
+}
+
+#[derive(Subcommand)]
+enum RoutingCmd {
+    /// Show per-kind worker success stats and suggested preferences.
+    Review,
+    /// Pin a worker for a task kind (human-approved policy change).
+    Apply {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        worker: String,
+    },
 }
 
 #[derive(Args)]
@@ -155,6 +176,50 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Run(a)) => cmd_run(&cwd, a),
         Some(Command::Answer(a)) => cmd_answer(&cwd, a),
         Some(Command::Handoff) => cmd_handoff(&cwd),
+        Some(Command::Routing(a)) => cmd_routing(&cwd, a),
+    }
+}
+
+fn cmd_routing(cwd: &std::path::Path, args: RoutingArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    match args.cmd {
+        RoutingCmd::Review => {
+            let runs = crate::telemetry::read_runs(&ws);
+            let workers = ws.load_workers()?;
+            let overrides = crate::routing::load_overrides(&ws);
+            if runs.is_empty() {
+                println!("No run telemetry yet. Routing suggestions appear once runs accrue.");
+                return Ok(());
+            }
+            println!("Per-kind worker success ({} runs):", runs.len());
+            let stats = crate::review::aggregate(&runs);
+            for ((kind, worker), s) in &stats {
+                println!(
+                    "  {:<16} {:<12} {}/{} done ({:.0}%)",
+                    kind,
+                    worker,
+                    s.success,
+                    s.total,
+                    s.rate() * 100.0
+                );
+            }
+            let suggestions = crate::review::suggest(&runs, &workers, &overrides);
+            if suggestions.is_empty() {
+                println!("\nNo routing changes suggested.");
+            } else {
+                println!("\nSuggestions (apply are human-approved):");
+                for s in &suggestions {
+                    println!("  - {}", s.reason);
+                    println!("    yard routing apply --kind {} --worker {}", s.kind, s.to);
+                }
+            }
+            Ok(())
+        }
+        RoutingCmd::Apply { kind, worker } => {
+            crate::review::set_kind_override(&ws, &kind, &worker)?;
+            println!("Pinned '{kind}' tasks to {worker} (.agents/routing-overrides.yaml).");
+            Ok(())
+        }
     }
 }
 
@@ -347,6 +412,10 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
             }
         );
         println!("  answer with:  yard answer \"<your reply>\"");
+    }
+    let suggestions = crate::review::pending_count(&ws);
+    if suggestions > 0 {
+        println!("\nrouting: {suggestions} suggestion(s) \u{2014} run `yard routing review`");
     }
     Ok(())
 }
