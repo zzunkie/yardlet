@@ -3,12 +3,20 @@
 **/*.rs.bk
 Cargo.lock.orig
 
-# Yard runtime state created in workspaces under test
-# (the canonical .agents/ of a *consuming* repo is theirs to track;
-#  inside this repo we only keep templates/ and seeds/)
+# Yard runtime state. This repo now self-hosts Yard: we TRACK the .agents/
+# config (yard.yaml, *-policy.yaml, workers.yaml, work-queue.yaml, skills/) and
+# ignore the per-run operational artifacts below.
 /.agents/runs/
 /.agents/checkpoints/
 /.agents/handoffs/
+/.agents/telemetry/
+/.agents/intent-contract.yaml
+
+# Personal / per-machine harness files (internal adapter convention)
+*.local
+.claude/settings.local.json
+.codex/settings.local.json
+.claude/worktrees/
 
 # OS / editor
 .DS_Store

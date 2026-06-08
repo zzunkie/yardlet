@@ -1,0 +1,12 @@
+schema_version: 1
+queue_id: queue-initial
+intent_id: ""
+selection_policy:
+  default_order: priority_then_created_at
+  require_planning_gate: true
+  skip_if_approval_required: true
+  skip_if_blocked: true
+
+# Tasks are created by the planning gate from a natural-language request.
+# Run `yard` and open New Work, or seed a queue manually.
+tasks: []

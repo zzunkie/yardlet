@@ -1,0 +1,32 @@
+schema_version: 1
+mode: zero_key_subscription_workers
+
+# Yard core itself must never touch AI provider API billing.
+yard_core:
+  require_ai_api_key: false
+  ask_for_ai_api_key: false
+  store_ai_api_key: false
+  call_provider_api: false
+  auto_api_fallback: false
+
+worker_invocation:
+  require_local_cli: true
+  require_subscription_backed_auth: true
+  if_auth_ambiguous: stop
+  if_no_worker_ready: stop
+  # scrub_or_block: remove billing env vars before spawning a worker.
+  # strict mode (block) refuses to run if billing vars are present in the parent.
+  ai_billing_env_policy: scrub_or_block
+  never_print_secret_values: true
+
+# Environment variables that must not leak into a worker subprocess.
+# Yard scrubs these from the worker env so a subscription-backed CLI does
+# not accidentally bill against an API key.
+blocked_worker_env_names:
+  - OPENAI_API_KEY
+  - ANTHROPIC_API_KEY
+  - OPENAI_BASE_URL
+  - ANTHROPIC_BASE_URL
+  - OPENAI_ORGANIZATION
+  - OPENAI_PROJECT
+  - ANTHROPIC_AUTH_TOKEN

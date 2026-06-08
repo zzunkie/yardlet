@@ -1,0 +1,64 @@
+schema_version: 1
+
+workers:
+  - id: codex
+    kind: cli_worker
+    # best_for is the planner's rubric: task characteristics, not model names,
+    # so it survives model changes. Refine it by hand (or via `yard routing
+    # review` suggestions) as the workers' relative strengths shift.
+    best_for: "tight scoped edits, boilerplate, mechanical transforms, fast iteration, test-driven bugfix"
+    cost_weight: low
+    # Optional. Empty = the CLI's own default. codex: `-m <model>` +
+    # `-c model_reasoning_effort=<minimal|low|medium|high>`.
+    model: ""
+    effort: ""
+    role_strengths:
+      - focused_implementation
+      - test_driven_bugfix
+      - shell_heavy_repo_changes
+      - local_code_review
+    billing:
+      mode: subscription_backed_only
+    invocation:
+      command: codex
+      supports_noninteractive: true
+      output_contract: files
+    limits:
+      max_wall_minutes: 45
+      max_retries: 1
+
+  - id: claude-code
+    kind: cli_worker
+    best_for: "multi-file refactor, architecture and spec reasoning, broad exploration, careful diff editing, review and handoff"
+    cost_weight: high
+    # Optional. Empty = the CLI's own default. claude: `--model <alias|id>` +
+    # `--effort <level>`.
+    model: ""
+    effort: ""
+    role_strengths:
+      - planning_gate
+      - ambiguity_reduction
+      - acceptance_criteria
+      - review
+      - handoff_quality
+    billing:
+      mode: subscription_backed_only
+    invocation:
+      command: claude
+      supports_noninteractive: true
+      output_contract: json_or_files
+    limits:
+      max_wall_minutes: 45
+      max_retries: 1
+
+routing:
+  # The human cost dial the planner weighs: cheap | balanced | quality.
+  cost_bias: balanced
+  # Run-time default + fallback order when a task names no worker / its worker
+  # is not ready. Resolution is deterministic; telemetry never overrides it.
+  default_worker: codex
+  fallback_order: [codex, claude-code]
+  # The planner itself runs on this worker (primary, then fallback if not ready).
+  planning_gate:
+    primary: claude-code
+    fallback: codex

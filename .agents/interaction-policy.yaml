@@ -1,0 +1,21 @@
+schema_version: 1
+
+# Yard asks few, high-level questions. It does not ask the user to review
+# code, architecture, or diffs as a normal path.
+question_budget: 2
+user_review_mode: natural_language_scope_and_approval_only
+
+may_ask_about:
+  - product_intent
+  - scope_boundary
+  - acceptance_priority
+  - high_risk_approval
+  - blocked_external_dependency
+  - stop_continue_or_split_after_blocker
+
+do_not_ask_for:
+  - code_review
+  - architecture_review
+  - diff_review
+  - low_level_file_choice
+  - next_obvious_test
