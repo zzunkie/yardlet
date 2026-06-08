@@ -15,6 +15,18 @@ use crate::snapshot::Snapshot;
 
 const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
 
+/// The drawable area, less one right column so the box borders are not hidden
+/// under a terminal's overlay scrollbar.
+fn safe_area(frame: &Frame) -> Rect {
+    let a = frame.area();
+    Rect {
+        x: a.x,
+        y: a.y,
+        width: a.width.saturating_sub(1).max(1),
+        height: a.height,
+    }
+}
+
 pub fn render(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Home => render_home(frame, app),
@@ -26,7 +38,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
 fn render_home(frame: &mut Frame, app: &App) {
     let l = app.lang.l();
-    let area = frame.area();
+    let area = safe_area(frame);
     let chunks = Layout::vertical([
         Constraint::Length(6),
         Constraint::Min(4),
@@ -214,7 +226,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_new_work(frame: &mut Frame, app: &App) {
     let l = app.lang.l();
-    let area = frame.area();
+    let area = safe_area(frame);
     let chunks = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(4),
@@ -238,7 +250,7 @@ fn render_new_work(frame: &mut Frame, app: &App) {
 
 fn render_answer(frame: &mut Frame, app: &App) {
     let l = app.lang.l();
-    let area = frame.area();
+    let area = safe_area(frame);
     let chunks = Layout::vertical([
         Constraint::Min(4),
         Constraint::Length(5),
@@ -274,7 +286,7 @@ fn render_answer(frame: &mut Frame, app: &App) {
 
 fn render_handoff(frame: &mut Frame, app: &App) {
     let l = app.lang.l();
-    let area = frame.area();
+    let area = safe_area(frame);
     let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
     frame.render_widget(
         Paragraph::new(app.handoff_text.clone())
