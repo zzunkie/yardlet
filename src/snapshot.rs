@@ -50,13 +50,14 @@ impl Snapshot {
             })
             .collect();
 
-        let planner = workers_file
-            .routing
-            .get("planning_gate")
-            .and_then(|r| r.get("primary"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("codex")
-            .to_string();
+        let planner = {
+            let primary = &workers_file.routing.planning_gate.primary;
+            if primary.is_empty() {
+                "codex".to_string()
+            } else {
+                primary.clone()
+            }
+        };
 
         let pending = queue
             .tasks

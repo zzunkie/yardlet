@@ -13,12 +13,12 @@ use anyhow::{anyhow, Result};
 use chrono::Local;
 use serde::Serialize;
 
-use crate::guard::{self, Readiness};
+use crate::guard;
 use crate::inspect;
 use crate::packet::{self, PacketInputs};
 use crate::schemas::{RunResult, TaskState, WorkerProfile};
 use crate::state::{self, write_str, Workspace};
-use crate::{compact, evaluator, workers};
+use crate::{compact, evaluator, routing, telemetry, workers};
 
 pub struct RunOptions {
     pub execute: bool,
@@ -95,19 +95,25 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         None
     };
 
-    // ---- pick worker -----------------------------------------------------
-    let worker_id = opts
+    // ---- resolve worker (deterministic: candidate -> readiness -> fallback) --
+    let resolved = routing::resolve_worker(
+        ws,
+        &workers,
+        &billing,
+        opts.worker_override.as_deref(),
+        &task.preferred_worker,
+        &task.kind,
+    );
+    let candidate_id = opts
         .worker_override
         .clone()
-        .or_else(|| {
-            if task.preferred_worker.is_empty() {
-                None
-            } else {
-                Some(task.preferred_worker.clone())
-            }
-        })
-        .unwrap_or_else(|| "codex".to_string());
-    let profile = find_worker(&workers.workers, &worker_id)?;
+        .filter(|s| !s.is_empty())
+        .or_else(|| (!task.preferred_worker.is_empty()).then(|| task.preferred_worker.clone()))
+        .unwrap_or_else(|| workers.routing.default_worker.clone());
+    let worker_id = resolved
+        .as_ref()
+        .map(|r| r.worker_id.clone())
+        .unwrap_or_else(|_| candidate_id.clone());
 
     // ---- run directory ---------------------------------------------------
     let run_id = format!("run-{}", Local::now().format("%Y%m%d-%H%M%S"));
@@ -117,7 +123,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 
     let mut lines = Vec::new();
     lines.push(format!("selected task {} ({})", task.id, task.title));
-    lines.push(format!("worker: {worker_id}"));
+    if let Some(rat) = &task.worker_rationale {
+        lines.push(format!("planner rationale: {rat}"));
+    }
     lines.push(format!("run dir: {run_dir_rel}"));
 
     // ---- deterministic evidence -----------------------------------------
@@ -166,23 +174,21 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     };
     state::save_yaml(&run_dir.join("run.yaml"), &record)?;
 
-    // ---- zero-key env ----------------------------------------------------
-    let status = guard::probe(profile, &billing);
-    if !status.billing_env_present.is_empty() {
+    // ---- zero-key env note ----------------------------------------------
+    let billing_present = guard::present_billing_env(&billing.blocked_worker_env_names);
+    if !billing_present.is_empty() {
         lines.push(format!(
             "billing env present in parent ({}); will be scrubbed before worker runs",
-            status.billing_env_present.len()
+            billing_present.len()
         ));
     }
 
     if !opts.execute {
         lines.push(String::new());
-        lines.push("prepared (not executed). Worker readiness:".to_string());
-        lines.push(format!(
-            "  {} — {}",
-            status.readiness.label(),
-            status.detail
-        ));
+        match &resolved {
+            Ok(r) => lines.push(format!("will use {} ({})", r.worker_id, r.reason)),
+            Err(e) => lines.push(format!("no ready worker: {e}")),
+        }
         lines.push("re-run with --execute to invoke the worker.".to_string());
         return Ok(RunReport {
             run_id,
@@ -203,24 +209,19 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             task.id
         ));
     }
-    if status.readiness != Readiness::Ready {
-        return Err(anyhow!(
-            "worker '{worker_id}' is {}: {}\nYard did not call an AI API and did not ask for an API key.",
-            status.readiness.label(),
-            status.detail
-        ));
-    }
-    let bin = status
-        .binary_path
-        .clone()
-        .ok_or_else(|| anyhow!("worker '{worker_id}' binary path not resolved"))?;
+    let resolved = resolved?; // hard stop if no ready worker
+    let reason = resolved.reason;
+    let bin = resolved.bin;
+    let profile = find_worker(&workers.workers, &worker_id)?;
     let env = guard::sanitized_worker_env(&billing).map_err(|e| anyhow!(e))?;
     let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
+    lines.push(format!("worker: {worker_id} ({reason})"));
 
     // mark running
     queue.tasks[idx].state = TaskState::Running;
     ws.save_queue(&queue)?;
 
+    let run_started = std::time::Instant::now();
     let outcome = workers::spawn(
         profile,
         &bin,
@@ -231,6 +232,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         timeout,
         opts.full_access,
     )?;
+    let wall_seconds = run_started.elapsed().as_secs();
     lines.push(format!(
         "worker outcome: {} (exit_ok={}, timed_out={})",
         outcome.note, outcome.exit_ok, outcome.timed_out
@@ -254,6 +256,34 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // ---- update queue ----------------------------------------------------
     queue.tasks[idx].state = eval.next_task_state;
     ws.save_queue(&queue)?;
+
+    // ---- telemetry (best effort; feeds routing suggestions) -------------
+    let user_override = opts.worker_override.as_ref().map(|o| {
+        let from = if task.preferred_worker.is_empty() {
+            "(default)".to_string()
+        } else {
+            task.preferred_worker.clone()
+        };
+        format!("{from}->{o}")
+    });
+    let _ = telemetry::append_run(
+        ws,
+        &telemetry::RunTelemetry {
+            ts: Local::now().to_rfc3339(),
+            task_id: task.id.clone(),
+            kind: task.kind.clone(),
+            risk: task.risk.clone(),
+            worker: worker_id.clone(),
+            chosen_reason: reason.clone(),
+            result_status: result
+                .as_ref()
+                .map(|r| r.status.clone())
+                .unwrap_or_else(|| "no-result".to_string()),
+            eval_state: format!("{:?}", eval.next_task_state),
+            wall_seconds,
+            user_override,
+        },
+    );
 
     lines.push(format!("evaluation status: {}", eval.status));
     lines.push(format!("next task state: {:?}", eval.next_task_state));
@@ -351,6 +381,7 @@ mod tests {
                 None
             },
             interaction: None,
+            worker_rationale: None,
         }
     }
 

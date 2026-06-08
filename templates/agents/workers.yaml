@@ -3,6 +3,11 @@ schema_version: 1
 workers:
   - id: codex
     kind: cli_worker
+    # best_for is the planner's rubric: task characteristics, not model names,
+    # so it survives model changes. Refine it by hand (or via `yard routing
+    # review` suggestions) as the workers' relative strengths shift.
+    best_for: "tight scoped edits, boilerplate, mechanical transforms, fast iteration, test-driven bugfix"
+    cost_weight: low
     role_strengths:
       - focused_implementation
       - test_driven_bugfix
@@ -20,6 +25,8 @@ workers:
 
   - id: claude-code
     kind: cli_worker
+    best_for: "multi-file refactor, architecture and spec reasoning, broad exploration, careful diff editing, review and handoff"
+    cost_weight: high
     role_strengths:
       - planning_gate
       - ambiguity_reduction
@@ -36,21 +43,14 @@ workers:
       max_wall_minutes: 45
       max_retries: 1
 
-# Default routing. One primary worker per normal task; add a second only when
-# risk or repeated failure justifies the usage cost.
 routing:
+  # The human cost dial the planner weighs: cheap | balanced | quality.
+  cost_bias: balanced
+  # Run-time default + fallback order when a task names no worker / its worker
+  # is not ready. Resolution is deterministic; telemetry never overrides it.
+  default_worker: codex
+  fallback_order: [codex, claude-code]
+  # The planner itself runs on this worker (primary, then fallback if not ready).
   planning_gate:
     primary: claude-code
     fallback: codex
-  implementation:
-    primary: codex
-    fallback: claude-code
-  review_or_handoff:
-    primary: claude-code
-    fallback: codex
-  failed_validation_repair:
-    primary: codex
-    fallback: claude-code
-  ambiguous_scope:
-    primary: claude-code
-    fallback: none

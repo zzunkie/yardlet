@@ -59,6 +59,8 @@ struct PlanTask {
     allowed_scope: Vec<String>,
     #[serde(default)]
     acceptance: Vec<String>,
+    #[serde(default)]
+    worker_rationale: Option<String>,
 }
 
 // ---- report ---------------------------------------------------------------
@@ -99,7 +101,9 @@ pub fn run_planning(
         &run_dir.join("evidence").join("repo-summary.md"),
         &inspect::to_markdown(&summary),
     )?;
-    let packet_text = packet::compile_planning(request, &summary, &run_dir_rel, &language);
+    let worker_guidance = build_worker_guidance(&workers);
+    let packet_text =
+        packet::compile_planning(request, &summary, &run_dir_rel, &language, &worker_guidance);
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
     // Invoke the worker with a sanitized, zero-key environment.
@@ -203,6 +207,7 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             validation: None,
             approval: None,
             interaction: None,
+            worker_rationale: t.worker_rationale.clone(),
         })
         .collect();
 
@@ -215,6 +220,23 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
     }
 }
 
+/// Build the planner's worker-selection rubric from the editable profiles.
+fn build_worker_guidance(workers: &WorkersFile) -> String {
+    let mut g = format!("Cost bias: {}.\n", workers.routing.cost_bias);
+    for w in &workers.workers {
+        if w.best_for.is_empty() {
+            continue;
+        }
+        let cost = if w.cost_weight.is_empty() {
+            "?"
+        } else {
+            &w.cost_weight
+        };
+        g.push_str(&format!("- {}: {} (cost: {})\n", w.id, w.best_for, cost));
+    }
+    g
+}
+
 /// Resolve the ordered worker preference and return the first that is ready.
 fn pick_ready_worker(
     workers: &WorkersFile,
@@ -225,13 +247,10 @@ fn pick_ready_worker(
     if let Some(o) = worker_override {
         order.push(o.to_string());
     }
-    if let Some(routing) = workers.routing.get("planning_gate") {
-        for key in ["primary", "fallback"] {
-            if let Some(v) = routing.get(key).and_then(|v| v.as_str()) {
-                if v != "none" {
-                    order.push(v.to_string());
-                }
-            }
+    let pg = &workers.routing.planning_gate;
+    for v in [&pg.primary, &pg.fallback] {
+        if !v.is_empty() && v != "none" {
+            order.push(v.clone());
         }
     }
     order.push("codex".to_string());

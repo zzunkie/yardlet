@@ -220,6 +220,7 @@ pub fn compile_planning(
     repo: &RepoSummary,
     run_dir_rel: &str,
     language: &str,
+    worker_guidance: &str,
 ) -> String {
     let mut p = String::new();
     p.push_str("# Yard planning gate\n\n");
@@ -262,6 +263,16 @@ pub fn compile_planning(
          assumptions otherwise.\n\
          - Never ask the user to review code, architecture, or diffs.\n\n",
     );
+
+    if !worker_guidance.is_empty() {
+        p.push_str("## Worker selection\n\n");
+        p.push_str(worker_guidance);
+        p.push_str(
+            "\nFor each task, set `preferred_worker` to the best fit and give a one-line \
+             `worker_rationale`. Weigh the cost bias: prefer the cheaper worker for routine, \
+             well-scoped work; reserve the pricier one for hard, ambiguous, or broad tasks.\n\n",
+        );
+    }
 
     p.push_str(&language_directive(language));
 
@@ -310,6 +321,7 @@ const PLANNING_SCHEMA_HINT: &str = r#"```json
       "kind": "research|implementation|review|safety",
       "risk": "low|medium|high",
       "preferred_worker": "codex|claude-code",
+      "worker_rationale": "one line: why this worker fits this task",
       "allowed_scope": ["..."],
       "acceptance": ["..."]
     }

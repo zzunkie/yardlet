@@ -153,6 +153,9 @@ pub struct Task {
     pub approval: Option<yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interaction: Option<yaml::Value>,
+    /// One-line reason the planner chose this task's preferred_worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_rationale: Option<String>,
 }
 
 impl Task {
@@ -178,7 +181,47 @@ pub struct WorkersFile {
     #[serde(default)]
     pub workers: Vec<WorkerProfile>,
     #[serde(default)]
-    pub routing: yaml::Value,
+    pub routing: Routing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Routing {
+    #[serde(default = "default_codex")]
+    pub default_worker: String,
+    #[serde(default)]
+    pub fallback_order: Vec<String>,
+    /// Human cost dial read by the planner: cheap | balanced | quality.
+    #[serde(default = "default_cost_bias")]
+    pub cost_bias: String,
+    #[serde(default)]
+    pub planning_gate: GateRoute,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GateRoute {
+    #[serde(default)]
+    pub primary: String,
+    #[serde(default)]
+    pub fallback: String,
+}
+
+fn default_codex() -> String {
+    "codex".to_string()
+}
+
+fn default_cost_bias() -> String {
+    "balanced".to_string()
+}
+
+impl Default for Routing {
+    fn default() -> Self {
+        Self {
+            default_worker: default_codex(),
+            fallback_order: vec!["codex".to_string(), "claude-code".to_string()],
+            cost_bias: default_cost_bias(),
+            planning_gate: GateRoute::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,6 +231,12 @@ pub struct WorkerProfile {
     pub kind: String,
     #[serde(default)]
     pub role_strengths: Vec<String>,
+    /// Task characteristics this worker is good at (planner rubric; policy).
+    #[serde(default)]
+    pub best_for: String,
+    /// Relative subscription cost pressure: low | high (planner rubric).
+    #[serde(default)]
+    pub cost_weight: String,
     #[serde(default)]
     pub billing: Billing,
     pub invocation: Invocation,

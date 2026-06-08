@@ -216,6 +216,7 @@ mod tests {
             validation: None,
             approval: None,
             interaction: None,
+            worker_rationale: None,
         };
 
         let eval = evaluate(&dir, "run-x", &t);
