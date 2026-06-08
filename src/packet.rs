@@ -17,6 +17,50 @@ pub struct PacketInputs<'a> {
     pub prior_question: Option<&'a str>,
     /// The user's answer to that question, when resuming.
     pub user_answer: Option<&'a str>,
+    /// Resolved output language for user-facing content ("ko", "en", ...).
+    pub language: &'a str,
+}
+
+/// Resolve the output language: an explicit config wins; "auto" detects Korean
+/// (Hangul) in the sample text, else falls back to English.
+pub fn resolve_language(configured: &str, sample: &str) -> String {
+    if !configured.is_empty() && configured != "auto" {
+        return configured.to_string();
+    }
+    if sample
+        .chars()
+        .any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c))
+    {
+        "ko".to_string()
+    } else {
+        "en".to_string()
+    }
+}
+
+fn language_name(code: &str) -> &str {
+    match code {
+        "ko" => "Korean",
+        "ja" => "Japanese",
+        "zh" => "Chinese",
+        "es" => "Spanish",
+        "fr" => "French",
+        "de" => "German",
+        _ => "English",
+    }
+}
+
+/// A directive telling the worker which language user-facing content should use.
+/// Returns empty for English (the default), so packets stay lean.
+fn language_directive(code: &str) -> String {
+    if code == "en" || code.is_empty() {
+        return String::new();
+    }
+    format!(
+        "## Language\n\nWrite all user-facing content in {lang}: the plan summary, task titles, \
+         acceptance text, the handoff, any question_for_user, and result `compact_summary`. Keep \
+         code, identifiers, file paths, commands, and JSON/YAML keys in English.\n\n",
+        lang = language_name(code)
+    )
 }
 
 pub fn compile(inputs: &PacketInputs) -> String {
@@ -138,6 +182,18 @@ pub fn compile(inputs: &PacketInputs) -> String {
         }
     }
 
+    // Permission boundary: report, do not bypass.
+    p.push_str("## If you are blocked by permissions\n\n");
+    p.push_str(
+        "You run in a bounded sandbox. If a needed write or command is denied, or you need \
+         network, package install, production access, or a destructive action, do NOT try to \
+         bypass the sandbox. Stop and report it: set `status` to `needs_user` and put exactly \
+         what access you need in `question_for_user`. The user can then grant it and resume.\n\n",
+    );
+
+    // Output language.
+    p.push_str(&language_directive(inputs.language));
+
     // Output contract.
     p.push_str("## Required output\n\n");
     p.push_str(&format!(
@@ -159,7 +215,12 @@ pub fn compile(inputs: &PacketInputs) -> String {
 /// `.agents/intent-contract.yaml` and `.agents/work-queue.yaml` files it
 /// derives from the result. The worker therefore only needs write access to
 /// the run directory.
-pub fn compile_planning(request: &str, repo: &RepoSummary, run_dir_rel: &str) -> String {
+pub fn compile_planning(
+    request: &str,
+    repo: &RepoSummary,
+    run_dir_rel: &str,
+    language: &str,
+) -> String {
     let mut p = String::new();
     p.push_str("# Yard planning gate\n\n");
     p.push_str(
@@ -202,12 +263,35 @@ pub fn compile_planning(request: &str, repo: &RepoSummary, run_dir_rel: &str) ->
          - Never ask the user to review code, architecture, or diffs.\n\n",
     );
 
+    p.push_str(&language_directive(language));
+
     p.push_str("## Required output\n\n");
     p.push_str(&format!(
         "Write exactly one file: `{run_dir_rel}/planning-result.json`, matching this shape:\n\n"
     ));
     p.push_str(PLANNING_SCHEMA_HINT);
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_korean_and_respects_config() {
+        assert_eq!(resolve_language("auto", "관리자 주문 검색"), "ko");
+        assert_eq!(resolve_language("auto", "add admin order search"), "en");
+        // an explicit config wins over detection
+        assert_eq!(resolve_language("en", "관리자"), "en");
+        assert_eq!(resolve_language("ko", "english text"), "ko");
+    }
+
+    #[test]
+    fn directive_empty_for_english_only() {
+        assert!(language_directive("en").is_empty());
+        assert!(language_directive("").is_empty());
+        assert!(language_directive("ko").contains("Korean"));
+    }
 }
 
 const PLANNING_SCHEMA_HINT: &str = r#"```json

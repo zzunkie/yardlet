@@ -13,6 +13,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_language() -> String {
+    "auto".to_string()
+}
+
 // ---------------------------------------------------------------------------
 // .agents/yard.yaml
 // ---------------------------------------------------------------------------
@@ -27,6 +31,10 @@ pub struct YardConfig {
     pub default_interface: String,
     pub canonical_queue: String,
     pub current_intent: String,
+    /// User-facing output language for worker content: "auto" (detect from the
+    /// request), "ko", "en", etc. Yard's own CLI/TUI chrome stays English.
+    #[serde(default = "default_language")]
+    pub language: String,
 }
 
 // ---------------------------------------------------------------------------

@@ -80,6 +80,8 @@ pub fn run_planning(
 ) -> Result<PlanningReport> {
     let workers = ws.load_workers()?;
     let billing = ws.load_billing()?;
+    let config = ws.load_config()?;
+    let language = packet::resolve_language(&config.language, request);
 
     // Choose a ready planning worker.
     let (profile, bin, worker_id) = pick_ready_worker(&workers, &billing, worker_override)?;
@@ -97,7 +99,7 @@ pub fn run_planning(
         &run_dir.join("evidence").join("repo-summary.md"),
         &inspect::to_markdown(&summary),
     )?;
-    let packet_text = packet::compile_planning(request, &summary, &run_dir_rel);
+    let packet_text = packet::compile_planning(request, &summary, &run_dir_rel, &language);
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
     // Invoke the worker with a sanitized, zero-key environment.
@@ -111,6 +113,7 @@ pub fn run_planning(
         &env,
         &run_dir.join("worker-output.log"),
         timeout,
+        false, // planning never needs elevated access
     )?;
     lines.push(format!("worker outcome: {}", outcome.note));
 

@@ -55,6 +55,9 @@ pub struct AnswerArgs {
     /// The task to answer (defaults to the one waiting on you).
     #[arg(long)]
     task: Option<String>,
+    /// Drop the worker sandbox when resuming (e.g. to grant the access asked for).
+    #[arg(long)]
+    full_access: bool,
 }
 
 #[derive(Args)]
@@ -130,6 +133,9 @@ pub struct RunArgs {
     /// Override the worker for this run.
     #[arg(long)]
     worker: Option<String>,
+    /// Drop the worker sandbox (network, installs, etc.). Use with care.
+    #[arg(long)]
+    full_access: bool,
     /// Non-interactive output (no extra prompts).
     #[arg(long)]
     headless: bool,
@@ -246,6 +252,7 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
             worker_override: None,
             target: Some(task_id),
             answer: Some(reply),
+            full_access: args.full_access,
         },
     )?;
     for line in &report.lines {
@@ -407,6 +414,13 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         .find(|t| t.id == args.task)
         .ok_or_else(|| anyhow::anyhow!("task '{}' not found in the queue", args.task))?;
     let summary = inspect::summarize(&ws.root);
+    let config = ws.load_config()?;
+    let sample = intent
+        .as_ref()
+        .map(|i| i.raw_request.clone())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| task.title.clone());
+    let language = packet::resolve_language(&config.language, &sample);
     let text = packet::compile(&packet::PacketInputs {
         worker_id: &args.worker,
         task,
@@ -415,6 +429,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         run_dir_rel: ".agents/runs/<run-id>",
         prior_question: None,
         user_answer: None,
+        language: &language,
     });
     if args.dry_run {
         eprintln!("(dry-run: packet not persisted)\n");
@@ -433,6 +448,7 @@ fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
             worker_override: args.worker,
             target: None,
             answer: None,
+            full_access: args.full_access,
         },
     )?;
     for line in &report.lines {

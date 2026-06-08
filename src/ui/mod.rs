@@ -291,6 +291,7 @@ fn start_answer(app: &mut App) {
                 worker_override: None,
                 target: Some(task_id.clone()),
                 answer: Some(answer),
+                full_access: false,
             },
         ) {
             Ok(r) => {

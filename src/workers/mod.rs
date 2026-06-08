@@ -30,23 +30,40 @@ use crate::schemas::WorkerProfile;
 /// result/handoff artifacts:
 ///   - codex: `--sandbox workspace-write` bounds writes to the workspace.
 ///   - claude: `--permission-mode acceptEdits` allows edits without prompts.
-pub fn build_command(worker_id: &str, bin: &Path, run_dir: &Path, cwd: &Path) -> Command {
+pub fn build_command(
+    worker_id: &str,
+    bin: &Path,
+    run_dir: &Path,
+    cwd: &Path,
+    full_access: bool,
+) -> Command {
     let mut cmd = Command::new(bin);
     // The worker must be able to write its artifacts into the run directory.
     // Codex's workspace-write sandbox treats the hidden `.agents/` tree as
     // read-only, so the run dir is added as an explicit writable root.
+    //
+    // `full_access` is the explicit, opt-in escalation: it drops the sandbox so
+    // the worker can reach the network, install packages, etc. Off by default.
     match worker_id {
         "codex" => {
-            cmd.args([
-                "exec",
-                "--sandbox",
-                "workspace-write",
-                "--skip-git-repo-check",
-            ]);
-            cmd.arg("--add-dir").arg(run_dir);
+            let sandbox = if full_access {
+                "danger-full-access"
+            } else {
+                "workspace-write"
+            };
+            cmd.arg("exec")
+                .arg("--sandbox")
+                .arg(sandbox)
+                .arg("--skip-git-repo-check")
+                .arg("--add-dir")
+                .arg(run_dir);
         }
         "claude-code" => {
-            cmd.args(["-p", "--permission-mode", "acceptEdits"]);
+            if full_access {
+                cmd.arg("-p").arg("--dangerously-skip-permissions");
+            } else {
+                cmd.arg("-p").arg("--permission-mode").arg("acceptEdits");
+            }
             cmd.arg("--add-dir").arg(run_dir);
         }
         _ => {}
@@ -68,6 +85,7 @@ pub struct WorkerOutcome {
 ///
 /// This is the only place Yard launches a worker. It uses the env produced by
 /// the zero-key guard; it never injects an AI provider API key.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     profile: &WorkerProfile,
     bin: &Path,
@@ -76,11 +94,12 @@ pub fn spawn(
     env: &[(String, String)],
     output_log: &Path,
     timeout: Duration,
+    full_access: bool,
 ) -> Result<WorkerOutcome> {
     use std::io::Write;
 
     let run_dir = output_log.parent().unwrap_or(cwd);
-    let mut cmd = build_command(&profile.id, bin, run_dir, cwd);
+    let mut cmd = build_command(&profile.id, bin, run_dir, cwd, full_access);
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -142,4 +161,34 @@ pub fn spawn(
 /// The packet file path inside a run directory.
 pub fn packet_path(run_dir: &Path) -> PathBuf {
     run_dir.join("task-packet.md")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args_of(cmd: &Command) -> Vec<String> {
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn codex_sandbox_toggles_with_full_access() {
+        let (bin, run, cwd) = (Path::new("codex"), Path::new("/tmp/r"), Path::new("/tmp"));
+        let safe = args_of(&build_command("codex", bin, run, cwd, false));
+        assert!(safe.iter().any(|a| a == "workspace-write"));
+        assert!(!safe.iter().any(|a| a == "danger-full-access"));
+        let full = args_of(&build_command("codex", bin, run, cwd, true));
+        assert!(full.iter().any(|a| a == "danger-full-access"));
+    }
+
+    #[test]
+    fn claude_permission_toggles_with_full_access() {
+        let (bin, run, cwd) = (Path::new("claude"), Path::new("/tmp/r"), Path::new("/tmp"));
+        let safe = args_of(&build_command("claude-code", bin, run, cwd, false));
+        assert!(safe.iter().any(|a| a == "acceptEdits"));
+        let full = args_of(&build_command("claude-code", bin, run, cwd, true));
+        assert!(full.iter().any(|a| a == "--dangerously-skip-permissions"));
+    }
 }

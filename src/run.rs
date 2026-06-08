@@ -28,6 +28,9 @@ pub struct RunOptions {
     pub target: Option<String>,
     /// The user's answer to a worker's prior question, threaded into the packet.
     pub answer: Option<String>,
+    /// Explicit, opt-in escalation: drop the worker sandbox (network, installs,
+    /// etc.). Off by default; this is a human-granted permission.
+    pub full_access: bool,
 }
 
 impl RunOptions {
@@ -38,6 +41,7 @@ impl RunOptions {
             worker_override: None,
             target: None,
             answer: None,
+            full_access: false,
         }
     }
 }
@@ -69,6 +73,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let workers = ws.load_workers()?;
     let billing = ws.load_billing()?;
     let intent = ws.load_intent()?;
+    let config = ws.load_config()?;
 
     // ---- select task: a named target, or the next eligible queued one ---
     let idx = match &opts.target {
@@ -123,6 +128,19 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     )?;
 
     // ---- compile packet --------------------------------------------------
+    // Resolve output language from config (auto-detects Korean from the intent).
+    let lang_sample = intent
+        .as_ref()
+        .map(|i| {
+            if !i.raw_request.is_empty() {
+                i.raw_request.clone()
+            } else {
+                i.summary.clone()
+            }
+        })
+        .unwrap_or_else(|| task.title.clone());
+    let language = packet::resolve_language(&config.language, &lang_sample);
+
     let packet_text = packet::compile(&PacketInputs {
         worker_id: &worker_id,
         task: &task,
@@ -131,6 +149,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         run_dir_rel: &run_dir_rel,
         prior_question: prior_question.as_deref(),
         user_answer: opts.answer.as_deref(),
+        language: &language,
     });
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
@@ -210,6 +229,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         &env,
         &run_dir.join("worker-output.log"),
         timeout,
+        opts.full_access,
     )?;
     lines.push(format!(
         "worker outcome: {} (exit_ok={}, timed_out={})",

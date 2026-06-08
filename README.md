@@ -61,6 +61,26 @@ When a worker needs input it leaves the task in **NeedsUser** with a question.
 `yard status` (and the TUI) shows the question; reply with `yard answer "..."`
 (or press `a` in the TUI) and Yard re-runs the task with your answer.
 
+## Language
+
+Worker-authored content (plan summary, task titles, handoff, questions) follows
+your language. By default Yard auto-detects it from your request, so a Korean
+request gets a Korean plan and handoff while code and identifiers stay English.
+Set `language:` in `.agents/yard.yaml` to `ko`/`en`/etc. to force one.
+
+## Permissions
+
+Workers run in a bounded sandbox by default (local files and tests, no network).
+This is layered:
+
+1. **Safe by default** — codex `workspace-write`, claude `acceptEdits`.
+2. **Report, don't bypass** — if a worker needs network, an install, production,
+   or a destructive action, it stops and asks via **NeedsUser** instead of
+   failing silently. You grant access and resume.
+3. **Explicit escalation** — `yard run --next --execute --full-access` (or
+   `yard answer --full-access`) drops the sandbox for that run only. Off by
+   default; it is a human-granted permission, never automatic.
+
 `run --next` prepares a run and stops *before* invoking a worker by default,
 because spawning a subscription-backed worker consumes usage. Pass `--execute`
 to actually run it.
