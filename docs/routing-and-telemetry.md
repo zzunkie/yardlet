@@ -1,6 +1,6 @@
 # Worker Routing + Telemetry Loop — Design
 
-> Status: design (not yet implemented)
+> Status: implemented (all four phases)
 > Decides: which worker (Codex CLI / Claude Code CLI) runs each task, and how
 > that decision stays correct as models, costs, and task mixes change.
 
