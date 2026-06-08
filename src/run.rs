@@ -137,6 +137,10 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         })
         .unwrap_or_else(|| task.title.clone());
     let language = packet::resolve_language(&config.language, &lang_sample);
+    let images: Vec<String> = intent
+        .as_ref()
+        .map(|i| i.images.clone())
+        .unwrap_or_default();
 
     let packet_text = packet::compile(&PacketInputs {
         worker_id: &worker_id,
@@ -147,6 +151,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         prior_question: prior_question.as_deref(),
         user_answer: opts.answer.as_deref(),
         language: &language,
+        images: &images,
     });
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
@@ -230,6 +235,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         &run_dir.join("worker-output.log"),
         timeout,
         full_access,
+        &images,
     )?;
     let wall_seconds = run_started.elapsed().as_secs();
     lines.push(format!(

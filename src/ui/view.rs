@@ -106,10 +106,7 @@ fn render_monitor(frame: &mut Frame, app: &App) {
         }
         None => String::new(),
     };
-    frame.render_widget(
-        Paragraph::new(body).block(Block::bordered()),
-        chunks[1],
-    );
+    frame.render_widget(Paragraph::new(body).block(Block::bordered()), chunks[1]);
 
     render_footer(frame, chunks[2], l.footer_monitor);
 }

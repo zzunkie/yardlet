@@ -79,11 +79,20 @@ pub fn run_planning(
     ws: &Workspace,
     request: &str,
     worker_override: Option<&str>,
+    explicit_images: &[String],
 ) -> Result<PlanningReport> {
     let workers = ws.load_workers()?;
     let billing = ws.load_billing()?;
     let config = ws.load_config()?;
     let language = packet::resolve_language(&config.language, request);
+
+    // Images: explicit --image plus any path detected in the request.
+    let mut images: Vec<String> = explicit_images.to_vec();
+    for d in packet::detect_images(request, &ws.root) {
+        if !images.contains(&d) {
+            images.push(d);
+        }
+    }
 
     // Choose a ready planning worker.
     let (profile, bin, worker_id) = pick_ready_worker(&workers, &billing, worker_override)?;
@@ -102,8 +111,14 @@ pub fn run_planning(
         &inspect::to_markdown(&summary),
     )?;
     let worker_guidance = build_worker_guidance(&workers);
-    let packet_text =
-        packet::compile_planning(request, &summary, &run_dir_rel, &language, &worker_guidance);
+    let packet_text = packet::compile_planning(
+        request,
+        &summary,
+        &run_dir_rel,
+        &language,
+        &worker_guidance,
+        &images,
+    );
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
     // Invoke the worker with a sanitized, zero-key environment.
@@ -118,6 +133,7 @@ pub fn run_planning(
         &run_dir.join("worker-output.log"),
         timeout,
         false, // planning never needs elevated access
+        &images,
     )?;
     lines.push(format!("worker outcome: {}", outcome.note));
 
@@ -142,7 +158,7 @@ pub fn run_planning(
 
     // Derive canonical state. Yard owns these files.
     let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
-    let intent = build_intent(&intent_id, request, &plan);
+    let intent = build_intent(&intent_id, request, &plan, &images);
     let queue = build_queue(&intent_id, &plan);
 
     state::save_yaml(&ws.intent_path(), &intent)?;
@@ -158,7 +174,12 @@ pub fn run_planning(
     })
 }
 
-fn build_intent(intent_id: &str, request: &str, plan: &PlanningResult) -> IntentContract {
+fn build_intent(
+    intent_id: &str,
+    request: &str,
+    plan: &PlanningResult,
+    images: &[String],
+) -> IntentContract {
     IntentContract {
         schema_version: 1,
         id: intent_id.to_string(),
@@ -173,6 +194,7 @@ fn build_intent(intent_id: &str, request: &str, plan: &PlanningResult) -> Intent
             .filter(|a| !a.statement.trim().is_empty())
             .map(|a| yaml::Value::String(a.statement.clone()))
             .collect(),
+        images: images.to_vec(),
         status: "accepted".to_string(),
     }
 }

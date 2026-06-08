@@ -67,6 +67,10 @@ pub struct IntentContract {
     pub out_of_scope: Vec<String>,
     #[serde(default)]
     pub acceptance: Vec<yaml::Value>,
+    /// Local image paths attached to this goal (passed to the worker natively:
+    /// codex `-i`, claude reads them), so Yard does not lose the CLIs' vision.
+    #[serde(default)]
+    pub images: Vec<String>,
     #[serde(default)]
     pub status: String,
 }

@@ -484,7 +484,7 @@ fn start_planning(app: &mut App) {
     let (planned_via, tasks_word, failed) = (lbl.planned_via, lbl.tasks_word, lbl.planning_failed);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let res = match crate::planner::run_planning(&ws, &request, None) {
+        let res = match crate::planner::run_planning(&ws, &request, None, &[]) {
             Ok(r) => JobResult {
                 ok: true,
                 summary: format!(

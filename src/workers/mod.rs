@@ -30,6 +30,7 @@ use crate::schemas::WorkerProfile;
 /// result/handoff artifacts:
 ///   - codex: `--sandbox workspace-write` bounds writes to the workspace.
 ///   - claude: `--permission-mode acceptEdits` allows edits without prompts.
+#[allow(clippy::too_many_arguments)]
 pub fn build_command(
     worker_id: &str,
     bin: &Path,
@@ -38,6 +39,7 @@ pub fn build_command(
     full_access: bool,
     model: &str,
     effort: &str,
+    images: &[String],
 ) -> Command {
     let mut cmd = Command::new(bin);
     // The worker must be able to write its artifacts into the run directory.
@@ -63,6 +65,10 @@ pub fn build_command(
             if !effort.is_empty() {
                 cmd.arg("-c")
                     .arg(format!("model_reasoning_effort=\"{effort}\""));
+            }
+            // Attach images natively (codex vision), so Yard does not lose it.
+            for img in images {
+                cmd.arg("-i").arg(img);
             }
             cmd.arg("--add-dir").arg(run_dir);
         }
@@ -109,6 +115,7 @@ pub fn spawn(
     output_log: &Path,
     timeout: Duration,
     full_access: bool,
+    images: &[String],
 ) -> Result<WorkerOutcome> {
     use std::io::Write;
 
@@ -121,6 +128,7 @@ pub fn spawn(
         full_access,
         &profile.model,
         &profile.effort,
+        images,
     );
     for (k, v) in env {
         cmd.env(k, v);
@@ -217,19 +225,37 @@ mod tests {
     #[test]
     fn codex_sandbox_toggles_with_full_access() {
         let (bin, run, cwd) = (Path::new("codex"), Path::new("/tmp/r"), Path::new("/tmp"));
-        let safe = args_of(&build_command("codex", bin, run, cwd, false, "", ""));
+        let safe = args_of(&build_command("codex", bin, run, cwd, false, "", "", &[]));
         assert!(safe.iter().any(|a| a == "workspace-write"));
         assert!(!safe.iter().any(|a| a == "danger-full-access"));
-        let full = args_of(&build_command("codex", bin, run, cwd, true, "", ""));
+        let full = args_of(&build_command("codex", bin, run, cwd, true, "", "", &[]));
         assert!(full.iter().any(|a| a == "danger-full-access"));
     }
 
     #[test]
     fn claude_permission_toggles_with_full_access() {
         let (bin, run, cwd) = (Path::new("claude"), Path::new("/tmp/r"), Path::new("/tmp"));
-        let safe = args_of(&build_command("claude-code", bin, run, cwd, false, "", ""));
+        let safe = args_of(&build_command(
+            "claude-code",
+            bin,
+            run,
+            cwd,
+            false,
+            "",
+            "",
+            &[],
+        ));
         assert!(safe.iter().any(|a| a == "acceptEdits"));
-        let full = args_of(&build_command("claude-code", bin, run, cwd, true, "", ""));
+        let full = args_of(&build_command(
+            "claude-code",
+            bin,
+            run,
+            cwd,
+            true,
+            "",
+            "",
+            &[],
+        ));
         assert!(full.iter().any(|a| a == "--dangerously-skip-permissions"));
     }
 
@@ -237,7 +263,14 @@ mod tests {
     fn model_and_effort_flags_passed() {
         let (bin, run, cwd) = (Path::new("x"), Path::new("/tmp/r"), Path::new("/tmp"));
         let cx = args_of(&build_command(
-            "codex", bin, run, cwd, false, "gpt-5", "high",
+            "codex",
+            bin,
+            run,
+            cwd,
+            false,
+            "gpt-5",
+            "high",
+            &[],
         ));
         assert!(cx.windows(2).any(|w| w[0] == "-m" && w[1] == "gpt-5"));
         assert!(cx
@@ -251,8 +284,18 @@ mod tests {
             false,
             "opus",
             "high",
+            &[],
         ));
         assert!(cl.windows(2).any(|w| w[0] == "--model" && w[1] == "opus"));
         assert!(cl.windows(2).any(|w| w[0] == "--effort" && w[1] == "high"));
+    }
+
+    #[test]
+    fn codex_attaches_images() {
+        let (bin, run, cwd) = (Path::new("codex"), Path::new("/tmp/r"), Path::new("/tmp"));
+        let imgs = vec!["a.png".to_string(), "b.jpg".to_string()];
+        let cx = args_of(&build_command("codex", bin, run, cwd, false, "", "", &imgs));
+        assert!(cx.windows(2).any(|w| w[0] == "-i" && w[1] == "a.png"));
+        assert!(cx.windows(2).any(|w| w[0] == "-i" && w[1] == "b.jpg"));
     }
 }

@@ -104,6 +104,9 @@ pub struct NewArgs {
     /// Force a specific planning worker (codex | claude-code).
     #[arg(long)]
     worker: Option<String>,
+    /// Attach a local image (repeatable). Also auto-detected from the request.
+    #[arg(long = "image")]
+    images: Vec<String>,
     /// After planning, drain the queue autonomously (plan + run in one go).
     #[arg(long)]
     run: bool,
@@ -282,7 +285,7 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
         anyhow::bail!("provide a request, e.g. `yard new \"add admin order search\"`");
     }
     println!("Planning: {request}\n");
-    let report = crate::planner::run_planning(&ws, &request, args.worker.as_deref())?;
+    let report = crate::planner::run_planning(&ws, &request, args.worker.as_deref(), &args.images)?;
     println!(
         "planning worker: {}  ·  run: {}",
         report.worker_id, report.run_id
@@ -588,6 +591,10 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| task.title.clone());
     let language = packet::resolve_language(&config.language, &sample);
+    let images: Vec<String> = intent
+        .as_ref()
+        .map(|i| i.images.clone())
+        .unwrap_or_default();
     let text = packet::compile(&packet::PacketInputs {
         worker_id: &args.worker,
         task,
@@ -597,6 +604,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         prior_question: None,
         user_answer: None,
         language: &language,
+        images: &images,
     });
     if args.dry_run {
         eprintln!("(dry-run: packet not persisted)\n");

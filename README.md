@@ -48,6 +48,7 @@ evaluator, and leaves a checkpoint and handoff under `.agents/runs/`.
 | `yard` | Open the terminal UI (auto-inits on first use). |
 | `yard init [--force]` | Explicitly scaffold `.agents/` state (optional). |
 | `yard new "<request>" [--worker <id>]` | Plan a request into an intent contract + queue. |
+| `yard new "..." --image <path>` | Attach a local image to the goal (also auto-detected from the request). |
 | `yard queue` | List the work queue. |
 | `yard status [--json]` | Workspace, intent, queue, and worker summary. |
 | `yard worker status` | Worker readiness and zero-key billing safety. |

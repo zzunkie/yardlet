@@ -19,6 +19,36 @@ pub struct PacketInputs<'a> {
     pub user_answer: Option<&'a str>,
     /// Resolved output language for user-facing content ("ko", "en", ...).
     pub language: &'a str,
+    /// Local image paths attached to the goal (also passed natively to the CLI).
+    pub images: &'a [String],
+}
+
+/// Find existing local image files referenced in `text` (e.g. a path dragged
+/// into the input). Whitespace-separated tokens ending in an image extension
+/// that resolve to a real file under `cwd` (or absolute).
+pub fn detect_images(text: &str, cwd: &std::path::Path) -> Vec<String> {
+    const EXTS: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"];
+    let mut out: Vec<String> = Vec::new();
+    for raw in text.split_whitespace() {
+        let tok =
+            raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | ',' | '(' | ')' | '<' | '>'));
+        let lower = tok.to_lowercase();
+        if !EXTS.iter().any(|e| lower.ends_with(e)) {
+            continue;
+        }
+        let p = if std::path::Path::new(tok).is_absolute() {
+            std::path::PathBuf::from(tok)
+        } else {
+            cwd.join(tok)
+        };
+        if p.is_file() {
+            let s = p.to_string_lossy().into_owned();
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        }
+    }
+    out
 }
 
 /// Resolve the output language: an explicit config wins; "auto" detects Korean
@@ -119,6 +149,16 @@ pub fn compile(inputs: &PacketInputs) -> String {
             if let Some(s) = a.as_str() {
                 p.push_str(&format!("- {s}\n"));
             }
+        }
+        p.push('\n');
+    }
+
+    // Attached images (also passed to the worker natively where supported).
+    if !inputs.images.is_empty() {
+        p.push_str("## Attached images\n\n");
+        p.push_str("The user attached these local images; read/inspect them as needed:\n");
+        for img in inputs.images {
+            p.push_str(&format!("- {img}\n"));
         }
         p.push('\n');
     }
@@ -230,6 +270,7 @@ pub fn compile_planning(
     run_dir_rel: &str,
     language: &str,
     worker_guidance: &str,
+    images: &[String],
 ) -> String {
     let mut p = String::new();
     p.push_str("# Yard planning gate\n\n");
@@ -241,6 +282,14 @@ pub fn compile_planning(
     p.push_str("## Request (verbatim)\n\n");
     p.push_str(request);
     p.push_str("\n\n");
+
+    if !images.is_empty() {
+        p.push_str("## Attached images\n\n");
+        for img in images {
+            p.push_str(&format!("- {img}\n"));
+        }
+        p.push('\n');
+    }
 
     p.push_str("## Local environment (evidence, not a task list)\n\n");
     p.push_str(&format!("- root: `{}`\n", repo.root));
@@ -311,6 +360,19 @@ mod tests {
         assert!(language_directive("en").is_empty());
         assert!(language_directive("").is_empty());
         assert!(language_directive("ko").contains("Korean"));
+    }
+
+    #[test]
+    fn detects_only_existing_image_paths() {
+        let dir = std::env::temp_dir().join(format!("yard-img-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("shot.png"), b"x").unwrap();
+        let found = detect_images("see shot.png and notes.txt", &dir);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].ends_with("shot.png"));
+        // a referenced-but-missing image is not attached
+        assert!(detect_images("see missing.jpg", &dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
