@@ -217,6 +217,8 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         }
         KeyCode::Char('g') if !app.is_busy() => app.reload(),
         KeyCode::Char('l') if !app.is_busy() => toggle_language(app),
+        // Access can be toggled even mid-run; it takes effect on the next task.
+        KeyCode::Char('f') => toggle_access(app),
         _ if app.is_busy() => app.toast = Some((true, app.lang.l().busy.into())),
         _ => {}
     }
@@ -244,6 +246,24 @@ fn handle_new_work_key(app: &mut App, code: KeyCode) {
         KeyCode::Char(c) => app.input.push(c),
         _ => {}
     }
+}
+
+/// Flip the default worker access (sandboxed <-> full) and persist it. Safe to
+/// do mid-run; the next task picks it up.
+fn toggle_access(app: &mut App) {
+    if let Ok(mut cfg) = app.ws.load_config() {
+        cfg.default_access = if cfg.default_access.eq_ignore_ascii_case("full") {
+            "sandboxed".to_string()
+        } else {
+            "full".to_string()
+        };
+        let _ = crate::state::save_yaml(&app.ws.config_path(), &cfg);
+        app.toast = Some((
+            true,
+            format!("{}: {}", app.lang.l().access_word, cfg.default_access),
+        ));
+    }
+    app.reload();
 }
 
 /// Flip the UI language between English and Korean and persist it to yard.yaml.

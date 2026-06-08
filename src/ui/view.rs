@@ -100,12 +100,14 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
             Span::raw(l.workspace),
             Span::styled(snap.config.product.clone(), Style::default().bold()),
             Span::raw(format!(
-                "   {}: {} {}   {}: {}",
+                "   {}: {} {}   {}: {}   {}: {}",
                 l.workers_word,
                 snap.workers_ready(),
                 l.ready_word,
                 l.planner,
-                snap.planner
+                snap.planner,
+                l.access_word,
+                snap.config.default_access,
             )),
         ]),
         Line::from(vec![

@@ -36,6 +36,8 @@ pub fn build_command(
     run_dir: &Path,
     cwd: &Path,
     full_access: bool,
+    model: &str,
+    effort: &str,
 ) -> Command {
     let mut cmd = Command::new(bin);
     // The worker must be able to write its artifacts into the run directory.
@@ -54,15 +56,27 @@ pub fn build_command(
             cmd.arg("exec")
                 .arg("--sandbox")
                 .arg(sandbox)
-                .arg("--skip-git-repo-check")
-                .arg("--add-dir")
-                .arg(run_dir);
+                .arg("--skip-git-repo-check");
+            if !model.is_empty() {
+                cmd.arg("-m").arg(model);
+            }
+            if !effort.is_empty() {
+                cmd.arg("-c")
+                    .arg(format!("model_reasoning_effort=\"{effort}\""));
+            }
+            cmd.arg("--add-dir").arg(run_dir);
         }
         "claude-code" => {
             if full_access {
                 cmd.arg("-p").arg("--dangerously-skip-permissions");
             } else {
                 cmd.arg("-p").arg("--permission-mode").arg("acceptEdits");
+            }
+            if !model.is_empty() {
+                cmd.arg("--model").arg(model);
+            }
+            if !effort.is_empty() {
+                cmd.arg("--effort").arg(effort);
             }
             cmd.arg("--add-dir").arg(run_dir);
         }
@@ -99,7 +113,15 @@ pub fn spawn(
     use std::io::Write;
 
     let run_dir = output_log.parent().unwrap_or(cwd);
-    let mut cmd = build_command(&profile.id, bin, run_dir, cwd, full_access);
+    let mut cmd = build_command(
+        &profile.id,
+        bin,
+        run_dir,
+        cwd,
+        full_access,
+        &profile.model,
+        &profile.effort,
+    );
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -176,19 +198,42 @@ mod tests {
     #[test]
     fn codex_sandbox_toggles_with_full_access() {
         let (bin, run, cwd) = (Path::new("codex"), Path::new("/tmp/r"), Path::new("/tmp"));
-        let safe = args_of(&build_command("codex", bin, run, cwd, false));
+        let safe = args_of(&build_command("codex", bin, run, cwd, false, "", ""));
         assert!(safe.iter().any(|a| a == "workspace-write"));
         assert!(!safe.iter().any(|a| a == "danger-full-access"));
-        let full = args_of(&build_command("codex", bin, run, cwd, true));
+        let full = args_of(&build_command("codex", bin, run, cwd, true, "", ""));
         assert!(full.iter().any(|a| a == "danger-full-access"));
     }
 
     #[test]
     fn claude_permission_toggles_with_full_access() {
         let (bin, run, cwd) = (Path::new("claude"), Path::new("/tmp/r"), Path::new("/tmp"));
-        let safe = args_of(&build_command("claude-code", bin, run, cwd, false));
+        let safe = args_of(&build_command("claude-code", bin, run, cwd, false, "", ""));
         assert!(safe.iter().any(|a| a == "acceptEdits"));
-        let full = args_of(&build_command("claude-code", bin, run, cwd, true));
+        let full = args_of(&build_command("claude-code", bin, run, cwd, true, "", ""));
         assert!(full.iter().any(|a| a == "--dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn model_and_effort_flags_passed() {
+        let (bin, run, cwd) = (Path::new("x"), Path::new("/tmp/r"), Path::new("/tmp"));
+        let cx = args_of(&build_command(
+            "codex", bin, run, cwd, false, "gpt-5", "high",
+        ));
+        assert!(cx.windows(2).any(|w| w[0] == "-m" && w[1] == "gpt-5"));
+        assert!(cx
+            .iter()
+            .any(|a| a.contains("model_reasoning_effort=\"high\"")));
+        let cl = args_of(&build_command(
+            "claude-code",
+            bin,
+            run,
+            cwd,
+            false,
+            "opus",
+            "high",
+        ));
+        assert!(cl.windows(2).any(|w| w[0] == "--model" && w[1] == "opus"));
+        assert!(cl.windows(2).any(|w| w[0] == "--effort" && w[1] == "high"));
     }
 }

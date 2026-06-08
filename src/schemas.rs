@@ -247,6 +247,13 @@ pub struct WorkerProfile {
     /// Relative subscription cost pressure: low | high (planner rubric).
     #[serde(default)]
     pub cost_weight: String,
+    /// Model to run this worker with (alias or full id). Empty = CLI default.
+    #[serde(default)]
+    pub model: String,
+    /// Reasoning effort level (codex: minimal|low|medium|high; claude: per CLI).
+    /// Empty = CLI default.
+    #[serde(default)]
+    pub effort: String,
     #[serde(default)]
     pub billing: Billing,
     pub invocation: Invocation,
