@@ -297,9 +297,17 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 /// user (those need a human). A per-task attempt cap prevents looping on a task
 /// that keeps coming back partial. `bypass` drops the worker sandbox for the
 /// whole run (workers still self-gate dangerous actions per the packet).
-pub fn run_auto(ws: &Workspace, bypass: bool) -> Result<Vec<String>> {
+pub fn run_auto<F: FnMut(&str)>(
+    ws: &Workspace,
+    bypass: bool,
+    mut on_event: F,
+) -> Result<Vec<String>> {
     use std::collections::HashMap;
     let mut out = Vec::new();
+    let mut emit = |s: String| {
+        on_event(&s);
+        out.push(s);
+    };
     let mut attempts: HashMap<String, u32> = HashMap::new();
     let probe_opts = RunOptions {
         execute: false,
@@ -320,11 +328,11 @@ pub fn run_auto(ws: &Workspace, bypass: bool) -> Result<Vec<String>> {
                 )
             });
             match stuck {
-                Some(t) => out.push(format!(
+                Some(t) => emit(format!(
                     "stopped: {} is {:?} \u{2014} needs you (see `yard handoff`)",
                     t.id, t.state
                 )),
-                None => out.push("done: queue drained, all tasks complete".to_string()),
+                None => emit("done: queue drained, all tasks complete".to_string()),
             }
             break;
         };
@@ -333,12 +341,11 @@ pub fn run_auto(ws: &Workspace, bypass: bool) -> Result<Vec<String>> {
         let n = attempts.entry(task_id.clone()).or_default();
         *n += 1;
         if *n > 2 {
-            out.push(format!(
-                "stopped: {task_id} keeps coming back \u{2014} needs you"
-            ));
+            emit(format!("stopped: {task_id} keeps coming back \u{2014} needs you"));
             break;
         }
 
+        emit(format!("running {task_id}\u{2026}"));
         let report = run_next(
             ws,
             &RunOptions {
@@ -350,29 +357,23 @@ pub fn run_auto(ws: &Workspace, bypass: bool) -> Result<Vec<String>> {
             },
         )?;
         let state = report.result_state.unwrap_or(TaskState::Failed);
-        out.push(format!("{} \u{2192} {:?}", report.task_id, state));
+        emit(format!("{} \u{2192} {:?}", report.task_id, state));
 
         match state {
             TaskState::Done | TaskState::Queued => continue,
             TaskState::Blocked => {
-                out.push(format!(
-                    "stopped: {} blocked \u{2014} see `yard handoff`",
-                    report.task_id
-                ));
+                emit(format!("stopped: {} blocked \u{2014} see `yard handoff`", report.task_id));
                 break;
             }
             TaskState::NeedsUser => {
-                out.push(format!(
+                emit(format!(
                     "stopped: {} needs you \u{2014} `yard answer \"...\"`",
                     report.task_id
                 ));
                 break;
             }
             TaskState::Failed => {
-                out.push(format!(
-                    "stopped: {} failed \u{2014} needs you",
-                    report.task_id
-                ));
+                emit(format!("stopped: {} failed \u{2014} needs you", report.task_id));
                 break;
             }
             TaskState::Running => break,

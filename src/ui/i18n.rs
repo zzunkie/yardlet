@@ -184,7 +184,7 @@ pub const KO: L = L {
     s_done: "완료",
     queue_word: "큐",
     queue_empty: "  (큐 비어 있음 — n 눌러 새 작업 입력)",
-    workers_title: " 워커 · 무키 ",
+    workers_title: " 워커 · 키 불필요 ",
     w_ready: "준비됨",
     w_ambiguous: "모호",
     w_notready: "준비안됨",

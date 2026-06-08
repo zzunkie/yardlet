@@ -36,12 +36,18 @@ pub struct JobResult {
     pub summary: String,
 }
 
+/// Messages a background job streams to the UI loop.
+pub enum JobMsg {
+    Progress(String),
+    Done(JobResult),
+}
+
 pub enum Job {
     Idle,
     Running {
         label: String,
         started: Instant,
-        rx: Receiver<JobResult>,
+        rx: Receiver<JobMsg>,
     },
 }
 
@@ -52,6 +58,7 @@ pub struct App {
     pub input: String,
     pub job: Job,
     pub toast: Option<(bool, String)>,
+    pub progress: Option<String>,
     pub handoff_text: String,
     pub lang: i18n::Lang,
 }
@@ -74,6 +81,7 @@ impl App {
             input: String::new(),
             job: Job::Idle,
             toast: None,
+            progress: None,
             handoff_text: String::new(),
             lang,
         }
@@ -108,11 +116,25 @@ pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
 
 fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()> {
     loop {
-        // Drain a finished background job.
+        // Drain background-job messages: progress lines stream in; the final
+        // Done message ends the job.
         if let Job::Running { rx, .. } = &app.job {
-            if let Ok(res) = rx.try_recv() {
-                app.toast = Some((res.ok, res.summary));
+            let mut latest_progress = None;
+            let mut finished = None;
+            loop {
+                match rx.try_recv() {
+                    Ok(JobMsg::Progress(s)) => latest_progress = Some(s),
+                    Ok(JobMsg::Done(r)) => finished = Some(r),
+                    Err(_) => break,
+                }
+            }
+            if let Some(p) = latest_progress {
+                app.progress = Some(p);
+            }
+            if let Some(r) = finished {
+                app.toast = Some((r.ok, r.summary));
                 app.job = Job::Idle;
+                app.progress = None;
                 app.reload();
             }
         }
@@ -283,7 +305,7 @@ fn start_planning(app: &mut App) {
                 summary: format!("{failed} {e}"),
             },
         };
-        let _ = tx.send(res);
+        let _ = tx.send(JobMsg::Done(res));
     });
     app.job = Job::Running {
         label: format!("{} {planner}", lbl.run_word),
@@ -344,7 +366,7 @@ fn start_run(app: &mut App) {
                 summary: format!("{failed} {e}"),
             },
         };
-        let _ = tx.send(res);
+        let _ = tx.send(JobMsg::Done(res));
     });
     app.job = Job::Running {
         label: lbl.run_word.into(),
@@ -367,8 +389,11 @@ fn start_auto(app: &mut App) {
     let lbl = app.lang.l();
     let failed = lbl.run_failed;
     let (tx, rx) = mpsc::channel();
+    let txp = tx.clone();
     thread::spawn(move || {
-        let res = match run::run_auto(&ws, false) {
+        let res = match run::run_auto(&ws, false, |s| {
+            let _ = txp.send(JobMsg::Progress(s.to_string()));
+        }) {
             Ok(lines) => {
                 let last = lines.last().cloned().unwrap_or_default();
                 JobResult {
@@ -381,8 +406,9 @@ fn start_auto(app: &mut App) {
                 summary: format!("{failed} {e}"),
             },
         };
-        let _ = tx.send(res);
+        let _ = tx.send(JobMsg::Done(res));
     });
+    app.progress = None;
     app.job = Job::Running {
         label: format!("{} (auto)", lbl.run_word),
         started: Instant::now(),
@@ -424,7 +450,7 @@ fn start_answer(app: &mut App) {
                 summary: format!("{failed} {e}"),
             },
         };
-        let _ = tx.send(res);
+        let _ = tx.send(JobMsg::Done(res));
     });
     app.job = Job::Running {
         label: format!("{} {label_task}", lbl.run_word),

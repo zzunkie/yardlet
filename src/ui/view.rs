@@ -192,20 +192,17 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
     let line = match &app.job {
         Job::Running { label, started, .. } => {
             let frame_idx = (started.elapsed().as_millis() / 120) as usize % SPINNER.len();
+            let secs = started.elapsed().as_secs();
+            let body = match &app.progress {
+                Some(p) => format!("{p}  ({secs}{})", l.sec_unit),
+                None => format!("{label} {} ({secs}{})\u{2026}", l.run_word, l.sec_unit),
+            };
             Line::from(vec![
                 Span::styled(
                     format!(" {} ", SPINNER[frame_idx]),
                     Style::default().fg(Color::Yellow).bold(),
                 ),
-                Span::styled(
-                    format!(
-                        "{label} {} ({}{})\u{2026}",
-                        l.run_word,
-                        started.elapsed().as_secs(),
-                        l.sec_unit
-                    ),
-                    Style::default().fg(Color::Yellow),
-                ),
+                Span::styled(body, Style::default().fg(Color::Yellow)),
                 Span::styled(l.subscription_note, Style::default().fg(Color::DarkGray)),
             ])
         }

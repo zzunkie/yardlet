@@ -88,6 +88,12 @@ pub struct NewArgs {
     /// Force a specific planning worker (codex | claude-code).
     #[arg(long)]
     worker: Option<String>,
+    /// After planning, drain the queue autonomously (plan + run in one go).
+    #[arg(long)]
+    run: bool,
+    /// With --run: drop the sandbox (workers still self-gate dangerous actions).
+    #[arg(long)]
+    bypass: bool,
 }
 
 #[derive(Args)]
@@ -273,6 +279,11 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
         for q in &report.questions {
             println!("  - {q}");
         }
+    }
+    if args.run && report.task_count > 0 {
+        println!("\nRunning autonomously \u{2014} stops only if it needs you:\n");
+        run::run_auto(&ws, args.bypass, |s| println!("{s}"))?;
+        return Ok(());
     }
     println!("\nNext: `yard queue` to review, `yard run --next --execute` to run.");
     Ok(())
@@ -534,10 +545,7 @@ fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let _ = (args.next, args.headless); // --next is implied; --task targets one
     if args.auto {
-        let lines = run::run_auto(&ws, args.bypass || args.full_access)?;
-        for line in &lines {
-            println!("{line}");
-        }
+        run::run_auto(&ws, args.bypass || args.full_access, |s| println!("{s}"))?;
         return Ok(());
     }
     let report = run::run_next(
