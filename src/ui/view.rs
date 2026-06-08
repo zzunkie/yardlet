@@ -15,14 +15,20 @@ use crate::snapshot::Snapshot;
 
 const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
 
-/// The drawable area, less one right column so the box borders are not hidden
-/// under a terminal's overlay scrollbar.
+/// The drawable area, less a right margin so the box borders are not hidden
+/// under a terminal's overlay scrollbar. The margin defaults to 1 column and is
+/// tunable with `YARD_RIGHT_MARGIN` (e.g. `YARD_RIGHT_MARGIN=2 yard`) so it can
+/// be matched to a terminal without a rebuild.
 fn safe_area(frame: &Frame) -> Rect {
+    let margin: u16 = std::env::var("YARD_RIGHT_MARGIN")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(1);
     let a = frame.area();
     Rect {
         x: a.x,
         y: a.y,
-        width: a.width.saturating_sub(1).max(1),
+        width: a.width.saturating_sub(margin).max(1),
         height: a.height,
     }
 }
