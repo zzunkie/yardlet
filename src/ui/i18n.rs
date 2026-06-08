@@ -49,7 +49,7 @@ impl Lang {
 
 /// Label table. Every user-visible TUI string lives here.
 pub struct L {
-    pub app_title: &'static str,
+    pub subtitle: &'static str,
     pub workspace: &'static str,
     pub workers_word: &'static str,
     pub ready_word: &'static str,
@@ -108,7 +108,7 @@ pub struct L {
 }
 
 pub const EN: L = L {
-    app_title: " Yard \u{00b7} Local AI Workbench ",
+    subtitle: "Local AI Workbench",
     workspace: "Workspace: ",
     workers_word: "Workers",
     ready_word: "ready",
@@ -183,7 +183,7 @@ mod tests {
 }
 
 pub const KO: L = L {
-    app_title: " Yard \u{00b7} 로컬 AI 워크벤치 ",
+    subtitle: "로컬 AI 워크벤치",
     workspace: "워크스페이스: ",
     workers_word: "워커",
     ready_word: "준비",

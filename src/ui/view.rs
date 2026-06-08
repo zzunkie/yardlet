@@ -175,7 +175,11 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
         ]),
         status,
     ];
-    let block = Block::bordered().title(l.app_title);
+    let block = Block::bordered().title(format!(
+        " Yard v{} \u{00b7} {} ",
+        env!("CARGO_PKG_VERSION"),
+        l.subtitle
+    ));
     frame.render_widget(
         Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
         area,

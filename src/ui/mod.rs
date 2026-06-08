@@ -17,6 +17,7 @@ use ratatui::crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
 };
 use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::SetTitle;
 
 use crate::run::{self, RunOptions};
 use crate::schemas::TaskState;
@@ -88,6 +89,7 @@ pub struct App {
     pub progress: Option<String>,
     pub handoff_text: String,
     pub settings: Option<SettingsDraft>,
+    pub last_title: Option<String>,
     pub lang: i18n::Lang,
 }
 
@@ -112,6 +114,7 @@ impl App {
             progress: None,
             handoff_text: String::new(),
             settings: None,
+            last_title: None,
             lang,
         }
     }
@@ -138,9 +141,26 @@ pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
     // as one Event::Paste instead of being dropped.
     let _ = execute!(std::io::stdout(), EnableBracketedPaste);
     let result = main_loop(&mut terminal, app);
-    let _ = execute!(std::io::stdout(), DisableBracketedPaste);
+    let _ = execute!(std::io::stdout(), DisableBracketedPaste, SetTitle(""));
     ratatui::restore();
     result
+}
+
+/// The terminal title for the current state: running task, else current intent,
+/// else the app + version.
+fn title_for(app: &App) -> String {
+    let clip = |s: &str| -> String { s.chars().take(50).collect() };
+    if app.is_busy() {
+        match &app.progress {
+            Some(p) => format!("Yard \u{00b7} {}", clip(p)),
+            None => "Yard \u{00b7} running".to_string(),
+        }
+    } else {
+        match app.snapshot.as_ref().map(|s| s.intent_summary()) {
+            Some(intent) if !intent.starts_with('(') => format!("Yard \u{00b7} {}", clip(intent)),
+            _ => format!("Yard v{}", env!("CARGO_PKG_VERSION")),
+        }
+    }
 }
 
 fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()> {
@@ -169,6 +189,14 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
         }
 
         terminal.draw(|frame| view::render(frame, &app))?;
+
+        // Reflect Yard's state in the terminal title (OSC sequence), only when
+        // it changes.
+        let title = title_for(&app);
+        if app.last_title.as_deref() != Some(title.as_str()) {
+            let _ = execute!(std::io::stdout(), SetTitle(&title));
+            app.last_title = Some(title);
+        }
 
         // Poll so the spinner animates and the channel is checked even with no
         // key activity.
