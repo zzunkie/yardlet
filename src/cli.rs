@@ -148,6 +148,9 @@ pub struct RunArgs {
     /// Select and prepare the next eligible task.
     #[arg(long)]
     next: bool,
+    /// Run a specific task by id (retries blocked/failed tasks too).
+    #[arg(long)]
+    task: Option<String>,
     /// Actually invoke the worker (consumes subscription usage). Default: prepare only.
     #[arg(long)]
     execute: bool,
@@ -413,6 +416,20 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         );
         println!("  answer with:  yard answer \"<your reply>\"");
     }
+    let stuck: Vec<&str> = snap
+        .queue
+        .tasks
+        .iter()
+        .filter(|t| matches!(t.state, TaskState::Blocked | TaskState::Failed))
+        .map(|t| t.id.as_str())
+        .collect();
+    if !stuck.is_empty() {
+        println!("\nstuck (blocked/failed): {}", stuck.join(", "));
+        println!("  see why:   yard handoff");
+        println!(
+            "  retry:     yard run --task <id> --execute   (add --full-access if it needs network/installs)"
+        );
+    }
     let suggestions = crate::review::pending_count(&ws);
     if suggestions > 0 {
         println!("\nrouting: {suggestions} suggestion(s) \u{2014} run `yard routing review`");
@@ -509,13 +526,13 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
 
 fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
-    let _ = (args.next, args.headless); // --next is the only mode today
+    let _ = (args.next, args.headless); // --next is implied; --task targets one
     let report = run::run_next(
         &ws,
         &RunOptions {
             execute: args.execute,
             worker_override: args.worker,
-            target: None,
+            target: args.task,
             answer: None,
             full_access: args.full_access,
         },
