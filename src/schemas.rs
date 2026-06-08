@@ -35,6 +35,16 @@ pub struct YardConfig {
     /// request), "ko", "en", etc. Yard's own CLI/TUI chrome stays English.
     #[serde(default = "default_language")]
     pub language: String,
+    /// Default worker permission: "sandboxed" (local-only, network blocked) or
+    /// "full" (drop the sandbox so commands/network run freely; the worker still
+    /// self-gates dangerous actions). Lets a user opt into autonomy once instead
+    /// of passing --bypass every run.
+    #[serde(default = "default_access")]
+    pub default_access: String,
+}
+
+fn default_access() -> String {
+    "sandboxed".to_string()
 }
 
 // ---------------------------------------------------------------------------

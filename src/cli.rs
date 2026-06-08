@@ -46,6 +46,8 @@ pub enum Command {
     Answer(AnswerArgs),
     /// Grant single-use approval to a gated task.
     Approve(ApproveArgs),
+    /// Set the default worker permission: sandboxed | full.
+    Access(AccessArgs),
     /// Print the latest run's handoff.
     Handoff,
     /// Review routing telemetry and apply suggested worker preferences.
@@ -75,6 +77,12 @@ enum RoutingCmd {
 pub struct ApproveArgs {
     /// The task id to approve (single use).
     task: String,
+}
+
+#[derive(Args)]
+pub struct AccessArgs {
+    /// sandboxed (local only, network blocked) or full (no sandbox).
+    level: String,
 }
 
 #[derive(Args)]
@@ -199,6 +207,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Run(a)) => cmd_run(&cwd, a),
         Some(Command::Answer(a)) => cmd_answer(&cwd, a),
         Some(Command::Approve(a)) => cmd_approve(&cwd, a),
+        Some(Command::Access(a)) => cmd_access(&cwd, a),
         Some(Command::Handoff) => cmd_handoff(&cwd),
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
     }
@@ -370,6 +379,26 @@ fn cmd_approve(cwd: &std::path::Path, args: ApproveArgs) -> Result<()> {
     Ok(())
 }
 
+fn cmd_access(cwd: &std::path::Path, args: AccessArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let level = args.level.to_lowercase();
+    if level != "sandboxed" && level != "full" {
+        anyhow::bail!("level must be 'sandboxed' or 'full'");
+    }
+    let mut config = ws.load_config()?;
+    config.default_access = level.clone();
+    crate::state::save_yaml(&ws.config_path(), &config)?;
+    println!("Default worker access set to '{level}'.");
+    if level == "full" {
+        println!(
+            "Workers now run without the sandbox (commands and network flow freely). They still \
+             self-gate dangerous actions per the packet, and any change to a forbidden path still \
+             fails the run."
+        );
+    }
+    Ok(())
+}
+
 fn cmd_handoff(cwd: &std::path::Path) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let latest = latest_run_dir(&ws.runs_dir());
@@ -444,6 +473,7 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         snap.workers.len(),
         snap.planner,
     );
+    println!("Access: {}", snap.config.default_access);
     if let Some((id, q)) = &snap.pending {
         println!("\n\u{2691} {id} is waiting on you:");
         println!(

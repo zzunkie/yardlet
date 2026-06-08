@@ -38,6 +38,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
         canonical_queue: format!("{STATE_DIR}/work-queue.yaml"),
         current_intent: format!("{STATE_DIR}/intent-contract.yaml"),
         language: "auto".to_string(),
+        default_access: "sandboxed".to_string(),
     };
     state::save_yaml(&ws.config_path(), &config)?;
     written.push("yard.yaml".to_string());
