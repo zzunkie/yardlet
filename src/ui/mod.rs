@@ -46,7 +46,7 @@ pub struct SettingsDraft {
 }
 
 /// Known cycle options for a field key (empty = free text, e.g. a model name).
-fn field_options(key: &str) -> &'static [&'static str] {
+pub fn field_options(key: &str) -> &'static [&'static str] {
     if key == "access" {
         &["sandboxed", "full"]
     } else if key == "language" {
@@ -280,11 +280,12 @@ fn handle_new_work_key(app: &mut App, code: KeyCode) {
 }
 
 fn open_settings(app: &mut App) {
+    let l = app.lang.l();
     let cfg = app.ws.load_config().ok();
     let wf = app.ws.load_workers().ok();
     let mut fields = vec![
         Field {
-            label: "Access (sandboxed | full)".into(),
+            label: l.access_word.to_string(),
             key: "access".into(),
             value: cfg
                 .as_ref()
@@ -292,7 +293,7 @@ fn open_settings(app: &mut App) {
                 .unwrap_or_default(),
         },
         Field {
-            label: "Language (auto | ko | en)".into(),
+            label: l.language_word.to_string(),
             key: "language".into(),
             value: cfg.map(|c| c.language).unwrap_or_default(),
         },

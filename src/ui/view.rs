@@ -71,10 +71,21 @@ fn render_settings(frame: &mut Frame, app: &App) {
                 } else {
                     Style::default().fg(Color::Gray)
                 };
+                let opts = super::field_options(&f.key);
+                let hint = if opts.is_empty() {
+                    String::new()
+                } else {
+                    let shown: Vec<&str> = opts
+                        .iter()
+                        .map(|o| if o.is_empty() { "default" } else { o })
+                        .collect();
+                    format!("({})", shown.join(" | "))
+                };
                 ListItem::new(Line::from(vec![
                     Span::styled(marker, lstyle),
-                    Span::styled(format!("{:<20}", f.label), lstyle),
-                    Span::styled(format!("{val}{cursor}"), vstyle),
+                    Span::styled(pad_cols(&f.label, 18), lstyle),
+                    Span::styled(pad_cols(&format!("{val}{cursor}"), 16), vstyle),
+                    Span::styled(hint, Style::default().fg(Color::DarkGray)),
                 ]))
             })
             .collect(),
@@ -384,6 +395,14 @@ fn place_input_cursor(frame: &mut Frame, area: Rect, input: &str) {
     let row = (w / inner_w) as u16;
     let col = (w % inner_w) as u16;
     frame.set_cursor_position((area.x + 1 + col, area.y + 1 + row));
+}
+
+/// Pad `s` with trailing spaces until its display width reaches `cols` (Hangul
+/// counts as 2). Always leaves at least a 2-space gap when it overflows.
+fn pad_cols(s: &str, cols: usize) -> String {
+    let w = UnicodeWidthStr::width(s);
+    let pad = if w < cols { cols - w } else { 2 };
+    format!("{s}{}", " ".repeat(pad))
 }
 
 fn truncate(s: &str, max: usize) -> String {
