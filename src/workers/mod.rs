@@ -148,6 +148,10 @@ pub fn spawn(
         .spawn()
         .with_context(|| format!("spawning worker '{}'", bin.display()))?;
 
+    // Record the worker PID so the TUI can stop it (Esc) by killing the process.
+    let pid_path = run_dir.join("worker.pid");
+    let _ = std::fs::write(&pid_path, child.id().to_string());
+
     if let Some(mut stdin) = child.stdin.take() {
         // Best-effort: a worker that ignores stdin will simply not receive it.
         let _ = stdin.write_all(packet.as_bytes());
@@ -206,6 +210,7 @@ pub fn spawn(
     for r in readers {
         let _ = r.join();
     }
+    let _ = std::fs::remove_file(&pid_path);
 
     Ok(WorkerOutcome {
         exit_ok: status.success() && !timed_out,

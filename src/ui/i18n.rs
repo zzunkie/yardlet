@@ -81,6 +81,7 @@ pub struct L {
     /// Shown on Home while a worker is running: only the keys that work mid-run.
     pub footer_home_busy: &'static str,
     pub busy: &'static str,
+    pub stopping: &'static str,
     pub no_pending: &'static str,
     pub no_answer_target: &'static str,
     pub nothing_to_run: &'static str,
@@ -144,6 +145,7 @@ pub const EN: L = L {
     footer_home: "n new  r run  A auto  a answer  p approve  m monitor  h handoff  f access  s settings  l lang  g refresh  q quit",
     footer_home_busy: "running...  m monitor  h handoff  f access  s settings  q quit",
     busy: "a worker is running; please wait",
+    stopping: "stopping the worker (the task will need a retry)",
     no_pending: "no task is waiting on you",
     no_answer_target: "no task to answer",
     nothing_to_run: "nothing to run (queue is done or empty)",
@@ -222,6 +224,7 @@ pub const KO: L = L {
     footer_home: "n 새작업  r 실행  A 자동  a 답변  p 승인  m 모니터  h 핸드오프  f 접근  s 설정  l 언어  g 새로고침  q 종료",
     footer_home_busy: "실행 중...  m 모니터  h 핸드오프  f 접근  s 설정  q 종료",
     busy: "워커 실행 중 · 잠시만요",
+    stopping: "워커 정지 중 (태스크는 재시도 필요)",
     no_pending: "응답 대기 중인 작업 없음",
     no_answer_target: "응답할 작업 없음",
     nothing_to_run: "실행할 작업 없음 (큐 완료/비어 있음)",

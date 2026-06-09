@@ -300,6 +300,8 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         KeyCode::Char('l') if !app.is_busy() => toggle_language(app),
         // Access can be toggled even mid-run; it takes effect on the next task.
         KeyCode::Char('f') => toggle_access(app),
+        // Esc while a worker runs stops it (kills the worker process).
+        KeyCode::Esc if app.is_busy() => stop_running_worker(app),
         _ if app.is_busy() => app.toast = Some((true, app.lang.l().busy.into())),
         _ => {}
     }
@@ -458,6 +460,30 @@ fn toggle_access(app: &mut App) {
         ));
     }
     app.reload();
+}
+
+/// Stop the currently running worker by killing the latest run's process
+/// (recorded in worker.pid). The worker exiting ends the run; the task is
+/// evaluated as failed and the drain halts at the gate, so you can fix or retry.
+fn stop_running_worker(app: &mut App) {
+    let runs = app.ws.runs_dir();
+    let latest = std::fs::read_dir(&runs)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+    if let Some(dir) = latest {
+        if let Ok(pid) = std::fs::read_to_string(dir.join("worker.pid")) {
+            let pid = pid.trim();
+            if !pid.is_empty() {
+                let _ = std::process::Command::new("kill").arg(pid).status();
+            }
+        }
+    }
+    app.toast = Some((true, app.lang.l().stopping.into()));
 }
 
 /// Flip the UI language between English and Korean and persist it to yard.yaml.
