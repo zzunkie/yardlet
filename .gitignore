@@ -10,6 +10,7 @@ Cargo.lock.orig
 /.agents/checkpoints/
 /.agents/handoffs/
 /.agents/telemetry/
+/.agents/intents/
 /.agents/intent-contract.yaml
 
 # Personal / per-machine harness files (internal adapter convention)

@@ -41,6 +41,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Screen::Settings => render_settings(frame, app),
         Screen::Monitor => render_monitor(frame, app),
         Screen::Handoff => render_handoff(frame, app),
+        Screen::Completion => render_completion(frame, app),
     }
 }
 
@@ -455,6 +456,19 @@ fn render_handoff(frame: &mut Frame, app: &App) {
         chunks[0],
     );
     render_footer(frame, chunks[1], l.footer_handoff);
+}
+
+fn render_completion(frame: &mut Frame, app: &App) {
+    let l = app.lang.l();
+    let area = safe_area(frame);
+    let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
+    frame.render_widget(
+        Paragraph::new(app.report_text.clone())
+            .wrap(Wrap { trim: false })
+            .block(Block::bordered().title(l.completion_title)),
+        chunks[0],
+    );
+    render_footer(frame, chunks[1], l.footer_completion);
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, keys: &str) {

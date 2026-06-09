@@ -34,6 +34,7 @@ pub enum Screen {
     Handoff,
     Settings,
     Monitor,
+    Completion,
 }
 
 /// One editable settings row. `key` routes the value back to the right file:
@@ -91,6 +92,10 @@ pub struct App {
     pub toast: Option<(bool, String)>,
     pub progress: Option<String>,
     pub handoff_text: String,
+    pub report_text: String,
+    /// When true, NewWork input continues (amends) the current intent instead of
+    /// starting a fresh one.
+    pub amend: bool,
     pub settings: Option<SettingsDraft>,
     pub last_title: Option<String>,
     pub lang: i18n::Lang,
@@ -116,6 +121,8 @@ impl App {
             toast: None,
             progress: None,
             handoff_text: String::new(),
+            report_text: String::new(),
+            amend: false,
             settings: None,
             last_title: None,
             lang,
@@ -195,16 +202,32 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             if let Some(p) = latest_progress {
                 app.progress = Some(p);
             }
+            let job_done = finished.is_some();
             if let Some(r) = finished {
                 app.toast = Some((r.ok, r.summary));
                 app.job = Job::Idle;
                 app.progress = None;
             }
             // Refresh the queue snapshot every tick while a job runs so Home
-            // tracks the drain's live task states. A "running X" progress line can
-            // arrive before run_next persists the Running state, so the refresh
-            // must not be gated on progress messages.
+            // tracks the drain's live task states (a "running X" progress line can
+            // arrive before run_next persists the Running state).
             app.reload();
+            // When a job finishes and the whole queue is done, surface the
+            // intent-level final report and let the user pick what's next.
+            if job_done {
+                let all_done = app
+                    .snapshot
+                    .as_ref()
+                    .map(|s| {
+                        !s.queue.tasks.is_empty()
+                            && s.queue.tasks.iter().all(|t| t.state == TaskState::Done)
+                    })
+                    .unwrap_or(false);
+                if all_done {
+                    app.report_text = crate::report::build_final_report(&app.ws).unwrap_or_default();
+                    app.screen = Screen::Completion;
+                }
+            }
         }
 
         terminal.draw(|frame| view::render(frame, &app))?;
@@ -252,6 +275,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             Screen::NewWork => handle_new_work_key(&mut app, key.code, key.modifiers),
             Screen::Answer => handle_answer_key(&mut app, key.code, key.modifiers),
             Screen::Settings => handle_settings_key(&mut app, key.code),
+            Screen::Completion => handle_completion_key(&mut app, key.code),
             Screen::Handoff | Screen::Monitor => {
                 if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
                     app.screen = Screen::Home;
@@ -269,6 +293,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         KeyCode::Char('n') if !app.is_busy() => {
             app.input.clear();
             app.toast = None;
+            app.amend = false;
             app.screen = Screen::NewWork;
         }
         KeyCode::Char('r') if !app.is_busy() => start_run(app),
@@ -324,7 +349,11 @@ fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         }
         KeyCode::Enter => {
             if !app.input.trim().is_empty() {
-                start_planning(app);
+                if app.amend {
+                    start_continue(app);
+                } else {
+                    start_planning(app);
+                }
                 app.screen = Screen::Home;
             }
         }
@@ -334,6 +363,45 @@ fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Char(c) => app.input.push(c),
         _ => {}
     }
+}
+
+fn handle_completion_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Home,
+        // New work: start_planning archives the finished intent before overwriting.
+        KeyCode::Char('n') => {
+            app.input.clear();
+            app.toast = None;
+            app.amend = false;
+            app.screen = Screen::NewWork;
+        }
+        // Continue: add follow-up tasks to this intent (amend), keep done work.
+        KeyCode::Char('c') => {
+            app.input.clear();
+            app.toast = None;
+            app.amend = true;
+            app.screen = Screen::NewWork;
+        }
+        // Redo: requeue every done task so the next drain re-runs them.
+        KeyCode::Char('R') => redo_all(app),
+        _ => {}
+    }
+}
+
+fn redo_all(app: &mut App) {
+    if let Ok(mut q) = app.ws.load_queue() {
+        let mut n = 0;
+        for t in q.tasks.iter_mut() {
+            if t.state == TaskState::Done {
+                t.state = TaskState::Queued;
+                n += 1;
+            }
+        }
+        let _ = app.ws.save_queue(&q);
+        app.toast = Some((true, format!("{}: {n}", app.lang.l().redo_done)));
+    }
+    app.reload();
+    app.screen = Screen::Home;
 }
 
 fn open_settings(app: &mut App) {
@@ -561,6 +629,42 @@ fn start_planning(app: &mut App) {
         rx,
     };
     app.input.clear();
+}
+
+fn start_continue(app: &mut App) {
+    let ws = app.ws.clone();
+    let request = app.input.trim().to_string();
+    let planner = app
+        .snapshot
+        .as_ref()
+        .map(|s| s.planner.clone())
+        .unwrap_or_else(|| "worker".into());
+    let lbl = app.lang.l();
+    let (planned_via, tasks_word, failed) = (lbl.planned_via, lbl.tasks_word, lbl.planning_failed);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let res = match crate::planner::run_planning_amend(&ws, &request) {
+            Ok(r) => JobResult {
+                ok: true,
+                summary: format!(
+                    "{planned_via} {}: {} ({} {tasks_word})",
+                    r.worker_id, r.intent_summary, r.task_count
+                ),
+            },
+            Err(e) => JobResult {
+                ok: false,
+                summary: format!("{failed} {e}"),
+            },
+        };
+        let _ = tx.send(JobMsg::Done(res));
+    });
+    app.job = Job::Running {
+        label: format!("{} {planner}", lbl.run_word),
+        started: Instant::now(),
+        rx,
+    };
+    app.input.clear();
+    app.amend = false;
 }
 
 fn start_run(app: &mut App) {
