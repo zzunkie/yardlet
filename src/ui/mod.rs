@@ -154,6 +154,13 @@ impl App {
 pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
     let mut terminal = ratatui::init();
     let mut app = App::new(ws.clone());
+    // On startup, recover any tasks left "running" by an interrupted/quit session
+    // (evaluate finished runs, requeue the rest) so a restart isn't left stale.
+    let recovered = crate::run::recover_orphans(ws);
+    if !recovered.is_empty() {
+        app.reload();
+        app.toast = Some((true, recovered.join("; ")));
+    }
     if just_created {
         app.toast = Some((true, app.lang.l().initialized.to_string()));
     }

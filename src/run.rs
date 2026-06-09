@@ -406,42 +406,9 @@ pub fn run_auto<F: FnMut(&str)>(
         full_access: false,
     };
 
-    // Recover orphans first: a task left in Running means an earlier drain was
-    // interrupted (its worker process is gone). If that run actually produced a
-    // result, evaluate it (don't throw finished work away); otherwise requeue it.
-    // Yard assumes one instance per workspace.
-    {
-        let mut q = ws.load_queue()?;
-        let mut requeued = Vec::new();
-        let mut finished = Vec::new();
-        for t in q.tasks.iter_mut() {
-            if t.state != TaskState::Running {
-                continue;
-            }
-            match latest_run_for(ws, &t.id) {
-                Some((run_id, run_dir)) if run_dir.join("result.json").exists() => {
-                    let eval = evaluator::evaluate(&run_dir, &run_id, t);
-                    t.state = eval.next_task_state;
-                    finished.push(format!("{} \u{2192} {:?}", t.id, t.state));
-                }
-                _ => {
-                    t.state = TaskState::Queued;
-                    requeued.push(t.id.clone());
-                }
-            }
-        }
-        if !finished.is_empty() || !requeued.is_empty() {
-            ws.save_queue(&q)?;
-            if !finished.is_empty() {
-                emit(format!("recovered completed run(s): {}", finished.join(", ")));
-            }
-            if !requeued.is_empty() {
-                emit(format!(
-                    "requeued interrupted task(s): {}",
-                    requeued.join(", ")
-                ));
-            }
-        }
+    // Recover orphans (interrupted runs left "running") before draining.
+    for m in recover_orphans(ws) {
+        emit(m);
     }
 
     loop {
@@ -659,6 +626,47 @@ fn find_codex_session(after: std::time::SystemTime) -> Option<String> {
 /// left no result, and was not stopped by us — worth resuming rather than redoing.
 fn is_transient_failure(outcome: &workers::WorkerOutcome, run_dir: &std::path::Path) -> bool {
     !outcome.exit_ok && !outcome.timed_out && !run_dir.join("result.json").exists()
+}
+
+/// Recover tasks left "running" by an interrupted/quit session: if the task's
+/// latest run produced a result, evaluate it (keep the finished work); otherwise
+/// requeue it. Returns messages describing what changed. Safe to call on startup.
+pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
+    let mut msgs = Vec::new();
+    let Ok(mut q) = ws.load_queue() else {
+        return msgs;
+    };
+    let mut requeued = Vec::new();
+    let mut finished = Vec::new();
+    for t in q.tasks.iter_mut() {
+        if t.state != TaskState::Running {
+            continue;
+        }
+        match latest_run_for(ws, &t.id) {
+            Some((run_id, run_dir)) if run_dir.join("result.json").exists() => {
+                let eval = evaluator::evaluate(&run_dir, &run_id, t);
+                t.state = eval.next_task_state;
+                finished.push(format!("{} \u{2192} {:?}", t.id, t.state));
+            }
+            _ => {
+                t.state = TaskState::Queued;
+                requeued.push(t.id.clone());
+            }
+        }
+    }
+    if !finished.is_empty() || !requeued.is_empty() {
+        let _ = ws.save_queue(&q);
+        if !finished.is_empty() {
+            msgs.push(format!("recovered completed run(s): {}", finished.join(", ")));
+        }
+        if !requeued.is_empty() {
+            msgs.push(format!(
+                "requeued interrupted task(s): {}",
+                requeued.join(", ")
+            ));
+        }
+    }
+    msgs
 }
 
 fn find_worker<'a>(workers: &'a [WorkerProfile], id: &str) -> Result<&'a WorkerProfile> {
