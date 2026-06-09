@@ -174,7 +174,7 @@ fn render_home(frame: &mut Frame, app: &App) {
         Constraint::Min(4),
         Constraint::Length(5),
         Constraint::Length(3),
-        Constraint::Length(3),
+        Constraint::Length(4),
     ])
     .split(area);
 
@@ -191,7 +191,12 @@ fn render_home(frame: &mut Frame, app: &App) {
         }
     }
     render_status(frame, chunks[3], app);
-    render_footer(frame, chunks[4], l.footer_home);
+    let footer = if app.is_busy() {
+        l.footer_home_busy
+    } else {
+        l.footer_home
+    };
+    render_footer(frame, chunks[4], footer);
 }
 
 fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
@@ -453,7 +458,8 @@ fn render_footer(frame: &mut Frame, area: Rect, keys: &str) {
             keys,
             Style::default().fg(Color::DarkGray),
         )))
-        .block(Block::bordered()),
+        .block(Block::bordered())
+        .wrap(Wrap { trim: true }),
         area,
     );
 }
