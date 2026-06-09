@@ -82,12 +82,21 @@ fn render_monitor(frame: &mut Frame, app: &App) {
                     .map(|v| v.trim().trim_matches('"').to_string())
                     .unwrap_or_default()
             };
-            let state = field("state:");
-            let state_color = match state.as_str() {
-                "running" => Color::Yellow,
-                "done" => Color::Green,
-                "failed" => Color::Red,
-                _ => Color::Gray,
+            // State comes from the queue (source of truth); run.yaml's `state`
+            // is written once at start and never updated, so it's stale.
+            let task_id = field("task_id:");
+            let qstate = app
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.queue.tasks.iter().find(|t| t.id == task_id).map(|t| t.state));
+            let (state, state_color) = match qstate {
+                Some(TaskState::Running) => ("running".to_string(), Color::Yellow),
+                Some(TaskState::Done) => ("done".to_string(), Color::Green),
+                Some(TaskState::Failed) => ("failed".to_string(), Color::Red),
+                Some(TaskState::Blocked) => ("blocked".to_string(), Color::Red),
+                Some(TaskState::NeedsUser) => ("needs-you".to_string(), Color::Magenta),
+                Some(TaskState::Queued) => ("queued".to_string(), Color::Gray),
+                None => (field("state:"), Color::Gray),
             };
             Line::from(vec![
                 Span::styled(
@@ -98,7 +107,7 @@ fn render_monitor(frame: &mut Frame, app: &App) {
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::raw("   "),
-                Span::styled(format!("task {}", field("task_id:")), Style::default().bold()),
+                Span::styled(format!("task {task_id}"), Style::default().bold()),
                 Span::raw("   "),
                 Span::styled(
                     format!("worker {}", field("worker:")),

@@ -197,6 +197,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
     // screen (e.g. the Monitor's live worker output) doesn't leave artifacts
     // bleeding onto the next one.
     let mut last_screen: Option<Screen> = None;
+    let mut tick: u32 = 0;
     loop {
         // Drain background-job messages: progress lines stream in; the final
         // Done message ends the job.
@@ -210,6 +211,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
                     Err(_) => break,
                 }
             }
+            let got_progress = latest_progress.is_some();
             if let Some(p) = latest_progress {
                 app.progress = Some(p);
             }
@@ -220,10 +222,14 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
                 app.progress = None;
                 app.pause = None;
             }
-            // Refresh the queue snapshot every tick while a job runs so Home
-            // tracks the drain's live task states (a "running X" progress line can
-            // arrive before run_next persists the Running state).
-            app.reload();
+            // Refresh the queue snapshot — but throttled. Snapshot::load probes
+            // worker readiness (spawns `--version`), so reloading every ~120ms
+            // tick blocks the event loop. Reload on a transition, on finish, and
+            // about once a second otherwise.
+            tick = tick.wrapping_add(1);
+            if got_progress || job_done || tick % 8 == 0 {
+                app.reload();
+            }
             // When a job finishes and the whole queue is done, surface the
             // intent-level final report and let the user pick what's next.
             if job_done {
