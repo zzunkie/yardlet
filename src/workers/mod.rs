@@ -124,7 +124,7 @@ pub fn spawn(
     full_access: bool,
     images: &[String],
 ) -> Result<WorkerOutcome> {
-    use std::io::Write;
+    use std::io::{Read, Write};
 
     let run_dir = output_log.parent().unwrap_or(cwd);
     let mut cmd = build_command(
@@ -153,28 +153,42 @@ pub fn spawn(
         let _ = stdin.write_all(packet.as_bytes());
     }
 
-    // Stream stdout to the log file as it arrives so a Run Monitor can tail it
-    // live, instead of capturing everything only after the worker exits.
-    let stdout = child.stdout.take();
-    let log_path = output_log.to_path_buf();
-    let reader = thread::spawn(move || {
-        use std::io::Read;
-        let mut file = std::fs::File::create(&log_path).ok();
-        if let Some(mut out) = stdout {
-            let mut buf = [0u8; 4096];
-            loop {
-                match out.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if let Some(f) = file.as_mut() {
-                            let _ = f.write_all(&buf[..n]);
-                            let _ = f.flush();
+    // Stream BOTH stdout and stderr to the log as they arrive, so a Run Monitor
+    // can tail the worker live. Worker CLIs often route progress to stderr or
+    // block-buffer stdout on a pipe, so capturing stderr live (not only after
+    // exit) is what keeps the monitor non-empty during a run.
+    let log_file = std::sync::Arc::new(std::sync::Mutex::new(
+        std::fs::File::create(output_log).ok(),
+    ));
+    let mut sources: Vec<Box<dyn Read + Send>> = Vec::new();
+    if let Some(o) = child.stdout.take() {
+        sources.push(Box::new(o));
+    }
+    if let Some(e) = child.stderr.take() {
+        sources.push(Box::new(e));
+    }
+    let readers: Vec<_> = sources
+        .into_iter()
+        .map(|mut src| {
+            let log = std::sync::Arc::clone(&log_file);
+            thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    match src.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            if let Ok(mut guard) = log.lock() {
+                                if let Some(f) = guard.as_mut() {
+                                    let _ = f.write_all(&buf[..n]);
+                                    let _ = f.flush();
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
-    });
+            })
+        })
+        .collect();
 
     let start = Instant::now();
     let mut timed_out = false;
@@ -189,18 +203,8 @@ pub fn spawn(
         }
         thread::sleep(Duration::from_millis(200));
     };
-    let _ = reader.join();
-
-    // Append stderr (usually small / errors) once the worker has exited.
-    if let Some(mut err) = child.stderr.take() {
-        use std::io::Read;
-        let mut e = String::new();
-        let _ = err.read_to_string(&mut e);
-        if !e.is_empty() {
-            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(output_log) {
-                let _ = write!(f, "\n--- stderr ---\n{e}");
-            }
-        }
+    for r in readers {
+        let _ = r.join();
     }
 
     Ok(WorkerOutcome {
