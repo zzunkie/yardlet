@@ -99,6 +99,8 @@ pub struct App {
     /// The running auto-drain's pause flag, if any. Set it to stop the drain
     /// gracefully after the current task; cleared when the job ends.
     pub pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Vertical scroll offset for the handoff/report screens.
+    pub scroll: u16,
     pub settings: Option<SettingsDraft>,
     pub last_title: Option<String>,
     pub lang: i18n::Lang,
@@ -127,6 +129,7 @@ impl App {
             report_text: String::new(),
             amend: false,
             pause: None,
+            scroll: 0,
             settings: None,
             last_title: None,
             lang,
@@ -234,6 +237,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
                     .unwrap_or(false);
                 if all_done {
                     app.report_text = crate::report::build_final_report(&app.ws).unwrap_or_default();
+                    app.scroll = 0;
                     app.screen = Screen::Completion;
                 }
             }
@@ -289,7 +293,8 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             Screen::Answer => handle_answer_key(&mut app, key.code, key.modifiers),
             Screen::Settings => handle_settings_key(&mut app, key.code),
             Screen::Completion => handle_completion_key(&mut app, key.code),
-            Screen::Handoff | Screen::Monitor => {
+            Screen::Handoff => handle_handoff_key(&mut app, key.code),
+            Screen::Monitor => {
                 if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
                     app.screen = Screen::Home;
                 }
@@ -331,6 +336,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         }
         KeyCode::Char('h') => {
             app.handoff_text = load_latest_handoff(app);
+            app.scroll = 0;
             app.screen = Screen::Handoff;
         }
         // Settings can be opened mid-run; saved changes apply to the next task.
@@ -400,6 +406,23 @@ fn handle_completion_key(app: &mut App, code: KeyCode) {
         }
         // Redo: requeue every done task so the next drain re-runs them.
         KeyCode::Char('R') => redo_all(app),
+        _ => apply_scroll(app, code),
+    }
+}
+
+fn handle_handoff_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Home,
+        _ => apply_scroll(app, code),
+    }
+}
+
+fn apply_scroll(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Up => app.scroll = app.scroll.saturating_sub(1),
+        KeyCode::Down => app.scroll = app.scroll.saturating_add(1),
+        KeyCode::PageUp => app.scroll = app.scroll.saturating_sub(10),
+        KeyCode::PageDown => app.scroll = app.scroll.saturating_add(10),
         _ => {}
     }
 }

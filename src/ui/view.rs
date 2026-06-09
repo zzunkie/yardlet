@@ -82,15 +82,33 @@ fn render_monitor(frame: &mut Frame, app: &App) {
                     .map(|v| v.trim().trim_matches('"').to_string())
                     .unwrap_or_default()
             };
-            format!(
-                "{}   task {}   worker {}   [{}]",
-                d.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-                field("task_id:"),
-                field("worker:"),
-                field("state:"),
-            )
+            let state = field("state:");
+            let state_color = match state.as_str() {
+                "running" => Color::Yellow,
+                "done" => Color::Green,
+                "failed" => Color::Red,
+                _ => Color::Gray,
+            };
+            Line::from(vec![
+                Span::styled(
+                    d.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw("   "),
+                Span::styled(format!("task {}", field("task_id:")), Style::default().bold()),
+                Span::raw("   "),
+                Span::styled(
+                    format!("worker {}", field("worker:")),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw("   "),
+                Span::styled(format!("[{state}]"), Style::default().fg(state_color)),
+            ])
         }
-        None => l.monitor_no_runs.to_string(),
+        None => Line::from(l.monitor_no_runs.to_string()),
     };
     frame.render_widget(
         Paragraph::new(header).block(Block::bordered().title(l.monitor_title)),
@@ -165,6 +183,97 @@ fn render_settings(frame: &mut Frame, app: &App) {
         chunks[0],
     );
     render_footer(frame, chunks[1], l.footer_settings);
+}
+
+/// Render lightweight markdown (headings, bullets, **bold**, `code`, rules) to
+/// styled lines for the handoff/report screens.
+fn md_lines(text: &str) -> Vec<Line<'static>> {
+    text.lines().map(md_line).collect()
+}
+
+fn md_line(line: &str) -> Line<'static> {
+    if let Some(h) = line.strip_prefix("### ") {
+        Line::from(Span::styled(
+            h.to_string(),
+            Style::default().fg(Color::Green).bold(),
+        ))
+    } else if let Some(h) = line.strip_prefix("## ") {
+        Line::from(Span::styled(
+            h.to_string(),
+            Style::default().fg(Color::Yellow).bold(),
+        ))
+    } else if let Some(h) = line.strip_prefix("# ") {
+        Line::from(Span::styled(
+            h.to_string(),
+            Style::default().fg(Color::Cyan).bold(),
+        ))
+    } else if matches!(line.trim(), "---" | "***" | "___") {
+        Line::from(Span::styled(
+            "\u{2500}".repeat(48),
+            Style::default().fg(Color::DarkGray),
+        ))
+    } else {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        {
+            let indent = line.len() - trimmed.len();
+            let mut spans = vec![
+                Span::raw(" ".repeat(indent)),
+                Span::styled("\u{2022} ", Style::default().fg(Color::DarkGray)),
+            ];
+            spans.extend(inline_spans(rest));
+            Line::from(spans)
+        } else {
+            Line::from(inline_spans(line))
+        }
+    }
+}
+
+fn inline_spans(s: &str) -> Vec<Span<'static>> {
+    let base = Style::default();
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '`' {
+            if !buf.is_empty() {
+                out.push(Span::styled(std::mem::take(&mut buf), base));
+            }
+            let mut code = String::new();
+            for n in chars.by_ref() {
+                if n == '`' {
+                    break;
+                }
+                code.push(n);
+            }
+            out.push(Span::styled(code, Style::default().fg(Color::Cyan)));
+        } else if c == '*' && chars.peek() == Some(&'*') {
+            chars.next();
+            if !buf.is_empty() {
+                out.push(Span::styled(std::mem::take(&mut buf), base));
+            }
+            let mut bold = String::new();
+            while let Some(n) = chars.next() {
+                if n == '*' && chars.peek() == Some(&'*') {
+                    chars.next();
+                    break;
+                }
+                bold.push(n);
+            }
+            out.push(Span::styled(bold, base.bold()));
+        } else {
+            buf.push(c);
+        }
+    }
+    if !buf.is_empty() {
+        out.push(Span::styled(buf, base));
+    }
+    if out.is_empty() {
+        out.push(Span::raw(""));
+    }
+    out
 }
 
 fn render_home(frame: &mut Frame, app: &App) {
@@ -450,8 +559,9 @@ fn render_handoff(frame: &mut Frame, app: &App) {
     let area = safe_area(frame);
     let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
     frame.render_widget(
-        Paragraph::new(app.handoff_text.clone())
+        Paragraph::new(md_lines(&app.handoff_text))
             .wrap(Wrap { trim: false })
+            .scroll((app.scroll, 0))
             .block(Block::bordered().title(l.handoff_title)),
         chunks[0],
     );
@@ -463,8 +573,9 @@ fn render_completion(frame: &mut Frame, app: &App) {
     let area = safe_area(frame);
     let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
     frame.render_widget(
-        Paragraph::new(app.report_text.clone())
+        Paragraph::new(md_lines(&app.report_text))
             .wrap(Wrap { trim: false })
+            .scroll((app.scroll, 0))
             .block(Block::bordered().title(l.completion_title)),
         chunks[0],
     );
