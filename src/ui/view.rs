@@ -220,6 +220,11 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
         ),
         Span::raw(", "),
         Span::styled(
+            format!("{} {}", snap.count(TaskState::Failed), l.s_failed),
+            Style::default().fg(Color::Red),
+        ),
+        Span::raw(", "),
+        Span::styled(
             format!("{} {}", snap.count(TaskState::Done), l.s_done),
             Style::default().fg(Color::Green),
         ),
