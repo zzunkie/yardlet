@@ -96,6 +96,9 @@ pub struct App {
     /// When true, NewWork input continues (amends) the current intent instead of
     /// starting a fresh one.
     pub amend: bool,
+    /// The running auto-drain's pause flag, if any. Set it to stop the drain
+    /// gracefully after the current task; cleared when the job ends.
+    pub pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub settings: Option<SettingsDraft>,
     pub last_title: Option<String>,
     pub lang: i18n::Lang,
@@ -123,6 +126,7 @@ impl App {
             handoff_text: String::new(),
             report_text: String::new(),
             amend: false,
+            pause: None,
             settings: None,
             last_title: None,
             lang,
@@ -211,6 +215,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
                 app.toast = Some((r.ok, r.summary));
                 app.job = Job::Idle;
                 app.progress = None;
+                app.pause = None;
             }
             // Refresh the queue snapshot every tick while a job runs so Home
             // tracks the drain's live task states (a "running X" progress line can
@@ -307,6 +312,9 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         KeyCode::Char('r') if !app.is_busy() => start_run(app),
         KeyCode::Char('A') if !app.is_busy() => start_auto(app),
         KeyCode::Char('p') if !app.is_busy() => start_approve(app),
+        // While an auto-drain runs, p requests a graceful pause (finish current
+        // task, then stop). Esc stops immediately; A resumes.
+        KeyCode::Char('p') => request_pause(app),
         KeyCode::Char('a') if !app.is_busy() => {
             let has_pending = app
                 .snapshot
@@ -542,6 +550,16 @@ fn toggle_access(app: &mut App) {
 /// Stop the currently running worker by killing the latest run's process
 /// (recorded in worker.pid). The worker exiting ends the run; the task is
 /// evaluated as failed and the drain halts at the gate, so you can fix or retry.
+fn request_pause(app: &mut App) {
+    match &app.pause {
+        Some(p) => {
+            p.store(true, std::sync::atomic::Ordering::Relaxed);
+            app.toast = Some((true, app.lang.l().pausing.into()));
+        }
+        None => app.toast = Some((true, app.lang.l().busy.into())),
+    }
+}
+
 fn stop_running_worker(app: &mut App) {
     let runs = app.ws.runs_dir();
     let latest = std::fs::read_dir(&runs)
@@ -795,10 +813,12 @@ fn start_auto(app: &mut App) {
     let ws = app.ws.clone();
     let lbl = app.lang.l();
     let failed = lbl.run_failed;
+    let pause = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pause_job = pause.clone();
     let (tx, rx) = mpsc::channel();
     let txp = tx.clone();
     thread::spawn(move || {
-        let res = match run::run_auto(&ws, false, |s| {
+        let res = match run::run_auto(&ws, false, Some(pause), |s| {
             let _ = txp.send(JobMsg::Progress(s.to_string()));
         }) {
             Ok(lines) => {
@@ -816,6 +836,7 @@ fn start_auto(app: &mut App) {
         let _ = tx.send(JobMsg::Done(res));
     });
     app.progress = None;
+    app.pause = Some(pause_job);
     app.job = Job::Running {
         label: format!("{} (auto)", lbl.run_word),
         started: Instant::now(),

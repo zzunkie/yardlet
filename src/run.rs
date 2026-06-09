@@ -388,6 +388,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 pub fn run_auto<F: FnMut(&str)>(
     ws: &Workspace,
     bypass: bool,
+    pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     mut on_event: F,
 ) -> Result<Vec<String>> {
     use std::collections::HashMap;
@@ -444,6 +445,16 @@ pub fn run_auto<F: FnMut(&str)>(
     }
 
     loop {
+        // Graceful pause: stop between tasks (the current task, if any, has
+        // already finished here). Resume by running auto again.
+        if pause
+            .as_ref()
+            .map(|p| p.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(false)
+        {
+            emit("paused: stopped after the current task (run auto again to resume)".to_string());
+            break;
+        }
         let queue = ws.load_queue()?;
         // NeedsUser/Blocked genuinely need a human: halt (don't skip past them).
         if let Some(t) = queue
