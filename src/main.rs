@@ -14,6 +14,7 @@ mod init;
 mod inspect;
 mod packet;
 mod planner;
+mod report;
 mod review;
 mod routing;
 mod run;

@@ -552,7 +552,7 @@ pub fn select_next(queue: &crate::schemas::WorkQueue, _opts: &RunOptions) -> Res
 
 /// The newest run directory recorded for a task id, as (run_id, dir). Run dirs
 /// are named `run-<timestamp>` so a lexicographic max is the most recent.
-fn latest_run_for(ws: &Workspace, task_id: &str) -> Option<(String, PathBuf)> {
+pub(crate) fn latest_run_for(ws: &Workspace, task_id: &str) -> Option<(String, PathBuf)> {
     let mut best: Option<(String, PathBuf)> = None;
     for entry in std::fs::read_dir(ws.runs_dir()).ok()?.flatten() {
         let dir = entry.path();

@@ -50,6 +50,8 @@ pub enum Command {
     Access(AccessArgs),
     /// Print the latest run's handoff.
     Handoff,
+    /// Print the intent's final report (aggregate of every task's result).
+    Report,
     /// Review routing telemetry and apply suggested worker preferences.
     Routing(RoutingArgs),
 }
@@ -212,6 +214,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Approve(a)) => cmd_approve(&cwd, a),
         Some(Command::Access(a)) => cmd_access(&cwd, a),
         Some(Command::Handoff) => cmd_handoff(&cwd),
+        Some(Command::Report) => cmd_report(&cwd),
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
     }
 }
@@ -399,6 +402,12 @@ fn cmd_access(cwd: &std::path::Path, args: AccessArgs) -> Result<()> {
              fails the run."
         );
     }
+    Ok(())
+}
+
+fn cmd_report(cwd: &std::path::Path) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    print!("{}", crate::report::build_final_report(&ws)?);
     Ok(())
 }
 
