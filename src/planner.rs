@@ -172,6 +172,8 @@ pub fn run_planning(
         timeout,
         false, // planning never needs elevated access
         &images,
+        None,
+        false,
     )?;
     lines.push(format!("worker outcome: {}", outcome.note));
 

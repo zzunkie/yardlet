@@ -100,6 +100,60 @@ pub fn build_command(
     cmd
 }
 
+/// Build the command to RESUME an existing worker session (continue, not redo).
+/// claude: `-p --resume <id>`; codex: `exec resume <id> -` (prompt on stdin).
+/// Note: codex `resume` has no `--sandbox`/`--add-dir`; full-access bypasses the
+/// sandbox, and a sandboxed session inherits its original writable roots.
+fn build_resume_command(
+    worker_id: &str,
+    bin: &Path,
+    run_dir: &Path,
+    cwd: &Path,
+    full_access: bool,
+    model: &str,
+    images: &[String],
+    session: Option<&str>,
+) -> Command {
+    let mut cmd = Command::new(bin);
+    match worker_id {
+        "codex" => {
+            cmd.arg("exec").arg("resume");
+            if full_access {
+                cmd.arg("--dangerously-bypass-approvals-and-sandbox");
+            }
+            cmd.arg("--skip-git-repo-check");
+            if explicit(model) {
+                cmd.arg("-m").arg(model);
+            }
+            for img in images {
+                cmd.arg("-i").arg(img);
+            }
+            if let Some(id) = session {
+                cmd.arg(id);
+            }
+            cmd.arg("-"); // continuation prompt on stdin
+        }
+        "claude-code" => {
+            if full_access {
+                cmd.arg("-p").arg("--dangerously-skip-permissions");
+            } else {
+                cmd.arg("-p").arg("--permission-mode").arg("acceptEdits");
+            }
+            if let Some(id) = session {
+                cmd.arg("--resume").arg(id);
+            }
+            if explicit(model) {
+                cmd.arg("--model").arg(model);
+            }
+            cmd.arg("--add-dir").arg(run_dir);
+        }
+        _ => {}
+    }
+    cmd.current_dir(cwd);
+    cmd.env_clear();
+    cmd
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkerOutcome {
     pub exit_ok: bool,
@@ -123,20 +177,43 @@ pub fn spawn(
     timeout: Duration,
     full_access: bool,
     images: &[String],
+    session: Option<&str>,
+    resume: bool,
 ) -> Result<WorkerOutcome> {
     use std::io::{Read, Write};
 
     let run_dir = output_log.parent().unwrap_or(cwd);
-    let mut cmd = build_command(
-        &profile.id,
-        bin,
-        run_dir,
-        cwd,
-        full_access,
-        &profile.model,
-        &profile.effort,
-        images,
-    );
+    let mut cmd = if resume {
+        build_resume_command(
+            &profile.id,
+            bin,
+            run_dir,
+            cwd,
+            full_access,
+            &profile.model,
+            images,
+            session,
+        )
+    } else {
+        let mut c = build_command(
+            &profile.id,
+            bin,
+            run_dir,
+            cwd,
+            full_access,
+            &profile.model,
+            &profile.effort,
+            images,
+        );
+        // Set a stable session id on a fresh claude run so a transient failure
+        // can resume the same conversation instead of redoing the work.
+        if profile.id == "claude-code" {
+            if let Some(id) = session {
+                c.arg("--session-id").arg(id);
+            }
+        }
+        c
+    };
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -313,6 +390,38 @@ mod tests {
         let cx = args_of(&build_command("codex", bin, run, cwd, false, "", "", &imgs));
         assert!(cx.windows(2).any(|w| w[0] == "-i" && w[1] == "a.png"));
         assert!(cx.windows(2).any(|w| w[0] == "-i" && w[1] == "b.jpg"));
+    }
+
+    #[test]
+    fn resume_commands_target_the_session() {
+        let (bin, run, cwd) = (Path::new("x"), Path::new("/tmp/r"), Path::new("/tmp"));
+        let cx = args_of(&build_resume_command(
+            "codex",
+            bin,
+            run,
+            cwd,
+            true,
+            "",
+            &[],
+            Some("SID"),
+        ));
+        assert!(cx.windows(2).any(|w| w[0] == "exec" && w[1] == "resume"));
+        assert!(cx.iter().any(|a| a == "SID"));
+        assert!(cx
+            .iter()
+            .any(|a| a == "--dangerously-bypass-approvals-and-sandbox"));
+        let cl = args_of(&build_resume_command(
+            "claude-code",
+            bin,
+            run,
+            cwd,
+            false,
+            "opus",
+            &[],
+            Some("SID"),
+        ));
+        assert!(cl.windows(2).any(|w| w[0] == "--resume" && w[1] == "SID"));
+        assert!(cl.windows(2).any(|w| w[0] == "--model" && w[1] == "opus"));
     }
 
     #[test]

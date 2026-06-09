@@ -235,19 +235,82 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     queue.tasks[idx].state = TaskState::Running;
     ws.save_queue(&queue)?;
 
+    // Session id for resume-on-transient: claude lets us set one up front; codex
+    // generates its own, captured from its rollout file after the run starts.
+    let log_path = run_dir.join("worker-output.log");
+    let mut session_id: Option<String> = if worker_id == "claude-code" {
+        Some(gen_session_uuid(&run_id))
+    } else {
+        None
+    };
+    let started_sys = std::time::SystemTime::now();
     let run_started = std::time::Instant::now();
-    let outcome = workers::spawn(
+    let mut outcome = workers::spawn(
         &eff_profile,
         &bin,
         &packet_text,
         &ws.root,
         &env,
-        &run_dir.join("worker-output.log"),
+        &log_path,
         timeout,
         full_access,
         &images,
+        session_id.as_deref(),
+        false,
     )?;
+    if worker_id == "codex" && session_id.is_none() {
+        session_id = find_codex_session(started_sys);
+    }
+    // Resume on a transient failure (e.g. a dropped connection) instead of redoing
+    // the task from scratch — unless the user stopped it (Esc writes a marker).
+    let cancelled_marker = run_dir.join("cancelled");
+    let max_retries = eff_profile.limits.max_retries as u32;
+    let mut resumes = 0u32;
+    while session_id.is_some()
+        && !cancelled_marker.exists()
+        && is_transient_failure(&outcome, &run_dir)
+        && resumes < max_retries
+    {
+        resumes += 1;
+        lines.push(format!(
+            "transient failure; resuming session ({resumes}/{max_retries})"
+        ));
+        let cont = "The previous run was interrupted by a connection error before it finished. \
+                    Continue from where you left off, complete the task, and write the result file \
+                    exactly as specified in the original task packet.";
+        outcome = workers::spawn(
+            &eff_profile,
+            &bin,
+            cont,
+            &ws.root,
+            &env,
+            &log_path,
+            timeout,
+            full_access,
+            &images,
+            session_id.as_deref(),
+            true,
+        )?;
+    }
     let wall_seconds = run_started.elapsed().as_secs();
+
+    // User stopped it (Esc): requeue rather than evaluate as a real failure.
+    if cancelled_marker.exists() {
+        let _ = std::fs::remove_file(&cancelled_marker);
+        queue.tasks[idx].state = TaskState::Queued;
+        ws.save_queue(&queue)?;
+        lines.push(format!("stopped by user; {} requeued", task.id));
+        return Ok(RunReport {
+            run_id: run_id.clone(),
+            task_id: task.id.clone(),
+            worker_id: worker_id.clone(),
+            run_dir: run_dir.clone(),
+            prepared: true,
+            executed: true,
+            lines,
+            result_state: Some(TaskState::Queued),
+        });
+    }
     lines.push(format!(
         "worker outcome: {} (exit_ok={}, timed_out={})",
         outcome.note, outcome.exit_ok, outcome.timed_out
@@ -511,6 +574,80 @@ fn latest_run_for(ws: &Workspace, task_id: &str) -> Option<(String, PathBuf)> {
         }
     }
     best
+}
+
+/// A UUID-format string (8-4-4-4-12 hex) from a seed + pid, used to set a claude
+/// session id up front so a transient failure can resume the same conversation.
+fn gen_session_uuid(seed: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h1 = std::collections::hash_map::DefaultHasher::new();
+    seed.hash(&mut h1);
+    std::process::id().hash(&mut h1);
+    let a = h1.finish();
+    let mut h2 = std::collections::hash_map::DefaultHasher::new();
+    (a, seed).hash(&mut h2);
+    let b = h2.finish();
+    let hex = format!("{a:016x}{b:016x}");
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+/// Find the codex session id (UUID) for a run started at/after `after`, from its
+/// rollout file under ~/.codex/sessions (named `rollout-<ts>-<uuid>.jsonl`, so
+/// the trailing 36 chars are the id).
+fn find_codex_session(after: std::time::SystemTime) -> Option<String> {
+    fn walk(
+        dir: &std::path::Path,
+        after: std::time::SystemTime,
+        best: &mut Option<(std::time::SystemTime, String)>,
+    ) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, after, best);
+                continue;
+            }
+            let Some(stem) = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".jsonl"))
+            else {
+                continue;
+            };
+            if !stem.starts_with("rollout-") || stem.len() < 36 {
+                continue;
+            }
+            let Ok(mt) = e.metadata().and_then(|m| m.modified()) else {
+                continue;
+            };
+            if mt + std::time::Duration::from_secs(3) < after {
+                continue;
+            }
+            if best.as_ref().map(|(t, _)| mt > *t).unwrap_or(true) {
+                *best = Some((mt, stem[stem.len() - 36..].to_string()));
+            }
+        }
+    }
+    let home = std::env::var_os("HOME")?;
+    let base = std::path::Path::new(&home).join(".codex/sessions");
+    let mut best = None;
+    walk(&base, after, &mut best);
+    best.map(|(_, id)| id)
+}
+
+/// A transient (likely network/infra) failure: the worker did not exit cleanly,
+/// left no result, and was not stopped by us — worth resuming rather than redoing.
+fn is_transient_failure(outcome: &workers::WorkerOutcome, run_dir: &std::path::Path) -> bool {
+    !outcome.exit_ok && !outcome.timed_out && !run_dir.join("result.json").exists()
 }
 
 fn find_worker<'a>(workers: &'a [WorkerProfile], id: &str) -> Result<&'a WorkerProfile> {
