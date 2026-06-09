@@ -101,6 +101,8 @@ pub struct App {
     pub pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Vertical scroll offset for the handoff/report screens.
     pub scroll: u16,
+    /// Selected row in the Home queue (for per-task handoff view).
+    pub selected: usize,
     pub settings: Option<SettingsDraft>,
     pub last_title: Option<String>,
     pub lang: i18n::Lang,
@@ -130,6 +132,7 @@ impl App {
             amend: false,
             pause: None,
             scroll: 0,
+            selected: 0,
             settings: None,
             last_title: None,
             lang,
@@ -356,6 +359,30 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         KeyCode::Char('f') => toggle_access(app),
         // Esc while a worker runs stops it (kills the worker process).
         KeyCode::Esc if app.is_busy() => stop_running_worker(app),
+        // Browse the queue and open a task's handoff (works while busy too).
+        KeyCode::Up => app.selected = app.selected.saturating_sub(1),
+        KeyCode::Down => {
+            let len = app
+                .snapshot
+                .as_ref()
+                .map(|s| s.queue.tasks.len())
+                .unwrap_or(0);
+            if app.selected + 1 < len {
+                app.selected += 1;
+            }
+        }
+        KeyCode::Enter => {
+            let id = app
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.queue.tasks.get(app.selected))
+                .map(|t| t.id.clone());
+            if let Some(id) = id {
+                app.handoff_text = load_handoff_for_task(app, &id);
+                app.scroll = 0;
+                app.screen = Screen::Handoff;
+            }
+        }
         _ if app.is_busy() => app.toast = Some((true, app.lang.l().busy.into())),
         _ => {}
     }
@@ -917,15 +944,30 @@ fn start_answer(app: &mut App) {
     app.input.clear();
 }
 
+fn load_handoff_for_task(app: &App, task_id: &str) -> String {
+    if let Some((_, dir)) = crate::run::latest_run_for(&app.ws, task_id) {
+        if let Ok(txt) = std::fs::read_to_string(dir.join("handoff.md")) {
+            if !txt.trim().is_empty() {
+                return txt;
+            }
+        }
+    }
+    format!("No handoff for {task_id} yet — run it first.")
+}
+
 fn load_latest_handoff(app: &App) -> String {
     let runs = app.ws.runs_dir();
     let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
     if let Ok(rd) = std::fs::read_dir(&runs) {
         for e in rd.flatten() {
-            if !e.path().is_dir() {
+            // Only runs that actually wrote a handoff — skip plan-* and
+            // unfinished runs — so `h` shows the most recent real handoff,
+            // including after a restart. Handoffs persist on disk.
+            let hf = e.path().join("handoff.md");
+            if !hf.is_file() {
                 continue;
             }
-            let t = e
+            let t = hf
                 .metadata()
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
@@ -937,6 +979,6 @@ fn load_latest_handoff(app: &App) -> String {
     match newest {
         Some((_, dir)) => std::fs::read_to_string(dir.join("handoff.md"))
             .unwrap_or_else(|_| "Latest run has no handoff yet.".into()),
-        None => "No runs yet. Press r on Home to run the next task.".into(),
+        None => "No handoff yet. Run a task first.".into(),
     }
 }

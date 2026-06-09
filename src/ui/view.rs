@@ -300,7 +300,7 @@ fn render_home(frame: &mut Frame, app: &App) {
     match &app.snapshot {
         Some(snap) => {
             render_header(frame, chunks[0], snap, l);
-            render_queue(frame, chunks[1], snap, l);
+            render_queue(frame, chunks[1], snap, l, app.selected);
             render_workers(frame, chunks[2], snap, l);
         }
         None => {
@@ -383,16 +383,18 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
     );
 }
 
-fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
+fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected: usize) {
     let items: Vec<ListItem> = if snap.tasks().is_empty() {
         vec![ListItem::new(Line::from(Span::styled(
             l.queue_empty,
             Style::default().fg(Color::DarkGray),
         )))]
     } else {
+        let sel = selected.min(snap.tasks().len().saturating_sub(1));
         snap.tasks()
             .iter()
-            .map(|t| {
+            .enumerate()
+            .map(|(i, t)| {
                 let color = match t.state {
                     TaskState::Done => Color::Green,
                     TaskState::Running => Color::Yellow,
@@ -400,9 +402,19 @@ fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
                     TaskState::NeedsUser => Color::Magenta,
                     TaskState::Queued => Color::Gray,
                 };
+                let is_sel = i == sel;
+                let marker = if is_sel { "\u{25b8}" } else { " " };
+                let id_style = if is_sel {
+                    Style::default().fg(Color::White).bold()
+                } else {
+                    Style::default().fg(Color::White)
+                };
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!(" {} ", t.state.glyph()), Style::default().fg(color)),
-                    Span::styled(format!("{:<11}", t.id), Style::default().fg(Color::White)),
+                    Span::styled(
+                        format!("{marker}{} ", t.state.glyph()),
+                        Style::default().fg(color),
+                    ),
+                    Span::styled(format!("{:<11}", t.id), id_style),
                     Span::raw(truncate(&t.title, 44)),
                     Span::styled(
                         format!("  {}", t.preferred_worker),
