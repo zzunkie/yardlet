@@ -124,6 +124,12 @@ pub fn build_final_report(ws: &Workspace) -> Result<String> {
                     }
                 }
             }
+            // Non-code tasks deliver a written report.md — surface it in full.
+            if let Ok(rep) = std::fs::read_to_string(dir.join("report.md")) {
+                if !rep.trim().is_empty() {
+                    md.push_str(&format!("{}\n\n", rep.trim()));
+                }
+            }
         }
     }
 

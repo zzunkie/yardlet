@@ -252,6 +252,17 @@ pub fn compile(inputs: &PacketInputs) -> String {
          - `{rd}/validation.log` (if you ran validation)\n\n",
         rd = inputs.run_dir_rel
     ));
+    // Non-code tasks (research/review/safety) deliver findings as prose; require
+    // a human-readable report so there's an artifact a person can actually read.
+    let kind = inputs.task.kind.trim();
+    if !kind.is_empty() && !kind.eq_ignore_ascii_case("implementation") {
+        p.push_str(&format!(
+            "Because this task is `{kind}` (not implementation), also write \
+             `{rd}/report.md` \u{2014} your findings/results in clear prose for a person to \
+             read, not just the JSON summary.\n\n",
+            rd = inputs.run_dir_rel
+        ));
+    }
     p.push_str("`result.json` shape:\n\n");
     p.push_str(RESULT_SCHEMA_HINT);
     p
