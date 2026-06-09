@@ -379,11 +379,23 @@ fn render_home(frame: &mut Frame, app: &App) {
     }
     render_status(frame, chunks[3], app);
     let footer = if app.is_busy() {
-        l.footer_home_busy
+        l.footer_home_busy.to_string()
     } else {
-        l.footer_home
+        // Only show answer/approve keys when there's actually something to do.
+        let mut f = l.footer_home.to_string();
+        if let Some(snap) = &app.snapshot {
+            if snap.pending.is_some() {
+                f.push_str("  ");
+                f.push_str(l.key_answer);
+            }
+            if !snap.approvals_needed.is_empty() {
+                f.push_str("  ");
+                f.push_str(l.key_approve);
+            }
+        }
+        f
     };
-    render_footer(frame, chunks[4], footer);
+    render_footer(frame, chunks[4], &footer);
 }
 
 fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
