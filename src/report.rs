@@ -8,8 +8,25 @@ use anyhow::Result;
 
 use crate::run::latest_run_for;
 use crate::schemas::{RunResult, TaskState};
-use crate::state::Workspace;
+use crate::state::{self, Workspace};
 use crate::yaml;
+
+/// Archive the current intent + queue + final report under
+/// `.agents/intents/<intent_id>/` so starting fresh work doesn't lose the
+/// record. Returns the archived intent id, or None if there is no intent.
+pub fn archive_intent(ws: &Workspace) -> Result<Option<String>> {
+    let Some(intent) = ws.load_intent()? else {
+        return Ok(None);
+    };
+    let queue = ws.load_queue()?;
+    let dir = ws.agents_dir().join("intents").join(&intent.id);
+    std::fs::create_dir_all(&dir)?;
+    state::save_yaml(&dir.join("intent-contract.yaml"), &intent)?;
+    state::save_yaml(&dir.join("work-queue.yaml"), &queue)?;
+    let report = build_final_report(ws).unwrap_or_default();
+    state::write_str(&dir.join("final-report.md"), &report)?;
+    Ok(Some(intent.id))
+}
 
 /// Yard's own run bookkeeping (under `.agents/`) — not a deliverable, so it is
 /// excluded from the report's file list.
