@@ -264,6 +264,8 @@ mod tests {
             risk: String::new(),
             kind: String::new(),
             preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
             allowed_scope: vec![],
             acceptance: vec![],
             validation: None,

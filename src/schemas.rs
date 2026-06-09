@@ -157,6 +157,14 @@ pub struct Task {
     pub kind: String,
     #[serde(default)]
     pub preferred_worker: String,
+    /// Optional per-task model override. Empty or "auto" = fall back to the
+    /// worker profile's model, then the CLI's own default.
+    #[serde(default)]
+    pub model: String,
+    /// Optional per-task reasoning effort. Empty or "auto" = worker default.
+    /// codex: minimal|low|medium|high.
+    #[serde(default)]
+    pub effort: String,
     #[serde(default)]
     pub allowed_scope: Vec<String>,
     #[serde(default)]

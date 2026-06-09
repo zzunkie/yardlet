@@ -56,6 +56,10 @@ struct PlanTask {
     #[serde(default)]
     preferred_worker: String,
     #[serde(default)]
+    model: String,
+    #[serde(default)]
+    effort: String,
+    #[serde(default)]
     allowed_scope: Vec<String>,
     #[serde(default)]
     acceptance: Vec<String>,
@@ -259,6 +263,8 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             } else {
                 t.preferred_worker.clone()
             },
+            model: t.model.clone(),
+            effort: t.effort.clone(),
             allowed_scope: t.allowed_scope.clone(),
             acceptance: t
                 .acceptance

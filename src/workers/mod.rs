@@ -19,6 +19,13 @@ use anyhow::{Context, Result};
 
 use crate::schemas::WorkerProfile;
 
+/// A model/effort value counts as explicit only when it is set and is not the
+/// "auto" sentinel. Empty or "auto" means: omit the flag and let the worker CLI
+/// choose (its own default / automatic selection).
+fn explicit(v: &str) -> bool {
+    !v.trim().is_empty() && !v.eq_ignore_ascii_case("auto")
+}
+
 /// How a given worker turns a packet file into a subprocess command.
 ///
 /// Argument shapes are isolated here so a single adapter edit fixes flag drift
@@ -59,10 +66,10 @@ pub fn build_command(
                 .arg("--sandbox")
                 .arg(sandbox)
                 .arg("--skip-git-repo-check");
-            if !model.is_empty() {
+            if explicit(model) {
                 cmd.arg("-m").arg(model);
             }
-            if !effort.is_empty() {
+            if explicit(effort) {
                 cmd.arg("-c")
                     .arg(format!("model_reasoning_effort=\"{effort}\""));
             }
@@ -78,10 +85,10 @@ pub fn build_command(
             } else {
                 cmd.arg("-p").arg("--permission-mode").arg("acceptEdits");
             }
-            if !model.is_empty() {
+            if explicit(model) {
                 cmd.arg("--model").arg(model);
             }
-            if !effort.is_empty() {
+            if explicit(effort) {
                 cmd.arg("--effort").arg(effort);
             }
             cmd.arg("--add-dir").arg(run_dir);
@@ -297,5 +304,31 @@ mod tests {
         let cx = args_of(&build_command("codex", bin, run, cwd, false, "", "", &imgs));
         assert!(cx.windows(2).any(|w| w[0] == "-i" && w[1] == "a.png"));
         assert!(cx.windows(2).any(|w| w[0] == "-i" && w[1] == "b.jpg"));
+    }
+
+    #[test]
+    fn auto_and_empty_omit_model_effort_flags() {
+        // "auto" (any case) and empty both mean: let the CLI choose — no flag.
+        let (bin, run, cwd) = (Path::new("x"), Path::new("/tmp/r"), Path::new("/tmp"));
+        for (model, effort) in [("auto", "auto"), ("", ""), ("AUTO", "Auto")] {
+            let cx = args_of(&build_command("codex", bin, run, cwd, false, model, effort, &[]));
+            assert!(!cx.iter().any(|a| a == "-m"), "codex -m omitted for {model:?}");
+            assert!(
+                !cx.iter().any(|a| a.contains("model_reasoning_effort")),
+                "codex effort omitted for {effort:?}"
+            );
+            let cl = args_of(&build_command(
+                "claude-code",
+                bin,
+                run,
+                cwd,
+                false,
+                model,
+                effort,
+                &[],
+            ));
+            assert!(!cl.iter().any(|a| a == "--model"), "claude --model omitted for {model:?}");
+            assert!(!cl.iter().any(|a| a == "--effort"), "claude --effort omitted for {effort:?}");
+        }
     }
 }

@@ -313,7 +313,10 @@ pub fn compile_planning(
          checkable acceptance criteria.\n\
          - Break the work into a few bounded tasks. Each task: title, kind \
          (research|implementation|review|safety), risk (low|medium|high), preferred_worker \
-         (codex|claude-code), allowed_scope, acceptance.\n\
+         (codex|claude-code), model, effort, allowed_scope, acceptance.\n\
+         - Default model and effort to \"auto\" (let the chosen worker decide). Set them \
+         only when a task clearly needs a stronger or cheaper model, or more or less \
+         reasoning. Effort levels: minimal|low|medium|high (or \"auto\").\n\
          - Do not expand the goal. Keep out-of-scope strict (payments, auth redesign, production \
          DB, deploy) unless the request demands them.\n\
          - Ask at most 2 questions, and only about product intent / scope / acceptance priority. \
@@ -392,6 +395,8 @@ const PLANNING_SCHEMA_HINT: &str = r#"```json
       "kind": "research|implementation|review|safety",
       "risk": "low|medium|high",
       "preferred_worker": "codex|claude-code",
+      "model": "auto",
+      "effort": "auto",
       "worker_rationale": "one line: why this worker fits this task",
       "allowed_scope": ["..."],
       "acceptance": ["..."]

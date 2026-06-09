@@ -215,6 +215,16 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let reason = resolved.reason;
     let bin = resolved.bin;
     let profile = find_worker(&workers.workers, &worker_id)?;
+    // Per-task model/effort override the worker profile; an empty value falls
+    // back to the profile, and build_command treats "auto" as the CLI's own
+    // default. The in-flight task thus captures its own effective profile.
+    let mut eff_profile = profile.clone();
+    if !task.model.trim().is_empty() {
+        eff_profile.model = task.model.clone();
+    }
+    if !task.effort.trim().is_empty() {
+        eff_profile.effort = task.effort.clone();
+    }
     // Per-run --full-access OR the workspace's default_access=full.
     let full_access = opts.full_access || config.default_access.eq_ignore_ascii_case("full");
     let env = guard::sanitized_worker_env(&billing).map_err(|e| anyhow!(e))?;
@@ -227,7 +237,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 
     let run_started = std::time::Instant::now();
     let outcome = workers::spawn(
-        profile,
+        &eff_profile,
         &bin,
         &packet_text,
         &ws.root,
@@ -478,6 +488,8 @@ mod tests {
             risk: String::new(),
             kind: String::new(),
             preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
             allowed_scope: vec![],
             acceptance: vec![],
             validation: None,
