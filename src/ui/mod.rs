@@ -288,7 +288,8 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             app.handoff_text = load_latest_handoff(app);
             app.screen = Screen::Handoff;
         }
-        KeyCode::Char('s') if !app.is_busy() => open_settings(app),
+        // Settings can be opened mid-run; saved changes apply to the next task.
+        KeyCode::Char('s') => open_settings(app),
         // Monitor can be opened mid-run to watch the worker's live output.
         KeyCode::Char('m') => app.screen = Screen::Monitor,
         KeyCode::Char('g') if !app.is_busy() => app.reload(),
