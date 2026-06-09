@@ -382,45 +382,41 @@ pub fn run_auto<F: FnMut(&str)>(
 
     loop {
         let queue = ws.load_queue()?;
-        // Hard gate: never run a later task while an earlier one needs attention.
-        // A NeedsUser/Blocked/Failed task must be resolved (yard answer / fix /
-        // requeue) before the drain proceeds — it is not silently skipped.
-        if let Some(t) = queue.tasks.iter().find(|t| {
-            matches!(
-                t.state,
-                TaskState::NeedsUser | TaskState::Blocked | TaskState::Failed
-            )
-        }) {
+        // NeedsUser/Blocked genuinely need a human: halt (don't skip past them).
+        if let Some(t) = queue
+            .tasks
+            .iter()
+            .find(|t| matches!(t.state, TaskState::NeedsUser | TaskState::Blocked))
+        {
             emit(format!(
-                "stopped: {} is {:?} \u{2014} resolve it before draining",
+                "stopped: {} is {:?} \u{2014} answer (a) or resolve it, then run auto again",
                 t.id, t.state
             ));
             break;
         }
-        let Some(idx) = select_next(&queue, &probe_opts)? else {
-            // Nothing queued: either fully drained or waiting on a human gate.
-            let stuck = queue.tasks.iter().find(|t| {
-                matches!(
-                    t.state,
-                    TaskState::Blocked | TaskState::NeedsUser | TaskState::Failed
-                )
-            });
-            match stuck {
-                Some(t) => emit(format!(
-                    "stopped: {} is {:?} \u{2014} needs you (see `yard handoff`)",
-                    t.id, t.state
-                )),
-                None => emit("done: queue drained, all tasks complete".to_string()),
-            }
-            break;
+        // A Failed task may be transient (e.g. a dropped connection): retry it
+        // first, bounded by the attempts cap below, instead of halting the drain.
+        let retry_target = queue
+            .tasks
+            .iter()
+            .find(|t| t.state == TaskState::Failed)
+            .map(|t| t.id.clone());
+        // Pick the work: retry the failed task first, else the next queued one.
+        let task_id = match &retry_target {
+            Some(id) => id.clone(),
+            None => match select_next(&queue, &probe_opts)? {
+                Some(idx) => queue.tasks[idx].id.clone(),
+                None => {
+                    emit("done: queue drained, all tasks complete".to_string());
+                    break;
+                }
+            },
         };
-
-        let task_id = queue.tasks[idx].id.clone();
         let n = attempts.entry(task_id.clone()).or_default();
         *n += 1;
         if *n > 2 {
             emit(format!(
-                "stopped: {task_id} keeps coming back \u{2014} needs you"
+                "stopped: {task_id} did not complete after retries \u{2014} needs you"
             ));
             break;
         }
@@ -431,7 +427,7 @@ pub fn run_auto<F: FnMut(&str)>(
             &RunOptions {
                 execute: true,
                 worker_override: None,
-                target: None,
+                target: retry_target.clone(),
                 answer: None,
                 full_access: bypass,
             },
@@ -456,11 +452,10 @@ pub fn run_auto<F: FnMut(&str)>(
                 break;
             }
             TaskState::Failed => {
-                emit(format!(
-                    "stopped: {} failed \u{2014} needs you",
-                    report.task_id
-                ));
-                break;
+                // Likely transient (e.g. a dropped connection); loop to retry it,
+                // bounded by the attempts cap above.
+                emit(format!("{} failed; retrying", report.task_id));
+                continue;
             }
             TaskState::Running => break,
         }
