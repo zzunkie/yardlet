@@ -194,6 +194,9 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             }
             if let Some(p) = latest_progress {
                 app.progress = Some(p);
+                // Refresh the queue snapshot so Home reflects the drain's
+                // task-by-task progress instead of the state frozen at job start.
+                app.reload();
             }
             if let Some(r) = finished {
                 app.toast = Some((r.ok, r.summary));
@@ -292,7 +295,8 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         KeyCode::Char('s') => open_settings(app),
         // Monitor can be opened mid-run to watch the worker's live output.
         KeyCode::Char('m') => app.screen = Screen::Monitor,
-        KeyCode::Char('g') if !app.is_busy() => app.reload(),
+        // Refresh is safe mid-run and lets you re-read the live queue/snapshot.
+        KeyCode::Char('g') => app.reload(),
         KeyCode::Char('l') if !app.is_busy() => toggle_language(app),
         // Access can be toggled even mid-run; it takes effect on the next task.
         KeyCode::Char('f') => toggle_access(app),
