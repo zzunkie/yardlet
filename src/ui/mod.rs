@@ -186,6 +186,10 @@ fn title_for(app: &App) -> String {
 }
 
 fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()> {
+    // Force a full repaint when the screen changes so leaving a content-heavy
+    // screen (e.g. the Monitor's live worker output) doesn't leave artifacts
+    // bleeding onto the next one.
+    let mut last_screen: Option<Screen> = None;
     loop {
         // Drain background-job messages: progress lines stream in; the final
         // Done message ends the job.
@@ -230,6 +234,10 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             }
         }
 
+        if last_screen != Some(app.screen) {
+            let _ = terminal.clear();
+            last_screen = Some(app.screen);
+        }
         terminal.draw(|frame| view::render(frame, &app))?;
 
         // Reflect Yard's state in the terminal title (OSC sequence), only when
