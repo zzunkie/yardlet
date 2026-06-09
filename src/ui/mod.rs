@@ -194,16 +194,17 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             }
             if let Some(p) = latest_progress {
                 app.progress = Some(p);
-                // Refresh the queue snapshot so Home reflects the drain's
-                // task-by-task progress instead of the state frozen at job start.
-                app.reload();
             }
             if let Some(r) = finished {
                 app.toast = Some((r.ok, r.summary));
                 app.job = Job::Idle;
                 app.progress = None;
-                app.reload();
             }
+            // Refresh the queue snapshot every tick while a job runs so Home
+            // tracks the drain's live task states. A "running X" progress line can
+            // arrive before run_next persists the Running state, so the refresh
+            // must not be gated on progress messages.
+            app.reload();
         }
 
         terminal.draw(|frame| view::render(frame, &app))?;
@@ -476,6 +477,9 @@ fn stop_running_worker(app: &mut App) {
         .filter(|p| p.is_dir())
         .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
     if let Some(dir) = latest {
+        // Mark cancelled BEFORE killing so the run loop treats the worker's death
+        // as a user stop (requeue) rather than a transient failure to auto-resume.
+        let _ = std::fs::write(dir.join("cancelled"), b"1");
         if let Ok(pid) = std::fs::read_to_string(dir.join("worker.pid")) {
             let pid = pid.trim();
             if !pid.is_empty() {
