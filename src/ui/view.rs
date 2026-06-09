@@ -62,6 +62,69 @@ fn latest_run_dir(runs: &std::path::Path) -> Option<std::path::PathBuf> {
     newest.map(|(_, p)| p)
 }
 
+/// Turn one worker-output line into a readable monitor line. Worker CLIs stream
+/// JSONL events (claude `stream-json`, codex `--json`); extract the human bits
+/// (assistant text + tool calls). Non-JSON lines are shown as-is.
+fn pretty_event_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => return Some(line.to_string()),
+    };
+    let mut out = Vec::new();
+    collect_readable(&v, &mut out);
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.join("\n"))
+    }
+}
+
+fn collect_readable(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::Object(m) => {
+            match m.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                "text" => {
+                    if let Some(t) = m.get("text").and_then(|t| t.as_str()) {
+                        if !t.trim().is_empty() {
+                            out.push(t.trim().to_string());
+                        }
+                    }
+                }
+                "tool_use" => {
+                    let name = m.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                    out.push(format!("\u{1f527} {name}"));
+                }
+                _ => {
+                    // codex/agent messages often carry text/message directly.
+                    if let Some(t) = m.get("text").and_then(|t| t.as_str()) {
+                        if !t.trim().is_empty() {
+                            out.push(t.trim().to_string());
+                        }
+                    } else if let Some(t) = m.get("message").and_then(|t| t.as_str()) {
+                        if !t.trim().is_empty() {
+                            out.push(t.trim().to_string());
+                        }
+                    } else {
+                        for val in m.values() {
+                            collect_readable(val, out);
+                        }
+                    }
+                }
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for val in a {
+                collect_readable(val, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn render_monitor(frame: &mut Frame, app: &App) {
     let l = app.lang.l();
     let area = safe_area(frame);
@@ -127,14 +190,19 @@ fn render_monitor(frame: &mut Frame, app: &App) {
     let body = match &dir {
         Some(d) => {
             let log = std::fs::read_to_string(d.join("worker-output.log")).unwrap_or_default();
+            let pretty: Vec<String> = log.lines().filter_map(pretty_event_line).collect();
             let visible = chunks[1].height.saturating_sub(2) as usize;
-            let lines: Vec<&str> = log.lines().collect();
-            let start = lines.len().saturating_sub(visible);
-            lines[start..].join("\n")
+            let start = pretty.len().saturating_sub(visible);
+            pretty[start..].join("\n")
         }
         None => String::new(),
     };
-    frame.render_widget(Paragraph::new(body).block(Block::bordered()), chunks[1]);
+    frame.render_widget(
+        Paragraph::new(body)
+            .wrap(Wrap { trim: true })
+            .block(Block::bordered()),
+        chunks[1],
+    );
 
     render_footer(frame, chunks[2], l.footer_monitor);
 }

@@ -65,7 +65,8 @@ pub fn build_command(
             cmd.arg("exec")
                 .arg("--sandbox")
                 .arg(sandbox)
-                .arg("--skip-git-repo-check");
+                .arg("--skip-git-repo-check")
+                .arg("--json"); // stream events as JSONL for the live monitor
             if explicit(model) {
                 cmd.arg("-m").arg(model);
             }
@@ -85,6 +86,8 @@ pub fn build_command(
             } else {
                 cmd.arg("-p").arg("--permission-mode").arg("acceptEdits");
             }
+            // Stream events as JSONL so the live monitor shows progress.
+            cmd.arg("--output-format").arg("stream-json").arg("--verbose");
             if explicit(model) {
                 cmd.arg("--model").arg(model);
             }
