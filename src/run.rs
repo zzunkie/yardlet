@@ -342,8 +342,47 @@ pub fn run_auto<F: FnMut(&str)>(
         full_access: false,
     };
 
+    // Recover orphans first: a task left in Running means an earlier drain was
+    // interrupted (its worker process is gone). Nothing is running it now, so
+    // requeue it before draining. Yard assumes one instance per workspace.
+    {
+        let mut q = ws.load_queue()?;
+        let recovered: Vec<String> = q
+            .tasks
+            .iter_mut()
+            .filter(|t| t.state == TaskState::Running)
+            .map(|t| {
+                t.state = TaskState::Queued;
+                t.id.clone()
+            })
+            .collect();
+        if !recovered.is_empty() {
+            ws.save_queue(&q)?;
+            emit(format!(
+                "recovered {} orphaned running task(s): {}",
+                recovered.len(),
+                recovered.join(", ")
+            ));
+        }
+    }
+
     loop {
         let queue = ws.load_queue()?;
+        // Hard gate: never run a later task while an earlier one needs attention.
+        // A NeedsUser/Blocked/Failed task must be resolved (yard answer / fix /
+        // requeue) before the drain proceeds — it is not silently skipped.
+        if let Some(t) = queue.tasks.iter().find(|t| {
+            matches!(
+                t.state,
+                TaskState::NeedsUser | TaskState::Blocked | TaskState::Failed
+            )
+        }) {
+            emit(format!(
+                "stopped: {} is {:?} \u{2014} resolve it before draining",
+                t.id, t.state
+            ));
+            break;
+        }
         let Some(idx) = select_next(&queue, &probe_opts)? else {
             // Nothing queued: either fully drained or waiting on a human gate.
             let stuck = queue.tasks.iter().find(|t| {
