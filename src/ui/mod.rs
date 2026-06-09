@@ -560,25 +560,25 @@ fn start_planning(app: &mut App) {
 }
 
 fn start_run(app: &mut App) {
-    // Prefer the next queued task; if none, retry the first stuck (blocked/failed)
-    // one so the user is never dead-ended in the TUI.
-    let (has_queued, stuck) = app
+    // A Failed/Blocked task blocks the drain (see run_auto's gate), so `r` retries
+    // it first; otherwise it runs the next queued task. NeedsUser is resolved via a.
+    let (stuck, has_queued) = app
         .snapshot
         .as_ref()
         .map(|s| {
-            let has_queued = s.queue.tasks.iter().any(|t| t.state == TaskState::Queued);
             let stuck = s
                 .queue
                 .tasks
                 .iter()
                 .find(|t| matches!(t.state, TaskState::Blocked | TaskState::Failed))
                 .map(|t| t.id.clone());
-            (has_queued, stuck)
+            let has_queued = s.queue.tasks.iter().any(|t| t.state == TaskState::Queued);
+            (stuck, has_queued)
         })
-        .unwrap_or((false, None));
+        .unwrap_or((None, false));
 
-    let target = if has_queued { None } else { stuck };
-    if !has_queued && target.is_none() {
+    let target = stuck;
+    if target.is_none() && !has_queued {
         app.toast = Some((true, app.lang.l().nothing_to_run.into()));
         return;
     }

@@ -343,26 +343,40 @@ pub fn run_auto<F: FnMut(&str)>(
     };
 
     // Recover orphans first: a task left in Running means an earlier drain was
-    // interrupted (its worker process is gone). Nothing is running it now, so
-    // requeue it before draining. Yard assumes one instance per workspace.
+    // interrupted (its worker process is gone). If that run actually produced a
+    // result, evaluate it (don't throw finished work away); otherwise requeue it.
+    // Yard assumes one instance per workspace.
     {
         let mut q = ws.load_queue()?;
-        let recovered: Vec<String> = q
-            .tasks
-            .iter_mut()
-            .filter(|t| t.state == TaskState::Running)
-            .map(|t| {
-                t.state = TaskState::Queued;
-                t.id.clone()
-            })
-            .collect();
-        if !recovered.is_empty() {
+        let mut requeued = Vec::new();
+        let mut finished = Vec::new();
+        for t in q.tasks.iter_mut() {
+            if t.state != TaskState::Running {
+                continue;
+            }
+            match latest_run_for(ws, &t.id) {
+                Some((run_id, run_dir)) if run_dir.join("result.json").exists() => {
+                    let eval = evaluator::evaluate(&run_dir, &run_id, t);
+                    t.state = eval.next_task_state;
+                    finished.push(format!("{} \u{2192} {:?}", t.id, t.state));
+                }
+                _ => {
+                    t.state = TaskState::Queued;
+                    requeued.push(t.id.clone());
+                }
+            }
+        }
+        if !finished.is_empty() || !requeued.is_empty() {
             ws.save_queue(&q)?;
-            emit(format!(
-                "recovered {} orphaned running task(s): {}",
-                recovered.len(),
-                recovered.join(", ")
-            ));
+            if !finished.is_empty() {
+                emit(format!("recovered completed run(s): {}", finished.join(", ")));
+            }
+            if !requeued.is_empty() {
+                emit(format!(
+                    "requeued interrupted task(s): {}",
+                    requeued.join(", ")
+                ));
+            }
         }
     }
 
@@ -476,6 +490,32 @@ pub fn select_next(queue: &crate::schemas::WorkQueue, _opts: &RunOptions) -> Res
         }
     }
     Ok(best)
+}
+
+/// The newest run directory recorded for a task id, as (run_id, dir). Run dirs
+/// are named `run-<timestamp>` so a lexicographic max is the most recent.
+fn latest_run_for(ws: &Workspace, task_id: &str) -> Option<(String, PathBuf)> {
+    let mut best: Option<(String, PathBuf)> = None;
+    for entry in std::fs::read_dir(ws.runs_dir()).ok()?.flatten() {
+        let dir = entry.path();
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(String::from) else {
+            continue;
+        };
+        if !name.starts_with("run-") {
+            continue;
+        }
+        let yaml = std::fs::read_to_string(dir.join("run.yaml")).unwrap_or_default();
+        let tid = yaml
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("task_id:").map(|v| v.trim().to_string()));
+        if tid.as_deref() != Some(task_id) {
+            continue;
+        }
+        if best.as_ref().map(|(n, _)| name > *n).unwrap_or(true) {
+            best = Some((name, dir));
+        }
+    }
+    best
 }
 
 fn find_worker<'a>(workers: &'a [WorkerProfile], id: &str) -> Result<&'a WorkerProfile> {
