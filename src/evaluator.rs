@@ -163,7 +163,7 @@ fn decide_state(reported: &str, all_passed: bool, result: Option<&RunResult>) ->
     match reported {
         "done" if all_passed => TaskState::Done,
         "done" => TaskState::Failed, // claimed done but evidence is incomplete
-        "partial" => TaskState::Queued,
+        "partial" => TaskState::Partial,
         "blocked" => TaskState::Blocked,
         "needs_user" => TaskState::NeedsUser,
         "failed" => TaskState::Failed,
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn non_done_states_map_safely() {
-        assert_eq!(decide_state("partial", true, None), TaskState::Queued);
+        assert_eq!(decide_state("partial", true, None), TaskState::Partial);
         assert_eq!(decide_state("blocked", true, None), TaskState::Blocked);
         assert_eq!(decide_state("needs_user", true, None), TaskState::NeedsUser);
         assert_eq!(decide_state("failed", true, None), TaskState::Failed);

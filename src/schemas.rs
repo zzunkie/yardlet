@@ -128,6 +128,8 @@ pub enum TaskState {
     Blocked,
     Failed,
     NeedsUser,
+    /// Ran but did not fully complete — acceptance not met or a blocker found.
+    Partial,
 }
 
 impl TaskState {
@@ -138,7 +140,8 @@ impl TaskState {
             TaskState::Blocked => "\u{2715}", // x
             TaskState::Failed => "!",
             TaskState::NeedsUser => "?",
-            TaskState::Queued => "\u{00b7}", // middle dot
+            TaskState::Partial => "\u{25d0}", // half-filled circle
+            TaskState::Queued => "\u{00b7}",  // middle dot
         }
     }
 }

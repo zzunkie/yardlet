@@ -502,7 +502,12 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         .queue
         .tasks
         .iter()
-        .filter(|t| matches!(t.state, TaskState::Blocked | TaskState::Failed))
+        .filter(|t| {
+            matches!(
+                t.state,
+                TaskState::Blocked | TaskState::Failed | TaskState::Partial
+            )
+        })
         .map(|t| t.id.as_str())
         .collect();
     if !stuck.is_empty() {

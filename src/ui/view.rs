@@ -158,6 +158,7 @@ fn render_monitor(frame: &mut Frame, app: &App) {
                 Some(TaskState::Failed) => ("failed".to_string(), Color::Red),
                 Some(TaskState::Blocked) => ("blocked".to_string(), Color::Red),
                 Some(TaskState::NeedsUser) => ("needs-you".to_string(), Color::Magenta),
+                Some(TaskState::Partial) => ("partial".to_string(), Color::LightYellow),
                 Some(TaskState::Queued) => ("queued".to_string(), Color::Gray),
                 None => (field("state:"), Color::Gray),
             };
@@ -424,6 +425,11 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
         ),
         Span::raw(", "),
         Span::styled(
+            format!("{} {}", snap.count(TaskState::Partial), l.s_partial),
+            Style::default().fg(Color::LightYellow),
+        ),
+        Span::raw(", "),
+        Span::styled(
             format!("{} {}", snap.count(TaskState::Done), l.s_done),
             Style::default().fg(Color::Green),
         ),
@@ -480,6 +486,7 @@ fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected:
                     TaskState::Running => Color::Yellow,
                     TaskState::Blocked | TaskState::Failed => Color::Red,
                     TaskState::NeedsUser => Color::Magenta,
+                    TaskState::Partial => Color::LightYellow,
                     TaskState::Queued => Color::Gray,
                 };
                 let is_sel = i == sel;

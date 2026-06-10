@@ -767,7 +767,12 @@ fn start_run(app: &mut App) {
                 .queue
                 .tasks
                 .iter()
-                .find(|t| matches!(t.state, TaskState::Blocked | TaskState::Failed))
+                .find(|t| {
+                    matches!(
+                        t.state,
+                        TaskState::Blocked | TaskState::Failed | TaskState::Partial
+                    )
+                })
                 .map(|t| t.id.clone());
             let has_queued = s.queue.tasks.iter().any(|t| t.state == TaskState::Queued);
             (stuck, has_queued)

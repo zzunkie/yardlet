@@ -427,7 +427,12 @@ pub fn run_auto<F: FnMut(&str)>(
         if let Some(t) = queue
             .tasks
             .iter()
-            .find(|t| matches!(t.state, TaskState::NeedsUser | TaskState::Blocked))
+            .find(|t| {
+                matches!(
+                    t.state,
+                    TaskState::NeedsUser | TaskState::Blocked | TaskState::Partial
+                )
+            })
         {
             emit(format!(
                 "stopped: {} is {:?} \u{2014} answer (a) or resolve it, then run auto again",
@@ -488,6 +493,13 @@ pub fn run_auto<F: FnMut(&str)>(
             TaskState::NeedsUser => {
                 emit(format!(
                     "stopped: {} needs you \u{2014} `yard answer \"...\"`",
+                    report.task_id
+                ));
+                break;
+            }
+            TaskState::Partial => {
+                emit(format!(
+                    "stopped: {} is partial (incomplete) \u{2014} needs you",
                     report.task_id
                 ));
                 break;
