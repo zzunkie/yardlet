@@ -1,7 +1,6 @@
 # Parallel Queue — Design
 
-> Status: phases 1–2 implemented (dependency model, parallel worktree
-> execution); phase 3 (TUI multi-run) in progress.
+> Status: implemented (all three phases).
 
 ## Why this exists, and what it is NOT
 
@@ -84,8 +83,11 @@ Implementation notes (src/parallel.rs):
   conflict aborts cleanly, drops the task to Partial, appends the conflict to
   the handoff, and keeps the worktree for manual integration.
 
-## Phase 3 — TUI
+## Phase 3 — TUI + recovery (implemented)
 
-Run Monitor lists all running tasks and streams the selected one; the status
-header counts parallel runs; orphan recovery handles multiple interrupted
-running tasks (already per-task, needs worktree cleanup awareness).
+- Run Monitor: with several tasks running, a tab row lists them; Tab/←→
+  switches which run's live output is followed.
+- Settings exposes `max_parallel` ("Parallel tasks", Space cycles 1–4).
+- Orphan recovery is worktree-aware: a finished orphaned worktree run is
+  merged back on recovery (conflict → Partial, worktree kept), and an
+  unfinished one is requeued with its abandoned worktree removed.

@@ -54,6 +54,8 @@ pub struct SettingsDraft {
 pub fn field_options(key: &str) -> &'static [&'static str] {
     if key == "access" {
         &["sandboxed", "full"]
+    } else if key == "parallel" {
+        &["1", "2", "3", "4"]
     } else if key == "language" {
         &["auto", "ko", "en"]
     } else if key.starts_with("effort:") {
@@ -113,6 +115,9 @@ pub struct App {
     pub viewing_archived: bool,
     pub settings: Option<SettingsDraft>,
     pub last_title: Option<String>,
+    /// Which running task the Run Monitor is following (Tab cycles when
+    /// several tasks run in parallel).
+    pub monitor_sel: usize,
     pub lang: i18n::Lang,
 }
 
@@ -146,6 +151,7 @@ impl App {
             viewing_archived: false,
             settings: None,
             last_title: None,
+            monitor_sel: 0,
             lang,
         }
     }
@@ -329,14 +335,39 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             Screen::Completion => handle_completion_key(&mut app, key.code),
             Screen::ReportList => handle_reportlist_key(&mut app, key.code),
             Screen::Handoff => handle_handoff_key(&mut app, key.code),
-            Screen::Monitor => {
-                if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
-                    app.screen = Screen::Home;
+            Screen::Monitor => match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Home,
+                // Cycle which parallel run is being followed.
+                KeyCode::Tab | KeyCode::Right => {
+                    let n = monitor_runs(&app).len().max(1);
+                    app.monitor_sel = (app.monitor_sel + 1) % n;
+                }
+                KeyCode::Left => {
+                    let n = monitor_runs(&app).len().max(1);
+                    app.monitor_sel = (app.monitor_sel + n - 1) % n;
+                }
+                _ => {}
+            },
+        }
+    }
+    Ok(())
+}
+
+/// The runs the Monitor can follow: the latest run of every Running task,
+/// in queue order. Empty when nothing is running (the view then falls back
+/// to the newest run dir).
+pub(crate) fn monitor_runs(app: &App) -> Vec<(String, std::path::PathBuf)> {
+    let mut runs = Vec::new();
+    if let Some(s) = &app.snapshot {
+        for t in &s.queue.tasks {
+            if t.state == TaskState::Running {
+                if let Some((_, dir)) = crate::run::latest_run_for(&app.ws, &t.id) {
+                    runs.push((t.id.clone(), dir));
                 }
             }
         }
     }
-    Ok(())
+    runs
 }
 
 /// Returns true to quit.
@@ -608,6 +639,14 @@ fn open_settings(app: &mut App) {
                 .unwrap_or_default(),
         },
         Field {
+            label: l.parallel_word.to_string(),
+            key: "parallel".into(),
+            value: cfg
+                .as_ref()
+                .map(|c| c.max_parallel.to_string())
+                .unwrap_or_else(|| "1".to_string()),
+        },
+        Field {
             label: l.language_word.to_string(),
             key: "language".into(),
             value: cfg.map(|c| c.language).unwrap_or_default(),
@@ -678,6 +717,11 @@ fn save_settings(app: &mut App) {
             match f.key.as_str() {
                 "access" if f.value == "full" || f.value == "sandboxed" => {
                     cfg.default_access = f.value.clone()
+                }
+                "parallel" => {
+                    if let Ok(n) = f.value.trim().parse::<usize>() {
+                        cfg.max_parallel = n.max(1);
+                    }
                 }
                 "language" if !f.value.is_empty() => cfg.language = f.value.clone(),
                 _ => {}

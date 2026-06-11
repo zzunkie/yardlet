@@ -384,7 +384,7 @@ pub fn run_batch<F: FnMut(&str)>(
     Ok(states)
 }
 
-enum Integration {
+pub(crate) enum Integration {
     Merged,
     NoChanges,
     Conflict(String),
@@ -392,7 +392,12 @@ enum Integration {
 
 /// Commit whatever the worker left in the worktree (excluding Yard's `.agents/`
 /// state copies) and merge the branch back into the main workspace.
-fn integrate_worktree(root: &Path, wt: &Path, branch: &str, task_id: &str) -> Result<Integration> {
+pub(crate) fn integrate_worktree(
+    root: &Path,
+    wt: &Path,
+    branch: &str,
+    task_id: &str,
+) -> Result<Integration> {
     git(wt, &["add", "-A", "--", ".", ":(exclude).agents"])?;
     let staged = git(wt, &["diff", "--cached", "--name-only"])?;
     if !staged.trim().is_empty() {
@@ -443,7 +448,7 @@ fn create_worktree(root: &Path, wt: &Path, branch: &str) -> Result<()> {
     git(root, &["worktree", "add", &wt_s, "-b", branch]).map(|_| ())
 }
 
-fn remove_worktree(root: &Path, wt: &Path, branch: &str) {
+pub(crate) fn remove_worktree(root: &Path, wt: &Path, branch: &str) {
     let _ = git(
         root,
         &["worktree", "remove", "--force", &wt.display().to_string()],

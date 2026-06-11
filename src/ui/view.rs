@@ -129,14 +129,38 @@ fn collect_readable(v: &serde_json::Value, out: &mut Vec<String>) {
 fn render_monitor(frame: &mut Frame, app: &App) {
     let l = app.lang.l();
     let area = safe_area(frame);
+    // With parallel runs, the header grows one line for the task tabs.
+    let multi = crate::ui::monitor_runs(app).len() > 1;
     let chunks = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(if multi { 4 } else { 3 }),
         Constraint::Min(4),
         Constraint::Length(3),
     ])
     .split(area);
 
-    let dir = latest_run_dir(&app.ws.runs_dir());
+    // Follow the selected running task's run; with no running task, fall back
+    // to the newest run dir (post-run inspection).
+    let running = crate::ui::monitor_runs(app);
+    let tabs: Option<Line> = (running.len() > 1).then(|| {
+        let sel = app.monitor_sel % running.len();
+        let mut spans: Vec<Span> = Vec::new();
+        for (i, (task_id, _)) in running.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw("  "));
+            }
+            spans.push(if i == sel {
+                Span::styled(task_id.clone(), Style::default().bold().fg(Color::Yellow))
+            } else {
+                Span::styled(task_id.clone(), Style::default().fg(Color::DarkGray))
+            });
+        }
+        Line::from(spans)
+    });
+    let dir = if running.is_empty() {
+        latest_run_dir(&app.ws.runs_dir())
+    } else {
+        Some(running[app.monitor_sel % running.len()].1.clone())
+    };
     let header = match &dir {
         Some(d) => {
             let yaml = std::fs::read_to_string(d.join("run.yaml")).unwrap_or_default();
@@ -187,8 +211,12 @@ fn render_monitor(frame: &mut Frame, app: &App) {
         }
         None => Line::from(l.monitor_no_runs.to_string()),
     };
+    let header_lines: Vec<Line> = match tabs {
+        Some(t) => vec![t, header],
+        None => vec![header],
+    };
     frame.render_widget(
-        Paragraph::new(header).block(Block::bordered().title(l.monitor_title)),
+        Paragraph::new(header_lines).block(Block::bordered().title(l.monitor_title)),
         chunks[0],
     );
 

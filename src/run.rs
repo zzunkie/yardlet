@@ -704,9 +704,21 @@ fn is_transient_failure(outcome: &workers::WorkerOutcome, run_dir: &std::path::P
     !outcome.exit_ok && !outcome.timed_out && !run_dir.join("result.json").exists()
 }
 
+/// The worktree a run executed in, when it was a parallel worktree run.
+fn run_worktree(run_dir: &std::path::Path) -> Option<PathBuf> {
+    let yaml = std::fs::read_to_string(run_dir.join("run.yaml")).ok()?;
+    let v = yaml
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("worktree:"))
+        .map(|v| v.trim().trim_matches('"').to_string())?;
+    (v != "." && !v.is_empty()).then(|| PathBuf::from(v))
+}
+
 /// Recover tasks left "running" by an interrupted/quit session: if the task's
 /// latest run produced a result, evaluate it (keep the finished work); otherwise
-/// requeue it. Returns messages describing what changed. Safe to call on startup.
+/// requeue it. A parallel worktree run that finished Done is also merged back —
+/// without this its changes would be stranded in the worktree while the task
+/// reads Done. Returns messages describing what changed. Safe to call on startup.
 pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
     let mut msgs = Vec::new();
     let Ok(mut q) = ws.load_queue() else {
@@ -722,9 +734,37 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
             Some((run_id, run_dir)) if run_dir.join("result.json").exists() => {
                 let eval = evaluator::evaluate(&run_dir, &run_id, t);
                 t.state = eval.next_task_state;
+                if let Some(wt) = run_worktree(&run_dir).filter(|w| w.exists()) {
+                    let branch = format!("yard/{}", t.id.to_lowercase());
+                    if t.state == TaskState::Done {
+                        match crate::parallel::integrate_worktree(&ws.root, &wt, &branch, &t.id) {
+                            Ok(crate::parallel::Integration::Conflict(why)) => {
+                                t.state = TaskState::Partial;
+                                msgs.push(format!(
+                                    "{}: merge conflict on recovery ({}); worktree kept at {}",
+                                    t.id,
+                                    why.trim(),
+                                    wt.display()
+                                ));
+                            }
+                            Ok(_) => crate::parallel::remove_worktree(&ws.root, &wt, &branch),
+                            Err(e) => {
+                                t.state = TaskState::Partial;
+                                msgs.push(format!("{}: recovery integration error: {e}", t.id));
+                            }
+                        }
+                    }
+                }
                 finished.push(format!("{} \u{2192} {:?}", t.id, t.state));
             }
-            _ => {
+            run => {
+                // No result: redo from scratch; drop the abandoned worktree.
+                if let Some((_, run_dir)) = run {
+                    if let Some(wt) = run_worktree(&run_dir).filter(|w| w.exists()) {
+                        let branch = format!("yard/{}", t.id.to_lowercase());
+                        crate::parallel::remove_worktree(&ws.root, &wt, &branch);
+                    }
+                }
                 t.state = TaskState::Queued;
                 requeued.push(t.id.clone());
             }
@@ -860,6 +900,95 @@ mod tests {
             task("b", TaskState::Blocked, 2, false),
         ]);
         assert_eq!(select_next(&q, &opts()).unwrap(), None);
+    }
+
+    #[test]
+    fn recovery_merges_a_finished_orphaned_worktree_run() {
+        // A parallel worktree run finished (result.json written) but Yard died
+        // before integrating. Recovery must merge the work back, not just mark
+        // the task Done with its changes stranded in the worktree.
+        let root = std::env::temp_dir().join(format!("yard-orphan-wt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let sh = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        sh(&["init", "-q"]);
+        std::fs::write(root.join("base.txt"), "base\n").unwrap();
+        sh(&["add", "base.txt"]);
+        sh(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "init",
+        ]);
+
+        let ws = Workspace::at(&root);
+        let mut t = task("YARD-001", TaskState::Running, 10, false);
+        t.kind = "implementation".into();
+        ws.save_queue(&queue(vec![t.clone()])).unwrap();
+
+        // The orphaned run: a result the evaluator will accept, plus a run.yaml
+        // pointing at a live worktree with an unintegrated change.
+        let run_id = "run-20990101-000000-yard-001";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let wt = ws.agents_dir().join("worktrees").join("yard-001");
+        sh(&[
+            "worktree",
+            "add",
+            &wt.display().to_string(),
+            "-b",
+            "yard/yard-001",
+        ]);
+        std::fs::write(wt.join("feature.txt"), "from worker\n").unwrap();
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: "YARD-001".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "ok".into(),
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "run_id: {run_id}\ntask_id: YARD-001\nworktree: {}\n",
+                wt.display()
+            ),
+        )
+        .unwrap();
+
+        let msgs = recover_orphans(&ws);
+        assert!(msgs.iter().any(|m| m.contains("recovered")), "{msgs:?}");
+        let q = ws.load_queue().unwrap();
+        assert_eq!(q.tasks[0].state, TaskState::Done);
+        // The worker's change landed in the main workspace; the worktree is gone.
+        assert_eq!(
+            std::fs::read_to_string(root.join("feature.txt")).unwrap(),
+            "from worker\n"
+        );
+        assert!(!wt.exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
