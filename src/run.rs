@@ -409,6 +409,7 @@ pub fn run_auto<F: FnMut(&str)>(
         out.push(s);
     };
     let mut attempts: HashMap<String, u32> = HashMap::new();
+    let mut waits: HashMap<String, u32> = HashMap::new();
     let probe_opts = RunOptions {
         execute: false,
         worker_override: None,
@@ -438,6 +439,40 @@ pub fn run_auto<F: FnMut(&str)>(
             break;
         }
         let queue = ws.load_queue()?;
+        // A worker adopted from a previous session is still on a task: wait
+        // for it instead of starting overlapping work in the same workspace.
+        // recover_orphans evaluates it the moment its result appears.
+        if let Some(t) = queue.tasks.iter().find(|t| t.state == TaskState::Running) {
+            let task_id = t.id.clone();
+            for m in recover_orphans(ws) {
+                if !m.starts_with("adopted:") {
+                    emit(m);
+                }
+            }
+            let still_running = ws
+                .load_queue()?
+                .tasks
+                .iter()
+                .any(|x| x.state == TaskState::Running);
+            if still_running {
+                let n = waits.entry(task_id.clone()).or_default();
+                *n += 1;
+                if *n == 1 {
+                    emit(format!(
+                        "waiting for {task_id}'s worker from a previous session\u{2026}"
+                    ));
+                }
+                if *n > 360 {
+                    emit(format!(
+                        "stopped: {task_id} has run for 30+ minutes \u{2014} kill its worker \
+                         or keep waiting, then run auto again"
+                    ));
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(5));
+            }
+            continue;
+        }
         // NeedsUser/Blocked genuinely need a human: halt (don't skip past them).
         if let Some(t) = queue.tasks.iter().find(|t| {
             matches!(
@@ -716,11 +751,37 @@ fn run_worktree(run_dir: &std::path::Path) -> Option<PathBuf> {
     (v != "." && !v.is_empty()).then(|| PathBuf::from(v))
 }
 
+/// The pid of a run's worker, if that process is still alive. The pid file is
+/// written at spawn and removed when the worker exits cleanly under a live
+/// Yard; an orphaned worker (Yard quit mid-run) keeps running with the file
+/// in place.
+pub(crate) fn live_worker_pid(run_dir: &std::path::Path) -> Option<u32> {
+    let pid: u32 = std::fs::read_to_string(run_dir.join("worker.pid"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    // Signal 0: existence check only, never delivered.
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()?
+        .success()
+        .then_some(pid)
+}
+
 /// Recover tasks left "running" by an interrupted/quit session: if the task's
-/// latest run produced a result, evaluate it (keep the finished work); otherwise
-/// requeue it. A parallel worktree run that finished Done is also merged back —
-/// without this its changes would be stranded in the worktree while the task
-/// reads Done. Returns messages describing what changed. Safe to call on startup.
+/// latest run produced a result, evaluate it (keep the finished work); if its
+/// worker is still alive (quitting Yard does not kill workers), ADOPT it —
+/// keep the task Running and let a later pass evaluate the result, instead of
+/// starting a duplicate worker on the same task. Only a dead worker with no
+/// result is requeued. A parallel worktree run that finished Done is also
+/// merged back — without this its changes would be stranded in the worktree
+/// while the task reads Done. Returns messages describing what changed. Safe
+/// to call on startup and periodically.
 pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
     let mut msgs = Vec::new();
     let Ok(mut q) = ws.load_queue() else {
@@ -760,7 +821,19 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 finished.push(format!("{} \u{2192} {:?}", t.id, t.state));
             }
             run => {
-                // No result: redo from scratch; drop the abandoned worktree.
+                // Worker still alive: adopt it — its original session keeps
+                // working; the result lands in the run dir and the next
+                // recovery pass evaluates it.
+                if let Some((_, run_dir)) = &run {
+                    if let Some(pid) = live_worker_pid(run_dir) {
+                        msgs.push(format!(
+                            "adopted: {} still running from a previous session (pid {pid})",
+                            t.id
+                        ));
+                        continue;
+                    }
+                }
+                // Dead with no result: redo from scratch; drop the worktree.
                 if let Some((_, run_dir)) = run {
                     if let Some(wt) = run_worktree(&run_dir).filter(|w| w.exists()) {
                         let branch = format!("yard/{}", t.id.to_lowercase());
@@ -990,6 +1063,40 @@ mod tests {
             "from worker\n"
         );
         assert!(!wt.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recovery_adopts_a_live_orphaned_worker() {
+        // Quit-and-restart while a worker runs: the worker survives (it is a
+        // separate process). Recovery must keep the task Running — adopting
+        // the original session — not requeue it into a duplicate worker.
+        let root = std::env::temp_dir().join(format!("yard-adopt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        ws.save_queue(&queue(vec![task(
+            "YARD-001",
+            TaskState::Running,
+            10,
+            false,
+        )]))
+        .unwrap();
+        let run_dir = ws.runs_dir().join("run-20990101-000000-yard-001");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        write_str(&run_dir.join("run.yaml"), "task_id: YARD-001\n").unwrap();
+        // Use our own pid: definitely alive.
+        write_str(&run_dir.join("worker.pid"), &std::process::id().to_string()).unwrap();
+
+        let msgs = recover_orphans(&ws);
+        assert!(msgs.iter().any(|m| m.starts_with("adopted:")), "{msgs:?}");
+        let q = ws.load_queue().unwrap();
+        assert_eq!(q.tasks[0].state, TaskState::Running); // not requeued
+
+        // Once the worker dies (pid file gone), the same task is requeued.
+        std::fs::remove_file(run_dir.join("worker.pid")).unwrap();
+        let msgs = recover_orphans(&ws);
+        assert!(msgs.iter().any(|m| m.contains("requeued")), "{msgs:?}");
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Queued);
         let _ = std::fs::remove_dir_all(&root);
     }
 

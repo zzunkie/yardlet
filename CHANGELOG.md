@@ -23,6 +23,12 @@
   keypress is no longer swallowed by IME composition; the IME is restored on
   text-input screens and on exit. Toggle via Settings ("Auto IME switch") or
   `auto_ime` in `.agents/yard.yaml`.
+- Quitting mid-run no longer duplicates work: the worker survives a quit, and
+  on restart Yard now ADOPTS a still-alive worker (task stays Running, the
+  Monitor tails its live log, the idle loop evaluates and merges its result
+  when it lands) instead of requeueing the task into a second worker. The
+  auto-drain waits for an adopted worker rather than starting overlapping
+  work; only a dead worker with no result is requeued.
 
 ## v0.2.0 — 2026-06-11
 

@@ -432,7 +432,30 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
     // bleeding onto the next one.
     let mut last_screen: Option<Screen> = None;
     let mut tick: u32 = 0;
+    let mut last_idle_recover = Instant::now();
     loop {
+        // While idle with a task still Running — an adopted worker from a
+        // previous session — poll for its completion so the finished work is
+        // evaluated (and merged) without the user doing anything.
+        if matches!(app.job, Job::Idle) && last_idle_recover.elapsed() >= Duration::from_secs(5) {
+            last_idle_recover = Instant::now();
+            let has_running = app
+                .snapshot
+                .as_ref()
+                .map(|s| s.queue.tasks.iter().any(|t| t.state == TaskState::Running))
+                .unwrap_or(false);
+            if has_running {
+                let msgs = crate::run::recover_orphans(&app.ws);
+                let changed: Vec<String> = msgs
+                    .into_iter()
+                    .filter(|m| !m.starts_with("adopted:"))
+                    .collect();
+                if !changed.is_empty() {
+                    app.toast = Some((true, changed.join("; ")));
+                    app.reload();
+                }
+            }
+        }
         // Drain background-job messages: progress lines stream in; the final
         // Done message ends the job.
         if let Job::Running { rx, .. } = &app.job {
