@@ -2,6 +2,8 @@
 
 > Yard is the local operating console where AI coding workers plan, build, verify, and hand off long-running work inside your workspace.
 
+![Yard terminal UI demo](docs/assets/yard-demo.gif)
+
 Yard is a local AI workbench. You describe work in a few natural-language sentences, and Yard manages planning, a queued execution model, worker routing, validation, compacting, handoff, and safety inside your local workspace. It uses **Codex CLI** and **Claude Code CLI** as hidden, subscription-backed workers.
 
 You normally open **Yard**, not Codex or Claude Code directly.
@@ -28,7 +30,7 @@ Yard core does **not** require, request, store, or call AI provider API keys. It
 cd your-project
 yard new "add admin order search with status, email, and date filters"
 yard queue                      # review the planned tasks
-yard run --next --execute       # run the next task through a hidden worker
+yard run --auto                 # drain the queue, stopping only at human gates
 yard handoff                    # read the teammate-readable summary
 yard                            # or do it all from the terminal UI
 ```
@@ -37,9 +39,10 @@ Like the worker CLIs, `yard` just works in any directory: the first command
 creates `.agents/` state on demand. `yard init` exists for scripting or to
 re-scaffold, but you do not need to run it first.
 
-A one-sentence request becomes an intent contract plus a bounded task queue;
-each task runs through a hidden worker, is checked by a deterministic
-evaluator, and leaves a checkpoint and handoff under `.agents/runs/`.
+A one-sentence request becomes an intent contract plus a bounded task queue
+with explicit dependencies; each task runs through a hidden worker, is checked
+by a deterministic evaluator, and leaves a checkpoint and handoff under
+`.agents/runs/`.
 
 ## Commands
 
@@ -55,8 +58,11 @@ evaluator, and leaves a checkpoint and handoff under `.agents/runs/`.
 | `yard inspect repo [--json]` | Cheap deterministic local evidence. |
 | `yard packet --task <id> --worker <id> [--dry-run]` | Compile a worker packet. |
 | `yard run --next [--execute] [--worker <id>]` | Prepare (default) or run the next task. |
+| `yard run --auto [--parallel N]` | Drain the queue autonomously; optionally N tasks at once. |
 | `yard answer "<reply>"` | Answer a task waiting on you (NeedsUser) and resume it. |
 | `yard handoff` | Print the latest run's handoff. |
+| `yard report` | Print the intent's final report (aggregate of every task). |
+| `yard recover` | Recover state from an interrupted session (orphaned runs, unread plans). |
 | `yard routing review` | Per-kind worker success stats + suggested preferences. |
 | `yard routing apply --kind K --worker W` | Pin a worker for a task kind (human-approved). |
 
@@ -98,6 +104,29 @@ with `yard routing apply` — telemetry never changes routing on its own. Design
 `run --next` prepares a run and stops *before* invoking a worker by default,
 because spawning a subscription-backed worker consumes usage. Pass `--execute`
 to actually run it.
+
+## Parallel execution
+
+The planner marks which tasks genuinely depend on each other (`depends_on`);
+everything else is independent. With parallelism on, the auto-drain runs up to
+N independent tasks at once — each in its own git worktree on branch
+`yard/<task-id>`, possibly on different workers. Workers run in parallel, but
+queue state keeps a single writer and results merge back sequentially; a merge
+conflict is never auto-resolved (the task drops to Partial and its worktree is
+kept for inspection). Off by default; opt in via Settings ("Parallel tasks"),
+`max_parallel` in `.agents/yard.yaml`, or `yard run --auto --parallel 3`.
+Requires a clean git tree, otherwise Yard falls back to sequential.
+
+Inside a task, workers are free to use their own subagents — Yard's queue
+parallelism is for work that must survive sessions, cross workers, or pass
+human gates. Design: [docs/parallel-queue.md](docs/parallel-queue.md).
+
+## Crash safety
+
+Yard state survives restarts. On startup (and via `yard recover`) it recovers
+interrupted sessions: a planning result the previous session paid for but never
+read is consumed into the queue, finished orphaned runs are evaluated and
+merged (worktree runs included), and unfinished ones are requeued.
 
 ## Build
 
