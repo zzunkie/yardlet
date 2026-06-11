@@ -6,6 +6,7 @@
 //! for completion and animates a spinner meanwhile.
 
 mod i18n;
+mod ime;
 mod view;
 
 use std::sync::mpsc::{self, Receiver};
@@ -56,6 +57,8 @@ pub fn field_options(key: &str) -> &'static [&'static str] {
         &["sandboxed", "full"]
     } else if key == "parallel" {
         &["1", "2", "3", "4"]
+    } else if key == "ime" {
+        &["on", "off"]
     } else if key == "language" {
         &["auto", "ko", "en"]
     } else if key.starts_with("effort:") {
@@ -121,6 +124,12 @@ pub struct App {
     /// Cached Monitor state so rendering never scans the runs directory or
     /// re-parses the whole worker log per frame.
     pub monitor: MonitorCache,
+    /// The non-ASCII input source we auto-switched away from (restored when a
+    /// text-input screen opens, or on quit).
+    pub ime_saved: Option<String>,
+    /// Throttle for the IME poll (checking the current source every frame
+    /// would be wasteful).
+    pub ime_checked: Instant,
     pub lang: i18n::Lang,
 }
 
@@ -218,7 +227,38 @@ impl App {
             last_title: None,
             monitor_sel: 0,
             monitor: MonitorCache::default(),
+            ime_saved: None,
+            ime_checked: Instant::now(),
             lang,
+        }
+    }
+
+    /// Keep the OS input source in sync with the screen (macOS, opt-out via
+    /// the auto_ime setting): shortcut screens get an ASCII layout so single
+    /// keys aren't eaten by IME composition; text screens get the user's IME
+    /// back. `force` skips the 1s throttle (used on screen transitions).
+    fn sync_ime(&mut self, force: bool) {
+        let enabled = self
+            .snapshot
+            .as_ref()
+            .map(|s| s.config.auto_ime)
+            .unwrap_or(true);
+        if !enabled {
+            return;
+        }
+        if !force && self.ime_checked.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.ime_checked = Instant::now();
+        if matches!(self.screen, Screen::NewWork | Screen::Answer) {
+            // Text input: give the user their IME back.
+            if let Some(id) = self.ime_saved.take() {
+                let _ = ime::select_by_id(&id);
+            }
+        } else if let Some((id, ascii)) = ime::current_id_and_ascii() {
+            if !ascii && ime::select_ascii() {
+                self.ime_saved = Some(id);
+            }
         }
     }
 
@@ -450,7 +490,13 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             if app.screen == Screen::Monitor {
                 app.refresh_monitor_runs();
             }
+            // Screen changed: sync the input source immediately (ASCII for
+            // shortcuts, the user's IME back for text input).
+            app.sync_ime(true);
             last_screen = Some(app.screen);
+        } else {
+            // Catch a manual 한/영 toggle while on a shortcut screen.
+            app.sync_ime(false);
         }
         // Keep the Monitor's log cache current (stat per frame; read on growth).
         if app.screen == Screen::Monitor {
@@ -527,6 +573,10 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
                 _ => {}
             },
         }
+    }
+    // Leave the input source the way we found it.
+    if let Some(id) = app.ime_saved.take() {
+        let _ = ime::select_by_id(&id);
     }
     Ok(())
 }
@@ -861,6 +911,15 @@ fn open_settings(app: &mut App) {
                 .unwrap_or_else(|| "1".to_string()),
         },
         Field {
+            label: l.ime_word.to_string(),
+            key: "ime".into(),
+            value: if cfg.as_ref().map(|c| c.auto_ime).unwrap_or(true) {
+                "on".to_string()
+            } else {
+                "off".to_string()
+            },
+        },
+        Field {
             label: l.language_word.to_string(),
             key: "language".into(),
             value: cfg.map(|c| c.language).unwrap_or_default(),
@@ -937,6 +996,7 @@ fn save_settings(app: &mut App) {
                         cfg.max_parallel = n.max(1);
                     }
                 }
+                "ime" => cfg.auto_ime = f.value != "off",
                 "language" if !f.value.is_empty() => cfg.language = f.value.clone(),
                 _ => {}
             }

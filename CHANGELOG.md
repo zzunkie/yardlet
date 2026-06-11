@@ -18,6 +18,11 @@
   directory and re-parsing the whole worker log every frame.
 - Keyboard shortcuts work with the Korean IME on: 2-beolsik jamo map back to
   their QWERTY keys on shortcut screens (ㅡ→m, ㅗ→h, Shift+ㅁ→A).
+- Single-press shortcuts under a CJK IME (macOS): on shortcut screens Yard
+  auto-selects an ASCII input source (the im-select pattern), so the first
+  keypress is no longer swallowed by IME composition; the IME is restored on
+  text-input screens and on exit. Toggle via Settings ("Auto IME switch") or
+  `auto_ime` in `.agents/yard.yaml`.
 
 ## v0.2.0 — 2026-06-11
 

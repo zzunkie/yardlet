@@ -45,6 +45,11 @@ pub struct YardConfig {
     /// own git worktree). 1 = sequential (default).
     #[serde(default = "default_parallel")]
     pub max_parallel: usize,
+    /// Auto-switch the OS input source to an ASCII layout on shortcut screens
+    /// (and restore the IME for text input), so single-key shortcuts work
+    /// while a CJK IME is on. macOS only; ignored elsewhere.
+    #[serde(default = "default_true")]
+    pub auto_ime: bool,
 }
 
 fn default_access() -> String {
