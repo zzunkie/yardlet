@@ -10,6 +10,15 @@
   guidance. A workspace extends a role by writing `.agents/agents/<role>.md`
   (appended to that role's packets as "Workspace role notes").
 
+### Fixed
+
+- TUI responsiveness: the mid-run refresh no longer spawns worker `--version`
+  probes every second (which froze the event loop ~100ms and ate keystrokes),
+  and the Run Monitor renders from a cache instead of rescanning the runs
+  directory and re-parsing the whole worker log every frame.
+- Keyboard shortcuts work with the Korean IME on: 2-beolsik jamo map back to
+  their QWERTY keys on shortcut screens (ㅡ→m, ㅗ→h, Shift+ㅁ→A).
+
 ## v0.2.0 — 2026-06-11
 
 ### Added
