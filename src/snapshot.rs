@@ -31,26 +31,40 @@ pub struct WorkerLine {
 
 impl Snapshot {
     pub fn load(ws: &Workspace) -> Result<Snapshot> {
+        Self::load_inner(ws, None)
+    }
+
+    /// Reload the cheap state (yaml files) while reusing a previous worker
+    /// probe. `load` spawns each worker CLI with `--version`, which blocks the
+    /// caller for ~100ms — too slow for the TUI's once-a-second refresh.
+    pub fn load_reusing_workers(ws: &Workspace, workers: Vec<WorkerLine>) -> Result<Snapshot> {
+        Self::load_inner(ws, Some(workers))
+    }
+
+    fn load_inner(ws: &Workspace, cached_workers: Option<Vec<WorkerLine>>) -> Result<Snapshot> {
         let config = ws.load_config()?;
         let intent = ws.load_intent()?;
         let queue = ws.load_queue()?;
         let billing = ws.load_billing()?;
         let workers_file = ws.load_workers()?;
 
-        let workers = workers_file
-            .workers
-            .iter()
-            .map(|p| {
-                let s = guard::probe(p, &billing);
-                WorkerLine {
-                    id: s.id,
-                    readiness: s.readiness.label().to_string(),
-                    version: s.version,
-                    billing_env_present: s.billing_env_present.len(),
-                    detail: s.detail,
-                }
-            })
-            .collect();
+        let workers = match cached_workers {
+            Some(w) => w,
+            None => workers_file
+                .workers
+                .iter()
+                .map(|p| {
+                    let s = guard::probe(p, &billing);
+                    WorkerLine {
+                        id: s.id,
+                        readiness: s.readiness.label().to_string(),
+                        version: s.version,
+                        billing_env_present: s.billing_env_present.len(),
+                        detail: s.detail,
+                    }
+                })
+                .collect(),
+        };
 
         let planner = {
             let primary = &workers_file.routing.planning_gate.primary;

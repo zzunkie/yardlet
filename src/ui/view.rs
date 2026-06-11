@@ -46,27 +46,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
 }
 
-fn latest_run_dir(runs: &std::path::Path) -> Option<std::path::PathBuf> {
-    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
-    for e in std::fs::read_dir(runs).ok()?.flatten() {
-        if !e.path().is_dir() {
-            continue;
-        }
-        let t = e
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::UNIX_EPOCH);
-        if newest.as_ref().map(|(nt, _)| t > *nt).unwrap_or(true) {
-            newest = Some((t, e.path()));
-        }
-    }
-    newest.map(|(_, p)| p)
-}
-
 /// Turn one worker-output line into a readable monitor line. Worker CLIs stream
 /// JSONL events (claude `stream-json`, codex `--json`); extract the human bits
 /// (assistant text + tool calls). Non-JSON lines are shown as-is.
-fn pretty_event_line(line: &str) -> Option<String> {
+pub(crate) fn pretty_event_line(line: &str) -> Option<String> {
     let line = line.trim();
     if line.is_empty() {
         return None;
@@ -127,10 +110,14 @@ fn collect_readable(v: &serde_json::Value, out: &mut Vec<String>) {
 }
 
 fn render_monitor(frame: &mut Frame, app: &App) {
+    // Renders entirely from App's MonitorCache: the event loop keeps the cache
+    // current (stat per frame, file reads only on growth/run switch), so this
+    // function does no filesystem work.
     let l = app.lang.l();
     let area = safe_area(frame);
+    let mc = &app.monitor;
     // With parallel runs, the header grows one line for the task tabs.
-    let multi = crate::ui::monitor_runs(app).len() > 1;
+    let multi = mc.runs.len() > 1;
     let chunks = Layout::vertical([
         Constraint::Length(if multi { 4 } else { 3 }),
         Constraint::Min(4),
@@ -138,13 +125,10 @@ fn render_monitor(frame: &mut Frame, app: &App) {
     ])
     .split(area);
 
-    // Follow the selected running task's run; with no running task, fall back
-    // to the newest run dir (post-run inspection).
-    let running = crate::ui::monitor_runs(app);
-    let tabs: Option<Line> = (running.len() > 1).then(|| {
-        let sel = app.monitor_sel % running.len();
+    let tabs: Option<Line> = multi.then(|| {
+        let sel = app.monitor_sel % mc.runs.len();
         let mut spans: Vec<Span> = Vec::new();
-        for (i, (task_id, _)) in running.iter().enumerate() {
+        for (i, (task_id, _)) in mc.runs.iter().enumerate() {
             if i > 0 {
                 spans.push(Span::raw("  "));
             }
@@ -156,28 +140,15 @@ fn render_monitor(frame: &mut Frame, app: &App) {
         }
         Line::from(spans)
     });
-    let dir = if running.is_empty() {
-        latest_run_dir(&app.ws.runs_dir())
-    } else {
-        Some(running[app.monitor_sel % running.len()].1.clone())
-    };
-    let header = match &dir {
-        Some(d) => {
-            let yaml = std::fs::read_to_string(d.join("run.yaml")).unwrap_or_default();
-            let field = |k: &str| {
-                yaml.lines()
-                    .find_map(|ln| ln.trim().strip_prefix(k))
-                    .map(|v| v.trim().trim_matches('"').to_string())
-                    .unwrap_or_default()
-            };
+    let header = match &mc.header {
+        Some(h) => {
             // State comes from the queue (source of truth); run.yaml's `state`
             // is written once at start and never updated, so it's stale.
-            let task_id = field("task_id:");
             let qstate = app.snapshot.as_ref().and_then(|s| {
                 s.queue
                     .tasks
                     .iter()
-                    .find(|t| t.id == task_id)
+                    .find(|t| t.id == h.task_id)
                     .map(|t| t.state)
             });
             let (state, state_color) = match qstate {
@@ -188,21 +159,15 @@ fn render_monitor(frame: &mut Frame, app: &App) {
                 Some(TaskState::NeedsUser) => ("needs-you".to_string(), Color::Magenta),
                 Some(TaskState::Partial) => ("partial".to_string(), Color::LightYellow),
                 Some(TaskState::Queued) => ("queued".to_string(), Color::Gray),
-                None => (field("state:"), Color::Gray),
+                None => (h.recorded_state.clone(), Color::Gray),
             };
             Line::from(vec![
-                Span::styled(
-                    d.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(h.run_name.clone(), Style::default().fg(Color::DarkGray)),
                 Span::raw("   "),
-                Span::styled(format!("task {task_id}"), Style::default().bold()),
+                Span::styled(format!("task {}", h.task_id), Style::default().bold()),
                 Span::raw("   "),
                 Span::styled(
-                    format!("worker {}", field("worker:")),
+                    format!("worker {}", h.worker),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::raw("   "),
@@ -220,16 +185,9 @@ fn render_monitor(frame: &mut Frame, app: &App) {
         chunks[0],
     );
 
-    let body = match &dir {
-        Some(d) => {
-            let log = std::fs::read_to_string(d.join("worker-output.log")).unwrap_or_default();
-            let pretty: Vec<String> = log.lines().filter_map(pretty_event_line).collect();
-            let visible = chunks[1].height.saturating_sub(2) as usize;
-            let start = pretty.len().saturating_sub(visible);
-            pretty[start..].join("\n")
-        }
-        None => String::new(),
-    };
+    let visible = chunks[1].height.saturating_sub(2) as usize;
+    let start = mc.log_lines.len().saturating_sub(visible);
+    let body = mc.log_lines[start..].join("\n");
     frame.render_widget(
         Paragraph::new(body)
             .wrap(Wrap { trim: true })
