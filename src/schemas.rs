@@ -168,6 +168,10 @@ pub struct Task {
     /// codex: minimal|low|medium|high.
     #[serde(default)]
     pub effort: String,
+    /// Task ids that must be Done before this task may run. Empty = independent
+    /// (eligible to run in parallel with other independent tasks).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
     #[serde(default)]
     pub allowed_scope: Vec<String>,
     #[serde(default)]
@@ -193,6 +197,21 @@ impl Task {
                 .unwrap_or(false),
             _ => false,
         }
+    }
+}
+
+impl WorkQueue {
+    /// Are all of `task`'s dependencies Done? A dependency id that does not
+    /// exist in the queue is treated as met (a planner typo must not deadlock
+    /// the queue forever).
+    pub fn deps_met(&self, task: &Task) -> bool {
+        task.depends_on.iter().all(|dep| {
+            self.tasks
+                .iter()
+                .find(|t| &t.id == dep)
+                .map(|t| t.state == TaskState::Done)
+                .unwrap_or(true)
+        })
     }
 }
 

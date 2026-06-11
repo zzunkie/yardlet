@@ -266,6 +266,7 @@ mod tests {
             preferred_worker: String::new(),
             model: String::new(),
             effort: String::new(),
+            depends_on: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
             validation: None,

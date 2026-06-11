@@ -208,6 +208,8 @@ pub fn compile(inputs: &PacketInputs) -> String {
             p.push_str(
                 "- Stay strictly inside the allowed scope.\n\
                  - Make focused changes and run the listed validation locally.\n\
+                 - You may use your own subagents/parallelism inside this task; the task \
+                 scope and the boundaries below bind your whole agent tree.\n\
                  - Do not ask for code/architecture/diff review.\n\
                  - If you hit a genuine blocker or a gated action, stop and report it.\n\n",
             );
@@ -324,7 +326,15 @@ pub fn compile_planning(
          checkable acceptance criteria.\n\
          - Break the work into a few bounded tasks. Each task: title, kind \
          (research|implementation|review|safety), risk (low|medium|high), preferred_worker \
-         (codex|claude-code), model, effort, allowed_scope, acceptance.\n\
+         (codex|claude-code), model, effort, depends_on, allowed_scope, acceptance.\n\
+         - Cut tasks COARSE, along scope boundaries: each task is one bounded worker session \
+         with its own disjoint allowed_scope and independently checkable acceptance. Do NOT \
+         split work that shares context into micro-tasks \u{2014} the worker can parallelize \
+         internally (subagents) within one task. A good split: tasks could run in any order \
+         or in parallel without reading each other's changes.\n\
+         - Set `depends_on` to the ids of tasks whose OUTPUT this task genuinely needs \
+         (earlier tasks only). Leave it empty for independent tasks \u{2014} independent \
+         tasks may run in parallel. Order alone is not a dependency.\n\
          - Default model and effort to \"auto\" (let the chosen worker decide). Set them \
          only when a task clearly needs a stronger or cheaper model, or more or less \
          reasoning. Effort levels: minimal|low|medium|high (or \"auto\").\n\
@@ -374,6 +384,7 @@ const PLANNING_SCHEMA_HINT: &str = r#"```json
       "preferred_worker": "codex|claude-code",
       "model": "auto",
       "effort": "auto",
+      "depends_on": ["YARD-001"],
       "worker_rationale": "one line: why this worker fits this task",
       "allowed_scope": ["..."],
       "acceptance": ["..."]

@@ -449,7 +449,22 @@ pub fn run_auto<F: FnMut(&str)>(
             None => match select_next(&queue, &probe_opts)? {
                 Some(idx) => queue.tasks[idx].id.clone(),
                 None => {
-                    emit("done: queue drained, all tasks complete".to_string());
+                    // Nothing eligible. Distinguish "all done" from "queued tasks
+                    // remain but are gated" (approval, or deps on a gated task).
+                    let waiting: Vec<&str> = queue
+                        .tasks
+                        .iter()
+                        .filter(|t| t.state == TaskState::Queued)
+                        .map(|t| t.id.as_str())
+                        .collect();
+                    if waiting.is_empty() {
+                        emit("done: queue drained, all tasks complete".to_string());
+                    } else {
+                        emit(format!(
+                            "stopped: {} waiting on approval or dependencies",
+                            waiting.join(", ")
+                        ));
+                    }
                     break;
                 }
             },
@@ -521,6 +536,9 @@ pub fn select_next(queue: &crate::schemas::WorkQueue, _opts: &RunOptions) -> Res
             continue;
         }
         if pol.skip_if_approval_required && t.approval_required() {
+            continue;
+        }
+        if !queue.deps_met(t) {
             continue;
         }
         // skip_if_blocked is about the Blocked state, already filtered above.
@@ -733,6 +751,7 @@ mod tests {
             preferred_worker: String::new(),
             model: String::new(),
             effort: String::new(),
+            depends_on: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
             validation: None,
@@ -793,5 +812,23 @@ mod tests {
             task("b", TaskState::Blocked, 2, false),
         ]);
         assert_eq!(select_next(&q, &opts()).unwrap(), None);
+    }
+
+    #[test]
+    fn skips_tasks_with_unmet_dependencies() {
+        let mut a = task("A", TaskState::Queued, 10, false);
+        let mut b = task("B", TaskState::Queued, 20, false);
+        b.depends_on = vec!["A".into()];
+        // B is ineligible while A is queued, even though both are queued.
+        let q = queue(vec![a.clone(), b.clone()]);
+        assert_eq!(select_next(&q, &opts()).unwrap(), Some(0));
+        // Once A is done, B becomes eligible.
+        a.state = TaskState::Done;
+        let q = queue(vec![a, b.clone()]);
+        assert_eq!(select_next(&q, &opts()).unwrap(), Some(1));
+        // A dependency id that does not exist is treated as met (no deadlock).
+        b.depends_on = vec!["GHOST".into()];
+        let q = queue(vec![b]);
+        assert_eq!(select_next(&q, &opts()).unwrap(), Some(0));
     }
 }

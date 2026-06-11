@@ -60,11 +60,24 @@ struct PlanTask {
     #[serde(default)]
     effort: String,
     #[serde(default)]
+    depends_on: Vec<String>,
+    #[serde(default)]
     allowed_scope: Vec<String>,
     #[serde(default)]
     acceptance: Vec<String>,
     #[serde(default)]
     worker_rationale: Option<String>,
+}
+
+/// Keep only dependencies on tasks that come earlier (`prior_ids`). This drops
+/// self-references, forward references, and cycles in one rule: a task may only
+/// depend on work already planned before it.
+fn sanitize_deps(depends_on: &[String], prior_ids: &[String]) -> Vec<String> {
+    depends_on
+        .iter()
+        .filter(|d| prior_ids.iter().any(|p| p == *d))
+        .cloned()
+        .collect()
 }
 
 /// A worker may emit `questions_for_user` either as plain strings or as objects
@@ -327,6 +340,8 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         } else {
             pt.id.clone()
         };
+        // Follow-up tasks may depend on existing queue tasks or earlier new ones.
+        let prior_ids: Vec<String> = queue.tasks.iter().map(|t| t.id.clone()).collect();
         queue.tasks.push(Task {
             id,
             title: pt.title.clone(),
@@ -341,6 +356,7 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
             },
             model: pt.model.clone(),
             effort: pt.effort.clone(),
+            depends_on: sanitize_deps(&pt.depends_on, &prior_ids),
             allowed_scope: pt.allowed_scope.clone(),
             acceptance: pt
                 .acceptance
@@ -404,11 +420,10 @@ fn build_intent(
 }
 
 fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
-    let tasks = plan
-        .tasks
-        .iter()
-        .enumerate()
-        .map(|(i, t)| Task {
+    let mut tasks: Vec<Task> = Vec::with_capacity(plan.tasks.len());
+    for (i, t) in plan.tasks.iter().enumerate() {
+        let prior_ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
+        tasks.push(Task {
             id: if t.id.trim().is_empty() {
                 format!("YARD-{:03}", i + 1)
             } else {
@@ -426,6 +441,7 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             },
             model: t.model.clone(),
             effort: t.effort.clone(),
+            depends_on: sanitize_deps(&t.depends_on, &prior_ids),
             allowed_scope: t.allowed_scope.clone(),
             acceptance: t
                 .acceptance
@@ -436,8 +452,8 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             approval: None,
             interaction: None,
             worker_rationale: t.worker_rationale.clone(),
-        })
-        .collect();
+        });
+    }
 
     WorkQueue {
         schema_version: 1,
@@ -540,5 +556,24 @@ mod tests {
                 "fallback to statement".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn queue_keeps_only_backward_dependencies() {
+        let json = r#"{
+            "summary": "do a thing",
+            "tasks": [
+                { "id": "YARD-001", "title": "a" },
+                { "id": "YARD-002", "title": "b",
+                  "depends_on": ["YARD-001", "YARD-002", "YARD-003", "NOPE"] },
+                { "id": "YARD-003", "title": "c", "depends_on": ["YARD-001"] }
+            ]
+        }"#;
+        let plan: PlanningResult = serde_json::from_str(json).unwrap();
+        let q = build_queue("intent-x", &plan);
+        assert!(q.tasks[0].depends_on.is_empty());
+        // self-reference, forward reference, and unknown id are all dropped
+        assert_eq!(q.tasks[1].depends_on, vec!["YARD-001".to_string()]);
+        assert_eq!(q.tasks[2].depends_on, vec!["YARD-001".to_string()]);
     }
 }
