@@ -114,6 +114,25 @@ impl PlanQuestion {
     }
 }
 
+// ---- plan-run metadata (crash recovery) ------------------------------------
+
+/// Written when a plan run starts, so an interrupted session can still consume
+/// the worker's result on the next startup.
+#[derive(Debug, Default, serde::Serialize, Deserialize)]
+struct PlanMeta {
+    mode: String, // "new" | "amend"
+    #[serde(default)]
+    request: String,
+}
+
+/// Marker file written into a plan run dir once Yard has derived the canonical
+/// intent/queue from its result. Absent + result present = unconsumed.
+const CONSUMED_MARKER: &str = "consumed";
+
+fn mark_consumed(run_dir: &std::path::Path) {
+    let _ = write_str(&run_dir.join(CONSUMED_MARKER), "");
+}
+
 // ---- report ---------------------------------------------------------------
 
 pub struct PlanningReport {
@@ -152,6 +171,13 @@ pub fn run_planning(
     let run_dir = ws.runs_dir().join(&run_id);
     std::fs::create_dir_all(run_dir.join("evidence"))?;
     let run_dir_rel = format!(".agents/runs/{run_id}");
+    state::save_yaml(
+        &run_dir.join("plan-meta.yaml"),
+        &PlanMeta {
+            mode: "new".to_string(),
+            request: request.to_string(),
+        },
+    )?;
 
     let mut lines = Vec::new();
 
@@ -220,6 +246,7 @@ pub fn run_planning(
 
     state::save_yaml(&ws.intent_path(), &intent)?;
     ws.save_queue(&queue)?;
+    mark_consumed(&run_dir);
 
     Ok(PlanningReport {
         run_id,
@@ -274,6 +301,13 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
     let run_dir = ws.runs_dir().join(&run_id);
     std::fs::create_dir_all(run_dir.join("evidence"))?;
     let run_dir_rel = format!(".agents/runs/{run_id}");
+    state::save_yaml(
+        &run_dir.join("plan-meta.yaml"),
+        &PlanMeta {
+            mode: "amend".to_string(),
+            request: request.to_string(),
+        },
+    )?;
     let mut lines = Vec::new();
     let summary = inspect::summarize(&ws.root);
     write_str(
@@ -322,6 +356,37 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
 
     // Merge: append the new tasks to the existing queue (continue the numbering).
     let mut queue = existing_queue;
+    let added = append_plan_tasks(&mut queue, &plan);
+    ws.save_queue(&queue)?;
+
+    // Note the follow-up in the intent summary (keep the same intent).
+    if let Some(mut intent) = existing_intent {
+        if !plan.summary.trim().is_empty() {
+            intent.summary = format!("{}\n\n[follow-up] {}", intent.summary, plan.summary.trim());
+            state::save_yaml(&ws.intent_path(), &intent)?;
+        }
+    }
+    mark_consumed(&run_dir);
+
+    Ok(PlanningReport {
+        run_id,
+        worker_id,
+        intent_summary: format!("+{added} task(s)"),
+        task_count: queue.tasks.len(),
+        questions: plan
+            .questions_for_user
+            .into_iter()
+            .map(PlanQuestion::into_text)
+            .filter(|q| !q.trim().is_empty())
+            .collect(),
+        lines,
+    })
+}
+
+/// Append a plan's tasks to an existing queue (follow-up/amend semantics):
+/// continue the YARD-nnn numbering and stack priorities after existing tasks.
+/// Returns how many tasks were added.
+fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
     let next_num = queue
         .tasks
         .iter()
@@ -333,7 +398,6 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         .unwrap_or(queue.tasks.len())
         + 1;
     let base_priority = queue.tasks.iter().map(|t| t.priority).max().unwrap_or(0);
-    let added = plan.tasks.len();
     for (i, pt) in plan.tasks.iter().enumerate() {
         let id = if pt.id.trim().is_empty() {
             format!("YARD-{:03}", next_num + i)
@@ -369,29 +433,91 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
             worker_rationale: pt.worker_rationale.clone(),
         });
     }
-    ws.save_queue(&queue)?;
+    plan.tasks.len()
+}
 
-    // Note the follow-up in the intent summary (keep the same intent).
-    if let Some(mut intent) = existing_intent {
-        if !plan.summary.trim().is_empty() {
-            intent.summary = format!("{}\n\n[follow-up] {}", intent.summary, plan.summary.trim());
-            state::save_yaml(&ws.intent_path(), &intent)?;
+/// Recover a planning result left unconsumed by an interrupted session: the
+/// worker finished and wrote `planning-result.json`, but Yard exited before
+/// deriving the canonical intent/queue from it. Safe to call on every startup.
+///
+/// Guards against stale or double application: only the newest unconsumed plan
+/// run is considered, and only when its result file is newer than the current
+/// queue file (canonical state is always written right after a plan is
+/// consumed, so anything older has already been applied or superseded).
+pub fn recover_unconsumed_plan(ws: &Workspace) -> Option<String> {
+    let mut best: Option<(String, std::path::PathBuf)> = None;
+    for entry in std::fs::read_dir(ws.runs_dir()).ok()?.flatten() {
+        let dir = entry.path();
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(String::from) else {
+            continue;
+        };
+        if !name.starts_with("plan-")
+            || !dir.join("planning-result.json").is_file()
+            || !dir.join("plan-meta.yaml").is_file()
+            || dir.join(CONSUMED_MARKER).exists()
+        {
+            continue;
+        }
+        if best.as_ref().map(|(n, _)| name > *n).unwrap_or(true) {
+            best = Some((name, dir));
+        }
+    }
+    let (run_id, run_dir) = best?;
+
+    // Freshness guard: the result must be newer than the canonical queue.
+    let result_path = run_dir.join("planning-result.json");
+    let result_mtime = std::fs::metadata(&result_path)
+        .and_then(|m| m.modified())
+        .ok()?;
+    if let Ok(queue_mtime) = std::fs::metadata(ws.queue_path()).and_then(|m| m.modified()) {
+        if result_mtime <= queue_mtime {
+            // Already applied (or superseded by newer work): retire it quietly.
+            mark_consumed(&run_dir);
+            return None;
         }
     }
 
-    Ok(PlanningReport {
-        run_id,
-        worker_id,
-        intent_summary: format!("+{added} task(s)"),
-        task_count: queue.tasks.len(),
-        questions: plan
-            .questions_for_user
-            .into_iter()
-            .map(PlanQuestion::into_text)
-            .filter(|q| !q.trim().is_empty())
-            .collect(),
-        lines,
-    })
+    let raw = std::fs::read_to_string(&result_path).ok()?;
+    let plan: PlanningResult = serde_json::from_str(&raw).ok()?;
+    if plan.tasks.is_empty() {
+        mark_consumed(&run_dir); // unusable; don't retry forever
+        return None;
+    }
+    let meta: PlanMeta = state::load_yaml(&run_dir.join("plan-meta.yaml")).unwrap_or_default();
+
+    if meta.mode == "amend" {
+        let mut queue = ws.load_queue().ok()?;
+        let added = append_plan_tasks(&mut queue, &plan);
+        ws.save_queue(&queue).ok()?;
+        if let Ok(Some(mut intent)) = ws.load_intent() {
+            if !plan.summary.trim().is_empty() {
+                intent.summary =
+                    format!("{}\n\n[follow-up] {}", intent.summary, plan.summary.trim());
+                let _ = state::save_yaml(&ws.intent_path(), &intent);
+            }
+        }
+        mark_consumed(&run_dir);
+        return Some(format!(
+            "recovered interrupted follow-up plan ({run_id}): +{added} task(s)"
+        ));
+    }
+
+    if plan.summary.trim().is_empty() {
+        mark_consumed(&run_dir);
+        return None;
+    }
+    let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
+    let intent = build_intent(&intent_id, &meta.request, &plan, &[]);
+    let queue = build_queue(&intent_id, &plan);
+    let _ = crate::report::archive_intent(ws);
+    state::save_yaml(&ws.intent_path(), &intent).ok()?;
+    ws.save_queue(&queue).ok()?;
+    mark_consumed(&run_dir);
+    Some(format!(
+        "recovered interrupted plan ({run_id}): {} ({} tasks)",
+        intent.summary,
+        queue.tasks.len()
+    ))
 }
 
 fn build_intent(
@@ -556,6 +682,41 @@ mod tests {
                 "fallback to statement".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn recovers_unconsumed_plan_after_restart() {
+        let root = std::env::temp_dir().join(format!("yard-planrec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let run_dir = ws.runs_dir().join("plan-20990101-000000");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        state::save_yaml(
+            &run_dir.join("plan-meta.yaml"),
+            &PlanMeta {
+                mode: "new".into(),
+                request: "add admin search".into(),
+            },
+        )
+        .unwrap();
+        write_str(
+            &run_dir.join("planning-result.json"),
+            r#"{ "summary": "admin search",
+                 "tasks": [{ "id": "YARD-001", "title": "t" }] }"#,
+        )
+        .unwrap();
+
+        // First startup after the crash: the plan is consumed into canonical state.
+        let msg = recover_unconsumed_plan(&ws).expect("plan should be recovered");
+        assert!(msg.contains("admin search"));
+        let queue = ws.load_queue().unwrap();
+        assert_eq!(queue.tasks.len(), 1);
+        let intent = ws.load_intent().unwrap().unwrap();
+        assert_eq!(intent.raw_request, "add admin search");
+
+        // Second startup: marked consumed, nothing to do.
+        assert!(recover_unconsumed_plan(&ws).is_none());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

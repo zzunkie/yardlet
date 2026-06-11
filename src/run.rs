@@ -406,7 +406,11 @@ pub fn run_auto<F: FnMut(&str)>(
         full_access: false,
     };
 
-    // Recover orphans (interrupted runs left "running") before draining.
+    // Recover orphans (interrupted runs left "running") and any unconsumed
+    // planning result from an interrupted session before draining.
+    if let Some(m) = crate::planner::recover_unconsumed_plan(ws) {
+        emit(m);
+    }
     for m in recover_orphans(ws) {
         emit(m);
     }

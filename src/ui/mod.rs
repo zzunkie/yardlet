@@ -167,7 +167,12 @@ pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
     let mut app = App::new(ws.clone());
     // On startup, recover any tasks left "running" by an interrupted/quit session
     // (evaluate finished runs, requeue the rest) so a restart isn't left stale.
-    let recovered = crate::run::recover_orphans(ws);
+    // Also consume a planning result the previous session paid for but never read.
+    let mut recovered = Vec::new();
+    if let Some(m) = crate::planner::recover_unconsumed_plan(ws) {
+        recovered.push(m);
+    }
+    recovered.extend(crate::run::recover_orphans(ws));
     if !recovered.is_empty() {
         app.reload();
         app.toast = Some((true, recovered.join("; ")));
