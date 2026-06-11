@@ -1,6 +1,7 @@
 # Parallel Queue — Design
 
-> Status: phase 1 implemented (dependency model); phases 2–3 in progress.
+> Status: phases 1–2 implemented (dependency model, parallel worktree
+> execution); phase 3 (TUI multi-run) in progress.
 
 ## Why this exists, and what it is NOT
 
@@ -64,8 +65,24 @@ Three invariants keep this simple:
    does not get auto-resolved: the task drops to `Partial` with the conflict
    recorded in the handoff, and its worktree is kept for inspection.
 
-Fallbacks: not a git repo, dirty tree, or a parallelism of 1 → run sequentially
-exactly as today.
+Fallbacks: not a git repo, dirty tracked tree, or a parallelism of 1 → run
+sequentially exactly as today.
+
+Implementation notes (src/parallel.rs):
+
+- Off by default: `max_parallel: 1` in `.agents/yard.yaml`; opt in by raising
+  it or passing `yard run --auto --parallel N`.
+- Worktrees live at `.agents/worktrees/<task-id>`, kept out of `git status`
+  via the repo-local `.git/info/exclude` (the user's .gitignore is never
+  touched).
+- Run artifacts stay in the main workspace: the run dir is passed to the
+  worker as an absolute path plus an extra writable root, while the worker's
+  cwd is its worktree. The two contract files (intent, queue) are copied into
+  the worktree so the packet's read anchors resolve.
+- Integration commits as `yard <yard@localhost>`, excluding `.agents/` from
+  the worker's staged changes; merges are `--no-ff` in completion order; a
+  conflict aborts cleanly, drops the task to Partial, appends the conflict to
+  the handoff, and keeps the worktree for manual integration.
 
 ## Phase 3 — TUI
 

@@ -195,6 +195,10 @@ pub struct RunArgs {
     /// With --auto: drop the sandbox (workers still self-gate dangerous actions).
     #[arg(long)]
     bypass: bool,
+    /// With --auto: run up to N independent tasks at once, each in its own git
+    /// worktree (overrides the workspace max_parallel setting).
+    #[arg(long)]
+    parallel: Option<usize>,
     /// Non-interactive output (no extra prompts).
     #[arg(long)]
     headless: bool,
@@ -326,7 +330,7 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
     }
     if args.run && report.task_count > 0 {
         println!("\nRunning autonomously \u{2014} stops only if it needs you:\n");
-        run::run_auto(&ws, args.bypass, None, |s| println!("{s}"))?;
+        run::run_auto(&ws, args.bypass, None, None, |s| println!("{s}"))?;
         return Ok(());
     }
     println!("\nNext: `yard queue` to review, `yard run --next --execute` to run.");
@@ -651,9 +655,13 @@ fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let _ = (args.next, args.headless); // --next is implied; --task targets one
     if args.auto {
-        run::run_auto(&ws, args.bypass || args.full_access, None, |s| {
-            println!("{s}")
-        })?;
+        run::run_auto(
+            &ws,
+            args.bypass || args.full_access,
+            None,
+            args.parallel,
+            |s| println!("{s}"),
+        )?;
         return Ok(());
     }
     let report = run::run_next(

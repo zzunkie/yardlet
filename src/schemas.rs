@@ -38,13 +38,21 @@ pub struct YardConfig {
     /// Default worker permission: "sandboxed" (local-only, network blocked) or
     /// "full" (drop the sandbox so commands/network run freely; the worker still
     /// self-gates dangerous actions). Lets a user opt into autonomy once instead
-    /// of passing --bypass every run.
+    /// of passing --bypass per run.
     #[serde(default = "default_access")]
     pub default_access: String,
+    /// How many independent tasks the auto-drain may run at once (each in its
+    /// own git worktree). 1 = sequential (default).
+    #[serde(default = "default_parallel")]
+    pub max_parallel: usize,
 }
 
 fn default_access() -> String {
     "sandboxed".to_string()
+}
+
+fn default_parallel() -> usize {
+    1
 }
 
 // ---------------------------------------------------------------------------

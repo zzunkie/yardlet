@@ -13,6 +13,7 @@ mod guard;
 mod init;
 mod inspect;
 mod packet;
+mod parallel;
 mod planner;
 mod report;
 mod review;

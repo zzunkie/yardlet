@@ -22,3 +22,4 @@ Cargo.lock.orig
 # OS / editor
 .DS_Store
 *.swp
+/.agents/worktrees/

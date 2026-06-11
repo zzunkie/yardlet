@@ -996,7 +996,7 @@ fn start_auto(app: &mut App) {
     let (tx, rx) = mpsc::channel();
     let txp = tx.clone();
     thread::spawn(move || {
-        let res = match run::run_auto(&ws, false, Some(pause), |s| {
+        let res = match run::run_auto(&ws, false, Some(pause), None, |s| {
             let _ = txp.send(JobMsg::Progress(s.to_string()));
         }) {
             Ok(lines) => {

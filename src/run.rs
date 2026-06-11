@@ -46,15 +46,15 @@ pub struct RunReport {
 }
 
 #[derive(Serialize)]
-struct RunRecord {
-    schema_version: u32,
-    run_id: String,
-    task_id: String,
-    intent_id: String,
-    worker: String,
-    state: String,
-    started_at: String,
-    worktree: String,
+pub(crate) struct RunRecord {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub task_id: String,
+    pub intent_id: String,
+    pub worker: String,
+    pub state: String,
+    pub started_at: String,
+    pub worktree: String,
 }
 
 pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
@@ -380,18 +380,27 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 
 /// Autonomous mode: drain the queue, stopping only at genuine human gates.
 ///
-/// Runs eligible queued tasks one after another. Done (or partial->re-queued)
-/// advances; Blocked / NeedsUser / Failed stop the loop and hand back to the
-/// user (those need a human). A per-task attempt cap prevents looping on a task
-/// that keeps coming back partial. `bypass` drops the worker sandbox for the
-/// whole run (workers still self-gate dangerous actions per the packet).
+/// Runs eligible queued tasks one after another — or, when parallelism is
+/// enabled (config `max_parallel` or the `--parallel` flag) and several
+/// independent tasks are ready in a clean git workspace, in concurrent
+/// worktree batches. Done (or partial->re-queued) advances; Blocked /
+/// NeedsUser / Failed stop the loop and hand back to the user (those need a
+/// human). A per-task attempt cap prevents looping on a task that keeps
+/// coming back partial. `bypass` drops the worker sandbox for the whole run
+/// (workers still self-gate dangerous actions per the packet).
 pub fn run_auto<F: FnMut(&str)>(
     ws: &Workspace,
     bypass: bool,
     pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    parallel: Option<usize>,
     mut on_event: F,
 ) -> Result<Vec<String>> {
     use std::collections::HashMap;
+    let max_parallel = parallel
+        .or_else(|| ws.load_config().ok().map(|c| c.max_parallel))
+        .unwrap_or(1)
+        .max(1);
+    let mut parallel_warned = false;
     let mut out = Vec::new();
     let mut emit = |s: String| {
         on_event(&s);
@@ -447,6 +456,41 @@ pub fn run_auto<F: FnMut(&str)>(
             .iter()
             .find(|t| t.state == TaskState::Failed)
             .map(|t| t.id.clone());
+        // With parallelism on, a clean git tree, and 2+ independent ready
+        // tasks: run them as a concurrent worktree batch instead. (A Failed
+        // task still gets its sequential retry first.)
+        if retry_target.is_none() && max_parallel > 1 {
+            let ready = crate::parallel::ready_independent(&queue, max_parallel);
+            if ready.len() >= 2 {
+                match crate::parallel::git_preflight(&ws.root) {
+                    Ok(()) => {
+                        let mut capped = false;
+                        for &i in &ready {
+                            let n = attempts.entry(queue.tasks[i].id.clone()).or_default();
+                            *n += 1;
+                            capped |= *n > 2;
+                        }
+                        if capped {
+                            emit(
+                                "stopped: a task did not complete after retries \u{2014} needs you"
+                                    .to_string(),
+                            );
+                            break;
+                        }
+                        crate::parallel::run_batch(ws, &ready, bypass, |s| {
+                            emit(s.to_string());
+                        })?;
+                        continue;
+                    }
+                    Err(why) => {
+                        if !parallel_warned {
+                            emit(format!("parallel off ({why}); running sequentially"));
+                            parallel_warned = true;
+                        }
+                    }
+                }
+            }
+        }
         // Pick the work: retry the failed task first, else the next queued one.
         let task_id = match &retry_target {
             Some(id) => id.clone(),
@@ -588,7 +632,7 @@ pub(crate) fn latest_run_for(ws: &Workspace, task_id: &str) -> Option<(String, P
 
 /// A UUID-format string (8-4-4-4-12 hex) from a seed + pid, used to set a claude
 /// session id up front so a transient failure can resume the same conversation.
-fn gen_session_uuid(seed: &str) -> String {
+pub(crate) fn gen_session_uuid(seed: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h1 = std::collections::hash_map::DefaultHasher::new();
     seed.hash(&mut h1);
@@ -704,7 +748,7 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
     msgs
 }
 
-fn find_worker<'a>(workers: &'a [WorkerProfile], id: &str) -> Result<&'a WorkerProfile> {
+pub(crate) fn find_worker<'a>(workers: &'a [WorkerProfile], id: &str) -> Result<&'a WorkerProfile> {
     workers
         .iter()
         .find(|w| w.id == id)
