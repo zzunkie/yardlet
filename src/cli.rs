@@ -633,6 +633,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         .as_ref()
         .map(|i| i.images.clone())
         .unwrap_or_default();
+    let role_notes = packet::load_role_notes(&ws.root, packet::role_for(&task.kind));
     let text = packet::compile(&packet::PacketInputs {
         worker_id: &args.worker,
         task,
@@ -643,6 +644,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         user_answer: None,
         language: &language,
         images: &images,
+        role_notes: &role_notes,
     });
     if args.dry_run {
         eprintln!("(dry-run: packet not persisted)\n");

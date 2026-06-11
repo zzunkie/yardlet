@@ -8,7 +8,7 @@ use std::process::Command;
 
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct RepoSummary {
     pub root: String,
     pub git: GitInfo,

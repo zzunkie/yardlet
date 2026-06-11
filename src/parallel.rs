@@ -201,6 +201,7 @@ pub fn run_batch<F: FnMut(&str)>(
         )?;
         // Absolute run dir: results land in the MAIN workspace, not the worktree.
         let run_dir_abs = p.run_dir.display().to_string();
+        let role_notes = packet::load_role_notes(&ws.root, packet::role_for(&p.task.kind));
         p.packet_text = packet::compile(&PacketInputs {
             worker_id: &p.worker_id,
             task: &p.task,
@@ -211,6 +212,7 @@ pub fn run_batch<F: FnMut(&str)>(
             user_answer: None,
             language: &language,
             images: &images,
+            role_notes: &role_notes,
         });
         write_str(&workers::packet_path(&p.run_dir), &p.packet_text)?;
         state::save_yaml(

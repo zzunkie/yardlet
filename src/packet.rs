@@ -21,6 +21,8 @@ pub struct PacketInputs<'a> {
     pub language: &'a str,
     /// Local image paths attached to the goal (also passed natively to the CLI).
     pub images: &'a [String],
+    /// Workspace-authored role extension (`.agents/agents/<role>.md`), if any.
+    pub role_notes: &'a str,
 }
 
 /// Find existing local image files referenced in `text` (e.g. a path dragged
@@ -93,18 +95,83 @@ fn language_directive(code: &str) -> String {
     )
 }
 
+// ---- role profiles ---------------------------------------------------------
+//
+// A role is a prompt mode over a worker (plan §13.4), not a separate agent:
+// the same Codex/Claude session works under role-specific guidance derived
+// from the task kind. Built-ins below; a workspace extends a role by writing
+// `.agents/agents/<role>.md` (appended to that role's packets).
+
+/// The role profile a task runs under, derived from its kind.
+pub fn role_for(kind: &str) -> &'static str {
+    match kind.trim().to_lowercase().as_str() {
+        "review" => "reviewer",
+        "research" => "researcher",
+        "safety" => "security",
+        _ => "builder",
+    }
+}
+
+fn role_guidance(role: &str) -> &'static str {
+    match role {
+        "reviewer" => {
+            "- You are reviewing, not building: read the code in scope and verify it \
+             against the acceptance criteria.\n\
+             - Every finding needs evidence \u{2014} file and line plus why it is a problem; \
+             verify by reading the actual code, not a diff summary.\n\
+             - Rate each finding (critical/major/minor) and propose a concrete fix.\n\
+             - Do not rewrite the code; only fix something if it is trivial and clearly \
+             inside scope.\n\
+             - Your findings go in the required report.md, in clear prose.\n\n"
+        }
+        "researcher" => {
+            "- Answer the task's questions from local evidence: read the code, configs, \
+             and docs in scope, and cite a path for every claim.\n\
+             - Stay intent-locked: gather what the intent needs; do not expand into new work.\n\
+             - Prefer primary sources in the repo over assumptions, and say clearly when \
+             evidence is missing.\n\
+             - Make no production code changes; your deliverables are the result files \
+             and report.md.\n\n"
+        }
+        "security" => {
+            "- Audit the scoped code adversarially: authn/authz gaps, injection, unsafe \
+             input handling, secrets in code or logs, dangerous defaults.\n\
+             - Every finding needs evidence (file and line) and an exploit rationale; mark \
+             severity and give a minimal remediation.\n\
+             - Do not commit fixes unless trivial and in scope. Never print or move secret \
+             values \u{2014} refer to them by path or name only.\n\
+             - Your findings go in the required report.md, in clear prose.\n\n"
+        }
+        _ => {
+            "- Stay strictly inside the allowed scope.\n\
+             - Make focused changes and run the listed validation locally.\n\
+             - You may use your own subagents/parallelism inside this task; the task \
+             scope and the boundaries below bind your whole agent tree.\n\
+             - Do not ask for code/architecture/diff review.\n\
+             - If you hit a genuine blocker or a gated action, stop and report it.\n\n"
+        }
+    }
+}
+
+/// Workspace-authored extension for a role: `.agents/agents/<role>.md`,
+/// appended to that role's packets. Empty when absent.
+pub fn load_role_notes(root: &std::path::Path, role: &str) -> String {
+    std::fs::read_to_string(
+        root.join(crate::state::STATE_DIR)
+            .join("agents")
+            .join(format!("{role}.md")),
+    )
+    .unwrap_or_default()
+}
+
 pub fn compile(inputs: &PacketInputs) -> String {
-    let style = if inputs.worker_id == "claude-code" {
-        Style::Planning
-    } else {
-        Style::Execution
-    };
+    let role = role_for(&inputs.task.kind);
     let mut p = String::new();
 
     p.push_str(&format!("# Yard task packet: {}\n\n", inputs.task.id));
     p.push_str(&format!(
-        "You are a hidden Yard worker ({}). Do the work below and leave structured \
-         artifacts. Console prose is not enough.\n\n",
+        "You are a hidden Yard worker ({}) acting as the {role}. Do the work below and \
+         leave structured artifacts. Console prose is not enough.\n\n",
         inputs.worker_id
     ));
 
@@ -201,27 +268,13 @@ pub fn compile(inputs: &PacketInputs) -> String {
     }
     p.push('\n');
 
-    // Worker-style guidance.
-    match style {
-        Style::Execution => {
-            p.push_str("## How to work (execution)\n\n");
-            p.push_str(
-                "- Stay strictly inside the allowed scope.\n\
-                 - Make focused changes and run the listed validation locally.\n\
-                 - You may use your own subagents/parallelism inside this task; the task \
-                 scope and the boundaries below bind your whole agent tree.\n\
-                 - Do not ask for code/architecture/diff review.\n\
-                 - If you hit a genuine blocker or a gated action, stop and report it.\n\n",
-            );
-        }
-        Style::Planning => {
-            p.push_str("## How to work (planning/review)\n\n");
-            p.push_str(
-                "- Reduce ambiguity and produce a bounded, checkable result.\n\
-                 - Ask at most the interaction-policy question budget, product/scope level only.\n\
-                 - Do not expand the goal; research is intent-locked evidence only.\n\n",
-            );
-        }
+    // Role guidance: how this kind of task is worked, regardless of worker.
+    p.push_str(&format!("## How to work \u{2014} role: {role}\n\n"));
+    p.push_str(role_guidance(role));
+    if !inputs.role_notes.trim().is_empty() {
+        p.push_str("### Workspace role notes\n\n");
+        p.push_str(inputs.role_notes.trim());
+        p.push_str("\n\n");
     }
 
     // Boundaries: proceed freely on safe work, stop before dangerous actions.
@@ -395,11 +448,6 @@ const PLANNING_SCHEMA_HINT: &str = r#"```json
 ```
 "#;
 
-enum Style {
-    Execution,
-    Planning,
-}
-
 const RESULT_SCHEMA_HINT: &str = r#"```json
 {
   "schema_version": 1,
@@ -433,6 +481,62 @@ mod tests {
         assert!(language_directive("en").is_empty());
         assert!(language_directive("").is_empty());
         assert!(language_directive("ko").contains("Korean"));
+    }
+
+    #[test]
+    fn kinds_map_to_role_profiles() {
+        assert_eq!(role_for("review"), "reviewer");
+        assert_eq!(role_for("Research"), "researcher");
+        assert_eq!(role_for("safety"), "security");
+        assert_eq!(role_for("implementation"), "builder");
+        assert_eq!(role_for(""), "builder"); // unknown/empty defaults to builder
+    }
+
+    fn packet_for(kind: &str, role_notes: &str) -> String {
+        let task = crate::schemas::Task {
+            id: "YARD-1".into(),
+            title: "t".into(),
+            state: Default::default(),
+            priority: 0,
+            risk: String::new(),
+            kind: kind.into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+        };
+        let repo = crate::inspect::RepoSummary::default();
+        compile(&PacketInputs {
+            worker_id: "codex",
+            task: &task,
+            intent: None,
+            repo: &repo,
+            run_dir_rel: ".agents/runs/run-x",
+            prior_question: None,
+            user_answer: None,
+            language: "en",
+            images: &[],
+            role_notes,
+        })
+    }
+
+    #[test]
+    fn packet_carries_role_guidance_and_workspace_notes() {
+        let review = packet_for("review", "");
+        assert!(review.contains("role: reviewer"));
+        assert!(review.contains("reviewing, not building"));
+        assert!(!review.contains("Workspace role notes"));
+
+        let build = packet_for("implementation", "Prefer small commits.");
+        assert!(build.contains("role: builder"));
+        assert!(build.contains("Workspace role notes"));
+        assert!(build.contains("Prefer small commits."));
     }
 
     #[test]

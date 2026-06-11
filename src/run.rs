@@ -142,6 +142,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         .map(|i| i.images.clone())
         .unwrap_or_default();
 
+    let role_notes = packet::load_role_notes(&ws.root, packet::role_for(&task.kind));
     let packet_text = packet::compile(&PacketInputs {
         worker_id: &worker_id,
         task: &task,
@@ -152,6 +153,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         user_answer: opts.answer.as_deref(),
         language: &language,
         images: &images,
+        role_notes: &role_notes,
     });
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 

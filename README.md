@@ -105,6 +105,16 @@ with `yard routing apply` — telemetry never changes routing on its own. Design
 because spawning a subscription-backed worker consumes usage. Pass `--execute`
 to actually run it.
 
+## Role profiles
+
+Each task runs under a role — a prompt mode over the worker, derived from the
+task kind: `implementation` → **builder**, `review` → **reviewer**,
+`research` → **researcher**, `safety` → **security**. The same Codex/Claude
+session gets role-specific working rules (a reviewer cites file:line evidence
+and doesn't rewrite code; a researcher makes no code changes; security audits
+adversarially and never prints secret values). Extend a role per workspace by
+writing `.agents/agents/<role>.md` — it is appended to that role's packets.
+
 ## Parallel execution
 
 The planner marks which tasks genuinely depend on each other (`depends_on`);

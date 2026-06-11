@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Role profiles** (plan §13.4). Tasks run under a prompt-mode role derived
+  from their kind — builder / reviewer / researcher / security — with
+  role-specific working rules in the packet, replacing the old worker-keyed
+  guidance. A workspace extends a role by writing `.agents/agents/<role>.md`
+  (appended to that role's packets as "Workspace role notes").
+
 ## v0.2.0 — 2026-06-11
 
 ### Added
