@@ -42,6 +42,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Screen::Monitor => render_monitor(frame, app),
         Screen::Handoff => render_handoff(frame, app),
         Screen::Completion => render_completion(frame, app),
+        Screen::ReportList => render_report_list(frame, app),
     }
 }
 
@@ -674,6 +675,40 @@ fn render_handoff(frame: &mut Frame, app: &App) {
         chunks[0],
     );
     render_footer(frame, chunks[1], l.footer_handoff);
+}
+
+fn render_report_list(frame: &mut Frame, app: &App) {
+    let l = app.lang.l();
+    let area = safe_area(frame);
+    let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
+    let items: Vec<ListItem> = if app.reports.is_empty() {
+        vec![ListItem::new(Line::from(Span::styled(
+            "(no reports yet)",
+            Style::default().fg(Color::DarkGray),
+        )))]
+    } else {
+        let sel = app.report_sel.min(app.reports.len().saturating_sub(1));
+        app.reports
+            .iter()
+            .enumerate()
+            .map(|(i, (label, src))| {
+                let is_sel = i == sel;
+                let marker = if is_sel { "\u{25b8} " } else { "  " };
+                let color = if src.is_none() { Color::Cyan } else { Color::Gray };
+                let style = if is_sel {
+                    Style::default().fg(color).bold()
+                } else {
+                    Style::default().fg(color)
+                };
+                ListItem::new(Line::from(Span::styled(format!("{marker}{label}"), style)))
+            })
+            .collect()
+    };
+    frame.render_widget(
+        List::new(items).block(Block::bordered().title(l.reports_title)),
+        chunks[0],
+    );
+    render_footer(frame, chunks[1], l.footer_reports);
 }
 
 fn render_completion(frame: &mut Frame, app: &App) {

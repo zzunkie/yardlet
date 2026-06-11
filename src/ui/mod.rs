@@ -35,6 +35,7 @@ pub enum Screen {
     Settings,
     Monitor,
     Completion,
+    ReportList,
 }
 
 /// One editable settings row. `key` routes the value back to the right file:
@@ -103,6 +104,12 @@ pub struct App {
     pub scroll: u16,
     /// Selected row in the Home queue (for per-task handoff view).
     pub selected: usize,
+    /// Reports browser: (label, source) — None source = current (live) report,
+    /// Some(dir) = an archived intent under .agents/intents/.
+    pub reports: Vec<(String, Option<std::path::PathBuf>)>,
+    pub report_sel: usize,
+    /// True while viewing an archived report (read-only; no new/continue/redo).
+    pub viewing_archived: bool,
     pub settings: Option<SettingsDraft>,
     pub last_title: Option<String>,
     pub lang: i18n::Lang,
@@ -133,6 +140,9 @@ impl App {
             pause: None,
             scroll: 0,
             selected: 0,
+            reports: Vec::new(),
+            report_sel: 0,
+            viewing_archived: false,
             settings: None,
             last_title: None,
             lang,
@@ -254,6 +264,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
                 if all_done {
                     app.report_text = crate::report::build_final_report(&app.ws).unwrap_or_default();
                     app.scroll = 0;
+                    app.viewing_archived = false;
                     app.screen = Screen::Completion;
                 }
             }
@@ -309,6 +320,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             Screen::Answer => handle_answer_key(&mut app, key.code, key.modifiers),
             Screen::Settings => handle_settings_key(&mut app, key.code),
             Screen::Completion => handle_completion_key(&mut app, key.code),
+            Screen::ReportList => handle_reportlist_key(&mut app, key.code),
             Screen::Handoff => handle_handoff_key(&mut app, key.code),
             Screen::Monitor => {
                 if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
@@ -390,10 +402,91 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
                 app.screen = Screen::Handoff;
             }
         }
+        // Reports/history browser: current final report + past intents.
+        KeyCode::Char('R') => open_reports(app),
         _ if app.is_busy() => app.toast = Some((true, app.lang.l().busy.into())),
         _ => {}
     }
     false
+}
+
+fn short(s: &str, n: usize) -> String {
+    let t: String = s.trim().chars().take(n).collect();
+    if s.trim().chars().count() > n {
+        format!("{t}\u{2026}")
+    } else {
+        t
+    }
+}
+
+fn open_reports(app: &mut App) {
+    let mut list: Vec<(String, Option<std::path::PathBuf>)> = Vec::new();
+    let cur = app
+        .snapshot
+        .as_ref()
+        .map(|s| s.intent_summary().to_string())
+        .unwrap_or_default();
+    list.push((format!("current \u{2014} {}", short(&cur, 50)), None));
+    if let Ok(rd) = std::fs::read_dir(app.ws.agents_dir().join("intents")) {
+        let mut dirs: Vec<std::path::PathBuf> =
+            rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        dirs.sort();
+        dirs.reverse(); // ids are timestamped → newest first
+        for d in dirs {
+            let id = d
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("?")
+                .to_string();
+            let summary = std::fs::read_to_string(d.join("intent-contract.yaml"))
+                .ok()
+                .and_then(|y| {
+                    y.lines().find_map(|l| {
+                        l.trim()
+                            .strip_prefix("summary:")
+                            .map(|v| v.trim().trim_matches('"').to_string())
+                    })
+                })
+                .unwrap_or_default();
+            list.push((format!("{id} \u{2014} {}", short(&summary, 44)), Some(d)));
+        }
+    }
+    app.reports = list;
+    app.report_sel = 0;
+    app.screen = Screen::ReportList;
+}
+
+fn handle_reportlist_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Home,
+        KeyCode::Up => app.report_sel = app.report_sel.saturating_sub(1),
+        KeyCode::Down => {
+            if app.report_sel + 1 < app.reports.len() {
+                app.report_sel += 1;
+            }
+        }
+        KeyCode::Enter => {
+            let src = app.reports.get(app.report_sel).map(|(_, s)| s.clone());
+            if let Some(src) = src {
+                let (body, archived) = match src {
+                    None => (
+                        crate::report::build_final_report(&app.ws).unwrap_or_default(),
+                        false,
+                    ),
+                    Some(d) => (
+                        std::fs::read_to_string(d.join("final-report.md"))
+                            .unwrap_or_else(|_| "(no report)".into()),
+                        true,
+                    ),
+                };
+                app.report_text = body;
+                app.viewing_archived = archived;
+                app.scroll = 0;
+                app.screen = Screen::Completion;
+            }
+        }
+        _ => {}
+    }
 }
 
 fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
@@ -428,6 +521,14 @@ fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
 }
 
 fn handle_completion_key(app: &mut App, code: KeyCode) {
+    // An archived report is read-only — just scroll and go back to the list.
+    if app.viewing_archived {
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::ReportList,
+            _ => apply_scroll(app, code),
+        }
+        return;
+    }
     match code {
         KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Home,
         // New work: start_planning archives the finished intent before overwriting.
