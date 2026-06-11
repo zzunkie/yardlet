@@ -133,6 +133,30 @@ fn mark_consumed(run_dir: &std::path::Path) {
     let _ = write_str(&run_dir.join(CONSUMED_MARKER), "");
 }
 
+/// Reconstruct plan metadata for run dirs created before plan-meta.yaml
+/// existed: the compiled packet carries the verbatim request, and follow-up
+/// (amend) packets embed a recognizable FOLLOW-UP preamble.
+fn legacy_plan_meta(run_dir: &std::path::Path) -> Option<PlanMeta> {
+    let packet = std::fs::read_to_string(workers::packet_path(run_dir)).ok()?;
+    let request = packet
+        .split("## Request (verbatim)")
+        .nth(1)?
+        .split("\n## ")
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let mode = if request.contains("This is a FOLLOW-UP") {
+        "amend"
+    } else {
+        "new"
+    };
+    Some(PlanMeta {
+        mode: mode.to_string(),
+        request,
+    })
+}
+
 // ---- report ---------------------------------------------------------------
 
 pub struct PlanningReport {
@@ -451,9 +475,10 @@ pub fn recover_unconsumed_plan(ws: &Workspace) -> Option<String> {
         let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(String::from) else {
             continue;
         };
+        let has_meta = dir.join("plan-meta.yaml").is_file() || workers::packet_path(&dir).is_file();
         if !name.starts_with("plan-")
             || !dir.join("planning-result.json").is_file()
-            || !dir.join("plan-meta.yaml").is_file()
+            || !has_meta
             || dir.join(CONSUMED_MARKER).exists()
         {
             continue;
@@ -483,7 +508,10 @@ pub fn recover_unconsumed_plan(ws: &Workspace) -> Option<String> {
         mark_consumed(&run_dir); // unusable; don't retry forever
         return None;
     }
-    let meta: PlanMeta = state::load_yaml(&run_dir.join("plan-meta.yaml")).unwrap_or_default();
+    let meta: PlanMeta = state::load_yaml(&run_dir.join("plan-meta.yaml"))
+        .ok()
+        .or_else(|| legacy_plan_meta(&run_dir))
+        .unwrap_or_default();
 
     if meta.mode == "amend" {
         let mut queue = ws.load_queue().ok()?;
@@ -715,6 +743,36 @@ mod tests {
         assert_eq!(intent.raw_request, "add admin search");
 
         // Second startup: marked consumed, nothing to do.
+        assert!(recover_unconsumed_plan(&ws).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recovers_legacy_plan_without_meta_file() {
+        // Plan dirs created before plan-meta.yaml existed: reconstruct the
+        // request (and mode) from the compiled packet.
+        let root = std::env::temp_dir().join(format!("yard-planrec-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let run_dir = ws.runs_dir().join("plan-20990101-000000");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        write_str(
+            &workers::packet_path(&run_dir),
+            "# Yard planning gate\n\n## Request (verbatim)\n\n\
+             make the game feel like a game\n\n## Rules\n\n- ...\n",
+        )
+        .unwrap();
+        write_str(
+            &run_dir.join("planning-result.json"),
+            r#"{ "summary": "game feel",
+                 "tasks": [{ "id": "YARD-101", "title": "t" }] }"#,
+        )
+        .unwrap();
+
+        let msg = recover_unconsumed_plan(&ws).expect("legacy plan should be recovered");
+        assert!(msg.contains("game feel"));
+        let intent = ws.load_intent().unwrap().unwrap();
+        assert_eq!(intent.raw_request, "make the game feel like a game");
         assert!(recover_unconsumed_plan(&ws).is_none());
         let _ = std::fs::remove_dir_all(&root);
     }

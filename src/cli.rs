@@ -54,6 +54,8 @@ pub enum Command {
     Report,
     /// Review routing telemetry and apply suggested worker preferences.
     Routing(RoutingArgs),
+    /// Recover state from an interrupted session (orphaned runs, unread plans).
+    Recover,
 }
 
 #[derive(Args)]
@@ -216,7 +218,25 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Handoff) => cmd_handoff(&cwd),
         Some(Command::Report) => cmd_report(&cwd),
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
+        Some(Command::Recover) => cmd_recover(&cwd),
     }
+}
+
+fn cmd_recover(cwd: &std::path::Path) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let mut msgs = Vec::new();
+    if let Some(m) = crate::planner::recover_unconsumed_plan(&ws) {
+        msgs.push(m);
+    }
+    msgs.extend(crate::run::recover_orphans(&ws));
+    if msgs.is_empty() {
+        println!("nothing to recover \u{2014} state is consistent.");
+    } else {
+        for m in &msgs {
+            println!("{m}");
+        }
+    }
+    Ok(())
 }
 
 fn cmd_routing(cwd: &std::path::Path, args: RoutingArgs) -> Result<()> {
