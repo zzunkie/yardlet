@@ -59,8 +59,10 @@ pub fn field_options(key: &str) -> &'static [&'static str] {
         &["auto", "ko", "en"]
     } else if key.starts_with("effort:") {
         &["", "low", "medium", "high"]
+    } else if key == "model:claude-code" {
+        &["", "sonnet", "opus", "haiku"]
     } else {
-        &[]
+        &[] // e.g. codex model ids vary — type the exact id
     }
 }
 
@@ -648,9 +650,8 @@ fn handle_settings_key(app: &mut App, code: KeyCode) {
                     .map(|i| (i + 1) % opts.len())
                     .unwrap_or(0);
                 f.value = opts[next].to_string();
-            } else {
-                f.value.push(' ');
             }
+            // No preset options (e.g. codex model): type the value instead.
         }
         KeyCode::Backspace => {
             d.fields[d.sel].value.pop();
