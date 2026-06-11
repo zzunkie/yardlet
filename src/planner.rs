@@ -268,8 +268,14 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         &inspect::to_markdown(&summary),
     )?;
     let worker_guidance = build_worker_guidance(&workers);
-    let packet_text =
-        packet::compile_planning(&ctx, &summary, &run_dir_rel, &language, &worker_guidance, &images);
+    let packet_text = packet::compile_planning(
+        &ctx,
+        &summary,
+        &run_dir_rel,
+        &language,
+        &worker_guidance,
+        &images,
+    );
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
     let env = guard::sanitized_worker_env(&billing).map_err(|e| anyhow!(e))?;
     let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
@@ -306,7 +312,10 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
     let next_num = queue
         .tasks
         .iter()
-        .filter_map(|t| t.id.strip_prefix("YARD-").and_then(|n| n.parse::<usize>().ok()))
+        .filter_map(|t| {
+            t.id.strip_prefix("YARD-")
+                .and_then(|n| n.parse::<usize>().ok())
+        })
         .max()
         .unwrap_or(queue.tasks.len())
         + 1;

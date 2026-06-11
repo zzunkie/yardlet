@@ -631,7 +631,9 @@ fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let _ = (args.next, args.headless); // --next is implied; --task targets one
     if args.auto {
-        run::run_auto(&ws, args.bypass || args.full_access, None, |s| println!("{s}"))?;
+        run::run_auto(&ws, args.bypass || args.full_access, None, |s| {
+            println!("{s}")
+        })?;
         return Ok(());
     }
     let report = run::run_next(

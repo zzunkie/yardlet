@@ -356,40 +356,6 @@ pub fn compile_planning(
     p
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detects_korean_and_respects_config() {
-        assert_eq!(resolve_language("auto", "관리자 주문 검색"), "ko");
-        assert_eq!(resolve_language("auto", "add admin order search"), "en");
-        // an explicit config wins over detection
-        assert_eq!(resolve_language("en", "관리자"), "en");
-        assert_eq!(resolve_language("ko", "english text"), "ko");
-    }
-
-    #[test]
-    fn directive_empty_for_english_only() {
-        assert!(language_directive("en").is_empty());
-        assert!(language_directive("").is_empty());
-        assert!(language_directive("ko").contains("Korean"));
-    }
-
-    #[test]
-    fn detects_only_existing_image_paths() {
-        let dir = std::env::temp_dir().join(format!("yard-img-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("shot.png"), b"x").unwrap();
-        let found = detect_images("see shot.png and notes.txt", &dir);
-        assert_eq!(found.len(), 1);
-        assert!(found[0].ends_with("shot.png"));
-        // a referenced-but-missing image is not attached
-        assert!(detect_images("see missing.jpg", &dir).is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
 const PLANNING_SCHEMA_HINT: &str = r#"```json
 {
   "summary": "One sentence describing the goal in product terms.",
@@ -437,3 +403,37 @@ const RESULT_SCHEMA_HINT: &str = r#"```json
 }
 ```
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_korean_and_respects_config() {
+        assert_eq!(resolve_language("auto", "관리자 주문 검색"), "ko");
+        assert_eq!(resolve_language("auto", "add admin order search"), "en");
+        // an explicit config wins over detection
+        assert_eq!(resolve_language("en", "관리자"), "en");
+        assert_eq!(resolve_language("ko", "english text"), "ko");
+    }
+
+    #[test]
+    fn directive_empty_for_english_only() {
+        assert!(language_directive("en").is_empty());
+        assert!(language_directive("").is_empty());
+        assert!(language_directive("ko").contains("Korean"));
+    }
+
+    #[test]
+    fn detects_only_existing_image_paths() {
+        let dir = std::env::temp_dir().join(format!("yard-img-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("shot.png"), b"x").unwrap();
+        let found = detect_images("see shot.png and notes.txt", &dir);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].ends_with("shot.png"));
+        // a referenced-but-missing image is not attached
+        assert!(detect_images("see missing.jpg", &dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

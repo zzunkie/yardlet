@@ -197,22 +197,6 @@ pub const EN: L = L {
     answer_failed: "Answer/resume failed:",
 };
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn explicit_config_wins() {
-        assert_eq!(detect("ko", ""), Lang::Ko);
-        assert_eq!(detect("en", "관리자 검색"), Lang::En);
-    }
-
-    #[test]
-    fn auto_detects_hangul() {
-        assert_eq!(detect("auto", "관리자 주문 검색 추가"), Lang::Ko);
-    }
-}
-
 pub const KO: L = L {
     subtitle: "로컬 AI 워크벤치",
     workspace: "워크스페이스: ",
@@ -285,3 +269,19 @@ pub const KO: L = L {
     resumed_via: "재개 ·",
     answer_failed: "응답/재개 실패:",
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_config_wins() {
+        assert_eq!(detect("ko", ""), Lang::Ko);
+        assert_eq!(detect("en", "관리자 검색"), Lang::En);
+    }
+
+    #[test]
+    fn auto_detects_hangul() {
+        assert_eq!(detect("auto", "관리자 주문 검색 추가"), Lang::Ko);
+    }
+}

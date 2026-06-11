@@ -149,10 +149,13 @@ fn render_monitor(frame: &mut Frame, app: &App) {
             // State comes from the queue (source of truth); run.yaml's `state`
             // is written once at start and never updated, so it's stale.
             let task_id = field("task_id:");
-            let qstate = app
-                .snapshot
-                .as_ref()
-                .and_then(|s| s.queue.tasks.iter().find(|t| t.id == task_id).map(|t| t.state));
+            let qstate = app.snapshot.as_ref().and_then(|s| {
+                s.queue
+                    .tasks
+                    .iter()
+                    .find(|t| t.id == task_id)
+                    .map(|t| t.state)
+            });
             let (state, state_color) = match qstate {
                 Some(TaskState::Running) => ("running".to_string(), Color::Yellow),
                 Some(TaskState::Done) => ("done".to_string(), Color::Green),
@@ -694,7 +697,11 @@ fn render_report_list(frame: &mut Frame, app: &App) {
             .map(|(i, (label, src))| {
                 let is_sel = i == sel;
                 let marker = if is_sel { "\u{25b8} " } else { "  " };
-                let color = if src.is_none() { Color::Cyan } else { Color::Gray };
+                let color = if src.is_none() {
+                    Color::Cyan
+                } else {
+                    Color::Gray
+                };
                 let style = if is_sel {
                     Style::default().fg(color).bold()
                 } else {

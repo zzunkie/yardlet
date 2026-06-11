@@ -14,9 +14,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
-    KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, SetTitle};
@@ -264,7 +263,8 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
                     })
                     .unwrap_or(false);
                 if all_done {
-                    app.report_text = crate::report::build_final_report(&app.ws).unwrap_or_default();
+                    app.report_text =
+                        crate::report::build_final_report(&app.ws).unwrap_or_default();
                     app.scroll = 0;
                     app.viewing_archived = false;
                     app.screen = Screen::Completion;
@@ -430,8 +430,11 @@ fn open_reports(app: &mut App) {
         .unwrap_or_default();
     list.push((format!("current \u{2014} {}", short(&cur, 50)), None));
     if let Ok(rd) = std::fs::read_dir(app.ws.agents_dir().join("intents")) {
-        let mut dirs: Vec<std::path::PathBuf> =
-            rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        let mut dirs: Vec<std::path::PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
         dirs.sort();
         dirs.reverse(); // ids are timestamped → newest first
         for d in dirs {

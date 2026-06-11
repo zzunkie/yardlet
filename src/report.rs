@@ -97,7 +97,10 @@ pub fn build_final_report(ws: &Workspace) -> Result<String> {
     let mut all_changed: Vec<String> = Vec::new();
     let mut open_questions: Vec<String> = Vec::new();
     for t in &queue.tasks {
-        md.push_str(&format!("### {} {} \u{2014} {:?}\n\n", t.id, t.title, t.state));
+        md.push_str(&format!(
+            "### {} {} \u{2014} {:?}\n\n",
+            t.id, t.title, t.state
+        ));
         if let Some((_, dir)) = latest_run_for(ws, &t.id) {
             if let Some(r) = read_result(&dir) {
                 if !r.compact_summary.trim().is_empty() {

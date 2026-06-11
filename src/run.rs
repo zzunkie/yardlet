@@ -424,16 +424,12 @@ pub fn run_auto<F: FnMut(&str)>(
         }
         let queue = ws.load_queue()?;
         // NeedsUser/Blocked genuinely need a human: halt (don't skip past them).
-        if let Some(t) = queue
-            .tasks
-            .iter()
-            .find(|t| {
-                matches!(
-                    t.state,
-                    TaskState::NeedsUser | TaskState::Blocked | TaskState::Partial
-                )
-            })
-        {
+        if let Some(t) = queue.tasks.iter().find(|t| {
+            matches!(
+                t.state,
+                TaskState::NeedsUser | TaskState::Blocked | TaskState::Partial
+            )
+        }) {
             emit(format!(
                 "stopped: {} is {:?} \u{2014} answer (a) or resolve it, then run auto again",
                 t.id, t.state
@@ -553,9 +549,11 @@ pub(crate) fn latest_run_for(ws: &Workspace, task_id: &str) -> Option<(String, P
             continue;
         }
         let yaml = std::fs::read_to_string(dir.join("run.yaml")).unwrap_or_default();
-        let tid = yaml
-            .lines()
-            .find_map(|l| l.trim().strip_prefix("task_id:").map(|v| v.trim().to_string()));
+        let tid = yaml.lines().find_map(|l| {
+            l.trim()
+                .strip_prefix("task_id:")
+                .map(|v| v.trim().to_string())
+        });
         if tid.as_deref() != Some(task_id) {
             continue;
         }
@@ -669,7 +667,10 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
     if !finished.is_empty() || !requeued.is_empty() {
         let _ = ws.save_queue(&q);
         if !finished.is_empty() {
-            msgs.push(format!("recovered completed run(s): {}", finished.join(", ")));
+            msgs.push(format!(
+                "recovered completed run(s): {}",
+                finished.join(", ")
+            ));
         }
         if !requeued.is_empty() {
             msgs.push(format!(

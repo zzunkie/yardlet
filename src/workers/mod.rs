@@ -87,7 +87,9 @@ pub fn build_command(
                 cmd.arg("-p").arg("--permission-mode").arg("acceptEdits");
             }
             // Stream events as JSONL so the live monitor shows progress.
-            cmd.arg("--output-format").arg("stream-json").arg("--verbose");
+            cmd.arg("--output-format")
+                .arg("stream-json")
+                .arg("--verbose");
             if explicit(model) {
                 cmd.arg("--model").arg(model);
             }
@@ -107,6 +109,7 @@ pub fn build_command(
 /// claude: `-p --resume <id>`; codex: `exec resume <id> -` (prompt on stdin).
 /// Note: codex `resume` has no `--sandbox`/`--add-dir`; full-access bypasses the
 /// sandbox, and a sandboxed session inherits its original writable roots.
+#[allow(clippy::too_many_arguments)]
 fn build_resume_command(
     worker_id: &str,
     bin: &Path,
@@ -432,8 +435,20 @@ mod tests {
         // "auto" (any case) and empty both mean: let the CLI choose — no flag.
         let (bin, run, cwd) = (Path::new("x"), Path::new("/tmp/r"), Path::new("/tmp"));
         for (model, effort) in [("auto", "auto"), ("", ""), ("AUTO", "Auto")] {
-            let cx = args_of(&build_command("codex", bin, run, cwd, false, model, effort, &[]));
-            assert!(!cx.iter().any(|a| a == "-m"), "codex -m omitted for {model:?}");
+            let cx = args_of(&build_command(
+                "codex",
+                bin,
+                run,
+                cwd,
+                false,
+                model,
+                effort,
+                &[],
+            ));
+            assert!(
+                !cx.iter().any(|a| a == "-m"),
+                "codex -m omitted for {model:?}"
+            );
             assert!(
                 !cx.iter().any(|a| a.contains("model_reasoning_effort")),
                 "codex effort omitted for {effort:?}"
@@ -448,8 +463,14 @@ mod tests {
                 effort,
                 &[],
             ));
-            assert!(!cl.iter().any(|a| a == "--model"), "claude --model omitted for {model:?}");
-            assert!(!cl.iter().any(|a| a == "--effort"), "claude --effort omitted for {effort:?}");
+            assert!(
+                !cl.iter().any(|a| a == "--model"),
+                "claude --model omitted for {model:?}"
+            );
+            assert!(
+                !cl.iter().any(|a| a == "--effort"),
+                "claude --effort omitted for {effort:?}"
+            );
         }
     }
 }
