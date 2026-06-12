@@ -4,6 +4,22 @@
 
 ### Added
 
+- **Hot session chaining (P1).** During an auto-drain, a task whose
+  `depends_on` includes the task that just finished — on the same worker —
+  now runs IN that worker's live session (`claude --resume` /
+  `codex exec resume`) instead of cold-booting: the worker keeps everything
+  it learned about the repo. The chain cuts on anything but a clean Done
+  (failure/partial poisons the context), on a worker switch, on parallel
+  fan-out, and after 3 consecutive tasks (context-rot cap). The packet says
+  so explicitly ("same session, next task — do not re-explore").
+
+### Fixed
+
+- Input caret position with Korean text: the cursor drifted one cell per
+  wrapped line (width/box-width division ignored word wrap and double-width
+  Hangul at the right edge). The caret now simulates the renderer's
+  wrapping, including explicit newlines on earlier lines.
+
 - **Guaranteed acceptance review (A3).** A risky plan (any high-risk task)
   or a sizable one (3+ tasks) now always ends in a review-kind task that
   verifies the intent's acceptance criteria per criterion against the

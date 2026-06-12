@@ -216,6 +216,7 @@ pub fn run_batch<F: FnMut(&str)>(
             prior_question: None,
             user_answer: None,
             continuation: None, // batches only pick Queued tasks
+            chained_from: None,
             language: &language,
             images: &images,
             role_notes: &role_notes,

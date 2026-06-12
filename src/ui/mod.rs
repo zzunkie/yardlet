@@ -1386,6 +1386,7 @@ fn start_run(app: &mut App) {
                 answer: None,
                 full_access: false,
                 accept_ambiguity: false,
+                chain: None,
             },
         ) {
             Ok(r) => {
@@ -1433,6 +1434,7 @@ fn start_approve(app: &mut App) {
                 answer: None,
                 full_access: false,
                 accept_ambiguity: false,
+                chain: None,
             },
         ) {
             Ok(r) => {
@@ -1611,6 +1613,7 @@ fn start_answer(app: &mut App) {
                 answer: Some(answer),
                 full_access: false,
                 accept_ambiguity: false,
+                chain: None,
             },
         ) {
             Ok(r) => {

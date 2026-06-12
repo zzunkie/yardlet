@@ -390,6 +390,7 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
             answer: Some(reply),
             full_access: args.full_access,
             accept_ambiguity: false,
+            chain: None,
         },
     )?;
     for line in &report.lines {
@@ -653,6 +654,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         prior_question: None,
         user_answer: None,
         continuation: continuation.as_deref(),
+        chained_from: None,
         language: &language,
         images: &images,
         role_notes: &role_notes,
@@ -688,6 +690,7 @@ fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
             answer: None,
             full_access: args.full_access,
             accept_ambiguity: args.accept_ambiguity,
+            chain: None,
         },
     )?;
     for line in &report.lines {

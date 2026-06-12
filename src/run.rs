@@ -20,6 +20,22 @@ use crate::schemas::{RunResult, TaskState, WorkerProfile};
 use crate::state::{self, write_str, Workspace};
 use crate::{compact, evaluator, routing, telemetry, workers};
 
+/// A live worker session a previous task finished in, offered to the next
+/// task: same worker + dependency link = the worker keeps its hot context
+/// (P1 — the bounded-task model without the cold-boot tax).
+#[derive(Clone)]
+pub struct ChainHandle {
+    pub prev_task_id: String,
+    pub worker_id: String,
+    pub session: String,
+    /// How many tasks this session has already run (cap guards context rot).
+    pub length: u32,
+}
+
+/// Longest run of tasks one session may carry before a forced fresh start —
+/// hot context helps until it rots.
+pub const CHAIN_CAP: u32 = 3;
+
 pub struct RunOptions {
     pub execute: bool,
     pub worker_override: Option<String>,
@@ -33,6 +49,9 @@ pub struct RunOptions {
     pub full_access: bool,
     /// Run even though the planner scored ambiguity "high" (gate override).
     pub accept_ambiguity: bool,
+    /// Continue in this session instead of booting a fresh worker, when the
+    /// resolved worker matches (run_auto offers it for dependent tasks).
+    pub chain: Option<ChainHandle>,
 }
 
 pub struct RunReport {
@@ -45,6 +64,10 @@ pub struct RunReport {
     pub lines: Vec<String>,
     /// The task's state after evaluation (None when only prepared).
     pub result_state: Option<TaskState>,
+    /// The worker session this run used (for chaining the next task).
+    pub session: Option<String>,
+    /// Whether this run continued a previous task's session.
+    pub chained: bool,
 }
 
 #[derive(Serialize)]
@@ -171,6 +194,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 
     let role_notes = packet::load_role_notes(&ws.root, packet::role_for(&task.kind));
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
+    let chained_from = opts.chain.as_ref().map(|c| c.prev_task_id.clone());
     let packet_text = packet::compile(&PacketInputs {
         worker_id: &worker_id,
         task: &task,
@@ -180,6 +204,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         prior_question: prior_question.as_deref(),
         user_answer: opts.answer.as_deref(),
         continuation: continuation.as_deref(),
+        chained_from: chained_from.as_deref(),
         language: &language,
         images: &images,
         role_notes: &role_notes,
@@ -225,6 +250,8 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             executed: false,
             lines,
             result_state: None,
+            session: None,
+            chained: false,
         });
     }
 
@@ -268,10 +295,27 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     queue.tasks[idx].state = TaskState::Running;
     ws.save_queue(&queue)?;
 
+    // Chaining (P1): when run_auto offers the previous task's live session and
+    // routing kept the same worker, continue IN that session — the worker
+    // keeps its hot context instead of re-learning the repo from zero.
+    let chained = opts
+        .chain
+        .as_ref()
+        .is_some_and(|c| c.worker_id == worker_id);
+    if chained {
+        lines.push(format!(
+            "chaining into {}'s session (task {} of a hot chain)",
+            worker_id,
+            opts.chain.as_ref().map(|c| c.length + 1).unwrap_or(1)
+        ));
+    }
+
     // Session id for resume-on-transient: claude lets us set one up front; codex
     // generates its own, captured from its rollout file after the run starts.
     let log_path = run_dir.join("worker-output.log");
-    let mut session_id: Option<String> = if worker_id == "claude-code" {
+    let mut session_id: Option<String> = if chained {
+        opts.chain.as_ref().map(|c| c.session.clone())
+    } else if worker_id == "claude-code" {
         Some(gen_session_uuid(&run_id))
     } else {
         None
@@ -289,7 +333,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         full_access,
         &images,
         session_id.as_deref(),
-        false,
+        chained,
     )?;
     if worker_id == "codex" && session_id.is_none() {
         session_id = find_codex_session(started_sys);
@@ -342,6 +386,8 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             executed: true,
             lines,
             result_state: Some(TaskState::Queued),
+            session: session_id.clone(),
+            chained,
         });
     }
     lines.push(format!(
@@ -408,6 +454,8 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         executed: true,
         lines,
         result_state: Some(eval.next_task_state),
+        session: session_id,
+        chained,
     })
 }
 
@@ -443,6 +491,9 @@ pub fn run_auto<F: FnMut(&str)>(
     };
     let mut attempts: HashMap<String, u32> = HashMap::new();
     let mut waits: HashMap<String, u32> = HashMap::new();
+    // P1: the previous Done task's live session, offered to a dependent
+    // successor on the same worker. Cut on anything but a clean Done.
+    let mut chain: Option<ChainHandle> = None;
     let probe_opts = RunOptions {
         execute: false,
         worker_override: None,
@@ -450,6 +501,7 @@ pub fn run_auto<F: FnMut(&str)>(
         answer: None,
         full_access: false,
         accept_ambiguity: false,
+        chain: None,
     };
 
     // Recover orphans (interrupted runs left "running") and any unconsumed
@@ -579,6 +631,7 @@ pub fn run_auto<F: FnMut(&str)>(
                             );
                             break;
                         }
+                        chain = None; // parallel fan-out: fresh contexts
                         crate::parallel::run_batch(ws, &ready, bypass, |s| {
                             emit(s.to_string());
                         })?;
@@ -628,6 +681,20 @@ pub fn run_auto<F: FnMut(&str)>(
             break;
         }
 
+        // Offer the previous session only to a DEPENDENT successor (shared
+        // context is the point) and under the rot cap; retries start cold.
+        let offer = chain
+            .as_ref()
+            .filter(|c| {
+                retry_target.is_none()
+                    && c.length < CHAIN_CAP
+                    && queue
+                        .tasks
+                        .iter()
+                        .find(|t| t.id == task_id)
+                        .is_some_and(|t| t.depends_on.contains(&c.prev_task_id))
+            })
+            .cloned();
         emit(format!("running {task_id}\u{2026}"));
         let report = run_next(
             ws,
@@ -638,10 +705,25 @@ pub fn run_auto<F: FnMut(&str)>(
                 answer: None,
                 full_access: bypass,
                 accept_ambiguity: false,
+                chain: offer.clone(),
             },
         )?;
         let state = report.result_state.unwrap_or(TaskState::Failed);
         emit(format!("{} \u{2192} {:?}", report.task_id, state));
+        chain = if state == TaskState::Done {
+            report.session.as_ref().map(|sess| ChainHandle {
+                prev_task_id: report.task_id.clone(),
+                worker_id: report.worker_id.clone(),
+                session: sess.clone(),
+                length: if report.chained {
+                    offer.map(|o| o.length + 1).unwrap_or(1)
+                } else {
+                    1
+                },
+            })
+        } else {
+            None // a messy ending poisons the context; next run starts clean
+        };
 
         match state {
             TaskState::Done | TaskState::Queued => continue,
@@ -1068,6 +1150,7 @@ mod tests {
             answer: None,
             full_access: false,
             accept_ambiguity: false,
+            chain: None,
         }
     }
 

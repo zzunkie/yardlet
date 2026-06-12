@@ -21,6 +21,9 @@ pub struct PacketInputs<'a> {
     /// checkpoint + unmet acceptance, so the worker continues instead of
     /// redoing finished work.
     pub continuation: Option<&'a str>,
+    /// Set when this packet continues the SAME session that just finished
+    /// the named task (P1 chaining): the worker should reuse its context.
+    pub chained_from: Option<&'a str>,
     /// Resolved output language for user-facing content ("ko", "en", ...).
     pub language: &'a str,
     /// Local image paths attached to the goal (also passed natively to the CLI).
@@ -519,6 +522,16 @@ pub fn compile(inputs: &PacketInputs) -> String {
         p.push('\n');
     }
 
+    // Hot chain: same session, next task.
+    if let Some(prev) = inputs.chained_from {
+        p.push_str(&format!(
+            "## Same session, next task\n\nYou just completed task {prev} in this session. \
+             The packet below is the NEXT task; reuse everything you already know about \
+             this repo \u{2014} do not re-explore what you have already read \u{2014} but treat \
+             the new task's scope and acceptance as the contract.\n\n"
+        ));
+    }
+
     // Continuation context: a previous run of this task ended Partial.
     if let Some(cont) = inputs.continuation {
         p.push_str("## Continuing a partial run\n\n");
@@ -980,6 +993,7 @@ mod tests {
             prior_question: None,
             user_answer: None,
             continuation: None,
+            chained_from: None,
             language: "en",
             images: &[],
             role_notes: "",
@@ -1046,11 +1060,54 @@ mod tests {
             prior_question: None,
             user_answer: None,
             continuation: None,
+            chained_from: None,
             language: "en",
             images: &[],
             role_notes,
             harness: &Harness::default(),
         })
+    }
+
+    #[test]
+    fn chained_packet_tells_the_worker_to_reuse_its_context() {
+        let task = crate::schemas::Task {
+            id: "YARD-2".into(),
+            title: "t".into(),
+            state: Default::default(),
+            priority: 0,
+            risk: String::new(),
+            kind: "implementation".into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec!["YARD-1".into()],
+            skills: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+        };
+        let repo = crate::inspect::RepoSummary::default();
+        let p = compile(&PacketInputs {
+            worker_id: "codex",
+            task: &task,
+            intent: None,
+            repo: &repo,
+            run_dir_rel: ".agents/runs/run-x",
+            prior_question: None,
+            user_answer: None,
+            continuation: None,
+            chained_from: Some("YARD-1"),
+            language: "en",
+            images: &[],
+            role_notes: "",
+            harness: &Harness::default(),
+        });
+        assert!(p.contains("## Same session, next task"));
+        assert!(p.contains("completed task YARD-1 in this session"));
+        assert!(p.contains("do not re-explore"));
     }
 
     #[test]
@@ -1084,6 +1141,7 @@ mod tests {
             prior_question: None,
             user_answer: None,
             continuation: Some("- Checkpoint: AC-004 unmet (wrong background)"),
+            chained_from: None,
             language: "en",
             images: &[],
             role_notes: "",

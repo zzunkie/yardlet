@@ -783,14 +783,75 @@ fn render_footer(frame: &mut Frame, area: Rect, keys: &str) {
 /// Width is measured in display columns (Hangul is 2 wide).
 fn place_input_cursor(frame: &mut Frame, area: Rect, input: &str) {
     let inner_w = (area.width.saturating_sub(2)).max(1) as usize;
-    // Account for explicit newlines (Shift/Alt+Enter) plus wrapping of the last
-    // line so the cursor (and the terminal's IME overlay) sit at the caret.
-    let newlines = input.matches('\n').count() as u16;
-    let last_line = input.rsplit('\n').next().unwrap_or("");
-    let w = UnicodeWidthStr::width(last_line);
-    let row = newlines + (w / inner_w) as u16;
-    let col = (w % inner_w) as u16;
-    frame.set_cursor_position((area.x + 1 + col, area.y + 1 + row));
+    let (row, col) = wrapped_caret(input, inner_w);
+    // Keep the caret inside the box even when the text outgrows it.
+    let max_row = area.height.saturating_sub(3);
+    frame.set_cursor_position((
+        area.x + 1 + col.min(inner_w.saturating_sub(1) as u16),
+        area.y + 1 + row.min(max_row),
+    ));
+}
+
+/// Where the caret lands after `input`, under the same wrapping the renderer
+/// applies: greedy word wrap, and a double-width char (Hangul) that would
+/// straddle the right edge moves wholly to the next row. The old width/inner
+/// division drifted one cell per wrapped line for Korean text.
+fn wrapped_caret(input: &str, width: usize) -> (u16, u16) {
+    use unicode_width::UnicodeWidthChar;
+    let width = width.max(1);
+    let mut row = 0usize;
+    let mut col = 0usize;
+    for (li, line) in input.split('\n').enumerate() {
+        if li > 0 {
+            row += 1;
+            col = 0;
+        }
+        // Alternate whitespace runs (wrap char-by-char) and words (move whole
+        // to the next row when they no longer fit; hard-break only when a
+        // word is wider than the box).
+        let mut chars = line.chars().peekable();
+        while let Some(&c) = chars.peek() {
+            if c.is_whitespace() {
+                chars.next();
+                if col + 1 > width {
+                    row += 1;
+                    col = 0;
+                }
+                col += 1;
+                continue;
+            }
+            let mut word = String::new();
+            while let Some(&c) = chars.peek() {
+                if c.is_whitespace() {
+                    break;
+                }
+                word.push(c);
+                chars.next();
+            }
+            let ww = UnicodeWidthStr::width(word.as_str());
+            if col + ww <= width {
+                col += ww;
+            } else if ww <= width {
+                row += 1;
+                col = ww;
+            } else {
+                // Wider than the box: hard-break, double-width aware.
+                if col > 0 {
+                    row += 1;
+                    col = 0;
+                }
+                for ch in word.chars() {
+                    let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if col + cw > width {
+                        row += 1;
+                        col = 0;
+                    }
+                    col += cw;
+                }
+            }
+        }
+    }
+    (row as u16, col as u16)
 }
 
 /// Pad `s` with trailing spaces until its display width reaches `cols` (Hangul
@@ -808,5 +869,26 @@ fn truncate(s: &str, max: usize) -> String {
         let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
         out.push('\u{2026}');
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caret_tracks_hangul_double_width_wrapping() {
+        // width 5, one long Hangul "word" (width 2 each): 가나 fits (4),
+        // 다 would straddle -> moves to the next row whole.
+        assert_eq!(wrapped_caret("가나다", 5), (1, 2));
+        // ASCII word wrap: "hello world" at width 8 — "world" moves whole.
+        assert_eq!(wrapped_caret("hello world", 8), (1, 5));
+        // Explicit newline resets the column and counts a row.
+        assert_eq!(wrapped_caret("ab\ncd", 10), (1, 2));
+        // Earlier lines that wrap are counted too (the old code missed this).
+        assert_eq!(wrapped_caret("가나다\nx", 5), (2, 1));
+        // Korean prose with spaces: words move wholly, like the renderer.
+        // width 6: "안녕 하세요" -> 안녕(4)+space(5), 하세요(6) doesn't fit -> row 1.
+        assert_eq!(wrapped_caret("안녕 하세요", 6), (1, 6));
     }
 }

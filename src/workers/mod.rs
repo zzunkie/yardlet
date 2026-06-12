@@ -198,6 +198,10 @@ fn build_resume_command(
             } else {
                 cmd.arg("-p").arg("--permission-mode").arg("acceptEdits");
             }
+            // Keep the live monitor working on resumed/chained sessions too.
+            cmd.arg("--output-format")
+                .arg("stream-json")
+                .arg("--verbose");
             if let Some(id) = session {
                 cmd.arg("--resume").arg(id);
             }
