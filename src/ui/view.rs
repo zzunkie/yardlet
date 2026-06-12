@@ -382,7 +382,7 @@ fn render_home(frame: &mut Frame, app: &App) {
                     .queue
                     .tasks
                     .iter()
-                    .any(|t| matches!(t.state, TaskState::Partial | TaskState::Blocked));
+                    .any(|t| !matches!(t.state, TaskState::Running | TaskState::Done));
             if answerable {
                 f.push_str("  ");
                 f.push_str(l.key_answer);

@@ -1452,8 +1452,16 @@ fn start_auto(app: &mut App) {
     };
 }
 
-/// What `a` would answer right now: the NeedsUser question if one is pending,
-/// else the first Partial/Blocked task with its remaining-work context.
+/// Can `a` instruct this task? Anything not currently running and not done:
+/// queued (run with instructions), partial/blocked/failed (continue or retry
+/// with instructions), needs-user (answer the question).
+fn answerable(state: TaskState) -> bool {
+    !matches!(state, TaskState::Running | TaskState::Done)
+}
+
+/// What `a` would answer right now, in priority order: the pending NeedsUser
+/// question; the task selected in the queue list (if answerable); else the
+/// first answerable task. The reply rides into the task's next packet.
 fn compute_answer_target(app: &App) -> Option<(String, String)> {
     let s = app.snapshot.as_ref()?;
     if let Some(p) = &s.pending {
@@ -1462,8 +1470,9 @@ fn compute_answer_target(app: &App) -> Option<(String, String)> {
     let t = s
         .queue
         .tasks
-        .iter()
-        .find(|t| matches!(t.state, TaskState::Partial | TaskState::Blocked))?;
+        .get(app.selected)
+        .filter(|t| answerable(t.state))
+        .or_else(|| s.queue.tasks.iter().find(|t| answerable(t.state)))?;
     // Show what the previous run says is missing, so the user can instruct.
     let context = crate::run::latest_run_for(&app.ws, &t.id)
         .and_then(|(_, dir)| std::fs::read_to_string(dir.join("result.json")).ok())
@@ -1476,7 +1485,7 @@ fn compute_answer_target(app: &App) -> Option<(String, String)> {
             }
             s
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| t.title.clone());
     Some((t.id.clone(), context))
 }
 
