@@ -137,6 +137,10 @@ pub struct App {
     /// Cached Monitor state so rendering never scans the runs directory or
     /// re-parses the whole worker log per frame.
     pub monitor: MonitorCache,
+    /// What the Answer screen is replying to: (task id, question/context).
+    /// Set when the screen opens — a NeedsUser question, or a Partial/Blocked
+    /// task's remaining-work context (the answer becomes rerun instructions).
+    pub answer_target: Option<(String, String)>,
     /// The non-ASCII input source we auto-switched away from (restored when a
     /// text-input screen opens, or on quit).
     pub ime_saved: Option<String>,
@@ -240,6 +244,7 @@ impl App {
             last_title: None,
             monitor_sel: 0,
             monitor: MonitorCache::default(),
+            answer_target: None,
             ime_saved: None,
             ime_checked: Instant::now(),
             lang,
@@ -699,17 +704,16 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         // task, then stop). Esc stops immediately; A resumes.
         KeyCode::Char('p') => request_pause(app),
         KeyCode::Char('a') if !app.is_busy() => {
-            let has_pending = app
-                .snapshot
-                .as_ref()
-                .map(|s| s.pending.is_some())
-                .unwrap_or(false);
-            if has_pending {
-                app.input.clear();
-                app.toast = None;
-                app.screen = Screen::Answer;
-            } else {
-                app.toast = Some((true, app.lang.l().no_pending.into()));
+            // Answer a NeedsUser question — or give rerun instructions to a
+            // Partial/Blocked task (threaded into its continuation packet).
+            match compute_answer_target(app) {
+                Some(t) => {
+                    app.answer_target = Some(t);
+                    app.input.clear();
+                    app.toast = None;
+                    app.screen = Screen::Answer;
+                }
+                None => app.toast = Some((true, app.lang.l().no_pending.into())),
             }
         }
         KeyCode::Char('h') => {
@@ -1200,7 +1204,10 @@ fn handle_answer_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         return;
     }
     match code {
-        KeyCode::Esc => app.screen = Screen::Home,
+        KeyCode::Esc => {
+            app.answer_target = None;
+            app.screen = Screen::Home;
+        }
         KeyCode::Enter if mods.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
             app.input.push('\n')
         }
@@ -1445,8 +1452,40 @@ fn start_auto(app: &mut App) {
     };
 }
 
+/// What `a` would answer right now: the NeedsUser question if one is pending,
+/// else the first Partial/Blocked task with its remaining-work context.
+fn compute_answer_target(app: &App) -> Option<(String, String)> {
+    let s = app.snapshot.as_ref()?;
+    if let Some(p) = &s.pending {
+        return Some(p.clone());
+    }
+    let t = s
+        .queue
+        .tasks
+        .iter()
+        .find(|t| matches!(t.state, TaskState::Partial | TaskState::Blocked))?;
+    // Show what the previous run says is missing, so the user can instruct.
+    let context = crate::run::latest_run_for(&app.ws, &t.id)
+        .and_then(|(_, dir)| std::fs::read_to_string(dir.join("result.json")).ok())
+        .and_then(|raw| serde_json::from_str::<crate::schemas::RunResult>(&raw).ok())
+        .map(|r| {
+            let mut s = r.compact_summary.trim().to_string();
+            for f in &r.validation.failures {
+                s.push_str("\n- ");
+                s.push_str(f);
+            }
+            s
+        })
+        .unwrap_or_default();
+    Some((t.id.clone(), context))
+}
+
 fn start_answer(app: &mut App) {
-    let Some((task_id, _)) = app.snapshot.as_ref().and_then(|s| s.pending.clone()) else {
+    let target = app
+        .answer_target
+        .take()
+        .or_else(|| app.snapshot.as_ref().and_then(|s| s.pending.clone()));
+    let Some((task_id, _)) = target else {
         app.toast = Some((false, app.lang.l().no_answer_target.into()));
         return;
     };

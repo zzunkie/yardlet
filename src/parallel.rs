@@ -210,6 +210,7 @@ pub fn run_batch<F: FnMut(&str)>(
             run_dir_rel: &run_dir_abs,
             prior_question: None,
             user_answer: None,
+            continuation: None, // batches only pick Queued tasks
             language: &language,
             images: &images,
             role_notes: &role_notes,
@@ -328,6 +329,9 @@ pub fn run_batch<F: FnMut(&str)>(
                 }
                 Ok(Integration::Conflict(why)) => {
                     next = TaskState::Partial;
+                    // Mark WHY it is partial: a conflict needs a human, so the
+                    // auto-drain must not continue it like a worker self-report.
+                    let _ = write_str(&p.run_dir.join("partial-reason"), "merge_conflict");
                     let note = format!(
                         "\n## Merge conflict\n\nYard could not merge `{}` back: {}\n\
                          The worktree is kept at `{}` for manual integration.\n",
@@ -344,6 +348,7 @@ pub fn run_batch<F: FnMut(&str)>(
                 }
                 Err(e) => {
                     next = TaskState::Partial;
+                    let _ = write_str(&p.run_dir.join("partial-reason"), "merge_conflict");
                     on_event(&format!("{}: integration error: {e}", p.task.id));
                 }
             }

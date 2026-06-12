@@ -634,6 +634,11 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         .map(|i| i.images.clone())
         .unwrap_or_default();
     let role_notes = packet::load_role_notes(&ws.root, packet::role_for(&task.kind));
+    let continuation = if task.state == crate::schemas::TaskState::Partial {
+        crate::run::continuation_context(&ws, &task.id)
+    } else {
+        None
+    };
     let text = packet::compile(&packet::PacketInputs {
         worker_id: &args.worker,
         task,
@@ -642,6 +647,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         run_dir_rel: ".agents/runs/<run-id>",
         prior_question: None,
         user_answer: None,
+        continuation: continuation.as_deref(),
         language: &language,
         images: &images,
         role_notes: &role_notes,

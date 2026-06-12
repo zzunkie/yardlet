@@ -1,6 +1,6 @@
 # Shared Worker Harness & Learning Loop — Design
 
-> Status: design (phases H1–H4 planned, not yet implemented).
+> Status: H2 implemented (partial continuation); H1/H3/H4 planned.
 > Companion docs: [parallel-queue.md](parallel-queue.md),
 > [routing-and-telemetry.md](routing-and-telemetry.md).
 

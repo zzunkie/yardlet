@@ -377,7 +377,13 @@ fn render_home(frame: &mut Frame, app: &App) {
         // Only show answer/approve keys when there's actually something to do.
         let mut f = l.footer_home.to_string();
         if let Some(snap) = &app.snapshot {
-            if snap.pending.is_some() {
+            let answerable = snap.pending.is_some()
+                || snap
+                    .queue
+                    .tasks
+                    .iter()
+                    .any(|t| matches!(t.state, TaskState::Partial | TaskState::Blocked));
+            if answerable {
                 f.push_str("  ");
                 f.push_str(l.key_answer);
             }
@@ -650,9 +656,9 @@ fn render_answer(frame: &mut Frame, app: &App) {
     .split(area);
 
     let (task_id, question) = app
-        .snapshot
-        .as_ref()
-        .and_then(|s| s.pending.clone())
+        .answer_target
+        .clone()
+        .or_else(|| app.snapshot.as_ref().and_then(|s| s.pending.clone()))
         .unwrap_or_else(|| ("(none)".into(), String::new()));
     let q_body = if question.is_empty() {
         l.no_question.to_string()

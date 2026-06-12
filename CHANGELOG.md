@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Partial = continue, not redo (harness phase H2).** Re-running a Partial
+  task injects the previous run's checkpoint, summary, and unresolved
+  validation failures into the packet ("do not redo finished work"). The
+  auto-drain now continues self-reported partials automatically
+  (attempts-capped) and halts only on merge-conflict partials (marked via a
+  partial-reason file). The TUI `a` key now also answers Partial/Blocked
+  tasks — the reply becomes rerun instructions threaded into the
+  continuation packet; the Answer screen shows what the previous run says is
+  still missing.
+
 - **Worker management from the TUI.** The Home arrow keys now continue past
   the queue into the workers panel; Enter/Space toggles a worker on/off
   (persisted as `enabled:` in workers.yaml — routing and planning skip a

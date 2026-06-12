@@ -17,6 +17,10 @@ pub struct PacketInputs<'a> {
     pub prior_question: Option<&'a str>,
     /// The user's answer to that question, when resuming.
     pub user_answer: Option<&'a str>,
+    /// Continuation context for a Partial re-run: the previous run's
+    /// checkpoint + unmet acceptance, so the worker continues instead of
+    /// redoing finished work.
+    pub continuation: Option<&'a str>,
     /// Resolved output language for user-facing content ("ko", "en", ...).
     pub language: &'a str,
     /// Local image paths attached to the goal (also passed natively to the CLI).
@@ -228,6 +232,18 @@ pub fn compile(inputs: &PacketInputs) -> String {
             p.push_str(&format!("- {img}\n"));
         }
         p.push('\n');
+    }
+
+    // Continuation context: a previous run of this task ended Partial.
+    if let Some(cont) = inputs.continuation {
+        p.push_str("## Continuing a partial run\n\n");
+        p.push_str(
+            "A previous run completed PART of this task. Continue from the checkpoint \
+             below \u{2014} do not redo finished work; close the remaining gaps and meet \
+             the acceptance criteria.\n\n",
+        );
+        p.push_str(cont.trim());
+        p.push_str("\n\n");
     }
 
     // Resume context: the user answered a question from a prior run.
@@ -521,10 +537,50 @@ mod tests {
             run_dir_rel: ".agents/runs/run-x",
             prior_question: None,
             user_answer: None,
+            continuation: None,
             language: "en",
             images: &[],
             role_notes,
         })
+    }
+
+    #[test]
+    fn continuation_section_renders_for_partial_reruns() {
+        let task = crate::schemas::Task {
+            id: "YARD-1".into(),
+            title: "t".into(),
+            state: Default::default(),
+            priority: 0,
+            risk: String::new(),
+            kind: "implementation".into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+        };
+        let repo = crate::inspect::RepoSummary::default();
+        let p = compile(&PacketInputs {
+            worker_id: "codex",
+            task: &task,
+            intent: None,
+            repo: &repo,
+            run_dir_rel: ".agents/runs/run-x",
+            prior_question: None,
+            user_answer: None,
+            continuation: Some("- Checkpoint: AC-004 unmet (wrong background)"),
+            language: "en",
+            images: &[],
+            role_notes: "",
+        });
+        assert!(p.contains("## Continuing a partial run"));
+        assert!(p.contains("do not redo finished work"));
+        assert!(p.contains("AC-004 unmet"));
     }
 
     #[test]

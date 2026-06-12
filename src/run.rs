@@ -83,6 +83,13 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     } else {
         None
     };
+    // Re-running a Partial task: continue from the previous run's checkpoint
+    // instead of redoing the work from scratch.
+    let continuation = if task.state == TaskState::Partial {
+        continuation_context(ws, &task.id)
+    } else {
+        None
+    };
 
     // ---- resolve worker (deterministic: candidate -> readiness -> fallback) --
     let resolved = routing::resolve_worker(
@@ -151,6 +158,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         run_dir_rel: &run_dir_rel,
         prior_question: prior_question.as_deref(),
         user_answer: opts.answer.as_deref(),
+        continuation: continuation.as_deref(),
         language: &language,
         images: &images,
         role_notes: &role_notes,
@@ -474,24 +482,36 @@ pub fn run_auto<F: FnMut(&str)>(
             continue;
         }
         // NeedsUser/Blocked genuinely need a human: halt (don't skip past them).
-        if let Some(t) = queue.tasks.iter().find(|t| {
-            matches!(
-                t.state,
-                TaskState::NeedsUser | TaskState::Blocked | TaskState::Partial
-            )
-        }) {
+        if let Some(t) = queue
+            .tasks
+            .iter()
+            .find(|t| matches!(t.state, TaskState::NeedsUser | TaskState::Blocked))
+        {
             emit(format!(
                 "stopped: {} is {:?} \u{2014} answer (a) or resolve it, then run auto again",
                 t.id, t.state
             ));
             break;
         }
-        // A Failed task may be transient (e.g. a dropped connection): retry it
-        // first, bounded by the attempts cap below, instead of halting the drain.
+        // A merge-conflict Partial needs a human; a self-reported Partial is
+        // auto-continued from its checkpoint (retry path below, attempts-capped).
+        if let Some(t) = queue.tasks.iter().find(|t| t.state == TaskState::Partial) {
+            if partial_is_conflict(ws, &t.id) {
+                emit(format!(
+                    "stopped: {} has a merge conflict \u{2014} resolve it (see handoff), then \
+                     run auto again",
+                    t.id
+                ));
+                break;
+            }
+        }
+        // A Failed task may be transient (e.g. a dropped connection) and a
+        // Partial one continues from its checkpoint: retry them first, bounded
+        // by the attempts cap below, instead of halting the drain.
         let retry_target = queue
             .tasks
             .iter()
-            .find(|t| t.state == TaskState::Failed)
+            .find(|t| matches!(t.state, TaskState::Failed | TaskState::Partial))
             .map(|t| t.id.clone());
         // With parallelism on, a clean git tree, and 2+ independent ready
         // tasks: run them as a concurrent worktree batch instead. (A Failed
@@ -594,11 +614,13 @@ pub fn run_auto<F: FnMut(&str)>(
                 break;
             }
             TaskState::Partial => {
+                // Loop back: the conflict check halts, a self-report continues
+                // from its checkpoint, and the attempts cap bounds it all.
                 emit(format!(
-                    "stopped: {} is partial (incomplete) \u{2014} needs you",
+                    "{} is partial \u{2014} continuing from its checkpoint",
                     report.task_id
                 ));
-                break;
+                continue;
             }
             TaskState::Failed => {
                 // Likely transient (e.g. a dropped connection); loop to retry it,
@@ -803,6 +825,8 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                         match crate::parallel::integrate_worktree(&ws.root, &wt, &branch, &t.id) {
                             Ok(crate::parallel::Integration::Conflict(why)) => {
                                 t.state = TaskState::Partial;
+                                let _ =
+                                    write_str(&run_dir.join("partial-reason"), "merge_conflict");
                                 msgs.push(format!(
                                     "{}: merge conflict on recovery ({}); worktree kept at {}",
                                     t.id,
@@ -813,6 +837,8 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                             Ok(_) => crate::parallel::remove_worktree(&ws.root, &wt, &branch),
                             Err(e) => {
                                 t.state = TaskState::Partial;
+                                let _ =
+                                    write_str(&run_dir.join("partial-reason"), "merge_conflict");
                                 msgs.push(format!("{}: recovery integration error: {e}", t.id));
                             }
                         }
@@ -868,6 +894,55 @@ pub(crate) fn find_worker<'a>(workers: &'a [WorkerProfile], id: &str) -> Result<
         .iter()
         .find(|w| w.id == id)
         .ok_or_else(|| anyhow!("worker '{id}' is not defined in .agents/workers.yaml"))
+}
+
+/// Context for CONTINUING a Partial task instead of redoing it: the previous
+/// run's checkpoint plus what evaluation said is still missing. Injected into
+/// the next packet of that task (docs/harness.md, phase H2).
+pub(crate) fn continuation_context(ws: &Workspace, task_id: &str) -> Option<String> {
+    let (_, run_dir) = latest_run_for(ws, task_id)?;
+    let mut s = String::new();
+    if let Ok(cp) = std::fs::read_to_string(run_dir.join("checkpoint.md")) {
+        s.push_str(cp.trim());
+        s.push_str("\n\n");
+    }
+    if let Ok(raw) = std::fs::read_to_string(run_dir.join("result.json")) {
+        if let Ok(r) = serde_json::from_str::<RunResult>(&raw) {
+            if !r.compact_summary.is_empty() {
+                s.push_str("Previous run summary: ");
+                s.push_str(&r.compact_summary);
+                s.push('\n');
+            }
+            if !r.validation.failures.is_empty() {
+                s.push_str("Unresolved failures:\n");
+                for f in &r.validation.failures {
+                    s.push_str("- ");
+                    s.push_str(f);
+                    s.push('\n');
+                }
+            }
+        }
+    }
+    // Keep the packet lean even if a checkpoint ballooned.
+    const CAP: usize = 6 * 1024;
+    if s.len() > CAP {
+        let mut end = CAP;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+        s.push_str("\n[truncated]");
+    }
+    let trimmed = s.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Did this task's latest run go Partial because of a merge conflict (needs a
+/// human) rather than a worker self-report (safe to auto-continue)?
+pub(crate) fn partial_is_conflict(ws: &Workspace, task_id: &str) -> bool {
+    latest_run_for(ws, task_id)
+        .map(|(_, dir)| dir.join("partial-reason").exists())
+        .unwrap_or(false)
 }
 
 /// The most recent unanswered question a worker left for a given task, if any.
