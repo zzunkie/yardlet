@@ -11,7 +11,7 @@
 
 | # | invariant | the line it draws |
 |---|---|---|
-| I1 | **Yard is the operating console, never the worker.** | Tool surfaces (LSP, debuggers, kernels, browser control) belong to workers. Yard absorbs *operating* patterns only. If a feature makes Yard smarter at *doing* the work rather than *running* it, it is out. |
+| I1 | **The core stays deterministic; everything generative sits behind the worker contract.** | "Console vs worker" is a role label and roles blur (Yard already merges code, will run hooks, may ship a native API worker). The enforceable line is mechanism: the orchestrator does only deterministic, auditable operations (templating, rule routing, check-based evaluation, git plumbing, hook execution); anything that *generates or judges* work goes through packet → process → result files. A Yard-shipped worker (e.g. a native API adapter) is fine **iff** it lives behind that same contract and is routable/swappable like any other worker. Worker-side tool surfaces (LSP, debuggers, kernels) stay with workers — not because tools are forbidden, but because owning them would pull the console into the judgment loop. |
 | I2 | **The packet is the only shared injection point.** | Anything absorbed must reach codex, claude, and custom workers identically — never via one CLI's plugin system. |
 | I3 | **`.agents/` is canonical; sessions are disposable.** | Discovered/borrowed assets are read at compile time, not copied into state. Yard remains the sole writer of its files. |
 | I4 | **Policy vs mechanism.** | Mechanisms detect and suggest; humans promote. Nothing self-patches the harness, routing, or specs. |
@@ -130,7 +130,8 @@ are small and independent. H3/H4 resume after, unchanged.
 - **Magic keywords / hidden modes** — I5. The planning gate is Yard's
   explicit answer to the same need.
 - **Worker-grade tool surface** (LSP, debugger, kernels, browser) — I1.
-  That race is for workers; Yard benefits by *registering* the winners.
+  Owning them would pull the deterministic core into the judgment loop;
+  Yard benefits by *registering* the winners as workers instead.
 - **Self-patching harness/specs** (Hermes skill_manage auto-write,
   internal-system generational self-rewrite) — I4. H4 keeps the human gate.
 - **Consensus voting** — cost without telemetry-backed justification yet.
