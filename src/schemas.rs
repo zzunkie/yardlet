@@ -185,6 +185,10 @@ pub struct Task {
     /// (eligible to run in parallel with other independent tasks).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
+    /// Workspace skills (`.agents/skills/<name>/`) the worker must read before
+    /// starting this task. Planner-assigned from the catalog.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
     #[serde(default)]
     pub allowed_scope: Vec<String>,
     #[serde(default)]

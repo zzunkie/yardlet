@@ -27,6 +27,10 @@ pub struct PacketInputs<'a> {
     pub images: &'a [String],
     /// Workspace-authored role extension (`.agents/agents/<role>.md`), if any.
     pub role_notes: &'a str,
+    /// Inlined workspace rules + anchored leftovers (`load_rules`).
+    pub rules: &'a (String, Vec<String>),
+    /// The skill catalog (`skill_catalog`).
+    pub skills: &'a [(String, String)],
 }
 
 /// Find existing local image files referenced in `text` (e.g. a path dragged
@@ -168,6 +172,123 @@ pub fn load_role_notes(root: &std::path::Path, role: &str) -> String {
     .unwrap_or_default()
 }
 
+// ---- shared harness: rules + skill catalog (docs/harness.md, phase H1) -----
+//
+// The packet is the only injection point every adapter-connected worker
+// shares, so workspace rules and the skill catalog ride in it: rules inlined
+// (constraints must not be optional), skills as one catalog line each with
+// the body read on demand (Hermes-style progressive loading — SKILL.md is
+// level 1, deeper files in the skill folder are level 2).
+
+/// Cap for inlined workspace rules; beyond it the remaining files become
+/// anchors so a rule pile-up cannot blow up every packet.
+const RULES_INLINE_CAP: usize = 4 * 1024;
+
+/// Concatenate `.agents/rules/*.md` (sorted by filename) up to the cap.
+/// Returns (inlined text, anchored leftover paths).
+pub fn load_rules(root: &std::path::Path) -> (String, Vec<String>) {
+    let dir = root.join(crate::state::STATE_DIR).join("rules");
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .collect();
+    files.sort();
+    let mut inlined = String::new();
+    let mut anchored = Vec::new();
+    for f in files {
+        let Ok(text) = std::fs::read_to_string(&f) else {
+            continue;
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("rule");
+        if inlined.len() + text.len() > RULES_INLINE_CAP {
+            anchored.push(format!(".agents/rules/{name}"));
+            continue;
+        }
+        inlined.push_str(&format!("### {name}\n{text}\n\n"));
+    }
+    (inlined.trim().to_string(), anchored)
+}
+
+/// The skill catalog: (name, description) from every
+/// `.agents/skills/<name>/SKILL.md` frontmatter, sorted by name.
+pub fn skill_catalog(root: &std::path::Path) -> Vec<(String, String)> {
+    let dir = root.join(crate::state::STATE_DIR).join("skills");
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let skill_md = entry.path().join("SKILL.md");
+        let Ok(text) = std::fs::read_to_string(&skill_md) else {
+            continue;
+        };
+        let dir_name = entry.file_name().to_string_lossy().into_owned();
+        let name = frontmatter_field(&text, "name").unwrap_or(dir_name);
+        let description = frontmatter_field(&text, "description").unwrap_or_default();
+        out.push((name, description));
+    }
+    out.sort();
+    out
+}
+
+/// A top-level scalar field from a leading YAML frontmatter block.
+fn frontmatter_field(text: &str, key: &str) -> Option<String> {
+    let rest = text.strip_prefix("---")?;
+    let block = rest.split("\n---").next()?;
+    block.lines().find_map(|l| {
+        l.strip_prefix(key)
+            .and_then(|r| r.trim_start().strip_prefix(':'))
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    })
+}
+
+/// Render the shared-harness sections (workspace rules + skill catalog) that
+/// every packet — execution and planning — carries identically.
+fn push_harness_sections(
+    p: &mut String,
+    rules: &(String, Vec<String>),
+    skills: &[(String, String)],
+    required_skills: &[String],
+) {
+    let (inlined, anchored) = rules;
+    if !inlined.is_empty() || !anchored.is_empty() {
+        p.push_str("## Workspace rules (always apply)\n\n");
+        if !inlined.is_empty() {
+            p.push_str(inlined);
+            p.push_str("\n\n");
+        }
+        for a in anchored {
+            p.push_str(&format!("- also read and follow: `{a}`\n"));
+        }
+        if !anchored.is_empty() {
+            p.push('\n');
+        }
+    }
+    if !skills.is_empty() {
+        p.push_str("## Skills (read on demand)\n\n");
+        p.push_str(
+            "Reusable procedures for this workspace. Before work a skill clearly applies \
+             to, read `.agents/skills/<name>/SKILL.md` first (the folder may hold deeper \
+             reference files \u{2014} read those only as needed):\n",
+        );
+        for (name, desc) in skills {
+            p.push_str(&format!("- {name} \u{2014} {desc}\n"));
+        }
+        if !required_skills.is_empty() {
+            p.push_str("\nRequired for THIS task (read before starting):\n");
+            for s in required_skills {
+                p.push_str(&format!("- `.agents/skills/{s}/SKILL.md`\n"));
+            }
+        }
+        p.push('\n');
+    }
+}
+
 pub fn compile(inputs: &PacketInputs) -> String {
     let role = role_for(&inputs.task.kind);
     let mut p = String::new();
@@ -200,6 +321,9 @@ pub fn compile(inputs: &PacketInputs) -> String {
             p.push('\n');
         }
     }
+
+    // Shared harness: rules every worker must follow + the skill catalog.
+    push_harness_sections(&mut p, inputs.rules, inputs.skills, &inputs.task.skills);
 
     // Task.
     p.push_str("## Task\n\n");
@@ -346,6 +470,7 @@ pub fn compile(inputs: &PacketInputs) -> String {
 /// `.agents/intent-contract.yaml` and `.agents/work-queue.yaml` files it
 /// derives from the result. The worker therefore only needs write access to
 /// the run directory.
+#[allow(clippy::too_many_arguments)]
 pub fn compile_planning(
     request: &str,
     repo: &RepoSummary,
@@ -353,6 +478,8 @@ pub fn compile_planning(
     language: &str,
     worker_guidance: &str,
     images: &[String],
+    rules: &(String, Vec<String>),
+    skills: &[(String, String)],
 ) -> String {
     let mut p = String::new();
     p.push_str("# Yard planning gate\n\n");
@@ -389,6 +516,10 @@ pub fn compile_planning(
     }
     p.push_str(&format!("- top level: {}\n\n", repo.top_level.join(", ")));
 
+    // The same shared harness execution packets carry: planning must respect
+    // workspace rules, and seeing the skill catalog lets it assign task.skills.
+    push_harness_sections(&mut p, rules, skills, &[]);
+
     p.push_str("## Rules\n\n");
     p.push_str(
         "- Produce a goal summary, allowed scope, explicit out-of-scope, and a small tree of \
@@ -405,6 +536,8 @@ pub fn compile_planning(
          - Set `depends_on` to the ids of tasks whose OUTPUT this task genuinely needs \
          (earlier tasks only). Leave it empty for independent tasks \u{2014} independent \
          tasks may run in parallel. Order alone is not a dependency.\n\
+         - If a workspace skill (see Skills above) clearly applies to a task, list its \
+         name in that task's `skills` so the worker reads it before starting.\n\
          - Default model and effort to \"auto\" (let the chosen worker decide). Set them \
          only when a task clearly needs a stronger or cheaper model, or more or less \
          reasoning. Effort levels: minimal|low|medium|high (or \"auto\").\n\
@@ -455,6 +588,7 @@ const PLANNING_SCHEMA_HINT: &str = r#"```json
       "model": "auto",
       "effort": "auto",
       "depends_on": ["YARD-001"],
+      "skills": ["<skill name from the catalog, when one applies>"],
       "worker_rationale": "one line: why this worker fits this task",
       "allowed_scope": ["..."],
       "acceptance": ["..."]
@@ -501,6 +635,112 @@ mod tests {
     }
 
     #[test]
+    fn rules_inline_with_cap_and_anchor_overflow() {
+        let root = std::env::temp_dir().join(format!("yard-h1-rules-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join(".agents/rules");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a-style.md"), "# Style\nMatch surrounding code.").unwrap();
+        std::fs::write(dir.join("b-big.md"), "x".repeat(5000)).unwrap(); // over the cap
+        let (inlined, anchored) = load_rules(&root);
+        assert!(inlined.contains("a-style.md"));
+        assert!(inlined.contains("Match surrounding code."));
+        assert_eq!(anchored, vec![".agents/rules/b-big.md".to_string()]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn skill_catalog_reads_frontmatter() {
+        let root = std::env::temp_dir().join(format!("yard-h1-skills-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join(".agents/skills/deploy-check");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: deploy-check\ndescription: Verify a deploy end to end.\n---\n# body",
+        )
+        .unwrap();
+        let cat = skill_catalog(&root);
+        assert_eq!(
+            cat,
+            vec![(
+                "deploy-check".to_string(),
+                "Verify a deploy end to end.".to_string()
+            )]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn packet_carries_rules_catalog_and_required_skills() {
+        let mut task = crate::schemas::Task {
+            id: "YARD-1".into(),
+            title: "t".into(),
+            state: Default::default(),
+            priority: 0,
+            risk: String::new(),
+            kind: "implementation".into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec![],
+            skills: vec!["deploy-check".into()],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+        };
+        let repo = crate::inspect::RepoSummary::default();
+        let rules = (
+            "### team.md\nNever push without review.".to_string(),
+            vec![".agents/rules/overflow.md".to_string()],
+        );
+        let skills = vec![(
+            "deploy-check".to_string(),
+            "Verify a deploy end to end.".to_string(),
+        )];
+        let p = compile(&PacketInputs {
+            worker_id: "codex",
+            task: &task,
+            intent: None,
+            repo: &repo,
+            run_dir_rel: ".agents/runs/run-x",
+            prior_question: None,
+            user_answer: None,
+            continuation: None,
+            language: "en",
+            images: &[],
+            role_notes: "",
+            rules: &rules,
+            skills: &skills,
+        });
+        assert!(p.contains("## Workspace rules (always apply)"));
+        assert!(p.contains("Never push without review."));
+        assert!(p.contains(".agents/rules/overflow.md"));
+        assert!(p.contains("## Skills (read on demand)"));
+        assert!(p.contains("deploy-check \u{2014} Verify a deploy end to end."));
+        assert!(p.contains("Required for THIS task"));
+        assert!(p.contains(".agents/skills/deploy-check/SKILL.md"));
+
+        // Planning packets carry the same harness sections.
+        task.skills.clear();
+        let plan = compile_planning(
+            "do a thing",
+            &repo,
+            ".agents/runs/plan-x",
+            "en",
+            "",
+            &[],
+            &rules,
+            &skills,
+        );
+        assert!(plan.contains("## Workspace rules (always apply)"));
+        assert!(plan.contains("## Skills (read on demand)"));
+    }
+
+    #[test]
     fn kinds_map_to_role_profiles() {
         assert_eq!(role_for("review"), "reviewer");
         assert_eq!(role_for("Research"), "researcher");
@@ -521,6 +761,7 @@ mod tests {
             model: String::new(),
             effort: String::new(),
             depends_on: vec![],
+            skills: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
             validation: None,
@@ -541,6 +782,8 @@ mod tests {
             language: "en",
             images: &[],
             role_notes,
+            rules: &(String::new(), vec![]),
+            skills: &[],
         })
     }
 
@@ -557,6 +800,7 @@ mod tests {
             model: String::new(),
             effort: String::new(),
             depends_on: vec![],
+            skills: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
             validation: None,
@@ -577,6 +821,8 @@ mod tests {
             language: "en",
             images: &[],
             role_notes: "",
+            rules: &(String::new(), vec![]),
+            skills: &[],
         });
         assert!(p.contains("## Continuing a partial run"));
         assert!(p.contains("do not redo finished work"));

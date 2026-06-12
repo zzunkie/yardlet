@@ -115,6 +115,8 @@ pub fn run_batch<F: FnMut(&str)>(
         .map(|i| i.images.clone())
         .unwrap_or_default();
 
+    let rules = packet::load_rules(&ws.root);
+    let skills = packet::skill_catalog(&ws.root);
     ensure_worktrees_excluded(&ws.root);
 
     // ---- prepare every task up front (deterministic, no workers yet) -----
@@ -192,6 +194,11 @@ pub fn run_batch<F: FnMut(&str)>(
         let _ = std::fs::create_dir_all(&wt_agents);
         let _ = std::fs::copy(ws.intent_path(), wt_agents.join("intent-contract.yaml"));
         let _ = std::fs::copy(ws.queue_path(), wt_agents.join("work-queue.yaml"));
+        // Harness assets too (small text): skill anchors and role notes are
+        // cwd-relative in the packet and must resolve inside the worktree.
+        for d in ["rules", "skills", "agents"] {
+            copy_dir(&ws.agents_dir().join(d), &wt_agents.join(d));
+        }
 
         std::fs::create_dir_all(p.run_dir.join("evidence"))?;
         write_str(
@@ -213,6 +220,8 @@ pub fn run_batch<F: FnMut(&str)>(
             language: &language,
             images: &images,
             role_notes: &role_notes,
+            rules: &rules,
+            skills: &skills,
         });
         write_str(&workers::packet_path(&p.run_dir), &p.packet_text)?;
         state::save_yaml(
@@ -517,6 +526,23 @@ fn ensure_worktrees_excluded(root: &Path) {
     let _ = std::fs::write(&exclude, format!("{existing}\n.agents/worktrees/\n"));
 }
 
+/// Best-effort recursive copy for small harness asset dirs (no-op if absent).
+fn copy_dir(src: &Path, dst: &Path) {
+    let Ok(rd) = std::fs::read_dir(src) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(dst);
+    for e in rd.flatten() {
+        let from = e.path();
+        let to = dst.join(e.file_name());
+        if from.is_dir() {
+            copy_dir(&from, &to);
+        } else {
+            let _ = std::fs::copy(&from, &to);
+        }
+    }
+}
+
 fn append_to(path: &Path, text: &str) {
     let mut existing = std::fs::read_to_string(path).unwrap_or_default();
     existing.push_str(text);
@@ -558,6 +584,7 @@ mod tests {
             model: String::new(),
             effort: String::new(),
             depends_on: deps,
+            skills: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
             validation: None,

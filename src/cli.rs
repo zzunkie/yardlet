@@ -17,7 +17,7 @@ use crate::{init, packet};
 #[command(
     name = "yard",
     version,
-    about = "Yard: a local AI workbench. Zero AI API keys; Codex/Claude Code as hidden workers."
+    about = "Yard: a local AI workbench driving your already-installed Codex/Claude Code as hidden workers."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -639,6 +639,8 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
     } else {
         None
     };
+    let rules = packet::load_rules(&ws.root);
+    let skills = packet::skill_catalog(&ws.root);
     let text = packet::compile(&packet::PacketInputs {
         worker_id: &args.worker,
         task,
@@ -651,6 +653,8 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         language: &language,
         images: &images,
         role_notes: &role_notes,
+        rules: &rules,
+        skills: &skills,
     });
     if args.dry_run {
         eprintln!("(dry-run: packet not persisted)\n");

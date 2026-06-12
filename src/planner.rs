@@ -62,6 +62,8 @@ struct PlanTask {
     #[serde(default)]
     depends_on: Vec<String>,
     #[serde(default)]
+    skills: Vec<String>,
+    #[serde(default)]
     allowed_scope: Vec<String>,
     #[serde(default)]
     acceptance: Vec<String>,
@@ -212,6 +214,8 @@ pub fn run_planning(
         &inspect::to_markdown(&summary),
     )?;
     let worker_guidance = build_worker_guidance(&workers);
+    let rules = packet::load_rules(&ws.root);
+    let skills = packet::skill_catalog(&ws.root);
     let packet_text = packet::compile_planning(
         request,
         &summary,
@@ -219,6 +223,8 @@ pub fn run_planning(
         &language,
         &worker_guidance,
         &images,
+        &rules,
+        &skills,
     );
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
@@ -340,6 +346,8 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         &inspect::to_markdown(&summary),
     )?;
     let worker_guidance = build_worker_guidance(&workers);
+    let rules = packet::load_rules(&ws.root);
+    let skills = packet::skill_catalog(&ws.root);
     let packet_text = packet::compile_planning(
         &ctx,
         &summary,
@@ -347,6 +355,8 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         &language,
         &worker_guidance,
         &images,
+        &rules,
+        &skills,
     );
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
     let env = guard::sanitized_worker_env_for(&billing, &profile.invocation.pass_env)
@@ -447,6 +457,7 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
             model: pt.model.clone(),
             effort: pt.effort.clone(),
             depends_on: sanitize_deps(&pt.depends_on, &prior_ids),
+            skills: pt.skills.clone(),
             allowed_scope: pt.allowed_scope.clone(),
             acceptance: pt
                 .acceptance
@@ -639,6 +650,7 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             model: t.model.clone(),
             effort: t.effort.clone(),
             depends_on: sanitize_deps(&t.depends_on, &prior_ids),
+            skills: t.skills.clone(),
             allowed_scope: t.allowed_scope.clone(),
             acceptance: t
                 .acceptance

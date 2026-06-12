@@ -1,6 +1,6 @@
 # Shared Worker Harness & Learning Loop — Design
 
-> Status: H2 implemented (partial continuation); H1/H3/H4 planned.
+> Status: H1 implemented (shared rules + skill catalog injection), H2 implemented (partial continuation); H3/H4 planned.
 > Companion docs: [parallel-queue.md](parallel-queue.md),
 > [routing-and-telemetry.md](routing-and-telemetry.md).
 
@@ -51,7 +51,7 @@ lifecycle, §13.4 oh-my/OMC hooks and permission matrix), in Yard's shape.
   telemetry/harness.jsonl   suggestion candidates (mechanism-owned)
 ```
 
-## Phase H1 — shared injection (rules + skill catalog)
+## Phase H1 — shared injection (rules + skill catalog) — implemented
 
 Execution packets gain two sections, compiled identically for every worker:
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Shared harness injection (phase H1).** Every packet — execution and
+  planning, every worker — now carries the workspace harness: `.agents/rules/*.md`
+  inlined (4 KB cap, overflow becomes read anchors) and a skill catalog from
+  `.agents/skills/*/SKILL.md` frontmatter with Hermes-style progressive
+  loading (catalog line → SKILL.md → deeper reference files). The planner can
+  assign `task.skills`, which become required read-anchors in that task's
+  packet; parallel worktrees get the harness assets copied in so relative
+  anchors resolve. Skill format stays agentskills.io/Claude-Code compatible.
+
 ## v0.3.0 — 2026-06-12
 
 ### Added
