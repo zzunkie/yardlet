@@ -7,10 +7,18 @@
 - **Worker management from the TUI.** The Home arrow keys now continue past
   the queue into the workers panel; Enter/Space toggles a worker on/off
   (persisted as `enabled:` in workers.yaml — routing and planning skip a
-  disabled worker). Settings model presets are now real: claude-code cycles
-  the CLI's aliases (fable/opus/sonnet/haiku) and codex cycles model ids
-  discovered from your own recent codex sessions plus the configured default,
-  so the list stays current without hardcoded ids.
+  disabled worker).
+- **Model/effort presets sync from the CLIs.** codex models and reasoning
+  efforts come from the CLI's own `~/.codex/models_cache.json` (the models
+  available to this account); claude effort levels are parsed from
+  `claude --help`, and its model aliases are the documented stable set. No
+  hand-maintained id lists; typing an exact id still works.
+- **Custom workers via config alone.** Any subscription-backed CLI can be
+  added as a third worker in workers.yaml with an invocation template
+  (`args`, `sandbox_args`/`full_access_args`, `model_args`, `effort_args`,
+  `image_args`; placeholders `{run_dir}` `{model}` `{effort}` `{image}`).
+  Codex and Claude Code keep their first-class adapters; see README
+  "Adding a worker".
 
 - **Role profiles** (plan §13.4). Tasks run under a prompt-mode role derived
   from their kind — builder / reviewer / researcher / security — with

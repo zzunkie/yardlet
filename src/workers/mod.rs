@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use crate::schemas::WorkerProfile;
+use crate::schemas::{Invocation, WorkerProfile};
 
 /// A model/effort value counts as explicit only when it is set and is not the
 /// "auto" sentinel. Empty or "auto" means: omit the flag and let the worker CLI
@@ -99,6 +99,59 @@ pub fn build_command(
             cmd.arg("--add-dir").arg(run_dir);
         }
         _ => {}
+    }
+    cmd.current_dir(cwd);
+    cmd.env_clear();
+    cmd
+}
+
+/// Build the command for a worker WITHOUT a built-in adapter, from the
+/// invocation template in its workers.yaml profile. This is what makes a
+/// third worker a pure-config addition: packet on stdin, args from the
+/// template, placeholders expanded.
+#[allow(clippy::too_many_arguments)]
+pub fn build_generic_command(
+    inv: &Invocation,
+    bin: &Path,
+    run_dir: &Path,
+    cwd: &Path,
+    full_access: bool,
+    model: &str,
+    effort: &str,
+    images: &[String],
+) -> Command {
+    let expand = |arg: &str, image: &str| -> String {
+        arg.replace("{run_dir}", &run_dir.display().to_string())
+            .replace("{model}", model)
+            .replace("{effort}", effort)
+            .replace("{image}", image)
+    };
+    let mut cmd = Command::new(bin);
+    for a in &inv.args {
+        cmd.arg(expand(a, ""));
+    }
+    let access = if full_access {
+        &inv.full_access_args
+    } else {
+        &inv.sandbox_args
+    };
+    for a in access {
+        cmd.arg(expand(a, ""));
+    }
+    if explicit(model) {
+        for a in &inv.model_args {
+            cmd.arg(expand(a, ""));
+        }
+    }
+    if explicit(effort) {
+        for a in &inv.effort_args {
+            cmd.arg(expand(a, ""));
+        }
+    }
+    for img in images {
+        for a in &inv.image_args {
+            cmd.arg(expand(a, img));
+        }
     }
     cmd.current_dir(cwd);
     cmd.env_clear();
@@ -201,16 +254,30 @@ pub fn spawn(
             session,
         )
     } else {
-        let mut c = build_command(
-            &profile.id,
-            bin,
-            run_dir,
-            cwd,
-            full_access,
-            &profile.model,
-            &profile.effort,
-            images,
-        );
+        let mut c = match profile.id.as_str() {
+            // Built-in adapters with verified flags.
+            "codex" | "claude-code" => build_command(
+                &profile.id,
+                bin,
+                run_dir,
+                cwd,
+                full_access,
+                &profile.model,
+                &profile.effort,
+                images,
+            ),
+            // Anything else: the profile's own invocation template.
+            _ => build_generic_command(
+                &profile.invocation,
+                bin,
+                run_dir,
+                cwd,
+                full_access,
+                &profile.model,
+                &profile.effort,
+                images,
+            ),
+        };
         // Set a stable session id on a fresh claude run so a transient failure
         // can resume the same conversation instead of redoing the work.
         if profile.id == "claude-code" {
@@ -445,6 +512,64 @@ mod tests {
         cmd.get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn generic_adapter_builds_from_the_invocation_template() {
+        let inv: Invocation = crate::yaml::from_str(
+            r#"
+command: mytool
+supports_noninteractive: true
+args: ["run", "--json", "--out", "{run_dir}"]
+sandbox_args: ["--sandbox"]
+full_access_args: ["--yolo"]
+model_args: ["--model", "{model}"]
+effort_args: ["--effort", "{effort}"]
+image_args: ["-i", "{image}"]
+"#,
+        )
+        .unwrap();
+        let (bin, run, cwd) = (Path::new("mytool"), Path::new("/tmp/r"), Path::new("/tmp"));
+
+        let sandboxed = args_of(&build_generic_command(
+            &inv,
+            bin,
+            run,
+            cwd,
+            false,
+            "m-1",
+            "high",
+            &["a.png".to_string()],
+        ));
+        assert_eq!(
+            sandboxed,
+            vec![
+                "run",
+                "--json",
+                "--out",
+                "/tmp/r",
+                "--sandbox",
+                "--model",
+                "m-1",
+                "--effort",
+                "high",
+                "-i",
+                "a.png",
+            ]
+        );
+
+        // Full access swaps the access args; auto model/effort add nothing.
+        let full = args_of(&build_generic_command(
+            &inv,
+            bin,
+            run,
+            cwd,
+            true,
+            "auto",
+            "",
+            &[],
+        ));
+        assert_eq!(full, vec!["run", "--json", "--out", "/tmp/r", "--yolo"]);
     }
 
     #[test]

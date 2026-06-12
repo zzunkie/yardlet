@@ -333,6 +333,28 @@ pub struct Invocation {
     pub supports_noninteractive: bool,
     #[serde(default)]
     pub output_contract: String,
+    /// Generic adapter template for workers without a built-in adapter
+    /// (codex and claude-code have first-class ones; any other id uses these).
+    /// Placeholders: `{run_dir}`, `{model}`, `{effort}`, `{image}`. The task
+    /// packet always arrives on stdin; the binary must support `--version`
+    /// (the readiness probe) and be able to write files in the workspace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// Appended when running sandboxed (the default access level).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sandbox_args: Vec<String>,
+    /// Appended instead of `sandbox_args` when full access was granted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub full_access_args: Vec<String>,
+    /// Appended once per attached image, e.g. ["-i", "{image}"].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_args: Vec<String>,
+    /// Appended when a model is set, e.g. ["--model", "{model}"].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_args: Vec<String>,
+    /// Appended when an effort is set, e.g. ["--effort", "{effort}"].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effort_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

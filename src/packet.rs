@@ -379,7 +379,8 @@ pub fn compile_planning(
          checkable acceptance criteria.\n\
          - Break the work into a few bounded tasks. Each task: title, kind \
          (research|implementation|review|safety), risk (low|medium|high), preferred_worker \
-         (codex|claude-code), model, effort, depends_on, allowed_scope, acceptance.\n\
+         (one of the worker ids under Worker selection), model, effort, depends_on, \
+         allowed_scope, acceptance.\n\
          - Cut tasks COARSE, along scope boundaries: each task is one bounded worker session \
          with its own disjoint allowed_scope and independently checkable acceptance. Do NOT \
          split work that shares context into micro-tasks \u{2014} the worker can parallelize \
@@ -434,7 +435,7 @@ const PLANNING_SCHEMA_HINT: &str = r#"```json
       "title": "...",
       "kind": "research|implementation|review|safety",
       "risk": "low|medium|high",
-      "preferred_worker": "codex|claude-code",
+      "preferred_worker": "<a worker id from Worker selection>",
       "model": "auto",
       "effort": "auto",
       "depends_on": ["YARD-001"],

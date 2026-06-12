@@ -105,6 +105,35 @@ with `yard routing apply` — telemetry never changes routing on its own. Design
 because spawning a subscription-backed worker consumes usage. Pass `--execute`
 to actually run it.
 
+Workers can be toggled on/off from the Home workers panel (arrow keys past
+the queue, then Enter/Space); a disabled worker is skipped by routing and
+planning.
+
+### Adding a worker
+
+Codex and Claude Code have built-in adapters. Any other subscription-backed
+CLI can be added in `.agents/workers.yaml` alone — give it an invocation
+template and Yard drives it through the same contract (packet on stdin →
+result files out). Placeholders: `{run_dir}`, `{model}`, `{effort}`,
+`{image}`.
+
+```yaml
+- id: mytool
+  best_for: "..."            # planner rubric
+  invocation:
+    command: mytool          # must support --version (readiness probe)
+    supports_noninteractive: true
+    args: ["run", "--json", "--out", "{run_dir}"]
+    sandbox_args: ["--sandbox"]        # default access level
+    full_access_args: ["--yolo"]       # only when full access is granted
+    model_args: ["--model", "{model}"] # added when a model is set
+    effort_args: ["--effort", "{effort}"]
+    image_args: ["-i", "{image}"]      # repeated per attached image
+```
+
+The worker must be able to write files in the workspace (that is how results
+come back) — Yard never passes provider API keys to it.
+
 ## Role profiles
 
 Each task runs under a role — a prompt mode over the worker, derived from the
