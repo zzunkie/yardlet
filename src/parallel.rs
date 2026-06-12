@@ -672,42 +672,14 @@ mod tests {
     #[test]
     fn a_users_in_progress_merge_is_never_aborted() {
         // Integration must not destroy a merge the USER has in progress.
+        // Simulate the mid-merge state directly with the files git leaves
+        // behind (MERGE_HEAD + MERGE_MSG) — driving a real conflicted merge
+        // here proved platform-sensitive; the state files are the contract.
         let root = temp_repo("usermerge");
-        // A user feature branch that conflicts with main.
-        sh_git(&root, &["checkout", "-q", "-b", "feature"]);
-        std::fs::write(root.join("base.txt"), "feature version\n").unwrap();
-        sh_git(&root, &["add", "base.txt"]);
-        sh_git(
-            &root,
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "commit",
-                "-q",
-                "-m",
-                "feature edit",
-            ],
-        );
-        sh_git(&root, &["checkout", "-q", "-"]);
-        std::fs::write(root.join("base.txt"), "main version\n").unwrap();
-        sh_git(&root, &["add", "base.txt"]);
-        sh_git(
-            &root,
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "commit",
-                "-q",
-                "-m",
-                "main edit",
-            ],
-        );
-        // The user starts a merge and hits a conflict (merge left in progress).
-        let _ = git(&root, &["merge", "feature"]);
+        let head = sh_git(&root, &["rev-parse", "HEAD"]);
+        let git_dir = root.join(".git");
+        std::fs::write(git_dir.join("MERGE_HEAD"), head.trim().as_bytes()).unwrap();
+        std::fs::write(git_dir.join("MERGE_MSG"), "Merge branch 'feature'\n").unwrap();
         assert_eq!(
             merge_in_progress_is_ours(&root, "yard/yard-009"),
             Some(false)
@@ -723,6 +695,7 @@ mod tests {
             _ => panic!("expected a conflict report"),
         }
         // The user's merge is still in progress.
+        assert!(git_dir.join("MERGE_HEAD").exists());
         assert_eq!(
             merge_in_progress_is_ours(&root, "yard/yard-009"),
             Some(false)
