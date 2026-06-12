@@ -465,7 +465,21 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
                 match rx.try_recv() {
                     Ok(JobMsg::Progress(s)) => latest_progress = Some(s),
                     Ok(JobMsg::Done(r)) => finished = Some(r),
-                    Err(_) => break,
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    // The job thread died without reporting (panic): fail the
+                    // job instead of spinning busy forever. Any orphaned
+                    // worker is picked up by the idle recovery pass.
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        if finished.is_none() {
+                            finished = Some(JobResult {
+                                ok: false,
+                                summary: "background job died unexpectedly; \
+                                          state will be recovered"
+                                    .to_string(),
+                            });
+                        }
+                        break;
+                    }
                 }
             }
             let got_progress = latest_progress.is_some();
@@ -701,8 +715,10 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         KeyCode::Char('l') if !app.is_busy() => toggle_language(app),
         // Access can be toggled even mid-run; it takes effect on the next task.
         KeyCode::Char('f') => toggle_access(app),
-        // Esc while a worker runs stops it (kills the worker process).
-        KeyCode::Esc if app.is_busy() => stop_running_worker(app),
+        // Esc while a worker runs stops it (kills the worker process). Also
+        // covers an adopted worker from a previous session (task Running with
+        // no active job): kill it and let the idle recovery pass requeue it.
+        KeyCode::Esc if app.is_busy() || has_running_task(app) => stop_running_worker(app),
         // Browse the queue and open a task's handoff (works while busy too).
         KeyCode::Up => app.selected = app.selected.saturating_sub(1),
         KeyCode::Down => {
@@ -1074,16 +1090,35 @@ fn request_pause(app: &mut App) {
     }
 }
 
+fn has_running_task(app: &App) -> bool {
+    app.snapshot
+        .as_ref()
+        .map(|s| s.queue.tasks.iter().any(|t| t.state == TaskState::Running))
+        .unwrap_or(false)
+}
+
 fn stop_running_worker(app: &mut App) {
+    // Prefer the Running task's own latest run (exact, works for adopted
+    // workers); fall back to the most recently modified run dir.
+    let target = app.snapshot.as_ref().and_then(|s| {
+        s.queue
+            .tasks
+            .iter()
+            .find(|t| t.state == TaskState::Running)
+            .and_then(|t| crate::run::latest_run_for(&app.ws, &t.id))
+            .map(|(_, dir)| dir)
+    });
     let runs = app.ws.runs_dir();
-    let latest = std::fs::read_dir(&runs)
-        .ok()
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+    let latest = target.or_else(|| {
+        std::fs::read_dir(&runs)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
+    });
     if let Some(dir) = latest {
         // Mark cancelled BEFORE killing so the run loop treats the worker's death
         // as a user stop (requeue) rather than a transient failure to auto-resume.

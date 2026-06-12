@@ -465,29 +465,70 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
 /// deriving the canonical intent/queue from it. Safe to call on every startup.
 ///
 /// Guards against stale or double application: only the newest unconsumed plan
-/// run is considered, and only when its result file is newer than the current
-/// queue file (canonical state is always written right after a plan is
-/// consumed, so anything older has already been applied or superseded).
+/// run is considered, it must not be superseded by a NEWER plan run (an
+/// orphaned planning worker can finish long after the user already planned
+/// something else — consuming it then would clobber the live intent/queue),
+/// and its result file must be newer than the current queue file. Also
+/// surfaces a still-alive planning worker from a previous session, so the
+/// user knows a plan is on its way before paying for a duplicate one.
 pub fn recover_unconsumed_plan(ws: &Workspace) -> Option<String> {
     let mut best: Option<(String, std::path::PathBuf)> = None;
+    // The newest plan run with a result, consumed or not (supersession check).
+    let mut newest_finished: Option<String> = None;
+    // A previous session's planning worker that is still running.
+    let mut live_planner: Option<(String, u32)> = None;
     for entry in std::fs::read_dir(ws.runs_dir()).ok()?.flatten() {
         let dir = entry.path();
         let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(String::from) else {
             continue;
         };
+        if !name.starts_with("plan-") {
+            continue;
+        }
+        if !dir.join("planning-result.json").is_file() {
+            // No result yet: is its worker still alive (orphaned planning)?
+            if let Some(pid) = crate::run::live_worker_pid(&dir) {
+                if live_planner
+                    .as_ref()
+                    .map(|(n, _)| name > *n)
+                    .unwrap_or(true)
+                {
+                    live_planner = Some((name, pid));
+                }
+            }
+            continue;
+        }
+        if newest_finished.as_ref().map(|n| name > *n).unwrap_or(true) {
+            newest_finished = Some(name.clone());
+        }
         let has_meta = dir.join("plan-meta.yaml").is_file() || workers::packet_path(&dir).is_file();
-        if !name.starts_with("plan-")
-            || !dir.join("planning-result.json").is_file()
-            || !has_meta
-            || dir.join(CONSUMED_MARKER).exists()
-        {
+        if !has_meta || dir.join(CONSUMED_MARKER).exists() {
             continue;
         }
         if best.as_ref().map(|(n, _)| name > *n).unwrap_or(true) {
             best = Some((name, dir));
         }
     }
-    let (run_id, run_dir) = best?;
+    let Some((run_id, run_dir)) = best else {
+        // Nothing to consume — but report a planning worker still at work.
+        return live_planner.map(|(name, pid)| {
+            format!(
+                "a planning worker from a previous session is still running \
+                 ({name}, pid {pid}); its plan will be picked up when it finishes"
+            )
+        });
+    };
+
+    // Superseded: a newer plan run exists (consumed or not). Consuming this
+    // older one would overwrite the user's current intent/queue with a stale
+    // plan — retire it instead.
+    if newest_finished
+        .as_deref()
+        .is_some_and(|n| n > run_id.as_str())
+    {
+        mark_consumed(&run_dir);
+        return None;
+    }
 
     // Freshness guard: the result must be newer than the canonical queue.
     let result_path = run_dir.join("planning-result.json");
@@ -744,6 +785,69 @@ mod tests {
 
         // Second startup: marked consumed, nothing to do.
         assert!(recover_unconsumed_plan(&ws).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn superseded_plan_is_never_recovered_over_a_newer_one() {
+        // An orphaned planning worker can finish AFTER the user has already
+        // planned (and consumed) something newer. Recovering the stale plan
+        // would clobber the live intent/queue — it must be retired instead.
+        let root = std::env::temp_dir().join(format!("yard-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+
+        // Newer plan: already consumed (the user's current work).
+        let newer = ws.runs_dir().join("plan-20990202-000000");
+        std::fs::create_dir_all(&newer).unwrap();
+        write_str(&newer.join("planning-result.json"), "{}").unwrap();
+        write_str(&newer.join(CONSUMED_MARKER), "").unwrap();
+        ws.save_queue(&WorkQueue {
+            schema_version: 1,
+            queue_id: "q".into(),
+            intent_id: "live".into(),
+            selection_policy: Default::default(),
+            tasks: vec![],
+        })
+        .unwrap();
+
+        // Older plan: finished late by an orphaned worker, never consumed.
+        // Its result file is NEWER than the queue on disk (written just now).
+        let stale = ws.runs_dir().join("plan-20990101-000000");
+        std::fs::create_dir_all(&stale).unwrap();
+        state::save_yaml(
+            &stale.join("plan-meta.yaml"),
+            &PlanMeta {
+                mode: "new".into(),
+                request: "old request".into(),
+            },
+        )
+        .unwrap();
+        write_str(
+            &stale.join("planning-result.json"),
+            r#"{ "summary": "stale plan",
+                 "tasks": [{ "id": "YARD-001", "title": "t" }] }"#,
+        )
+        .unwrap();
+
+        assert!(recover_unconsumed_plan(&ws).is_none());
+        // The live queue was not replaced, and the stale plan is retired.
+        assert_eq!(ws.load_queue().unwrap().intent_id, "live");
+        assert!(stale.join(CONSUMED_MARKER).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reports_a_still_running_planning_worker() {
+        let root = std::env::temp_dir().join(format!("yard-liveplan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let dir = ws.runs_dir().join("plan-20990101-000000");
+        std::fs::create_dir_all(&dir).unwrap();
+        // No result yet, but the worker (our own pid) is alive.
+        write_str(&dir.join("worker.pid"), &std::process::id().to_string()).unwrap();
+        let msg = recover_unconsumed_plan(&ws).expect("live planner should be reported");
+        assert!(msg.contains("still running"), "{msg}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

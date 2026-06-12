@@ -29,6 +29,13 @@
   when it lands) instead of requeueing the task into a second worker. The
   auto-drain waits for an adopted worker rather than starting overlapping
   work; only a dead worker with no result is requeued.
+- Worker-loss audit fixes: a stale plan finished late by an orphaned planning
+  worker can no longer clobber a newer intent/queue (supersession guard); a
+  still-running planning worker from a previous session is reported instead
+  of being silently duplicated; Esc now also stops an adopted worker; a dead
+  background job thread fails the job instead of leaving the UI busy forever;
+  and integration only ever aborts its OWN in-progress merge — a merge the
+  user has in progress is reported and left untouched.
 
 ## v0.2.0 — 2026-06-11
 

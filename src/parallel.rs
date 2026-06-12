@@ -392,6 +392,16 @@ pub(crate) enum Integration {
     Conflict(String),
 }
 
+/// Is a merge in progress in `root`, and if so, is it OUR merge of `branch`?
+/// None = no merge in progress. Distinguishing matters: aborting blindly
+/// would destroy a merge the USER had in progress.
+fn merge_in_progress_is_ours(root: &Path, branch: &str) -> Option<bool> {
+    let rel = git(root, &["rev-parse", "--git-path", "MERGE_MSG"]).ok()?;
+    let path = root.join(rel.trim());
+    let msg = std::fs::read_to_string(path).ok()?;
+    Some(msg.contains(branch))
+}
+
 /// Commit whatever the worker left in the worktree (excluding Yard's `.agents/`
 /// state copies) and merge the branch back into the main workspace.
 pub(crate) fn integrate_worktree(
@@ -400,6 +410,23 @@ pub(crate) fn integrate_worktree(
     branch: &str,
     task_id: &str,
 ) -> Result<Integration> {
+    // A previous session may have died in the middle of merging this very
+    // branch, leaving the checkout mid-merge: abort OUR stale merge so the
+    // retry below starts clean. A merge belonging to anyone else is left
+    // untouched and reported instead.
+    match merge_in_progress_is_ours(root, branch) {
+        Some(true) => {
+            let _ = git(root, &["merge", "--abort"]);
+        }
+        Some(false) => {
+            return Ok(Integration::Conflict(
+                "another merge is already in progress in the workspace; \
+                 finish or abort it, then retry"
+                    .to_string(),
+            ));
+        }
+        None => {}
+    }
     git(wt, &["add", "-A", "--", ".", ":(exclude).agents"])?;
     let staged = git(wt, &["diff", "--cached", "--name-only"])?;
     if !staged.trim().is_empty() {
@@ -435,7 +462,11 @@ pub(crate) fn integrate_worktree(
     ) {
         Ok(_) => Ok(Integration::Merged),
         Err(e) => {
-            let _ = git(root, &["merge", "--abort"]);
+            // Abort only if the failed merge is OURS (a content conflict from
+            // the command above); never touch someone else's merge state.
+            if merge_in_progress_is_ours(root, branch) == Some(true) {
+                let _ = git(root, &["merge", "--abort"]);
+            }
             Ok(Integration::Conflict(e.to_string()))
         }
     }
@@ -635,6 +666,67 @@ mod tests {
         );
         // The worktree survives for manual integration.
         assert!(wt.join("base.txt").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_users_in_progress_merge_is_never_aborted() {
+        // Integration must not destroy a merge the USER has in progress.
+        let root = temp_repo("usermerge");
+        // A user feature branch that conflicts with main.
+        sh_git(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("base.txt"), "feature version\n").unwrap();
+        sh_git(&root, &["add", "base.txt"]);
+        sh_git(
+            &root,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-m",
+                "feature edit",
+            ],
+        );
+        sh_git(&root, &["checkout", "-q", "-"]);
+        std::fs::write(root.join("base.txt"), "main version\n").unwrap();
+        sh_git(&root, &["add", "base.txt"]);
+        sh_git(
+            &root,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-m",
+                "main edit",
+            ],
+        );
+        // The user starts a merge and hits a conflict (merge left in progress).
+        let _ = git(&root, &["merge", "feature"]);
+        assert_eq!(
+            merge_in_progress_is_ours(&root, "yard/yard-009"),
+            Some(false)
+        );
+
+        // Yard tries to integrate a worktree meanwhile: it must report and
+        // leave the user's merge state intact.
+        let wt = root.join(".agents/worktrees/yard-009");
+        create_worktree(&root, &wt, "yard/yard-009").unwrap();
+        std::fs::write(wt.join("other.txt"), "fine\n").unwrap();
+        match integrate_worktree(&root, &wt, "yard/yard-009", "YARD-009").unwrap() {
+            Integration::Conflict(why) => assert!(why.contains("another merge"), "{why}"),
+            _ => panic!("expected a conflict report"),
+        }
+        // The user's merge is still in progress.
+        assert_eq!(
+            merge_in_progress_is_ours(&root, "yard/yard-009"),
+            Some(false)
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
