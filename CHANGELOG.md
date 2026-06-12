@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Self-restart on upgrade.** yard notices when its own binary is replaced
+  (cargo install while running) — the status line announces the new build
+  and `u` re-execs into it in place. No more silently-stale TUI sessions;
+  `a` now also works on queued tasks (instructions ride into the run).
+
 - **Partial = continue, not redo (harness phase H2).** Re-running a Partial
   task injects the previous run's checkpoint, summary, and unresolved
   validation failures into the packet ("do not redo finished work"). The
