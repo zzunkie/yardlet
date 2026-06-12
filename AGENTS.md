@@ -22,7 +22,7 @@ Rust 2021 (rustc ≥ 1.82) | Ratatui (TUI) | clap (CLI) | serde / serde_json / s
 
 ## Core Principles
 
-1. **Zero AI API keys (hard rule).** Yard core never requires, requests, stores, or calls an AI provider API key. It drives already-installed, subscription-backed worker CLIs. If no safe worker is ready, Yard stops with a clear readiness message — it never silently falls back to a provider API. See `src/guard.rs` + `.agents/billing-policy.yaml`.
+1. **Zero AI API keys (default, not identity).** Yard core never requires, requests, or stores an AI provider API key, and never *silently* falls back to a provider API. Subscription-backed CLIs are the default workers (the initial audience is cost-sensitive individuals); if no safe worker is ready, Yard stops with a clear readiness message. API-backed workers are a per-worker opt-in via `invocation.pass_env` — the named env vars reach that worker only, everything else stays scrubbed, and Yard never reads the values. See `src/guard.rs` + `.agents/billing-policy.yaml`.
 2. **Policy vs mechanism.** Routing resolution is deterministic and auditable (`src/routing.rs`); telemetry only *suggests* policy changes a human applies (`src/review.rs`). Telemetry never binds at run-time.
 3. **Yard owns canonical state.** Workers author content; Yard writes the canonical `.agents/` files (`src/state.rs` is the only place that touches them). LLMs never edit the system-of-record directly.
 4. **Layered safety.** Zero-key (hard) + a packet danger-list the worker self-gates against (soft) + an evaluator forbidden-path check that fails a run post-hoc.

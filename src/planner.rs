@@ -223,7 +223,8 @@ pub fn run_planning(
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
     // Invoke the worker with a sanitized, zero-key environment.
-    let env = guard::sanitized_worker_env(&billing).map_err(|e| anyhow!(e))?;
+    let env = guard::sanitized_worker_env_for(&billing, &profile.invocation.pass_env)
+        .map_err(|e| anyhow!(e))?;
     let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
     let outcome = workers::spawn(
         &profile,
@@ -348,7 +349,8 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         &images,
     );
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
-    let env = guard::sanitized_worker_env(&billing).map_err(|e| anyhow!(e))?;
+    let env = guard::sanitized_worker_env_for(&billing, &profile.invocation.pass_env)
+        .map_err(|e| anyhow!(e))?;
     let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
     let outcome = workers::spawn(
         &profile,

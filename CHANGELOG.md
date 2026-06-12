@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Per-worker API key pass-through (`invocation.pass_env`).** Zero-key is
+  now framed as the default for the subscription-first audience, not an
+  identity rule: a custom worker profile can name env vars (e.g.
+  `OPENAI_API_KEY`) that reach that worker only, while every other worker
+  stays key-scrubbed and Yard never reads or stores the values. README and
+  AGENTS.md reworded accordingly; a native API adapter is on the roadmap.
+
 - **Self-restart on upgrade.** yard notices when its own binary is replaced
   (cargo install while running) — the status line announces the new build
   and `u` re-execs into it in place. No more silently-stale TUI sessions;

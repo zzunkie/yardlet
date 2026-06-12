@@ -208,7 +208,14 @@ fn read_version(path: &std::path::Path) -> Option<String> {
 ///
 /// In `block` mode, the presence of any billing variable is a hard stop and
 /// this returns an error string instead of an environment.
-pub fn sanitized_worker_env(billing: &BillingPolicy) -> Result<Vec<(String, String)>, String> {
+/// A worker profile may opt back in to specific variables
+/// (`invocation.pass_env`). Zero-key stays the DEFAULT: nothing passes
+/// through unless the user names it on that worker in workers.yaml, and
+/// Yard itself never reads, stores, or requires the value.
+pub fn sanitized_worker_env_for(
+    billing: &BillingPolicy,
+    pass_env: &[String],
+) -> Result<Vec<(String, String)>, String> {
     let present = present_billing_env(&billing.blocked_worker_env_names);
     let policy = billing.worker_invocation.ai_billing_env_policy.as_str();
 
@@ -220,7 +227,13 @@ pub fn sanitized_worker_env(billing: &BillingPolicy) -> Result<Vec<(String, Stri
         ));
     }
 
-    Ok(scrub_env(env::vars(), &billing.blocked_worker_env_names))
+    let blocked: Vec<String> = billing
+        .blocked_worker_env_names
+        .iter()
+        .filter(|b| !pass_env.contains(b))
+        .cloned()
+        .collect();
+    Ok(scrub_env(env::vars(), &blocked))
 }
 
 /// Remove every blocked variable from an environment iterator. Pure and
@@ -238,6 +251,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pass_env_opts_a_worker_back_in_to_a_blocked_var() {
+        let var = "YARD_TEST_FAKE_KEY_7741";
+        std::env::set_var(var, "sk-test");
+        let billing = BillingPolicy {
+            schema_version: 1,
+            mode: String::new(),
+            worker_invocation: Default::default(),
+            blocked_worker_env_names: vec![var.to_string()],
+        };
+        // Default: scrubbed.
+        let env = sanitized_worker_env_for(&billing, &[]).unwrap();
+        assert!(!env.iter().any(|(k, _)| k == var));
+        // Explicit per-worker opt-in: passed through.
+        let env = sanitized_worker_env_for(&billing, &[var.to_string()]).unwrap();
+        assert!(env.iter().any(|(k, v)| k == var && v == "sk-test"));
+        std::env::remove_var(var);
+    }
 
     #[test]
     fn scrub_removes_only_blocked_names() {

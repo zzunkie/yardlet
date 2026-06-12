@@ -355,6 +355,12 @@ pub struct Invocation {
     /// Appended when an effort is set, e.g. ["--effort", "{effort}"].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effort_args: Vec<String>,
+    /// Env vars passed through to THIS worker even when the billing policy
+    /// scrubs them (e.g. ["OPENAI_API_KEY"] for an API-backed worker CLI).
+    /// Explicit per-worker opt-in; zero-key remains the default and Yard
+    /// itself never reads or stores the values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pass_env: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

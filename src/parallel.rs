@@ -98,7 +98,6 @@ pub fn run_batch<F: FnMut(&str)>(
     let intent = ws.load_intent()?;
     let config = ws.load_config()?;
     let full_access = full_access || config.default_access.eq_ignore_ascii_case("full");
-    let env = guard::sanitized_worker_env(&billing).map_err(|e| anyhow!(e))?;
     let repo_summary = inspect::summarize(&ws.root);
     let lang_sample = intent
         .as_ref()
@@ -254,11 +253,14 @@ pub fn run_batch<F: FnMut(&str)>(
     let mut handles = Vec::new();
     for (i, p) in preps.iter().enumerate() {
         let tx = tx.clone();
+        let env = match guard::sanitized_worker_env_for(&billing, &p.profile.invocation.pass_env) {
+            Ok(e) => e,
+            Err(e) => return Err(anyhow!(e)),
+        };
         let profile = p.profile.clone();
         let bin = p.bin.clone();
         let packet_text = p.packet_text.clone();
         let cwd = p.wt_path.clone();
-        let env = env.clone();
         let log_path = p.run_dir.join("worker-output.log");
         let timeout = Duration::from_secs(p.profile.limits.max_wall_minutes as u64 * 60);
         let images = images.clone();

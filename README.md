@@ -20,9 +20,19 @@ User
     -> checkpoint / handoff
 ```
 
-## Hard rule: zero AI API keys
+## Zero API keys — by default
 
-Yard core does **not** require, request, store, or call AI provider API keys. It drives already-installed, subscription-backed worker CLIs. If no safe local worker is ready, Yard stops with a clear readiness message. It never asks for an API key and never silently falls back to a provider API.
+Yard core does **not** require, request, or store AI provider API keys, and it
+never *silently* calls a provider API. The default workers are
+subscription-backed CLIs because Yard's first audience is individuals for whom
+metered API billing is the pain; if no safe local worker is ready, Yard stops
+with a clear readiness message.
+
+This is a default, not an identity: an API-backed worker is a per-worker
+**opt-in**. Set `invocation.pass_env: ["OPENAI_API_KEY"]` on a custom worker
+profile and that one worker receives the named variable while every other
+worker still runs key-scrubbed. The key belongs to the worker's own tooling —
+Yard never reads or persists its value.
 
 ## The loop
 

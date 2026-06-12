@@ -237,7 +237,8 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     }
     // Per-run --full-access OR the workspace's default_access=full.
     let full_access = opts.full_access || config.default_access.eq_ignore_ascii_case("full");
-    let env = guard::sanitized_worker_env(&billing).map_err(|e| anyhow!(e))?;
+    let env = guard::sanitized_worker_env_for(&billing, &eff_profile.invocation.pass_env)
+        .map_err(|e| anyhow!(e))?;
     let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
     lines.push(format!("worker: {worker_id} ({reason})"));
 
