@@ -31,6 +31,8 @@ pub struct RunOptions {
     /// Explicit, opt-in escalation: drop the worker sandbox (network, installs,
     /// etc.). Off by default; this is a human-granted permission.
     pub full_access: bool,
+    /// Run even though the planner scored ambiguity "high" (gate override).
+    pub accept_ambiguity: bool,
 }
 
 pub struct RunReport {
@@ -63,6 +65,24 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let billing = ws.load_billing()?;
     let intent = ws.load_intent()?;
     let config = ws.load_config()?;
+
+    // Ambiguity gate (absorption.md A2): while the planner's own self-report
+    // says it is still guessing, queue-selected runs refuse to start. A named
+    // target or --accept-ambiguity is an explicit human override.
+    if opts.target.is_none() && !opts.accept_ambiguity {
+        if let Some(i) = &intent {
+            if crate::planner::intent_gated(i, config.ambiguity_gate) {
+                return Err(anyhow!(
+                    "the plan is still guessing (ambiguity: high, {} open question(s), \
+                     interview turn {}/{}). Answer with `a` in the TUI or `yard answer`, \
+                     or override with --accept-ambiguity.",
+                    i.open_questions.len(),
+                    i.interview_turns,
+                    crate::planner::INTERVIEW_CAP
+                ));
+            }
+        }
+    }
 
     // ---- select task: a named target, or the next eligible queued one ---
     let idx = match &opts.target {
@@ -401,11 +421,13 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 /// human). A per-task attempt cap prevents looping on a task that keeps
 /// coming back partial. `bypass` drops the worker sandbox for the whole run
 /// (workers still self-gate dangerous actions per the packet).
+#[allow(clippy::too_many_arguments)]
 pub fn run_auto<F: FnMut(&str)>(
     ws: &Workspace,
     bypass: bool,
     pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     parallel: Option<usize>,
+    accept_ambiguity: bool,
     mut on_event: F,
 ) -> Result<Vec<String>> {
     use std::collections::HashMap;
@@ -427,6 +449,7 @@ pub fn run_auto<F: FnMut(&str)>(
         target: None,
         answer: None,
         full_access: false,
+        accept_ambiguity: false,
     };
 
     // Recover orphans (interrupted runs left "running") and any unconsumed
@@ -436,6 +459,25 @@ pub fn run_auto<F: FnMut(&str)>(
     }
     for m in recover_orphans(ws) {
         emit(m);
+    }
+
+    // Ambiguity gate: don't drain a plan that says it is still guessing.
+    if !accept_ambiguity {
+        let gate_on = ws.load_config().map(|c| c.ambiguity_gate).unwrap_or(true);
+        if let Ok(Some(i)) = ws.load_intent() {
+            if crate::planner::intent_gated(&i, gate_on) {
+                emit(format!(
+                    "stopped: the plan is still guessing (ambiguity high, interview turn \
+                     {}/{}) \u{2014} answer its questions (a) or run with --accept-ambiguity",
+                    i.interview_turns,
+                    crate::planner::INTERVIEW_CAP
+                ));
+                for q in i.open_questions.iter().take(5) {
+                    emit(format!("  ? {q}"));
+                }
+                return Ok(out);
+            }
+        }
     }
 
     loop {
@@ -595,6 +637,7 @@ pub fn run_auto<F: FnMut(&str)>(
                 target: retry_target.clone(),
                 answer: None,
                 full_access: bypass,
+                accept_ambiguity: false,
             },
         )?;
         let state = report.result_state.unwrap_or(TaskState::Failed);
@@ -1024,6 +1067,7 @@ mod tests {
             target: None,
             answer: None,
             full_access: false,
+            accept_ambiguity: false,
         }
     }
 

@@ -199,6 +199,9 @@ pub struct RunArgs {
     /// worktree (overrides the workspace max_parallel setting).
     #[arg(long)]
     parallel: Option<usize>,
+    /// Run even though the planner scored ambiguity "high".
+    #[arg(long)]
+    accept_ambiguity: bool,
     /// Non-interactive output (no extra prompts).
     #[arg(long)]
     headless: bool,
@@ -330,7 +333,7 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
     }
     if args.run && report.task_count > 0 {
         println!("\nRunning autonomously \u{2014} stops only if it needs you:\n");
-        run::run_auto(&ws, args.bypass, None, None, |s| println!("{s}"))?;
+        run::run_auto(&ws, args.bypass, None, None, false, |s| println!("{s}"))?;
         return Ok(());
     }
     println!("\nNext: `yard queue` to review, `yard run --next --execute` to run.");
@@ -386,6 +389,7 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
             target: Some(task_id),
             answer: Some(reply),
             full_access: args.full_access,
+            accept_ambiguity: false,
         },
     )?;
     for line in &report.lines {
@@ -670,6 +674,7 @@ fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
             args.bypass || args.full_access,
             None,
             args.parallel,
+            args.accept_ambiguity,
             |s| println!("{s}"),
         )?;
         return Ok(());
@@ -682,6 +687,7 @@ fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
             target: args.task,
             answer: None,
             full_access: args.full_access,
+            accept_ambiguity: args.accept_ambiguity,
         },
     )?;
     for line in &report.lines {

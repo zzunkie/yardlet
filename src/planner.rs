@@ -32,9 +32,19 @@ struct PlanningResult {
     #[serde(default)]
     acceptance: Vec<PlanAcceptance>,
     #[serde(default)]
+    ambiguity: PlanAmbiguity,
+    #[serde(default)]
     tasks: Vec<PlanTask>,
     #[serde(default)]
     questions_for_user: Vec<PlanQuestion>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PlanAmbiguity {
+    #[serde(default)]
+    score: String,
+    #[serde(default)]
+    open_questions: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -180,7 +190,6 @@ pub fn run_planning(
     let workers = ws.load_workers()?;
     let billing = ws.load_billing()?;
     let config = ws.load_config()?;
-    let language = packet::resolve_language(&config.language, request);
 
     // Images: explicit --image plus any path detected in the request.
     let mut images: Vec<String> = explicit_images.to_vec();
@@ -190,8 +199,126 @@ pub fn run_planning(
         }
     }
 
+    plan_core(
+        ws,
+        &workers,
+        &billing,
+        &config,
+        request,
+        request,
+        &images,
+        worker_override,
+        "new",
+        true,
+    )
+}
+
+/// Hard cap on interview turns; past it the gate opens (proceed on
+/// recorded assumptions).
+pub const INTERVIEW_CAP: u32 = 10;
+
+/// Is this intent still gated on the planner's own ambiguity self-report?
+pub fn intent_gated(intent: &IntentContract, gate_enabled: bool) -> bool {
+    gate_enabled
+        && intent.ambiguity == "high"
+        && intent.interview_turns < INTERVIEW_CAP
+        && !intent.open_questions.is_empty()
+}
+
+/// One interview turn (absorption.md A2): feed the user's answer back to the
+/// planning worker and derive a REVISED plan in place — same intent id, no
+/// archive (this is the same intent being refined before any work starts).
+/// The new plan re-scores ambiguity; the gate opens when it drops below
+/// "high", the user overrides, or `INTERVIEW_CAP` turns have run.
+pub fn run_planning_interview(ws: &Workspace, answer: &str) -> Result<PlanningReport> {
+    let Some(prev) = ws.load_intent()? else {
+        bail!("no intent to interview \u{2014} plan first (n)");
+    };
+    let queue = ws.load_queue()?;
+    let workers = ws.load_workers()?;
+    let billing = ws.load_billing()?;
+    let config = ws.load_config()?;
+
+    let turns = prev.interview_turns + 1;
+    let mut clarifications = prev.clarifications.clone();
+    clarifications.push(format!(
+        "Q: {}\nA: {}",
+        prev.open_questions.join(" / "),
+        answer.trim()
+    ));
+
+    let mut ctx = String::new();
+    ctx.push_str(&format!("Original request:\n{}\n\n", prev.raw_request));
+    ctx.push_str(&format!("Current plan summary: {}\n", prev.summary));
+    if !queue.tasks.is_empty() {
+        ctx.push_str("Current planned tasks (revise them freely):\n");
+        for t in &queue.tasks {
+            ctx.push_str(&format!("- {} {}\n", t.id, t.title));
+        }
+    }
+    ctx.push_str("\nInterview so far:\n");
+    for c in &clarifications {
+        ctx.push_str(c);
+        ctx.push_str("\n---\n");
+    }
+    ctx.push_str(&format!(
+        "\nThis is interview turn {turns}/{cap}. RE-PLAN the whole intent with these \
+         answers folded in: revise the summary, scope, acceptance, and tasks as needed. \
+         Re-score `ambiguity` honestly \u{2014} drop it below \"high\" only when you are no \
+         longer guessing about product behavior or architecture. If something essential \
+         is still unclear, ask up to 3 NEW questions (never repeat an answered one).",
+        cap = INTERVIEW_CAP
+    ));
+
+    let report = plan_core(
+        ws,
+        &workers,
+        &billing,
+        &config,
+        &ctx,
+        &prev.raw_request,
+        &prev.images,
+        None,
+        "interview",
+        false,
+    )?;
+
+    // plan_core derived a fresh intent; restore identity + interview bookkeeping.
+    if let Some(mut intent) = ws.load_intent()? {
+        intent.id = prev.id.clone();
+        intent.raw_request = prev.raw_request.clone();
+        intent.clarifications = clarifications;
+        intent.interview_turns = turns;
+        state::save_yaml(&ws.intent_path(), &intent)?;
+        let mut q = ws.load_queue()?;
+        q.intent_id = prev.id.clone();
+        q.queue_id = format!("queue-{}", prev.id);
+        ws.save_queue(&q)?;
+    }
+    Ok(report)
+}
+
+/// The planning machinery shared by fresh plans and interview re-plans.
+/// `packet_request` goes to the worker; `store_request` is recorded as the
+/// intent's raw request; `archive` controls whether the previous intent is
+/// archived first (interview refines in place).
+#[allow(clippy::too_many_arguments)]
+fn plan_core(
+    ws: &Workspace,
+    workers: &WorkersFile,
+    billing: &crate::schemas::BillingPolicy,
+    config: &crate::schemas::YardConfig,
+    packet_request: &str,
+    store_request: &str,
+    images: &[String],
+    worker_override: Option<&str>,
+    mode: &str,
+    archive: bool,
+) -> Result<PlanningReport> {
+    let language = packet::resolve_language(&config.language, store_request);
+
     // Choose a ready planning worker.
-    let (profile, bin, worker_id) = pick_ready_worker(&workers, &billing, worker_override)?;
+    let (profile, bin, worker_id) = pick_ready_worker(workers, billing, worker_override)?;
 
     let run_id = format!("plan-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let run_dir = ws.runs_dir().join(&run_id);
@@ -200,8 +327,8 @@ pub fn run_planning(
     state::save_yaml(
         &run_dir.join("plan-meta.yaml"),
         &PlanMeta {
-            mode: "new".to_string(),
-            request: request.to_string(),
+            mode: mode.to_string(),
+            request: store_request.to_string(),
         },
     )?;
 
@@ -213,22 +340,22 @@ pub fn run_planning(
         &run_dir.join("evidence").join("repo-summary.md"),
         &inspect::to_markdown(&summary),
     )?;
-    let worker_guidance = build_worker_guidance(&workers);
+    let worker_guidance = build_worker_guidance(workers);
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let packet_text = packet::compile_planning(
-        request,
+        packet_request,
         &summary,
         &run_dir_rel,
         &language,
         &worker_guidance,
-        &images,
+        images,
         &harness,
         &worker_id,
     );
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
-    // Invoke the worker with a sanitized, zero-key environment.
-    let env = guard::sanitized_worker_env_for(&billing, &profile.invocation.pass_env)
+    // Invoke the worker with a sanitized environment.
+    let env = guard::sanitized_worker_env_for(billing, &profile.invocation.pass_env)
         .map_err(|e| anyhow!(e))?;
     let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
     let outcome = workers::spawn(
@@ -240,7 +367,7 @@ pub fn run_planning(
         &run_dir.join("worker-output.log"),
         timeout,
         false, // planning never needs elevated access
-        &images,
+        images,
         None,
         false,
     )?;
@@ -267,12 +394,14 @@ pub fn run_planning(
 
     // Derive canonical state. Yard owns these files.
     let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
-    let intent = build_intent(&intent_id, request, &plan, &images);
+    let intent = build_intent(&intent_id, store_request, &plan, images);
     let queue = build_queue(&intent_id, &plan);
 
-    // Archive the previous intent before overwriting it (new work shouldn't lose
-    // the finished one's record). Best-effort; no-op on the first plan.
-    let _ = crate::report::archive_intent(ws);
+    if archive {
+        // Archive the previous intent before overwriting it (new work
+        // shouldn't lose the finished one's record). No-op on the first plan.
+        let _ = crate::report::archive_intent(ws);
+    }
 
     state::save_yaml(&ws.intent_path(), &intent)?;
     ws.save_queue(&queue)?;
@@ -606,6 +735,31 @@ fn build_intent(
     plan: &PlanningResult,
     images: &[String],
 ) -> IntentContract {
+    // The gate reads one merged question list: the planner's explicit
+    // questions_for_user plus whatever its ambiguity block still holds open.
+    let mut open_questions: Vec<String> = plan
+        .questions_for_user
+        .iter()
+        .map(|q| match q {
+            PlanQuestion::Text(s) => s.clone(),
+            PlanQuestion::Obj {
+                question,
+                statement,
+            } => {
+                if !question.trim().is_empty() {
+                    question.clone()
+                } else {
+                    statement.clone()
+                }
+            }
+        })
+        .filter(|q| !q.trim().is_empty())
+        .collect();
+    for q in &plan.ambiguity.open_questions {
+        if !q.trim().is_empty() && !open_questions.contains(q) {
+            open_questions.push(q.clone());
+        }
+    }
     IntentContract {
         schema_version: 1,
         id: intent_id.to_string(),
@@ -621,6 +775,10 @@ fn build_intent(
             .map(|a| yaml::Value::String(a.statement.clone()))
             .collect(),
         images: images.to_vec(),
+        ambiguity: plan.ambiguity.score.to_lowercase(),
+        open_questions,
+        clarifications: Vec::new(),
+        interview_turns: 0,
         status: "accepted".to_string(),
     }
 }
@@ -801,6 +959,51 @@ mod tests {
         // Second startup: marked consumed, nothing to do.
         assert!(recover_unconsumed_plan(&ws).is_none());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ambiguity_gate_logic() {
+        let mut intent = IntentContract {
+            schema_version: 1,
+            id: "i".into(),
+            source: String::new(),
+            raw_request: String::new(),
+            summary: String::new(),
+            allowed_scope: vec![],
+            out_of_scope: vec![],
+            acceptance: vec![],
+            images: vec![],
+            ambiguity: "high".into(),
+            open_questions: vec!["which auth provider?".into()],
+            clarifications: vec![],
+            interview_turns: 0,
+            status: String::new(),
+        };
+        assert!(intent_gated(&intent, true));
+        assert!(!intent_gated(&intent, false)); // config off
+        intent.ambiguity = "medium".into();
+        assert!(!intent_gated(&intent, true)); // only high gates
+        intent.ambiguity = "high".into();
+        intent.interview_turns = INTERVIEW_CAP;
+        assert!(!intent_gated(&intent, true)); // cap opens the gate
+        intent.interview_turns = 0;
+        intent.open_questions.clear();
+        assert!(!intent_gated(&intent, true)); // nothing to ask = no gate
+    }
+
+    #[test]
+    fn intent_records_planner_ambiguity_and_questions() {
+        let json = r#"{
+            "summary": "s",
+            "tasks": [{ "id": "YARD-001", "title": "t" }],
+            "ambiguity": { "score": "HIGH", "open_questions": ["q1", "q2"] },
+            "questions_for_user": ["q1", "q3"]
+        }"#;
+        let plan: PlanningResult = serde_json::from_str(json).unwrap();
+        let intent = build_intent("i", "req", &plan, &[]);
+        assert_eq!(intent.ambiguity, "high");
+        // merged + deduped: questions_for_user first, then ambiguity extras
+        assert_eq!(intent.open_questions, vec!["q1", "q3", "q2"]);
     }
 
     #[test]

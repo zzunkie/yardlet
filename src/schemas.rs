@@ -50,6 +50,10 @@ pub struct YardConfig {
     /// while a CJK IME is on. macOS only; ignored elsewhere.
     #[serde(default = "default_true")]
     pub auto_ime: bool,
+    /// Refuse to start runs while the planner's own ambiguity score is
+    /// "high" — answer its questions (interview) or override. On by default.
+    #[serde(default = "default_true")]
+    pub ambiguity_gate: bool,
     /// Fold agent assets the repo already has (CLAUDE.md/AGENTS.md,
     /// .claude/skills, .cursor/rules, copilot-instructions) into the shared
     /// worker harness, worker-aware (docs/absorption.md A1). On by default.
@@ -89,6 +93,19 @@ pub struct IntentContract {
     /// codex `-i`, claude reads them), so Yard does not lose the CLIs' vision.
     #[serde(default)]
     pub images: Vec<String>,
+    /// The planner's own ambiguity self-report: low | medium | high.
+    /// "high" gates the run until the interview lowers it (absorption.md A2).
+    #[serde(default)]
+    pub ambiguity: String,
+    /// Questions the planner still has (shown by the interview gate).
+    #[serde(default)]
+    pub open_questions: Vec<String>,
+    /// Interview Q->A pairs accumulated across re-plans.
+    #[serde(default)]
+    pub clarifications: Vec<String>,
+    /// How many interview turns have run (hard cap applies).
+    #[serde(default)]
+    pub interview_turns: u32,
     #[serde(default)]
     pub status: String,
 }

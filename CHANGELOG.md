@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Ambiguity gate + planner interview (A2).** The planner's own ambiguity
+  self-report now has teeth: while it says "high", queue-selected runs and
+  the auto-drain refuse to start and show the planner's open questions.
+  Press `a` to answer — each answer runs one interview turn (an in-place
+  re-plan that folds all clarifications in and re-scores ambiguity), up to
+  10 turns; the gate opens when the score drops, the cap is reached, or you
+  override (`--accept-ambiguity`, or `ambiguity_gate: false`). The status
+  line shows the questions and the turn counter.
+
 - **Harness asset discovery (A1).** Repos that already carry agent assets
   get them as shared harness the moment Yard runs: root `AGENTS.md` /
   `CLAUDE.md`, `.claude/skills/*`, `.cursor/rules/*.{md,mdc}`, and

@@ -704,6 +704,9 @@ pub fn compile_planning(
          reasoning. Effort levels: minimal|low|medium|high (or \"auto\").\n\
          - Do not expand the goal. Keep out-of-scope strict (payments, auth redesign, production \
          DB, deploy) unless the request demands them.\n\
+         - Score `ambiguity` honestly: \"high\" means you would still be guessing product \
+         behavior or architecture \u{2014} it pauses the run and starts an interview with \
+         the user; put what you need answered in `ambiguity.open_questions`.\n\
          - Ask at most 2 questions, and only about product intent / scope / acceptance priority. \
          Put them in `questions_for_user`; do NOT block on them, proceed with explicit \
          assumptions otherwise.\n\

@@ -1385,6 +1385,7 @@ fn start_run(app: &mut App) {
                 target,
                 answer: None,
                 full_access: false,
+                accept_ambiguity: false,
             },
         ) {
             Ok(r) => {
@@ -1431,6 +1432,7 @@ fn start_approve(app: &mut App) {
                 target: Some(id.clone()),
                 answer: None,
                 full_access: false,
+                accept_ambiguity: false,
             },
         ) {
             Ok(r) => {
@@ -1473,7 +1475,7 @@ fn start_auto(app: &mut App) {
     let (tx, rx) = mpsc::channel();
     let txp = tx.clone();
     thread::spawn(move || {
-        let res = match run::run_auto(&ws, false, Some(pause), None, |s| {
+        let res = match run::run_auto(&ws, false, Some(pause), None, false, |s| {
             let _ = txp.send(JobMsg::Progress(s.to_string()));
         }) {
             Ok(lines) => {
@@ -1499,6 +1501,10 @@ fn start_auto(app: &mut App) {
     };
 }
 
+/// Answer-target sentinel: the reply is an interview answer to the planner,
+/// not instructions for a task.
+const INTERVIEW_TARGET: &str = "__intent__";
+
 /// Can `a` instruct this task? Anything not currently running and not done:
 /// queued (run with instructions), partial/blocked/failed (continue or retry
 /// with instructions), needs-user (answer the question).
@@ -1513,6 +1519,14 @@ fn compute_answer_target(app: &App) -> Option<(String, String)> {
     let s = app.snapshot.as_ref()?;
     if let Some(p) = &s.pending {
         return Some(p.clone());
+    }
+    // The ambiguity gate: a answers the PLANNER (interview turn), not a task.
+    if let Some((qs, _)) = &s.gate {
+        let mut text = String::new();
+        for (i, q) in qs.iter().enumerate() {
+            text.push_str(&format!("{}. {}\n", i + 1, q));
+        }
+        return Some((INTERVIEW_TARGET.to_string(), text.trim().to_string()));
     }
     let t = s
         .queue
@@ -1536,6 +1550,38 @@ fn compute_answer_target(app: &App) -> Option<(String, String)> {
     Some((t.id.clone(), context))
 }
 
+/// One interview turn: send the user's answer to the planning worker and
+/// re-plan in place. The gate re-evaluates from the new ambiguity score.
+fn start_interview(app: &mut App) {
+    let ws = app.ws.clone();
+    let answer = app.input.trim().to_string();
+    let lbl = app.lang.l();
+    let (planned_via, tasks_word, failed) = (lbl.planned_via, lbl.tasks_word, lbl.planning_failed);
+    let planner_label = lbl.planner.to_string();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let res = match crate::planner::run_planning_interview(&ws, &answer) {
+            Ok(r) => JobResult {
+                ok: true,
+                summary: format!(
+                    "{planned_via} {}: {} ({} {tasks_word})",
+                    r.worker_id, r.intent_summary, r.task_count
+                ),
+            },
+            Err(e) => JobResult {
+                ok: false,
+                summary: format!("{failed} {e}"),
+            },
+        };
+        let _ = tx.send(JobMsg::Done(res));
+    });
+    app.job = Job::Running {
+        label: planner_label,
+        started: Instant::now(),
+        rx,
+    };
+}
+
 fn start_answer(app: &mut App) {
     let target = app
         .answer_target
@@ -1545,6 +1591,10 @@ fn start_answer(app: &mut App) {
         app.toast = Some((false, app.lang.l().no_answer_target.into()));
         return;
     };
+    if task_id == INTERVIEW_TARGET {
+        start_interview(app);
+        return;
+    }
     let ws = app.ws.clone();
     let answer = app.input.trim().to_string();
     let lbl = app.lang.l();
@@ -1560,6 +1610,7 @@ fn start_answer(app: &mut App) {
                 target: Some(task_id.clone()),
                 answer: Some(answer),
                 full_access: false,
+                accept_ambiguity: false,
             },
         ) {
             Ok(r) => {

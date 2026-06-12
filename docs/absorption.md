@@ -1,6 +1,6 @@
 # Absorption Plan — taking what's good without becoming what they are
 
-> Status: A1 implemented (harness asset discovery); A2–A4 planned. Companion: [harness.md](harness.md)
+> Status: A1 implemented (harness asset discovery), A2 implemented (ambiguity gate + interview); A3–A4 planned. Companion: [harness.md](harness.md)
 > (H3 hooks / H4 learning loop continue after this plan's A-phases).
 >
 > Sources studied: oh-my-pi (can1357), oh-my-openagent / oh-my-claudecode
@@ -74,7 +74,7 @@ yard.yaml for repos where the borrowed assets are noise.
 Tests: per-source discovery; precedence/dedup (same skill name in `.agents`
 and `.claude` → ours wins); projection matrix per worker; cap interaction.
 
-## A2 — Ambiguity gate (internal-system's "don't build while guessing") · size S
+## A2 — Ambiguity gate (internal-system's "don't build while guessing") · size S — implemented
 
 The planning schema already returns `ambiguity.score` (low|medium|high) and
 `questions_for_user` — today they are always non-blocking. Change:

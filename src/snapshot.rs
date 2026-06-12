@@ -16,6 +16,9 @@ pub struct Snapshot {
     pub planner: String,
     /// (task id, question) for the first task waiting on the user, if any.
     pub pending: Option<(String, String)>,
+    /// The ambiguity-gate state, when the intent is gated: (open questions,
+    /// interview turns so far).
+    pub gate: Option<(Vec<String>, u32)>,
     /// Task ids that are gated and not yet granted approval.
     pub approvals_needed: Vec<String>,
 }
@@ -105,6 +108,11 @@ impl Snapshot {
                 (t.id.clone(), q)
             });
 
+        let gate = intent
+            .as_ref()
+            .filter(|i| crate::planner::intent_gated(i, config.ambiguity_gate))
+            .map(|i| (i.open_questions.clone(), i.interview_turns));
+
         let approvals_needed = queue
             .tasks
             .iter()
@@ -119,6 +127,7 @@ impl Snapshot {
             workers,
             planner,
             pending,
+            gate,
             approvals_needed,
         })
     }

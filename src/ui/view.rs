@@ -378,6 +378,7 @@ fn render_home(frame: &mut Frame, app: &App) {
         let mut f = l.footer_home.to_string();
         if let Some(snap) = &app.snapshot {
             let answerable = snap.pending.is_some()
+                || snap.gate.is_some()
                 || snap
                     .queue
                     .tasks
@@ -596,6 +597,20 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
                             Style::default().fg(Color::Magenta).bold(),
                         ),
                         Span::raw(truncate(if q.is_empty() { l.see_handoff } else { q }, 60)),
+                        Span::styled(l.press_a, Style::default().fg(Color::DarkGray)),
+                    ])
+                } else if let Some((qs, turns)) = snap.and_then(|s| s.gate.as_ref()) {
+                    Line::from(vec![
+                        Span::styled(
+                            format!(
+                                " \u{270B} {} ({}/{}): ",
+                                l.plan_needs,
+                                turns + 1,
+                                crate::planner::INTERVIEW_CAP
+                            ),
+                            Style::default().fg(Color::Yellow).bold(),
+                        ),
+                        Span::raw(truncate(qs.first().map(|q| q.as_str()).unwrap_or(""), 56)),
                         Span::styled(l.press_a, Style::default().fg(Color::DarkGray)),
                     ])
                 } else if let Some(s) = snap.filter(|s| !s.approvals_needed.is_empty()) {
