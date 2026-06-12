@@ -40,10 +40,12 @@ pub enum Screen {
 
 /// One editable settings row. `key` routes the value back to the right file:
 /// "access"/"language" -> yard.yaml; "model:<id>"/"effort:<id>" -> workers.yaml.
+/// `options` are the Space-cycle presets ("" = default); typing still works.
 pub struct Field {
     pub label: String,
     pub key: String,
     pub value: String,
+    pub options: Vec<String>,
 }
 
 pub struct SettingsDraft {
@@ -51,22 +53,29 @@ pub struct SettingsDraft {
     pub sel: usize,
 }
 
-/// Known cycle options for a field key (empty = free text, e.g. a model name).
-pub fn field_options(key: &str) -> &'static [&'static str] {
+fn strs(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+/// Cycle options for a field key. Model lists come from the machine itself
+/// (CLI aliases; ids seen in recent codex sessions), so they stay current.
+fn options_for(key: &str) -> Vec<String> {
     if key == "access" {
-        &["sandboxed", "full"]
+        strs(&["sandboxed", "full"])
     } else if key == "parallel" {
-        &["1", "2", "3", "4"]
+        strs(&["1", "2", "3", "4"])
     } else if key == "ime" {
-        &["on", "off"]
+        strs(&["on", "off"])
     } else if key == "language" {
-        &["auto", "ko", "en"]
+        strs(&["auto", "ko", "en"])
     } else if key.starts_with("effort:") {
-        &["", "low", "medium", "high"]
+        strs(&["", "low", "medium", "high"])
     } else if key == "model:claude-code" {
-        &["", "sonnet", "opus", "haiku"]
+        crate::workers::known_claude_models()
+    } else if key == "model:codex" {
+        crate::workers::known_codex_models()
     } else {
-        &[] // e.g. codex model ids vary — type the exact id
+        Vec::new()
     }
 }
 
@@ -719,28 +728,40 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         // covers an adopted worker from a previous session (task Running with
         // no active job): kill it and let the idle recovery pass requeue it.
         KeyCode::Esc if app.is_busy() || has_running_task(app) => stop_running_worker(app),
-        // Browse the queue and open a task's handoff (works while busy too).
+        // Browse the queue — and past its end, the workers panel (toggle a
+        // worker on/off with Enter/Space). Works while busy too.
         KeyCode::Up => app.selected = app.selected.saturating_sub(1),
         KeyCode::Down => {
-            let len = app
+            let total = app
+                .snapshot
+                .as_ref()
+                .map(|s| s.queue.tasks.len() + s.workers.len())
+                .unwrap_or(0);
+            if app.selected + 1 < total {
+                app.selected += 1;
+            }
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            let tasks = app
                 .snapshot
                 .as_ref()
                 .map(|s| s.queue.tasks.len())
                 .unwrap_or(0);
-            if app.selected + 1 < len {
-                app.selected += 1;
-            }
-        }
-        KeyCode::Enter => {
-            let id = app
-                .snapshot
-                .as_ref()
-                .and_then(|s| s.queue.tasks.get(app.selected))
-                .map(|t| t.id.clone());
-            if let Some(id) = id {
-                app.handoff_text = load_handoff_for_task(app, &id);
-                app.scroll = 0;
-                app.screen = Screen::Handoff;
+            if app.selected < tasks {
+                if code == KeyCode::Enter {
+                    let id = app
+                        .snapshot
+                        .as_ref()
+                        .and_then(|s| s.queue.tasks.get(app.selected))
+                        .map(|t| t.id.clone());
+                    if let Some(id) = id {
+                        app.handoff_text = load_handoff_for_task(app, &id);
+                        app.scroll = 0;
+                        app.screen = Screen::Handoff;
+                    }
+                }
+            } else {
+                toggle_worker(app, app.selected - tasks);
             }
         }
         // Reports/history browser: current final report + past intents.
@@ -932,50 +953,54 @@ fn open_settings(app: &mut App) {
     let l = app.lang.l();
     let cfg = app.ws.load_config().ok();
     let wf = app.ws.load_workers().ok();
+    let field = |label: String, key: String, value: String| Field {
+        options: options_for(&key),
+        label,
+        key,
+        value,
+    };
     let mut fields = vec![
-        Field {
-            label: l.access_word.to_string(),
-            key: "access".into(),
-            value: cfg
-                .as_ref()
+        field(
+            l.access_word.to_string(),
+            "access".into(),
+            cfg.as_ref()
                 .map(|c| c.default_access.clone())
                 .unwrap_or_default(),
-        },
-        Field {
-            label: l.parallel_word.to_string(),
-            key: "parallel".into(),
-            value: cfg
-                .as_ref()
+        ),
+        field(
+            l.parallel_word.to_string(),
+            "parallel".into(),
+            cfg.as_ref()
                 .map(|c| c.max_parallel.to_string())
                 .unwrap_or_else(|| "1".to_string()),
-        },
-        Field {
-            label: l.ime_word.to_string(),
-            key: "ime".into(),
-            value: if cfg.as_ref().map(|c| c.auto_ime).unwrap_or(true) {
+        ),
+        field(
+            l.ime_word.to_string(),
+            "ime".into(),
+            if cfg.as_ref().map(|c| c.auto_ime).unwrap_or(true) {
                 "on".to_string()
             } else {
                 "off".to_string()
             },
-        },
-        Field {
-            label: l.language_word.to_string(),
-            key: "language".into(),
-            value: cfg.map(|c| c.language).unwrap_or_default(),
-        },
+        ),
+        field(
+            l.language_word.to_string(),
+            "language".into(),
+            cfg.map(|c| c.language).unwrap_or_default(),
+        ),
     ];
     if let Some(wf) = wf {
         for w in wf.workers {
-            fields.push(Field {
-                label: format!("{} model", w.id),
-                key: format!("model:{}", w.id),
-                value: w.model,
-            });
-            fields.push(Field {
-                label: format!("{} effort", w.id),
-                key: format!("effort:{}", w.id),
-                value: w.effort,
-            });
+            fields.push(field(
+                format!("{} model", w.id),
+                format!("model:{}", w.id),
+                w.model,
+            ));
+            fields.push(field(
+                format!("{} effort", w.id),
+                format!("effort:{}", w.id),
+                w.effort,
+            ));
         }
     }
     app.settings = Some(SettingsDraft { fields, sel: 0 });
@@ -999,18 +1024,18 @@ fn handle_settings_key(app: &mut App, code: KeyCode) {
             }
         }
         KeyCode::Char(' ') => {
-            // Cycle through known options for this field, if any.
+            // Cycle through this field's preset options, if any.
             let f = &mut d.fields[d.sel];
-            let opts = field_options(&f.key);
-            if !opts.is_empty() {
-                let next = opts
+            if !f.options.is_empty() {
+                let next = f
+                    .options
                     .iter()
                     .position(|o| *o == f.value)
-                    .map(|i| (i + 1) % opts.len())
+                    .map(|i| (i + 1) % f.options.len())
                     .unwrap_or(0);
-                f.value = opts[next].to_string();
+                f.value = f.options[next].clone();
             }
-            // No preset options (e.g. codex model): type the value instead.
+            // No presets: type the value instead.
         }
         KeyCode::Backspace => {
             d.fields[d.sel].value.pop();
@@ -1088,6 +1113,24 @@ fn request_pause(app: &mut App) {
         }
         None => app.toast = Some((true, app.lang.l().busy.into())),
     }
+}
+
+/// Flip a worker's enabled flag (Home workers panel). Routing and planning
+/// skip a disabled worker; the change persists to workers.yaml.
+fn toggle_worker(app: &mut App, widx: usize) {
+    if let Ok(mut wf) = app.ws.load_workers() {
+        if let Some(w) = wf.workers.get_mut(widx) {
+            w.enabled = !w.enabled;
+            let (id, on) = (w.id.clone(), w.enabled);
+            let _ = crate::state::save_yaml(&app.ws.workers_path(), &wf);
+            let l = app.lang.l();
+            app.toast = Some((
+                true,
+                format!("{id}: {}", if on { l.worker_on } else { l.worker_off }),
+            ));
+        }
+    }
+    app.reload();
 }
 
 fn has_running_task(app: &App) -> bool {

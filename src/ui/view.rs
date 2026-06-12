@@ -226,13 +226,13 @@ fn render_settings(frame: &mut Frame, app: &App) {
                 } else {
                     Style::default().fg(Color::Gray)
                 };
-                let opts = super::field_options(&f.key);
-                let hint = if opts.is_empty() {
+                let hint = if f.options.is_empty() {
                     String::new()
                 } else {
-                    let shown: Vec<&str> = opts
+                    let shown: Vec<&str> = f
+                        .options
                         .iter()
-                        .map(|o| if o.is_empty() { "default" } else { o })
+                        .map(|o| if o.is_empty() { "default" } else { o.as_str() })
                         .collect();
                     format!("({})", shown.join(" | "))
                 };
@@ -360,7 +360,9 @@ fn render_home(frame: &mut Frame, app: &App) {
         Some(snap) => {
             render_header(frame, chunks[0], snap, l);
             render_queue(frame, chunks[1], snap, l, app.selected);
-            render_workers(frame, chunks[2], snap, l);
+            // Selection continues past the queue into the workers panel.
+            let wsel = app.selected.checked_sub(snap.tasks().len());
+            render_workers(frame, chunks[2], snap, l, wsel);
         }
         None => {
             let p = Paragraph::new("No workspace state loaded. Run `yard init`.")
@@ -505,22 +507,36 @@ fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected:
     frame.render_widget(List::new(items).block(block), area);
 }
 
-fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
+fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected: Option<usize>) {
     let items: Vec<ListItem> = snap
         .workers
         .iter()
-        .map(|w| {
-            let (glyph, color, word) = match w.readiness.as_str() {
-                "ready" => ("\u{2713}", Color::Green, l.w_ready),
-                "ambiguous" => ("?", Color::Yellow, l.w_ambiguous),
-                _ => ("\u{2715}", Color::Red, l.w_notready),
+        .enumerate()
+        .map(|(i, w)| {
+            let (glyph, color, word) = if !w.enabled {
+                ("\u{00b7}", Color::DarkGray, l.w_disabled)
+            } else {
+                match w.readiness.as_str() {
+                    "ready" => ("\u{2713}", Color::Green, l.w_ready),
+                    "ambiguous" => ("?", Color::Yellow, l.w_ambiguous),
+                    _ => ("\u{2715}", Color::Red, l.w_notready),
+                }
             };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!(" {glyph} "), Style::default().fg(color)),
-                Span::styled(
-                    format!("{:<14}", w.id),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
+            let is_sel = selected == Some(i);
+            let marker = if is_sel { "\u{25b8}" } else { " " };
+            let id_style = if w.enabled {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            let id_style = if is_sel {
+                id_style.fg(Color::Yellow)
+            } else {
+                id_style
+            };
+            let mut spans = vec![
+                Span::styled(format!("{marker}{glyph} "), Style::default().fg(color)),
+                Span::styled(format!("{:<14}", w.id), id_style),
                 Span::styled(format!("{word:<11}"), Style::default().fg(color)),
                 Span::styled(
                     w.version
@@ -528,7 +544,14 @@ fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
                         .unwrap_or_else(|| l.version_unknown.to_string()),
                     Style::default().fg(Color::DarkGray),
                 ),
-            ]))
+            ];
+            if is_sel {
+                spans.push(Span::styled(
+                    l.worker_toggle_hint,
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
     let block = Block::bordered().title(l.workers_title);

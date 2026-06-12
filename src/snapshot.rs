@@ -27,6 +27,7 @@ pub struct WorkerLine {
     pub version: Option<String>,
     pub billing_env_present: usize,
     pub detail: String,
+    pub enabled: bool,
 }
 
 impl Snapshot {
@@ -48,23 +49,43 @@ impl Snapshot {
         let billing = ws.load_billing()?;
         let workers_file = ws.load_workers()?;
 
-        let workers = match cached_workers {
-            Some(w) => w,
-            None => workers_file
-                .workers
-                .iter()
-                .map(|p| {
-                    let s = guard::probe(p, &billing);
-                    WorkerLine {
-                        id: s.id,
-                        readiness: s.readiness.label().to_string(),
-                        version: s.version,
-                        billing_env_present: s.billing_env_present.len(),
-                        detail: s.detail,
-                    }
-                })
-                .collect(),
-        };
+        // The enabled flag is always re-read from workers.yaml (it is cheap and
+        // user-toggled); only the expensive probe (spawning `--version`) is
+        // reused from the cache, matched by worker id.
+        let workers = workers_file
+            .workers
+            .iter()
+            .map(|p| {
+                if !p.enabled {
+                    return WorkerLine {
+                        id: p.id.clone(),
+                        readiness: "disabled".to_string(),
+                        version: None,
+                        billing_env_present: 0,
+                        detail: "disabled (toggle on the Home workers panel)".to_string(),
+                        enabled: false,
+                    };
+                }
+                if let Some(c) = cached_workers.as_ref().and_then(|cw| {
+                    cw.iter()
+                        .find(|w| w.id == p.id && w.readiness != "disabled")
+                }) {
+                    return WorkerLine {
+                        enabled: true,
+                        ..c.clone()
+                    };
+                }
+                let s = guard::probe(p, &billing);
+                WorkerLine {
+                    id: s.id,
+                    readiness: s.readiness.label().to_string(),
+                    version: s.version,
+                    billing_env_present: s.billing_env_present.len(),
+                    detail: s.detail,
+                    enabled: true,
+                }
+            })
+            .collect();
 
         let planner = {
             let primary = &workers_file.routing.planning_gate.primary;

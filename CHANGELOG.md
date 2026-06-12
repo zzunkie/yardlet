@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Worker management from the TUI.** The Home arrow keys now continue past
+  the queue into the workers panel; Enter/Space toggles a worker on/off
+  (persisted as `enabled:` in workers.yaml — routing and planning skip a
+  disabled worker). Settings model presets are now real: claude-code cycles
+  the CLI's aliases (fable/opus/sonnet/haiku) and codex cycles model ids
+  discovered from your own recent codex sessions plus the configured default,
+  so the list stays current without hardcoded ids.
+
 - **Role profiles** (plan §13.4). Tasks run under a prompt-mode role derived
   from their kind — builder / reviewer / researcher / security — with
   role-specific working rules in the packet, replacing the old worker-keyed

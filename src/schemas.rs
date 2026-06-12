@@ -284,6 +284,10 @@ impl Default for Routing {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerProfile {
     pub id: String,
+    /// A disabled worker is skipped by routing and planning (toggle from the
+    /// Home workers panel). Default on.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     #[serde(default)]
     pub kind: String,
     #[serde(default)]

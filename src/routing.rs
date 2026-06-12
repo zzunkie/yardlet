@@ -67,6 +67,9 @@ pub fn resolve_worker(
         let Some(profile) = workers.workers.iter().find(|w| &w.id == id) else {
             continue;
         };
+        if !profile.enabled {
+            continue;
+        }
         tried.push(id.clone());
         let status = guard::probe(profile, billing);
         if status.readiness == Readiness::Ready {

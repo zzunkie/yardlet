@@ -311,6 +311,102 @@ pub fn packet_path(run_dir: &Path) -> PathBuf {
     run_dir.join("task-packet.md")
 }
 
+/// Claude Code model choices: the CLI's documented aliases ("" = CLI default).
+/// Full model ids are accepted too — these are just the Space-cycle presets.
+pub fn known_claude_models() -> Vec<String> {
+    ["", "fable", "opus", "sonnet", "haiku"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Codex model choices, discovered from the machine itself: the configured
+/// default in ~/.codex/config.toml plus model ids seen in recent codex
+/// session rollouts. There is no non-interactive `codex models` listing, and
+/// hardcoding ids would rot — the local history is the freshest source.
+pub fn known_codex_models() -> Vec<String> {
+    let mut out: Vec<String> = vec![String::new()]; // "" = CLI default
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+
+    // The configured default first.
+    if let Some(h) = &home {
+        if let Ok(cfg) = std::fs::read_to_string(h.join(".codex/config.toml")) {
+            if let Some(m) = cfg.lines().find_map(|l| {
+                l.trim()
+                    .strip_prefix("model")
+                    .and_then(|r| r.trim_start().strip_prefix('='))
+                    .map(|v| v.trim().trim_matches('"').to_string())
+            }) {
+                if !m.is_empty() && !out.contains(&m) {
+                    out.push(m);
+                }
+            }
+        }
+    }
+
+    // Then ids seen in the most recent session rollouts (newest first).
+    if let Some(h) = &home {
+        let mut files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+        fn walk(dir: &Path, files: &mut Vec<(std::time::SystemTime, PathBuf)>) {
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, files);
+                } else if p.extension().is_some_and(|x| x == "jsonl") {
+                    if let Ok(mt) = e.metadata().and_then(|m| m.modified()) {
+                        files.push((mt, p));
+                    }
+                }
+            }
+        }
+        walk(&h.join(".codex/sessions"), &mut files);
+        files.sort_by_key(|(mt, _)| std::cmp::Reverse(*mt));
+        for (_, p) in files.into_iter().take(100) {
+            let Ok(head) = read_head(&p, 32 * 1024) else {
+                continue;
+            };
+            for m in extract_models(&head) {
+                if !out.contains(&m) {
+                    out.push(m);
+                }
+            }
+            if out.len() > 8 {
+                break; // plenty of presets; free text covers the rest
+            }
+        }
+    }
+    out
+}
+
+fn read_head(path: &Path, max: usize) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = vec![0u8; max];
+    let n = f.read(&mut buf)?;
+    buf.truncate(n);
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Pull every `"model":"<id>"` value out of a JSONL fragment.
+fn extract_models(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let needle = "\"model\":\"";
+    let mut rest = text;
+    while let Some(i) = rest.find(needle) {
+        rest = &rest[i + needle.len()..];
+        if let Some(end) = rest.find('"') {
+            let id = &rest[..end];
+            if !id.is_empty() && id.len() < 64 && !out.iter().any(|o| o == id) {
+                out.push(id.to_string());
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
