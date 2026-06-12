@@ -699,6 +699,9 @@ pub fn compile_planning(
          tasks may run in parallel. Order alone is not a dependency.\n\
          - If a workspace skill (see Skills above) clearly applies to a task, list its \
          name in that task's `skills` so the worker reads it before starting.\n\
+         - If any task is high-risk or the plan has 3+ tasks, END with a review-kind \
+         task that verifies the intent's acceptance criteria against the workspace \
+         (per-criterion pass/fail). If you omit it, Yard appends one.\n\
          - Default model and effort to \"auto\" (let the chosen worker decide). Set them \
          only when a task clearly needs a stronger or cheaper model, or more or less \
          reasoning. Effort levels: minimal|low|medium|high (or \"auto\").\n\

@@ -154,6 +154,11 @@ The worker must be able to write files in the workspace (that is how results
 come back); its subprocess env is sanitized unless the profile opts vars
 back in with `pass_env`.
 
+The ecosystem's agents are Yard's supply side: terminal agents like
+[oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`), OpenCode, Gemini
+CLI, or an API-backed CLI of your own all fit the same template — register
+the winners, swap them per task, keep the records.
+
 ## Role profiles
 
 Each task runs under a role — a prompt mode over the worker, derived from the

@@ -1,6 +1,6 @@
 # Absorption Plan — taking what's good without becoming what they are
 
-> Status: A1 implemented (harness asset discovery), A2 implemented (ambiguity gate + interview); A3–A4 planned. Companion: [harness.md](harness.md)
+> Status: A1–A4 implemented (discovery, ambiguity gate + interview, semantic rung, ecosystem workers doc). Companion: [harness.md](harness.md)
 > (H3 hooks / H4 learning loop continue after this plan's A-phases).
 >
 > Sources studied: oh-my-pi (can1357), oh-my-openagent / oh-my-claudecode
@@ -101,7 +101,7 @@ No new scoring math (internal-system's weighted-clarity formula stays theirs); w
 gate on the planner's own self-report, which we already collect. Mechanism =
 deterministic gate; policy = the user's answer. (I4, I5)
 
-## A3 — Semantic verification rung (internal-system's ladder, bounded) · size S
+## A3 — Semantic verification rung (internal-system's ladder, bounded) · size S — implemented
 
 Yard's evaluator is the Mechanical rung (schema, ids, drift, forbidden
 paths). Add the Semantic rung as a *task*, not a smarter evaluator (I1):
@@ -117,7 +117,7 @@ paths). Add the Semantic rung as a *task*, not a smarter evaluator (I1):
 Consensus rung (multi-worker vote): deferred — it doubles spend; revisit
 when routing telemetry can justify it per task kind.
 
-## A4 — Workers from the ecosystem (docs only) · size XS
+## A4 — Workers from the ecosystem (docs only) · size XS — implemented
 
 README "Adding a worker" gains real examples: oh-my-pi (`omp`) and other
 agent CLIs as generic-adapter profiles — the ecosystem's *workers* are

@@ -820,6 +820,8 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
         });
     }
 
+    ensure_review_task(&mut tasks);
+
     WorkQueue {
         schema_version: 1,
         queue_id: format!("queue-{intent_id}"),
@@ -827,6 +829,58 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
         selection_policy: SelectionPolicy::default(),
         tasks,
     }
+}
+
+/// The Semantic verification rung (absorption.md A3), as a deterministic
+/// guarantee: a risky plan (any high-risk task) or a sizable one (3+ tasks)
+/// must end in a review-kind task that verifies the intent's acceptance
+/// criteria against the actual workspace. The planner is asked to include
+/// one; if it forgot, Yard appends it — planner forgetfulness cannot skip
+/// verification, and the verifier is never the doer (a separate reviewer-
+/// role run, not a smarter evaluator).
+fn ensure_review_task(tasks: &mut Vec<Task>) {
+    let risky = tasks.iter().any(|t| t.risk.eq_ignore_ascii_case("high"));
+    let sizable = tasks.len() >= 3;
+    let has_review = tasks.iter().any(|t| t.kind.eq_ignore_ascii_case("review"));
+    if !(risky || sizable) || has_review || tasks.is_empty() {
+        return;
+    }
+    let next_num = tasks
+        .iter()
+        .filter_map(|t| {
+            t.id.strip_prefix("YARD-")
+                .and_then(|n| n.parse::<usize>().ok())
+        })
+        .max()
+        .unwrap_or(tasks.len())
+        + 1;
+    let depends_on: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
+    let priority = tasks.iter().map(|t| t.priority).max().unwrap_or(0) + 10;
+    tasks.push(Task {
+        id: format!("YARD-{next_num:03}"),
+        title: "Acceptance review (auto-added)".to_string(),
+        state: TaskState::Queued,
+        priority,
+        risk: "low".to_string(),
+        kind: "review".to_string(),
+        preferred_worker: String::new(), // routing decides (kind overrides apply)
+        model: String::new(),
+        effort: String::new(),
+        depends_on,
+        skills: vec![],
+        allowed_scope: vec![],
+        acceptance: vec![yaml::Value::String(
+            "Every intent acceptance criterion is verified against the actual workspace, \
+             with per-criterion pass/fail and evidence in report.md"
+                .to_string(),
+        )],
+        validation: None,
+        approval: None,
+        interaction: None,
+        worker_rationale: Some(
+            "deterministic semantic-verification rung: the verifier is never the doer".to_string(),
+        ),
+    });
 }
 
 /// Build the planner's worker-selection rubric from the editable profiles.
@@ -959,6 +1013,54 @@ mod tests {
         // Second startup: marked consumed, nothing to do.
         assert!(recover_unconsumed_plan(&ws).is_none());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn review_task_is_guaranteed_for_risky_or_sizable_plans() {
+        let plan = |n: usize, risk: &str, with_review: bool| -> WorkQueue {
+            let mut json_tasks: Vec<String> = (1..=n)
+                .map(|i| {
+                    format!(
+                        r#"{{ "id": "YARD-{i:03}", "title": "t{i}", "risk": "{risk}", "kind": "implementation" }}"#
+                    )
+                })
+                .collect();
+            if with_review {
+                json_tasks.push(
+                    r#"{ "id": "YARD-099", "title": "review", "kind": "review" }"#.to_string(),
+                );
+            }
+            let json = format!(
+                r#"{{ "summary": "s", "tasks": [{}] }}"#,
+                json_tasks.join(",")
+            );
+            let p: PlanningResult = serde_json::from_str(&json).unwrap();
+            build_queue("i", &p)
+        };
+
+        // High risk, single task: review appended with deps on everything.
+        let q = plan(1, "high", false);
+        assert_eq!(q.tasks.len(), 2);
+        let review = q.tasks.last().unwrap();
+        assert_eq!(review.kind, "review");
+        assert_eq!(review.id, "YARD-002");
+        assert_eq!(review.depends_on, vec!["YARD-001"]);
+
+        // 3+ tasks, all low risk: appended too.
+        let q = plan(3, "low", false);
+        assert_eq!(q.tasks.len(), 4);
+        assert_eq!(
+            q.tasks.last().unwrap().depends_on,
+            vec!["YARD-001", "YARD-002", "YARD-003"]
+        );
+
+        // Planner already included a review: nothing added.
+        let q = plan(3, "high", true);
+        assert_eq!(q.tasks.iter().filter(|t| t.kind == "review").count(), 1);
+
+        // Small low-risk plan: no forced ceremony.
+        let q = plan(2, "low", false);
+        assert_eq!(q.tasks.len(), 2);
     }
 
     #[test]

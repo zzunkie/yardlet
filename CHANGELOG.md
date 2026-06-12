@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Guaranteed acceptance review (A3).** A risky plan (any high-risk task)
+  or a sizable one (3+ tasks) now always ends in a review-kind task that
+  verifies the intent's acceptance criteria per criterion against the
+  actual workspace. The planner is asked to include it; if it forgets,
+  Yard appends one deterministically (depends_on = every prior task) — the
+  verifier is never the doer.
+
 - **Ambiguity gate + planner interview (A2).** The planner's own ambiguity
   self-report now has teeth: while it says "high", queue-selected runs and
   the auto-drain refuse to start and show the planner's open questions.
