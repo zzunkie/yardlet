@@ -612,6 +612,11 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
                         ),
                         Span::styled("(p)", Style::default().fg(Color::DarkGray)),
                     ])
+                } else if app.update_available {
+                    Line::from(Span::styled(
+                        l.update_ready,
+                        Style::default().fg(Color::Cyan),
+                    ))
                 } else {
                     Line::from(Span::styled(l.idle, Style::default().fg(Color::DarkGray)))
                 }

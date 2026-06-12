@@ -137,6 +137,11 @@ pub struct App {
     /// Cached Monitor state so rendering never scans the runs directory or
     /// re-parses the whole worker log per frame.
     pub monitor: MonitorCache,
+    /// A newer yard binary replaced the one this process was started from
+    /// (cargo install while running). `u` re-execs into it.
+    pub update_available: bool,
+    /// Set by the `u` key; the main loop exits and re-execs the new binary.
+    pub want_restart: bool,
     /// What the Answer screen is replying to: (task id, question/context).
     /// Set when the screen opens — a NeedsUser question, or a Partial/Blocked
     /// task's remaining-work context (the answer becomes rerun instructions).
@@ -244,6 +249,8 @@ impl App {
             last_title: None,
             monitor_sel: 0,
             monitor: MonitorCache::default(),
+            update_available: false,
+            want_restart: false,
             answer_target: None,
             ime_saved: None,
             ime_checked: Instant::now(),
@@ -424,7 +431,20 @@ pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
     }
     let _ = execute!(std::io::stdout(), DisableBracketedPaste, SetTitle(""));
     ratatui::restore();
-    result
+    // `u` after an in-place upgrade: replace this process with the new binary
+    // (same path, same cwd). State lives in .agents/, so nothing is lost; a
+    // still-running worker is adopted by the new process on startup.
+    if let Ok(true) = &result {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            if let Ok(exe) = std::env::current_exe() {
+                let err = std::process::Command::new(exe).exec();
+                eprintln!("yard: restart failed: {err}");
+            }
+        }
+    }
+    result.map(|_| ())
 }
 
 /// The terminal title for the current state: running task, else current intent,
@@ -444,14 +464,36 @@ fn title_for(app: &App) -> String {
     }
 }
 
-fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()> {
+/// Modification time of the binary this process was started from.
+fn binary_mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(std::env::current_exe().ok()?)
+        .ok()?
+        .modified()
+        .ok()
+}
+
+/// Returns Ok(true) when the loop ended with a restart request (`u` after an
+/// in-place binary upgrade) — the caller re-execs the new binary.
+fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bool> {
     // Force a full repaint when the screen changes so leaving a content-heavy
     // screen (e.g. the Monitor's live worker output) doesn't leave artifacts
     // bleeding onto the next one.
     let mut last_screen: Option<Screen> = None;
     let mut tick: u32 = 0;
     let mut last_idle_recover = Instant::now();
+    let launched_mtime = binary_mtime();
+    let mut last_update_check = Instant::now();
     loop {
+        // Notice an in-place upgrade (cargo install while running): the file
+        // at our own path got a new mtime. Cheap stat, every ~5s.
+        if !app.update_available && last_update_check.elapsed() >= Duration::from_secs(5) {
+            last_update_check = Instant::now();
+            if let (Some(at_launch), Some(now)) = (launched_mtime, binary_mtime()) {
+                if now != at_launch {
+                    app.update_available = true;
+                }
+            }
+        }
         // While idle with a task still Running — an adopted worker from a
         // previous session — poll for its completion so the finished work is
         // evaluated (and merged) without the user doing anything.
@@ -633,7 +675,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
     if let Some(id) = app.ime_saved.take() {
         let _ = ime::select_by_id(&id);
     }
-    Ok(())
+    Ok(app.want_restart)
 }
 
 /// Map a Korean 2-beolsik jamo back to the QWERTY key that produces it, so
@@ -691,6 +733,11 @@ fn dekorean(code: KeyCode, shifted: bool) -> KeyCode {
 fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
     match code {
         KeyCode::Char('q') => return true,
+        // Restart into the freshly installed binary (notice in the status line).
+        KeyCode::Char('u') if app.update_available => {
+            app.want_restart = true;
+            return true;
+        }
         KeyCode::Char('n') if !app.is_busy() => {
             app.input.clear();
             app.toast = None;
