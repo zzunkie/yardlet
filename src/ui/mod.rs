@@ -68,6 +68,10 @@ fn options_for(key: &str) -> Vec<String> {
         strs(&["on", "off"])
     } else if key == "language" {
         strs(&["auto", "ko", "en"])
+    } else if key == "effort:codex" {
+        crate::workers::known_codex_efforts()
+    } else if key == "effort:claude-code" {
+        crate::workers::known_claude_efforts()
     } else if key.starts_with("effort:") {
         strs(&["", "low", "medium", "high"])
     } else if key == "model:claude-code" {

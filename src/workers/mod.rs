@@ -311,8 +311,19 @@ pub fn packet_path(run_dir: &Path) -> PathBuf {
     run_dir.join("task-packet.md")
 }
 
-/// Claude Code model choices: the CLI's documented aliases ("" = CLI default).
-/// Full model ids are accepted too — these are just the Space-cycle presets.
+// ---- model/effort preset discovery -----------------------------------------
+//
+// Presets stay in sync with the CLIs themselves, no hand-maintained id lists:
+//   - codex: the CLI maintains ~/.codex/models_cache.json with the models
+//     available to THIS account, including each model's supported reasoning
+//     efforts. That file is the authoritative machine-local source.
+//   - claude: model aliases are the CLI's documented stable set; effort
+//     levels are parsed out of `claude --help` (a complete enum in the text).
+// Everything degrades to a sensible static fallback, and Settings always
+// allows typing an exact id.
+
+/// Claude Code model presets ("" = CLI default). The aliases are the CLI's
+/// stable documented set; full model ids can still be typed.
 pub fn known_claude_models() -> Vec<String> {
     ["", "fable", "opus", "sonnet", "haiku"]
         .iter()
@@ -320,91 +331,110 @@ pub fn known_claude_models() -> Vec<String> {
         .collect()
 }
 
-/// Codex model choices, discovered from the machine itself: the configured
-/// default in ~/.codex/config.toml plus model ids seen in recent codex
-/// session rollouts. There is no non-interactive `codex models` listing, and
-/// hardcoding ids would rot — the local history is the freshest source.
-pub fn known_codex_models() -> Vec<String> {
-    let mut out: Vec<String> = vec![String::new()]; // "" = CLI default
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+/// Claude Code effort presets, parsed live from `claude --help`.
+pub fn known_claude_efforts() -> Vec<String> {
+    let help = std::process::Command::new("claude")
+        .arg("--help")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let mut out = vec![String::new()];
+    out.extend(parse_claude_efforts(&help).unwrap_or_else(|| {
+        ["low", "medium", "high"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }));
+    out
+}
 
-    // The configured default first.
-    if let Some(h) = &home {
-        if let Ok(cfg) = std::fs::read_to_string(h.join(".codex/config.toml")) {
-            if let Some(m) = cfg.lines().find_map(|l| {
-                l.trim()
-                    .strip_prefix("model")
-                    .and_then(|r| r.trim_start().strip_prefix('='))
-                    .map(|v| v.trim().trim_matches('"').to_string())
-            }) {
-                if !m.is_empty() && !out.contains(&m) {
-                    out.push(m);
-                }
-            }
+/// `--effort <level>  ... (low, medium, high, xhigh, max)` -> the level list.
+fn parse_claude_efforts(help: &str) -> Option<Vec<String>> {
+    let after = help.split("--effort").nth(1)?;
+    let inner = after.split('(').nth(1)?.split(')').next()?;
+    let levels: Vec<String> = inner
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.len() < 12 && s.chars().all(|c| c.is_ascii_alphabetic()))
+        .collect();
+    (!levels.is_empty()).then_some(levels)
+}
+
+/// Codex model presets ("" = CLI default), read from the CLI's own
+/// models cache of what this account can use.
+pub fn known_codex_models() -> Vec<String> {
+    let mut out = vec![String::new()];
+    if let Some((models, _)) = read_codex_models_cache() {
+        out.extend(models);
+    }
+    if out.len() == 1 {
+        // No cache yet (codex never run on this machine): configured default.
+        if let Some(m) = codex_config_default_model() {
+            out.push(m);
         }
     }
+    out
+}
 
-    // Then ids seen in the most recent session rollouts (newest first).
-    if let Some(h) = &home {
-        let mut files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
-        fn walk(dir: &Path, files: &mut Vec<(std::time::SystemTime, PathBuf)>) {
-            let Ok(rd) = std::fs::read_dir(dir) else {
-                return;
-            };
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    walk(&p, files);
-                } else if p.extension().is_some_and(|x| x == "jsonl") {
-                    if let Ok(mt) = e.metadata().and_then(|m| m.modified()) {
-                        files.push((mt, p));
+/// Codex effort presets ("" = CLI default), from the models cache (the union
+/// across listed models).
+pub fn known_codex_efforts() -> Vec<String> {
+    let mut out = vec![String::new()];
+    match read_codex_models_cache() {
+        Some((_, efforts)) if !efforts.is_empty() => out.extend(efforts),
+        _ => out.extend(["low", "medium", "high"].iter().map(|s| s.to_string())),
+    }
+    out
+}
+
+/// Parse ~/.codex/models_cache.json into (listed model slugs, effort union).
+fn read_codex_models_cache() -> Option<(Vec<String>, Vec<String>)> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let raw = std::fs::read_to_string(home.join(".codex/models_cache.json")).ok()?;
+    parse_codex_models_cache(&raw)
+}
+
+fn parse_codex_models_cache(raw: &str) -> Option<(Vec<String>, Vec<String>)> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let mut models = Vec::new();
+    let mut efforts: Vec<String> = Vec::new();
+    for m in v.get("models")?.as_array()? {
+        // Hidden entries (e.g. internal review models) are not user choices.
+        if m.get("visibility").and_then(|x| x.as_str()) != Some("list") {
+            continue;
+        }
+        if let Some(slug) = m.get("slug").and_then(|x| x.as_str()) {
+            if !slug.is_empty() && !models.iter().any(|s| s == slug) {
+                models.push(slug.to_string());
+            }
+        }
+        if let Some(levels) = m
+            .get("supported_reasoning_levels")
+            .and_then(|x| x.as_array())
+        {
+            for l in levels {
+                if let Some(e) = l.get("effort").and_then(|x| x.as_str()) {
+                    if !efforts.iter().any(|s| s == e) {
+                        efforts.push(e.to_string());
                     }
                 }
             }
         }
-        walk(&h.join(".codex/sessions"), &mut files);
-        files.sort_by_key(|(mt, _)| std::cmp::Reverse(*mt));
-        for (_, p) in files.into_iter().take(100) {
-            let Ok(head) = read_head(&p, 32 * 1024) else {
-                continue;
-            };
-            for m in extract_models(&head) {
-                if !out.contains(&m) {
-                    out.push(m);
-                }
-            }
-            if out.len() > 8 {
-                break; // plenty of presets; free text covers the rest
-            }
-        }
     }
-    out
+    Some((models, efforts))
 }
 
-fn read_head(path: &Path, max: usize) -> std::io::Result<String> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path)?;
-    let mut buf = vec![0u8; max];
-    let n = f.read(&mut buf)?;
-    buf.truncate(n);
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
-/// Pull every `"model":"<id>"` value out of a JSONL fragment.
-fn extract_models(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let needle = "\"model\":\"";
-    let mut rest = text;
-    while let Some(i) = rest.find(needle) {
-        rest = &rest[i + needle.len()..];
-        if let Some(end) = rest.find('"') {
-            let id = &rest[..end];
-            if !id.is_empty() && id.len() < 64 && !out.iter().any(|o| o == id) {
-                out.push(id.to_string());
-            }
-        }
-    }
-    out
+fn codex_config_default_model() -> Option<String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let cfg = std::fs::read_to_string(home.join(".codex/config.toml")).ok()?;
+    cfg.lines().find_map(|l| {
+        l.trim()
+            .strip_prefix("model")
+            .and_then(|r| r.trim_start().strip_prefix('='))
+            .map(|v| v.trim().trim_matches('"').to_string())
+            .filter(|m| !m.is_empty())
+    })
 }
 
 #[cfg(test)]
@@ -415,6 +445,37 @@ mod tests {
         cmd.get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn codex_models_cache_yields_listed_models_and_efforts() {
+        let raw = r#"{
+            "models": [
+                { "slug": "gpt-5.5", "visibility": "list",
+                  "supported_reasoning_levels": [
+                    {"effort": "low"}, {"effort": "medium"},
+                    {"effort": "high"}, {"effort": "xhigh"} ] },
+                { "slug": "gpt-5.4-mini", "visibility": "list",
+                  "supported_reasoning_levels": [{"effort": "low"}] },
+                { "slug": "internal-review", "visibility": "hide",
+                  "supported_reasoning_levels": [{"effort": "secret"}] }
+            ]
+        }"#;
+        let (models, efforts) = parse_codex_models_cache(raw).unwrap();
+        assert_eq!(models, vec!["gpt-5.5", "gpt-5.4-mini"]);
+        // Hidden models contribute neither slugs nor efforts.
+        assert_eq!(efforts, vec!["low", "medium", "high", "xhigh"]);
+    }
+
+    #[test]
+    fn claude_effort_levels_parse_from_help_text() {
+        let help = "  --effort <level>   Effort level for the current session\n\
+                    (low, medium, high, xhigh, max)\n  --other ...";
+        assert_eq!(
+            parse_claude_efforts(help).unwrap(),
+            vec!["low", "medium", "high", "xhigh", "max"]
+        );
+        assert!(parse_claude_efforts("no flag here").is_none());
     }
 
     #[test]
