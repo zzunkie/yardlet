@@ -639,8 +639,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
     } else {
         None
     };
-    let rules = packet::load_rules(&ws.root);
-    let skills = packet::skill_catalog(&ws.root);
+    let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let text = packet::compile(&packet::PacketInputs {
         worker_id: &args.worker,
         task,
@@ -653,8 +652,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         language: &language,
         images: &images,
         role_notes: &role_notes,
-        rules: &rules,
-        skills: &skills,
+        harness: &harness,
     });
     if args.dry_run {
         eprintln!("(dry-run: packet not persisted)\n");

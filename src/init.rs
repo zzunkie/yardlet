@@ -41,6 +41,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
         default_access: "sandboxed".to_string(),
         max_parallel: 1,
         auto_ime: true,
+        harness_discovery: true,
     };
     state::save_yaml(&ws.config_path(), &config)?;
     written.push("yard.yaml".to_string());

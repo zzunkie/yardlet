@@ -1,6 +1,6 @@
 # Shared Worker Harness & Learning Loop — Design
 
-> Status: H1 implemented (shared rules + skill catalog injection), H2 implemented (partial continuation); H3/H4 planned.
+> Status: H1 implemented (+A1 discovery of existing repo assets), H2 implemented (partial continuation); H3/H4 planned.
 > Companion docs: [parallel-queue.md](parallel-queue.md),
 > [routing-and-telemetry.md](routing-and-telemetry.md).
 

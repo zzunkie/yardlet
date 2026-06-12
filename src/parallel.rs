@@ -115,8 +115,7 @@ pub fn run_batch<F: FnMut(&str)>(
         .map(|i| i.images.clone())
         .unwrap_or_default();
 
-    let rules = packet::load_rules(&ws.root);
-    let skills = packet::skill_catalog(&ws.root);
+    let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     ensure_worktrees_excluded(&ws.root);
 
     // ---- prepare every task up front (deterministic, no workers yet) -----
@@ -220,8 +219,7 @@ pub fn run_batch<F: FnMut(&str)>(
             language: &language,
             images: &images,
             role_notes: &role_notes,
-            rules: &rules,
-            skills: &skills,
+            harness: &harness,
         });
         write_str(&workers::packet_path(&p.run_dir), &p.packet_text)?;
         state::save_yaml(

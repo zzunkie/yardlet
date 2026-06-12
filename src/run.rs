@@ -150,8 +150,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         .unwrap_or_default();
 
     let role_notes = packet::load_role_notes(&ws.root, packet::role_for(&task.kind));
-    let rules = packet::load_rules(&ws.root);
-    let skills = packet::skill_catalog(&ws.root);
+    let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let packet_text = packet::compile(&PacketInputs {
         worker_id: &worker_id,
         task: &task,
@@ -164,8 +163,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         language: &language,
         images: &images,
         role_notes: &role_notes,
-        rules: &rules,
-        skills: &skills,
+        harness: &harness,
     });
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 

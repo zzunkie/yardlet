@@ -214,8 +214,7 @@ pub fn run_planning(
         &inspect::to_markdown(&summary),
     )?;
     let worker_guidance = build_worker_guidance(&workers);
-    let rules = packet::load_rules(&ws.root);
-    let skills = packet::skill_catalog(&ws.root);
+    let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let packet_text = packet::compile_planning(
         request,
         &summary,
@@ -223,8 +222,8 @@ pub fn run_planning(
         &language,
         &worker_guidance,
         &images,
-        &rules,
-        &skills,
+        &harness,
+        &worker_id,
     );
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
@@ -346,8 +345,7 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         &inspect::to_markdown(&summary),
     )?;
     let worker_guidance = build_worker_guidance(&workers);
-    let rules = packet::load_rules(&ws.root);
-    let skills = packet::skill_catalog(&ws.root);
+    let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let packet_text = packet::compile_planning(
         &ctx,
         &summary,
@@ -355,8 +353,8 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         &language,
         &worker_guidance,
         &images,
-        &rules,
-        &skills,
+        &harness,
+        &worker_id,
     );
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
     let env = guard::sanitized_worker_env_for(&billing, &profile.invocation.pass_env)

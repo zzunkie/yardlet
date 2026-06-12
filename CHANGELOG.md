@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Harness asset discovery (A1).** Repos that already carry agent assets
+  get them as shared harness the moment Yard runs: root `AGENTS.md` /
+  `CLAUDE.md`, `.claude/skills/*`, `.cursor/rules/*.{md,mdc}`, and
+  `.github/copilot-instructions.md` are discovered read-only and projected
+  into packets **worker-aware** — a worker that reads a source natively
+  (claude: CLAUDE.md + .claude/skills; codex: AGENTS.md) never receives it
+  twice. Symlinked duplicates (CLAUDE.md -> AGENTS.md) merge into one entry
+  native to both. Opt out with `harness_discovery: false` in yard.yaml.
+
 - **Shared harness injection (phase H1).** Every packet — execution and
   planning, every worker — now carries the workspace harness: `.agents/rules/*.md`
   inlined (4 KB cap, overflow becomes read anchors) and a skill catalog from

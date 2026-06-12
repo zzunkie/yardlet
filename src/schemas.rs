@@ -50,6 +50,11 @@ pub struct YardConfig {
     /// while a CJK IME is on. macOS only; ignored elsewhere.
     #[serde(default = "default_true")]
     pub auto_ime: bool,
+    /// Fold agent assets the repo already has (CLAUDE.md/AGENTS.md,
+    /// .claude/skills, .cursor/rules, copilot-instructions) into the shared
+    /// worker harness, worker-aware (docs/absorption.md A1). On by default.
+    #[serde(default = "default_true")]
+    pub harness_discovery: bool,
 }
 
 fn default_access() -> String {

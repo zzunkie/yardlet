@@ -1,6 +1,6 @@
 # Absorption Plan — taking what's good without becoming what they are
 
-> Status: plan (A1–A4 not yet implemented). Companion: [harness.md](harness.md)
+> Status: A1 implemented (harness asset discovery); A2–A4 planned. Companion: [harness.md](harness.md)
 > (H3 hooks / H4 learning loop continue after this plan's A-phases).
 >
 > Sources studied: oh-my-pi (can1357), oh-my-openagent / oh-my-claudecode
@@ -39,7 +39,7 @@
   H1), agent-created skills via `skill_manage` → **H4 keeps the human gate
   (I4) instead of self-write.**
 
-## A1 — Harness asset discovery (oh-my-pi's onboarding, Yard-shaped) · size M
+## A1 — Harness asset discovery (oh-my-pi's onboarding, Yard-shaped) · size M — implemented
 
 **Goal**: a repo that already has agent assets gets them as a shared harness
 the moment Yard runs — zero setup, all workers.
@@ -87,6 +87,15 @@ The planning schema already returns `ambiguity.score` (low|medium|high) and
 - Explicit override (I5 — the human can always decide): `yard run --auto
   --accept-ambiguity`, or `ambiguity_gate: off` in yard.yaml.
   medium/low: unchanged (non-blocking, assumptions recorded).
+- **Interview loop** (owner request): when the request is thin (high
+  ambiguity, or a very short raw request), planning becomes a bounded Q&A
+  conversation instead of a one-shot guess — the TUI surfaces the planner's
+  questions, each answer triggers an amend-style re-plan that re-scores
+  ambiguity, and the loop continues until the score drops below high, the
+  user says "proceed as is", or a hard cap of **10 turns**. Each turn is a
+  planning-worker invocation, so re-plans ride the cheaper amend path with
+  the prior plan as context, and the loop only engages when the gate
+  triggers (not on every plan).
 
 No new scoring math (internal-system's weighted-clarity formula stays theirs); we
 gate on the planner's own self-report, which we already collect. Mechanism =

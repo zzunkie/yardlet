@@ -27,10 +27,9 @@ pub struct PacketInputs<'a> {
     pub images: &'a [String],
     /// Workspace-authored role extension (`.agents/agents/<role>.md`), if any.
     pub role_notes: &'a str,
-    /// Inlined workspace rules + anchored leftovers (`load_rules`).
-    pub rules: &'a (String, Vec<String>),
-    /// The skill catalog (`skill_catalog`).
-    pub skills: &'a [(String, String)],
+    /// The discovered workspace harness (`discover_harness`); projected
+    /// per worker at compile time.
+    pub harness: &'a Harness,
 }
 
 /// Find existing local image files referenced in `text` (e.g. a path dragged
@@ -172,23 +171,91 @@ pub fn load_role_notes(root: &std::path::Path, role: &str) -> String {
     .unwrap_or_default()
 }
 
-// ---- shared harness: rules + skill catalog (docs/harness.md, phase H1) -----
+// ---- shared harness: discovery + worker-aware projection (H1 + A1) ---------
 //
 // The packet is the only injection point every adapter-connected worker
 // shares, so workspace rules and the skill catalog ride in it: rules inlined
 // (constraints must not be optional), skills as one catalog line each with
 // the body read on demand (Hermes-style progressive loading — SKILL.md is
 // level 1, deeper files in the skill folder are level 2).
+//
+// A1 (docs/absorption.md): a repo that already has agent assets gets them
+// as harness the moment Yard runs. Discovery is read-only (nothing is
+// copied into .agents/), and projection is worker-aware: a worker that
+// natively consumes a source (claude-code reads CLAUDE.md and
+// .claude/skills; codex reads AGENTS.md) must not receive it twice.
 
 /// Cap for inlined workspace rules; beyond it the remaining files become
 /// anchors so a rule pile-up cannot blow up every packet.
 const RULES_INLINE_CAP: usize = 4 * 1024;
 
-/// Concatenate `.agents/rules/*.md` (sorted by filename) up to the cap.
-/// Returns (inlined text, anchored leftover paths).
-pub fn load_rules(root: &std::path::Path) -> (String, Vec<String>) {
-    let dir = root.join(crate::state::STATE_DIR).join("rules");
-    let mut files: Vec<_> = std::fs::read_dir(&dir)
+/// One always-apply rule source (a file), with the workers that already read
+/// it natively (those workers get nothing — token discipline).
+pub struct HarnessRule {
+    /// Display label and read anchor, repo-relative (e.g. "CLAUDE.md").
+    pub origin: String,
+    pub text: String,
+    pub native_to: Vec<String>,
+}
+
+/// One catalog skill, with its SKILL.md anchor path.
+pub struct HarnessSkill {
+    pub name: String,
+    pub description: String,
+    /// Repo-relative SKILL.md path (".agents/skills/x/SKILL.md" or borrowed).
+    pub path: String,
+    pub native_to: Vec<String>,
+}
+
+#[derive(Default)]
+pub struct Harness {
+    pub rules: Vec<HarnessRule>,
+    pub skills: Vec<HarnessSkill>,
+}
+
+/// Discover the workspace harness. Yard-native `.agents/` sources always
+/// load; with `discovery` on (the default), assets the repo already has for
+/// other agent tooling join in, in precedence order — `.agents` first, and a
+/// canonical-path dedup so symlinked copies (e.g. CLAUDE.md -> AGENTS.md)
+/// merge into one entry whose native set covers both readers.
+pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
+    let mut h = Harness::default();
+    let mut seen_rule_paths: Vec<(std::path::PathBuf, usize)> = Vec::new();
+
+    let push_rule = |h: &mut Harness,
+                     seen: &mut Vec<(std::path::PathBuf, usize)>,
+                     file: &std::path::Path,
+                     origin: String,
+                     native: Option<&str>| {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            return;
+        };
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let canon = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
+        if let Some((_, idx)) = seen.iter().find(|(c, _)| *c == canon) {
+            // Same file under another name (symlink): merge the native set.
+            if let Some(n) = native {
+                let entry = &mut h.rules[*idx];
+                if !entry.native_to.iter().any(|w| w == n) {
+                    entry.native_to.push(n.to_string());
+                }
+            }
+            return;
+        }
+        seen.push((canon, h.rules.len()));
+        h.rules.push(HarnessRule {
+            origin,
+            text,
+            native_to: native.map(|n| vec![n.to_string()]).unwrap_or_default(),
+        });
+    };
+
+    // 1. Yard-native rules (always on).
+    let rules_dir = root.join(crate::state::STATE_DIR).join("rules");
+    let mut files: Vec<_> = std::fs::read_dir(&rules_dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -196,43 +263,101 @@ pub fn load_rules(root: &std::path::Path) -> (String, Vec<String>) {
         .filter(|p| p.extension().is_some_and(|x| x == "md"))
         .collect();
     files.sort();
-    let mut inlined = String::new();
-    let mut anchored = Vec::new();
-    for f in files {
-        let Ok(text) = std::fs::read_to_string(&f) else {
-            continue;
-        };
-        let text = text.trim();
-        if text.is_empty() {
-            continue;
-        }
+    for f in &files {
         let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("rule");
-        if inlined.len() + text.len() > RULES_INLINE_CAP {
-            anchored.push(format!(".agents/rules/{name}"));
-            continue;
-        }
-        inlined.push_str(&format!("### {name}\n{text}\n\n"));
+        push_rule(
+            &mut h,
+            &mut seen_rule_paths,
+            f,
+            format!(".agents/rules/{name}"),
+            None,
+        );
     }
-    (inlined.trim().to_string(), anchored)
+
+    // 1b. Yard-native skills (always on).
+    collect_skills(
+        &mut h,
+        &root.join(crate::state::STATE_DIR).join("skills"),
+        ".agents/skills",
+        &[],
+    );
+
+    if discovery {
+        // 2. Root instruction files other agents already use.
+        push_rule(
+            &mut h,
+            &mut seen_rule_paths,
+            &root.join("AGENTS.md"),
+            "AGENTS.md".to_string(),
+            Some("codex"),
+        );
+        push_rule(
+            &mut h,
+            &mut seen_rule_paths,
+            &root.join("CLAUDE.md"),
+            "CLAUDE.md".to_string(),
+            Some("claude-code"),
+        );
+        // 3. Claude Code skills (same SKILL.md format).
+        collect_skills(
+            &mut h,
+            &root.join(".claude/skills"),
+            ".claude/skills",
+            &["claude-code"],
+        );
+        // 4. Cursor rules.
+        let cursor = root.join(".cursor/rules");
+        let mut cfiles: Vec<_> = std::fs::read_dir(&cursor)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "md" || x == "mdc"))
+            .collect();
+        cfiles.sort();
+        for f in &cfiles {
+            let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("rule");
+            push_rule(
+                &mut h,
+                &mut seen_rule_paths,
+                f,
+                format!(".cursor/rules/{name}"),
+                None,
+            );
+        }
+        // 5. Copilot instructions.
+        push_rule(
+            &mut h,
+            &mut seen_rule_paths,
+            &root.join(".github/copilot-instructions.md"),
+            ".github/copilot-instructions.md".to_string(),
+            None,
+        );
+    }
+    h.skills.sort_by(|a, b| a.name.cmp(&b.name));
+    h
 }
 
-/// The skill catalog: (name, description) from every
-/// `.agents/skills/<name>/SKILL.md` frontmatter, sorted by name.
-pub fn skill_catalog(root: &std::path::Path) -> Vec<(String, String)> {
-    let dir = root.join(crate::state::STATE_DIR).join("skills");
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+/// Scan one skills directory into the harness, skipping names already taken
+/// by a higher-precedence source and files already seen via symlink.
+fn collect_skills(h: &mut Harness, dir: &std::path::Path, prefix: &str, native_to: &[&str]) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let skill_md = entry.path().join("SKILL.md");
         let Ok(text) = std::fs::read_to_string(&skill_md) else {
             continue;
         };
         let dir_name = entry.file_name().to_string_lossy().into_owned();
-        let name = frontmatter_field(&text, "name").unwrap_or(dir_name);
-        let description = frontmatter_field(&text, "description").unwrap_or_default();
-        out.push((name, description));
+        let name = frontmatter_field(&text, "name").unwrap_or(dir_name.clone());
+        if h.skills.iter().any(|s| s.name == name) {
+            continue; // precedence: first source wins
+        }
+        h.skills.push(HarnessSkill {
+            name,
+            description: frontmatter_field(&text, "description").unwrap_or_default(),
+            path: format!("{prefix}/{dir_name}/SKILL.md"),
+            native_to: native_to.iter().map(|s| s.to_string()).collect(),
+        });
     }
-    out.sort();
-    out
 }
 
 /// A top-level scalar field from a leading YAML frontmatter block.
@@ -247,42 +372,72 @@ fn frontmatter_field(text: &str, key: &str) -> Option<String> {
     })
 }
 
-/// Render the shared-harness sections (workspace rules + skill catalog) that
-/// every packet — execution and planning — carries identically.
+/// Render the shared-harness sections for one worker: rules it does not
+/// already read natively (inlined up to the cap, then anchored) and the
+/// skill catalog (minus natively-loaded skills), with required-skill anchors.
 fn push_harness_sections(
     p: &mut String,
-    rules: &(String, Vec<String>),
-    skills: &[(String, String)],
+    harness: &Harness,
+    worker_id: &str,
     required_skills: &[String],
 ) {
-    let (inlined, anchored) = rules;
+    let native = |list: &[String]| list.iter().any(|w| w == worker_id);
+
+    let mut inlined = String::new();
+    let mut anchored: Vec<&str> = Vec::new();
+    for r in &harness.rules {
+        if native(&r.native_to) {
+            continue;
+        }
+        if inlined.len() + r.text.len() > RULES_INLINE_CAP {
+            anchored.push(&r.origin);
+            continue;
+        }
+        inlined.push_str(&format!("### {}\n{}\n\n", r.origin, r.text));
+    }
+    let inlined = inlined.trim();
     if !inlined.is_empty() || !anchored.is_empty() {
         p.push_str("## Workspace rules (always apply)\n\n");
         if !inlined.is_empty() {
             p.push_str(inlined);
             p.push_str("\n\n");
         }
-        for a in anchored {
+        for a in &anchored {
             p.push_str(&format!("- also read and follow: `{a}`\n"));
         }
         if !anchored.is_empty() {
             p.push('\n');
         }
     }
+
+    let skills: Vec<&HarnessSkill> = harness
+        .skills
+        .iter()
+        .filter(|s| !native(&s.native_to))
+        .collect();
     if !skills.is_empty() {
         p.push_str("## Skills (read on demand)\n\n");
         p.push_str(
             "Reusable procedures for this workspace. Before work a skill clearly applies \
-             to, read `.agents/skills/<name>/SKILL.md` first (the folder may hold deeper \
-             reference files \u{2014} read those only as needed):\n",
+             to, read its SKILL.md first (the folder may hold deeper reference files \
+             \u{2014} read those only as needed):\n",
         );
-        for (name, desc) in skills {
-            p.push_str(&format!("- {name} \u{2014} {desc}\n"));
+        for s in &skills {
+            p.push_str(&format!(
+                "- {} \u{2014} {} (`{}`)\n",
+                s.name, s.description, s.path
+            ));
         }
         if !required_skills.is_empty() {
             p.push_str("\nRequired for THIS task (read before starting):\n");
-            for s in required_skills {
-                p.push_str(&format!("- `.agents/skills/{s}/SKILL.md`\n"));
+            for name in required_skills {
+                let path = harness
+                    .skills
+                    .iter()
+                    .find(|s| &s.name == name)
+                    .map(|s| s.path.clone())
+                    .unwrap_or_else(|| format!(".agents/skills/{name}/SKILL.md"));
+                p.push_str(&format!("- `{path}`\n"));
             }
         }
         p.push('\n');
@@ -322,8 +477,14 @@ pub fn compile(inputs: &PacketInputs) -> String {
         }
     }
 
-    // Shared harness: rules every worker must follow + the skill catalog.
-    push_harness_sections(&mut p, inputs.rules, inputs.skills, &inputs.task.skills);
+    // Shared harness: rules every worker must follow + the skill catalog,
+    // projected for this worker (native sources are skipped).
+    push_harness_sections(
+        &mut p,
+        inputs.harness,
+        inputs.worker_id,
+        &inputs.task.skills,
+    );
 
     // Task.
     p.push_str("## Task\n\n");
@@ -478,8 +639,8 @@ pub fn compile_planning(
     language: &str,
     worker_guidance: &str,
     images: &[String],
-    rules: &(String, Vec<String>),
-    skills: &[(String, String)],
+    harness: &Harness,
+    planner_worker_id: &str,
 ) -> String {
     let mut p = String::new();
     p.push_str("# Yard planning gate\n\n");
@@ -518,7 +679,7 @@ pub fn compile_planning(
 
     // The same shared harness execution packets carry: planning must respect
     // workspace rules, and seeing the skill catalog lets it assign task.skills.
-    push_harness_sections(&mut p, rules, skills, &[]);
+    push_harness_sections(&mut p, harness, planner_worker_id, &[]);
 
     p.push_str("## Rules\n\n");
     p.push_str(
@@ -635,45 +796,143 @@ mod tests {
     }
 
     #[test]
-    fn rules_inline_with_cap_and_anchor_overflow() {
-        let root = std::env::temp_dir().join(format!("yard-h1-rules-{}", std::process::id()));
+    fn discovery_finds_native_and_borrowed_sources() {
+        let root = std::env::temp_dir().join(format!("yard-a1-disc-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let dir = root.join(".agents/rules");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("a-style.md"), "# Style\nMatch surrounding code.").unwrap();
-        std::fs::write(dir.join("b-big.md"), "x".repeat(5000)).unwrap(); // over the cap
-        let (inlined, anchored) = load_rules(&root);
-        assert!(inlined.contains("a-style.md"));
-        assert!(inlined.contains("Match surrounding code."));
-        assert_eq!(anchored, vec![".agents/rules/b-big.md".to_string()]);
+        std::fs::create_dir_all(root.join(".agents/rules")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/skills/native-skill")).unwrap();
+        std::fs::create_dir_all(root.join(".claude/skills/borrowed-skill")).unwrap();
+        std::fs::create_dir_all(root.join(".cursor/rules")).unwrap();
+        std::fs::create_dir_all(root.join(".github")).unwrap();
+        std::fs::write(root.join(".agents/rules/team.md"), "Ours first.").unwrap();
+        std::fs::write(root.join("AGENTS.md"), "Repo agent instructions.").unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "Claude instructions.").unwrap();
+        std::fs::write(
+            root.join(".claude/skills/borrowed-skill/SKILL.md"),
+            "---\nname: borrowed-skill\ndescription: From claude dir.\n---\nbody",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".agents/skills/native-skill/SKILL.md"),
+            "---\nname: native-skill\ndescription: Ours.\n---\nbody",
+        )
+        .unwrap();
+        std::fs::write(root.join(".cursor/rules/style.mdc"), "Cursor style rule.").unwrap();
+        std::fs::write(
+            root.join(".github/copilot-instructions.md"),
+            "Copilot notes.",
+        )
+        .unwrap();
+
+        let h = discover_harness(&root, true);
+        let origins: Vec<&str> = h.rules.iter().map(|r| r.origin.as_str()).collect();
+        assert_eq!(
+            origins,
+            vec![
+                ".agents/rules/team.md",
+                "AGENTS.md",
+                "CLAUDE.md",
+                ".cursor/rules/style.mdc",
+                ".github/copilot-instructions.md"
+            ]
+        );
+        let names: Vec<&str> = h.skills.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["borrowed-skill", "native-skill"]);
+        let borrowed = h
+            .skills
+            .iter()
+            .find(|s| s.name == "borrowed-skill")
+            .unwrap();
+        assert_eq!(borrowed.path, ".claude/skills/borrowed-skill/SKILL.md");
+        assert_eq!(borrowed.native_to, vec!["claude-code".to_string()]);
+
+        // Discovery off: only .agents sources remain.
+        let h = discover_harness(&root, false);
+        assert_eq!(h.rules.len(), 1);
+        assert_eq!(h.skills.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_claude_md_merges_into_one_rule_native_to_both() {
+        let root = std::env::temp_dir().join(format!("yard-a1-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "Shared instructions.").unwrap();
+        std::os::unix::fs::symlink(root.join("AGENTS.md"), root.join("CLAUDE.md")).unwrap();
+
+        let h = discover_harness(&root, true);
+        assert_eq!(h.rules.len(), 1);
+        let r = &h.rules[0];
+        assert_eq!(r.origin, "AGENTS.md");
+        assert!(r.native_to.contains(&"codex".to_string()));
+        assert!(r.native_to.contains(&"claude-code".to_string()));
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn skill_catalog_reads_frontmatter() {
-        let root = std::env::temp_dir().join(format!("yard-h1-skills-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let dir = root.join(".agents/skills/deploy-check");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("SKILL.md"),
-            "---\nname: deploy-check\ndescription: Verify a deploy end to end.\n---\n# body",
-        )
-        .unwrap();
-        let cat = skill_catalog(&root);
-        assert_eq!(
-            cat,
-            vec![(
-                "deploy-check".to_string(),
-                "Verify a deploy end to end.".to_string()
-            )]
-        );
-        let _ = std::fs::remove_dir_all(&root);
+    fn projection_skips_natively_consumed_sources() {
+        let harness = Harness {
+            rules: vec![
+                HarnessRule {
+                    origin: "CLAUDE.md".into(),
+                    text: "Claude-native rule body.".into(),
+                    native_to: vec!["claude-code".into()],
+                },
+                HarnessRule {
+                    origin: ".cursor/rules/style.md".into(),
+                    text: "Cursor rule body.".into(),
+                    native_to: vec![],
+                },
+            ],
+            skills: vec![HarnessSkill {
+                name: "borrowed-skill".into(),
+                description: "From claude dir.".into(),
+                path: ".claude/skills/borrowed-skill/SKILL.md".into(),
+                native_to: vec!["claude-code".into()],
+            }],
+        };
+        let mut for_claude = String::new();
+        push_harness_sections(&mut for_claude, &harness, "claude-code", &[]);
+        assert!(!for_claude.contains("Claude-native rule body."));
+        assert!(for_claude.contains("Cursor rule body."));
+        assert!(!for_claude.contains("borrowed-skill"));
+
+        let mut for_codex = String::new();
+        push_harness_sections(&mut for_codex, &harness, "codex", &[]);
+        assert!(for_codex.contains("Claude-native rule body."));
+        assert!(for_codex.contains("borrowed-skill"));
+        assert!(for_codex.contains(".claude/skills/borrowed-skill/SKILL.md"));
+    }
+
+    #[test]
+    fn rules_overflow_becomes_anchors() {
+        let harness = Harness {
+            rules: vec![
+                HarnessRule {
+                    origin: "small.md".into(),
+                    text: "fits".into(),
+                    native_to: vec![],
+                },
+                HarnessRule {
+                    origin: "big.md".into(),
+                    text: "x".repeat(5000),
+                    native_to: vec![],
+                },
+            ],
+            skills: vec![],
+        };
+        let mut out = String::new();
+        push_harness_sections(&mut out, &harness, "codex", &[]);
+        assert!(out.contains("### small.md"));
+        assert!(out.contains("also read and follow: `big.md`"));
+        assert!(!out.contains("xxxxxxxxxx"));
     }
 
     #[test]
     fn packet_carries_rules_catalog_and_required_skills() {
-        let mut task = crate::schemas::Task {
+        let task = crate::schemas::Task {
             id: "YARD-1".into(),
             title: "t".into(),
             state: Default::default(),
@@ -693,14 +952,19 @@ mod tests {
             worker_rationale: None,
         };
         let repo = crate::inspect::RepoSummary::default();
-        let rules = (
-            "### team.md\nNever push without review.".to_string(),
-            vec![".agents/rules/overflow.md".to_string()],
-        );
-        let skills = vec![(
-            "deploy-check".to_string(),
-            "Verify a deploy end to end.".to_string(),
-        )];
+        let harness = Harness {
+            rules: vec![HarnessRule {
+                origin: "team.md".into(),
+                text: "Never push without review.".into(),
+                native_to: vec![],
+            }],
+            skills: vec![HarnessSkill {
+                name: "deploy-check".into(),
+                description: "Verify a deploy end to end.".into(),
+                path: ".agents/skills/deploy-check/SKILL.md".into(),
+                native_to: vec![],
+            }],
+        };
         let p = compile(&PacketInputs {
             worker_id: "codex",
             task: &task,
@@ -713,19 +977,16 @@ mod tests {
             language: "en",
             images: &[],
             role_notes: "",
-            rules: &rules,
-            skills: &skills,
+            harness: &harness,
         });
         assert!(p.contains("## Workspace rules (always apply)"));
         assert!(p.contains("Never push without review."));
-        assert!(p.contains(".agents/rules/overflow.md"));
         assert!(p.contains("## Skills (read on demand)"));
         assert!(p.contains("deploy-check \u{2014} Verify a deploy end to end."));
         assert!(p.contains("Required for THIS task"));
         assert!(p.contains(".agents/skills/deploy-check/SKILL.md"));
 
         // Planning packets carry the same harness sections.
-        task.skills.clear();
         let plan = compile_planning(
             "do a thing",
             &repo,
@@ -733,8 +994,8 @@ mod tests {
             "en",
             "",
             &[],
-            &rules,
-            &skills,
+            &harness,
+            "codex",
         );
         assert!(plan.contains("## Workspace rules (always apply)"));
         assert!(plan.contains("## Skills (read on demand)"));
@@ -782,8 +1043,7 @@ mod tests {
             language: "en",
             images: &[],
             role_notes,
-            rules: &(String::new(), vec![]),
-            skills: &[],
+            harness: &Harness::default(),
         })
     }
 
@@ -821,8 +1081,7 @@ mod tests {
             language: "en",
             images: &[],
             role_notes: "",
-            rules: &(String::new(), vec![]),
-            skills: &[],
+            harness: &Harness::default(),
         });
         assert!(p.contains("## Continuing a partial run"));
         assert!(p.contains("do not redo finished work"));
