@@ -1,23 +1,37 @@
 # Yard
 
-> Yard is the local operating console where AI coding workers plan, build, verify, and hand off long-running work inside your workspace.
+> **Rent the intelligence. Own the work.**
+> Yard is a local console for engineering the loop that turns a few sentences
+> of intent into verified, durable work — using your already-installed coding
+> agents as interchangeable workers.
 
 ![Yard terminal UI demo](docs/assets/yard-demo.gif)
 
-Yard is a local AI workbench. You describe work in a few natural-language sentences, and Yard manages planning, a queued execution model, worker routing, validation, compacting, handoff, and safety inside your local workspace. It uses **Codex CLI** and **Claude Code CLI** as hidden, subscription-backed workers.
+*"I don't prompt Claude anymore. I have loops running that prompt Claude…
+my job is to write loops."* — that is how Anthropic's Claude Code lead
+describes his own workflow now, and **loop engineering** is the name the
+practice picked up. Yard is that practice as a product, for everyone:
 
-You normally open **Yard**, not Codex or Claude Code directly.
+- **Prompts are compiled, not written.** You state intent once; every worker
+  prompt is built from contracts, rules, skills, role discipline, and
+  checkpoints you own. Improve those inputs and every future prompt improves.
+- **The loop is yours, not a vendor's.** Worker-neutral (Claude Code, Codex,
+  or any CLI behind one contract), local (state lives in your repo), and it
+  survives crashes, restarts, and worker swaps.
+- **The verifier is never the doer.** A deterministic evaluator checks every
+  run against the contract; risky plans get reviewer-role verification tasks.
+  "Done" is earned, not self-reported.
+
+Full identity: [docs/identity.md](docs/identity.md).
 
 ```
-User
-  -> Yard UI (terminal)
-    -> planning gate
-    -> intent / scope / acceptance contract
-    -> queue / state / ledger
-    -> worker packet compiler
-      -> Codex CLI or Claude Code CLI as a hidden worker
-    -> validation / evaluation
-    -> checkpoint / handoff
+User intent (a few sentences)
+  -> planning gate            intent / scope / acceptance contract
+  -> work queue               bounded tasks, dependencies, parallel-ready
+  -> packet compiler          prompts built from state you own
+      -> hidden workers       claude / codex / any CLI, sandboxed, routable
+  -> deterministic evaluator  done is checked, not declared
+  -> checkpoint / handoff     durable artifacts, resumable forever
 ```
 
 ## Your Claude Code and Codex, as they are

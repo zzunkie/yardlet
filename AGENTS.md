@@ -12,7 +12,9 @@ Authoritative guidance for AI agents working in the `yard` repository.
 
 ## What Yard is
 
-A local terminal AI workbench (Rust + Ratatui). You describe work in a few sentences; Yard plans it into an intent + task queue, runs each task through a hidden, subscription-backed worker CLI (**Codex** or **Claude Code**), validates with a deterministic evaluator, and leaves checkpoints/handoffs under `.agents/`.
+A local terminal AI workbench (Rust + Ratatui). You describe work in a few sentences; Yard plans it into an intent + task queue, runs each task through a hidden worker CLI (**Codex**, **Claude Code**, or any CLI via the generic adapter), validates with a deterministic evaluator, and leaves checkpoints/handoffs under `.agents/`.
+
+**Identity** ([`docs/identity.md`](docs/identity.md)): *rent the intelligence, own the work.* The core stays deterministic; everything generative sits behind the worker contract; prompts are compiled from user-owned state, never hand-written; the records/rules/skills/telemetry in `.agents/` are compounding user capital.
 
 Full spec: [`docs/yard-final-plan.md`](docs/yard-final-plan.md). Routing/telemetry design: [`docs/routing-and-telemetry.md`](docs/routing-and-telemetry.md). Parallel queue / queue-vs-subagent boundary: [`docs/parallel-queue.md`](docs/parallel-queue.md). Shared harness & learning loop: [`docs/harness.md`](docs/harness.md).
 
