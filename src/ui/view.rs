@@ -580,7 +580,6 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
                     Style::default().fg(Color::Yellow).bold(),
                 ),
                 Span::styled(body, Style::default().fg(Color::Yellow)),
-                Span::styled(l.subscription_note, Style::default().fg(Color::DarkGray)),
             ])
         }
         Job::Idle => match &app.toast {
