@@ -1,9 +1,9 @@
 [package]
 name = "yard"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.82"
-description = "Yard: a local AI workbench. Plan, queue, route, validate, and hand off long-running work using subscription-backed Codex and Claude Code CLIs as hidden workers. Zero AI API keys required."
+description = "Yard: a local AI workbench. Plan, queue, route, validate, and hand off long-running work using your already-installed Codex and Claude Code CLIs as hidden workers."
 license = "MIT"
 repository = "https://github.com/zzunkie/yard"
 keywords = ["ai", "agent", "tui", "workbench", "cli"]

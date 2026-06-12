@@ -20,19 +20,14 @@ User
     -> checkpoint / handoff
 ```
 
-## Zero API keys — by default
+## Your Claude Code and Codex, as they are
 
-Yard core does **not** require, request, or store AI provider API keys, and it
-never *silently* calls a provider API. The default workers are
-subscription-backed CLIs because Yard's first audience is individuals for whom
-metered API billing is the pain; if no safe local worker is ready, Yard stops
-with a clear readiness message.
-
-This is a default, not an identity: an API-backed worker is a per-worker
-**opt-in**. Set `invocation.pass_env: ["OPENAI_API_KEY"]` on a custom worker
-profile and that one worker receives the named variable while every other
-worker still runs key-scrubbed. The key belongs to the worker's own tooling —
-Yard never reads or persists its value.
+If `claude` or `codex` runs on your machine, Yard can drive it — no new
+accounts, no extra configuration, no setup step. Yard discovers the installed
+CLIs, probes readiness, and puts them to work exactly as you already pay for
+them. Any other agent CLI can be added in config alone (see
+"Adding a worker"), including API-backed tools via a per-worker
+`invocation.pass_env` opt-in.
 
 ## The loop
 
@@ -64,7 +59,7 @@ by a deterministic evaluator, and leaves a checkpoint and handoff under
 | `yard new "..." --image <path>` | Attach a local image to the goal (also auto-detected from the request). |
 | `yard queue` | List the work queue. |
 | `yard status [--json]` | Workspace, intent, queue, and worker summary. |
-| `yard worker status` | Worker readiness and zero-key billing safety. |
+| `yard worker status` | Worker readiness and billing-env safety. |
 | `yard inspect repo [--json]` | Cheap deterministic local evidence. |
 | `yard packet --task <id> --worker <id> [--dry-run]` | Compile a worker packet. |
 | `yard run --next [--execute] [--worker <id>]` | Prepare (default) or run the next task. |
@@ -142,7 +137,8 @@ result files out). Placeholders: `{run_dir}`, `{model}`, `{effort}`,
 ```
 
 The worker must be able to write files in the workspace (that is how results
-come back) — Yard never passes provider API keys to it.
+come back); its subprocess env is sanitized unless the profile opts vars
+back in with `pass_env`.
 
 ## Role profiles
 
