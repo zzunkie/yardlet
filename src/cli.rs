@@ -58,6 +58,26 @@ pub enum Command {
     Routing(RoutingArgs),
     /// Recover state from an interrupted session (orphaned runs, unread plans).
     Recover,
+    /// Classify the repo and equip skills from the library (docs/skills.md).
+    Skill(SkillArgs),
+}
+
+#[derive(Args)]
+pub struct SkillArgs {
+    #[command(subcommand)]
+    cmd: SkillCmd,
+}
+
+#[derive(Subcommand)]
+enum SkillCmd {
+    /// Show equipped skills, detected presets, and library availability.
+    List,
+    /// Print skills the detected presets want but that aren't equipped.
+    Suggest,
+    /// Equip skills (or a whole preset) from the library.
+    Equip { names: Vec<String> },
+    /// Remove equipped skills.
+    Unequip { names: Vec<String> },
 }
 
 #[derive(Args)]
@@ -248,6 +268,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Report) => cmd_report(&cwd),
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
         Some(Command::Recover) => cmd_recover(&cwd),
+        Some(Command::Skill(a)) => cmd_skill(&cwd, a),
     }
 }
 
@@ -263,6 +284,78 @@ fn cmd_recover(cwd: &std::path::Path) -> Result<()> {
     } else {
         for m in &msgs {
             println!("{m}");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_skill(cwd: &std::path::Path, args: SkillArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let cfg = ws.load_config()?;
+    let lib = crate::skills::Library::open(&cfg.skill_library);
+    match args.cmd {
+        SkillCmd::List => {
+            let repo = inspect::summarize(&ws.root);
+            println!(
+                "Detected presets: {}",
+                crate::skills::detect_presets(&repo).join(", ")
+            );
+            let inst = crate::skills::installed(&ws);
+            println!("\nEquipped ({}):", inst.len());
+            for s in &inst {
+                println!("  \u{2713} {s}");
+            }
+            match &lib {
+                Some(library) => {
+                    let avail: Vec<String> = library
+                        .all_skills()
+                        .into_iter()
+                        .filter(|s| !inst.contains(s))
+                        .collect();
+                    println!("\nAvailable in library ({}):", avail.len());
+                    for s in &avail {
+                        println!("  \u{00b7} {s}");
+                    }
+                }
+                None => println!("\n(no skill_library configured; set it in .agents/yard.yaml)"),
+            }
+        }
+        SkillCmd::Suggest => match &lib {
+            Some(library) => {
+                let repo = inspect::summarize(&ws.root);
+                let s = crate::skills::suggest(&ws, library, &repo);
+                if s.is_empty() {
+                    println!("nothing to suggest \u{2014} detected presets are fully equipped.");
+                } else {
+                    println!("suggested for this repo: {}", s.join(", "));
+                    println!("equip with: yard skill equip {}", s.join(" "));
+                }
+            }
+            None => println!("no skill_library configured."),
+        },
+        SkillCmd::Equip { names } => {
+            let Some(library) = &lib else {
+                anyhow::bail!("no skill_library configured (set it in .agents/yard.yaml).");
+            };
+            let expanded: Vec<String> = names.iter().flat_map(|n| library.resolve(n)).collect();
+            for (name, out) in crate::skills::equip(&ws, library, &expanded) {
+                let msg = match out {
+                    crate::skills::EquipResult::Added => "equipped".to_string(),
+                    crate::skills::EquipResult::AlreadyPresent => "already equipped".to_string(),
+                    crate::skills::EquipResult::NotInLibrary => "not in library".to_string(),
+                    crate::skills::EquipResult::Failed(e) => format!("failed: {e}"),
+                };
+                println!("  {name}: {msg}");
+            }
+        }
+        SkillCmd::Unequip { names } => {
+            for name in &names {
+                match crate::skills::unequip(&ws, name) {
+                    Ok(true) => println!("  {name}: removed"),
+                    Ok(false) => println!("  {name}: not equipped"),
+                    Err(e) => println!("  {name}: {e}"),
+                }
+            }
         }
     }
     Ok(())

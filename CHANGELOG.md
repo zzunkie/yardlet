@@ -4,6 +4,21 @@
 
 ### Added
 
+- **Skill toolbox (S1): repo classification + auto-equip.** Point
+  `skill_library` at a local library (internal-tool layout: `presets/*.skills`
+  + `skills/<name>/SKILL.md`) and Yard classifies the repo from its file
+  signals (`project.godot`→game, `package.json`→web-ui, Dockerfile→infra,
+  …) and equips the matching presets' skills automatically on plan/goal
+  (`auto_equip`, on by default — I4: minimize intervention). `yard skill
+  list / suggest / equip <preset|name> / unequip` manage it by hand.
+  Deterministic, no LLM; equip is a reversible symlink into `.agents/skills/`.
+
+### Fixed
+
+- A fresh plan now clears the queue before the planning worker runs, so the
+  Home screen no longer shows the previous intent's tasks for the whole
+  planning run. (Interview/amend keep the live queue.)
+
 - **`yard goal` express lane (P2).** For small work, skip the planning
   worker entirely: `yard goal "fix the login redirect"` lays down a single
   deterministic task and drains it. Add `--verify "..."` and Yard appends a

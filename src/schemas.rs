@@ -59,6 +59,15 @@ pub struct YardConfig {
     /// worker harness, worker-aware (docs/absorption.md A1). On by default.
     #[serde(default = "default_true")]
     pub harness_discovery: bool,
+    /// Path to a local skill library (internal-tool layout: presets/*.skills +
+    /// skills/<name>/SKILL.md). Empty = none. Read-only; equip links from it
+    /// into .agents/skills/ (docs/skills.md S1).
+    #[serde(default)]
+    pub skill_library: String,
+    /// Auto-equip core + detected-preset skills on plan/goal (I4: minimize
+    /// intervention). Off = `yard skill suggest` nudges instead. On by default.
+    #[serde(default = "default_true")]
+    pub auto_equip: bool,
 }
 
 fn default_access() -> String {

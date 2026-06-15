@@ -83,6 +83,7 @@ by a deterministic evaluator, and leaves a checkpoint and handoff under
 | `yard handoff` | Print the latest run's handoff. |
 | `yard report` | Print the intent's final report (aggregate of every task). |
 | `yard recover` | Recover state from an interrupted session (orphaned runs, unread plans). |
+| `yard skill list / suggest / equip <preset> / unequip` | Classify the repo and equip skills from a local library. |
 | `yard routing review` | Per-kind worker success stats + suggested preferences. |
 | `yard routing apply --kind K --worker W` | Pin a worker for a task kind (human-approved). |
 

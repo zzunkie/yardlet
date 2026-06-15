@@ -20,6 +20,7 @@ mod review;
 mod routing;
 mod run;
 mod schemas;
+mod skills;
 mod snapshot;
 mod state;
 mod telemetry;

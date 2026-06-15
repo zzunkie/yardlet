@@ -43,6 +43,8 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
         auto_ime: true,
         harness_discovery: true,
         ambiguity_gate: true,
+        skill_library: String::new(),
+        auto_equip: true,
     };
     state::save_yaml(&ws.config_path(), &config)?;
     written.push("yard.yaml".to_string());

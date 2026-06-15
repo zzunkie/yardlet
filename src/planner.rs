@@ -276,6 +276,7 @@ pub fn plan_goal(
     let _ = crate::report::archive_intent(ws);
     state::save_yaml(&ws.intent_path(), &intent)?;
     ws.save_queue(&queue)?;
+    let _ = crate::skills::auto_equip(ws, &inspect::summarize(&ws.root));
     Ok(task_count)
 }
 
@@ -439,6 +440,12 @@ fn plan_core(
         &run_dir.join("evidence").join("repo-summary.md"),
         &inspect::to_markdown(&summary),
     )?;
+    // Auto-equip skills for this repo's detected presets before compiling the
+    // packet, so the catalog the planner sees already includes them (S1).
+    let equipped = crate::skills::auto_equip(ws, &summary);
+    if !equipped.is_empty() {
+        lines.push(format!("equipped skills: {}", equipped.join(", ")));
+    }
     let worker_guidance = build_worker_guidance(workers);
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let packet_text = packet::compile_planning(
@@ -452,6 +459,21 @@ fn plan_core(
         &worker_id,
     );
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
+
+    // For a fresh plan, archive the previous intent and CLEAR the queue now,
+    // before the worker runs — otherwise the Home screen shows the old queue
+    // for the whole planning run, which reads as stale. (Interview/amend keep
+    // the live queue; they refine it in place.)
+    if archive {
+        let _ = crate::report::archive_intent(ws);
+        let _ = ws.save_queue(&WorkQueue {
+            schema_version: 1,
+            queue_id: "planning".to_string(),
+            intent_id: String::new(),
+            selection_policy: SelectionPolicy::default(),
+            tasks: Vec::new(),
+        });
+    }
 
     // Invoke the worker with a sanitized environment.
     let env = guard::sanitized_worker_env_for(billing, &profile.invocation.pass_env)
@@ -496,12 +518,8 @@ fn plan_core(
     let intent = build_intent(&intent_id, store_request, &plan, images);
     let queue = build_queue(&intent_id, &plan);
 
-    if archive {
-        // Archive the previous intent before overwriting it (new work
-        // shouldn't lose the finished one's record). No-op on the first plan.
-        let _ = crate::report::archive_intent(ws);
-    }
-
+    // (Fresh plans already archived + cleared the prior queue before the
+    // worker ran; here we just write the new canonical state.)
     state::save_yaml(&ws.intent_path(), &intent)?;
     ws.save_queue(&queue)?;
     mark_consumed(&run_dir);
