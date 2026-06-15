@@ -100,36 +100,80 @@ Identify and source skills the repo wants but doesn't have.
   authors a proper SKILL.md (frontmatter + procedure) which Yard writes,
   through `state.rs`, to `.agents/skills/<name>/` (in-repo) or, with
   `--library`, to the central library for reuse. Marked `source: learned`.
-- **From a run (the Hermes move, human-gated):** the result contract already
-  has `harness_suggestions` (designed in H4). A worker that discovers a
-  reusable procedure proposes it; `yard skill review` lists such candidates;
-  `apply` runs create. The worker proposes, the human promotes — never a
-  silent self-write (contrast Hermes `skill_manage` auto-write).
+- **From a run (the Hermes move, human-gated by default):** the result
+  contract already has `harness_suggestions` (designed in H4). A worker that
+  discovers a reusable procedure proposes it; `yard skill review` lists such
+  candidates; `apply` runs create. **Yard's default is propose → human
+  promote**; an opt-in `auto_skill: true` may apply create automatically for
+  fast iteration.
+  - *Versus Hermes:* Hermes `skill_manage` writes skills **automatically by
+    default** (including a post-turn self-improvement review), with an opt-in
+    `write_approval` gate that stages writes for `/skills approve`. Yard
+    inverts the default — gate on, autonomy opt-in — per I4. Same two modes,
+    opposite default.
 
 ## S4 — Manage over time (the lifecycle) · size L — this is H4
 
 Lifecycle (spec §13.2): observe → candidate → review → promote → deprecate.
+The hard part is not collecting usage — it is **judging whether a skill
+actually helped**. Usage counts are a weak signal (declared-often ≠ good); a
+bad skill that gets injected a lot is worse, not better. So S4's core is a
+skill *eval*, and that eval must obey the same rule as everything else:
+**the verifier is never the doer** — a skill's worth is not the self-report
+of the worker that used it.
 
-- **Observe (mechanism, every run):** record which equipped skills a task
-  declared (`task.skills`) and whether the run succeeded, to
-  `telemetry/skills.jsonl`. No tokens, no behavior change.
-- **`yard skill review`** — one screen: candidates (gaps, run-proposed,
-  research drafts) to promote; equipped skills that are stale (never
-  declared in N intents) or correlated with failures, to prune. Same UX as
-  `yard routing review`; a status nudge when items pend.
+- **Observe (mechanism, every run):** to `telemetry/skills.jsonl`, per task,
+  record the declared `task.skills` alongside signals Yard already produces
+  deterministically — `eval_state` (Done/Partial/Failed), retry count,
+  wall_seconds, and whether a downstream **review task** (A3 / `yard goal
+  --verify`) that depended on this task passed. No tokens, no behavior change.
+- **Skill score (deterministic, auditable):** per skill, aggregate across the
+  runs that declared it: pass-through rate of dependent review tasks,
+  first-try Done rate, retry tax. A skill that rides many runs but whose
+  work keeps failing review scores *down*, not up. The score is evidence for
+  a human, never an automatic promote/prune (I4) — same posture as
+  routing telemetry.
+- **`yard skill review`** — one screen driven by that score: candidates
+  (gaps, run-proposed, research drafts) to promote; equipped skills that are
+  stale (never declared in N intents) or score poorly (correlated with
+  failed/Partial review), to prune. Same UX as `yard routing review`; a
+  status nudge when items pend.
 - **Promote / deprecate (human gate):** `yard skill apply <n>` /
   `yard skill deprecate <name>`. Promotion writes/equips; deprecation
   unequips (and, for a library skill, marks it deprecated, never deletes
   someone else's file).
 - **Versioning:** a created/edited skill bumps a `version:` in frontmatter and
-  keeps prior text in git — skills improve in place, auditably.
+  keeps prior text in git — skills improve in place, auditably; the score
+  resets on a version bump so an edit is re-judged, not coasting on old
+  evidence.
+
+### Why this also sharpens Yard's core eval
+
+This phase exposes that today's evaluator only checks floor conditions
+(schema, ids, forbidden paths) and trusts the worker's `status` for "good".
+The skill score leans on the **review-task verdict** as the real quality
+signal — which means S4 only works well if review tasks produce a structured,
+machine-readable pass/fail per acceptance criterion (not just prose). That
+is a concrete upgrade to the reviewer-role output contract (A3): each review
+task should emit `verdict: { criterion_id, pass, evidence }[]` that the
+evaluator records. The same verdict feeds: task done/partial decisions,
+skill scores, and routing telemetry. One verifier, many consumers.
 
 ## Sequence
 
 ```
 S1 classify+equip ──► S2 research ──► S3 create ──► S4 manage (=H4)
    (toolbox)            (find gaps)     (author)       (lifecycle loop)
+                                                        └─ needs: structured
+                                                           review verdicts
 ```
+
+A prerequisite for S4's eval (callable independently, useful on its own):
+**structured review verdicts.** Reviewer-role tasks (and `yard goal --verify`)
+should write `verdict: [{criterion_id, pass, evidence}]` into result.json so
+the evaluator can record per-criterion pass/fail instead of trusting prose.
+This is the single quality signal S4's skill score, A3 acceptance, and
+routing telemetry all read. Build it before S4.
 
 S1 first — it makes every later phase land somewhere (research/created skills
 get equipped; S4 observes equipped usage). S2 and S3 share the worker-task
