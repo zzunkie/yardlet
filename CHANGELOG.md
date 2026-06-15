@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Skill score + auto-prune (S4) — the self-correction loop closes.** Each
+  equipped skill is scored from telemetry by the runs that DECLARED it,
+  preferring structured review-verdict pass-through over a plain Done rate
+  (a skill injected often whose work keeps failing scores down, not up).
+  `yard skill review` shows the table. Learned skills (`source: learned`)
+  that score below the floor over enough runs are auto-pruned on plan
+  (unequipped, kept in git — reversible), `auto_prune` default on (I4).
+  Library skills you equipped are never auto-pruned. This makes auto-writing
+  safe: bad learned skills don't accumulate — the eval loop removes them.
+
 - **Auto-learned skills (S3).** When a run's result proposes a reusable
   procedure (`harness_suggestions` of kind "skill"), Yard records it
   automatically as `.agents/skills/<slug>/SKILL.md` marked `source: learned`

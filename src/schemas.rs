@@ -74,6 +74,11 @@ pub struct YardConfig {
     /// ones. On by default (I4); off routes proposals to manual review.
     #[serde(default = "default_true")]
     pub auto_skill: bool,
+    /// Auto-prune learned skills whose eval score stays below the floor over
+    /// enough runs (the self-correction half of the loop, S4). Reversible
+    /// (git keeps the file). On by default (I4); off = review surfaces them.
+    #[serde(default = "default_true")]
+    pub auto_prune: bool,
 }
 
 fn default_access() -> String {

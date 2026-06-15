@@ -206,6 +206,111 @@ pub fn auto_equip(ws: &Workspace, repo: &RepoSummary) -> Vec<String> {
         .collect()
 }
 
+// ---- skill score + auto-prune (docs/skills.md S4) --------------------------
+//
+// The self-correction half of the auto-write loop: judge each skill by the
+// runs that DECLARED it, using the deterministic quality signals telemetry
+// already records (eval state, structured review verdicts) — not declare
+// counts. A skill injected often whose work keeps failing scores DOWN. This
+// is what makes auto-writing safe: bad skills get pruned automatically.
+
+/// A skill's aggregate evidence across the runs that declared it.
+pub struct SkillScore {
+    pub name: String,
+    pub runs: u32,
+    /// Runs whose task ended Done.
+    pub done: u32,
+    /// Verdict criteria passed / total across declaring runs that produced a
+    /// verdict (the cross-task quality signal when a reviewer judged the work).
+    pub verdict_pass: u32,
+    pub verdict_total: u32,
+}
+
+impl SkillScore {
+    /// 0.0–1.0. Prefer verdict pass-through (a real reviewer judged it) when
+    /// available, else the Done rate. Unscored (no runs) reads as 1.0 so a
+    /// freshly-equipped skill isn't pruned before it's had a chance.
+    pub fn value(&self) -> f64 {
+        if self.verdict_total > 0 {
+            self.verdict_pass as f64 / self.verdict_total as f64
+        } else if self.runs > 0 {
+            self.done as f64 / self.runs as f64
+        } else {
+            1.0
+        }
+    }
+}
+
+/// Score every equipped skill from telemetry. Skills with no declaring runs
+/// still appear (value 1.0, runs 0) so `review` can show them.
+pub fn scores(ws: &Workspace) -> Vec<SkillScore> {
+    use std::collections::HashMap;
+    let runs = crate::telemetry::read_runs(ws);
+    let mut agg: HashMap<String, SkillScore> = HashMap::new();
+    for name in installed(ws) {
+        agg.insert(
+            name.clone(),
+            SkillScore {
+                name,
+                runs: 0,
+                done: 0,
+                verdict_pass: 0,
+                verdict_total: 0,
+            },
+        );
+    }
+    for r in &runs {
+        for sk in &r.skills {
+            if let Some(s) = agg.get_mut(sk) {
+                s.runs += 1;
+                if r.eval_state == "Done" {
+                    s.done += 1;
+                }
+                if let Some((p, t)) = r.verdict_pass {
+                    s.verdict_pass += p as u32;
+                    s.verdict_total += t as u32;
+                }
+            }
+        }
+    }
+    let mut out: Vec<SkillScore> = agg.into_values().collect();
+    out.sort_by(|a, b| a.value().partial_cmp(&b.value()).unwrap());
+    out
+}
+
+/// Minimum runs before a learned skill can be pruned (don't judge on noise).
+const PRUNE_MIN_RUNS: u32 = 3;
+/// Score floor below which a learned skill is pruned.
+const PRUNE_FLOOR: f64 = 0.34;
+
+/// Is this skill workspace-authored/learned (`source: learned`) rather than a
+/// library equip? Auto-prune only unequips; for a learned in-repo skill that
+/// means deleting the dir, so we only auto-prune learned ones (library skills
+/// the user chose stay until they unequip).
+fn is_learned(ws: &Workspace, name: &str) -> bool {
+    std::fs::read_to_string(ws.agents_dir().join("skills").join(name).join("SKILL.md"))
+        .map(|t| t.contains("source: learned"))
+        .unwrap_or(false)
+}
+
+/// Auto-prune (S4): unequip learned skills that scored below the floor over
+/// enough runs. Reversible (git keeps the file). Returns pruned names. No-op
+/// when `auto_prune` is off.
+pub fn auto_prune(ws: &Workspace) -> Vec<String> {
+    if !ws.load_config().map(|c| c.auto_prune).unwrap_or(false) {
+        return Vec::new();
+    }
+    let mut pruned = Vec::new();
+    for s in scores(ws) {
+        if s.runs >= PRUNE_MIN_RUNS && s.value() < PRUNE_FLOOR && is_learned(ws, &s.name) {
+            if let Ok(true) = unequip(ws, &s.name) {
+                pruned.push(s.name);
+            }
+        }
+    }
+    pruned
+}
+
 /// Slugify a suggestion title into a skill directory name.
 fn slug(title: &str) -> String {
     let s: String = title
@@ -346,6 +451,91 @@ mod tests {
             .unwrap();
         }
         root
+    }
+
+    #[test]
+    fn skill_score_prefers_verdict_then_done_rate() {
+        let s = SkillScore {
+            name: "x".into(),
+            runs: 4,
+            done: 4,
+            verdict_pass: 1,
+            verdict_total: 4,
+        };
+        assert!((s.value() - 0.25).abs() < 1e-9); // verdict wins over done rate
+        let s = SkillScore {
+            name: "x".into(),
+            runs: 4,
+            done: 3,
+            verdict_pass: 0,
+            verdict_total: 0,
+        };
+        assert!((s.value() - 0.75).abs() < 1e-9); // falls back to done rate
+        let s = SkillScore {
+            name: "x".into(),
+            runs: 0,
+            done: 0,
+            verdict_pass: 0,
+            verdict_total: 0,
+        };
+        assert!((s.value() - 1.0).abs() < 1e-9); // unscored = benefit of the doubt
+    }
+
+    #[test]
+    fn auto_prune_drops_weak_learned_skills_only() {
+        use crate::schemas::HarnessSuggestion;
+        use crate::telemetry::RunTelemetry;
+        let ws_root = std::env::temp_dir().join(format!("yard-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ws_root);
+        let ws = Workspace::at(&ws_root);
+        std::fs::create_dir_all(ws.agents_dir()).unwrap();
+        // init a config with auto_prune on
+        crate::init::ensure_initialized(&ws_root).unwrap();
+
+        // a learned skill (will score badly) and a library-style equipped skill
+        let learned = record_run_suggestions(
+            &ws,
+            &[HarnessSuggestion {
+                kind: "skill".into(),
+                title: "Weak One".into(),
+                content: "x".into(),
+            }],
+        );
+        assert_eq!(learned, vec!["weak-one"]);
+        // a manually-equipped (no source: learned) skill
+        let dir = ws.agents_dir().join("skills").join("kept");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: kept\ndescription: d\n---\nb",
+        )
+        .unwrap();
+
+        // telemetry: weak-one declared in 3 runs, all failed; kept never bad
+        let mut tel = |skill: &str, state: &str| RunTelemetry {
+            ts: String::new(),
+            task_id: "t".into(),
+            kind: String::new(),
+            risk: String::new(),
+            worker: "codex".into(),
+            chosen_reason: String::new(),
+            result_status: String::new(),
+            eval_state: state.into(),
+            wall_seconds: 0,
+            user_override: None,
+            skills: vec![skill.into()],
+            verdict_pass: None,
+        };
+        for _ in 0..3 {
+            crate::telemetry::append_run(&ws, &tel("weak-one", "Failed")).unwrap();
+        }
+        let _ = &mut tel;
+
+        let pruned = auto_prune(&ws);
+        assert_eq!(pruned, vec!["weak-one"]); // learned + below floor + enough runs
+        assert!(!installed(&ws).contains(&"weak-one".to_string()));
+        assert!(installed(&ws).contains(&"kept".to_string())); // library skill untouched
+        let _ = std::fs::remove_dir_all(&ws_root);
     }
 
     #[test]

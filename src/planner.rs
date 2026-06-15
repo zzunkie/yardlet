@@ -446,6 +446,10 @@ fn plan_core(
     if !equipped.is_empty() {
         lines.push(format!("equipped skills: {}", equipped.join(", ")));
     }
+    let pruned = crate::skills::auto_prune(ws);
+    if !pruned.is_empty() {
+        lines.push(format!("pruned weak skills: {}", pruned.join(", ")));
+    }
     let worker_guidance = build_worker_guidance(workers);
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let packet_text = packet::compile_planning(

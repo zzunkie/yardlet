@@ -78,6 +78,8 @@ enum SkillCmd {
     Equip { names: Vec<String> },
     /// Remove equipped skills.
     Unequip { names: Vec<String> },
+    /// Show each equipped skill's eval score (from telemetry).
+    Review,
 }
 
 #[derive(Args)]
@@ -355,6 +357,29 @@ fn cmd_skill(cwd: &std::path::Path, args: SkillArgs) -> Result<()> {
                     Ok(false) => println!("  {name}: not equipped"),
                     Err(e) => println!("  {name}: {e}"),
                 }
+            }
+        }
+        SkillCmd::Review => {
+            let scores = crate::skills::scores(&ws);
+            if scores.is_empty() {
+                println!("no skills equipped.");
+            }
+            println!("{:<28} {:>6}  {:>5}  signal", "skill", "score", "runs");
+            for s in &scores {
+                let signal = if s.verdict_total > 0 {
+                    format!("verdict {}/{}", s.verdict_pass, s.verdict_total)
+                } else if s.runs > 0 {
+                    format!("done {}/{}", s.done, s.runs)
+                } else {
+                    "no runs yet".to_string()
+                };
+                println!(
+                    "{:<28} {:>6.2}  {:>5}  {}",
+                    s.name,
+                    s.value(),
+                    s.runs,
+                    signal
+                );
             }
         }
     }

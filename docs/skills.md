@@ -138,7 +138,7 @@ Identify and source skills the repo wants but doesn't have.
     Yard's core is the sole writer and an eval loop prunes what doesn't work,
     so autonomy doesn't require trusting each write.
 
-## S4 — Manage over time (the lifecycle) · size L — this is H4
+## S4 — Manage over time (the lifecycle) · size L — implemented
 
 Lifecycle (spec §13.2): observe → candidate → review → promote → deprecate.
 The hard part is not collecting usage — it is **judging whether a skill
