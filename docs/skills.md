@@ -34,7 +34,7 @@ Missing — this plan:
 | Deterministic core; generative behind the contract (I1) | Classification, equip, usage stats, dedup = deterministic Rust. **Researching and writing a skill's prose is a worker task** (researcher role), never the core. |
 | Packet is the only shared injection point (I2) | Equipped skills live in `.agents/skills/` and reach every worker through the existing catalog. |
 | `.agents/` canonical; sessions disposable (I3) | Equip writes real files Yard owns. A central library is read-only discovery; created skills are written through `state.rs`. |
-| Policy vs mechanism (I4) | Detection, suggestion, usage telemetry, candidate collection = mechanism. **Equipping, promoting, and deprecating are human-gated** (a key, not an automatic write). |
+| Minimize intervention; safety from determinism+eval+reversibility (I4) | Classify/equip/research/create/score/prune all run **automatically**. Safety: Yard (not the worker) writes every skill, the eval score self-corrects bad ones, git/`.agents` make it reversible. No human gate on skills — opt-outs (`auto_skill: false`) exist for the cautious. |
 | Explicit over magic (I5) | `yard skill ...` are visible commands; the planner *suggests* `task.skills`, it doesn't silently inject hidden modes. |
 | Bring-your-own / reduce setup (I6) | Auto-classification means a fresh repo is equipped in one keystroke, not a manual hunt. |
 
@@ -66,11 +66,11 @@ Deterministic. Turns "what is this repo" into "these skills".
   presets may match. `core` always applies.
 - **`yard skill list`** — equipped skills, plus library skills available to
   equip (greyed), plus the detected preset(s).
-- **`yard skill suggest`** — detected presets → skills not yet equipped, as a
-  proposal. Surfaced as a one-line nudge in `yard status` / the TUI, and at
-  first plan: *"game repo detected — equip 4 skills? (e)"*. Mechanism
-  proposes; the human equips (I4). Optional `auto_equip: true` opts into
-  applying the core+detected set automatically on first plan.
+- **Auto-equip (default):** on first plan (and `new`/`goal`), Yard equips
+  the core + detected presets automatically and reports what it did. No
+  prompt — the human steps back (I4). `auto_equip: false` switches to a
+  suggestion nudge (*"game repo detected — equip 4 skills? (e)"*) for the
+  cautious. `yard skill suggest` always shows detected − equipped on demand.
 - **`yard skill equip <preset|name>...`** — link/copy the named skills (or a
   whole preset) from the library into `.agents/skills/`. `unequip` removes.
 - **Config:** `skill_library: <path>` (empty = none; just the in-repo and A1
@@ -92,7 +92,9 @@ Identify and source skills the repo wants but doesn't have.
   generative work is behind the contract, I1): it studies the topic (repo
   conventions + optionally the web) and writes a *candidate* SKILL.md draft
   to a run dir, plus a short rationale. Nothing is installed yet.
-- Output is a reviewable draft, not an auto-equipped skill (I4).
+- The draft can feed S3 create directly (auto) or be inspected first; either
+  way Yard writes it, and the eval score later judges whether it earned its
+  place (I4).
 
 ## S3 — Create (author the skill) · size M
 
@@ -100,17 +102,16 @@ Identify and source skills the repo wants but doesn't have.
   authors a proper SKILL.md (frontmatter + procedure) which Yard writes,
   through `state.rs`, to `.agents/skills/<name>/` (in-repo) or, with
   `--library`, to the central library for reuse. Marked `source: learned`.
-- **From a run (the Hermes move, human-gated by default):** the result
-  contract already has `harness_suggestions` (designed in H4). A worker that
-  discovers a reusable procedure proposes it; `yard skill review` lists such
-  candidates; `apply` runs create. **Yard's default is propose → human
-  promote**; an opt-in `auto_skill: true` may apply create automatically for
-  fast iteration.
-  - *Versus Hermes:* Hermes `skill_manage` writes skills **automatically by
-    default** (including a post-turn self-improvement review), with an opt-in
-    `write_approval` gate that stages writes for `/skills approve`. Yard
-    inverts the default — gate on, autonomy opt-in — per I4. Same two modes,
-    opposite default.
+- **From a run (auto by default):** the result contract has
+  `harness_suggestions` (H4). A worker that discovers a reusable procedure
+  proposes it; **Yard records it automatically** as a skill (the worker
+  proposes, the deterministic core writes — I1/I3). The eval score then
+  decides whether it survives. `auto_skill: false` routes proposals to
+  `yard skill review` for manual promotion instead.
+  - *Versus Hermes:* both auto-write by default. The difference is the
+    writer and the safety model: Hermes lets the agent write its own files;
+    Yard's core is the sole writer and an eval loop prunes what doesn't work,
+    so autonomy doesn't require trusting each write.
 
 ## S4 — Manage over time (the lifecycle) · size L — this is H4
 
@@ -134,14 +135,14 @@ of the worker that used it.
   a human, never an automatic promote/prune (I4) — same posture as
   routing telemetry.
 - **`yard skill review`** — one screen driven by that score: candidates
-  (gaps, run-proposed, research drafts) to promote; equipped skills that are
-  stale (never declared in N intents) or score poorly (correlated with
-  failed/Partial review), to prune. Same UX as `yard routing review`; a
-  status nudge when items pend.
-- **Promote / deprecate (human gate):** `yard skill apply <n>` /
-  `yard skill deprecate <name>`. Promotion writes/equips; deprecation
-  unequips (and, for a library skill, marks it deprecated, never deletes
-  someone else's file).
+  (gaps, run-proposed, research drafts) and equipped skills that score
+  poorly. **Auto-prune (default):** a skill whose score stays below a floor
+  across N intents is automatically deprecated (unequipped, kept in git);
+  `yard skill review` is for *seeing* and overriding, not for routine
+  approval. `auto_prune: false` makes pruning a review action instead.
+- **Manual override (always available):** `yard skill equip/unequip` and
+  `yard skill deprecate <name>` let a human step in; for a library skill,
+  deprecate marks it, never deletes someone else's file.
 - **Versioning:** a created/edited skill bumps a `version:` in frontmatter and
   keeps prior text in git — skills improve in place, auditably; the score
   resets on a version bump so an edit is re-judged, not coasting on old
@@ -195,7 +196,9 @@ yard skill apply <n> | deprecate <name>
 
 ## Explicitly out of scope (for now)
 
-- Auto-equipping without a prompt by default (opt-in `auto_equip` only — I4).
-- Pulling skills from arbitrary remote registries (library is local; web
-  research informs a *draft* a human reviews, not a silent install).
-- Auto-editing an existing skill from a run without review (I4).
+- Workers writing skill files directly — they propose, the deterministic
+  core writes (I3). Auto-application is fine; bypassing the single writer is not.
+- Pulling skills from arbitrary remote registries (the library is local; web
+  research informs a draft Yard writes locally, not a silent remote install).
+- Self-rewriting the intent contract — skills/rules self-improve, the user's
+  contract does not.

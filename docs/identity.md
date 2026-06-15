@@ -83,7 +83,10 @@ all of them.
 
 No magic keywords or hidden modes (contracts are explicit artifacts). No
 worker-grade tool surfaces in the core (owning them pulls the console into
-the judgment loop). No self-patching harness or specs (mechanisms suggest,
-humans promote). No vendor lock-in of the user's capital (open formats,
-read-only discovery of existing assets). See
-[absorption.md](absorption.md) for the full invariants.
+the judgment loop). The harness self-improves — skills and learned rules are
+written and pruned automatically — but the deterministic core is the sole
+writer (workers propose, Yard records) and an eval loop self-corrects, so
+the human steps back instead of approving each change; gates are reserved for
+the irreversible or outward-facing (push, deploy, secrets). No vendor lock-in
+of the user's capital (open formats, read-only discovery of existing assets).
+See [absorption.md](absorption.md) for the full invariants.

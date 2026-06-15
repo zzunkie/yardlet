@@ -14,7 +14,7 @@
 | I1 | **The core stays deterministic; everything generative sits behind the worker contract.** | "Console vs worker" is a role label and roles blur (Yard already merges code, will run hooks, may ship a native API worker). The enforceable line is mechanism: the orchestrator does only deterministic, auditable operations (templating, rule routing, check-based evaluation, git plumbing, hook execution); anything that *generates or judges* work goes through packet → process → result files. A Yard-shipped worker (e.g. a native API adapter) is fine **iff** it lives behind that same contract and is routable/swappable like any other worker. Worker-side tool surfaces (LSP, debuggers, kernels) stay with workers — not because tools are forbidden, but because owning them would pull the console into the judgment loop. |
 | I2 | **The packet is the only shared injection point.** | Anything absorbed must reach codex, claude, and custom workers identically — never via one CLI's plugin system. |
 | I3 | **`.agents/` is canonical; sessions are disposable.** | Discovered/borrowed assets are read at compile time, not copied into state. Yard remains the sole writer of its files. |
-| I4 | **Policy vs mechanism.** | Mechanisms detect and suggest; humans promote. Nothing self-patches the harness, routing, or specs. |
+| I4 | **Minimize human intervention; safety comes from determinism + self-correction + reversibility, not from gates.** | Yard's whole point is that the human steps back. Safety is *not* a human approving each change — it is: (a) the deterministic core is the sole writer (LLMs propose, Yard writes); (b) an eval feedback loop demotes/prunes what doesn't work (skill scores, routing telemetry); (c) everything is reversible (git, `.agents/`). Reversible, self-correcting assets — skills, learned rules, eventually routing — are applied **automatically**. A human gate is reserved only for the **irreversible or outward-facing**: push, deploy, external sends, secrets, mass deletion. Auto-by-default; opt-outs exist for the cautious. |
 | I5 | **Explicit contracts over magic.** | Intent / scope / acceptance / queue are visible artifacts. No keyword-triggered hidden modes. |
 | I6 | **Bring-your-own CLI.** | Absorption must reduce setup, not add it. Defaults stay zero-config, zero-new-billing. |
 
@@ -36,8 +36,10 @@
   magic keywords rejected (I5) — Yard's planning gate IS the explicit
   version of that UX.**
 - **Hermes** — skills as procedural memory, progressive loading (absorbed in
-  H1), agent-created skills via `skill_manage` → **H4 keeps the human gate
-  (I4) instead of self-write.**
+  H1), agent-created skills via `skill_manage` (auto-write by default) →
+  **Yard also auto-writes, but the deterministic core is the writer (workers
+  propose via the result contract, Yard records) and an eval loop self-
+  corrects bad skills (I1, I4). See docs/skills.md.**
 
 ## A1 — Harness asset discovery (oh-my-pi's onboarding, Yard-shaped) · size M — implemented
 
@@ -141,8 +143,12 @@ are small and independent. H3/H4 resume after, unchanged.
 - **Worker-grade tool surface** (LSP, debugger, kernels, browser) — I1.
   Owning them would pull the deterministic core into the judgment loop;
   Yard benefits by *registering* the winners as workers instead.
-- **Self-patching harness/specs** (Hermes skill_manage auto-write,
-  internal-system generational self-rewrite) — I4. H4 keeps the human gate.
+- **Worker self-writing canonical state directly** — I3. Workers propose
+  (result contract); the deterministic core writes. Auto-application is fine;
+  bypassing the single writer is not.
+- **Unbounded self-rewrite of specs/intent** (internal-system generational
+  rewrite) — the intent contract is the user's; skills/rules self-improve,
+  the contract does not rewrite itself.
 - **Consensus voting** — cost without telemetry-backed justification yet.
 - **Curated mega-bundles** (19 agents / 39 skills) — H5 central-core
   territory; premature before the in-repo loop proves itself.

@@ -118,26 +118,26 @@ deprecation.
   conflicts, NeedsUser questions — each becomes a candidate with its
   evidence run id.
 
-**Collect (mechanism).** Candidates append to
-`.agents/telemetry/harness.jsonl`, deduplicated by normalized title.
-Nothing changes behavior yet.
+**Collect + apply (mechanism, auto by default).** Candidates append to
+`.agents/telemetry/harness.jsonl`, deduplicated by normalized title, and
+Yard writes them automatically as `.agents/rules/learned-<slug>.md` or
+`.agents/skills/<slug>/SKILL.md` through `state.rs` (the worker proposed; the
+deterministic core writes — I1/I3). From the next packet on, every worker
+shares the asset. What keeps this from poisoning itself is **not** a human
+gate but the eval feedback loop (skill/rule scores) plus reversibility (git):
+an asset that doesn't earn its place is auto-pruned.
 
-**Review + promote (human gate).**
-- `yard harness review` lists pending candidates with evidence counts
-  (same UX as `yard routing review`); `yard status` and the TUI surface a
-  one-line nudge when candidates are pending.
-- `yard harness apply <n>` writes the candidate as
-  `.agents/rules/learned-<slug>.md` (kind=rule) or
-  `.agents/skills/<slug>/SKILL.md` (kind=skill) through `state.rs`, marks it
-  consumed. `yard harness reject <n>` discards it.
-- From the next packet on, every worker shares the promoted asset — this is
-  what "the harness strengthens every cycle" means concretely, and the
-  promotion gate is what keeps it from poisoning itself.
+**Self-correct (eval, the safety mechanism).** Each learned asset carries a
+`source: learned` marker and accrues a score from the runs that used it
+(review-task pass-through, first-try Done, retry tax — see docs/skills.md).
+A learned asset that scores poorly across N intents is auto-deprecated
+(unequipped, kept in git). The H1 inline cap bounds packet growth.
 
-**Deprecate.** Promoted assets carry a `source: learned` marker in
-frontmatter; `yard harness review` also lists promoted-but-stale candidates
-(rule file unchanged for N intents) for pruning. The H1 inline cap is the
-hard backstop against unbounded packet growth.
+**Human override (always available, never required).** `yard harness review`
+shows pending candidates, scores, and what was auto-applied/pruned; a human
+can promote, reject, or restore. With `auto_skill: false` / `auto_prune:
+false`, apply and prune become review actions instead of automatic — the
+opt-out for cautious workspaces (I4: minimize intervention, don't mandate it).
 
 ## Phase H5 (deferred) — central core & presets
 
