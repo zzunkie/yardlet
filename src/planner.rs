@@ -180,6 +180,105 @@ pub struct PlanningReport {
     pub lines: Vec<String>,
 }
 
+/// Express lane (P2): skip the planning worker entirely and lay down a tiny
+/// deterministic queue for a single goal. Builds task T1 (do the goal) and,
+/// when a verify condition is given, a separate T2 (a reviewer that checks the
+/// condition against the workspace — the verifier is never the doer). No
+/// ambiguity gate (you accepted the goal by typing it). Returns the queue size.
+pub fn plan_goal(
+    ws: &Workspace,
+    goal: &str,
+    verify: Option<&str>,
+    worker_override: Option<&str>,
+) -> Result<usize> {
+    let goal = goal.trim();
+    if goal.is_empty() {
+        bail!("describe the goal, e.g. `yard goal \"fix the login redirect\"`");
+    }
+    let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
+    let worker = worker_override.unwrap_or("").to_string();
+
+    let mut tasks = vec![Task {
+        id: "YARD-001".to_string(),
+        title: goal.chars().take(80).collect(),
+        state: TaskState::Queued,
+        priority: 10,
+        risk: "low".to_string(),
+        kind: "implementation".to_string(),
+        preferred_worker: worker.clone(),
+        model: String::new(),
+        effort: String::new(),
+        depends_on: vec![],
+        skills: vec![],
+        allowed_scope: vec![],
+        acceptance: vec![yaml::Value::String(goal.to_string())],
+        validation: None,
+        approval: None,
+        interaction: None,
+        worker_rationale: Some("express goal (yard goal)".to_string()),
+    }];
+
+    if let Some(v) = verify.map(str::trim).filter(|v| !v.is_empty()) {
+        // A separate reviewer task: a fresh pair of eyes, not the worker that
+        // did the work. For visual goals this picks up the ui-review /
+        // browser-evidence skills and must cite screenshot evidence.
+        tasks.push(Task {
+            id: "YARD-002".to_string(),
+            title: "Verify the goal".to_string(),
+            state: TaskState::Queued,
+            priority: 20,
+            risk: "low".to_string(),
+            kind: "review".to_string(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec!["YARD-001".to_string()],
+            skills: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![yaml::Value::String(format!(
+                "Verify against the actual workspace, with evidence: {v}"
+            ))],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: Some("verifier is never the doer".to_string()),
+        });
+    }
+
+    let intent = IntentContract {
+        schema_version: 1,
+        id: intent_id.clone(),
+        source: "user".to_string(),
+        raw_request: goal.to_string(),
+        summary: goal.to_string(),
+        allowed_scope: vec![],
+        out_of_scope: vec![],
+        acceptance: verify
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(|v| vec![yaml::Value::String(v.to_string())])
+            .unwrap_or_default(),
+        images: vec![],
+        ambiguity: "low".to_string(),
+        open_questions: vec![],
+        clarifications: vec![],
+        interview_turns: 0,
+        status: "accepted".to_string(),
+    };
+    let queue = WorkQueue {
+        schema_version: 1,
+        queue_id: format!("queue-{intent_id}"),
+        intent_id,
+        selection_policy: SelectionPolicy::default(),
+        tasks,
+    };
+    let task_count = queue.tasks.len();
+    let _ = crate::report::archive_intent(ws);
+    state::save_yaml(&ws.intent_path(), &intent)?;
+    ws.save_queue(&queue)?;
+    Ok(task_count)
+}
+
 /// Run the planning gate for a natural-language request.
 pub fn run_planning(
     ws: &Workspace,
@@ -1061,6 +1160,37 @@ mod tests {
         // Small low-risk plan: no forced ceremony.
         let q = plan(2, "low", false);
         assert_eq!(q.tasks.len(), 2);
+    }
+
+    #[test]
+    fn goal_builds_a_two_task_queue_with_a_separate_verifier() {
+        let root = std::env::temp_dir().join(format!("yard-goal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+
+        // No verify: a single implementation task, no ambiguity gate.
+        let n = plan_goal(&ws, "fix the login redirect", None, None).unwrap();
+        assert_eq!(n, 1);
+        let q = ws.load_queue().unwrap();
+        assert_eq!(q.tasks.len(), 1);
+        assert_eq!(q.tasks[0].kind, "implementation");
+        let intent = ws.load_intent().unwrap().unwrap();
+        assert_eq!(intent.ambiguity, "low");
+        assert!(!intent_gated(&intent, true));
+
+        // With verify: a second reviewer task depends on the first.
+        let n = plan_goal(
+            &ws,
+            "polish the title screen",
+            Some("no clipped text and the theme is consistent"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(n, 2);
+        let q = ws.load_queue().unwrap();
+        assert_eq!(q.tasks[1].kind, "review");
+        assert_eq!(q.tasks[1].depends_on, vec!["YARD-001"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -70,6 +70,7 @@ by a deterministic evaluator, and leaves a checkpoint and handoff under
 | `yard` | Open the terminal UI (auto-inits on first use). |
 | `yard init [--force]` | Explicitly scaffold `.agents/` state (optional). |
 | `yard new "<request>" [--worker <id>]` | Plan a request into an intent contract + queue. |
+| `yard goal "<goal>" [--verify "..."]` | Express lane: skip planning, run one goal to a verify condition. |
 | `yard new "..." --image <path>` | Attach a local image to the goal (also auto-detected from the request). |
 | `yard queue` | List the work queue. |
 | `yard status [--json]` | Workspace, intent, queue, and worker summary. |

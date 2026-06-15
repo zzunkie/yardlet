@@ -4,6 +4,15 @@
 
 ### Added
 
+- **`yard goal` express lane (P2).** For small work, skip the planning
+  worker entirely: `yard goal "fix the login redirect"` lays down a single
+  deterministic task and drains it. Add `--verify "..."` and Yard appends a
+  separate reviewer task (depends_on the work) that checks the condition
+  against the actual workspace with evidence — the verifier is never the
+  doer, so for visual goals it picks up the ui-review / browser-evidence
+  skills and must cite screenshots. No ambiguity gate (typing the goal is
+  the acceptance). `--plan-only` queues without running.
+
 - **Mid-run model/effort changes apply to the next task.** Settings can be
   edited while a worker runs (it already could); now saving confirms with a
   toast that says the change lands on the next task — the in-flight worker

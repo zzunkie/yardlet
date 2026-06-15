@@ -30,6 +30,8 @@ pub enum Command {
     Init(InitArgs),
     /// Turn a natural-language request into an intent contract + queue.
     New(NewArgs),
+    /// Express lane: skip planning, run one goal (to a --verify condition).
+    Goal(GoalArgs),
     /// Report workspace, intent, queue, and worker state.
     Status(StatusArgs),
     /// List the work queue.
@@ -99,6 +101,25 @@ pub struct AnswerArgs {
     /// Drop the worker sandbox when resuming (e.g. to grant the access asked for).
     #[arg(long)]
     full_access: bool,
+}
+
+#[derive(Args)]
+pub struct GoalArgs {
+    /// What to achieve, in a sentence or two.
+    goal: Vec<String>,
+    /// A condition a separate reviewer task checks against the workspace
+    /// (e.g. "all tests pass and the UI has no clipped text").
+    #[arg(long)]
+    verify: Option<String>,
+    /// Force a worker for the goal task (codex | claude-code | <id>).
+    #[arg(long)]
+    worker: Option<String>,
+    /// Plan only; do not start the drain.
+    #[arg(long)]
+    plan_only: bool,
+    /// Drop the worker sandbox (network, installs, etc.).
+    #[arg(long)]
+    bypass: bool,
 }
 
 #[derive(Args)]
@@ -213,6 +234,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         None => launch_tui(&cwd),
         Some(Command::Init(a)) => cmd_init(&cwd, a),
         Some(Command::New(a)) => cmd_new(&cwd, a),
+        Some(Command::Goal(a)) => cmd_goal(&cwd, a),
         Some(Command::Status(a)) => cmd_status(&cwd, a),
         Some(Command::Queue) => cmd_queue(&cwd),
         Some(Command::Worker(a)) => cmd_worker(&cwd, a),
@@ -302,6 +324,23 @@ fn cmd_init(cwd: &std::path::Path, args: InitArgs) -> Result<()> {
         println!("  + {f}");
     }
     println!("\nNext: `yard` opens the workbench, `yard worker status` checks workers.");
+    Ok(())
+}
+
+fn cmd_goal(cwd: &std::path::Path, args: GoalArgs) -> Result<()> {
+    let (ws, created) = init::ensure_initialized(cwd)?;
+    if created {
+        println!("Initialized Yard workspace (.agents/).");
+    }
+    let goal = args.goal.join(" ");
+    let n = crate::planner::plan_goal(&ws, &goal, args.verify.as_deref(), args.worker.as_deref())?;
+    println!("Goal queued ({n} task{}).", if n == 1 { "" } else { "s" });
+    if args.plan_only {
+        println!("Next: `yard run --auto` to execute.");
+        return Ok(());
+    }
+    println!("\nRunning \u{2014} stops only if it needs you:\n");
+    run::run_auto(&ws, args.bypass, None, None, false, |s| println!("{s}"))?;
     Ok(())
 }
 
