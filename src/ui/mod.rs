@@ -1767,7 +1767,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[test]
     fn input_caret_edits_midstring_with_hangul() {
         let ws = Workspace::at(std::path::Path::new("/tmp/yard-caret-test"));
         let mut app = App::new(ws);
