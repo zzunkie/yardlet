@@ -27,6 +27,12 @@ pub struct RunTelemetry {
     pub wall_seconds: u64,
     #[serde(default)]
     pub user_override: Option<String>,
+    /// Skills the task declared (for the S4 skill score).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+    /// Structured review verdict, when this run produced one: (passed, total).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_pass: Option<(usize, usize)>,
 }
 
 pub fn log_path(ws: &Workspace) -> std::path::PathBuf {

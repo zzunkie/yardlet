@@ -112,6 +112,43 @@ pub fn evaluate(run_dir: &Path, run_id: &str, task: &Task) -> Evaluation {
                 )
             },
         ));
+        // Structured review verdict: the quality signal Yard records instead
+        // of trusting prose. For a review/safety task it is the contract —
+        // an empty verdict or any failed criterion blocks Done.
+        let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
+        if is_review {
+            let failed: Vec<&str> = r
+                .verdict
+                .iter()
+                .filter(|v| !v.pass)
+                .map(|v| v.criterion_id.as_str())
+                .collect();
+            checks.push(check(
+                "review_verdict_present",
+                !r.verdict.is_empty(),
+                if r.verdict.is_empty() {
+                    "review task wrote no structured verdict".to_string()
+                } else {
+                    format!("{} criterion verdict(s)", r.verdict.len())
+                },
+            ));
+            checks.push(check(
+                "review_criteria_pass",
+                failed.is_empty(),
+                if failed.is_empty() {
+                    "all judged criteria pass".to_string()
+                } else {
+                    format!("criteria failed: {}", failed.join(", "))
+                },
+            ));
+        } else if !r.verdict.is_empty() {
+            let passed = r.verdict.iter().filter(|v| v.pass).count();
+            checks.push(advisory(
+                "self_verdict",
+                passed == r.verdict.len(),
+                format!("{}/{} self-checked criteria pass", passed, r.verdict.len()),
+            ));
+        }
         reported_status = r.status.clone();
     }
 
@@ -192,6 +229,8 @@ mod tests {
             validation: Default::default(),
             question_for_user: None,
             compact_summary: String::new(),
+            verdict: vec![],
+            harness_suggestions: vec![],
         }
     }
 
@@ -231,6 +270,84 @@ mod tests {
         assert!(!bad.contains(&"src/main.rs".to_string()));
     }
 
+    fn eval_with(kind: &str, status: &str, verdict: Vec<crate::schemas::Verdict>) -> Evaluation {
+        let dir = std::env::temp_dir().join(format!(
+            "yard-eval-verdict-{}-{}",
+            std::process::id(),
+            kind.to_string() + status
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("handoff.md"), "h").unwrap();
+        let mut r = dummy_result();
+        r.run_id = "run-x".into();
+        r.task_id = "YARD-9".into();
+        r.status = status.into();
+        r.verdict = verdict;
+        std::fs::write(dir.join("result.json"), serde_json::to_string(&r).unwrap()).unwrap();
+        let mut t = crate::schemas::Task {
+            id: "YARD-9".into(),
+            title: "t".into(),
+            state: TaskState::Running,
+            priority: 0,
+            risk: String::new(),
+            kind: kind.into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec![],
+            skills: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+        };
+        t.kind = kind.into();
+        let e = evaluate(&dir, "run-x", &t);
+        let _ = std::fs::remove_dir_all(&dir);
+        e
+    }
+
+    #[test]
+    fn review_task_needs_a_structured_verdict() {
+        use crate::schemas::Verdict;
+        let v = |id: &str, pass: bool| Verdict {
+            criterion_id: id.into(),
+            pass,
+            evidence: "e".into(),
+        };
+
+        // review claims done with all criteria passing -> Done
+        let e = eval_with("review", "done", vec![v("AC-001", true), v("AC-002", true)]);
+        assert_eq!(e.next_task_state, TaskState::Done);
+
+        // review claims done but a criterion failed -> contradiction -> Failed
+        let e = eval_with("review", "done", vec![v("AC-001", false)]);
+        assert_eq!(e.next_task_state, TaskState::Failed);
+        assert!(e
+            .checks
+            .iter()
+            .any(|c| c.name == "review_criteria_pass" && !c.passed));
+
+        // review correctly reports needs_user with a failed criterion -> NeedsUser
+        let e = eval_with("review", "needs_user", vec![v("AC-001", false)]);
+        assert_eq!(e.next_task_state, TaskState::NeedsUser);
+
+        // review wrote no verdict -> didn't do its job -> Failed
+        let e = eval_with("review", "done", vec![]);
+        assert_eq!(e.next_task_state, TaskState::Failed);
+        assert!(e
+            .checks
+            .iter()
+            .any(|c| c.name == "review_verdict_present" && !c.passed));
+
+        // a build task needs no verdict
+        let e = eval_with("implementation", "done", vec![]);
+        assert_eq!(e.next_task_state, TaskState::Done);
+    }
+
     // Regression: a done result with no validation commands must stay Done.
     // "did validation run" is advisory, not an integrity gate.
     #[test]
@@ -249,6 +366,8 @@ mod tests {
             validation: Default::default(), // no commands run
             question_for_user: None,
             compact_summary: "ok".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
         };
         std::fs::write(
             dir.join("result.json"),

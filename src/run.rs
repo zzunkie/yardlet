@@ -439,6 +439,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             eval_state: format!("{:?}", eval.next_task_state),
             wall_seconds,
             user_override,
+            skills: task.skills.clone(),
+            verdict_pass: result.as_ref().and_then(|r| {
+                (!r.verdict.is_empty())
+                    .then(|| (r.verdict.iter().filter(|v| v.pass).count(), r.verdict.len()))
+            }),
         },
     );
 
@@ -1243,6 +1248,8 @@ mod tests {
             validation: Default::default(),
             question_for_user: None,
             compact_summary: "ok".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
         };
         write_str(
             &run_dir.join("result.json"),

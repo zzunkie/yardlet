@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Structured review verdicts (eval upgrade).** Reviewer/safety tasks and
+  `yard goal --verify` now emit `verdict: [{criterion_id, pass, evidence}]`
+  in result.json — a machine-readable per-criterion judgment instead of
+  trusting prose. The evaluator requires it for review tasks (no verdict, or
+  a "done" claim with a failed criterion, blocks Done), and reviewers are
+  instructed to report `needs_user` when a criterion fails so a real defect
+  routes to you, not into a review retry loop. Verdict pass/total and the
+  task's declared skills are recorded in telemetry — the quality signal the
+  upcoming skill score (S4) reads. This is the gap that let sample-project pass
+  as "web-UI quality": "good" is no longer the worker's self-report.
+
 - **Skill toolbox (S1): repo classification + auto-equip.** Point
   `skill_library` at a local library (internal-tool layout: `presets/*.skills`
   + `skills/<name>/SKILL.md`) and Yard classifies the repo from its file

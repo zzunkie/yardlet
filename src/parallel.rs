@@ -392,6 +392,11 @@ pub fn run_batch<F: FnMut(&str)>(
                 eval_state: format!("{next:?}"),
                 wall_seconds: fin.wall_seconds,
                 user_override: None,
+                skills: p.task.skills.clone(),
+                verdict_pass: result.as_ref().and_then(|r| {
+                    (!r.verdict.is_empty())
+                        .then(|| (r.verdict.iter().filter(|v| v.pass).count(), r.verdict.len()))
+                }),
             },
         );
     }

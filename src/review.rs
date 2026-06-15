@@ -173,6 +173,8 @@ mod tests {
             eval_state: if done { "Done".into() } else { "Failed".into() },
             wall_seconds: 0,
             user_override: ovr.map(|s| s.to_string()),
+            skills: vec![],
+            verdict_pass: None,
         }
     }
 

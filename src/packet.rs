@@ -130,6 +130,10 @@ fn role_guidance(role: &str) -> &'static str {
              - Every finding needs evidence \u{2014} file and line plus why it is a problem; \
              verify by reading the actual code, not a diff summary.\n\
              - Rate each finding (critical/major/minor) and propose a concrete fix.\n\
+             - Emit a structured `verdict` (one entry per acceptance criterion, \
+             pass/fail + evidence) in result.json. If ANY criterion fails, set \
+             `status` to `needs_user` (or `partial`) \u{2014} not `done`; never pass a \
+             criterion you could not actually verify.\n\
              - Do not rewrite the code; only fix something if it is trivial and clearly \
              inside scope.\n\
              - Your findings go in the required report.md, in clear prose.\n\n"
@@ -148,6 +152,8 @@ fn role_guidance(role: &str) -> &'static str {
              input handling, secrets in code or logs, dangerous defaults.\n\
              - Every finding needs evidence (file and line) and an exploit rationale; mark \
              severity and give a minimal remediation.\n\
+             - Emit a structured `verdict` (per criterion, pass/fail + evidence) in \
+             result.json; if any criterion fails set `status` to `needs_user`, not `done`.\n\
              - Do not commit fixes unless trivial and in scope. Never print or move secret \
              values \u{2014} refer to them by path or name only.\n\
              - Your findings go in the required report.md, in clear prose.\n\n"
@@ -789,9 +795,22 @@ const RESULT_SCHEMA_HINT: &str = r#"```json
   "changes": { "files_modified": [], "files_created": [], "files_deleted": [] },
   "validation": { "commands_run": [], "passed": true, "failures": [] },
   "question_for_user": null,
-  "compact_summary": "Short resume summary for the next run."
+  "compact_summary": "Short resume summary for the next run.",
+  "verdict": [
+    { "criterion_id": "AC-001", "pass": true, "evidence": "path/screenshot + why" }
+  ],
+  "harness_suggestions": [
+    { "kind": "rule|skill", "title": "...", "content": "short, imperative, reusable" }
+  ]
 }
 ```
+
+`verdict` is REQUIRED for review/safety tasks: one entry per acceptance
+criterion you checked, judged against the ACTUAL workspace (read the code,
+run it, look at the screenshots) — not a restatement of intent. `pass: false`
+with concrete evidence is the whole point; do not pass a criterion you could
+not verify. Build tasks may leave `verdict` empty. Fill `harness_suggestions`
+only when you learned something reusable about THIS repo.
 "#;
 
 #[cfg(test)]

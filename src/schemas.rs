@@ -485,6 +485,37 @@ pub struct RunResult {
     pub question_for_user: Option<String>,
     #[serde(default)]
     pub compact_summary: String,
+    /// Per-criterion verdict from a review/verify task — the structured
+    /// quality signal Yard records instead of trusting prose (docs/skills.md).
+    /// Empty for build tasks; populated by reviewer-role runs.
+    #[serde(default)]
+    pub verdict: Vec<Verdict>,
+    /// Reusable lessons this run proposes (harness learning loop, H4). Yard
+    /// records them; the worker never writes canonical state itself.
+    #[serde(default)]
+    pub harness_suggestions: Vec<HarnessSuggestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Verdict {
+    /// The acceptance-criterion id being judged (e.g. "AC-004").
+    #[serde(default)]
+    pub criterion_id: String,
+    pub pass: bool,
+    /// Evidence for the verdict — a path, a line, a screenshot ref.
+    #[serde(default)]
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HarnessSuggestion {
+    /// "rule" | "skill".
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

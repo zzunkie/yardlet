@@ -190,11 +190,14 @@ S1 classify+equip ──► S2 research ──► S3 create ──► S4 manage 
 ```
 
 A prerequisite for S4's eval (callable independently, useful on its own):
-**structured review verdicts.** Reviewer-role tasks (and `yard goal --verify`)
-should write `verdict: [{criterion_id, pass, evidence}]` into result.json so
-the evaluator can record per-criterion pass/fail instead of trusting prose.
-This is the single quality signal S4's skill score, A3 acceptance, and
-routing telemetry all read. Build it before S4.
+**structured review verdicts** — *implemented*. Reviewer/safety tasks now
+write `verdict: [{criterion_id, pass, evidence}]` into result.json; the
+evaluator requires it for those tasks (empty verdict or a done-claim with a
+failed criterion blocks Done), and reviewers are told to set `status:
+needs_user` when a criterion fails (so a real defect routes to the user, not
+a review retry loop). Per-run verdict pass/total and declared skills are
+recorded in telemetry — the data S4's skill score reads. The single quality
+signal now feeds task state, telemetry, and (next) skill scores.
 
 S1 first — it makes every later phase land somewhere (research/created skills
 get equipped; S4 observes equipped usage). S2 and S3 share the worker-task
