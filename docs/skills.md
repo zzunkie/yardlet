@@ -38,6 +38,26 @@ Missing — this plan:
 | Explicit over magic (I5) | `yard skill ...` are visible commands; the planner *suggests* `task.skills`, it doesn't silently inject hidden modes. |
 | Bring-your-own / reduce setup (I6) | Auto-classification means a fresh repo is equipped in one keystroke, not a manual hunt. |
 
+## Who generates vs who records (Yard has no LLM)
+
+Yard's core has no model. "Yard writes the skill" never means Yard *authors*
+prose — it means:
+
+- **A worker generates the content.** A skill's text (frontmatter +
+  procedure) is produced by a worker run, exactly like any other deliverable:
+  a packet goes in (researcher role: "write a SKILL.md for X"), the worker
+  writes the file into its run dir.
+- **Yard records it deterministically.** Yard reads that run output,
+  validates the frontmatter, places it at `.agents/skills/<name>/` (the
+  canonical location), updates the catalog, dedups, and commits. No model,
+  no judgment — file plumbing.
+
+So "the deterministic core is the sole writer" means: the worker can't drop
+files into canonical state itself; it proposes via its run output, and Yard's
+single writer (`state.rs`) is the only hand that places them. Equip (S1) needs
+no LLM at all — it's pure file work. Only research/create (S2/S3) run a worker,
+and only to get *content*; placement and scoring stay deterministic.
+
 ## Asset model
 
 ```
