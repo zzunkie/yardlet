@@ -1137,6 +1137,18 @@ fn save_settings(app: &mut App) {
         let _ = crate::state::save_yaml(&app.ws.workers_path(), &wf);
     }
     app.reload();
+    // Settings can be changed mid-run; a running worker keeps the model it was
+    // spawned with, but run_next re-reads workers.yaml each task, so the change
+    // lands on the next one. Say so — otherwise the save is silent.
+    let l = app.lang.l();
+    app.toast = Some((
+        true,
+        if app.is_busy() {
+            l.settings_saved_busy.to_string()
+        } else {
+            l.settings_saved.to_string()
+        },
+    ));
 }
 
 /// Flip the default worker access (sandboxed <-> full) and persist it. Safe to

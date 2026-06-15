@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Mid-run model/effort changes apply to the next task.** Settings can be
+  edited while a worker runs (it already could); now saving confirms with a
+  toast that says the change lands on the next task — the in-flight worker
+  keeps the model it was spawned with, but `run_next` re-reads workers.yaml
+  every task, so the switch takes effect without stopping the drain.
+
 - **Hot session chaining (P1).** During an auto-drain, a task whose
   `depends_on` includes the task that just finished — on the same worker —
   now runs IN that worker's live session (`claude --resume` /
