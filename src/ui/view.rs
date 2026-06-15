@@ -660,7 +660,7 @@ fn render_new_work(frame: &mut Frame, app: &App) {
             .block(Block::bordered().title(l.request_title)),
         chunks[1],
     );
-    place_input_cursor(frame, chunks[1], &app.input);
+    place_input_cursor(frame, chunks[1], &app.input, app.input_caret);
     render_footer(frame, chunks[2], l.footer_newwork);
 }
 
@@ -696,7 +696,7 @@ fn render_answer(frame: &mut Frame, app: &App) {
             .block(Block::bordered().title(l.your_answer_title)),
         chunks[1],
     );
-    place_input_cursor(frame, chunks[1], &app.input);
+    place_input_cursor(frame, chunks[1], &app.input, app.input_caret);
     render_footer(frame, chunks[2], l.footer_answer);
 }
 
@@ -781,9 +781,11 @@ fn render_footer(frame: &mut Frame, area: Rect, keys: &str) {
 /// Position the real terminal cursor at the end of the input so the terminal's
 /// IME composition (Korean/CJK) renders inline, instead of lagging a character.
 /// Width is measured in display columns (Hangul is 2 wide).
-fn place_input_cursor(frame: &mut Frame, area: Rect, input: &str) {
+fn place_input_cursor(frame: &mut Frame, area: Rect, input: &str, caret: usize) {
     let inner_w = (area.width.saturating_sub(2)).max(1) as usize;
-    let (row, col) = wrapped_caret(input, inner_w);
+    // The caret sits after `caret` chars, so wrap only that prefix.
+    let prefix: String = input.chars().take(caret).collect();
+    let (row, col) = wrapped_caret(&prefix, inner_w);
     // Keep the caret inside the box even when the text outgrows it.
     let max_row = area.height.saturating_sub(3);
     frame.set_cursor_position((

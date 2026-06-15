@@ -108,6 +108,9 @@ pub struct App {
     pub screen: Screen,
     pub snapshot: Option<Snapshot>,
     pub input: String,
+    /// Edit caret as a char index into `input` (text screens). Lets Left/Right/
+    /// Home/End move and edit mid-string instead of append-only.
+    pub input_caret: usize,
     pub job: Job,
     pub toast: Option<(bool, String)>,
     pub progress: Option<String>,
@@ -233,6 +236,7 @@ impl App {
             screen: Screen::Home,
             snapshot,
             input: String::new(),
+            input_caret: 0,
             job: Job::Idle,
             toast: None,
             progress: None,
@@ -392,6 +396,69 @@ impl App {
 
     fn is_busy(&self) -> bool {
         matches!(self.job, Job::Running { .. })
+    }
+
+    // ---- text input editing (caret-aware) ------------------------------
+
+    /// Byte offset of char index `i` (end of string when past the last char).
+    fn input_byte(&self, i: usize) -> usize {
+        self.input
+            .char_indices()
+            .nth(i)
+            .map(|(b, _)| b)
+            .unwrap_or(self.input.len())
+    }
+
+    fn input_len_chars(&self) -> usize {
+        self.input.chars().count()
+    }
+
+    fn input_clear(&mut self) {
+        self.input.clear();
+        self.input_caret = 0;
+    }
+
+    /// Insert text at the caret and advance past it.
+    fn input_insert(&mut self, s: &str) {
+        let at = self.input_byte(self.input_caret);
+        self.input.insert_str(at, s);
+        self.input_caret += s.chars().count();
+    }
+
+    /// Delete the char before the caret (Backspace).
+    fn input_backspace(&mut self) {
+        if self.input_caret == 0 {
+            return;
+        }
+        let start = self.input_byte(self.input_caret - 1);
+        let end = self.input_byte(self.input_caret);
+        self.input.replace_range(start..end, "");
+        self.input_caret -= 1;
+    }
+
+    /// Delete the char at the caret (Delete).
+    fn input_delete(&mut self) {
+        if self.input_caret >= self.input_len_chars() {
+            return;
+        }
+        let start = self.input_byte(self.input_caret);
+        let end = self.input_byte(self.input_caret + 1);
+        self.input.replace_range(start..end, "");
+    }
+
+    fn caret_left(&mut self) {
+        self.input_caret = self.input_caret.saturating_sub(1);
+    }
+    fn caret_right(&mut self) {
+        if self.input_caret < self.input_len_chars() {
+            self.input_caret += 1;
+        }
+    }
+    fn caret_home(&mut self) {
+        self.input_caret = 0;
+    }
+    fn caret_end(&mut self) {
+        self.input_caret = self.input_len_chars();
     }
 }
 
@@ -619,7 +686,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
         // goes straight into the active input field.
         if let Event::Paste(text) = &event {
             if !app.is_busy() && matches!(app.screen, Screen::NewWork | Screen::Answer) {
-                app.input.push_str(text);
+                app.input_insert(text);
             }
             continue;
         }
@@ -739,7 +806,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             return true;
         }
         KeyCode::Char('n') if !app.is_busy() => {
-            app.input.clear();
+            app.input_clear();
             app.toast = None;
             app.amend = false;
             app.screen = Screen::NewWork;
@@ -756,7 +823,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             match compute_answer_target(app) {
                 Some(t) => {
                     app.answer_target = Some(t);
-                    app.input.clear();
+                    app.input_clear();
                     app.toast = None;
                     app.screen = Screen::Answer;
                 }
@@ -920,7 +987,7 @@ fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Esc => app.screen = Screen::Home,
         // Shift/Alt+Enter inserts a newline (multi-line input); Enter submits.
         KeyCode::Enter if mods.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
-            app.input.push('\n')
+            app.input_insert("\n")
         }
         KeyCode::Enter => {
             if !app.input.trim().is_empty() {
@@ -932,10 +999,13 @@ fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
                 app.screen = Screen::Home;
             }
         }
-        KeyCode::Backspace => {
-            app.input.pop();
-        }
-        KeyCode::Char(c) => app.input.push(c),
+        KeyCode::Backspace => app.input_backspace(),
+        KeyCode::Delete => app.input_delete(),
+        KeyCode::Left => app.caret_left(),
+        KeyCode::Right => app.caret_right(),
+        KeyCode::Home => app.caret_home(),
+        KeyCode::End => app.caret_end(),
+        KeyCode::Char(c) => app.input_insert(&c.to_string()),
         _ => {}
     }
 }
@@ -953,14 +1023,14 @@ fn handle_completion_key(app: &mut App, code: KeyCode) {
         KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Home,
         // New work: start_planning archives the finished intent before overwriting.
         KeyCode::Char('n') => {
-            app.input.clear();
+            app.input_clear();
             app.toast = None;
             app.amend = false;
             app.screen = Screen::NewWork;
         }
         // Continue: add follow-up tasks to this intent (amend), keep done work.
         KeyCode::Char('c') => {
-            app.input.clear();
+            app.input_clear();
             app.toast = None;
             app.amend = true;
             app.screen = Screen::NewWork;
@@ -1268,7 +1338,7 @@ fn handle_answer_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
             app.screen = Screen::Home;
         }
         KeyCode::Enter if mods.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
-            app.input.push('\n')
+            app.input_insert("\n")
         }
         KeyCode::Enter => {
             if !app.input.trim().is_empty() {
@@ -1276,10 +1346,13 @@ fn handle_answer_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
                 app.screen = Screen::Home;
             }
         }
-        KeyCode::Backspace => {
-            app.input.pop();
-        }
-        KeyCode::Char(c) => app.input.push(c),
+        KeyCode::Backspace => app.input_backspace(),
+        KeyCode::Delete => app.input_delete(),
+        KeyCode::Left => app.caret_left(),
+        KeyCode::Right => app.caret_right(),
+        KeyCode::Home => app.caret_home(),
+        KeyCode::End => app.caret_end(),
+        KeyCode::Char(c) => app.input_insert(&c.to_string()),
         _ => {}
     }
 }
@@ -1316,7 +1389,7 @@ fn start_planning(app: &mut App) {
         started: Instant::now(),
         rx,
     };
-    app.input.clear();
+    app.input_clear();
 }
 
 fn start_continue(app: &mut App) {
@@ -1351,7 +1424,7 @@ fn start_continue(app: &mut App) {
         started: Instant::now(),
         rx,
     };
-    app.input.clear();
+    app.input_clear();
     app.amend = false;
 }
 
@@ -1647,7 +1720,7 @@ fn start_answer(app: &mut App) {
         started: Instant::now(),
         rx,
     };
-    app.input.clear();
+    app.input_clear();
 }
 
 fn load_handoff_for_task(app: &App, task_id: &str) -> String {
@@ -1692,6 +1765,32 @@ fn load_latest_handoff(app: &App) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[test]
+    fn input_caret_edits_midstring_with_hangul() {
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-caret-test"));
+        let mut app = App::new(ws);
+        app.input_insert("가나");
+        app.input_insert("다"); // "가나다", caret=3
+        assert_eq!(app.input, "가나다");
+        assert_eq!(app.input_caret, 3);
+        app.caret_left(); // between 나 and 다
+        app.caret_left(); // between 가 and 나
+        app.input_insert("X"); // "가X나다"
+        assert_eq!(app.input, "가X나다");
+        assert_eq!(app.input_caret, 2);
+        app.input_backspace(); // delete X -> "가나다"
+        assert_eq!(app.input, "가나다");
+        assert_eq!(app.input_caret, 1);
+        app.caret_end();
+        app.input_delete(); // at end, no-op
+        assert_eq!(app.input, "가나다");
+        app.caret_home();
+        app.input_delete(); // delete 가 -> "나다"
+        assert_eq!(app.input, "나다");
+        assert_eq!(app.input_caret, 0);
+    }
 
     #[test]
     fn jamo_maps_to_qwerty_shortcuts() {
