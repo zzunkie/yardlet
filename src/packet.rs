@@ -810,7 +810,9 @@ criterion you checked, judged against the ACTUAL workspace (read the code,
 run it, look at the screenshots) — not a restatement of intent. `pass: false`
 with concrete evidence is the whole point; do not pass a criterion you could
 not verify. Build tasks may leave `verdict` empty. Fill `harness_suggestions`
-only when you learned something reusable about THIS repo.
+only when you learned something reusable about THIS repo. A "skill" suggestion
+should be a self-contained procedure (how to do a recurring task in this repo)
+that a future worker could follow; a "rule" is a short always-apply constraint.
 "#;
 
 #[cfg(test)]

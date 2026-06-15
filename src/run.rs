@@ -410,6 +410,15 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     compact::write_checkpoint(&run_dir, &task, &eval, result.as_ref(), intent_summary)?;
     compact::write_handoff(&run_dir, &task, &eval, result.as_ref())?;
 
+    // Harness learning loop (S3): record skills the worker proposed. The
+    // worker authored the content; Yard (the core) does the writing.
+    if let Some(r) = &result {
+        let learned = crate::skills::record_run_suggestions(ws, &r.harness_suggestions);
+        if !learned.is_empty() {
+            lines.push(format!("learned skill(s): {}", learned.join(", ")));
+        }
+    }
+
     // ---- update queue ----------------------------------------------------
     queue.tasks[idx].state = eval.next_task_state;
     ws.save_queue(&queue)?;

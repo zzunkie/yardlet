@@ -206,6 +206,69 @@ pub fn auto_equip(ws: &Workspace, repo: &RepoSummary) -> Vec<String> {
         .collect()
 }
 
+/// Slugify a suggestion title into a skill directory name.
+fn slug(title: &str) -> String {
+    let s: String = title
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let s = s.trim_matches('-').to_string();
+    let collapsed: String = s
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    collapsed
+        .chars()
+        .take(48)
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+/// Record a worker-proposed skill (H4 / docs/skills.md S3): a run's
+/// `harness_suggestions` entry of kind "skill" becomes a real
+/// `.agents/skills/<slug>/SKILL.md` — the worker proposed the *content*, Yard
+/// (the deterministic core) does the writing. Marked `source: learned` so the
+/// score loop can later judge and prune it. Returns the slug if newly written.
+/// Skips if a skill of that name is already present (no clobber).
+pub fn record_suggested_skill(ws: &Workspace, title: &str, content: &str) -> Option<String> {
+    let name = slug(title);
+    if name.is_empty() || content.trim().is_empty() {
+        return None;
+    }
+    let dst = ws.agents_dir().join("skills").join(&name);
+    if dst.exists() {
+        return None; // already equipped/learned; don't overwrite
+    }
+    let body = format!(
+        "---\nname: {name}\ndescription: {}\nsource: learned\n---\n{}\n",
+        title.trim(),
+        content.trim()
+    );
+    std::fs::create_dir_all(&dst).ok()?;
+    crate::state::write_str(&dst.join("SKILL.md"), &body).ok()?;
+    Some(name)
+}
+
+/// Record every skill-kind suggestion from a run, when `auto_skill` is on.
+/// Returns the slugs written (for a one-line report).
+pub fn record_run_suggestions(
+    ws: &Workspace,
+    suggestions: &[crate::schemas::HarnessSuggestion],
+) -> Vec<String> {
+    if !ws.load_config().map(|c| c.auto_skill).unwrap_or(false) {
+        return Vec::new();
+    }
+    suggestions
+        .iter()
+        .filter(|s| s.kind.eq_ignore_ascii_case("skill"))
+        .filter_map(|s| record_suggested_skill(ws, &s.title, &s.content))
+        .collect()
+}
+
 #[cfg(unix)]
 fn link_or_copy(src: &Path, dst: &Path) -> Result<(), String> {
     // Absolute target so the link resolves from anywhere (incl. worktrees).
@@ -283,6 +346,59 @@ mod tests {
             .unwrap();
         }
         root
+    }
+
+    #[test]
+    fn slug_normalizes_titles() {
+        assert_eq!(slug("Godot UI fit to 720p"), "godot-ui-fit-to-720p");
+        assert_eq!(
+            slug("  Trailing / weird **chars** "),
+            "trailing-weird-chars"
+        );
+        assert_eq!(slug("---"), "");
+    }
+
+    #[test]
+    fn record_suggested_skill_writes_once_then_no_clobber() {
+        use crate::schemas::HarnessSuggestion;
+        let ws_root = std::env::temp_dir().join(format!("yard-learn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ws_root);
+        let ws = Workspace::at(&ws_root);
+        std::fs::create_dir_all(ws.agents_dir()).unwrap();
+
+        let name =
+            record_suggested_skill(&ws, "Capture Godot screenshots", "1. ...\n2. ...").unwrap();
+        assert_eq!(name, "capture-godot-screenshots");
+        let md =
+            std::fs::read_to_string(ws.agents_dir().join("skills").join(&name).join("SKILL.md"))
+                .unwrap();
+        assert!(md.contains("name: capture-godot-screenshots"));
+        assert!(md.contains("source: learned"));
+        assert!(md.contains("description: Capture Godot screenshots"));
+
+        // no clobber on a second proposal of the same title
+        assert!(record_suggested_skill(&ws, "Capture Godot screenshots", "different").is_none());
+
+        // empty content / title -> nothing
+        assert!(record_suggested_skill(&ws, "x", "   ").is_none());
+        assert!(record_suggested_skill(&ws, "---", "body").is_none());
+
+        // record_run_suggestions filters to kind=skill (no config = off -> none)
+        let sugg = vec![
+            HarnessSuggestion {
+                kind: "rule".into(),
+                title: "r".into(),
+                content: "c".into(),
+            },
+            HarnessSuggestion {
+                kind: "skill".into(),
+                title: "New One".into(),
+                content: "do it".into(),
+            },
+        ];
+        // no yard.yaml loaded -> auto_skill defaults off via unwrap_or(false)
+        assert!(record_run_suggestions(&ws, &sugg).is_empty());
+        let _ = std::fs::remove_dir_all(&ws_root);
     }
 
     #[test]

@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Auto-learned skills (S3).** When a run's result proposes a reusable
+  procedure (`harness_suggestions` of kind "skill"), Yard records it
+  automatically as `.agents/skills/<slug>/SKILL.md` marked `source: learned`
+  — the worker authored the content, Yard (the deterministic core) does the
+  writing, no clobber of existing skills. On by default (`auto_skill`, I4:
+  minimize intervention). This is the cycle-strengthening loop: every run
+  can leave the harness sharper, and the eval score (next) prunes what
+  doesn't earn its place.
+
 - **Structured review verdicts (eval upgrade).** Reviewer/safety tasks and
   `yard goal --verify` now emit `verdict: [{criterion_id, pass, evidence}]`
   in result.json — a machine-readable per-criterion judgment instead of

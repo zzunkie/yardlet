@@ -116,12 +116,17 @@ Identify and source skills the repo wants but doesn't have.
   way Yard writes it, and the eval score later judges whether it earned its
   place (I4).
 
-## S3 — Create (author the skill) · size M
+## S3 — Create (author the skill) · size M — auto-record implemented
 
-- **`yard skill create <name>`** (optionally from a research draft) — a worker
-  authors a proper SKILL.md (frontmatter + procedure) which Yard writes,
-  through `state.rs`, to `.agents/skills/<name>/` (in-repo) or, with
-  `--library`, to the central library for reuse. Marked `source: learned`.
+- **From a run (auto, implemented):** a run's `harness_suggestions` of kind
+  "skill" are recorded automatically as `.agents/skills/<slug>/SKILL.md`
+  (`source: learned`) when `auto_skill` is on — the worker authored the
+  content during its task, Yard slugifies + writes it, no clobber of an
+  existing skill. The eval score (S4) later prunes weak ones.
+- **`yard skill create/research` (explicit, deferred):** authoring a *new*
+  skill on demand needs a worker run that doesn't overwrite the live intent
+  queue — a queue-isolation design tracked separately. The auto path above
+  is the cycle-strengthening loop; explicit create is a convenience on top.
 - **From a run (auto by default):** the result contract has
   `harness_suggestions` (H4). A worker that discovers a reusable procedure
   proposes it; **Yard records it automatically** as a skill (the worker

@@ -68,6 +68,12 @@ pub struct YardConfig {
     /// intervention). Off = `yard skill suggest` nudges instead. On by default.
     #[serde(default = "default_true")]
     pub auto_equip: bool,
+    /// Auto-record worker-proposed skills (a run's harness_suggestions of kind
+    /// "skill") into `.agents/skills/` as `source: learned` (docs/skills.md
+    /// S3). The deterministic core writes; the eval score later prunes weak
+    /// ones. On by default (I4); off routes proposals to manual review.
+    #[serde(default = "default_true")]
+    pub auto_skill: bool,
 }
 
 fn default_access() -> String {
