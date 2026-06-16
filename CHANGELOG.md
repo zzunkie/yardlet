@@ -16,6 +16,19 @@
   `source: created` (not `learned`), so they are user-chosen and never
   auto-pruned — they persist like a library equip until `unequip`.
 
+### Fixed
+
+- **Recover a task wrongly stuck `Failed` by a dead orchestrator.** If Yard
+  exited after a worker *finished* but before the result was evaluated, the
+  task could end up `Failed` even though its run produced a clean `done`
+  result — and neither restart-recovery nor `yard recover` could salvage it
+  (recovery only looked at `Running` tasks), forcing a wasteful full re-run.
+  Recovery now also re-evaluates such a task's stranded result, detected by an
+  **unfinalized orphan run** (`worker.pid` still on disk — a finalized run
+  removes it — with the process gone). It routes through the evaluator, so a
+  genuinely-bad result stays failed; only real, completed work is reclaimed.
+  Surfaced by dogfooding sample-project, where a completed map task sat `Failed`.
+
 ## 0.4.0 — 2026-06-16
 
 ### Added

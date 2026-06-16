@@ -937,6 +937,18 @@ pub(crate) fn live_worker_pid(run_dir: &std::path::Path) -> Option<u32> {
         .then_some(pid)
 }
 
+/// A run Yard never finalized: its `worker.pid` is still on disk (a finalized
+/// run removes it the moment it sees the worker exit), the process is now gone,
+/// and it left a `result.json`. Such a run was orphaned by a dying orchestrator
+/// *after* the worker finished but *before* evaluation — its completed work is
+/// stranded. Distinct from a legitimately-failed run, which was evaluated and
+/// so has no pid file left.
+fn is_orphaned_unfinalized(run_dir: &std::path::Path) -> bool {
+    run_dir.join("worker.pid").exists()
+        && live_worker_pid(run_dir).is_none()
+        && run_dir.join("result.json").exists()
+}
+
 /// Recover tasks left "running" by an interrupted/quit session: if the task's
 /// latest run produced a result, evaluate it (keep the finished work); if its
 /// worker is still alive (quitting Yard does not kill workers), ADOPT it —
@@ -944,8 +956,12 @@ pub(crate) fn live_worker_pid(run_dir: &std::path::Path) -> Option<u32> {
 /// starting a duplicate worker on the same task. Only a dead worker with no
 /// result is requeued. A parallel worktree run that finished Done is also
 /// merged back — without this its changes would be stranded in the worktree
-/// while the task reads Done. Returns messages describing what changed. Safe
-/// to call on startup and periodically.
+/// while the task reads Done. It also SALVAGES a task wrongly stuck `Failed`
+/// when the orchestrator died after the worker finished but before evaluating
+/// it (an unfinalized orphan run — `worker.pid` still on disk): the stranded
+/// result is re-evaluated rather than the whole task re-run from scratch (a
+/// genuinely-bad result stays failed). Returns messages describing what
+/// changed. Safe to call on startup and periodically.
 pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
     let mut msgs = Vec::new();
     let Ok(mut q) = ws.load_queue() else {
@@ -954,12 +970,29 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
     let mut requeued = Vec::new();
     let mut finished = Vec::new();
     for t in q.tasks.iter_mut() {
-        if t.state != TaskState::Running {
+        let latest = latest_run_for(ws, &t.id);
+        let recover_this = match t.state {
+            TaskState::Running => true,
+            // Salvage a task wrongly stuck terminal because the orchestrator
+            // died before evaluating a finished orphan run (worker.pid still on
+            // disk, process gone, result written). Re-route it through the
+            // evaluator — a genuinely-bad result stays failed; completed work
+            // is no longer stranded by a full re-run.
+            TaskState::Failed => latest
+                .as_ref()
+                .map(|(_, rd)| is_orphaned_unfinalized(rd))
+                .unwrap_or(false),
+            _ => false,
+        };
+        if !recover_this {
             continue;
         }
-        match latest_run_for(ws, &t.id) {
+        match latest {
             Some((run_id, run_dir)) if run_dir.join("result.json").exists() => {
                 let eval = evaluator::evaluate(&run_dir, &run_id, t);
+                // Mark this orphan run finalized so a later pass won't
+                // re-evaluate it (a persistent failure must not loop).
+                let _ = std::fs::remove_file(run_dir.join("worker.pid"));
                 t.state = eval.next_task_state;
                 if let Some(wt) = run_worktree(&run_dir).filter(|w| w.exists()) {
                     let branch = format!("yard/{}", t.id.to_lowercase());
@@ -1319,6 +1352,90 @@ mod tests {
         let msgs = recover_orphans(&ws);
         assert!(msgs.iter().any(|m| m.contains("requeued")), "{msgs:?}");
         assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Queued);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recovery_salvages_a_failed_task_whose_orphan_run_actually_finished() {
+        // The reported gap: a task got stuck Failed because the orchestrator
+        // died after the worker finished but before evaluating it. The run's
+        // worker.pid is still on disk (dead) and a clean result was written.
+        // Recovery must re-evaluate that stranded result and flip the task to
+        // Done — not leave completed work unrecoverable and force a full re-run.
+        let root = std::env::temp_dir().join(format!("yard-salvage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let mut t = task("YARD-001", TaskState::Failed, 10, false);
+        t.kind = "implementation".into();
+        ws.save_queue(&queue(vec![t])).unwrap();
+
+        let run_id = "run-20990101-000000-yard-001";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: "YARD-001".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "ok".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!("run_id: {run_id}\ntask_id: YARD-001\n"),
+        )
+        .unwrap();
+        // The orphan marker: a pid file left behind for a process that is gone.
+        write_str(&run_dir.join("worker.pid"), "2147483647").unwrap();
+
+        let msgs = recover_orphans(&ws);
+        assert!(msgs.iter().any(|m| m.contains("recovered")), "{msgs:?}");
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+        // Finalized: the pid file is cleared so a later pass is a no-op.
+        assert!(!run_dir.join("worker.pid").exists());
+        let again = recover_orphans(&ws);
+        assert!(
+            !again.iter().any(|m| m.contains("recovered")),
+            "second pass should not re-recover: {again:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recovery_leaves_a_genuinely_failed_task_alone() {
+        // A task that was actually evaluated and failed (no orphan pid file on
+        // its run) must NOT be resurrected — its result is not stranded, the
+        // evaluator already judged it. Recovery skips it.
+        let root = std::env::temp_dir().join(format!("yard-realfail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let mut t = task("YARD-001", TaskState::Failed, 10, false);
+        t.kind = "implementation".into();
+        ws.save_queue(&queue(vec![t])).unwrap();
+        let run_id = "run-20990101-000000-yard-001";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        write_str(&run_dir.join("result.json"), "{\"status\":\"done\"}").unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!("run_id: {run_id}\ntask_id: YARD-001\n"),
+        )
+        .unwrap();
+        // No worker.pid file => the run was finalized; not an orphan.
+        let msgs = recover_orphans(&ws);
+        assert!(!msgs.iter().any(|m| m.contains("recovered")), "{msgs:?}");
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Failed);
         let _ = std::fs::remove_dir_all(&root);
     }
 
