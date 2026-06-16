@@ -1,6 +1,6 @@
 [package]
 name = "yardlet"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 rust-version = "1.82"
 description = "Yardlet: a local AI workbench. Plan, queue, route, validate, and hand off long-running work using your already-installed Codex and Claude Code CLIs as hidden workers."
@@ -8,6 +8,10 @@ license = "MIT"
 repository = "https://github.com/zzunkie/yardlet"
 keywords = ["ai", "agent", "tui", "workbench", "cli"]
 categories = ["command-line-utilities", "development-tools"]
+# Ship only what is needed to build/use the crate. Keeps internal/non-public
+# material (repo's own .agents state, seed queues, CI, backups) out of the
+# published tarball, which is permanent on crates.io.
+exclude = ["seeds/**", ".github/**", ".agents/**", ".claude", ".codex", "*.bundle"]
 
 [[bin]]
 name = "yardlet"

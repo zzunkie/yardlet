@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.4 - 2026-06-17
+
+### Changed
+
+- The published crate no longer ships repo-internal material. `Cargo.toml`
+  `exclude` drops the repo's own `.agents/` state, seed queues, CI config, and
+  local backups from the tarball, leaving only what builds and runs the crate.
+
 ## 0.5.3 - 2026-06-17
 
 ### Added
