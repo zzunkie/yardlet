@@ -78,6 +78,18 @@ enum SkillCmd {
     Equip { names: Vec<String> },
     /// Remove equipped skills.
     Unequip { names: Vec<String> },
+    /// Draft a candidate skill for a topic (a worker authors it; installs nothing).
+    Research { topic: Vec<String> },
+    /// Author and install a new skill by name (optionally from a topic).
+    Create {
+        /// Skill name (kebab-case recommended).
+        name: String,
+        /// Extra context/topic to brief the worker with.
+        #[arg(long)]
+        from: Option<String>,
+    },
+    /// Install a skill previously drafted by `research`, by its run id.
+    Apply { run: String },
     /// Show each equipped skill's eval score (from telemetry).
     Review,
 }
@@ -357,6 +369,31 @@ fn cmd_skill(cwd: &std::path::Path, args: SkillArgs) -> Result<()> {
                     Ok(false) => println!("  {name}: not equipped"),
                     Err(e) => println!("  {name}: {e}"),
                 }
+            }
+        }
+        SkillCmd::Research { topic } => {
+            let topic = topic.join(" ");
+            if topic.trim().is_empty() {
+                anyhow::bail!("usage: yard skill research \"<topic>\"");
+            }
+            let r = crate::skill_author::research(&ws, &topic)?;
+            println!("researched skill: {}", r.name);
+            for l in &r.lines {
+                println!("  {l}");
+            }
+        }
+        SkillCmd::Create { name, from } => {
+            let r = crate::skill_author::create(&ws, &name, from.as_deref())?;
+            println!("created skill: {}", r.name);
+            for l in &r.lines {
+                println!("  {l}");
+            }
+        }
+        SkillCmd::Apply { run } => {
+            let r = crate::skill_author::apply(&ws, &run)?;
+            println!("applied draft from {}: {}", r.run_id, r.name);
+            for l in &r.lines {
+                println!("  {l}");
             }
         }
         SkillCmd::Review => {

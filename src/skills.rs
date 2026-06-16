@@ -333,6 +333,43 @@ fn slug(title: &str) -> String {
         .to_string()
 }
 
+/// The single deterministic writer for every authored skill: slugify the
+/// name, refuse to clobber an existing skill, and write
+/// `.agents/skills/<slug>/SKILL.md` with frontmatter (`name`, `description`,
+/// `source`) over the given body. Returns the slug if newly written; `None`
+/// if the slug or body is empty, or a skill of that slug already exists.
+/// `source` distinguishes a `learned` skill (auto-prunable) from a `created`
+/// one (user-chosen, kept like a library equip).
+fn write_skill(
+    ws: &Workspace,
+    name_or_title: &str,
+    description: &str,
+    body: &str,
+    source: &str,
+) -> Option<String> {
+    let name = slug(name_or_title);
+    if name.is_empty() || body.trim().is_empty() {
+        return None;
+    }
+    let dst = ws.agents_dir().join("skills").join(&name);
+    if dst.exists() {
+        return None; // already equipped/learned/created; don't overwrite
+    }
+    let desc = description.trim();
+    let desc = if desc.is_empty() {
+        name_or_title.trim()
+    } else {
+        desc
+    };
+    let md = format!(
+        "---\nname: {name}\ndescription: {desc}\nsource: {source}\n---\n{}\n",
+        body.trim()
+    );
+    std::fs::create_dir_all(&dst).ok()?;
+    crate::state::write_str(&dst.join("SKILL.md"), &md).ok()?;
+    Some(name)
+}
+
 /// Record a worker-proposed skill (H4 / docs/skills.md S3): a run's
 /// `harness_suggestions` entry of kind "skill" becomes a real
 /// `.agents/skills/<slug>/SKILL.md` — the worker proposed the *content*, Yard
@@ -340,22 +377,40 @@ fn slug(title: &str) -> String {
 /// score loop can later judge and prune it. Returns the slug if newly written.
 /// Skips if a skill of that name is already present (no clobber).
 pub fn record_suggested_skill(ws: &Workspace, title: &str, content: &str) -> Option<String> {
-    let name = slug(title);
-    if name.is_empty() || content.trim().is_empty() {
-        return None;
+    write_skill(ws, title, title, content, "learned")
+}
+
+/// Outcome of explicitly authoring a skill (`yard skill create` / `apply`).
+pub enum AuthorOutcome {
+    /// Newly written; carries the installed slug.
+    Written(String),
+    /// A skill of this slug is already equipped; left untouched.
+    Exists(String),
+    /// The name or body was empty.
+    Invalid,
+}
+
+/// Install an explicitly authored skill (docs/skills.md S2/S3 `create`/`apply`).
+/// The worker authored the content; Yard (the deterministic core) is the sole
+/// writer. Tagged `source: created` — NOT `learned` — so it is user-chosen and
+/// never auto-pruned (it persists like a library equip until `unequip`).
+pub fn install_authored_skill(
+    ws: &Workspace,
+    name: &str,
+    description: &str,
+    body: &str,
+) -> AuthorOutcome {
+    let name_slug = slug(name);
+    if name_slug.is_empty() || body.trim().is_empty() {
+        return AuthorOutcome::Invalid;
     }
-    let dst = ws.agents_dir().join("skills").join(&name);
-    if dst.exists() {
-        return None; // already equipped/learned; don't overwrite
+    if ws.agents_dir().join("skills").join(&name_slug).exists() {
+        return AuthorOutcome::Exists(name_slug);
     }
-    let body = format!(
-        "---\nname: {name}\ndescription: {}\nsource: learned\n---\n{}\n",
-        title.trim(),
-        content.trim()
-    );
-    std::fs::create_dir_all(&dst).ok()?;
-    crate::state::write_str(&dst.join("SKILL.md"), &body).ok()?;
-    Some(name)
+    match write_skill(ws, name, description, body, "created") {
+        Some(s) => AuthorOutcome::Written(s),
+        None => AuthorOutcome::Invalid,
+    }
 }
 
 /// Record every skill-kind suggestion from a run, when `auto_skill` is on.

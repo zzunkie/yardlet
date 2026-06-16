@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Explicit skill authoring: `yard skill research / create / apply` (S2/S3).**
+  On-demand skills without hand-writing a SKILL.md. `yard skill research
+  "<topic>"` runs a researcher-role worker that drafts a candidate skill to a
+  run dir and installs nothing; `yard skill apply <run-id>` installs that
+  draft; `yard skill create <name> [--from "<topic>"]` authors and installs in
+  one step. The run is **queue-isolated** — like the planner it spawns one
+  worker, but derives no intent/queue, so authoring a skill never disturbs the
+  live intent (the gap that deferred this). The worker proposes the content;
+  Yard (the deterministic core) is the sole writer. Authored skills are tagged
+  `source: created` (not `learned`), so they are user-chosen and never
+  auto-pruned — they persist like a library equip until `unequip`.
+
 ## 0.4.0 — 2026-06-16
 
 ### Added

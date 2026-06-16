@@ -1,6 +1,7 @@
 # Skill Lifecycle — research, create, equip, manage
 
-> Status: plan (S1–S4 not yet implemented). Companion: [harness.md](harness.md)
+> Status: S1–S4 implemented; explicit `yard skill research`/`create`/`apply`
+> (S2/S3 on-demand authoring) implemented. Companion: [harness.md](harness.md)
 > (H1 already injects an installed skill catalog into every packet),
 > [absorption.md](absorption.md) (A1 already discovers a repo's existing
 > assets), [identity.md](identity.md).
@@ -99,7 +100,7 @@ Deterministic. Turns "what is this repo" into "these skills".
 Tests: classification table per fixture; preset expansion; equip idempotence;
 suggest = detected − equipped.
 
-## S2 — Research (find what's needed) · size M
+## S2 — Research (find what's needed) · size M — implemented
 
 Identify and source skills the repo wants but doesn't have.
 
@@ -108,13 +109,18 @@ Identify and source skills the repo wants but doesn't have.
   validation failures / NeedsUser themes (from telemetry) → capability-gap
   candidates ("3 runs stalled on browser screenshots → maybe a
   browser-evidence skill").
-- **`yard skill research "<topic>"`** — a researcher-role worker task (so the
-  generative work is behind the contract, I1): it studies the topic (repo
-  conventions + optionally the web) and writes a *candidate* SKILL.md draft
-  to a run dir, plus a short rationale. Nothing is installed yet.
-- The draft can feed S3 create directly (auto) or be inspected first; either
-  way Yard writes it, and the eval score later judges whether it earned its
-  place (I4).
+- **`yard skill research "<topic>"`** *(implemented)* — a researcher-role
+  worker task (so the generative work is behind the contract, I1): it studies
+  the topic (repo conventions; the web when access is `full`) and writes a
+  *candidate* SKILL.md draft to a run dir, plus a short rationale. **Nothing
+  is installed yet** — the draft lands at `.agents/runs/<id>/SKILL.md`.
+- **`yard skill apply <run-id>`** *(implemented)* installs that draft: Yard
+  reads the run's `skill-result.json` and writes the canonical skill (the
+  worker proposed, the deterministic core writes — I1/I3). The eval score
+  later judges whether it earned its place (I4).
+- The run is **queue-isolated**: like the planner it spawns one worker, but it
+  derives no `intent-contract.yaml` / `work-queue.yaml`, so researching a skill
+  never disturbs the live intent (`src/skill_author.rs`).
 
 ## S3 — Create (author the skill) · size M — auto-record implemented
 
@@ -123,10 +129,13 @@ Identify and source skills the repo wants but doesn't have.
   (`source: learned`) when `auto_skill` is on — the worker authored the
   content during its task, Yard slugifies + writes it, no clobber of an
   existing skill. The eval score (S4) later prunes weak ones.
-- **`yard skill create/research` (explicit, deferred):** authoring a *new*
-  skill on demand needs a worker run that doesn't overwrite the live intent
-  queue — a queue-isolation design tracked separately. The auto path above
-  is the cycle-strengthening loop; explicit create is a convenience on top.
+- **`yard skill create <name> [--from "<topic>"]` (explicit, implemented):**
+  authors a *new* skill on demand and installs it. It runs a queue-isolated
+  worker (`src/skill_author.rs`) that writes the SKILL.md content to a run
+  dir; Yard installs it tagged `source: created` — user-chosen, so unlike a
+  `learned` skill it is never auto-pruned (kept like a library equip until
+  `unequip`). The auto path above is the cycle-strengthening loop; explicit
+  create/research is a convenience on top.
 - **From a run (auto by default):** the result contract has
   `harness_suggestions` (H4). A worker that discovers a reusable procedure
   proposes it; **Yard records it automatically** as a skill (the worker

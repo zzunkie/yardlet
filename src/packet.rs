@@ -755,6 +755,100 @@ pub fn compile_planning(
     p
 }
 
+/// Compile a skill-authoring packet (docs/skills.md S2/S3). A researcher-role
+/// worker studies the subject against this repo and writes a candidate skill to
+/// `skill-result.json` in the run dir; Yard (not the worker) installs it. This
+/// run touches no canonical intent/queue state — the queue isolation S3 wanted.
+/// `mode` is `"research"` (propose name + rationale, install nothing) or
+/// `"create"` (author the named skill for installation).
+pub fn compile_skill(
+    mode: &str,
+    subject: &str,
+    repo: &RepoSummary,
+    run_dir_rel: &str,
+    language: &str,
+    harness: &Harness,
+    worker_id: &str,
+) -> String {
+    let mut p = String::new();
+    p.push_str("# Yard skill authoring\n\n");
+    p.push_str(&format!(
+        "You are a hidden Yard worker ({worker_id}) acting as the researcher. Author ONE \
+         reusable skill \u{2014} a portable SKILL.md (frontmatter + a concise procedure) \u{2014} \
+         for THIS repository. Do NOT implement repo changes in this run; your only deliverable \
+         is the skill draft written to the result file.\n\n",
+    ));
+
+    if mode == "create" {
+        p.push_str(&format!(
+            "## Skill to create\n\n{subject}\n\nAuthor that skill: the procedure a future \
+             worker in this repo should follow for the capability. Keep the name you were given \
+             unless it is clearly wrong.\n\n"
+        ));
+    } else {
+        p.push_str(&format!(
+            "## Topic to research\n\n{subject}\n\nIdentify the skill this repo needs for that \
+             topic, give it a short kebab-case `name`, and draft it. If a skill in the catalog \
+             below already covers it, say so in `rationale` and still draft the best version.\n\n"
+        ));
+    }
+
+    p.push_str("## This repository (evidence)\n\n");
+    p.push_str(&format!("- root: `{}`\n", repo.root));
+    if !repo.package_managers.is_empty() {
+        p.push_str(&format!(
+            "- package managers: {}\n",
+            repo.package_managers.join(", ")
+        ));
+    }
+    if !repo.test_commands.is_empty() {
+        p.push_str(&format!(
+            "- test commands: {}\n",
+            repo.test_commands.join(", ")
+        ));
+    }
+    p.push_str(&format!("- top level: {}\n\n", repo.top_level.join(", ")));
+
+    // Show the existing skill catalog so the worker doesn't duplicate one.
+    push_harness_sections(&mut p, harness, worker_id, &[]);
+
+    p.push_str("## How to write the skill\n\n");
+    p.push_str(
+        "- Make it a reusable PROCEDURE, not a one-off answer: when to use it, the steps, and \
+         how to verify success.\n\
+         - Fit it to THIS repo's conventions (the evidence above); cite concrete paths/commands \
+         where it helps.\n\
+         - Keep it tight \u{2014} a focused half-page beats an exhaustive essay. One skill, one \
+         capability; don't duplicate a skill already in the catalog above.\n\
+         - `description` is one line for the catalog: what the skill is for, so a planner can \
+         match it to a task.\n\
+         - Network may be unavailable (sandbox); draft from the repo and your own knowledge, and \
+         note in `rationale` if a source you would want is unreachable.\n\n",
+    );
+
+    p.push_str(&language_directive(language));
+
+    p.push_str("## Required output\n\n");
+    p.push_str(&format!(
+        "Write exactly one file: `{run_dir_rel}/skill-result.json`, matching this shape:\n\n"
+    ));
+    p.push_str(SKILL_SCHEMA_HINT);
+    p
+}
+
+const SKILL_SCHEMA_HINT: &str = r#"```json
+{
+  "name": "kebab-case-skill-name",
+  "description": "One line: what this skill is for (planner-matchable).",
+  "body": "Markdown procedure. Use headings like ## When to use, ## Steps, ## Verify. This becomes the SKILL.md body verbatim.",
+  "rationale": "Why this skill, what gap it fills, and any source you could not reach."
+}
+```
+
+Do NOT put YAML frontmatter inside `body` — Yard writes the `name`/`description`
+frontmatter itself. `body` is just the Markdown procedure.
+"#;
+
 const PLANNING_SCHEMA_HINT: &str = r#"```json
 {
   "summary": "One sentence describing the goal in product terms.",

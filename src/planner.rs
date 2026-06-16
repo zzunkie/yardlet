@@ -1022,7 +1022,7 @@ fn build_worker_guidance(workers: &WorkersFile) -> String {
 }
 
 /// Resolve the ordered worker preference and return the first that is ready.
-fn pick_ready_worker(
+pub(crate) fn pick_ready_worker(
     workers: &WorkersFile,
     billing: &crate::schemas::BillingPolicy,
     worker_override: Option<&str>,
