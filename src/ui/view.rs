@@ -372,6 +372,21 @@ fn render_home(frame: &mut Frame, app: &App) {
         }
     }
     render_status(frame, chunks[3], app);
+    // A freshly installed binary is worth shouting about — the silent
+    // status-line note got missed for days. When idle, the footer turns into
+    // the restart prompt in cyan so it can't be overlooked.
+    if app.update_available && !app.is_busy() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                l.update_ready,
+                Style::default().fg(Color::Cyan).bold(),
+            )))
+            .block(Block::bordered())
+            .wrap(Wrap { trim: true }),
+            chunks[4],
+        );
+        return;
+    }
     let footer = if app.is_busy() {
         l.footer_home_busy.to_string()
     } else {

@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Loud upgrade prompt.** When a newer yard binary is installed while the
+  TUI is open, the Home footer turns into a cyan "press u to restart" prompt
+  (the old one-line status note got missed for days). Once you've restarted
+  into a build that has this, in-place upgrades won't go unnoticed again.
+
 - **`i` opens the full intent.** The Home header now shows the goal as a
   single line with a `(+N)` chip for follow-ups; press `i` to read the whole
   intent contract — goal, scope, out-of-scope, acceptance, and any interview
