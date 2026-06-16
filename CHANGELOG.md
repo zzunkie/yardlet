@@ -1,19 +1,60 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-06-16
 
 ### Added
 
-- **Loud upgrade prompt.** When a newer yard binary is installed while the
-  TUI is open, the Home footer turns into a cyan "press u to restart" prompt
-  (the old one-line status note got missed for days). Once you've restarted
-  into a build that has this, in-place upgrades won't go unnoticed again.
+- **Shared harness injection (phase H1).** Every packet — execution and
+  planning, every worker — now carries the workspace harness: `.agents/rules/*.md`
+  inlined (4 KB cap, overflow becomes read anchors) and a skill catalog from
+  `.agents/skills/*/SKILL.md` frontmatter with Hermes-style progressive
+  loading (catalog line → SKILL.md → deeper reference files). The planner can
+  assign `task.skills`, which become required read-anchors in that task's
+  packet; parallel worktrees get the harness assets copied in so relative
+  anchors resolve. Skill format stays agentskills.io/Claude-Code compatible.
 
-- **`i` opens the full intent.** The Home header now shows the goal as a
-  single line with a `(+N)` chip for follow-ups; press `i` to read the whole
-  intent contract — goal, scope, out-of-scope, acceptance, and any interview
-  clarifications — in a scrollable view. The reclaimed header line goes to
-  the queue (header is now 5 lines, not 6).
+- **Harness asset discovery (A1).** Repos that already carry agent assets
+  get them as shared harness the moment Yard runs: root `AGENTS.md` /
+  `CLAUDE.md`, `.claude/skills/*`, `.cursor/rules/*.{md,mdc}`, and
+  `.github/copilot-instructions.md` are discovered read-only and projected
+  into packets **worker-aware** — a worker that reads a source natively
+  (claude: CLAUDE.md + .claude/skills; codex: AGENTS.md) never receives it
+  twice. Symlinked duplicates (CLAUDE.md -> AGENTS.md) merge into one entry
+  native to both. Opt out with `harness_discovery: false` in yard.yaml.
+
+- **Ambiguity gate + planner interview (A2).** The planner's own ambiguity
+  self-report now has teeth: while it says "high", queue-selected runs and
+  the auto-drain refuse to start and show the planner's open questions.
+  Press `a` to answer — each answer runs one interview turn (an in-place
+  re-plan that folds all clarifications in and re-scores ambiguity), up to
+  10 turns; the gate opens when the score drops, the cap is reached, or you
+  override (`--accept-ambiguity`, or `ambiguity_gate: false`). The status
+  line shows the questions and the turn counter.
+
+- **Guaranteed acceptance review (A3).** A risky plan (any high-risk task)
+  or a sizable one (3+ tasks) now always ends in a review-kind task that
+  verifies the intent's acceptance criteria per criterion against the
+  actual workspace. The planner is asked to include it; if it forgets,
+  Yard appends one deterministically (depends_on = every prior task) — the
+  verifier is never the doer.
+
+- **Skill toolbox (S1): repo classification + auto-equip.** Point
+  `skill_library` at a local library (internal-tool layout: `presets/*.skills`
+  + `skills/<name>/SKILL.md`) and Yard classifies the repo from its file
+  signals (`project.godot`→game, `package.json`→web-ui, Dockerfile→infra,
+  …) and equips the matching presets' skills automatically on plan/goal
+  (`auto_equip`, on by default — I4: minimize intervention). `yard skill
+  list / suggest / equip <preset|name> / unequip` manage it by hand.
+  Deterministic, no LLM; equip is a reversible symlink into `.agents/skills/`.
+
+- **Auto-learned skills (S3).** When a run's result proposes a reusable
+  procedure (`harness_suggestions` of kind "skill"), Yard records it
+  automatically as `.agents/skills/<slug>/SKILL.md` marked `source: learned`
+  — the worker authored the content, Yard (the deterministic core) does the
+  writing, no clobber of existing skills. On by default (`auto_skill`, I4:
+  minimize intervention). This is the cycle-strengthening loop: every run
+  can leave the harness sharper, and the eval score (next) prunes what
+  doesn't earn its place.
 
 - **Skill score + auto-prune (S4) — the self-correction loop closes.** Each
   equipped skill is scored from telemetry by the runs that DECLARED it,
@@ -25,15 +66,6 @@
   Library skills you equipped are never auto-pruned. This makes auto-writing
   safe: bad learned skills don't accumulate — the eval loop removes them.
 
-- **Auto-learned skills (S3).** When a run's result proposes a reusable
-  procedure (`harness_suggestions` of kind "skill"), Yard records it
-  automatically as `.agents/skills/<slug>/SKILL.md` marked `source: learned`
-  — the worker authored the content, Yard (the deterministic core) does the
-  writing, no clobber of existing skills. On by default (`auto_skill`, I4:
-  minimize intervention). This is the cycle-strengthening loop: every run
-  can leave the harness sharper, and the eval score (next) prunes what
-  doesn't earn its place.
-
 - **Structured review verdicts (eval upgrade).** Reviewer/safety tasks and
   `yard goal --verify` now emit `verdict: [{criterion_id, pass, evidence}]`
   in result.json — a machine-readable per-criterion judgment instead of
@@ -42,38 +74,8 @@
   instructed to report `needs_user` when a criterion fails so a real defect
   routes to you, not into a review retry loop. Verdict pass/total and the
   task's declared skills are recorded in telemetry — the quality signal the
-  upcoming skill score (S4) reads. This is the gap that let sample-project pass
+  skill score (S4) reads. This is the gap that let sample-project pass
   as "web-UI quality": "good" is no longer the worker's self-report.
-
-- **Skill toolbox (S1): repo classification + auto-equip.** Point
-  `skill_library` at a local library (internal-tool layout: `presets/*.skills`
-  + `skills/<name>/SKILL.md`) and Yard classifies the repo from its file
-  signals (`project.godot`→game, `package.json`→web-ui, Dockerfile→infra,
-  …) and equips the matching presets' skills automatically on plan/goal
-  (`auto_equip`, on by default — I4: minimize intervention). `yard skill
-  list / suggest / equip <preset|name> / unequip` manage it by hand.
-  Deterministic, no LLM; equip is a reversible symlink into `.agents/skills/`.
-
-### Fixed
-
-- A fresh plan now clears the queue before the planning worker runs, so the
-  Home screen no longer shows the previous intent's tasks for the whole
-  planning run. (Interview/amend keep the live queue.)
-
-- **`yard goal` express lane (P2).** For small work, skip the planning
-  worker entirely: `yard goal "fix the login redirect"` lays down a single
-  deterministic task and drains it. Add `--verify "..."` and Yard appends a
-  separate reviewer task (depends_on the work) that checks the condition
-  against the actual workspace with evidence — the verifier is never the
-  doer, so for visual goals it picks up the ui-review / browser-evidence
-  skills and must cite screenshots. No ambiguity gate (typing the goal is
-  the acceptance). `--plan-only` queues without running.
-
-- **Mid-run model/effort changes apply to the next task.** Settings can be
-  edited while a worker runs (it already could); now saving confirms with a
-  toast that says the change lands on the next task — the in-flight worker
-  keeps the model it was spawned with, but `run_next` re-reads workers.yaml
-  every task, so the switch takes effect without stopping the drain.
 
 - **Hot session chaining (P1).** During an auto-drain, a task whose
   `depends_on` includes the task that just finished — on the same worker —
@@ -84,46 +86,42 @@
   fan-out, and after 3 consecutive tasks (context-rot cap). The packet says
   so explicitly ("same session, next task — do not re-explore").
 
+- **`yard goal` express lane (P2).** For small work, skip the planning
+  worker entirely: `yard goal "fix the login redirect"` lays down a single
+  deterministic task and drains it. Add `--verify "..."` and Yard appends a
+  separate reviewer task (depends_on the work) that checks the condition
+  against the actual workspace with evidence — the verifier is never the
+  doer, so for visual goals it picks up the ui-review / browser-evidence
+  skills and must cite screenshots. No ambiguity gate (typing the goal is
+  the acceptance). `--plan-only` queues without running.
+
+- **`i` opens the full intent.** The Home header now shows the goal as a
+  single line with a `(+N)` chip for follow-ups; press `i` to read the whole
+  intent contract — goal, scope, out-of-scope, acceptance, and any interview
+  clarifications — in a scrollable view. The reclaimed header line goes to
+  the queue (header is now 5 lines, not 6).
+
+- **Loud upgrade prompt.** When a newer yard binary is installed while the
+  TUI is open, the Home footer turns into a cyan "press u to restart" prompt
+  (the old one-line status note got missed for days). Once you've restarted
+  into a build that has this, in-place upgrades won't go unnoticed again.
+
 ### Fixed
+
+- A fresh plan now clears the queue before the planning worker runs, so the
+  Home screen no longer shows the previous intent's tasks for the whole
+  planning run. (Interview/amend keep the live queue.)
+
+- **Mid-run model/effort changes apply to the next task.** Settings can be
+  edited while a worker runs (it already could); now saving confirms with a
+  toast that says the change lands on the next task — the in-flight worker
+  keeps the model it was spawned with, but `run_next` re-reads workers.yaml
+  every task, so the switch takes effect without stopping the drain.
 
 - Input caret position with Korean text: the cursor drifted one cell per
   wrapped line (width/box-width division ignored word wrap and double-width
   Hangul at the right edge). The caret now simulates the renderer's
   wrapping, including explicit newlines on earlier lines.
-
-- **Guaranteed acceptance review (A3).** A risky plan (any high-risk task)
-  or a sizable one (3+ tasks) now always ends in a review-kind task that
-  verifies the intent's acceptance criteria per criterion against the
-  actual workspace. The planner is asked to include it; if it forgets,
-  Yard appends one deterministically (depends_on = every prior task) — the
-  verifier is never the doer.
-
-- **Ambiguity gate + planner interview (A2).** The planner's own ambiguity
-  self-report now has teeth: while it says "high", queue-selected runs and
-  the auto-drain refuse to start and show the planner's open questions.
-  Press `a` to answer — each answer runs one interview turn (an in-place
-  re-plan that folds all clarifications in and re-scores ambiguity), up to
-  10 turns; the gate opens when the score drops, the cap is reached, or you
-  override (`--accept-ambiguity`, or `ambiguity_gate: false`). The status
-  line shows the questions and the turn counter.
-
-- **Harness asset discovery (A1).** Repos that already carry agent assets
-  get them as shared harness the moment Yard runs: root `AGENTS.md` /
-  `CLAUDE.md`, `.claude/skills/*`, `.cursor/rules/*.{md,mdc}`, and
-  `.github/copilot-instructions.md` are discovered read-only and projected
-  into packets **worker-aware** — a worker that reads a source natively
-  (claude: CLAUDE.md + .claude/skills; codex: AGENTS.md) never receives it
-  twice. Symlinked duplicates (CLAUDE.md -> AGENTS.md) merge into one entry
-  native to both. Opt out with `harness_discovery: false` in yard.yaml.
-
-- **Shared harness injection (phase H1).** Every packet — execution and
-  planning, every worker — now carries the workspace harness: `.agents/rules/*.md`
-  inlined (4 KB cap, overflow becomes read anchors) and a skill catalog from
-  `.agents/skills/*/SKILL.md` frontmatter with Hermes-style progressive
-  loading (catalog line → SKILL.md → deeper reference files). The planner can
-  assign `task.skills`, which become required read-anchors in that task's
-  packet; parallel worktrees get the harness assets copied in so relative
-  anchors resolve. Skill format stays agentskills.io/Claude-Code compatible.
 
 ## v0.3.0 — 2026-06-12
 
