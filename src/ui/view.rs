@@ -398,6 +398,47 @@ fn render_home(frame: &mut Frame, app: &App) {
     render_footer(frame, chunks[4], &footer);
 }
 
+/// The intent summary as ONE line for the fixed-height header: amend adds
+/// "\n\n[follow-up] ..." to the summary, which would wrap and push the status
+/// line out of the box. Show the base goal, width-truncated, with a "(+N)"
+/// chip when follow-ups exist (the full text lives in the intent contract).
+fn intent_oneline(snap: &Snapshot, width: u16, l: &L) -> String {
+    let raw = snap.intent_summary();
+    let followups = raw.matches("[follow-up]").count();
+    let base = raw.split("[follow-up]").next().unwrap_or(raw);
+    let base = base.split_whitespace().collect::<Vec<_>>().join(" ");
+    let suffix = if followups > 0 {
+        format!("  (+{followups})")
+    } else {
+        String::new()
+    };
+    let avail = (width as usize).saturating_sub(
+        2 + UnicodeWidthStr::width(l.intent) + UnicodeWidthStr::width(suffix.as_str()),
+    );
+    format!("{}{suffix}", truncate_width(&base, avail))
+}
+
+/// Truncate to a display-column budget (Hangul counts as 2), ellipsizing.
+fn truncate_width(s: &str, max: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    if UnicodeWidthStr::width(s) <= max {
+        return s.to_string();
+    }
+    let budget = max.saturating_sub(1); // room for the ellipsis
+    let mut w = 0;
+    let mut out = String::new();
+    for c in s.chars() {
+        let cw = UnicodeWidthChar::width(c).unwrap_or(0);
+        if w + cw > budget {
+            break;
+        }
+        out.push(c);
+        w += cw;
+    }
+    out.push('\u{2026}');
+    out
+}
+
 fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
     let status = Line::from(vec![
         Span::raw(l.status),
@@ -451,7 +492,7 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
         Line::from(vec![
             Span::raw(l.intent),
             Span::styled(
-                snap.intent_summary().to_string(),
+                intent_oneline(snap, area.width, l),
                 Style::default().fg(Color::Cyan),
             ),
         ]),
@@ -877,6 +918,12 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn truncate_width_respects_hangul_columns() {
+        assert_eq!(truncate_width("hello", 10), "hello");
+        // "가나다라" = 8 cols; budget 5 -> 2 chars (4 cols) + ellipsis
+        assert_eq!(truncate_width("가나다라", 5), "가나\u{2026}");
+    }
 
     #[test]
     fn caret_tracks_hangul_double_width_wrapping() {
