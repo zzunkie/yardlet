@@ -465,6 +465,10 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         if !learned.is_empty() {
             lines.push(format!("learned skill(s): {}", learned.join(", ")));
         }
+        let rules = crate::skills::record_run_rules(ws, &r.harness_suggestions);
+        if !rules.is_empty() {
+            lines.push(format!("learned rule(s): {}", rules.join(", ")));
+        }
     }
 
     // ---- update queue ----------------------------------------------------

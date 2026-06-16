@@ -60,6 +60,20 @@ pub enum Command {
     Recover,
     /// Classify the repo and equip skills from the library (docs/skills.md).
     Skill(SkillArgs),
+    /// Review the harness learning loop: learned rules + learned skills (H4).
+    Harness(HarnessArgs),
+}
+
+#[derive(Args)]
+pub struct HarnessArgs {
+    #[command(subcommand)]
+    cmd: HarnessCmd,
+}
+
+#[derive(Subcommand)]
+enum HarnessCmd {
+    /// Show auto-learned rules and skills (with their eval scores).
+    Review,
 }
 
 #[derive(Args)]
@@ -283,7 +297,55 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
         Some(Command::Recover) => cmd_recover(&cwd),
         Some(Command::Skill(a)) => cmd_skill(&cwd, a),
+        Some(Command::Harness(a)) => cmd_harness(&cwd, a),
     }
+}
+
+fn cmd_harness(cwd: &std::path::Path, args: HarnessArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    match args.cmd {
+        HarnessCmd::Review => {
+            let rules = crate::skills::learned_rules(&ws);
+            println!("Learned rules ({}):", rules.len());
+            if rules.is_empty() {
+                println!("  (none yet — a run proposes them via harness_suggestions)");
+            }
+            for r in &rules {
+                println!("  \u{2022} {r}  (.agents/rules/{r}.md)");
+            }
+
+            let scores = crate::skills::scores(&ws);
+            let learned: Vec<_> = scores
+                .iter()
+                .filter(|s| crate::skills::is_learned(&ws, &s.name))
+                .collect();
+            println!("\nLearned skills ({}):", learned.len());
+            if learned.is_empty() {
+                println!("  (none yet)");
+            }
+            for s in &learned {
+                let signal = if s.verdict_total > 0 {
+                    format!("verdict {}/{}", s.verdict_pass, s.verdict_total)
+                } else if s.runs > 0 {
+                    format!("done {}/{}", s.done, s.runs)
+                } else {
+                    "no runs yet".to_string()
+                };
+                println!(
+                    "  \u{2022} {:<26} score {:>4.2}  {}",
+                    s.name,
+                    s.value(),
+                    signal
+                );
+            }
+            println!(
+                "\nLearned skills below score floor over enough runs are auto-pruned \
+                 (auto_prune). Learned rules are kept until removed (git-reversible). \
+                 Full skill table: `yard skill review`."
+            );
+        }
+    }
+    Ok(())
 }
 
 fn cmd_recover(cwd: &std::path::Path) -> Result<()> {

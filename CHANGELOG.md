@@ -4,6 +4,18 @@
 
 ### Added
 
+- **Rule auto-learn + `yard harness review` (harness H4 completion).** The
+  learning loop already auto-recorded worker-proposed *skills* (S3); now a
+  run's `harness_suggestions` of kind `"rule"` are auto-recorded too, as
+  `.agents/rules/learned-<slug>.md` — an always-apply constraint H1 inlines
+  into every packet (the worker proposes, Yard's deterministic core writes; no
+  clobber; gated by `auto_rule`, default on). Because a rule is always-on it
+  has no per-task attribution to score, so learned rules are kept until removed
+  (git-reversible) rather than auto-pruned like skills. New `yard harness
+  review` shows the learned rules and the learned skills with their eval
+  scores in one place. (Deterministic-observation candidate mining — failure
+  themes into candidates — remains the open part of H4.)
+
 - **Workspace hooks (harness H3) — deterministic guards that bind every
   worker.** Executables in `.agents/hooks/pre-run.d/*` run before a worker
   spawns; a non-zero exit **blocks the run** (the task fails with the hook's

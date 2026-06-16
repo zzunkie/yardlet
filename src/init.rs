@@ -46,6 +46,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
         skill_library: String::new(),
         auto_equip: true,
         auto_skill: true,
+        auto_rule: true,
         auto_prune: true,
         hooks: true,
     };

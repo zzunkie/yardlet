@@ -287,7 +287,7 @@ const PRUNE_FLOOR: f64 = 0.34;
 /// library equip? Auto-prune only unequips; for a learned in-repo skill that
 /// means deleting the dir, so we only auto-prune learned ones (library skills
 /// the user chose stay until they unequip).
-fn is_learned(ws: &Workspace, name: &str) -> bool {
+pub(crate) fn is_learned(ws: &Workspace, name: &str) -> bool {
     std::fs::read_to_string(ws.agents_dir().join("skills").join(name).join("SKILL.md"))
         .map(|t| t.contains("source: learned"))
         .unwrap_or(false)
@@ -427,6 +427,57 @@ pub fn record_run_suggestions(
         .filter(|s| s.kind.eq_ignore_ascii_case("skill"))
         .filter_map(|s| record_suggested_skill(ws, &s.title, &s.content))
         .collect()
+}
+
+/// Record every rule-kind suggestion from a run, when `auto_rule` is on
+/// (harness.md H4, the rule half of the learning loop). A rule becomes
+/// `.agents/rules/learned-<slug>.md` — plain markdown H1 inlines into every
+/// packet (no frontmatter; the `learned-` prefix marks provenance). The worker
+/// proposed it; Yard (the deterministic core) writes it. No clobber. Returns
+/// the slugs written. Unlike learned skills these are not auto-pruned (an
+/// always-on rule has no per-task attribution to score), but they are
+/// reversible (git) and surfaced by `yard harness review`.
+pub fn record_run_rules(
+    ws: &Workspace,
+    suggestions: &[crate::schemas::HarnessSuggestion],
+) -> Vec<String> {
+    if !ws.load_config().map(|c| c.auto_rule).unwrap_or(false) {
+        return Vec::new();
+    }
+    let dir = ws.agents_dir().join("rules");
+    suggestions
+        .iter()
+        .filter(|s| s.kind.eq_ignore_ascii_case("rule"))
+        .filter_map(|s| {
+            let name = slug(&s.title);
+            if name.is_empty() || s.content.trim().is_empty() {
+                return None;
+            }
+            let file = dir.join(format!("learned-{name}.md"));
+            if file.exists() {
+                return None; // no clobber
+            }
+            std::fs::create_dir_all(&dir).ok()?;
+            let body = format!("# {}\n\n{}\n", s.title.trim(), s.content.trim());
+            crate::state::write_str(&file, &body).ok()?;
+            Some(name)
+        })
+        .collect()
+}
+
+/// Learned rule files (`.agents/rules/learned-*.md`) in this workspace, for
+/// `yard harness review`. Returns bare names (without the `.md`).
+pub fn learned_rules(ws: &Workspace) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(ws.agents_dir().join("rules"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|n| n.starts_with("learned-") && n.ends_with(".md"))
+        .map(|n| n.trim_end_matches(".md").to_string())
+        .collect();
+    out.sort();
+    out
 }
 
 #[cfg(unix)]
@@ -590,6 +641,57 @@ mod tests {
         assert_eq!(pruned, vec!["weak-one"]); // learned + below floor + enough runs
         assert!(!installed(&ws).contains(&"weak-one".to_string()));
         assert!(installed(&ws).contains(&"kept".to_string())); // library skill untouched
+        let _ = std::fs::remove_dir_all(&ws_root);
+    }
+
+    #[test]
+    fn record_run_rules_writes_learned_rule_files() {
+        use crate::schemas::HarnessSuggestion;
+        let ws_root = std::env::temp_dir().join(format!("yard-rules-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ws_root);
+        let ws = Workspace::at(&ws_root);
+        crate::init::ensure_initialized(&ws_root).unwrap(); // auto_rule defaults on
+
+        let sugg = vec![
+            HarnessSuggestion {
+                kind: "rule".into(),
+                title: "Always run gdformat before committing".into(),
+                content: "Run `gdformat scripts/` and fix diffs before any commit.".into(),
+            },
+            HarnessSuggestion {
+                kind: "skill".into(),
+                title: "Not a rule".into(),
+                content: "ignored by the rule recorder".into(),
+            },
+        ];
+        let written = record_run_rules(&ws, &sugg);
+        assert_eq!(written, vec!["always-run-gdformat-before-committing"]);
+        let file = ws
+            .agents_dir()
+            .join("rules")
+            .join("learned-always-run-gdformat-before-committing.md");
+        let body = std::fs::read_to_string(&file).unwrap();
+        assert!(body.contains("# Always run gdformat before committing"));
+        assert!(body.contains("gdformat scripts/"));
+        assert_eq!(
+            learned_rules(&ws),
+            vec!["learned-always-run-gdformat-before-committing"]
+        );
+
+        // no clobber on a second proposal of the same title
+        assert!(record_run_rules(&ws, &sugg).is_empty());
+
+        // off when auto_rule is disabled
+        let mut cfg = ws.load_config().unwrap();
+        cfg.auto_rule = false;
+        crate::state::save_yaml(&ws.config_path(), &cfg).unwrap();
+        let other = vec![HarnessSuggestion {
+            kind: "rule".into(),
+            title: "Another".into(),
+            content: "x".into(),
+        }];
+        assert!(record_run_rules(&ws, &other).is_empty());
+
         let _ = std::fs::remove_dir_all(&ws_root);
     }
 

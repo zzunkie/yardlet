@@ -74,6 +74,14 @@ pub struct YardConfig {
     /// ones. On by default (I4); off routes proposals to manual review.
     #[serde(default = "default_true")]
     pub auto_skill: bool,
+    /// Auto-record worker-proposed rules (a run's harness_suggestions of kind
+    /// "rule") as `.agents/rules/learned-<slug>.md` — an always-apply
+    /// constraint H1 inlines into every packet (harness.md H4). On by default;
+    /// reversible (git) and visible via `yard harness review`. Higher-blast
+    /// than a skill (rules are always-on, not per-task), so off is the cautious
+    /// choice. Unlike learned skills, learned rules are not auto-pruned.
+    #[serde(default = "default_true")]
+    pub auto_rule: bool,
     /// Auto-prune learned skills whose eval score stays below the floor over
     /// enough runs (the self-correction half of the loop, S4). Reversible
     /// (git keeps the file). On by default (I4); off = review surfaces them.

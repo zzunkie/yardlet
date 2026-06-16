@@ -1,9 +1,10 @@
 # Shared Worker Harness & Learning Loop — Design
 
 > Status: H1 implemented (+A1 discovery of existing repo assets), H2 implemented
-> (partial continuation), H3 implemented (workspace hooks). H4 skill half
-> shipped (docs/skills.md S3 auto-learn + S4 score/prune); its rule-kind
-> auto-learn + `yard harness review` remain. H5 deferred.
+> (partial continuation), H3 implemented (workspace hooks), H4 implemented
+> (learning loop: skill auto-learn + S4 score/prune, rule auto-learn, `yard
+> harness review`). Remaining within H4: deterministic-observation candidate
+> mining (failure themes → candidates). H5 deferred.
 > Companion docs: [parallel-queue.md](parallel-queue.md),
 > [routing-and-telemetry.md](routing-and-telemetry.md).
 
@@ -109,10 +110,20 @@ self-reported from conflict so the drain knows which to auto-continue.
 This gives internal-tool's `hooks/` a home where they bind *all* workers, not
 just one CLI. Implementation: `src/hooks.rs`, wired into `src/run.rs`.
 
-## Phase H4 — the learning loop (every cycle strengthens the harness)
+## Phase H4 — the learning loop (every cycle strengthens the harness) — implemented
 
 Lifecycle (spec §13.2): observation → candidate → review → promotion →
 deprecation.
+
+> Implemented: a run's `harness_suggestions` of kind "skill" auto-record as
+> `.agents/skills/<slug>/SKILL.md` (S3) and of kind "rule" as
+> `.agents/rules/learned-<slug>.md` (`src/skills.rs`
+> `record_run_suggestions`/`record_run_rules`, gated by `auto_skill`/
+> `auto_rule`). Learned skills are scored and auto-pruned (S4); learned rules
+> are always-on (no per-task attribution to score) so they are kept until
+> removed — reversible via git, visible via `yard harness review`. Still TODO
+> within H4: deterministic-observation candidate mining (turning repeated
+> validation failures / NeedsUser themes into candidates).
 
 **Observe (mechanism, every run, no extra tokens).**
 - The result contract gains an optional field:
