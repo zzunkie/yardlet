@@ -41,6 +41,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Screen::Settings => render_settings(frame, app),
         Screen::Monitor => render_monitor(frame, app),
         Screen::Handoff => render_handoff(frame, app),
+        Screen::Intent => render_intent(frame, app),
         Screen::Completion => render_completion(frame, app),
         Screen::ReportList => render_report_list(frame, app),
     }
@@ -348,7 +349,7 @@ fn render_home(frame: &mut Frame, app: &App) {
     let l = app.lang.l();
     let area = safe_area(frame);
     let chunks = Layout::vertical([
-        Constraint::Length(6),
+        Constraint::Length(5),
         Constraint::Min(4),
         Constraint::Length(5),
         Constraint::Length(3),
@@ -753,6 +754,20 @@ fn render_handoff(frame: &mut Frame, app: &App) {
         chunks[0],
     );
     render_footer(frame, chunks[1], l.footer_handoff);
+}
+
+fn render_intent(frame: &mut Frame, app: &App) {
+    let l = app.lang.l();
+    let area = safe_area(frame);
+    let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
+    frame.render_widget(
+        Paragraph::new(md_lines(&app.intent_text))
+            .wrap(Wrap { trim: false })
+            .scroll((app.scroll, 0))
+            .block(Block::bordered().title(l.intent_title)),
+        chunks[0],
+    );
+    render_footer(frame, chunks[1], l.footer_intent);
 }
 
 fn render_report_list(frame: &mut Frame, app: &App) {

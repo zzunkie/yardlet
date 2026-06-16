@@ -4,6 +4,12 @@
 
 ### Added
 
+- **`i` opens the full intent.** The Home header now shows the goal as a
+  single line with a `(+N)` chip for follow-ups; press `i` to read the whole
+  intent contract — goal, scope, out-of-scope, acceptance, and any interview
+  clarifications — in a scrollable view. The reclaimed header line goes to
+  the queue (header is now 5 lines, not 6).
+
 - **Skill score + auto-prune (S4) — the self-correction loop closes.** Each
   equipped skill is scored from telemetry by the runs that DECLARED it,
   preferring structured review-verdict pass-through over a plain Done rate

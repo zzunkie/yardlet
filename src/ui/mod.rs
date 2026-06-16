@@ -32,6 +32,7 @@ pub enum Screen {
     NewWork,
     Answer,
     Handoff,
+    Intent,
     Settings,
     Monitor,
     Completion,
@@ -115,6 +116,7 @@ pub struct App {
     pub toast: Option<(bool, String)>,
     pub progress: Option<String>,
     pub handoff_text: String,
+    pub intent_text: String,
     pub report_text: String,
     /// When true, NewWork input continues (amends) the current intent instead of
     /// starting a fresh one.
@@ -241,6 +243,7 @@ impl App {
             toast: None,
             progress: None,
             handoff_text: String::new(),
+            intent_text: String::new(),
             report_text: String::new(),
             amend: false,
             pause: None,
@@ -723,6 +726,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
             Screen::Completion => handle_completion_key(&mut app, code),
             Screen::ReportList => handle_reportlist_key(&mut app, code),
             Screen::Handoff => handle_handoff_key(&mut app, code),
+            Screen::Intent => handle_intent_key(&mut app, code),
             Screen::Monitor => match code {
                 KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Home,
                 // Cycle which parallel run is being followed.
@@ -829,6 +833,11 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
                 }
                 None => app.toast = Some((true, app.lang.l().no_pending.into())),
             }
+        }
+        KeyCode::Char('i') => {
+            app.intent_text = build_intent_view(app);
+            app.scroll = 0;
+            app.screen = Screen::Intent;
         }
         KeyCode::Char('h') => {
             app.handoff_text = load_latest_handoff(app);
@@ -1039,6 +1048,61 @@ fn handle_completion_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('R') => redo_all(app),
         _ => apply_scroll(app, code),
     }
+}
+
+fn handle_intent_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') => app.screen = Screen::Home,
+        _ => apply_scroll(app, code),
+    }
+}
+
+/// The full intent contract as scrollable markdown (the header only shows a
+/// one-line summary; this is the whole goal, scope, acceptance, and any
+/// interview clarifications).
+fn build_intent_view(app: &App) -> String {
+    let Ok(Some(i)) = app.ws.load_intent() else {
+        return "No intent yet — press n to describe new work.".to_string();
+    };
+    let mut s = String::new();
+    s.push_str("# Goal\n\n");
+    s.push_str(if i.summary.trim().is_empty() {
+        "(none)"
+    } else {
+        i.summary.trim()
+    });
+    s.push_str("\n\n");
+    if !i.allowed_scope.is_empty() {
+        s.push_str("## Allowed scope\n\n");
+        for x in &i.allowed_scope {
+            s.push_str(&format!("- {x}\n"));
+        }
+        s.push('\n');
+    }
+    if !i.out_of_scope.is_empty() {
+        s.push_str("## Out of scope\n\n");
+        for x in &i.out_of_scope {
+            s.push_str(&format!("- {x}\n"));
+        }
+        s.push('\n');
+    }
+    if !i.acceptance.is_empty() {
+        s.push_str("## Acceptance\n\n");
+        for a in &i.acceptance {
+            if let Some(t) = a.as_str() {
+                s.push_str(&format!("- {t}\n"));
+            }
+        }
+        s.push('\n');
+    }
+    if !i.clarifications.is_empty() {
+        s.push_str("## Interview\n\n");
+        for c in &i.clarifications {
+            s.push_str(c);
+            s.push_str("\n\n");
+        }
+    }
+    s
 }
 
 fn handle_handoff_key(app: &mut App, code: KeyCode) {
