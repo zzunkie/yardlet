@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.2 — 2026-06-17
+
+### Fixed
+
+- **Pressing `p` during an auto-drain now shows feedback.** The running status
+  line replaces the toast area while busy, so the graceful-pause toast was
+  invisible exactly when you'd press `p` — it looked like a no-op. The busy
+  status line now reflects the pause flag directly: request a pause and it
+  switches to "pausing — will stop after the current task" (persistent, since
+  the flag is). Completes the 0.5.1 pause/stop fix.
+
 ## 0.5.1 — 2026-06-17
 
 ### Changed

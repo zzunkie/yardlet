@@ -634,17 +634,36 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
         Job::Running { label, started, .. } => {
             let frame_idx = (started.elapsed().as_millis() / 120) as usize % SPINNER.len();
             let secs = started.elapsed().as_secs();
-            let body = match &app.progress {
-                Some(p) => format!("{p}  ({secs}{})", l.sec_unit),
-                None => format!("{label} {} ({secs}{})\u{2026}", l.run_word, l.sec_unit),
-            };
-            Line::from(vec![
-                Span::styled(
-                    format!(" {} ", SPINNER[frame_idx]),
-                    Style::default().fg(Color::Yellow).bold(),
-                ),
-                Span::styled(body, Style::default().fg(Color::Yellow)),
-            ])
+            // A requested graceful pause (`p`) must surface HERE: while busy this
+            // status line replaces the toast area, so otherwise pressing `p`
+            // looks like a no-op. The pause flag is persistent, so the notice
+            // stays until the drain actually stops after the current task.
+            let paused = app
+                .pause
+                .as_ref()
+                .map(|p| p.load(std::sync::atomic::Ordering::Relaxed))
+                .unwrap_or(false);
+            if paused {
+                Line::from(vec![
+                    Span::styled(" \u{23f8} ", Style::default().fg(Color::Cyan).bold()),
+                    Span::styled(
+                        format!("{} ({secs}{})", l.pausing, l.sec_unit),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                ])
+            } else {
+                let body = match &app.progress {
+                    Some(p) => format!("{p}  ({secs}{})", l.sec_unit),
+                    None => format!("{label} {} ({secs}{})\u{2026}", l.run_word, l.sec_unit),
+                };
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {} ", SPINNER[frame_idx]),
+                        Style::default().fg(Color::Yellow).bold(),
+                    ),
+                    Span::styled(body, Style::default().fg(Color::Yellow)),
+                ])
+            }
         }
         Job::Idle => match &app.toast {
             Some((ok, msg)) => Line::from(Span::styled(
