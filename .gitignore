@@ -4,7 +4,7 @@
 Cargo.lock.orig
 
 # Yard runtime state. This repo now self-hosts Yard: we TRACK the .agents/
-# config (yard.yaml, *-policy.yaml, workers.yaml, work-queue.yaml, skills/) and
+# config (yardlet.yaml, *-policy.yaml, workers.yaml, work-queue.yaml, skills/) and
 # ignore the per-run operational artifacts below.
 /.agents/runs/
 /.agents/checkpoints/

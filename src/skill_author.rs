@@ -1,6 +1,6 @@
 //! Explicit skill authoring (docs/skills.md S2/S3): `yard skill research`,
 //! `create`, and `apply`. A researcher-role worker drafts a candidate SKILL.md
-//! into an ISOLATED run dir; Yard (the deterministic core) is the sole writer
+//! into an ISOLATED run dir; Yardlet (the deterministic core) is the sole writer
 //! that installs it. This path never touches the live `intent-contract.yaml` /
 //! `work-queue.yaml` — the queue isolation the S3 deferral called for: it runs
 //! a one-off worker (like the planner) but derives no canonical intent/queue.
@@ -159,7 +159,7 @@ pub fn create(ws: &Workspace, name: &str, from: Option<&str>) -> Result<SkillRep
 }
 
 /// `yard skill apply <run-id>` — install a skill previously drafted by
-/// `yard skill research`. Reads that run's `skill-result.json`; Yard writes it.
+/// `yard skill research`. Reads that run's `skill-result.json`; Yardlet writes it.
 pub fn apply(ws: &Workspace, run_id: &str) -> Result<SkillReport> {
     let run_dir = ws.runs_dir().join(run_id);
     let result_path = run_dir.join("skill-result.json");

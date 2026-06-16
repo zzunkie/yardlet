@@ -1,8 +1,8 @@
 //! Planning gate.
 //!
 //! Turns a short natural-language request into canonical state: a worker writes
-//! a structured `planning-result.json`, and Yard derives the
-//! `intent-contract.yaml` + `work-queue.yaml` from it. Yard owns the canonical
+//! a structured `planning-result.json`, and Yardlet derives the
+//! `intent-contract.yaml` + `work-queue.yaml` from it. Yardlet owns the canonical
 //! files; the worker only authors plan content.
 
 use std::time::Duration;
@@ -95,7 +95,7 @@ fn sanitize_deps(depends_on: &[String], prior_ids: &[String]) -> Vec<String> {
 /// A worker may emit `questions_for_user` either as plain strings or as objects
 /// (e.g. `{ "id": ..., "question": ..., "topic": ... }`) when it mirrors the
 /// object style of the `acceptance` hint. Accept both shapes and keep only the
-/// human-readable text — Yard surfaces just the question string.
+/// human-readable text — Yardlet surfaces just the question string.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum PlanQuestion {
@@ -137,7 +137,7 @@ struct PlanMeta {
     request: String,
 }
 
-/// Marker file written into a plan run dir once Yard has derived the canonical
+/// Marker file written into a plan run dir once Yardlet has derived the canonical
 /// intent/queue from its result. Absent + result present = unconsumed.
 const CONSUMED_MARKER: &str = "consumed";
 
@@ -517,7 +517,7 @@ fn plan_core(
         );
     }
 
-    // Derive canonical state. Yard owns these files.
+    // Derive canonical state. Yardlet owns these files.
     let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let intent = build_intent(&intent_id, store_request, &plan, images);
     let queue = build_queue(&intent_id, &plan);
@@ -722,7 +722,7 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
 }
 
 /// Recover a planning result left unconsumed by an interrupted session: the
-/// worker finished and wrote `planning-result.json`, but Yard exited before
+/// worker finished and wrote `planning-result.json`, but Yardlet exited before
 /// deriving the canonical intent/queue from it. Safe to call on every startup.
 ///
 /// Guards against stale or double application: only the newest unconsumed plan
@@ -956,7 +956,7 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
 /// guarantee: a risky plan (any high-risk task) or a sizable one (3+ tasks)
 /// must end in a review-kind task that verifies the intent's acceptance
 /// criteria against the actual workspace. The planner is asked to include
-/// one; if it forgot, Yard appends it — planner forgetfulness cannot skip
+/// one; if it forgot, Yardlet appends it — planner forgetfulness cannot skip
 /// verification, and the verifier is never the doer (a separate reviewer-
 /// role run, not a smarter evaluator).
 fn ensure_review_task(tasks: &mut Vec<Task>) {
@@ -1061,7 +1061,7 @@ pub(crate) fn pick_ready_worker(
 
     Err(anyhow!(
         "no ready planning worker among {tried:?}. Run `yard worker status` to diagnose. \
-         Yard did not call an AI API and did not ask for an API key."
+         Yardlet did not call an AI API and did not ask for an API key."
     ))
 }
 
@@ -1334,7 +1334,7 @@ mod tests {
         std::fs::create_dir_all(&run_dir).unwrap();
         write_str(
             &workers::packet_path(&run_dir),
-            "# Yard planning gate\n\n## Request (verbatim)\n\n\
+            "# Yardlet planning gate\n\n## Request (verbatim)\n\n\
              make the game feel like a game\n\n## Rules\n\n- ...\n",
         )
         .unwrap();

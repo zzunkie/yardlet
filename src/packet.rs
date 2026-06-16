@@ -1,6 +1,6 @@
 //! Worker packet compiler.
 //!
-//! Yard compiles one canonical task contract into a worker-specific packet.
+//! Yardlet compiles one canonical task contract into a worker-specific packet.
 //! Codex packets are execution-oriented; Claude Code packets lean toward
 //! planning/review. Both prefer anchors over pasted content to save tokens.
 
@@ -189,7 +189,7 @@ pub fn load_role_notes(root: &std::path::Path, role: &str) -> String {
 // level 1, deeper files in the skill folder are level 2).
 //
 // A1 (docs/absorption.md): a repo that already has agent assets gets them
-// as harness the moment Yard runs. Discovery is read-only (nothing is
+// as harness the moment Yardlet runs. Discovery is read-only (nothing is
 // copied into .agents/), and projection is worker-aware: a worker that
 // natively consumes a source (claude-code reads CLAUDE.md and
 // .claude/skills; codex reads AGENTS.md) must not receive it twice.
@@ -222,7 +222,7 @@ pub struct Harness {
     pub skills: Vec<HarnessSkill>,
 }
 
-/// Discover the workspace harness. Yard-native `.agents/` sources always
+/// Discover the workspace harness. Yardlet-native `.agents/` sources always
 /// load; with `discovery` on (the default), assets the repo already has for
 /// other agent tooling join in, in precedence order — `.agents` first, and a
 /// canonical-path dedup so symlinked copies (e.g. CLAUDE.md -> AGENTS.md)
@@ -262,7 +262,7 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
         });
     };
 
-    // 1. Yard-native rules (always on).
+    // 1. Yardlet-native rules (always on).
     let rules_dir = root.join(crate::state::STATE_DIR).join("rules");
     let mut files: Vec<_> = std::fs::read_dir(&rules_dir)
         .into_iter()
@@ -283,7 +283,7 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
         );
     }
 
-    // 1b. Yard-native skills (always on).
+    // 1b. Yardlet-native skills (always on).
     collect_skills(
         &mut h,
         &root.join(crate::state::STATE_DIR).join("skills"),
@@ -457,9 +457,9 @@ pub fn compile(inputs: &PacketInputs) -> String {
     let role = role_for(&inputs.task.kind);
     let mut p = String::new();
 
-    p.push_str(&format!("# Yard task packet: {}\n\n", inputs.task.id));
+    p.push_str(&format!("# Yardlet task packet: {}\n\n", inputs.task.id));
     p.push_str(&format!(
-        "You are a hidden Yard worker ({}) acting as the {role}. Do the work below and \
+        "You are a hidden Yardlet worker ({}) acting as the {role}. Do the work below and \
          leave structured artifacts. Console prose is not enough.\n\n",
         inputs.worker_id
     ));
@@ -646,7 +646,7 @@ pub fn compile(inputs: &PacketInputs) -> String {
 /// Compile a planning-gate packet: turn a raw natural-language request into a
 /// structured plan written to `planning-result.json` in the run directory.
 ///
-/// The worker authors only the plan content; Yard owns the canonical
+/// The worker authors only the plan content; Yardlet owns the canonical
 /// `.agents/intent-contract.yaml` and `.agents/work-queue.yaml` files it
 /// derives from the result. The worker therefore only needs write access to
 /// the run directory.
@@ -662,9 +662,9 @@ pub fn compile_planning(
     planner_worker_id: &str,
 ) -> String {
     let mut p = String::new();
-    p.push_str("# Yard planning gate\n\n");
+    p.push_str("# Yardlet planning gate\n\n");
     p.push_str(
-        "You are a hidden Yard planning worker. Turn the request below into a bounded, \
+        "You are a hidden Yardlet planning worker. Turn the request below into a bounded, \
          checkable work contract. Do NOT implement anything in this run.\n\n",
     );
 
@@ -720,7 +720,7 @@ pub fn compile_planning(
          name in that task's `skills` so the worker reads it before starting.\n\
          - If any task is high-risk or the plan has 3+ tasks, END with a review-kind \
          task that verifies the intent's acceptance criteria against the workspace \
-         (per-criterion pass/fail). If you omit it, Yard appends one.\n\
+         (per-criterion pass/fail). If you omit it, Yardlet appends one.\n\
          - Default model and effort to \"auto\" (let the chosen worker decide). Set them \
          only when a task clearly needs a stronger or cheaper model, or more or less \
          reasoning. Effort levels: minimal|low|medium|high (or \"auto\").\n\
@@ -757,7 +757,7 @@ pub fn compile_planning(
 
 /// Compile a skill-authoring packet (docs/skills.md S2/S3). A researcher-role
 /// worker studies the subject against this repo and writes a candidate skill to
-/// `skill-result.json` in the run dir; Yard (not the worker) installs it. This
+/// `skill-result.json` in the run dir; Yardlet (not the worker) installs it. This
 /// run touches no canonical intent/queue state — the queue isolation S3 wanted.
 /// `mode` is `"research"` (propose name + rationale, install nothing) or
 /// `"create"` (author the named skill for installation).
@@ -771,9 +771,9 @@ pub fn compile_skill(
     worker_id: &str,
 ) -> String {
     let mut p = String::new();
-    p.push_str("# Yard skill authoring\n\n");
+    p.push_str("# Yardlet skill authoring\n\n");
     p.push_str(&format!(
-        "You are a hidden Yard worker ({worker_id}) acting as the researcher. Author ONE \
+        "You are a hidden Yardlet worker ({worker_id}) acting as the researcher. Author ONE \
          reusable skill \u{2014} a portable SKILL.md (frontmatter + a concise procedure) \u{2014} \
          for THIS repository. Do NOT implement repo changes in this run; your only deliverable \
          is the skill draft written to the result file.\n\n",
@@ -845,7 +845,7 @@ const SKILL_SCHEMA_HINT: &str = r#"```json
 }
 ```
 
-Do NOT put YAML frontmatter inside `body` — Yard writes the `name`/`description`
+Do NOT put YAML frontmatter inside `body` — Yardlet writes the `name`/`description`
 frontmatter itself. `body` is just the Markdown procedure.
 "#;
 

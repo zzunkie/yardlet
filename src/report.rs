@@ -2,7 +2,7 @@
 //!
 //! A deterministic, human-readable wrap-up of the current intent + queue,
 //! synthesized from the intent contract, the task states, and each task's run
-//! result. Zero-key: Yard assembles it from artifacts, never calls a worker.
+//! result. Zero-key: Yardlet assembles it from artifacts, never calls a worker.
 
 use anyhow::Result;
 
@@ -28,7 +28,7 @@ pub fn archive_intent(ws: &Workspace) -> Result<Option<String>> {
     Ok(Some(intent.id))
 }
 
-/// Yard's own run bookkeeping (under `.agents/`) — not a deliverable, so it is
+/// Yardlet's own run bookkeeping (under `.agents/`) — not a deliverable, so it is
 /// excluded from the report's file list.
 fn is_internal(path: &str) -> bool {
     path.starts_with(".agents/") || path.contains("/.agents/")

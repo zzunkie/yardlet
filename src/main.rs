@@ -1,8 +1,8 @@
-//! Yard: a local AI workbench.
+//! Yardlet: a local AI workbench.
 //!
 //! Plan, queue, route, validate, and hand off long-running work inside a local
 //! workspace using subscription-backed Codex and Claude Code CLIs as hidden
-//! workers. Yard core never requires, requests, stores, or calls AI provider
+//! workers. Yardlet core never requires, requests, stores, or calls AI provider
 //! API keys.
 
 mod approvals;
@@ -36,7 +36,7 @@ use clap::Parser;
 fn main() {
     let cli = cli::Cli::parse();
     if let Err(err) = cli::dispatch(cli) {
-        eprintln!("yard: {err:#}");
+        eprintln!("yardlet: {err:#}");
         std::process::exit(1);
     }
 }

@@ -2,7 +2,7 @@
 
 > Status: H1 implemented (+A1 discovery of existing repo assets), H2 implemented
 > (partial continuation), H3 implemented (workspace hooks), H4 implemented
-> (learning loop: skill auto-learn + S4 score/prune, rule auto-learn, `yard
+> (learning loop: skill auto-learn + S4 score/prune, rule auto-learn, `yardlet
 > harness review`). Remaining within H4: deterministic-observation candidate
 > mining (failure themes → candidates). H5 deferred.
 > Companion docs: [parallel-queue.md](parallel-queue.md),
@@ -10,7 +10,7 @@
 
 ## Problem
 
-Yard drives interchangeable workers (Codex, Claude Code, any CLI via the
+Yardlet drives interchangeable workers (Codex, Claude Code, any CLI via the
 generic adapter), but the *harness* around them — repo rules, reusable
 procedures, deterministic guards, accumulated lessons — barely exists and is
 not shared:
@@ -24,7 +24,7 @@ not shared:
   evaluations pile up as history, not as harness.
 
 This absorbs the remaining patterns the spec calls for (§13.2 Hermes skill
-lifecycle, §13.4 oh-my/OMC hooks and permission matrix), in Yard's shape.
+lifecycle, §13.4 oh-my/OMC hooks and permission matrix), in Yardlet's shape.
 
 ## Principles (inherited, non-negotiable)
 
@@ -37,7 +37,7 @@ lifecycle, §13.4 oh-my/OMC hooks and permission matrix), in Yard's shape.
    routing/telemetry: lessons never enter packets without explicit
    promotion.
 3. **`.agents/` stays canonical.** All harness assets live under `.agents/`
-   in the workspace; Yard writes promoted assets through `src/state.rs`.
+   in the workspace; Yardlet writes promoted assets through `src/state.rs`.
 4. **Token economy.** Inline only what is small and always relevant; anchor
    the rest and let the worker read on demand (progressive loading).
 
@@ -92,7 +92,7 @@ self-reported from conflict so the drain knows which to auto-continue.
 
 ## Phase H3 — hooks (workspace-owned deterministic guards) — implemented
 
-- `pre-run.d/*`: executed by Yard before spawning a worker, in the
+- `pre-run.d/*`: executed by Yardlet before spawning a worker, in the
   workspace root, with `YARD_TASK_ID`, `YARD_RUN_DIR`, `YARD_WORKER` env.
   Non-zero exit aborts the run with the hook's reason in the report — the
   task fails (drain stops on it; fix the cause and re-run) instead of
@@ -101,11 +101,11 @@ self-reported from conflict so the drain knows which to auto-continue.
 - `post-run.d/*`: executed during evaluation with the same env. Non-zero
   exit folds a failed fatal check into the evaluation (the task cannot be
   Done past it).
-- Hooks are the workspace's own code; Yard never ships enabled hooks, only a
+- Hooks are the workspace's own code; Yardlet never ships enabled hooks, only a
   documented `.agents/hooks/README.md` (+ empty `pre-run.d`/`post-run.d`).
   Only executable files run, in sorted filename order. A 30s wall-clock
   timeout (longer = killed + failed) and captured stdout/stderr go to
-  `<run_dir>/hooks/<phase>/`. `hooks: false` in yard.yaml turns them off.
+  `<run_dir>/hooks/<phase>/`. `hooks: false` in yardlet.yaml turns them off.
 
 This gives internal-tool's `hooks/` a home where they bind *all* workers, not
 just one CLI. Implementation: `src/hooks.rs`, wired into `src/run.rs`.
@@ -121,7 +121,7 @@ deprecation.
 > `record_run_suggestions`/`record_run_rules`, gated by `auto_skill`/
 > `auto_rule`). Learned skills are scored and auto-pruned (S4); learned rules
 > are always-on (no per-task attribution to score) so they are kept until
-> removed — reversible via git, visible via `yard harness review`. Still TODO
+> removed — reversible via git, visible via `yardlet harness review`. Still TODO
 > within H4: deterministic-observation candidate mining (turning repeated
 > validation failures / NeedsUser themes into candidates).
 
@@ -132,14 +132,14 @@ deprecation.
   reusable about this repo (a convention, a pitfall, a procedure), propose
   it here — short and imperative."* The worker that just did the work is the
   cheapest possible observer.
-- Yard adds deterministic observations from the evaluation itself: repeated
+- Yardlet adds deterministic observations from the evaluation itself: repeated
   validation failures, drift notes, forbidden-path attempts, merge
   conflicts, NeedsUser questions — each becomes a candidate with its
   evidence run id.
 
 **Collect + apply (mechanism, auto by default).** Candidates append to
 `.agents/telemetry/harness.jsonl`, deduplicated by normalized title, and
-Yard writes them automatically as `.agents/rules/learned-<slug>.md` or
+Yardlet writes them automatically as `.agents/rules/learned-<slug>.md` or
 `.agents/skills/<slug>/SKILL.md` through `state.rs` (the worker proposed; the
 deterministic core writes — I1/I3). From the next packet on, every worker
 shares the asset. What keeps this from poisoning itself is **not** a human
@@ -152,7 +152,7 @@ an asset that doesn't earn its place is auto-pruned.
 A learned asset that scores poorly across N intents is auto-deprecated
 (unequipped, kept in git). The H1 inline cap bounds packet growth.
 
-**Human override (always available, never required).** `yard harness review`
+**Human override (always available, never required).** `yardlet harness review`
 shows pending candidates, scores, and what was auto-applied/pruned; a human
 can promote, reject, or restore. With `auto_skill: false` / `auto_prune:
 false`, apply and prune become review actions instead of automatic — the
@@ -161,8 +161,8 @@ opt-out for cautious workspaces (I4: minimize intervention, don't mandate it).
 ## Phase H5 (deferred) — central core & presets
 
 internal-tool's remaining role: one shared library wired into many repos
-(`init-tool`, presets, catalog.tsv). Yard equivalent would be
-`yard init --core <path>` symlinking shared rules/skills into `.agents/`.
+(`init-tool`, presets, catalog.tsv). Yardlet equivalent would be
+`yardlet init --core <path>` symlinking shared rules/skills into `.agents/`.
 Deferred until H1–H4 prove the in-repo loop; a central core multiplies
 whatever the loop produces, including its mistakes.
 

@@ -1,16 +1,16 @@
 [package]
-name = "yard"
-version = "0.5.0"
+name = "yardlet"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.82"
-description = "Yard: a local AI workbench. Plan, queue, route, validate, and hand off long-running work using your already-installed Codex and Claude Code CLIs as hidden workers."
+description = "Yardlet: a local AI workbench. Plan, queue, route, validate, and hand off long-running work using your already-installed Codex and Claude Code CLIs as hidden workers."
 license = "MIT"
-repository = "https://github.com/zzunkie/yard"
+repository = "https://github.com/zzunkie/yardlet"
 keywords = ["ai", "agent", "tui", "workbench", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
-name = "yard"
+name = "yardlet"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,6 +1,6 @@
 //! Zero-key worker guard.
 //!
-//! Yard core never requires, requests, stores, or calls AI provider API keys.
+//! Yardlet core never requires, requests, stores, or calls AI provider API keys.
 //! This module enforces two things:
 //!
 //! 1. Worker readiness probing without invoking provider APIs.
@@ -21,7 +21,7 @@ pub enum Readiness {
     Ready,
     NotReady,
     /// Binary is present but its offline `--version` probe failed, so the
-    /// resolved CLI or its runtime cannot be confirmed. Yard stops rather than
+    /// resolved CLI or its runtime cannot be confirmed. Yardlet stops rather than
     /// guess (it never risks a billed call to verify auth).
     Ambiguous,
 }
@@ -156,7 +156,7 @@ pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
                 format!(
                     "binary resolved to {} but `--version` failed; the resolved CLI or its runtime \
                      is unverified. Set an explicit `command:` path in .agents/workers.yaml or fix \
-                     the login, then retry. Yard did not call an AI API and did not ask for an API key.",
+                     the login, then retry. Yardlet did not call an AI API and did not ask for an API key.",
                     path.display()
                 ),
             ),
@@ -167,7 +167,7 @@ pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
                 Readiness::NotReady,
                 format!(
                     "worker CLI '{command}' not found on PATH or known install paths. Install it \
-                     and log in with a subscription-backed account, then retry. Yard did not call \
+                     and log in with a subscription-backed account, then retry. Yardlet did not call \
                      an AI API and did not ask for an API key."
                 ),
             ),
@@ -211,7 +211,7 @@ fn read_version(path: &std::path::Path) -> Option<String> {
 /// A worker profile may opt back in to specific variables
 /// (`invocation.pass_env`). Zero-key stays the DEFAULT: nothing passes
 /// through unless the user names it on that worker in workers.yaml, and
-/// Yard itself never reads, stores, or requires the value.
+/// Yardlet itself never reads, stores, or requires the value.
 pub fn sanitized_worker_env_for(
     billing: &BillingPolicy,
     pass_env: &[String],

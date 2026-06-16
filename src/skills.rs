@@ -372,7 +372,7 @@ fn write_skill(
 
 /// Record a worker-proposed skill (H4 / docs/skills.md S3): a run's
 /// `harness_suggestions` entry of kind "skill" becomes a real
-/// `.agents/skills/<slug>/SKILL.md` — the worker proposed the *content*, Yard
+/// `.agents/skills/<slug>/SKILL.md` — the worker proposed the *content*, Yardlet
 /// (the deterministic core) does the writing. Marked `source: learned` so the
 /// score loop can later judge and prune it. Returns the slug if newly written.
 /// Skips if a skill of that name is already present (no clobber).
@@ -391,7 +391,7 @@ pub enum AuthorOutcome {
 }
 
 /// Install an explicitly authored skill (docs/skills.md S2/S3 `create`/`apply`).
-/// The worker authored the content; Yard (the deterministic core) is the sole
+/// The worker authored the content; Yardlet (the deterministic core) is the sole
 /// writer. Tagged `source: created` — NOT `learned` — so it is user-chosen and
 /// never auto-pruned (it persists like a library equip until `unequip`).
 pub fn install_authored_skill(
@@ -433,7 +433,7 @@ pub fn record_run_suggestions(
 /// (harness.md H4, the rule half of the learning loop). A rule becomes
 /// `.agents/rules/learned-<slug>.md` — plain markdown H1 inlines into every
 /// packet (no frontmatter; the `learned-` prefix marks provenance). The worker
-/// proposed it; Yard (the deterministic core) writes it. No clobber. Returns
+/// proposed it; Yardlet (the deterministic core) writes it. No clobber. Returns
 /// the slugs written. Unlike learned skills these are not auto-pruned (an
 /// always-on rule has no per-task attribution to score), but they are
 /// reversible (git) and surfaced by `yard harness review`.

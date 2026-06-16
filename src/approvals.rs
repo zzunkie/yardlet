@@ -1,7 +1,7 @@
 //! Single-use approvals for gated tasks (the plan's `approved_once` state).
 //!
 //! A task whose `approval.required` is true does not run until a human grants
-//! it with `yard approve <id>`. The grant is consumed on the next run, so the
+//! it with `yardlet approve <id>`. The grant is consumed on the next run, so the
 //! task asks again next time — approval never persists silently.
 
 use anyhow::Result;

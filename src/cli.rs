@@ -15,9 +15,9 @@ use crate::{init, packet};
 
 #[derive(Parser)]
 #[command(
-    name = "yard",
+    name = "yardlet",
     version,
-    about = "Yard: a local AI workbench driving your already-installed Codex/Claude Code as hidden workers."
+    about = "Yardlet: a local AI workbench driving your already-installed Codex/Claude Code as hidden workers."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -341,7 +341,7 @@ fn cmd_harness(cwd: &std::path::Path, args: HarnessArgs) -> Result<()> {
             println!(
                 "\nLearned skills below score floor over enough runs are auto-pruned \
                  (auto_prune). Learned rules are kept until removed (git-reversible). \
-                 Full skill table: `yard skill review`."
+                 Full skill table: `yardlet skill review`."
             );
         }
     }
@@ -393,7 +393,7 @@ fn cmd_skill(cwd: &std::path::Path, args: SkillArgs) -> Result<()> {
                         println!("  \u{00b7} {s}");
                     }
                 }
-                None => println!("\n(no skill_library configured; set it in .agents/yard.yaml)"),
+                None => println!("\n(no skill_library configured; set it in .agents/yardlet.yaml)"),
             }
         }
         SkillCmd::Suggest => match &lib {
@@ -404,14 +404,14 @@ fn cmd_skill(cwd: &std::path::Path, args: SkillArgs) -> Result<()> {
                     println!("nothing to suggest \u{2014} detected presets are fully equipped.");
                 } else {
                     println!("suggested for this repo: {}", s.join(", "));
-                    println!("equip with: yard skill equip {}", s.join(" "));
+                    println!("equip with: yardlet skill equip {}", s.join(" "));
                 }
             }
             None => println!("no skill_library configured."),
         },
         SkillCmd::Equip { names } => {
             let Some(library) = &lib else {
-                anyhow::bail!("no skill_library configured (set it in .agents/yard.yaml).");
+                anyhow::bail!("no skill_library configured (set it in .agents/yardlet.yaml).");
             };
             let expanded: Vec<String> = names.iter().flat_map(|n| library.resolve(n)).collect();
             for (name, out) in crate::skills::equip(&ws, library, &expanded) {
@@ -436,7 +436,7 @@ fn cmd_skill(cwd: &std::path::Path, args: SkillArgs) -> Result<()> {
         SkillCmd::Research { topic } => {
             let topic = topic.join(" ");
             if topic.trim().is_empty() {
-                anyhow::bail!("usage: yard skill research \"<topic>\"");
+                anyhow::bail!("usage: yardlet skill research \"<topic>\"");
             }
             let r = crate::skill_author::research(&ws, &topic)?;
             println!("researched skill: {}", r.name);
@@ -515,7 +515,10 @@ fn cmd_routing(cwd: &std::path::Path, args: RoutingArgs) -> Result<()> {
                 println!("\nSuggestions (apply are human-approved):");
                 for s in &suggestions {
                     println!("  - {}", s.reason);
-                    println!("    yard routing apply --kind {} --worker {}", s.kind, s.to);
+                    println!(
+                        "    yardlet routing apply --kind {} --worker {}",
+                        s.kind, s.to
+                    );
                 }
             }
             Ok(())
@@ -529,31 +532,31 @@ fn cmd_routing(cwd: &std::path::Path, args: RoutingArgs) -> Result<()> {
 }
 
 fn launch_tui(cwd: &std::path::Path) -> Result<()> {
-    // Like the worker CLIs, `yard` just works: it initializes on demand.
+    // Like the worker CLIs, `yardlet` just works: it initializes on demand.
     let (ws, just_created) = init::ensure_initialized(cwd)?;
     crate::ui::run(&ws, just_created)
 }
 
 fn cmd_init(cwd: &std::path::Path, args: InitArgs) -> Result<()> {
     let written = init::init(cwd, args.force)?;
-    println!("Initialized Yard workspace at {}/.agents", cwd.display());
+    println!("Initialized Yardlet workspace at {}/.agents", cwd.display());
     for f in &written {
         println!("  + {f}");
     }
-    println!("\nNext: `yard` opens the workbench, `yard worker status` checks workers.");
+    println!("\nNext: `yardlet` opens the workbench, `yardlet worker status` checks workers.");
     Ok(())
 }
 
 fn cmd_goal(cwd: &std::path::Path, args: GoalArgs) -> Result<()> {
     let (ws, created) = init::ensure_initialized(cwd)?;
     if created {
-        println!("Initialized Yard workspace (.agents/).");
+        println!("Initialized Yardlet workspace (.agents/).");
     }
     let goal = args.goal.join(" ");
     let n = crate::planner::plan_goal(&ws, &goal, args.verify.as_deref(), args.worker.as_deref())?;
     println!("Goal queued ({n} task{}).", if n == 1 { "" } else { "s" });
     if args.plan_only {
-        println!("Next: `yard run --auto` to execute.");
+        println!("Next: `yardlet run --auto` to execute.");
         return Ok(());
     }
     println!("\nRunning \u{2014} stops only if it needs you:\n");
@@ -564,11 +567,11 @@ fn cmd_goal(cwd: &std::path::Path, args: GoalArgs) -> Result<()> {
 fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
     let (ws, created) = init::ensure_initialized(cwd)?;
     if created {
-        println!("Initialized Yard workspace (.agents/).");
+        println!("Initialized Yardlet workspace (.agents/).");
     }
     let request = args.request.join(" ");
     if request.trim().is_empty() {
-        anyhow::bail!("provide a request, e.g. `yard new \"add admin order search\"`");
+        anyhow::bail!("provide a request, e.g. `yardlet new \"add admin order search\"`");
     }
     println!("Planning: {request}\n");
     let report = crate::planner::run_planning(&ws, &request, args.worker.as_deref(), &args.images)?;
@@ -592,7 +595,7 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
         run::run_auto(&ws, args.bypass, None, None, false, |s| println!("{s}"))?;
         return Ok(());
     }
-    println!("\nNext: `yard queue` to review, `yard run --next --execute` to run.");
+    println!("\nNext: `yardlet queue` to review, `yardlet run --next --execute` to run.");
     Ok(())
 }
 
@@ -600,7 +603,7 @@ fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let queue = ws.load_queue()?;
     if queue.tasks.is_empty() {
-        println!("Queue is empty. Run `yard new \"...\"` to create work.");
+        println!("Queue is empty. Run `yardlet new \"...\"` to create work.");
         return Ok(());
     }
     for t in &queue.tasks {
@@ -620,7 +623,7 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let reply = args.reply.join(" ");
     if reply.trim().is_empty() {
-        anyhow::bail!("provide an answer, e.g. `yard answer \"use postgres\"`");
+        anyhow::bail!("provide an answer, e.g. `yardlet answer \"use postgres\"`");
     }
     let queue = ws.load_queue()?;
     let task_id = match args.task {
@@ -664,7 +667,7 @@ fn cmd_approve(cwd: &std::path::Path, args: ApproveArgs) -> Result<()> {
     }
     crate::approvals::grant(&ws, &args.task)?;
     println!(
-        "Approved {} (single use). Run it with `yard run --task {} --execute`.",
+        "Approved {} (single use). Run it with `yardlet run --task {} --execute`.",
         args.task, args.task
     );
     Ok(())
@@ -710,7 +713,7 @@ fn cmd_handoff(cwd: &std::path::Path) -> Result<()> {
             Ok(())
         }
         None => {
-            println!("No runs yet. Run `yard run --next --execute` first.");
+            println!("No runs yet. Run `yardlet run --next --execute` first.");
             Ok(())
         }
     }
@@ -752,7 +755,7 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         return Ok(());
     }
     use crate::schemas::TaskState;
-    println!("Yard workspace: {}", snap.config.workspace_id);
+    println!("Yardlet workspace: {}", snap.config.workspace_id);
     println!("Intent: {}", snap.intent_summary());
     println!(
         "Queue: {} queued, {} running, {} needs-you, {} blocked, {} failed, {} done, {} total",
@@ -776,12 +779,12 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         println!(
             "  {}",
             if q.is_empty() {
-                "(see `yard handoff`)"
+                "(see `yardlet handoff`)"
             } else {
                 q
             }
         );
-        println!("  answer with:  yard answer \"<your reply>\"");
+        println!("  answer with:  yardlet answer \"<your reply>\"");
     }
     let stuck: Vec<&str> = snap
         .queue
@@ -797,9 +800,9 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         .collect();
     if !stuck.is_empty() {
         println!("\nstuck (blocked/failed): {}", stuck.join(", "));
-        println!("  see why:   yard handoff");
+        println!("  see why:   yardlet handoff");
         println!(
-            "  retry:     yard run --task <id> --execute   (add --full-access if it needs network/installs)"
+            "  retry:     yardlet run --task <id> --execute   (add --full-access if it needs network/installs)"
         );
     }
     let needs_approval: Vec<&str> = snap
@@ -811,11 +814,11 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         .collect();
     if !needs_approval.is_empty() {
         println!("\nneeds approval: {}", needs_approval.join(", "));
-        println!("  approve:   yard approve <id>   then  yard run --task <id> --execute");
+        println!("  approve:   yardlet approve <id>   then  yardlet run --task <id> --execute");
     }
     let suggestions = crate::review::pending_count(&ws);
     if suggestions > 0 {
-        println!("\nrouting: {suggestions} suggestion(s) \u{2014} run `yard routing review`");
+        println!("\nrouting: {suggestions} suggestion(s) \u{2014} run `yardlet routing review`");
     }
     Ok(())
 }

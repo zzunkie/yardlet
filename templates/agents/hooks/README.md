@@ -1,7 +1,7 @@
-# Workspace hooks (Yard H3)
+# Workspace hooks (Yardlet H3)
 
 Deterministic guards that bind **every** worker (Codex, Claude Code, any CLI),
-not just one tool. They are your own code — Yard runs whatever executables you
+not just one tool. They are your own code — Yardlet runs whatever executables you
 drop here and ships none enabled by default.
 
 ## Layout

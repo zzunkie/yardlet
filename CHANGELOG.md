@@ -1,17 +1,38 @@
 # Changelog
 
+## 0.5.1 — 2026-06-17
+
+### Changed
+
+- **Renamed the project to Yardlet.** The crate, binary, and command are now
+  `yardlet` (the `yard` name was taken on crates.io by an unrelated parser).
+  The container-yard metaphor and identity are unchanged. Existing workspaces
+  keep working: the config file is now `.agents/yardlet.yaml`, but a legacy
+  `.agents/yard.yaml` is still read (and written in place) so nothing breaks on
+  upgrade. Internal worktree branches stay `yard/<task-id>`.
+
+### Fixed
+
+- **Pause/stop now works from the Monitor screen, and the footer stops lying.**
+  `p` (graceful pause) and a new `x` (stop the worker now) work on the Run
+  Monitor, not just Home — the monitor was a dead end for both. The Home footer
+  no longer advertises `p pause` during a planning or single-task run (nothing
+  to pause between tasks); it shows `Esc stop` instead, and pressing `p` there
+  now says so explicitly rather than a vague "busy". Esc/`x` stop the worker
+  immediately; `p` still only pauses an auto-drain (between tasks).
+
 ## 0.5.0 — 2026-06-16
 
 ### Added
 
-- **Rule auto-learn + `yard harness review` (harness H4 completion).** The
+- **Rule auto-learn + `yardlet harness review` (harness H4 completion).** The
   learning loop already auto-recorded worker-proposed *skills* (S3); now a
   run's `harness_suggestions` of kind `"rule"` are auto-recorded too, as
   `.agents/rules/learned-<slug>.md` — an always-apply constraint H1 inlines
-  into every packet (the worker proposes, Yard's deterministic core writes; no
+  into every packet (the worker proposes, Yardlet's deterministic core writes; no
   clobber; gated by `auto_rule`, default on). Because a rule is always-on it
   has no per-task attribution to score, so learned rules are kept until removed
-  (git-reversible) rather than auto-pruned like skills. New `yard harness
+  (git-reversible) rather than auto-pruned like skills. New `yardlet harness
   review` shows the learned rules and the learned skills with their eval
   scores in one place. (Deterministic-observation candidate mining — failure
   themes into candidates — remains the open part of H4.)
@@ -26,28 +47,28 @@
   (longer is killed and fails), and stdout/stderr captured to
   `<run_dir>/hooks/<phase>/`. Only executable files run, in sorted filename
   order. Unlike a single CLI's hooks, these bind Codex, Claude Code, and any
-  generic-adapter worker alike. Yard ships no enabled hooks — `yard init`
+  generic-adapter worker alike. Yardlet ships no enabled hooks — `yardlet init`
   lays down empty `pre-run.d`/`post-run.d` and a documented `README.md`. Off
-  with `hooks: false` in `yard.yaml`.
+  with `hooks: false` in `yardlet.yaml`.
 
-- **Explicit skill authoring: `yard skill research / create / apply` (S2/S3).**
-  On-demand skills without hand-writing a SKILL.md. `yard skill research
+- **Explicit skill authoring: `yardlet skill research / create / apply` (S2/S3).**
+  On-demand skills without hand-writing a SKILL.md. `yardlet skill research
   "<topic>"` runs a researcher-role worker that drafts a candidate skill to a
-  run dir and installs nothing; `yard skill apply <run-id>` installs that
-  draft; `yard skill create <name> [--from "<topic>"]` authors and installs in
+  run dir and installs nothing; `yardlet skill apply <run-id>` installs that
+  draft; `yardlet skill create <name> [--from "<topic>"]` authors and installs in
   one step. The run is **queue-isolated** — like the planner it spawns one
   worker, but derives no intent/queue, so authoring a skill never disturbs the
   live intent (the gap that deferred this). The worker proposes the content;
-  Yard (the deterministic core) is the sole writer. Authored skills are tagged
+  Yardlet (the deterministic core) is the sole writer. Authored skills are tagged
   `source: created` (not `learned`), so they are user-chosen and never
   auto-pruned — they persist like a library equip until `unequip`.
 
 ### Fixed
 
-- **Recover a task wrongly stuck `Failed` by a dead orchestrator.** If Yard
+- **Recover a task wrongly stuck `Failed` by a dead orchestrator.** If Yardlet
   exited after a worker *finished* but before the result was evaluated, the
   task could end up `Failed` even though its run produced a clean `done`
-  result — and neither restart-recovery nor `yard recover` could salvage it
+  result — and neither restart-recovery nor `yardlet recover` could salvage it
   (recovery only looked at `Running` tasks), forcing a wasteful full re-run.
   Recovery now also re-evaluates such a task's stranded result, detected by an
   **unfinalized orphan run** (`worker.pid` still on disk — a finalized run
@@ -69,13 +90,13 @@
   anchors resolve. Skill format stays agentskills.io/Claude-Code compatible.
 
 - **Harness asset discovery (A1).** Repos that already carry agent assets
-  get them as shared harness the moment Yard runs: root `AGENTS.md` /
+  get them as shared harness the moment Yardlet runs: root `AGENTS.md` /
   `CLAUDE.md`, `.claude/skills/*`, `.cursor/rules/*.{md,mdc}`, and
   `.github/copilot-instructions.md` are discovered read-only and projected
   into packets **worker-aware** — a worker that reads a source natively
   (claude: CLAUDE.md + .claude/skills; codex: AGENTS.md) never receives it
   twice. Symlinked duplicates (CLAUDE.md -> AGENTS.md) merge into one entry
-  native to both. Opt out with `harness_discovery: false` in yard.yaml.
+  native to both. Opt out with `harness_discovery: false` in yardlet.yaml.
 
 - **Ambiguity gate + planner interview (A2).** The planner's own ambiguity
   self-report now has teeth: while it says "high", queue-selected runs and
@@ -90,22 +111,22 @@
   or a sizable one (3+ tasks) now always ends in a review-kind task that
   verifies the intent's acceptance criteria per criterion against the
   actual workspace. The planner is asked to include it; if it forgets,
-  Yard appends one deterministically (depends_on = every prior task) — the
+  Yardlet appends one deterministically (depends_on = every prior task) — the
   verifier is never the doer.
 
 - **Skill toolbox (S1): repo classification + auto-equip.** Point
   `skill_library` at a local library (internal-tool layout: `presets/*.skills`
-  + `skills/<name>/SKILL.md`) and Yard classifies the repo from its file
+  + `skills/<name>/SKILL.md`) and Yardlet classifies the repo from its file
   signals (`project.godot`→game, `package.json`→web-ui, Dockerfile→infra,
   …) and equips the matching presets' skills automatically on plan/goal
-  (`auto_equip`, on by default — I4: minimize intervention). `yard skill
+  (`auto_equip`, on by default — I4: minimize intervention). `yardlet skill
   list / suggest / equip <preset|name> / unequip` manage it by hand.
   Deterministic, no LLM; equip is a reversible symlink into `.agents/skills/`.
 
 - **Auto-learned skills (S3).** When a run's result proposes a reusable
-  procedure (`harness_suggestions` of kind "skill"), Yard records it
+  procedure (`harness_suggestions` of kind "skill"), Yardlet records it
   automatically as `.agents/skills/<slug>/SKILL.md` marked `source: learned`
-  — the worker authored the content, Yard (the deterministic core) does the
+  — the worker authored the content, Yardlet (the deterministic core) does the
   writing, no clobber of existing skills. On by default (`auto_skill`, I4:
   minimize intervention). This is the cycle-strengthening loop: every run
   can leave the harness sharper, and the eval score (next) prunes what
@@ -115,14 +136,14 @@
   equipped skill is scored from telemetry by the runs that DECLARED it,
   preferring structured review-verdict pass-through over a plain Done rate
   (a skill injected often whose work keeps failing scores down, not up).
-  `yard skill review` shows the table. Learned skills (`source: learned`)
+  `yardlet skill review` shows the table. Learned skills (`source: learned`)
   that score below the floor over enough runs are auto-pruned on plan
   (unequipped, kept in git — reversible), `auto_prune` default on (I4).
   Library skills you equipped are never auto-pruned. This makes auto-writing
   safe: bad learned skills don't accumulate — the eval loop removes them.
 
 - **Structured review verdicts (eval upgrade).** Reviewer/safety tasks and
-  `yard goal --verify` now emit `verdict: [{criterion_id, pass, evidence}]`
+  `yardlet goal --verify` now emit `verdict: [{criterion_id, pass, evidence}]`
   in result.json — a machine-readable per-criterion judgment instead of
   trusting prose. The evaluator requires it for review tasks (no verdict, or
   a "done" claim with a failed criterion, blocks Done), and reviewers are
@@ -141,9 +162,9 @@
   fan-out, and after 3 consecutive tasks (context-rot cap). The packet says
   so explicitly ("same session, next task — do not re-explore").
 
-- **`yard goal` express lane (P2).** For small work, skip the planning
-  worker entirely: `yard goal "fix the login redirect"` lays down a single
-  deterministic task and drains it. Add `--verify "..."` and Yard appends a
+- **`yardlet goal` express lane (P2).** For small work, skip the planning
+  worker entirely: `yardlet goal "fix the login redirect"` lays down a single
+  deterministic task and drains it. Add `--verify "..."` and Yardlet appends a
   separate reviewer task (depends_on the work) that checks the condition
   against the actual workspace with evidence — the verifier is never the
   doer, so for visual goals it picks up the ui-review / browser-evidence
@@ -156,7 +177,7 @@
   clarifications — in a scrollable view. The reclaimed header line goes to
   the queue (header is now 5 lines, not 6).
 
-- **Loud upgrade prompt.** When a newer yard binary is installed while the
+- **Loud upgrade prompt.** When a newer yardlet binary is installed while the
   TUI is open, the Home footer turns into a cyan "press u to restart" prompt
   (the old one-line status note got missed for days). Once you've restarted
   into a build that has this, in-place upgrades won't go unnoticed again.
@@ -186,10 +207,10 @@
   now framed as the default for the subscription-first audience, not an
   identity rule: a custom worker profile can name env vars (e.g.
   `OPENAI_API_KEY`) that reach that worker only, while every other worker
-  stays key-scrubbed and Yard never reads or stores the values. README and
+  stays key-scrubbed and Yardlet never reads or stores the values. README and
   AGENTS.md reworded accordingly; a native API adapter is on the roadmap.
 
-- **Self-restart on upgrade.** yard notices when its own binary is replaced
+- **Self-restart on upgrade.** yardlet notices when its own binary is replaced
   (cargo install while running) — the status line announces the new build
   and `u` re-execs into it in place. No more silently-stale TUI sessions;
   `a` now also works on queued tasks (instructions ride into the run).
@@ -234,13 +255,13 @@
   directory and re-parsing the whole worker log every frame.
 - Keyboard shortcuts work with the Korean IME on: 2-beolsik jamo map back to
   their QWERTY keys on shortcut screens (ㅡ→m, ㅗ→h, Shift+ㅁ→A).
-- Single-press shortcuts under a CJK IME (macOS): on shortcut screens Yard
+- Single-press shortcuts under a CJK IME (macOS): on shortcut screens Yardlet
   auto-selects an ASCII input source (the im-select pattern), so the first
   keypress is no longer swallowed by IME composition; the IME is restored on
   text-input screens and on exit. Toggle via Settings ("Auto IME switch") or
-  `auto_ime` in `.agents/yard.yaml`.
+  `auto_ime` in `.agents/yardlet.yaml`.
 - Quitting mid-run no longer duplicates work: the worker survives a quit, and
-  on restart Yard now ADOPTS a still-alive worker (task stays Running, the
+  on restart Yardlet now ADOPTS a still-alive worker (task stays Running, the
   Monitor tails its live log, the idle loop evaluates and merges its result
   when it lands) instead of requeueing the task into a second worker. The
   auto-drain waits for an adopted worker rather than starting overlapping
@@ -259,20 +280,20 @@
 
 - **Parallel queue.** The auto-drain can run up to `max_parallel` independent
   tasks at once, each in its own git worktree on branch `yard/<task-id>`
-  (`yard run --auto --parallel N`, the Settings screen, or
-  `max_parallel` in `.agents/yard.yaml`). Workers run in parallel; queue state
+  (`yardlet run --auto --parallel N`, the Settings screen, or
+  `max_parallel` in `.agents/yardlet.yaml`). Workers run in parallel; queue state
   keeps a single writer; results merge back sequentially, and a conflict drops
   the task to Partial with its worktree kept for inspection. Design:
   `docs/parallel-queue.md`.
 - **Task dependencies.** Tasks carry `depends_on`; the planner is asked to cut
   tasks coarse along scope boundaries and mark only genuine output
-  dependencies. Yard sanitizes plans to backward references (no self/forward/
+  dependencies. Yardlet sanitizes plans to backward references (no self/forward/
   unknown ids, no cycles) and scheduling skips tasks with unmet dependencies.
 - **Crash recovery for planning.** Plan runs record their mode + request up
   front and a consumed marker once derived; a restart (TUI startup, auto-drain,
-  or the new `yard recover`) consumes a planning result the previous session
+  or the new `yardlet recover`) consumes a planning result the previous session
   paid for but never read — including run dirs created by older versions.
-- **`yard recover`.** One command to recover an interrupted session: unread
+- **`yardlet recover`.** One command to recover an interrupted session: unread
   plans, finished orphaned runs (worktree runs get merged back), and
   interrupted tasks requeued.
 - **TUI.** Run Monitor follows every running task (tab row + Tab/←→ switching
@@ -285,7 +306,7 @@
 
 - Orphan recovery is worktree-aware: a finished parallel run found on startup
   is merged into the workspace instead of leaving its changes stranded.
-- Planning results are no longer lost when Yard exits mid-plan.
+- Planning results are no longer lost when Yardlet exits mid-plan.
 
 ## v0.1.0
 

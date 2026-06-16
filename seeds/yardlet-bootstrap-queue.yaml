@@ -1,6 +1,6 @@
 schema_version: 1
-queue_id: yard-bootstrap-queue
-intent_id: yard-final-plan
+queue_id: yardlet-bootstrap-queue
+intent_id: yardlet-final-plan
 selection_policy:
   default_order: priority_then_created_at
   require_planning_gate: false
@@ -9,14 +9,14 @@ selection_policy:
 
 tasks:
   - id: YARD-001
-    title: Create Yard product surface and remove user-facing Internal naming
+    title: Create Yardlet product surface and remove user-facing Internal naming
     state: queued
     priority: 10
     risk: low
     kind: design_refactor
     preferred_worker: codex
     acceptance:
-      - New files use Yard as product name.
+      - New files use Yardlet as product name.
       - internal-system remains reference-only, not dependency.
       - .agents remains canonical repo state.
 
@@ -28,19 +28,19 @@ tasks:
     kind: implementation
     preferred_worker: codex
     acceptance:
-      - .agents/yard.yaml template exists.
+      - .agents/yardlet.yaml template exists.
       - Intent, queue, policy, worker, run, and result schemas exist.
       - A schema validation command exists.
 
   - id: YARD-003
-    title: Build minimal Yard terminal UI shell
+    title: Build minimal Yardlet terminal UI shell
     state: queued
     priority: 30
     risk: medium
     kind: implementation
     preferred_worker: codex
     acceptance:
-      - Running yard opens a local terminal UI.
+      - Running yardlet opens a local terminal UI.
       - Home, Workers, Queue, New Work, Run, Handoff placeholders exist.
       - UI reads .agents state and does not require workers to render.
 
@@ -52,7 +52,7 @@ tasks:
     kind: safety
     preferred_worker: claude-code
     acceptance:
-      - Yard never asks for AI provider API keys.
+      - Yardlet never asks for AI provider API keys.
       - Worker invocation uses sanitized AI-billing environment.
       - Ambiguous worker auth stops safely.
       - UI shows worker readiness and billing safety state.

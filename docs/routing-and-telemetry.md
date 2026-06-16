@@ -6,7 +6,7 @@
 
 ## Problem
 
-Yard routes work between two subscription-backed CLIs. The "right" worker
+Yardlet routes work between two subscription-backed CLIs. The "right" worker
 varies three ways, so any fixed rule rots:
 
 - by **task** (a tight diff edit vs a multi-file refactor want different engines),
@@ -41,8 +41,8 @@ Not everything rots at the same rate — split it:
 
 | Fact | Maintained by | Cadence |
 | --- | --- | --- |
-| Concrete model version a CLI uses | the CLI itself | automatic; Yard never tracks it |
-| Relative strength per task type | **Yard telemetry → human-approved suggestion** | occasional |
+| Concrete model version a CLI uses | the CLI itself | automatic; Yardlet never tracks it |
+| Relative strength per task type | **Yardlet telemetry → human-approved suggestion** | occasional |
 | `cost_bias` (cheap vs quality) | the human (a preference) | rarely; never automated |
 
 Only the middle row needs a loop.
@@ -85,7 +85,7 @@ characteristics against `best_for` and the cost dial.
 { "preferred_worker": "codex", "worker_rationale": "tight single-file edit; cheap worker per profile" }
 ```
 
-Yard stores `preferred_worker` on the task (already does) and keeps
+Yardlet stores `preferred_worker` on the task (already does) and keeps
 `worker_rationale` for the audit log. This fixes the "picks codex for
 everything" bug: the judge now has a rubric and its choice is explainable.
 
@@ -126,7 +126,7 @@ projection for analysis.
 
 ### Aggregate + suggest (mechanism; output is advice, not action)
 
-`yard routing review` reads the telemetry and aggregates per `(kind, worker)`:
+`yardlet routing review` reads the telemetry and aggregates per `(kind, worker)`:
 success rate (`eval_state == done` / total), avg wall time, override count.
 Thresholds (config-tunable) turn deltas into suggestions:
 
@@ -142,16 +142,16 @@ never edits config itself.
 ### Human gate (policy change)
 
 Applying a suggestion edits `best_for` / `default_worker` / `fallback_order` —
-that is a policy change, so a human approves it (`yard routing apply` stages the
-diff for confirmation, or you edit the file). This matches Yard's "human
+that is a policy change, so a human approves it (`yardlet routing apply` stages the
+diff for confirmation, or you edit the file). This matches Yardlet's "human
 approval for shared-state changes" rule and the observe → candidate → review →
 promote learning lifecycle.
 
 ### Triggers (event-based, not calendar)
 
-- `yard status` shows a one-line nudge when suggestions are pending
-  (`routing: 2 suggestions — run \`yard routing review\``).
-- a worker's CLI version change (Yard stores last-seen versions) flags a
+- `yardlet status` shows a one-line nudge when suggestions are pending
+  (`routing: 2 suggestions — run \`yardlet routing review\``).
+- a worker's CLI version change (Yardlet stores last-seen versions) flags a
   re-evaluation,
 - an override spike for a kind.
 
@@ -191,9 +191,9 @@ profile (seeded)
    fallback immediately and starts gathering data. Low risk.
 2. **Guided planner.** `best_for` + `cost_bias` into the planning packet;
    `worker_rationale` in the result. Fixes the codex-default bug.
-3. **Aggregate + `yard routing review`.** Suggestions, the status nudge,
+3. **Aggregate + `yardlet routing review`.** Suggestions, the status nudge,
    version-change flag.
-4. **`yard routing apply` + override detection.** Assisted, human-confirmed
+4. **`yardlet routing apply` + override detection.** Assisted, human-confirmed
    profile edits.
 
 Phase 1 is shippable on its own and is the highest-value first slice.

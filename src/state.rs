@@ -1,6 +1,6 @@
 //! Workspace state layer.
 //!
-//! Yard owns canonical state under `.agents/` in the target repo. This module
+//! Yardlet owns canonical state under `.agents/` in the target repo. This module
 //! is the only place that reads and writes those files. Everything is durable
 //! and readable without any previous chat context.
 
@@ -13,19 +13,25 @@ use crate::schemas::{BillingPolicy, IntentContract, WorkQueue, WorkersFile, Yard
 use crate::yaml;
 
 pub const STATE_DIR: &str = ".agents";
+/// Canonical config filename. `yard.yaml` is the pre-rename name, still read
+/// (and written in place) for back-compat so existing workspaces keep working.
+pub const CONFIG_FILE: &str = "yardlet.yaml";
+pub const LEGACY_CONFIG_FILE: &str = "yard.yaml";
 
-/// A located Yard workspace: the directory that owns `.agents/`.
+/// A located Yardlet workspace: the directory that owns `.agents/`.
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub root: PathBuf,
 }
 
 impl Workspace {
-    /// Walk up from `start` looking for an existing `.agents/yard.yaml`.
+    /// Walk up from `start` looking for an existing config file (the canonical
+    /// `.agents/yardlet.yaml` or the legacy `.agents/yard.yaml`).
     pub fn discover(start: &Path) -> Option<Workspace> {
         let mut dir = Some(start);
         while let Some(d) = dir {
-            if d.join(STATE_DIR).join("yard.yaml").is_file() {
+            let agents = d.join(STATE_DIR);
+            if agents.join(CONFIG_FILE).is_file() || agents.join(LEGACY_CONFIG_FILE).is_file() {
                 return Some(Workspace {
                     root: d.to_path_buf(),
                 });
@@ -47,11 +53,22 @@ impl Workspace {
     }
 
     pub fn is_initialized(&self) -> bool {
-        self.agents_dir().join("yard.yaml").is_file()
+        self.agents_dir().join(CONFIG_FILE).is_file()
+            || self.agents_dir().join(LEGACY_CONFIG_FILE).is_file()
     }
 
+    /// The config file path. Prefers the canonical `yardlet.yaml`; falls back to
+    /// the legacy `yard.yaml` when that is the file a workspace already has, so
+    /// pre-rename workspaces are read and written in place rather than orphaned.
+    /// A fresh workspace gets the canonical name.
     pub fn config_path(&self) -> PathBuf {
-        self.agents_dir().join("yard.yaml")
+        let canonical = self.agents_dir().join(CONFIG_FILE);
+        let legacy = self.agents_dir().join(LEGACY_CONFIG_FILE);
+        if !canonical.is_file() && legacy.is_file() {
+            legacy
+        } else {
+            canonical
+        }
     }
     pub fn queue_path(&self) -> PathBuf {
         self.agents_dir().join("work-queue.yaml")

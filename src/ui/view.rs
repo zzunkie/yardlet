@@ -1,4 +1,4 @@
-//! Screen rendering for the Yard TUI. All user-visible strings come from the
+//! Screen rendering for the Yardlet TUI. All user-visible strings come from the
 //! active language's label table (`super::i18n`).
 
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -367,7 +367,7 @@ fn render_home(frame: &mut Frame, app: &App) {
         }
         None => {
             let p = Paragraph::new("No workspace state loaded. Run `yard init`.")
-                .block(Block::bordered().title(" Yard "));
+                .block(Block::bordered().title(" Yardlet "));
             frame.render_widget(p, chunks[0]);
         }
     }
@@ -388,7 +388,13 @@ fn render_home(frame: &mut Frame, app: &App) {
         return;
     }
     let footer = if app.is_busy() {
-        l.footer_home_busy.to_string()
+        // Only an auto-drain is pausable (`p`); planning / single runs show
+        // just `Esc stop` so the footer doesn't advertise a key that no-ops.
+        if app.pause.is_some() {
+            l.footer_home_busy.to_string()
+        } else {
+            l.footer_home_busy_nodrain.to_string()
+        }
     } else {
         // Only show answer/approve keys when there's actually something to do.
         let mut f = l.footer_home.to_string();
@@ -515,7 +521,7 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
         status,
     ];
     let block = Block::bordered().title(format!(
-        " Yard v{} \u{00b7} {} ",
+        " Yardlet v{} \u{00b7} {} ",
         env!("CARGO_PKG_VERSION"),
         l.subtitle
     ));

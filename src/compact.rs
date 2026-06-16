@@ -1,6 +1,6 @@
 //! Compact checkpoint + handoff writers.
 //!
-//! Yard must not rely on chat history as memory. At task/cycle boundaries it
+//! Yardlet must not rely on chat history as memory. At task/cycle boundaries it
 //! compacts into durable artifacts that the next run can start from.
 
 use std::path::Path;

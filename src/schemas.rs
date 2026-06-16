@@ -1,8 +1,8 @@
-//! Canonical Yard data model.
+//! Canonical Yardlet data model.
 //!
 //! These structs map to the `.agents/*.yaml` files and the per-run JSON
 //! artifacts. Logic-bearing fields are typed; loosely-structured policy detail
-//! that Yard only passes through to workers is kept as `yaml::Value` so the
+//! that Yardlet only passes through to workers is kept as `yaml::Value` so the
 //! model does not over-constrain user-edited files.
 
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ pub struct YardConfig {
     pub canonical_queue: String,
     pub current_intent: String,
     /// User-facing output language for worker content: "auto" (detect from the
-    /// request), "ko", "en", etc. Yard's own CLI/TUI chrome stays English.
+    /// request), "ko", "en", etc. Yardlet's own CLI/TUI chrome stays English.
     #[serde(default = "default_language")]
     pub language: String,
     /// Default worker permission: "sandboxed" (local-only, network blocked) or
@@ -124,7 +124,7 @@ pub struct IntentContract {
     #[serde(default)]
     pub acceptance: Vec<yaml::Value>,
     /// Local image paths attached to this goal (passed to the worker natively:
-    /// codex `-i`, claude reads them), so Yard does not lose the CLIs' vision.
+    /// codex `-i`, claude reads them), so Yardlet does not lose the CLIs' vision.
     #[serde(default)]
     pub images: Vec<String>,
     /// The planner's own ambiguity self-report: low | medium | high.
@@ -417,7 +417,7 @@ pub struct Invocation {
     pub effort_args: Vec<String>,
     /// Env vars passed through to THIS worker even when the billing policy
     /// scrubs them (e.g. ["OPENAI_API_KEY"] for an API-backed worker CLI).
-    /// Explicit per-worker opt-in; zero-key remains the default and Yard
+    /// Explicit per-worker opt-in; zero-key remains the default and Yardlet
     /// itself never reads or stores the values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pass_env: Vec<String>,
@@ -511,11 +511,11 @@ pub struct RunResult {
     #[serde(default)]
     pub compact_summary: String,
     /// Per-criterion verdict from a review/verify task — the structured
-    /// quality signal Yard records instead of trusting prose (docs/skills.md).
+    /// quality signal Yardlet records instead of trusting prose (docs/skills.md).
     /// Empty for build tasks; populated by reviewer-role runs.
     #[serde(default)]
     pub verdict: Vec<Verdict>,
-    /// Reusable lessons this run proposes (harness learning loop, H4). Yard
+    /// Reusable lessons this run proposes (harness learning loop, H4). Yardlet
     /// records them; the worker never writes canonical state itself.
     #[serde(default)]
     pub harness_suggestions: Vec<HarnessSuggestion>,

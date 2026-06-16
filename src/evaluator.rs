@@ -1,6 +1,6 @@
 //! Deterministic evaluator.
 //!
-//! Yard does not trust a worker's claims blindly. After a run it checks the
+//! Yardlet does not trust a worker's claims blindly. After a run it checks the
 //! evidence on disk and decides the next task state. The first evaluator is
 //! intentionally shallow but honest: every check is mechanical.
 
@@ -118,7 +118,7 @@ pub fn evaluate(run_dir: &Path, run_id: &str, task: &Task) -> Evaluation {
                 )
             },
         ));
-        // Structured review verdict: the quality signal Yard records instead
+        // Structured review verdict: the quality signal Yardlet records instead
         // of trusting prose. For a review/safety task it is the contract —
         // an empty verdict or any failed criterion blocks Done.
         let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");

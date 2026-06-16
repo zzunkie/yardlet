@@ -1,7 +1,7 @@
 //! Terminal UI (Ratatui).
 //!
 //! The TUI is the normal interface, but it is never the canonical state store:
-//! it reads and writes through Yard's state layer. Long worker runs happen on a
+//! it reads and writes through Yardlet's state layer. Long worker runs happen on a
 //! background thread so the UI stays responsive; the event loop polls a channel
 //! for completion and animates a spinner meanwhile.
 
@@ -523,13 +523,15 @@ fn title_for(app: &App) -> String {
     let clip = |s: &str| -> String { s.chars().take(50).collect() };
     if app.is_busy() {
         match &app.progress {
-            Some(p) => format!("Yard \u{00b7} {}", clip(p)),
-            None => "Yard \u{00b7} running".to_string(),
+            Some(p) => format!("Yardlet \u{00b7} {}", clip(p)),
+            None => "Yardlet \u{00b7} running".to_string(),
         }
     } else {
         match app.snapshot.as_ref().map(|s| s.intent_summary()) {
-            Some(intent) if !intent.starts_with('(') => format!("Yard \u{00b7} {}", clip(intent)),
-            _ => format!("Yard v{}", env!("CARGO_PKG_VERSION")),
+            Some(intent) if !intent.starts_with('(') => {
+                format!("Yardlet \u{00b7} {}", clip(intent))
+            }
+            _ => format!("Yardlet v{}", env!("CARGO_PKG_VERSION")),
         }
     }
 }
@@ -671,7 +673,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
         }
         terminal.draw(|frame| view::render(frame, &app))?;
 
-        // Reflect Yard's state in the terminal title (OSC sequence), only when
+        // Reflect Yardlet's state in the terminal title (OSC sequence), only when
         // it changes.
         let title = title_for(&app);
         if app.last_title.as_deref() != Some(title.as_str()) {
@@ -729,6 +731,13 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
             Screen::Intent => handle_intent_key(&mut app, code),
             Screen::Monitor => match code {
                 KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Home,
+                // Stop/pause work here too, so the monitor isn't a dead end:
+                // `x` stops the running worker, `p` pauses a drain (both also on
+                // Home). Esc/q stays "back to Home".
+                KeyCode::Char('x') if app.is_busy() || has_running_task(&app) => {
+                    stop_running_worker(&mut app)
+                }
+                KeyCode::Char('p') => request_pause(&mut app),
                 // Cycle which parallel run is being followed.
                 KeyCode::Tab | KeyCode::Right => {
                     let n = app.monitor.runs.len().max(1);
@@ -1312,7 +1321,9 @@ fn request_pause(app: &mut App) {
             p.store(true, std::sync::atomic::Ordering::Relaxed);
             app.toast = Some((true, app.lang.l().pausing.into()));
         }
-        None => app.toast = Some((true, app.lang.l().busy.into())),
+        // Planning / single runs have nothing to pause between tasks; tell the
+        // user the key that DOES stop them (Esc) instead of a vague "busy".
+        None => app.toast = Some((true, app.lang.l().not_pausable.into())),
     }
 }
 

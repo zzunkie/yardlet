@@ -1,16 +1,16 @@
-# Yard
+# Yardlet
 
 > **Rent the intelligence. Own the work.**
-> Yard is a local console for engineering the loop that turns a few sentences
+> Yardlet is a local console for engineering the loop that turns a few sentences
 > of intent into verified, durable work — using your already-installed coding
 > agents as interchangeable workers.
 
-![Yard terminal UI demo](docs/assets/yard-demo.gif)
+![Yardlet terminal UI demo](docs/assets/yardlet-demo.gif)
 
 *"I don't prompt Claude anymore. I have loops running that prompt Claude…
 my job is to write loops."* — that is how Anthropic's Claude Code lead
 describes his own workflow now, and **loop engineering** is the name the
-practice picked up. Yard is that practice as a product, for everyone:
+practice picked up. Yardlet is that practice as a product, for everyone:
 
 - **Prompts are compiled, not written.** You state intent once; every worker
   prompt is built from contracts, rules, skills, role discipline, and
@@ -36,8 +36,8 @@ User intent (a few sentences)
 
 ## Your Claude Code and Codex, as they are
 
-If `claude` or `codex` runs on your machine, Yard can drive it — no new
-accounts, no extra configuration, no setup step. Yard discovers the installed
+If `claude` or `codex` runs on your machine, Yardlet can drive it — no new
+accounts, no extra configuration, no setup step. Yardlet discovers the installed
 CLIs, probes readiness, and puts them to work exactly as you already pay for
 them. Any other agent CLI can be added in config alone (see
 "Adding a worker"), including API-backed tools via a per-worker
@@ -47,15 +47,15 @@ them. Any other agent CLI can be added in config alone (see
 
 ```bash
 cd your-project
-yard new "add admin order search with status, email, and date filters"
-yard queue                      # review the planned tasks
-yard run --auto                 # drain the queue, stopping only at human gates
-yard handoff                    # read the teammate-readable summary
-yard                            # or do it all from the terminal UI
+yardlet new "add admin order search with status, email, and date filters"
+yardlet queue                      # review the planned tasks
+yardlet run --auto                 # drain the queue, stopping only at human gates
+yardlet handoff                    # read the teammate-readable summary
+yardlet                            # or do it all from the terminal UI
 ```
 
-Like the worker CLIs, `yard` just works in any directory: the first command
-creates `.agents/` state on demand. `yard init` exists for scripting or to
+Like the worker CLIs, `yardlet` just works in any directory: the first command
+creates `.agents/` state on demand. `yardlet init` exists for scripting or to
 re-scaffold, but you do not need to run it first.
 
 A one-sentence request becomes an intent contract plus a bounded task queue
@@ -67,36 +67,36 @@ by a deterministic evaluator, and leaves a checkpoint and handoff under
 
 | Command | Purpose |
 | --- | --- |
-| `yard` | Open the terminal UI (auto-inits on first use). |
-| `yard init [--force]` | Explicitly scaffold `.agents/` state (optional). |
-| `yard new "<request>" [--worker <id>]` | Plan a request into an intent contract + queue. |
-| `yard goal "<goal>" [--verify "..."]` | Express lane: skip planning, run one goal to a verify condition. |
-| `yard new "..." --image <path>` | Attach a local image to the goal (also auto-detected from the request). |
-| `yard queue` | List the work queue. |
-| `yard status [--json]` | Workspace, intent, queue, and worker summary. |
-| `yard worker status` | Worker readiness and billing-env safety. |
-| `yard inspect repo [--json]` | Cheap deterministic local evidence. |
-| `yard packet --task <id> --worker <id> [--dry-run]` | Compile a worker packet. |
-| `yard run --next [--execute] [--worker <id>]` | Prepare (default) or run the next task. |
-| `yard run --auto [--parallel N]` | Drain the queue autonomously; optionally N tasks at once. |
-| `yard answer "<reply>"` | Answer a task waiting on you (NeedsUser) and resume it. |
-| `yard handoff` | Print the latest run's handoff. |
-| `yard report` | Print the intent's final report (aggregate of every task). |
-| `yard recover` | Recover state from an interrupted session (orphaned runs, unread plans). |
-| `yard skill list / suggest / equip <preset> / unequip / review` | Classify, equip, and score skills from a local library. |
-| `yard routing review` | Per-kind worker success stats + suggested preferences. |
-| `yard routing apply --kind K --worker W` | Pin a worker for a task kind (human-approved). |
+| `yardlet` | Open the terminal UI (auto-inits on first use). |
+| `yardlet init [--force]` | Explicitly scaffold `.agents/` state (optional). |
+| `yardlet new "<request>" [--worker <id>]` | Plan a request into an intent contract + queue. |
+| `yardlet goal "<goal>" [--verify "..."]` | Express lane: skip planning, run one goal to a verify condition. |
+| `yardlet new "..." --image <path>` | Attach a local image to the goal (also auto-detected from the request). |
+| `yardlet queue` | List the work queue. |
+| `yardlet status [--json]` | Workspace, intent, queue, and worker summary. |
+| `yardlet worker status` | Worker readiness and billing-env safety. |
+| `yardlet inspect repo [--json]` | Cheap deterministic local evidence. |
+| `yardlet packet --task <id> --worker <id> [--dry-run]` | Compile a worker packet. |
+| `yardlet run --next [--execute] [--worker <id>]` | Prepare (default) or run the next task. |
+| `yardlet run --auto [--parallel N]` | Drain the queue autonomously; optionally N tasks at once. |
+| `yardlet answer "<reply>"` | Answer a task waiting on you (NeedsUser) and resume it. |
+| `yardlet handoff` | Print the latest run's handoff. |
+| `yardlet report` | Print the intent's final report (aggregate of every task). |
+| `yardlet recover` | Recover state from an interrupted session (orphaned runs, unread plans). |
+| `yardlet skill list / suggest / equip <preset> / unequip / review` | Classify, equip, and score skills from a local library. |
+| `yardlet routing review` | Per-kind worker success stats + suggested preferences. |
+| `yardlet routing apply --kind K --worker W` | Pin a worker for a task kind (human-approved). |
 
 When a worker needs input it leaves the task in **NeedsUser** with a question.
-`yard status` (and the TUI) shows the question; reply with `yard answer "..."`
-(or press `a` in the TUI) and Yard re-runs the task with your answer.
+`yardlet status` (and the TUI) shows the question; reply with `yardlet answer "..."`
+(or press `a` in the TUI) and Yardlet re-runs the task with your answer.
 
 ## Language
 
 Worker-authored content (plan summary, task titles, handoff, questions) follows
-your language. By default Yard auto-detects it from your request, so a Korean
+your language. By default Yardlet auto-detects it from your request, so a Korean
 request gets a Korean plan and handoff while code and identifiers stay English.
-Set `language:` in `.agents/yard.yaml` to `ko`/`en`/etc. to force one.
+Set `language:` in `.agents/yardlet.yaml` to `ko`/`en`/etc. to force one.
 
 ## Permissions
 
@@ -107,8 +107,8 @@ This is layered:
 2. **Report, don't bypass** — if a worker needs network, an install, production,
    or a destructive action, it stops and asks via **NeedsUser** instead of
    failing silently. You grant access and resume.
-3. **Explicit escalation** — `yard run --next --execute --full-access` (or
-   `yard answer --full-access`) drops the sandbox for that run only. Off by
+3. **Explicit escalation** — `yardlet run --next --execute --full-access` (or
+   `yardlet answer --full-access`) drops the sandbox for that run only. Off by
    default; it is a human-granted permission, never automatic.
 
 ## Worker routing
@@ -117,9 +117,9 @@ The planner picks a worker per task from an editable rubric in
 `.agents/workers.yaml` (each worker's `best_for` + a `cost_bias` dial). At run
 time the choice is deterministic: preferred worker → readiness check → fall back
 to the next ready worker. Every run logs its outcome to
-`.agents/telemetry/runs.jsonl`; `yard routing review` aggregates that and
+`.agents/telemetry/runs.jsonl`; `yardlet routing review` aggregates that and
 *suggests* profile changes (e.g. "claude-code wins refactors"), which you apply
-with `yard routing apply` — telemetry never changes routing on its own. Design:
+with `yardlet routing apply` — telemetry never changes routing on its own. Design:
 [docs/routing-and-telemetry.md](docs/routing-and-telemetry.md).
 
 `run --next` prepares a run and stops *before* invoking a worker by default,
@@ -134,7 +134,7 @@ planning.
 
 Codex and Claude Code have built-in adapters. Any other subscription-backed
 CLI can be added in `.agents/workers.yaml` alone — give it an invocation
-template and Yard drives it through the same contract (packet on stdin →
+template and Yardlet drives it through the same contract (packet on stdin →
 result files out). Placeholders: `{run_dir}`, `{model}`, `{effort}`,
 `{image}`.
 
@@ -156,7 +156,7 @@ The worker must be able to write files in the workspace (that is how results
 come back); its subprocess env is sanitized unless the profile opts vars
 back in with `pass_env`.
 
-The ecosystem's agents are Yard's supply side: terminal agents like
+The ecosystem's agents are Yardlet's supply side: terminal agents like
 [oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`), OpenCode, Gemini
 CLI, or an API-backed CLI of your own all fit the same template — register
 the winners, swap them per task, keep the records.
@@ -180,16 +180,16 @@ N independent tasks at once — each in its own git worktree on branch
 queue state keeps a single writer and results merge back sequentially; a merge
 conflict is never auto-resolved (the task drops to Partial and its worktree is
 kept for inspection). Off by default; opt in via Settings ("Parallel tasks"),
-`max_parallel` in `.agents/yard.yaml`, or `yard run --auto --parallel 3`.
-Requires a clean git tree, otherwise Yard falls back to sequential.
+`max_parallel` in `.agents/yardlet.yaml`, or `yardlet run --auto --parallel 3`.
+Requires a clean git tree, otherwise Yardlet falls back to sequential.
 
-Inside a task, workers are free to use their own subagents — Yard's queue
+Inside a task, workers are free to use their own subagents — Yardlet's queue
 parallelism is for work that must survive sessions, cross workers, or pass
 human gates. Design: [docs/parallel-queue.md](docs/parallel-queue.md).
 
 ## Crash safety
 
-Yard state survives restarts. On startup (and via `yard recover`) it recovers
+Yardlet state survives restarts. On startup (and via `yardlet recover`) it recovers
 interrupted sessions: a planning result the previous session paid for but never
 read is consumed into the queue, finished orphaned runs are evaluated and
 merged (worktree runs included), and unfinished ones are requeued.
@@ -204,11 +204,11 @@ cargo run -- init
 
 ## Canonical state
 
-Yard owns state; workers do not. Canonical state lives under `.agents/` in the target repo:
+Yardlet owns state; workers do not. Canonical state lives under `.agents/` in the target repo:
 
 ```
 .agents/
-  yard.yaml              workspace config
+  yardlet.yaml              workspace config
   intent-contract.yaml   current goal / scope / acceptance
   work-queue.yaml         tasks
   *-policy.yaml           tool / approval / interaction / research / billing policy

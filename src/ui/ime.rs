@@ -8,7 +8,7 @@
 //!
 //! The reliable fix is the im-select/vim pattern: while a shortcut screen is
 //! focused, select an ASCII-capable system input source; when a text-input
-//! screen opens (or Yard exits), restore the user's IME. macOS only — the
+//! screen opens (or Yardlet exits), restore the user's IME. macOS only — the
 //! stubs below make it a no-op elsewhere.
 
 #[cfg(target_os = "macos")]

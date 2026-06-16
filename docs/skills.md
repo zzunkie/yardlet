@@ -1,6 +1,6 @@
 # Skill Lifecycle — research, create, equip, manage
 
-> Status: S1–S4 implemented; explicit `yard skill research`/`create`/`apply`
+> Status: S1–S4 implemented; explicit `yardlet skill research`/`create`/`apply`
 > (S2/S3 on-demand authoring) implemented. Companion: [harness.md](harness.md)
 > (H1 already injects an installed skill catalog into every packet),
 > [absorption.md](absorption.md) (A1 already discovers a repo's existing
@@ -34,27 +34,27 @@ Missing — this plan:
 |---|---|
 | Deterministic core; generative behind the contract (I1) | Classification, equip, usage stats, dedup = deterministic Rust. **Researching and writing a skill's prose is a worker task** (researcher role), never the core. |
 | Packet is the only shared injection point (I2) | Equipped skills live in `.agents/skills/` and reach every worker through the existing catalog. |
-| `.agents/` canonical; sessions disposable (I3) | Equip writes real files Yard owns. A central library is read-only discovery; created skills are written through `state.rs`. |
-| Minimize intervention; safety from determinism+eval+reversibility (I4) | Classify/equip/research/create/score/prune all run **automatically**. Safety: Yard (not the worker) writes every skill, the eval score self-corrects bad ones, git/`.agents` make it reversible. No human gate on skills — opt-outs (`auto_skill: false`) exist for the cautious. |
-| Explicit over magic (I5) | `yard skill ...` are visible commands; the planner *suggests* `task.skills`, it doesn't silently inject hidden modes. |
+| `.agents/` canonical; sessions disposable (I3) | Equip writes real files Yardlet owns. A central library is read-only discovery; created skills are written through `state.rs`. |
+| Minimize intervention; safety from determinism+eval+reversibility (I4) | Classify/equip/research/create/score/prune all run **automatically**. Safety: Yardlet (not the worker) writes every skill, the eval score self-corrects bad ones, git/`.agents` make it reversible. No human gate on skills — opt-outs (`auto_skill: false`) exist for the cautious. |
+| Explicit over magic (I5) | `yardlet skill ...` are visible commands; the planner *suggests* `task.skills`, it doesn't silently inject hidden modes. |
 | Bring-your-own / reduce setup (I6) | Auto-classification means a fresh repo is equipped in one keystroke, not a manual hunt. |
 
-## Who generates vs who records (Yard has no LLM)
+## Who generates vs who records (Yardlet has no LLM)
 
-Yard's core has no model. "Yard writes the skill" never means Yard *authors*
+Yardlet's core has no model. "Yardlet writes the skill" never means Yardlet *authors*
 prose — it means:
 
 - **A worker generates the content.** A skill's text (frontmatter +
   procedure) is produced by a worker run, exactly like any other deliverable:
   a packet goes in (researcher role: "write a SKILL.md for X"), the worker
   writes the file into its run dir.
-- **Yard records it deterministically.** Yard reads that run output,
+- **Yardlet records it deterministically.** Yardlet reads that run output,
   validates the frontmatter, places it at `.agents/skills/<name>/` (the
   canonical location), updates the catalog, dedups, and commits. No model,
   no judgment — file plumbing.
 
 So "the deterministic core is the sole writer" means: the worker can't drop
-files into canonical state itself; it proposes via its run output, and Yard's
+files into canonical state itself; it proposes via its run output, and Yardlet's
 single writer (`state.rs`) is the only hand that places them. Equip (S1) needs
 no LLM at all — it's pure file work. Only research/create (S2/S3) run a worker,
 and only to get *content*; placement and scoring stay deterministic.
@@ -74,7 +74,7 @@ and only to get *content*; placement and scoring stay deterministic.
 ```
 
 A skill is portable Markdown (agentskills.io / Claude-Code compatible), so the
-same files work as Yard skills, `.claude/skills`, or library entries.
+same files work as Yardlet skills, `.claude/skills`, or library entries.
 
 ## S1 — Classify & equip (the toolbox) · size M
 
@@ -85,14 +85,14 @@ Deterministic. Turns "what is this repo" into "these skills".
   react/next → `web-ui`; `Cargo.toml` → `rust`/`cli-tool`; `pyproject.toml` +
   ml deps → `ai-ml`; etc. A small, auditable signal→preset table; multiple
   presets may match. `core` always applies.
-- **`yard skill list`** — equipped skills, plus library skills available to
+- **`yardlet skill list`** — equipped skills, plus library skills available to
   equip (greyed), plus the detected preset(s).
-- **Auto-equip (default):** on first plan (and `new`/`goal`), Yard equips
+- **Auto-equip (default):** on first plan (and `new`/`goal`), Yardlet equips
   the core + detected presets automatically and reports what it did. No
   prompt — the human steps back (I4). `auto_equip: false` switches to a
   suggestion nudge (*"game repo detected — equip 4 skills? (e)"*) for the
-  cautious. `yard skill suggest` always shows detected − equipped on demand.
-- **`yard skill equip <preset|name>...`** — link/copy the named skills (or a
+  cautious. `yardlet skill suggest` always shows detected − equipped on demand.
+- **`yardlet skill equip <preset|name>...`** — link/copy the named skills (or a
   whole preset) from the library into `.agents/skills/`. `unequip` removes.
 - **Config:** `skill_library: <path>` (empty = none; just the in-repo and A1
   sources). Library is read-only.
@@ -109,12 +109,12 @@ Identify and source skills the repo wants but doesn't have.
   validation failures / NeedsUser themes (from telemetry) → capability-gap
   candidates ("3 runs stalled on browser screenshots → maybe a
   browser-evidence skill").
-- **`yard skill research "<topic>"`** *(implemented)* — a researcher-role
+- **`yardlet skill research "<topic>"`** *(implemented)* — a researcher-role
   worker task (so the generative work is behind the contract, I1): it studies
   the topic (repo conventions; the web when access is `full`) and writes a
   *candidate* SKILL.md draft to a run dir, plus a short rationale. **Nothing
   is installed yet** — the draft lands at `.agents/runs/<id>/SKILL.md`.
-- **`yard skill apply <run-id>`** *(implemented)* installs that draft: Yard
+- **`yardlet skill apply <run-id>`** *(implemented)* installs that draft: Yardlet
   reads the run's `skill-result.json` and writes the canonical skill (the
   worker proposed, the deterministic core writes — I1/I3). The eval score
   later judges whether it earned its place (I4).
@@ -127,24 +127,24 @@ Identify and source skills the repo wants but doesn't have.
 - **From a run (auto, implemented):** a run's `harness_suggestions` of kind
   "skill" are recorded automatically as `.agents/skills/<slug>/SKILL.md`
   (`source: learned`) when `auto_skill` is on — the worker authored the
-  content during its task, Yard slugifies + writes it, no clobber of an
+  content during its task, Yardlet slugifies + writes it, no clobber of an
   existing skill. The eval score (S4) later prunes weak ones.
-- **`yard skill create <name> [--from "<topic>"]` (explicit, implemented):**
+- **`yardlet skill create <name> [--from "<topic>"]` (explicit, implemented):**
   authors a *new* skill on demand and installs it. It runs a queue-isolated
   worker (`src/skill_author.rs`) that writes the SKILL.md content to a run
-  dir; Yard installs it tagged `source: created` — user-chosen, so unlike a
+  dir; Yardlet installs it tagged `source: created` — user-chosen, so unlike a
   `learned` skill it is never auto-pruned (kept like a library equip until
   `unequip`). The auto path above is the cycle-strengthening loop; explicit
   create/research is a convenience on top.
 - **From a run (auto by default):** the result contract has
   `harness_suggestions` (H4). A worker that discovers a reusable procedure
-  proposes it; **Yard records it automatically** as a skill (the worker
+  proposes it; **Yardlet records it automatically** as a skill (the worker
   proposes, the deterministic core writes — I1/I3). The eval score then
   decides whether it survives. `auto_skill: false` routes proposals to
-  `yard skill review` for manual promotion instead.
+  `yardlet skill review` for manual promotion instead.
   - *Versus Hermes:* both auto-write by default. The difference is the
     writer and the safety model: Hermes lets the agent write its own files;
-    Yard's core is the sole writer and an eval loop prunes what doesn't work,
+    Yardlet's core is the sole writer and an eval loop prunes what doesn't work,
     so autonomy doesn't require trusting each write.
 
 ## S4 — Manage over time (the lifecycle) · size L — implemented
@@ -158,9 +158,9 @@ skill *eval*, and that eval must obey the same rule as everything else:
 of the worker that used it.
 
 - **Observe (mechanism, every run):** to `telemetry/skills.jsonl`, per task,
-  record the declared `task.skills` alongside signals Yard already produces
+  record the declared `task.skills` alongside signals Yardlet already produces
   deterministically — `eval_state` (Done/Partial/Failed), retry count,
-  wall_seconds, and whether a downstream **review task** (A3 / `yard goal
+  wall_seconds, and whether a downstream **review task** (A3 / `yardlet goal
   --verify`) that depended on this task passed. No tokens, no behavior change.
 - **Skill score (deterministic, auditable):** per skill, aggregate across the
   runs that declared it: pass-through rate of dependent review tasks,
@@ -168,21 +168,21 @@ of the worker that used it.
   work keeps failing review scores *down*, not up. The score is evidence for
   a human, never an automatic promote/prune (I4) — same posture as
   routing telemetry.
-- **`yard skill review`** — one screen driven by that score: candidates
+- **`yardlet skill review`** — one screen driven by that score: candidates
   (gaps, run-proposed, research drafts) and equipped skills that score
   poorly. **Auto-prune (default):** a skill whose score stays below a floor
   across N intents is automatically deprecated (unequipped, kept in git);
-  `yard skill review` is for *seeing* and overriding, not for routine
+  `yardlet skill review` is for *seeing* and overriding, not for routine
   approval. `auto_prune: false` makes pruning a review action instead.
-- **Manual override (always available):** `yard skill equip/unequip` and
-  `yard skill deprecate <name>` let a human step in; for a library skill,
+- **Manual override (always available):** `yardlet skill equip/unequip` and
+  `yardlet skill deprecate <name>` let a human step in; for a library skill,
   deprecate marks it, never deletes someone else's file.
 - **Versioning:** a created/edited skill bumps a `version:` in frontmatter and
   keeps prior text in git — skills improve in place, auditably; the score
   resets on a version bump so an edit is re-judged, not coasting on old
   evidence.
 
-### Why this also sharpens Yard's core eval
+### Why this also sharpens Yardlet's core eval
 
 This phase exposes that today's evaluator only checks floor conditions
 (schema, ids, forbidden paths) and trusts the worker's `status` for "good".
@@ -221,14 +221,14 @@ is H4 from the harness plan, now concretely about skills.
 ## CLI surface (target)
 
 ```
-yard skill list                      equipped + available + detected presets
-yard skill suggest                   propose skills for this repo
-yard skill equip <preset|name>...    install from the library
-yard skill unequip <name>...
-yard skill research "<topic>"        worker drafts a candidate SKILL.md
-yard skill create <name> [--library] worker authors and installs a skill
-yard skill review                    candidates to promote / stale to prune
-yard skill apply <n> | deprecate <name>
+yardlet skill list                      equipped + available + detected presets
+yardlet skill suggest                   propose skills for this repo
+yardlet skill equip <preset|name>...    install from the library
+yardlet skill unequip <name>...
+yardlet skill research "<topic>"        worker drafts a candidate SKILL.md
+yardlet skill create <name> [--library] worker authors and installs a skill
+yardlet skill review                    candidates to promote / stale to prune
+yardlet skill apply <n> | deprecate <name>
 ```
 
 ## Explicitly out of scope (for now)
@@ -236,6 +236,6 @@ yard skill apply <n> | deprecate <name>
 - Workers writing skill files directly — they propose, the deterministic
   core writes (I3). Auto-application is fine; bypassing the single writer is not.
 - Pulling skills from arbitrary remote registries (the library is local; web
-  research informs a draft Yard writes locally, not a silent remote install).
+  research informs a draft Yardlet writes locally, not a silent remote install).
 - Self-rewriting the intent contract — skills/rules self-improve, the user's
   contract does not.

@@ -2,7 +2,7 @@
 //!
 //! The TUI chrome can render in English (default) or Korean. The language is
 //! resolved from the workspace `language` setting, falling back to the intent
-//! content and the OS locale when set to "auto". Yard's canonical state and
+//! content and the OS locale when set to "auto". Yardlet's canonical state and
 //! worker-facing packets are unaffected by this.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,12 +87,16 @@ pub struct L {
     pub press_a: &'static str,
     pub see_handoff: &'static str,
     pub footer_home: &'static str,
-    /// Shown on Home while a worker is running: only the keys that work mid-run.
+    /// Shown on Home during a pausable auto-drain: includes `p pause`.
     pub footer_home_busy: &'static str,
+    /// Shown on Home during a non-drain job (planning / single run): no `p
+    /// pause` (nothing to pause between tasks) — only `Esc stop`.
+    pub footer_home_busy_nodrain: &'static str,
     /// Conditionally appended to the Home footer when relevant.
     pub key_answer: &'static str,
     pub key_approve: &'static str,
     pub busy: &'static str,
+    pub not_pausable: &'static str,
     pub stopping: &'static str,
     pub pausing: &'static str,
     pub no_pending: &'static str,
@@ -175,9 +179,11 @@ pub const EN: L = L {
     see_handoff: "see handoff",
     footer_home: "\u{2191}\u{2193}/Enter view task  n new  r run  A auto  m monitor  h handoff  i goal  f access  s settings  l lang  g refresh  R reports  q quit",
     footer_home_busy: "running...  p pause  Esc stop  m monitor  h handoff  i goal  f access  s settings  q quit",
+    footer_home_busy_nodrain: "running...  Esc stop  m monitor  h handoff  i goal  f access  s settings  q quit",
     key_answer: "a answer",
     key_approve: "p approve",
     busy: "a worker is running; please wait",
+    not_pausable: "not a pausable drain (planning / single run) \u{2014} press Esc to stop",
     stopping: "stopping the worker (the task will need a retry)",
     pausing: "pausing \u{2014} will stop after the current task",
     no_pending: "no task is waiting on you",
@@ -185,9 +191,9 @@ pub const EN: L = L {
     nothing_to_run: "nothing to run (queue is done or empty)",
     approval_needed: "need approval",
     no_approval: "no task needs approval",
-    initialized: "initialized Yard workspace (.agents/)",
+    initialized: "initialized Yardlet workspace (.agents/)",
     newwork_title: " New Work ",
-    newwork_prompt: "Describe the work in a few sentences. Yard plans, queues, and runs it.",
+    newwork_prompt: "Describe the work in a few sentences. Yardlet plans, queues, and runs it.",
     request_title: " Request ",
     footer_newwork: "Enter plan   Esc cancel",
     asking_word: "is asking",
@@ -208,7 +214,7 @@ pub const EN: L = L {
     settings_saved: "settings saved",
     settings_saved_busy: "settings saved \u{2014} applies to the next task (the running one keeps its model)",
     monitor_title: " Run Monitor ",
-    footer_monitor: "Tab/\u{2190}\u{2192} switch run \u{00b7} Esc/q back \u{00b7} live worker output",
+    footer_monitor: "Tab/\u{2190}\u{2192} switch run \u{00b7} x stop \u{00b7} p pause \u{00b7} Esc/q back",
     monitor_no_runs: "No runs yet. Press r or A on Home to start one.",
     planned_via: "Planned via",
     tasks_word: "tasks",
@@ -259,9 +265,11 @@ pub const KO: L = L {
     see_handoff: "핸드오프 참고",
     footer_home: "\u{2191}\u{2193}/Enter 태스크 보기  n 새작업  r 실행  A 자동  m 모니터  h 핸드오프  i 목표  f 권한  s 설정  l 언어  g 새로고침  R 보고  q 종료",
     footer_home_busy: "실행 중...  p 일시정지  Esc 정지  m 모니터  h 핸드오프  i 목표  f 권한  s 설정  q 종료",
+    footer_home_busy_nodrain: "실행 중...  Esc 정지  m 모니터  h 핸드오프  i 목표  f 권한  s 설정  q 종료",
     key_answer: "a 답변",
     key_approve: "p 승인",
     busy: "워커 실행 중 · 잠시만요",
+    not_pausable: "일시정지 대상이 아님 (플래닝 / 단일 실행) \u{2014} 멈추려면 Esc",
     stopping: "워커 정지 중 (태스크는 재시도 필요)",
     pausing: "일시정지 \u{2014} 현재 태스크 끝나면 멈춤",
     no_pending: "응답 대기 중인 작업 없음",
@@ -269,9 +277,9 @@ pub const KO: L = L {
     nothing_to_run: "실행할 작업 없음 (큐 완료/비어 있음)",
     approval_needed: "승인 필요",
     no_approval: "승인할 작업 없음",
-    initialized: "Yard 워크스페이스 생성됨 (.agents/)",
+    initialized: "Yardlet 워크스페이스 생성됨 (.agents/)",
     newwork_title: " 새 작업 ",
-    newwork_prompt: "작업을 몇 문장으로 설명하세요. Yard 가 계획·큐·실행합니다.",
+    newwork_prompt: "작업을 몇 문장으로 설명하세요. Yardlet 가 계획·큐·실행합니다.",
     request_title: " 요청 ",
     footer_newwork: "Enter 계획   Esc 취소",
     asking_word: "질문",
@@ -292,7 +300,7 @@ pub const KO: L = L {
     settings_saved: "설정 저장됨",
     settings_saved_busy: "설정 저장됨 \u{2014} 다음 태스크부터 적용 (실행 중인 작업은 기존 모델 유지)",
     monitor_title: " 실행 모니터 ",
-    footer_monitor: "Tab/\u{2190}\u{2192} 런 전환 \u{00b7} Esc/q 뒤로 \u{00b7} worker 실시간 출력",
+    footer_monitor: "Tab/\u{2190}\u{2192} 런 전환 \u{00b7} x 정지 \u{00b7} p 일시정지 \u{00b7} Esc/q 뒤로",
     monitor_no_runs: "아직 실행 없음. Home 에서 r 또는 A 로 시작.",
     planned_via: "계획 완료 ·",
     tasks_word: "개 작업",

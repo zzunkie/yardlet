@@ -1,4 +1,4 @@
-//! `yard init`: scaffold canonical `.agents/` state into a workspace.
+//! `yardlet init`: scaffold canonical `.agents/` state into a workspace.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -15,7 +15,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
     let ws = Workspace::at(root);
     if ws.is_initialized() && !force {
         bail!(
-            "this workspace already has {}/yard.yaml. Use --force to overwrite policy templates.",
+            "this workspace already has {}/yardlet.yaml. Use --force to overwrite policy templates.",
             STATE_DIR
         );
     }
@@ -30,7 +30,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
     // Dynamic config.
     let config = YardConfig {
         schema_version: 1,
-        product: "yard".to_string(),
+        product: "yardlet".to_string(),
         workspace_id: workspace_id(root),
         created_at: Utc::now().to_rfc3339(),
         state_dir: STATE_DIR.to_string(),
@@ -51,7 +51,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
         hooks: true,
     };
     state::save_yaml(&ws.config_path(), &config)?;
-    written.push("yard.yaml".to_string());
+    written.push("yardlet.yaml".to_string());
 
     // Static templates.
     let files: &[(&str, &str)] = &[
@@ -79,7 +79,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
     }
 
     // H3 hooks: create the (empty) hook dirs and a documented README so the
-    // feature is discoverable. Yard ships no enabled hooks — only the docs.
+    // feature is discoverable. Yardlet ships no enabled hooks — only the docs.
     std::fs::create_dir_all(agents.join("hooks/pre-run.d"))?;
     std::fs::create_dir_all(agents.join("hooks/post-run.d"))?;
     let hooks_readme = agents.join("hooks/README.md");
@@ -94,7 +94,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
 /// Resolve a workspace, creating `.agents/` state on first use if none exists
 /// in this directory or any parent. Returns `(workspace, just_created)`.
 ///
-/// This is what makes `yard` work in a fresh directory without a separate
+/// This is what makes `yardlet` work in a fresh directory without a separate
 /// setup step: like the worker CLIs, it initializes on demand.
 pub fn ensure_initialized(cwd: &Path) -> Result<(Workspace, bool)> {
     if let Some(ws) = Workspace::discover(cwd) {

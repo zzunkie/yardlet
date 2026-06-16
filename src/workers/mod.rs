@@ -6,7 +6,7 @@
 //! task packet in -> worker subprocess -> structured result files out
 //! ```
 //!
-//! Yard treats Codex CLI and Claude Code CLI as hidden, subscription-backed
+//! Yardlet treats Codex CLI and Claude Code CLI as hidden, subscription-backed
 //! workers. The exact CLI flags are adapter-owned here so business logic does
 //! not hard-code brittle host assumptions.
 
@@ -74,7 +74,7 @@ pub fn build_command(
                 cmd.arg("-c")
                     .arg(format!("model_reasoning_effort=\"{effort}\""));
             }
-            // Attach images natively (codex vision), so Yard does not lose it.
+            // Attach images natively (codex vision), so Yardlet does not lose it.
             for img in images {
                 cmd.arg("-i").arg(img);
             }
@@ -227,7 +227,7 @@ pub struct WorkerOutcome {
 /// Spawn a worker with a sanitized environment, feeding the packet on stdin and
 /// capturing all output to `output_log`. Enforces a wall-clock timeout.
 ///
-/// This is the only place Yard launches a worker. It uses the env produced by
+/// This is the only place Yardlet launches a worker. It uses the env produced by
 /// the zero-key guard; it never injects an AI provider API key.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(

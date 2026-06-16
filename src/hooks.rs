@@ -3,7 +3,7 @@
 //! run before a worker is spawned (a non-zero exit blocks the run); those in
 //! `.agents/hooks/post-run.d/*` run during evaluation (a non-zero exit is a
 //! fatal check the task cannot be Done past). Hooks are the workspace's OWN
-//! code — Yard ships only a documented README, never enabled hooks. Each hook
+//! code — Yardlet ships only a documented README, never enabled hooks. Each hook
 //! runs in the workspace root with `YARD_TASK_ID` / `YARD_RUN_DIR` /
 //! `YARD_WORKER` in its environment, a wall-clock timeout, and its stdout +
 //! stderr captured into the run dir.

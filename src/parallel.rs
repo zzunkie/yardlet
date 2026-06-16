@@ -187,7 +187,7 @@ pub fn run_batch<F: FnMut(&str)>(
             continue;
         }
         // The worker's read anchors (`.agents/*.yaml`) resolve against its cwd
-        // (the worktree), and Yard's runtime state is not committed — copy the
+        // (the worktree), and Yardlet's runtime state is not committed — copy the
         // two contract files in so the packet's anchors hold.
         let wt_agents = p.wt_path.join(crate::state::STATE_DIR);
         let _ = std::fs::create_dir_all(&wt_agents);
@@ -422,7 +422,7 @@ fn merge_in_progress_is_ours(root: &Path, branch: &str) -> Option<bool> {
     Some(msg.contains(branch))
 }
 
-/// Commit whatever the worker left in the worktree (excluding Yard's `.agents/`
+/// Commit whatever the worker left in the worktree (excluding Yardlet's `.agents/`
 /// state copies) and merge the branch back into the main workspace.
 pub(crate) fn integrate_worktree(
     root: &Path,
@@ -454,12 +454,12 @@ pub(crate) fn integrate_worktree(
             wt,
             &[
                 "-c",
-                "user.name=yard",
+                "user.name=yardlet",
                 "-c",
-                "user.email=yard@localhost",
+                "user.email=yardlet@localhost",
                 "commit",
                 "-m",
-                &format!("yard: {task_id}"),
+                &format!("yardlet: {task_id}"),
             ],
         )?;
     }
@@ -471,9 +471,9 @@ pub(crate) fn integrate_worktree(
         root,
         &[
             "-c",
-            "user.name=yard",
+            "user.name=yardlet",
             "-c",
-            "user.email=yard@localhost",
+            "user.email=yardlet@localhost",
             "merge",
             "--no-ff",
             "--no-edit",
@@ -509,7 +509,7 @@ pub(crate) fn remove_worktree(root: &Path, wt: &Path, branch: &str) {
     let _ = git(root, &["branch", "-D", branch]);
 }
 
-/// Keep `.agents/worktrees/` out of `git status` in any repo Yard runs in,
+/// Keep `.agents/worktrees/` out of `git status` in any repo Yardlet runs in,
 /// without touching the repo's own .gitignore: use the repo-local exclude file.
 fn ensure_worktrees_excluded(root: &Path) {
     let Ok(common) = git(root, &["rev-parse", "--git-common-dir"]) else {
@@ -723,7 +723,7 @@ mod tests {
             Some(false)
         );
 
-        // Yard tries to integrate a worktree meanwhile: it must report and
+        // Yardlet tries to integrate a worktree meanwhile: it must report and
         // leave the user's merge state intact.
         let wt = root.join(".agents/worktrees/yard-009");
         create_worktree(&root, &wt, "yard/yard-009").unwrap();

@@ -1,7 +1,7 @@
 //! Run orchestration: select one bounded task, prepare it, and (optionally)
 //! execute it through a hidden worker, then evaluate and compact.
 //!
-//! Yard stays deterministic until a worker is invoked. By default `run_next`
+//! Yardlet stays deterministic until a worker is invoked. By default `run_next`
 //! prepares everything (run dir, evidence, packet, sanitized env) and stops
 //! *before* spawning, because spawning a subscription-backed worker consumes
 //! real usage. Pass `execute: true` to actually invoke the worker.
@@ -459,7 +459,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     compact::write_handoff(&run_dir, &task, &eval, result.as_ref())?;
 
     // Harness learning loop (S3): record skills the worker proposed. The
-    // worker authored the content; Yard (the core) does the writing.
+    // worker authored the content; Yardlet (the core) does the writing.
     if let Some(r) = &result {
         let learned = crate::skills::record_run_suggestions(ws, &r.harness_suggestions);
         if !learned.is_empty() {
@@ -969,7 +969,7 @@ fn run_worktree(run_dir: &std::path::Path) -> Option<PathBuf> {
 
 /// The pid of a run's worker, if that process is still alive. The pid file is
 /// written at spawn and removed when the worker exits cleanly under a live
-/// Yard; an orphaned worker (Yard quit mid-run) keeps running with the file
+/// Yardlet; an orphaned worker (Yardlet quit mid-run) keeps running with the file
 /// in place.
 pub(crate) fn live_worker_pid(run_dir: &std::path::Path) -> Option<u32> {
     let pid: u32 = std::fs::read_to_string(run_dir.join("worker.pid"))
@@ -989,7 +989,7 @@ pub(crate) fn live_worker_pid(run_dir: &std::path::Path) -> Option<u32> {
         .then_some(pid)
 }
 
-/// A run Yard never finalized: its `worker.pid` is still on disk (a finalized
+/// A run Yardlet never finalized: its `worker.pid` is still on disk (a finalized
 /// run removes it the moment it sees the worker exit), the process is now gone,
 /// and it left a `result.json`. Such a run was orphaned by a dying orchestrator
 /// *after* the worker finished but *before* evaluation — its completed work is
@@ -1003,7 +1003,7 @@ fn is_orphaned_unfinalized(run_dir: &std::path::Path) -> bool {
 
 /// Recover tasks left "running" by an interrupted/quit session: if the task's
 /// latest run produced a result, evaluate it (keep the finished work); if its
-/// worker is still alive (quitting Yard does not kill workers), ADOPT it —
+/// worker is still alive (quitting Yardlet does not kill workers), ADOPT it —
 /// keep the task Running and let a later pass evaluate the result, instead of
 /// starting a duplicate worker on the same task. Only a dead worker with no
 /// result is requeued. A parallel worktree run that finished Done is also
@@ -1284,7 +1284,7 @@ mod tests {
 
     #[test]
     fn recovery_merges_a_finished_orphaned_worktree_run() {
-        // A parallel worktree run finished (result.json written) but Yard died
+        // A parallel worktree run finished (result.json written) but Yardlet died
         // before integrating. Recovery must merge the work back, not just mark
         // the task Done with its changes stranded in the worktree.
         let root = std::env::temp_dir().join(format!("yard-orphan-wt-{}", std::process::id()));

@@ -89,7 +89,7 @@ pub fn resolve_worker(
     }
     Err(anyhow!(
         "no ready worker among {tried:?}. Run `yard worker status` to diagnose. \
-         Yard did not call an AI API and did not ask for an API key."
+         Yardlet did not call an AI API and did not ask for an API key."
     ))
 }
 

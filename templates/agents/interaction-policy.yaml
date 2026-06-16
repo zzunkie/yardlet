@@ -1,6 +1,6 @@
 schema_version: 1
 
-# Yard asks few, high-level questions. It does not ask the user to review
+# Yardlet asks few, high-level questions. It does not ask the user to review
 # code, architecture, or diffs as a normal path.
 question_budget: 2
 user_review_mode: natural_language_scope_and_approval_only
