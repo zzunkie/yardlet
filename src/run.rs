@@ -291,6 +291,31 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
     lines.push(format!("worker: {worker_id} ({reason})"));
 
+    // H3: workspace-owned pre-run gates bind every worker. A non-zero hook
+    // blocks the run before any worker spawns (detect-secrets, lint, "don't
+    // run while CI is red"). The task fails with the hook's reason so the
+    // auto-drain stops on it rather than looping; fix the cause and re-run.
+    let pre = crate::hooks::run_phase(ws, crate::hooks::Phase::Pre, &task.id, &run_dir, &worker_id);
+    if !pre.ok() {
+        for f in &pre.failures {
+            lines.push(format!("pre-run hook blocked the run: {}", f.summary()));
+        }
+        queue.tasks[idx].state = TaskState::Failed;
+        ws.save_queue(&queue)?;
+        return Ok(RunReport {
+            run_id: run_id.clone(),
+            task_id: task.id.clone(),
+            worker_id: worker_id.clone(),
+            run_dir: run_dir.clone(),
+            prepared: true,
+            executed: false,
+            lines,
+            result_state: Some(TaskState::Failed),
+            session: None,
+            chained: false,
+        });
+    }
+
     // mark running
     queue.tasks[idx].state = TaskState::Running;
     ws.save_queue(&queue)?;
@@ -396,7 +421,30 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     ));
 
     // ---- evaluate + compact ---------------------------------------------
-    let eval = evaluator::evaluate(&run_dir, &run_id, &task);
+    let mut eval = evaluator::evaluate(&run_dir, &run_id, &task);
+    // H3: workspace-owned post-run gates run during evaluation. A non-zero hook
+    // is a fatal check the task cannot be Done past (e.g. scanning the produced
+    // diff for secrets) — fold each into the evaluation and block Done.
+    let post = crate::hooks::run_phase(
+        ws,
+        crate::hooks::Phase::Post,
+        &task.id,
+        &run_dir,
+        &worker_id,
+    );
+    if !post.ok() {
+        for f in &post.failures {
+            lines.push(format!(
+                "post-run hook failed (blocks Done): {}",
+                f.summary()
+            ));
+            eval.checks
+                .push(evaluator::fatal_failure("post-run hook", f.summary()));
+        }
+        if eval.next_task_state == TaskState::Done {
+            eval.next_task_state = TaskState::Failed;
+        }
+    }
     state::write_str(
         &run_dir.join("evaluation.json"),
         &serde_json::to_string_pretty(&eval)?,

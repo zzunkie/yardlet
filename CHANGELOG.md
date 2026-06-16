@@ -4,6 +4,20 @@
 
 ### Added
 
+- **Workspace hooks (harness H3) — deterministic guards that bind every
+  worker.** Executables in `.agents/hooks/pre-run.d/*` run before a worker
+  spawns; a non-zero exit **blocks the run** (the task fails with the hook's
+  reason, so the drain stops on it — fix the cause and re-run). Executables in
+  `post-run.d/*` run during evaluation; a non-zero exit is a **fatal check
+  that blocks Done**, folded into the evaluation. Each hook runs in the repo
+  root with `YARD_TASK_ID` / `YARD_RUN_DIR` / `YARD_WORKER`, a 30s timeout
+  (longer is killed and fails), and stdout/stderr captured to
+  `<run_dir>/hooks/<phase>/`. Only executable files run, in sorted filename
+  order. Unlike a single CLI's hooks, these bind Codex, Claude Code, and any
+  generic-adapter worker alike. Yard ships no enabled hooks — `yard init`
+  lays down empty `pre-run.d`/`post-run.d` and a documented `README.md`. Off
+  with `hooks: false` in `yard.yaml`.
+
 - **Explicit skill authoring: `yard skill research / create / apply` (S2/S3).**
   On-demand skills without hand-writing a SKILL.md. `yard skill research
   "<topic>"` runs a researcher-role worker that drafts a candidate skill to a

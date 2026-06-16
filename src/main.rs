@@ -10,6 +10,7 @@ mod cli;
 mod compact;
 mod evaluator;
 mod guard;
+mod hooks;
 mod init;
 mod inspect;
 mod packet;

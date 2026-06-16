@@ -1,6 +1,9 @@
 # Shared Worker Harness & Learning Loop — Design
 
-> Status: H1 implemented (+A1 discovery of existing repo assets), H2 implemented (partial continuation); H3/H4 planned.
+> Status: H1 implemented (+A1 discovery of existing repo assets), H2 implemented
+> (partial continuation), H3 implemented (workspace hooks). H4 skill half
+> shipped (docs/skills.md S3 auto-learn + S4 score/prune); its rule-kind
+> auto-learn + `yard harness review` remain. H5 deferred.
 > Companion docs: [parallel-queue.md](parallel-queue.md),
 > [routing-and-telemetry.md](routing-and-telemetry.md).
 
@@ -86,20 +89,25 @@ answer-resume path) sourced from the latest Partial run of the task;
 sight. A `partial_reason` recorded at evaluation time distinguishes
 self-reported from conflict so the drain knows which to auto-continue.
 
-## Phase H3 — hooks (workspace-owned deterministic guards)
+## Phase H3 — hooks (workspace-owned deterministic guards) — implemented
 
 - `pre-run.d/*`: executed by Yard before spawning a worker, in the
   workspace root, with `YARD_TASK_ID`, `YARD_RUN_DIR`, `YARD_WORKER` env.
-  Non-zero exit aborts the run with the hook's stderr in the report
-  (e.g. detect-secrets, lint gates, "don't run while CI is red").
+  Non-zero exit aborts the run with the hook's reason in the report — the
+  task fails (drain stops on it; fix the cause and re-run) instead of
+  spawning a worker (e.g. detect-secrets, lint gates, "don't run while CI is
+  red").
 - `post-run.d/*`: executed during evaluation with the same env. Non-zero
-  exit adds a failed fatal check (the task cannot be Done past it).
-- Hooks are the workspace's own code; Yard never ships enabled hooks, only
-  documented examples. Timeouts (30s default) and captured output go to the
-  run dir.
+  exit folds a failed fatal check into the evaluation (the task cannot be
+  Done past it).
+- Hooks are the workspace's own code; Yard never ships enabled hooks, only a
+  documented `.agents/hooks/README.md` (+ empty `pre-run.d`/`post-run.d`).
+  Only executable files run, in sorted filename order. A 30s wall-clock
+  timeout (longer = killed + failed) and captured stdout/stderr go to
+  `<run_dir>/hooks/<phase>/`. `hooks: false` in yard.yaml turns them off.
 
 This gives internal-tool's `hooks/` a home where they bind *all* workers, not
-just one CLI.
+just one CLI. Implementation: `src/hooks.rs`, wired into `src/run.rs`.
 
 ## Phase H4 — the learning loop (every cycle strengthens the harness)
 

@@ -79,6 +79,12 @@ pub struct YardConfig {
     /// (git keeps the file). On by default (I4); off = review surfaces them.
     #[serde(default = "default_true")]
     pub auto_prune: bool,
+    /// Run workspace-owned hooks (`.agents/hooks/pre-run.d/*` before a worker
+    /// spawns, `post-run.d/*` during evaluation; docs/harness.md H3). A
+    /// non-zero pre-run hook blocks the run; a non-zero post-run hook blocks
+    /// Done. On by default; the dirs are empty until you add executables.
+    #[serde(default = "default_true")]
+    pub hooks: bool,
 }
 
 fn default_access() -> String {

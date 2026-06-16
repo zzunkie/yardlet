@@ -47,6 +47,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
         auto_equip: true,
         auto_skill: true,
         auto_prune: true,
+        hooks: true,
     };
     state::save_yaml(&ws.config_path(), &config)?;
     written.push("yard.yaml".to_string());
@@ -74,6 +75,16 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
     if !skill.exists() || force {
         write_str(&skill, templates::PLANNING_GATE_SKILL)?;
         written.push("skills/planning-gate/SKILL.md".to_string());
+    }
+
+    // H3 hooks: create the (empty) hook dirs and a documented README so the
+    // feature is discoverable. Yard ships no enabled hooks — only the docs.
+    std::fs::create_dir_all(agents.join("hooks/pre-run.d"))?;
+    std::fs::create_dir_all(agents.join("hooks/post-run.d"))?;
+    let hooks_readme = agents.join("hooks/README.md");
+    if !hooks_readme.exists() || force {
+        write_str(&hooks_readme, templates::HOOKS_README)?;
+        written.push("hooks/README.md".to_string());
     }
 
     Ok(written)

@@ -49,6 +49,12 @@ fn advisory(name: &str, passed: bool, note: impl Into<String>) -> Check {
     }
 }
 
+/// A failed fatal check contributed from outside the evaluator (e.g. run.rs
+/// folding a non-zero post-run hook into the evaluation, H3).
+pub fn fatal_failure(name: &str, note: impl Into<String>) -> Check {
+    check(name, false, note)
+}
+
 pub fn evaluate(run_dir: &Path, run_id: &str, task: &Task) -> Evaluation {
     let mut checks = Vec::new();
 
