@@ -1,14 +1,19 @@
 # Yardlet
 
+[![crates.io](https://img.shields.io/crates/v/yardlet.svg)](https://crates.io/crates/yardlet)
+[![CI](https://github.com/zzunkie/yardlet/actions/workflows/ci.yml/badge.svg)](https://github.com/zzunkie/yardlet/actions/workflows/ci.yml)
+[![downloads](https://img.shields.io/crates/d/yardlet.svg)](https://crates.io/crates/yardlet)
+[![license: MIT](https://img.shields.io/crates/l/yardlet.svg)](LICENSE)
+
 > **Rent the intelligence. Own the work.**
 > Yardlet is a local console for engineering the loop that turns a few sentences
-> of intent into verified, durable work — using your already-installed coding
+> of intent into verified, durable work, using your already-installed coding
 > agents as interchangeable workers.
 
 ![Yardlet terminal UI demo](docs/assets/yardlet-demo.gif)
 
 *"I don't prompt Claude anymore. I have loops running that prompt Claude…
-my job is to write loops."* — that is how Anthropic's Claude Code lead
+my job is to write loops."* That is how Anthropic's Claude Code lead
 describes his own workflow now, and **loop engineering** is the name the
 practice picked up. Yardlet is that practice as a product, for everyone:
 
@@ -34,9 +39,20 @@ User intent (a few sentences)
   -> checkpoint / handoff     durable artifacts, resumable forever
 ```
 
+## Install
+
+```bash
+cargo install yardlet
+```
+
+Prebuilt binaries for macOS and Linux are attached to each
+[GitHub release](https://github.com/zzunkie/yardlet/releases); with
+[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) installed,
+`cargo binstall yardlet` fetches one instead of compiling.
+
 ## Your Claude Code and Codex, as they are
 
-If `claude` or `codex` runs on your machine, Yardlet can drive it — no new
+If `claude` or `codex` runs on your machine, Yardlet can drive it, with no new
 accounts, no extra configuration, no setup step. Yardlet discovers the installed
 CLIs, probes readiness, and puts them to work exactly as you already pay for
 them. Any other agent CLI can be added in config alone (see
@@ -83,7 +99,8 @@ by a deterministic evaluator, and leaves a checkpoint and handoff under
 | `yardlet handoff` | Print the latest run's handoff. |
 | `yardlet report` | Print the intent's final report (aggregate of every task). |
 | `yardlet recover` | Recover state from an interrupted session (orphaned runs, unread plans). |
-| `yardlet skill list / suggest / equip <preset> / unequip / review` | Classify, equip, and score skills from a local library. |
+| `yardlet skill list / suggest / equip <preset> / unequip / research / create / apply / review` | Classify, equip, author, and score skills. |
+| `yardlet harness review` | Show auto-learned rules and skills with their eval scores. |
 | `yardlet routing review` | Per-kind worker success stats + suggested preferences. |
 | `yardlet routing apply --kind K --worker W` | Pin a worker for a task kind (human-approved). |
 
@@ -103,11 +120,11 @@ Set `language:` in `.agents/yardlet.yaml` to `ko`/`en`/etc. to force one.
 Workers run in a bounded sandbox by default (local files and tests, no network).
 This is layered:
 
-1. **Safe by default** — codex `workspace-write`, claude `acceptEdits`.
-2. **Report, don't bypass** — if a worker needs network, an install, production,
+1. **Safe by default**: codex `workspace-write`, claude `acceptEdits`.
+2. **Report, don't bypass**: if a worker needs network, an install, production,
    or a destructive action, it stops and asks via **NeedsUser** instead of
    failing silently. You grant access and resume.
-3. **Explicit escalation** — `yardlet run --next --execute --full-access` (or
+3. **Explicit escalation**: `yardlet run --next --execute --full-access` (or
    `yardlet answer --full-access`) drops the sandbox for that run only. Off by
    default; it is a human-granted permission, never automatic.
 
@@ -119,7 +136,7 @@ time the choice is deterministic: preferred worker → readiness check → fall 
 to the next ready worker. Every run logs its outcome to
 `.agents/telemetry/runs.jsonl`; `yardlet routing review` aggregates that and
 *suggests* profile changes (e.g. "claude-code wins refactors"), which you apply
-with `yardlet routing apply` — telemetry never changes routing on its own. Design:
+with `yardlet routing apply`. Telemetry never changes routing on its own. Design:
 [docs/routing-and-telemetry.md](docs/routing-and-telemetry.md).
 
 `run --next` prepares a run and stops *before* invoking a worker by default,
@@ -133,7 +150,7 @@ planning.
 ### Adding a worker
 
 Codex and Claude Code have built-in adapters. Any other subscription-backed
-CLI can be added in `.agents/workers.yaml` alone — give it an invocation
+CLI can be added in `.agents/workers.yaml` alone: give it an invocation
 template and Yardlet drives it through the same contract (packet on stdin →
 result files out). Placeholders: `{run_dir}`, `{model}`, `{effort}`,
 `{image}`.
@@ -158,24 +175,24 @@ back in with `pass_env`.
 
 The ecosystem's agents are Yardlet's supply side: terminal agents like
 [oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`), OpenCode, Gemini
-CLI, or an API-backed CLI of your own all fit the same template — register
+CLI, or an API-backed CLI of your own all fit the same template. Register
 the winners, swap them per task, keep the records.
 
 ## Role profiles
 
-Each task runs under a role — a prompt mode over the worker, derived from the
+Each task runs under a role, a prompt mode over the worker, derived from the
 task kind: `implementation` → **builder**, `review` → **reviewer**,
 `research` → **researcher**, `safety` → **security**. The same Codex/Claude
 session gets role-specific working rules (a reviewer cites file:line evidence
 and doesn't rewrite code; a researcher makes no code changes; security audits
 adversarially and never prints secret values). Extend a role per workspace by
-writing `.agents/agents/<role>.md` — it is appended to that role's packets.
+writing `.agents/agents/<role>.md`; it is appended to that role's packets.
 
 ## Parallel execution
 
 The planner marks which tasks genuinely depend on each other (`depends_on`);
 everything else is independent. With parallelism on, the auto-drain runs up to
-N independent tasks at once — each in its own git worktree on branch
+N independent tasks at once, each in its own git worktree on branch
 `yard/<task-id>`, possibly on different workers. Workers run in parallel, but
 queue state keeps a single writer and results merge back sequentially; a merge
 conflict is never auto-resolved (the task drops to Partial and its worktree is
@@ -183,7 +200,7 @@ kept for inspection). Off by default; opt in via Settings ("Parallel tasks"),
 `max_parallel` in `.agents/yardlet.yaml`, or `yardlet run --auto --parallel 3`.
 Requires a clean git tree, otherwise Yardlet falls back to sequential.
 
-Inside a task, workers are free to use their own subagents — Yardlet's queue
+Inside a task, workers are free to use their own subagents. Yardlet's queue
 parallelism is for work that must survive sessions, cross workers, or pass
 human gates. Design: [docs/parallel-queue.md](docs/parallel-queue.md).
 
