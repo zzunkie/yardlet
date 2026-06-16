@@ -1,6 +1,6 @@
 [package]
 name = "yardlet"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 rust-version = "1.82"
 description = "Yardlet: a local AI workbench. Plan, queue, route, validate, and hand off long-running work using your already-installed Codex and Claude Code CLIs as hidden workers."
@@ -12,6 +12,13 @@ categories = ["command-line-utilities", "development-tools"]
 [[bin]]
 name = "yardlet"
 path = "src/main.rs"
+
+# cargo-binstall: fetch the prebuilt binary attached to the GitHub release
+# (see .github/workflows/release.yml) instead of compiling from source.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/yardlet-{ target }.tar.gz"
+pkg-fmt = "tgz"
+bin-dir = "yardlet"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

@@ -1,17 +1,32 @@
 # Changelog
 
-## 0.5.2 — 2026-06-17
+## 0.5.3 - 2026-06-17
+
+### Added
+
+- **Prebuilt binaries + `cargo binstall` support.** A release workflow
+  (`.github/workflows/release.yml`) builds macOS (Intel and Apple Silicon) and
+  Linux x86_64 binaries on each version tag and attaches them to the GitHub
+  release, so users can grab a binary or run `cargo binstall yardlet` instead
+  of compiling.
+
+### Changed
+
+- Public-landing polish: README gains crates.io/CI/downloads/license badges
+  and an Install section, and its prose (plus this changelog) drops em-dashes.
+
+## 0.5.2 - 2026-06-17
 
 ### Fixed
 
 - **Pressing `p` during an auto-drain now shows feedback.** The running status
   line replaces the toast area while busy, so the graceful-pause toast was
-  invisible exactly when you'd press `p` — it looked like a no-op. The busy
+  invisible exactly when you'd press `p` - it looked like a no-op. The busy
   status line now reflects the pause flag directly: request a pause and it
-  switches to "pausing — will stop after the current task" (persistent, since
+  switches to "pausing - will stop after the current task" (persistent, since
   the flag is). Completes the 0.5.1 pause/stop fix.
 
-## 0.5.1 — 2026-06-17
+## 0.5.1 - 2026-06-17
 
 ### Changed
 
@@ -26,39 +41,39 @@
 
 - **Pause/stop now works from the Monitor screen, and the footer stops lying.**
   `p` (graceful pause) and a new `x` (stop the worker now) work on the Run
-  Monitor, not just Home — the monitor was a dead end for both. The Home footer
+  Monitor, not just Home - the monitor was a dead end for both. The Home footer
   no longer advertises `p pause` during a planning or single-task run (nothing
   to pause between tasks); it shows `Esc stop` instead, and pressing `p` there
   now says so explicitly rather than a vague "busy". Esc/`x` stop the worker
   immediately; `p` still only pauses an auto-drain (between tasks).
 
-## 0.5.0 — 2026-06-16
+## 0.5.0 - 2026-06-16
 
 ### Added
 
 - **Rule auto-learn + `yardlet harness review` (harness H4 completion).** The
   learning loop already auto-recorded worker-proposed *skills* (S3); now a
   run's `harness_suggestions` of kind `"rule"` are auto-recorded too, as
-  `.agents/rules/learned-<slug>.md` — an always-apply constraint H1 inlines
+  `.agents/rules/learned-<slug>.md` - an always-apply constraint H1 inlines
   into every packet (the worker proposes, Yardlet's deterministic core writes; no
   clobber; gated by `auto_rule`, default on). Because a rule is always-on it
   has no per-task attribution to score, so learned rules are kept until removed
   (git-reversible) rather than auto-pruned like skills. New `yardlet harness
   review` shows the learned rules and the learned skills with their eval
-  scores in one place. (Deterministic-observation candidate mining — failure
-  themes into candidates — remains the open part of H4.)
+  scores in one place. (Deterministic-observation candidate mining - failure
+  themes into candidates - remains the open part of H4.)
 
-- **Workspace hooks (harness H3) — deterministic guards that bind every
+- **Workspace hooks (harness H3) - deterministic guards that bind every
   worker.** Executables in `.agents/hooks/pre-run.d/*` run before a worker
   spawns; a non-zero exit **blocks the run** (the task fails with the hook's
-  reason, so the drain stops on it — fix the cause and re-run). Executables in
+  reason, so the drain stops on it - fix the cause and re-run). Executables in
   `post-run.d/*` run during evaluation; a non-zero exit is a **fatal check
   that blocks Done**, folded into the evaluation. Each hook runs in the repo
   root with `YARD_TASK_ID` / `YARD_RUN_DIR` / `YARD_WORKER`, a 30s timeout
   (longer is killed and fails), and stdout/stderr captured to
   `<run_dir>/hooks/<phase>/`. Only executable files run, in sorted filename
   order. Unlike a single CLI's hooks, these bind Codex, Claude Code, and any
-  generic-adapter worker alike. Yardlet ships no enabled hooks — `yardlet init`
+  generic-adapter worker alike. Yardlet ships no enabled hooks - `yardlet init`
   lays down empty `pre-run.d`/`post-run.d` and a documented `README.md`. Off
   with `hooks: false` in `yardlet.yaml`.
 
@@ -67,32 +82,32 @@
   "<topic>"` runs a researcher-role worker that drafts a candidate skill to a
   run dir and installs nothing; `yardlet skill apply <run-id>` installs that
   draft; `yardlet skill create <name> [--from "<topic>"]` authors and installs in
-  one step. The run is **queue-isolated** — like the planner it spawns one
+  one step. The run is **queue-isolated** - like the planner it spawns one
   worker, but derives no intent/queue, so authoring a skill never disturbs the
   live intent (the gap that deferred this). The worker proposes the content;
   Yardlet (the deterministic core) is the sole writer. Authored skills are tagged
   `source: created` (not `learned`), so they are user-chosen and never
-  auto-pruned — they persist like a library equip until `unequip`.
+  auto-pruned - they persist like a library equip until `unequip`.
 
 ### Fixed
 
 - **Recover a task wrongly stuck `Failed` by a dead orchestrator.** If Yardlet
   exited after a worker *finished* but before the result was evaluated, the
   task could end up `Failed` even though its run produced a clean `done`
-  result — and neither restart-recovery nor `yardlet recover` could salvage it
+  result - and neither restart-recovery nor `yardlet recover` could salvage it
   (recovery only looked at `Running` tasks), forcing a wasteful full re-run.
   Recovery now also re-evaluates such a task's stranded result, detected by an
-  **unfinalized orphan run** (`worker.pid` still on disk — a finalized run
-  removes it — with the process gone). It routes through the evaluator, so a
+  **unfinalized orphan run** (`worker.pid` still on disk - a finalized run
+  removes it - with the process gone). It routes through the evaluator, so a
   genuinely-bad result stays failed; only real, completed work is reclaimed.
   Surfaced by dogfooding sample-project, where a completed map task sat `Failed`.
 
-## 0.4.0 — 2026-06-16
+## 0.4.0 - 2026-06-16
 
 ### Added
 
-- **Shared harness injection (phase H1).** Every packet — execution and
-  planning, every worker — now carries the workspace harness: `.agents/rules/*.md`
+- **Shared harness injection (phase H1).** Every packet - execution and
+  planning, every worker - now carries the workspace harness: `.agents/rules/*.md`
   inlined (4 KB cap, overflow becomes read anchors) and a skill catalog from
   `.agents/skills/*/SKILL.md` frontmatter with Hermes-style progressive
   loading (catalog line → SKILL.md → deeper reference files). The planner can
@@ -104,7 +119,7 @@
   get them as shared harness the moment Yardlet runs: root `AGENTS.md` /
   `CLAUDE.md`, `.claude/skills/*`, `.cursor/rules/*.{md,mdc}`, and
   `.github/copilot-instructions.md` are discovered read-only and projected
-  into packets **worker-aware** — a worker that reads a source natively
+  into packets **worker-aware** - a worker that reads a source natively
   (claude: CLAUDE.md + .claude/skills; codex: AGENTS.md) never receives it
   twice. Symlinked duplicates (CLAUDE.md -> AGENTS.md) merge into one entry
   native to both. Opt out with `harness_discovery: false` in yardlet.yaml.
@@ -112,7 +127,7 @@
 - **Ambiguity gate + planner interview (A2).** The planner's own ambiguity
   self-report now has teeth: while it says "high", queue-selected runs and
   the auto-drain refuse to start and show the planner's open questions.
-  Press `a` to answer — each answer runs one interview turn (an in-place
+  Press `a` to answer - each answer runs one interview turn (an in-place
   re-plan that folds all clarifications in and re-scores ambiguity), up to
   10 turns; the gate opens when the score drops, the cap is reached, or you
   override (`--accept-ambiguity`, or `ambiguity_gate: false`). The status
@@ -122,7 +137,7 @@
   or a sizable one (3+ tasks) now always ends in a review-kind task that
   verifies the intent's acceptance criteria per criterion against the
   actual workspace. The planner is asked to include it; if it forgets,
-  Yardlet appends one deterministically (depends_on = every prior task) — the
+  Yardlet appends one deterministically (depends_on = every prior task) - the
   verifier is never the doer.
 
 - **Skill toolbox (S1): repo classification + auto-equip.** Point
@@ -130,62 +145,62 @@
   + `skills/<name>/SKILL.md`) and Yardlet classifies the repo from its file
   signals (`project.godot`→game, `package.json`→web-ui, Dockerfile→infra,
   …) and equips the matching presets' skills automatically on plan/goal
-  (`auto_equip`, on by default — I4: minimize intervention). `yardlet skill
+  (`auto_equip`, on by default - I4: minimize intervention). `yardlet skill
   list / suggest / equip <preset|name> / unequip` manage it by hand.
   Deterministic, no LLM; equip is a reversible symlink into `.agents/skills/`.
 
 - **Auto-learned skills (S3).** When a run's result proposes a reusable
   procedure (`harness_suggestions` of kind "skill"), Yardlet records it
   automatically as `.agents/skills/<slug>/SKILL.md` marked `source: learned`
-  — the worker authored the content, Yardlet (the deterministic core) does the
+  - the worker authored the content, Yardlet (the deterministic core) does the
   writing, no clobber of existing skills. On by default (`auto_skill`, I4:
   minimize intervention). This is the cycle-strengthening loop: every run
   can leave the harness sharper, and the eval score (next) prunes what
   doesn't earn its place.
 
-- **Skill score + auto-prune (S4) — the self-correction loop closes.** Each
+- **Skill score + auto-prune (S4) - the self-correction loop closes.** Each
   equipped skill is scored from telemetry by the runs that DECLARED it,
   preferring structured review-verdict pass-through over a plain Done rate
   (a skill injected often whose work keeps failing scores down, not up).
   `yardlet skill review` shows the table. Learned skills (`source: learned`)
   that score below the floor over enough runs are auto-pruned on plan
-  (unequipped, kept in git — reversible), `auto_prune` default on (I4).
+  (unequipped, kept in git - reversible), `auto_prune` default on (I4).
   Library skills you equipped are never auto-pruned. This makes auto-writing
-  safe: bad learned skills don't accumulate — the eval loop removes them.
+  safe: bad learned skills don't accumulate - the eval loop removes them.
 
 - **Structured review verdicts (eval upgrade).** Reviewer/safety tasks and
   `yardlet goal --verify` now emit `verdict: [{criterion_id, pass, evidence}]`
-  in result.json — a machine-readable per-criterion judgment instead of
+  in result.json - a machine-readable per-criterion judgment instead of
   trusting prose. The evaluator requires it for review tasks (no verdict, or
   a "done" claim with a failed criterion, blocks Done), and reviewers are
   instructed to report `needs_user` when a criterion fails so a real defect
   routes to you, not into a review retry loop. Verdict pass/total and the
-  task's declared skills are recorded in telemetry — the quality signal the
+  task's declared skills are recorded in telemetry - the quality signal the
   skill score (S4) reads. This is the gap that let sample-project pass
   as "web-UI quality": "good" is no longer the worker's self-report.
 
 - **Hot session chaining (P1).** During an auto-drain, a task whose
-  `depends_on` includes the task that just finished — on the same worker —
+  `depends_on` includes the task that just finished - on the same worker -
   now runs IN that worker's live session (`claude --resume` /
   `codex exec resume`) instead of cold-booting: the worker keeps everything
   it learned about the repo. The chain cuts on anything but a clean Done
   (failure/partial poisons the context), on a worker switch, on parallel
   fan-out, and after 3 consecutive tasks (context-rot cap). The packet says
-  so explicitly ("same session, next task — do not re-explore").
+  so explicitly ("same session, next task - do not re-explore").
 
 - **`yardlet goal` express lane (P2).** For small work, skip the planning
   worker entirely: `yardlet goal "fix the login redirect"` lays down a single
   deterministic task and drains it. Add `--verify "..."` and Yardlet appends a
   separate reviewer task (depends_on the work) that checks the condition
-  against the actual workspace with evidence — the verifier is never the
+  against the actual workspace with evidence - the verifier is never the
   doer, so for visual goals it picks up the ui-review / browser-evidence
   skills and must cite screenshots. No ambiguity gate (typing the goal is
   the acceptance). `--plan-only` queues without running.
 
 - **`i` opens the full intent.** The Home header now shows the goal as a
   single line with a `(+N)` chip for follow-ups; press `i` to read the whole
-  intent contract — goal, scope, out-of-scope, acceptance, and any interview
-  clarifications — in a scrollable view. The reclaimed header line goes to
+  intent contract - goal, scope, out-of-scope, acceptance, and any interview
+  clarifications - in a scrollable view. The reclaimed header line goes to
   the queue (header is now 5 lines, not 6).
 
 - **Loud upgrade prompt.** When a newer yardlet binary is installed while the
@@ -201,7 +216,7 @@
 
 - **Mid-run model/effort changes apply to the next task.** Settings can be
   edited while a worker runs (it already could); now saving confirms with a
-  toast that says the change lands on the next task — the in-flight worker
+  toast that says the change lands on the next task - the in-flight worker
   keeps the model it was spawned with, but `run_next` re-reads workers.yaml
   every task, so the switch takes effect without stopping the drain.
 
@@ -210,7 +225,7 @@
   Hangul at the right edge). The caret now simulates the renderer's
   wrapping, including explicit newlines on earlier lines.
 
-## v0.3.0 — 2026-06-12
+## v0.3.0 - 2026-06-12
 
 ### Added
 
@@ -222,7 +237,7 @@
   AGENTS.md reworded accordingly; a native API adapter is on the roadmap.
 
 - **Self-restart on upgrade.** yardlet notices when its own binary is replaced
-  (cargo install while running) — the status line announces the new build
+  (cargo install while running) - the status line announces the new build
   and `u` re-execs into it in place. No more silently-stale TUI sessions;
   `a` now also works on queued tasks (instructions ride into the run).
 
@@ -232,13 +247,13 @@
   auto-drain now continues self-reported partials automatically
   (attempts-capped) and halts only on merge-conflict partials (marked via a
   partial-reason file). The TUI `a` key now also answers Partial/Blocked
-  tasks — the reply becomes rerun instructions threaded into the
+  tasks - the reply becomes rerun instructions threaded into the
   continuation packet; the Answer screen shows what the previous run says is
   still missing.
 
 - **Worker management from the TUI.** The Home arrow keys now continue past
   the queue into the workers panel; Enter/Space toggles a worker on/off
-  (persisted as `enabled:` in workers.yaml — routing and planning skip a
+  (persisted as `enabled:` in workers.yaml - routing and planning skip a
   disabled worker).
 - **Model/effort presets sync from the CLIs.** codex models and reasoning
   efforts come from the CLI's own `~/.codex/models_cache.json` (the models
@@ -253,7 +268,7 @@
   "Adding a worker".
 
 - **Role profiles** (plan §13.4). Tasks run under a prompt-mode role derived
-  from their kind — builder / reviewer / researcher / security — with
+  from their kind - builder / reviewer / researcher / security - with
   role-specific working rules in the packet, replacing the old worker-keyed
   guidance. A workspace extends a role by writing `.agents/agents/<role>.md`
   (appended to that role's packets as "Workspace role notes").
@@ -282,10 +297,10 @@
   still-running planning worker from a previous session is reported instead
   of being silently duplicated; Esc now also stops an adopted worker; a dead
   background job thread fails the job instead of leaving the UI busy forever;
-  and integration only ever aborts its OWN in-progress merge — a merge the
+  and integration only ever aborts its OWN in-progress merge - a merge the
   user has in progress is reported and left untouched.
 
-## v0.2.0 — 2026-06-11
+## v0.2.0 - 2026-06-11
 
 ### Added
 
@@ -303,7 +318,7 @@
 - **Crash recovery for planning.** Plan runs record their mode + request up
   front and a consumed marker once derived; a restart (TUI startup, auto-drain,
   or the new `yardlet recover`) consumes a planning result the previous session
-  paid for but never read — including run dirs created by older versions.
+  paid for but never read - including run dirs created by older versions.
 - **`yardlet recover`.** One command to recover an interrupted session: unread
   plans, finished orphaned runs (worktree runs get merged back), and
   interrupted tasks requeued.
