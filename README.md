@@ -5,6 +5,8 @@
 [![downloads](https://img.shields.io/crates/d/yardlet.svg)](https://crates.io/crates/yardlet)
 [![license: MIT](https://img.shields.io/crates/l/yardlet.svg)](LICENSE)
 
+**English** | [한국어](README.ko.md)
+
 > **Rent the intelligence. Own the work.**
 > Yardlet is a local console for engineering the loop that turns a few sentences
 > of intent into verified, durable work, using your already-installed coding
