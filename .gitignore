@@ -13,7 +13,7 @@ Cargo.lock.orig
 /.agents/intents/
 /.agents/intent-contract.yaml
 
-# Personal / per-machine harness files (internal adapter convention)
+# Personal / per-machine harness files
 *.local
 .claude/settings.local.json
 .codex/settings.local.json
@@ -23,3 +23,6 @@ Cargo.lock.orig
 .DS_Store
 *.swp
 /.agents/worktrees/
+
+# internal planning doc (kept local, not public)
+docs/yardlet-final-plan.md

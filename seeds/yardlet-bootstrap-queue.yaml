@@ -9,7 +9,7 @@ selection_policy:
 
 tasks:
   - id: YARD-001
-    title: Create Yardlet product surface and remove user-facing Internal naming
+    title: Create Yardlet product surface and finalize user-facing naming
     state: queued
     priority: 10
     risk: low
@@ -17,7 +17,7 @@ tasks:
     preferred_worker: codex
     acceptance:
       - New files use Yardlet as product name.
-      - internal-system remains reference-only, not dependency.
+      - Yardlet is standalone; no external service or org membership is required.
       - .agents remains canonical repo state.
 
   - id: YARD-002

@@ -6,7 +6,7 @@
 > [absorption.md](absorption.md) (A1 already discovers a repo's existing
 > assets), [identity.md](identity.md).
 >
-> Source studied: internal-tool (`catalog/skills.tsv`, `presets/*.skills`,
+> Source studied: a presets-and-catalog library (`catalog/skills.tsv`, `presets/*.skills`,
 > 90 skills), Hermes (skills as progressively-loaded procedural memory,
 > agent-created via `skill_manage`).
 

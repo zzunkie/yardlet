@@ -107,7 +107,7 @@ self-reported from conflict so the drain knows which to auto-continue.
   timeout (longer = killed + failed) and captured stdout/stderr go to
   `<run_dir>/hooks/<phase>/`. `hooks: false` in yardlet.yaml turns them off.
 
-This gives internal-tool's `hooks/` a home where they bind *all* workers, not
+This gives the workspace's `hooks/` a home where they bind *all* workers, not
 just one CLI. Implementation: `src/hooks.rs`, wired into `src/run.rs`.
 
 ## Phase H4 — the learning loop (every cycle strengthens the harness) — implemented
@@ -160,8 +160,8 @@ opt-out for cautious workspaces (I4: minimize intervention, don't mandate it).
 
 ## Phase H5 (deferred) — central core & presets
 
-internal-tool's remaining role: one shared library wired into many repos
-(`init-tool`, presets, catalog.tsv). Yardlet equivalent would be
+the workspace's remaining role: one shared library wired into many repos
+(`init tooling`, presets, catalog.tsv). Yardlet equivalent would be
 `yardlet init --core <path>` symlinking shared rules/skills into `.agents/`.
 Deferred until H1–H4 prove the in-repo loop; a central core multiplies
 whatever the loop produces, including its mistakes.

@@ -16,7 +16,7 @@ A local terminal AI workbench (Rust + Ratatui). You describe work in a few sente
 
 **Identity** ([`docs/identity.md`](docs/identity.md)): *rent the intelligence, own the work.* The core stays deterministic; everything generative sits behind the worker contract; prompts are compiled from user-owned state, never hand-written; the records/rules/skills/telemetry in `.agents/` are compounding user capital.
 
-Full spec: [`docs/yardlet-final-plan.md`](docs/yardlet-final-plan.md). Routing/telemetry design: [`docs/routing-and-telemetry.md`](docs/routing-and-telemetry.md). Parallel queue / queue-vs-subagent boundary: [`docs/parallel-queue.md`](docs/parallel-queue.md). Shared harness & learning loop: [`docs/harness.md`](docs/harness.md). Skill lifecycle (classify/research/create/manage): [`docs/skills.md`](docs/skills.md). Absorption plan: [`docs/absorption.md`](docs/absorption.md). Identity: [`docs/identity.md`](docs/identity.md).
+Routing/telemetry design: [`docs/routing-and-telemetry.md`](docs/routing-and-telemetry.md). Parallel queue / queue-vs-subagent boundary: [`docs/parallel-queue.md`](docs/parallel-queue.md). Shared harness & learning loop: [`docs/harness.md`](docs/harness.md). Skill lifecycle (classify/research/create/manage): [`docs/skills.md`](docs/skills.md). Absorption plan: [`docs/absorption.md`](docs/absorption.md). Identity: [`docs/identity.md`](docs/identity.md).
 
 ## Tech Stack
 

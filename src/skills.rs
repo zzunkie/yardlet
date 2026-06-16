@@ -51,7 +51,7 @@ fn expand_home(p: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
-/// A read-only skill library in internal-tool layout: `presets/<name>.skills`
+/// A read-only skill library in presets/skills layout: `presets/<name>.skills`
 /// (whitespace-separated skill names) and `skills/<name>/SKILL.md`.
 pub struct Library {
     root: PathBuf,

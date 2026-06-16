@@ -5,7 +5,7 @@
 >
 > Sources studied: oh-my-pi (can1357), oh-my-openagent / oh-my-claudecode
 > (code-yeongyu, Yeachan-Heo), internal-system (Q00), Hermes (NousResearch),
-> internal-tool (internal predecessor).
+> a presets-and-catalog library.
 
 ## Identity invariants (what absorption may NOT bend)
 

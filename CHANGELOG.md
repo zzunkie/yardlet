@@ -100,7 +100,7 @@
   **unfinalized orphan run** (`worker.pid` still on disk - a finalized run
   removes it - with the process gone). It routes through the evaluator, so a
   genuinely-bad result stays failed; only real, completed work is reclaimed.
-  Surfaced by dogfooding sample-project, where a completed map task sat `Failed`.
+  Surfaced by dogfooding a real project, where a completed map task sat `Failed`.
 
 ## 0.4.0 - 2026-06-16
 
@@ -141,7 +141,7 @@
   verifier is never the doer.
 
 - **Skill toolbox (S1): repo classification + auto-equip.** Point
-  `skill_library` at a local library (internal-tool layout: `presets/*.skills`
+  `skill_library` at a local library (presets/skills layout: `presets/*.skills`
   + `skills/<name>/SKILL.md`) and Yardlet classifies the repo from its file
   signals (`project.godot`→game, `package.json`→web-ui, Dockerfile→infra,
   …) and equips the matching presets' skills automatically on plan/goal
@@ -176,7 +176,7 @@
   instructed to report `needs_user` when a criterion fails so a real defect
   routes to you, not into a review retry loop. Verdict pass/total and the
   task's declared skills are recorded in telemetry - the quality signal the
-  skill score (S4) reads. This is the gap that let sample-project pass
+  skill score (S4) reads. This is the gap that let a dogfooded project pass
   as "web-UI quality": "good" is no longer the worker's self-report.
 
 - **Hot session chaining (P1).** During an auto-drain, a task whose
