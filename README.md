@@ -218,7 +218,7 @@ Yardlet owns state; workers do not. Canonical state lives under `.agents/` in th
   handoffs/               teammate-readable summaries
 ```
 
-User-level, non-secret config lives under `~/.yard/`.
+User-level, non-secret config lives under `~/.yardlet/`.
 
 ## License
 
