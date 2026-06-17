@@ -32,7 +32,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-13, target: x86_64-apple-darwin }
+          # Both darwin targets build on the macos-14 (Apple Silicon) runner:
+          # x86_64 is cross-compiled from arm64, avoiding the retired/queue-stuck
+          # macos-13 Intel runner that dropped the x86_64 binary from v0.5.4.
+          - { os: macos-14, target: x86_64-apple-darwin }
           - { os: macos-14, target: aarch64-apple-darwin }
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
     steps:

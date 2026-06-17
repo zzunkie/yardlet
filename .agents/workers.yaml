@@ -6,7 +6,7 @@ workers:
     # best_for is the planner's rubric: task characteristics, not model names,
     # so it survives model changes. Refine it by hand (or via `yard routing
     # review` suggestions) as the workers' relative strengths shift.
-    best_for: "tight scoped edits, boilerplate, mechanical transforms, fast iteration, test-driven bugfix"
+    best_for: "tight scoped edits, boilerplate, mechanical transforms, fast iteration, test-driven bugfix, image and asset generation"
     cost_weight: low
     # Optional. Empty = the CLI's own default. codex: `-m <model>` +
     # `-c model_reasoning_effort=<minimal|low|medium|high>`.

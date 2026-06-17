@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.5 - 2026-06-17
+
+### Fixed
+
+- **Restored the macOS Intel (`x86_64-apple-darwin`) prebuilt binary.** The
+  release workflow's Intel job ran on the `macos-13` runner, which stuck in
+  `queued` and never produced a binary, so v0.5.4 shipped only Apple Silicon and
+  Linux binaries and `cargo binstall yardlet` fell back to a source build on
+  Intel Macs. Both darwin targets now cross-compile on the `macos-14` (Apple
+  Silicon) runner.
+
+### Changed
+
+- Planner rubric: `codex` `best_for` now also covers image and asset
+  generation, so those tasks route to codex without naming a worker.
+
 ## 0.5.4 - 2026-06-17
 
 ### Changed
