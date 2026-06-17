@@ -11,6 +11,11 @@
   Intel Macs. Both darwin targets now cross-compile on the `macos-14` (Apple
   Silicon) runner.
 
+### Added
+
+- README documents the terminal UI keyboard shortcuts, and the repo now ships a
+  CONTRIBUTING guide.
+
 ### Changed
 
 - Planner rubric: `codex` `best_for` now also covers image and asset

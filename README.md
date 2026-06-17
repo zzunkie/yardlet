@@ -81,6 +81,36 @@ with explicit dependencies; each task runs through a hidden worker, is checked
 by a deterministic evaluator, and leaves a checkpoint and handoff under
 `.agents/runs/`.
 
+## Terminal UI shortcuts
+
+The terminal UI (`yardlet` with no subcommand) is the main way to drive a
+session. From the Home screen:
+
+| Key | Action |
+| --- | --- |
+| `n` | New work: describe a request (when idle). |
+| `r` | Run the next task. |
+| `A` | Auto-drain the queue. |
+| `p` | Approve the next task; while a drain runs, request a graceful pause. |
+| `a` | Answer a task waiting on you (NeedsUser). |
+| `Esc` | Stop the running worker. |
+| `↑` / `↓` | Browse the queue, then the workers panel past its end. |
+| `Enter` | Open the selected task's handoff. |
+| `Space` / `Enter` | Toggle the selected worker on/off (in the workers panel). |
+| `i` | View the intent contract. |
+| `h` | View the latest handoff. |
+| `R` | Reports and history browser. |
+| `m` | Monitor the worker's live output. |
+| `s` | Settings (can be opened mid-run). |
+| `g` | Refresh, re-probing worker readiness. |
+| `l` | Toggle language. |
+| `f` | Toggle access level (sandboxed / full). |
+| `u` | Restart into a freshly installed update (when available). |
+| `q` / `Ctrl+C` | Quit. |
+
+Korean keyboard layouts work without switching back to English: the Hangul jamo
+are mapped to the same shortcuts.
+
 ## Commands
 
 | Command | Purpose |
