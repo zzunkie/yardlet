@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.6 - 2026-06-17
+
+### Changed
+
+- **Sharper worker routing.** Each worker's planner rubric is now contrastive and
+  carries an explicit `not_for` (avoid-for) signal next to `best_for`, and the
+  planning prompt shows each worker as one neutral "best for X. Avoid for Y."
+  line. This fixes a class of mis-routing where a surface word (e.g. "refactor"
+  on a single-file cleanup) pulled cheap, scoped work onto the more expensive
+  worker. Grounded in routing-rubric research plus an A/B routing eval: no
+  regression on clear tasks, better calls on ambiguous ones.
+
 ## 0.5.5 - 2026-06-17
 
 ### Fixed

@@ -355,6 +355,10 @@ pub struct WorkerProfile {
     /// Task characteristics this worker is good at (planner rubric; policy).
     #[serde(default)]
     pub best_for: String,
+    /// Task characteristics to steer AWAY from this worker (negative planner
+    /// rubric; policy). Best when contrastive with other workers' `best_for`.
+    #[serde(default)]
+    pub not_for: String,
     /// Relative subscription cost pressure: low | high (planner rubric).
     #[serde(default)]
     pub cost_weight: String,

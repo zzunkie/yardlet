@@ -3,10 +3,12 @@ schema_version: 1
 workers:
   - id: codex
     kind: cli_worker
-    # best_for is the planner's rubric: task characteristics, not model names,
-    # so it survives model changes. Refine it by hand (or via `yard routing
-    # review` suggestions) as the workers' relative strengths shift.
-    best_for: "tight scoped edits, boilerplate, mechanical transforms, fast iteration, test-driven bugfix, image and asset generation"
+    # best_for / not_for are the planner's rubric: task characteristics, not
+    # model names, so they survive model changes. Keep them contrastive between
+    # workers (one worker's not_for is roughly the other's best_for) so the
+    # planner can tell them apart. Refine by hand or via `yardlet routing review`.
+    best_for: "single-file and tightly-scoped edits, boilerplate, mechanical transforms, test-driven bugfixes, image and asset generation, fast iteration when the spec is already clear"
+    not_for: "ambiguous or underspecified goals, cross-cutting architecture decisions, broad multi-file exploration"
     cost_weight: low
     # Optional. Empty = the CLI's own default. codex: `-m <model>` +
     # `-c model_reasoning_effort=<minimal|low|medium|high>`.
@@ -29,7 +31,8 @@ workers:
 
   - id: claude-code
     kind: cli_worker
-    best_for: "multi-file refactor, architecture and spec reasoning, broad exploration, careful diff editing, review and handoff"
+    best_for: "multi-file and cross-cutting refactors, architecture and spec reasoning, ambiguity reduction and acceptance-criteria design, broad codebase exploration, review and handoff"
+    not_for: "tightly-scoped mechanical edits with an already-clear spec, simple boilerplate, cheap fast iteration"
     cost_weight: high
     # Optional. Empty = the CLI's own default. claude: `--model <alias|id>` +
     # `--effort <level>`.

@@ -1005,6 +1005,9 @@ fn ensure_review_task(tasks: &mut Vec<Task>) {
 }
 
 /// Build the planner's worker-selection rubric from the editable profiles.
+/// One neutral, parallel line per worker: a positive signal (best for) and,
+/// when set, a negative one (avoid for). Contrastive boundaries and explicit
+/// negatives help the planner discriminate better than long positive lists.
 fn build_worker_guidance(workers: &WorkersFile) -> String {
     let mut g = format!("Cost bias: {}.\n", workers.routing.cost_bias);
     for w in &workers.workers {
@@ -1016,7 +1019,11 @@ fn build_worker_guidance(workers: &WorkersFile) -> String {
         } else {
             &w.cost_weight
         };
-        g.push_str(&format!("- {}: {} (cost: {})\n", w.id, w.best_for, cost));
+        g.push_str(&format!("- {} (cost: {}): best for {}.", w.id, cost, w.best_for));
+        if !w.not_for.is_empty() {
+            g.push_str(&format!(" Avoid for {}.", w.not_for));
+        }
+        g.push('\n');
     }
     g
 }
@@ -1068,6 +1075,38 @@ pub(crate) fn pick_ready_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_guidance_has_contrastive_positive_and_negative_lines() {
+        let yaml = r#"
+schema_version: 1
+workers:
+  - id: codex
+    best_for: scoped edits
+    not_for: ambiguous specs
+    cost_weight: low
+    invocation: { command: codex }
+  - id: claude-code
+    best_for: refactors
+    cost_weight: high
+    invocation: { command: claude }
+  - id: blankworker
+    cost_weight: low
+    invocation: { command: blankworker }
+routing:
+  cost_bias: balanced
+"#;
+        let wf: WorkersFile = serde_yaml_ng::from_str(yaml).expect("workers yaml parses");
+        let g = build_worker_guidance(&wf);
+        assert!(g.contains("Cost bias: balanced."));
+        // Positive + negative signal on one neutral line.
+        assert!(g.contains("- codex (cost: low): best for scoped edits. Avoid for ambiguous specs.\n"));
+        // No not_for -> no "Avoid for" appended.
+        assert!(g.contains("- claude-code (cost: high): best for refactors.\n"));
+        assert!(!g.contains("best for refactors. Avoid"));
+        // Empty best_for -> worker skipped entirely.
+        assert!(!g.contains("blankworker"));
+    }
 
     // Regression: a worker emitted `questions_for_user` as objects
     // ({id, question, topic}) mirroring the `acceptance` hint, which used to
