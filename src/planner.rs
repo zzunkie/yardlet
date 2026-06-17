@@ -1019,7 +1019,10 @@ fn build_worker_guidance(workers: &WorkersFile) -> String {
         } else {
             &w.cost_weight
         };
-        g.push_str(&format!("- {} (cost: {}): best for {}.", w.id, cost, w.best_for));
+        g.push_str(&format!(
+            "- {} (cost: {}): best for {}.",
+            w.id, cost, w.best_for
+        ));
         if !w.not_for.is_empty() {
             g.push_str(&format!(" Avoid for {}.", w.not_for));
         }
@@ -1100,7 +1103,9 @@ routing:
         let g = build_worker_guidance(&wf);
         assert!(g.contains("Cost bias: balanced."));
         // Positive + negative signal on one neutral line.
-        assert!(g.contains("- codex (cost: low): best for scoped edits. Avoid for ambiguous specs.\n"));
+        assert!(
+            g.contains("- codex (cost: low): best for scoped edits. Avoid for ambiguous specs.\n")
+        );
         // No not_for -> no "Avoid for" appended.
         assert!(g.contains("- claude-code (cost: high): best for refactors.\n"));
         assert!(!g.contains("best for refactors. Avoid"));
