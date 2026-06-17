@@ -61,6 +61,20 @@ them. Any other agent CLI can be added in config alone (see
 "Adding a worker"), including API-backed tools via a per-worker
 `invocation.pass_env` opt-in.
 
+Because the worker runs in your project, your existing setup keeps working inside
+each task: your `CLAUDE.md`, skills, hooks, MCP servers, and subagents all still
+apply. Yardlet layers orchestration and verification on top rather than replacing
+your harness. It does not try to be clever at the LLM layer; it runs the
+harnesses that are already good there as interchangeable workers and spends its
+own effort on the parts you can solve deterministically: routing, evaluation,
+state, merges, recovery, handoffs.
+
+It is built to run within the subscriptions you already pay for, not to rack up
+per-token API costs. Billing keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and the
+like) are scrubbed from the worker environment before spawn, so an unattended
+auto-drain cannot silently bill against an API key instead of your subscription;
+a worker opts a specific var back in only via `pass_env`.
+
 ## The loop
 
 ```bash
@@ -250,6 +264,10 @@ cargo build
 cargo test
 cargo run -- init
 ```
+
+Contributing: see [CONTRIBUTING.md](CONTRIBUTING.md) for build/test, the core
+invariants, and the PR process. Adding another worker is config-only (see
+"Adding a worker"); PRs to wire up new workers are welcome.
 
 ## Canonical state
 
