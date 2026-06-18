@@ -7,17 +7,27 @@ workers:
     # model names, so they survive model changes. Keep them contrastive between
     # workers (one worker's not_for is roughly the other's best_for) so the
     # planner can tell them apart. Refine by hand or via `yardlet routing review`.
-    best_for: "single-file and tightly-scoped edits, boilerplate, mechanical transforms, test-driven bugfixes, image and asset generation, fast iteration when the spec is already clear"
-    not_for: "ambiguous or underspecified goals, cross-cutting architecture decisions, broad multi-file exploration"
+    best_for: >-
+      image and asset generation; issue-to-patch implementation; test-driven
+      bugfixes; shell-heavy build/test/debug loops; screenshot/mockup-to-code UI
+      implementation; visual UI bugfixes with concrete evidence; mechanical
+      transforms, boilerplate, schema/format constrained output, and routine
+      document/spreadsheet/code edits when acceptance criteria are clear
+    not_for: >-
+      underspecified product strategy, high-stakes domain judgment, long-form
+      narrative synthesis, broad architecture decisions without a concrete
+      implementation target, or policy-bound conversation design
     cost_weight: low
     # Optional. Empty = the CLI's own default. codex: `-m <model>` +
     # `-c model_reasoning_effort=<minimal|low|medium|high>`.
     model: ""
     effort: ""
     role_strengths:
+      - image_asset_generation
       - focused_implementation
       - test_driven_bugfix
       - shell_heavy_repo_changes
+      - visual_ui_implementation
       - local_code_review
     billing:
       mode: subscription_backed_only
@@ -31,8 +41,17 @@ workers:
 
   - id: claude-code
     kind: cli_worker
-    best_for: "multi-file and cross-cutting refactors, architecture and spec reasoning, ambiguity reduction and acceptance-criteria design, broad codebase exploration, review and handoff"
-    not_for: "tightly-scoped mechanical edits with an already-clear spec, simple boilerplate, cheap fast iteration"
+    best_for: >-
+      ambiguity reduction and acceptance-criteria design; product strategy,
+      PRDs, roadmap and decision briefs; faithful long-document briefing,
+      evidence synthesis, and style-sensitive writing/editing; broad codebase
+      exploration; architecture and cross-cutting refactor planning; safety,
+      legal, finance, healthcare, HR, customer-support, tutoring, and other
+      policy-bound reasoning where tradeoffs and source-grounding matter
+    not_for: >-
+      native image or asset generation, tightly-scoped mechanical edits with an
+      already-clear spec, simple boilerplate, shell-heavy tasks with clear
+      commands/tests, or cheap fast iteration
     cost_weight: high
     # Optional. Empty = the CLI's own default. claude: `--model <alias|id>` +
     # `--effort <level>`.
@@ -42,6 +61,10 @@ workers:
       - planning_gate
       - ambiguity_reduction
       - acceptance_criteria
+      - research_synthesis
+      - long_form_writing
+      - policy_bound_reasoning
+      - architecture_reasoning
       - review
       - handoff_quality
     billing:

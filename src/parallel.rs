@@ -122,20 +122,14 @@ pub fn run_batch<F: FnMut(&str)>(
     let mut preps: Vec<Prep> = Vec::new();
     for &idx in indices {
         let task = queue.tasks[idx].clone();
-        let resolved = match routing::resolve_worker(
-            ws,
-            &workers_file,
-            &billing,
-            None,
-            &task.preferred_worker,
-            &task.kind,
-        ) {
-            Ok(r) => r,
-            Err(e) => {
-                on_event(&format!("{}: no ready worker ({e}); skipped", task.id));
-                continue;
-            }
-        };
+        let resolved =
+            match routing::resolve_worker_for_task(ws, &workers_file, &billing, None, &task) {
+                Ok(r) => r,
+                Err(e) => {
+                    on_event(&format!("{}: no ready worker ({e}); skipped", task.id));
+                    continue;
+                }
+            };
         let profile = match run::find_worker(&workers_file.workers, &resolved.worker_id) {
             Ok(p) => p.clone(),
             Err(e) => {

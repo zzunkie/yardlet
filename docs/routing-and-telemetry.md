@@ -31,7 +31,11 @@ readiness fallback.
 4. **Express guidance in model-independent terms.** Route on task
    characteristics + a cost dial, never on "Claude > Codex" constants, so the
    rubric survives model changes.
-5. **Telemetry never binds at run-time.** Run-time stays deterministic and
+5. **Hard capability rules beat rubric preferences.** If one worker has a
+   concrete capability the other lacks, make that a deterministic mechanism,
+   not a planner preference. Current rule: image/asset generation routes to
+   Codex; if Codex is not ready, do not fall back to Claude Code.
+6. **Telemetry never binds at run-time.** Run-time stays deterministic and
    auditable. Telemetry only produces *suggestions* to update the policy, which
    a human approves.
 
@@ -55,11 +59,11 @@ Extend `.agents/workers.yaml` (the worker SOT). New, human-editable fields:
 workers:
   - id: codex
     # ...existing invocation/limits...
-    best_for: "tight scoped edits, boilerplate, mechanical transforms, fast iteration, test-driven bugfix"
+    best_for: "image/asset generation, issue-to-patch implementation, test-driven bugfixes, shell-heavy build/test/debug loops, visual UI implementation, mechanical transforms, schema/format constrained output"
     cost_weight: low
   - id: claude-code
     # ...existing...
-    best_for: "multi-file refactor, architecture/spec reasoning, broad exploration, careful diff editing, review and handoff"
+    best_for: "ambiguity reduction, acceptance criteria, PRDs/strategy briefs, evidence synthesis, long-form writing/editing, broad exploration, architecture planning, policy-bound reasoning"
     cost_weight: high
 
 routing:
@@ -93,8 +97,9 @@ everything" bug: the judge now has a rubric and its choice is explainable.
 
 ```
 resolve_worker(task, routing) -> (worker_id, reason):
-  candidate = run_override ?? task.preferred_worker ?? routing.default_worker
+  candidate = run_override ?? hard_capability_rule ?? task.preferred_worker ?? routing.default_worker
   if probe(candidate).ready:        return (candidate, "preferred")
+  if hard_capability_rule:          error "required worker not ready"
   for w in routing.fallback_order:
       if w != candidate and probe(w).ready:
           return (w, "fallback: {candidate} not ready")
@@ -176,9 +181,9 @@ profile (seeded)
 
 ## Policy vs mechanism (explicit)
 
-- **Mechanism (code):** readiness probe, fallback walk, telemetry collection,
-  aggregation + thresholds, suggestion computation, version-change detection,
-  the worker execution gate.
+- **Mechanism (code):** readiness probe, hard capability rules, fallback walk,
+  telemetry collection, aggregation + thresholds, suggestion computation,
+  version-change detection, the worker execution gate.
 - **Policy (editable config / human):** `best_for`, `cost_bias`,
   `default_worker`, `fallback_order`, the thresholds, and the planner's per-task
   choice derived from the rubric. Applying a suggestion is a human-gated policy
