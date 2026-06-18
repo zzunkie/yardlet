@@ -20,7 +20,7 @@ use crate::guard::{self, Readiness};
 use crate::schemas::{BillingPolicy, Task, WorkersFile};
 use crate::state::Workspace;
 
-/// Machine-managed learned overrides (written by `yard routing apply`), kept in
+/// Machine-managed learned overrides (written by `yardlet routing apply`), kept in
 /// a separate file so the human-owned `workers.yaml` keeps its comments.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RoutingOverrides {
@@ -106,7 +106,7 @@ fn resolve_candidate(
         }
     }
     Err(anyhow!(
-        "no ready worker among {tried:?}. Run `yard worker status` to diagnose. \
+        "no ready worker among {tried:?}. Run `yardlet worker status` to diagnose. \
          Yardlet did not call an AI API and did not ask for an API key."
     ))
 }

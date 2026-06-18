@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::schemas::{Changes, RunResult, Task, TaskState};
+use crate::schemas::{RunResult, Task, TaskState};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Check {
@@ -55,7 +55,12 @@ pub fn fatal_failure(name: &str, note: impl Into<String>) -> Check {
     check(name, false, note)
 }
 
-pub fn evaluate(run_dir: &Path, run_id: &str, task: &Task) -> Evaluation {
+pub fn evaluate(
+    run_dir: &Path,
+    run_id: &str,
+    task: &Task,
+    actual_changes: Option<&[String]>,
+) -> Evaluation {
     let mut checks = Vec::new();
 
     let result_path = run_dir.join("result.json");
@@ -96,7 +101,19 @@ pub fn evaluate(run_dir: &Path, run_id: &str, task: &Task) -> Evaluation {
                 "worker reported no scope drift".to_string()
             },
         ));
-        let forbidden = forbidden_paths_in(&r.changes);
+        // Forbidden-path runs on the ACTUAL on-disk diff when Yardlet could
+        // collect it (the worker's self-reported file list is not trusted); it
+        // falls back to the reported changes only when git evidence is absent.
+        let reported: Vec<String> = r
+            .changes
+            .files_modified
+            .iter()
+            .chain(&r.changes.files_created)
+            .chain(&r.changes.files_deleted)
+            .cloned()
+            .collect();
+        let basis: &[String] = actual_changes.unwrap_or(&reported);
+        let forbidden = forbidden_in(basis.iter());
         checks.push(check(
             "forbidden_paths_untouched",
             forbidden.is_empty(),
@@ -106,6 +123,28 @@ pub fn evaluate(run_dir: &Path, run_id: &str, task: &Task) -> Evaluation {
                 format!("changed forbidden path(s): {}", forbidden.join(", "))
             },
         ));
+        // With the real diff in hand, flag files the worker changed but did not
+        // disclose (advisory: surfaces incomplete/dishonest self-reports without
+        // blocking an otherwise-clean run).
+        if let Some(actual) = actual_changes {
+            let norm = |p: &str| p.trim_start_matches("./").to_string();
+            let reported_norm: std::collections::HashSet<String> =
+                reported.iter().map(|p| norm(p)).collect();
+            let undisclosed: Vec<String> = actual
+                .iter()
+                .map(|p| norm(p))
+                .filter(|p| !reported_norm.contains(p))
+                .collect();
+            checks.push(advisory(
+                "diff_matches_report",
+                undisclosed.is_empty(),
+                if undisclosed.is_empty() {
+                    "worker-reported changes match the actual diff".to_string()
+                } else {
+                    format!("changed but not reported: {}", undisclosed.join(", "))
+                },
+            ));
+        }
         checks.push(advisory(
             "validation_ran",
             !r.validation.commands_run.is_empty(),
@@ -171,9 +210,9 @@ pub fn evaluate(run_dir: &Path, run_id: &str, task: &Task) -> Evaluation {
     }
 }
 
-/// Changed paths that are sensitive (secrets/keys) or escape the workspace.
-/// A worker touching these fails the run regardless of its self-report.
-fn forbidden_paths_in(changes: &Changes) -> Vec<String> {
+/// Paths that are sensitive (secrets/keys) or escape the workspace. A worker
+/// touching these fails the run regardless of its self-report.
+fn forbidden_in<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
     const SENSITIVE: &[&str] = &[
         ".env",
         ".ssh",
@@ -184,12 +223,7 @@ fn forbidden_paths_in(changes: &Changes) -> Vec<String> {
         ".p12",
     ];
     let mut bad = Vec::new();
-    let all = changes
-        .files_modified
-        .iter()
-        .chain(&changes.files_created)
-        .chain(&changes.files_deleted);
-    for f in all {
+    for f in paths {
         let lower = f.to_lowercase();
         let escapes = f.starts_with('/') || f.contains("..");
         let sensitive = SENSITIVE.iter().any(|p| lower.contains(p));
@@ -198,6 +232,37 @@ fn forbidden_paths_in(changes: &Changes) -> Vec<String> {
         }
     }
     bad
+}
+
+/// Paths git reports as changed or untracked in `cwd`: the actual on-disk
+/// evidence of what a run touched, independent of what the worker claims. Empty
+/// when git is unavailable or `cwd` is not a repository (the evaluator then
+/// falls back to the worker's self-report).
+pub fn changed_paths(cwd: &Path) -> Vec<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["status", "--porcelain=v1", "--untracked-files=all"])
+        .output();
+    let Ok(out) = out else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        // "XY <path>", or a rename "XY old -> new"; the new path is on disk.
+        let rest = line[3..].trim();
+        let path = rest.rsplit(" -> ").next().unwrap_or(rest).trim_matches('"');
+        if !path.is_empty() {
+            paths.push(path.to_string());
+        }
+    }
+    paths
 }
 
 fn decide_state(reported: &str, all_passed: bool, result: Option<&RunResult>) -> TaskState {
@@ -223,6 +288,7 @@ fn decide_state(reported: &str, all_passed: bool, result: Option<&RunResult>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schemas::Changes;
 
     fn dummy_result() -> RunResult {
         RunResult {
@@ -269,7 +335,14 @@ mod tests {
             files_created: vec![".env".into()],
             files_deleted: vec!["/etc/hosts".into()],
         };
-        let bad = forbidden_paths_in(&c);
+        let all: Vec<String> = c
+            .files_modified
+            .iter()
+            .chain(&c.files_created)
+            .chain(&c.files_deleted)
+            .cloned()
+            .collect();
+        let bad = forbidden_in(all.iter());
         assert!(bad.contains(&"../outside.txt".to_string()));
         assert!(bad.contains(&".env".to_string()));
         assert!(bad.contains(&"/etc/hosts".to_string()));
@@ -311,9 +384,58 @@ mod tests {
             worker_rationale: None,
         };
         t.kind = kind.into();
-        let e = evaluate(&dir, "run-x", &t);
+        let e = evaluate(&dir, "run-x", &t, None);
         let _ = std::fs::remove_dir_all(&dir);
         e
+    }
+
+    #[test]
+    fn forbidden_path_uses_actual_diff_over_worker_report() {
+        let dir = std::env::temp_dir().join(format!("yard-eval-diff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("handoff.md"), "h").unwrap();
+        let mut r = dummy_result();
+        r.run_id = "run-x".into();
+        r.task_id = "YARD-9".into();
+        r.status = "done".into();
+        // Worker claims it only touched a safe file.
+        r.changes.files_modified = vec!["src/main.rs".into()];
+        std::fs::write(dir.join("result.json"), serde_json::to_string(&r).unwrap()).unwrap();
+        let t = crate::schemas::Task {
+            id: "YARD-9".into(),
+            title: "t".into(),
+            state: TaskState::Running,
+            priority: 0,
+            risk: String::new(),
+            kind: "implementation".into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec![],
+            skills: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+        };
+        // The real on-disk diff shows it actually wrote .env.
+        let actual = vec!["src/main.rs".to_string(), ".env".to_string()];
+        let e = evaluate(&dir, "run-x", &t, Some(&actual));
+        let fb = e
+            .checks
+            .iter()
+            .find(|c| c.name == "forbidden_paths_untouched")
+            .unwrap();
+        assert!(
+            !fb.passed,
+            ".env in the actual diff must fail the forbidden check"
+        );
+        // Claimed done, but a fatal check failed on real evidence -> not trusted.
+        assert_eq!(e.next_task_state, TaskState::Failed);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -401,7 +523,7 @@ mod tests {
             worker_rationale: None,
         };
 
-        let eval = evaluate(&dir, "run-x", &t);
+        let eval = evaluate(&dir, "run-x", &t, None);
         assert_eq!(eval.next_task_state, TaskState::Done);
         let v = eval
             .checks

@@ -1,4 +1,4 @@
-//! Explicit skill authoring (docs/skills.md S2/S3): `yard skill research`,
+//! Explicit skill authoring (docs/skills.md S2/S3): `yardlet skill research`,
 //! `create`, and `apply`. A researcher-role worker drafts a candidate SKILL.md
 //! into an ISOLATED run dir; Yardlet (the deterministic core) is the sole writer
 //! that installs it. This path never touches the live `intent-contract.yaml` /
@@ -110,8 +110,8 @@ fn draft(
     Ok((run_id, run_dir_rel, worker_id, result))
 }
 
-/// `yard skill research "<topic>"` — draft a candidate SKILL.md into the run
-/// dir and install NOTHING. The user inspects it and runs `yard skill apply
+/// `yardlet skill research "<topic>"` — draft a candidate SKILL.md into the run
+/// dir and install NOTHING. The user inspects it and runs `yardlet skill apply
 /// <run-id>` to install.
 pub fn research(ws: &Workspace, topic: &str) -> Result<SkillReport> {
     let (run_id, run_dir_rel, worker_id, r) = draft(ws, "research", topic)?;
@@ -135,7 +135,7 @@ pub fn research(ws: &Workspace, topic: &str) -> Result<SkillReport> {
     let mut lines = vec![
         format!("drafted by {worker_id} \u{2014} nothing installed yet"),
         format!("draft: {run_dir_rel}/SKILL.md"),
-        format!("install with: yard skill apply {run_id}"),
+        format!("install with: yardlet skill apply {run_id}"),
     ];
     if !r.rationale.trim().is_empty() {
         lines.push(format!("rationale: {}", r.rationale.trim()));
@@ -147,7 +147,7 @@ pub fn research(ws: &Workspace, topic: &str) -> Result<SkillReport> {
     })
 }
 
-/// `yard skill create <name> [--from "<topic>"]` — author and INSTALL a skill.
+/// `yardlet skill create <name> [--from "<topic>"]` — author and INSTALL a skill.
 /// The user-given `name` wins (predictable); `from` adds context for the worker.
 pub fn create(ws: &Workspace, name: &str, from: Option<&str>) -> Result<SkillReport> {
     let subject = match from {
@@ -158,14 +158,14 @@ pub fn create(ws: &Workspace, name: &str, from: Option<&str>) -> Result<SkillRep
     install(ws, run_id, name, &r.description, &r.body, &r.rationale)
 }
 
-/// `yard skill apply <run-id>` — install a skill previously drafted by
-/// `yard skill research`. Reads that run's `skill-result.json`; Yardlet writes it.
+/// `yardlet skill apply <run-id>` — install a skill previously drafted by
+/// `yardlet skill research`. Reads that run's `skill-result.json`; Yardlet writes it.
 pub fn apply(ws: &Workspace, run_id: &str) -> Result<SkillReport> {
     let run_dir = ws.runs_dir().join(run_id);
     let result_path = run_dir.join("skill-result.json");
     let raw = std::fs::read_to_string(&result_path).with_context(|| {
         format!(
-            "no skill draft at {} (is the run id right? try `yard skill research` first)",
+            "no skill draft at {} (is the run id right? try `yardlet skill research` first)",
             result_path.display()
         )
     })?;

@@ -1,6 +1,6 @@
 //! Routing review: aggregate run telemetry and *suggest* worker-routing policy
 //! changes. It never edits policy itself — applying a suggestion is an explicit,
-//! human-gated action (`yard routing apply`).
+//! human-gated action (`yardlet routing apply`).
 
 use std::collections::{BTreeMap, BTreeSet};
 

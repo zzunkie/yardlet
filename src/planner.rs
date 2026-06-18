@@ -193,7 +193,7 @@ pub fn plan_goal(
 ) -> Result<usize> {
     let goal = goal.trim();
     if goal.is_empty() {
-        bail!("describe the goal, e.g. `yard goal \"fix the login redirect\"`");
+        bail!("describe the goal, e.g. `yardlet goal \"fix the login redirect\"`");
     }
     let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let worker = worker_override.unwrap_or("").to_string();
@@ -215,7 +215,7 @@ pub fn plan_goal(
         validation: None,
         approval: None,
         interaction: None,
-        worker_rationale: Some("express goal (yard goal)".to_string()),
+        worker_rationale: Some("express goal (yardlet goal)".to_string()),
     }];
     for task in &mut tasks {
         crate::routing::apply_forced_worker(task);
@@ -1077,7 +1077,7 @@ pub(crate) fn pick_ready_worker(
     }
 
     Err(anyhow!(
-        "no ready planning worker among {tried:?}. Run `yard worker status` to diagnose. \
+        "no ready planning worker among {tried:?}. Run `yardlet worker status` to diagnose. \
          Yardlet did not call an AI API and did not ask for an API key."
     ))
 }

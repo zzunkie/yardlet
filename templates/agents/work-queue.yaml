@@ -8,5 +8,5 @@ selection_policy:
   skip_if_blocked: true
 
 # Tasks are created by the planning gate from a natural-language request.
-# Run `yard` and open New Work, or seed a queue manually.
+# Run `yardlet` and open New Work, or seed a queue manually.
 tasks: []

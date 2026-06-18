@@ -366,7 +366,7 @@ fn render_home(frame: &mut Frame, app: &App) {
             render_workers(frame, chunks[2], snap, l, wsel);
         }
         None => {
-            let p = Paragraph::new("No workspace state loaded. Run `yard init`.")
+            let p = Paragraph::new("No workspace state loaded. Run `yardlet init`.")
                 .block(Block::bordered().title(" Yardlet "));
             frame.render_widget(p, chunks[0]);
         }

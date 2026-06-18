@@ -27,7 +27,10 @@ practice picked up. Yardlet is that practice as a product, for everyone:
   survives crashes, restarts, and worker swaps.
 - **The verifier is never the doer.** A deterministic evaluator checks every
   run against the contract; risky plans get reviewer-role verification tasks.
-  "Done" is earned, not self-reported.
+  "Done" is earned, not self-reported. Mechanical checks are deterministic
+  (schema, IDs, scope drift, forbidden paths from the actual git diff, and the
+  validation commands Yardlet runs itself); semantic quality is judged by
+  separate reviewer-role tasks, not by pretending a checker judges everything.
 
 Full identity: [docs/identity.md](docs/identity.md).
 

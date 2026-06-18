@@ -380,7 +380,7 @@ pub fn record_suggested_skill(ws: &Workspace, title: &str, content: &str) -> Opt
     write_skill(ws, title, title, content, "learned")
 }
 
-/// Outcome of explicitly authoring a skill (`yard skill create` / `apply`).
+/// Outcome of explicitly authoring a skill (`yardlet skill create` / `apply`).
 pub enum AuthorOutcome {
     /// Newly written; carries the installed slug.
     Written(String),

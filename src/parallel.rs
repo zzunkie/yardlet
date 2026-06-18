@@ -304,7 +304,10 @@ pub fn run_batch<F: FnMut(&str)>(
             Err(e) => on_event(&format!("{}: worker error: {e}", p.task.id)),
         }
 
-        let eval = evaluator::evaluate(&p.run_dir, &p.run_id, &p.task);
+        // Parallel runs execute in an isolated worktree; the actual-diff check
+        // for that worktree is a follow-up, so fall back to the reported changes
+        // here (forbidden paths still gate via the worker's self-report).
+        let eval = evaluator::evaluate(&p.run_dir, &p.run_id, &p.task, None);
         let _ = state::write_str(
             &p.run_dir.join("evaluation.json"),
             &serde_json::to_string_pretty(&eval).unwrap_or_default(),

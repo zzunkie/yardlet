@@ -1,4 +1,4 @@
-//! A read-only snapshot of workspace state, shared by `yard status` and the TUI.
+//! A read-only snapshot of workspace state, shared by `yardlet status` and the TUI.
 
 use anyhow::Result;
 use serde::Serialize;
@@ -155,7 +155,7 @@ impl Snapshot {
         &self.queue.tasks
     }
 
-    /// JSON view for `yard status --json`.
+    /// JSON view for `yardlet status --json`.
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "product": self.config.product,

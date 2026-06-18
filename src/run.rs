@@ -97,7 +97,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             if crate::planner::intent_gated(i, config.ambiguity_gate) {
                 return Err(anyhow!(
                     "the plan is still guessing (ambiguity: high, {} open question(s), \
-                     interview turn {}/{}). Answer with `a` in the TUI or `yard answer`, \
+                     interview turn {}/{}). Answer with `a` in the TUI or `yardlet answer`, \
                      or override with --accept-ambiguity.",
                     i.open_questions.len(),
                     i.interview_turns,
@@ -261,8 +261,8 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             lines.push(format!("approval consumed for {}", task.id));
         } else {
             return Err(anyhow!(
-                "task {} requires approval. Run `yard approve {}` first, then \
-                 `yard run --task {} --execute`.",
+                "task {} requires approval. Run `yardlet approve {}` first, then \
+                 `yardlet run --task {} --execute`.",
                 task.id,
                 task.id,
                 task.id
@@ -344,6 +344,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     } else {
         None
     };
+    // Snapshot the working tree before the worker runs so the evaluator can
+    // diff against ACTUAL on-disk changes, not the worker's self-report.
+    let baseline_changes = evaluator::changed_paths(&ws.root);
     let started_sys = std::time::SystemTime::now();
     let run_started = std::time::Instant::now();
     let mut outcome = workers::spawn(
@@ -420,7 +423,16 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     ));
 
     // ---- evaluate + compact ---------------------------------------------
-    let mut eval = evaluator::evaluate(&run_dir, &run_id, &task);
+    // Worker-attributed changes = what the tree shows now minus what was already
+    // dirty before the run. Forbidden-path checks run against this real diff.
+    let worker_changed: Vec<String> = {
+        let base: std::collections::HashSet<&String> = baseline_changes.iter().collect();
+        evaluator::changed_paths(&ws.root)
+            .into_iter()
+            .filter(|p| !base.contains(p))
+            .collect()
+    };
+    let mut eval = evaluator::evaluate(&run_dir, &run_id, &task, Some(&worker_changed));
     // H3: workspace-owned post-run gates run during evaluation. A non-zero hook
     // is a fatal check the task cannot be Done past (e.g. scanning the produced
     // diff for secrets) — fold each into the evaluation and block Done.
@@ -440,6 +452,23 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             eval.checks
                 .push(evaluator::fatal_failure("post-run hook", f.summary()));
         }
+        if eval.next_task_state == TaskState::Done {
+            eval.next_task_state = TaskState::Failed;
+        }
+    }
+    // Deterministic validation: Yardlet core runs the task's configured
+    // validation commands itself; a worker's self-reported validation stays
+    // advisory. Any failure (or a `required` task with nothing to run) is fatal
+    // and blocks Done.
+    let validation_cmds = validation_commands(&task);
+    let (validation_ran, validation_passed) =
+        run_validation_commands(&validation_cmds, &ws.root, &run_dir);
+    if (validation_ran && !validation_passed) || (validation_required(&task) && !validation_ran) {
+        lines.push("validation failed (blocks Done)".to_string());
+        eval.checks.push(evaluator::fatal_failure(
+            "validation",
+            "configured validation did not pass",
+        ));
         if eval.next_task_state == TaskState::Done {
             eval.next_task_state = TaskState::Failed;
         }
@@ -794,14 +823,14 @@ pub fn run_auto<F: FnMut(&str)>(
             TaskState::Done | TaskState::Queued => continue,
             TaskState::Blocked => {
                 emit(format!(
-                    "stopped: {} blocked \u{2014} see `yard handoff`",
+                    "stopped: {} blocked \u{2014} see `yardlet handoff`",
                     report.task_id
                 ));
                 break;
             }
             TaskState::NeedsUser => {
                 emit(format!(
-                    "stopped: {} needs you \u{2014} `yard answer \"...\"`",
+                    "stopped: {} needs you \u{2014} `yardlet answer \"...\"`",
                     report.task_id
                 ));
                 break;
@@ -956,6 +985,73 @@ fn is_transient_failure(outcome: &workers::WorkerOutcome, run_dir: &std::path::P
     !outcome.exit_ok && !outcome.timed_out && !run_dir.join("result.json").exists()
 }
 
+/// Validation commands configured on a task: `validation: { commands: [..] }`
+/// or a bare sequence. Yardlet runs these itself (a worker's self-reported
+/// validation is advisory, not the gate).
+fn validation_commands(task: &crate::schemas::Task) -> Vec<String> {
+    let Some(v) = &task.validation else {
+        return Vec::new();
+    };
+    let seq = v
+        .get("commands")
+        .and_then(|c| c.as_sequence())
+        .or_else(|| v.as_sequence());
+    seq.map(|s| {
+        s.iter()
+            .filter_map(|x| x.as_str().map(|t| t.to_string()))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Whether the task marks validation as required. A required task with no
+/// commands to run is treated as a failed gate.
+fn validation_required(task: &crate::schemas::Task) -> bool {
+    task.validation
+        .as_ref()
+        .and_then(|v| v.get("required"))
+        .and_then(|r| r.as_bool())
+        .unwrap_or(false)
+}
+
+/// Run `cmds` in `cwd` via `sh -c`, write the deterministic outcome to
+/// `run_dir/validation.json`, and return `(any_ran, all_passed)`. Yardlet (not
+/// the worker) decides whether validation passed.
+fn run_validation_commands(
+    cmds: &[String],
+    cwd: &std::path::Path,
+    run_dir: &std::path::Path,
+) -> (bool, bool) {
+    let mut results = Vec::new();
+    let mut all_passed = true;
+    for c in cmds {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(c)
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::null())
+            .output();
+        let (passed, code) = match out {
+            Ok(o) => (o.status.success(), o.status.code()),
+            Err(_) => (false, None),
+        };
+        if !passed {
+            all_passed = false;
+        }
+        results.push(serde_json::json!({ "command": c, "passed": passed, "exit_code": code }));
+    }
+    let report = serde_json::json!({
+        "ran": !cmds.is_empty(),
+        "all_passed": all_passed,
+        "commands": results,
+    });
+    let _ = write_str(
+        &run_dir.join("validation.json"),
+        &serde_json::to_string_pretty(&report).unwrap_or_default(),
+    );
+    (!cmds.is_empty(), all_passed)
+}
+
 /// The worktree a run executed in, when it was a parallel worktree run.
 fn run_worktree(run_dir: &std::path::Path) -> Option<PathBuf> {
     let yaml = std::fs::read_to_string(run_dir.join("run.yaml")).ok()?;
@@ -1040,7 +1136,7 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
         }
         match latest {
             Some((run_id, run_dir)) if run_dir.join("result.json").exists() => {
-                let eval = evaluator::evaluate(&run_dir, &run_id, t);
+                let eval = evaluator::evaluate(&run_dir, &run_id, t, None);
                 // Mark this orphan run finalized so a later pass won't
                 // re-evaluate it (a persistent failure must not loop).
                 let _ = std::fs::remove_file(run_dir.join("worker.pid"));
@@ -1203,6 +1299,24 @@ pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::schemas::{SelectionPolicy, Task, WorkQueue};
+
+    #[test]
+    fn validation_runner_blocks_on_failure() {
+        let dir = std::env::temp_dir().join(format!("yard-valrun-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A passing command -> ran and passed.
+        let (ran, passed) = run_validation_commands(&["true".to_string()], &dir, &dir);
+        assert!(ran && passed);
+        // A failing command -> ran but not passed (this is the gate that blocks Done).
+        let (ran, passed) = run_validation_commands(&["false".to_string()], &dir, &dir);
+        assert!(ran && !passed);
+        assert!(dir.join("validation.json").is_file());
+        // No commands -> nothing ran (a task with nothing to validate is allowed).
+        let (ran, _) = run_validation_commands(&[], &dir, &dir);
+        assert!(!ran);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn task(id: &str, state: TaskState, priority: i64, needs_approval: bool) -> Task {
         Task {

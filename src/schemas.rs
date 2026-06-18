@@ -65,7 +65,7 @@ pub struct YardConfig {
     #[serde(default)]
     pub skill_library: String,
     /// Auto-equip core + detected-preset skills on plan/goal (I4: minimize
-    /// intervention). Off = `yard skill suggest` nudges instead. On by default.
+    /// intervention). Off = `yardlet skill suggest` nudges instead. On by default.
     #[serde(default = "default_true")]
     pub auto_equip: bool,
     /// Auto-record worker-proposed skills (a run's harness_suggestions of kind
@@ -75,12 +75,12 @@ pub struct YardConfig {
     #[serde(default = "default_true")]
     pub auto_skill: bool,
     /// Auto-record worker-proposed rules (a run's harness_suggestions of kind
-    /// "rule") as `.agents/rules/learned-<slug>.md` — an always-apply
-    /// constraint H1 inlines into every packet (harness.md H4). On by default;
-    /// reversible (git) and visible via `yard harness review`. Higher-blast
-    /// than a skill (rules are always-on, not per-task), so off is the cautious
-    /// choice. Unlike learned skills, learned rules are not auto-pruned.
-    #[serde(default = "default_true")]
+    /// "rule") as `.agents/rules/learned-<slug>.md`, an always-apply constraint
+    /// H1 inlines into every packet (harness.md H4). OFF by default: rules are
+    /// always-on (not per-task) and not auto-pruned, so one wrong learned rule
+    /// degrades every later packet. Promote rules by hand instead. Reversible
+    /// (git) and visible via `yardlet harness review`.
+    #[serde(default)]
     pub auto_rule: bool,
     /// Auto-prune learned skills whose eval score stays below the floor over
     /// enough runs (the self-correction half of the loop, S4). Reversible
