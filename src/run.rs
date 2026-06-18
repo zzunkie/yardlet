@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::guard;
 use crate::inspect;
 use crate::packet::{self, PacketInputs};
-use crate::schemas::{RunResult, TaskState, WorkerProfile};
+use crate::schemas::{RunResult, TaskState, WorkQueue, WorkerProfile};
 use crate::state::{self, write_str, Workspace};
 use crate::{compact, evaluator, routing, telemetry, workers};
 
@@ -500,8 +500,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     }
 
     // ---- update queue ----------------------------------------------------
-    queue.tasks[idx].state = eval.next_task_state;
-    ws.save_queue(&queue)?;
+    save_task_state_on_latest_queue(ws, &mut queue, &task.id, eval.next_task_state)?;
 
     // ---- telemetry (best effort; feeds routing suggestions) -------------
     let user_override = opts.worker_override.as_ref().map(|o| {
@@ -1218,6 +1217,26 @@ pub(crate) fn find_worker<'a>(workers: &'a [WorkerProfile], id: &str) -> Result<
         .ok_or_else(|| anyhow!("worker '{id}' is not defined in .agents/workers.yaml"))
 }
 
+fn save_task_state_on_latest_queue(
+    ws: &Workspace,
+    fallback_queue: &mut WorkQueue,
+    task_id: &str,
+    state: TaskState,
+) -> Result<()> {
+    let mut latest = ws.load_queue().unwrap_or_else(|_| fallback_queue.clone());
+    if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == task_id) {
+        t.state = state;
+        ws.save_queue(&latest)?;
+        *fallback_queue = latest;
+        return Ok(());
+    }
+
+    if let Some(t) = fallback_queue.tasks.iter_mut().find(|t| t.id == task_id) {
+        t.state = state;
+    }
+    ws.save_queue(fallback_queue)
+}
+
 /// Context for CONTINUING a Partial task instead of redoing it: the previous
 /// run's checkpoint plus what evaluation said is still missing. Injected into
 /// the next packet of that task (docs/harness.md, phase H2).
@@ -1601,6 +1620,31 @@ mod tests {
         let msgs = recover_orphans(&ws);
         assert!(!msgs.iter().any(|m| m.contains("recovered")), "{msgs:?}");
         assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Failed);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn final_state_update_preserves_tasks_added_during_run() {
+        let root =
+            std::env::temp_dir().join(format!("yard-preserve-queue-edits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+
+        let mut stale = queue(vec![task("YARD-010", TaskState::Running, 10, false)]);
+        ws.save_queue(&queue(vec![
+            task("YARD-010", TaskState::Done, 10, false),
+            task("YARD-011", TaskState::Queued, 20, false),
+        ]))
+        .unwrap();
+
+        save_task_state_on_latest_queue(&ws, &mut stale, "YARD-010", TaskState::Partial).unwrap();
+
+        let q = ws.load_queue().unwrap();
+        assert_eq!(q.tasks.len(), 2);
+        assert_eq!(q.tasks[0].id, "YARD-010");
+        assert_eq!(q.tasks[0].state, TaskState::Partial);
+        assert_eq!(q.tasks[1].id, "YARD-011");
+        assert_eq!(q.tasks[1].state, TaskState::Queued);
         let _ = std::fs::remove_dir_all(&root);
     }
 
