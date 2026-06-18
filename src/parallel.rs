@@ -586,6 +586,7 @@ mod tests {
             effort: String::new(),
             depends_on: deps,
             skills: vec![],
+            required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
             validation: None,

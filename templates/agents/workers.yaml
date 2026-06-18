@@ -3,6 +3,12 @@ schema_version: 1
 workers:
   - id: codex
     kind: cli_worker
+    # capabilities are HARD routing constraints (not the soft best_for rubric):
+    # a task whose required_capabilities lists one only runs on a worker that
+    # declares it. This replaces the old image-keyword router. Add a capability
+    # here and the planner can route to it by meaning, with no magic keywords.
+    capabilities:
+      - image_generation
     # best_for / not_for are the planner's rubric: task characteristics, not
     # model names, so they survive model changes. Keep them contrastive between
     # workers (one worker's not_for is roughly the other's best_for) so the

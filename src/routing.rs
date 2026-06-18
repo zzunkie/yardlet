@@ -53,13 +53,51 @@ pub fn resolve_worker_for_task(
     task: &Task,
 ) -> Result<Resolved> {
     let overrides = load_overrides(ws);
-    let candidate = candidate_for_task(workers, &overrides, override_w, task);
+    let required: Vec<String> = task
+        .required_capabilities
+        .iter()
+        .map(|c| norm_cap(c))
+        .filter(|c| !c.is_empty())
+        .collect();
+    let mut candidate = candidate_for_task(workers, &overrides, override_w, task);
+
+    // Hard capability gate (replaces the old image-keyword router): if the task
+    // declares required_capabilities, only workers that provide them may run it.
+    // The choice stays deterministic and auditable, driven by user-owned
+    // workers.yaml `capabilities` and planner-assigned `required_capabilities`
+    // (no magic keywords).
+    if !required.is_empty() && !worker_declares(workers, &candidate.worker_id, &required) {
+        if candidate.reason == "run override" {
+            return Err(anyhow!(
+                "worker '{}' was explicitly selected but does not declare the required \
+                 capability/capabilities {:?}. Add it to that worker in .agents/workers.yaml \
+                 or drop the override.",
+                candidate.worker_id,
+                required
+            ));
+        }
+        match first_capable(workers, &required) {
+            Some(id) => {
+                candidate = Candidate {
+                    worker_id: id,
+                    reason: "capability route",
+                }
+            }
+            None => {
+                return Err(anyhow!(
+                    "no enabled worker declares the required capability/capabilities \
+                     {required:?}. Add it to a worker in .agents/workers.yaml."
+                ))
+            }
+        }
+    }
+
     resolve_candidate(
         workers,
         billing,
         candidate.worker_id,
         candidate.reason,
-        candidate.strict,
+        &required,
     )
 }
 
@@ -68,16 +106,26 @@ fn resolve_candidate(
     billing: &BillingPolicy,
     candidate: String,
     source: &'static str,
-    strict: bool,
+    required: &[String],
 ) -> Result<Resolved> {
-    // Try order: the candidate, then the configured fallback order.
+    // Try order: the candidate, then the configured fallback order, restricted
+    // to workers that declare every required capability. The restriction (not a
+    // hardcoded strict flag) is what keeps a capability-bound task from failing
+    // over to a worker that cannot do it.
     let mut order = vec![candidate.clone()];
-    if !strict {
-        for w in &workers.routing.fallback_order {
-            if !order.contains(w) {
-                order.push(w.clone());
-            }
+    for w in &workers.routing.fallback_order {
+        if !order.contains(w) {
+            order.push(w.clone());
         }
+    }
+    if !required.is_empty() {
+        order.retain(|id| worker_declares(workers, id, required));
+    }
+    if order.is_empty() {
+        return Err(anyhow!(
+            "no enabled worker declares the required capability/capabilities {required:?}. \
+             Add it to a worker in .agents/workers.yaml."
+        ));
     }
 
     let mut tried = Vec::new();
@@ -114,7 +162,6 @@ fn resolve_candidate(
 struct Candidate {
     worker_id: String,
     reason: &'static str,
-    strict: bool,
 }
 
 /// The pre-readiness candidate and why it was chosen. Pure, so it is unit-tested.
@@ -142,147 +189,60 @@ fn candidate_for_task(
     override_w: Option<&str>,
     task: &Task,
 ) -> Candidate {
-    if let Some(o) = override_w.filter(|s| !s.is_empty()) {
-        Candidate {
-            worker_id: o.to_string(),
-            reason: "run override",
-            strict: false,
-        }
-    } else if is_image_asset_generation_task(task) {
-        Candidate {
-            worker_id: "codex".to_string(),
-            reason: "hard image/asset generation rule",
-            strict: true,
-        }
-    } else {
-        let (worker_id, reason) =
-            candidate_for(workers, overrides, None, &task.preferred_worker, &task.kind);
-        Candidate {
-            worker_id,
-            reason,
-            strict: false,
-        }
-    }
-}
-
-pub fn apply_forced_worker(task: &mut Task) {
-    if is_image_asset_generation_task(task) {
-        task.preferred_worker = "codex".to_string();
-        task.worker_rationale = Some(
-            "hard image/asset generation route: Codex has the image-generation capability"
-                .to_string(),
-        );
-    }
-}
-
-fn is_image_asset_generation_task(task: &Task) -> bool {
-    if task
-        .skills
-        .iter()
-        .any(|s| matches!(s.as_str(), "imagegen" | "game-assets"))
-    {
-        return true;
-    }
-
-    let text = task_text(task).to_lowercase();
-    let explicit = [
-        "$imagegen",
-        "image generation",
-        "generate image",
-        "generate an image",
-        "create image",
-        "create an image",
-        "edit image",
-        "generate/edit images",
-        "asset generation",
-        "generate asset",
-        "create asset",
-        "이미지 생성",
-        "이미지를 생성",
-        "이미지 만들어",
-        "이미지 만들",
-        "이미지 편집",
-        "이미지 수정",
-        "에셋 생성",
-        "애셋 생성",
-        "에셋 만들",
-    ]
-    .iter()
-    .any(|needle| text.contains(needle));
-    if explicit {
-        return true;
-    }
-
-    let create = [
-        "generate",
-        "create",
-        "draw",
-        "design",
-        "make",
-        "produce",
-        "render",
-        "생성",
-        "만들",
-        "그려",
-        "디자인",
-        "제작",
-    ]
-    .iter()
-    .any(|needle| text.contains(needle));
-    let asset = [
-        "asset",
-        "icon",
-        "banner",
-        "illustration",
-        "sprite",
-        "sprite sheet",
-        "placeholder art",
-        "logo",
-        "thumbnail",
-        "에셋",
-        "애셋",
-        "아이콘",
-        "배너",
-        "일러스트",
-        "스프라이트",
-        "로고",
-        "썸네일",
-    ]
-    .iter()
-    .any(|needle| text.contains(needle));
-
-    create && asset
-}
-
-fn task_text(task: &Task) -> String {
-    let mut text = format!(
-        "{} {} {} {}",
-        task.kind,
-        task.title,
-        task.allowed_scope.join(" "),
-        task.skills.join(" ")
+    let (worker_id, reason) = candidate_for(
+        workers,
+        overrides,
+        override_w,
+        &task.preferred_worker,
+        &task.kind,
     );
-    if let Some(rationale) = &task.worker_rationale {
-        text.push(' ');
-        text.push_str(rationale);
-    }
-    for acceptance in &task.acceptance {
-        text.push(' ');
-        if let Ok(yaml) = crate::yaml::to_string(acceptance) {
-            text.push_str(&yaml);
-        }
-    }
-    text
+    Candidate { worker_id, reason }
+}
+
+/// Normalize a capability name for matching: trimmed, lowercase, with spaces and
+/// hyphens folded to underscores. Keeps matching exact without forcing an enum
+/// (a new worker capability needs no Yardlet code change).
+fn norm_cap(s: &str) -> String {
+    s.trim().to_lowercase().replace([' ', '-'], "_")
+}
+
+/// Whether `worker_id` is an enabled worker declaring EVERY required capability.
+/// `required` must already be normalized.
+fn worker_declares(workers: &WorkersFile, worker_id: &str, required: &[String]) -> bool {
+    workers
+        .workers
+        .iter()
+        .find(|w| w.id == worker_id)
+        .filter(|w| w.enabled)
+        .map(|w| {
+            let have: Vec<String> = w.capabilities.iter().map(|c| norm_cap(c)).collect();
+            required.iter().all(|r| have.iter().any(|h| h == r))
+        })
+        .unwrap_or(false)
+}
+
+/// The first enabled worker (declaration order) providing every required
+/// capability, if any. `required` must already be normalized.
+fn first_capable(workers: &WorkersFile, required: &[String]) -> Option<String> {
+    workers
+        .workers
+        .iter()
+        .find(|w| {
+            w.enabled && {
+                let have: Vec<String> = w.capabilities.iter().map(|c| norm_cap(c)).collect();
+                required.iter().all(|r| have.iter().any(|h| h == r))
+            }
+        })
+        .map(|w| w.id.clone())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schemas::TaskState;
 
     fn workers() -> WorkersFile {
         crate::yaml::from_str(
-            "schema_version: 1\nrouting:\n  default_worker: codex\n  fallback_order: [codex, claude-code]\n",
+            "schema_version: 1\nrouting:\n  default_worker: codex\n  fallback_order: [codex, claude-code]\nworkers:\n  - id: codex\n    capabilities: [image_generation]\n    invocation: { command: codex }\n  - id: claude-code\n    invocation: { command: claude }\n",
         )
         .unwrap()
     }
@@ -316,69 +276,31 @@ mod tests {
         );
     }
 
-    fn task(title: &str) -> Task {
-        Task {
-            id: "YARD-001".into(),
-            title: title.into(),
-            state: TaskState::Queued,
-            priority: 10,
-            risk: "low".into(),
-            kind: "implementation".into(),
-            preferred_worker: "claude-code".into(),
-            model: String::new(),
-            effort: String::new(),
-            depends_on: vec![],
-            skills: vec![],
-            allowed_scope: vec![],
-            acceptance: vec![],
-            validation: None,
-            approval: None,
-            interaction: None,
-            worker_rationale: None,
-        }
+    #[test]
+    fn norm_cap_folds_case_and_separators() {
+        assert_eq!(norm_cap(" Image-Generation "), "image_generation");
+        assert_eq!(norm_cap("image generation"), "image_generation");
     }
 
     #[test]
-    fn image_asset_generation_forces_codex_before_planner_or_kind_rules() {
+    fn capability_gate_matches_only_declaring_workers() {
         let w = workers();
-        let mut ov = RoutingOverrides::default();
-        ov.kind_overrides
-            .insert("implementation".into(), "claude-code".into());
-
-        let candidate = candidate_for_task(
-            &w,
-            &ov,
-            None,
-            &task("Generate sprite sheet assets for the game"),
-        );
-        assert_eq!(candidate.worker_id, "codex");
-        assert_eq!(candidate.reason, "hard image/asset generation rule");
-        assert!(candidate.strict);
+        let need = vec!["image_generation".to_string()];
+        // codex declares it; claude-code does not.
+        assert!(worker_declares(&w, "codex", &need));
+        assert!(!worker_declares(&w, "claude-code", &need));
+        // routes to the declaring worker regardless of declaration order.
+        assert_eq!(first_capable(&w, &need).as_deref(), Some("codex"));
+        // no worker declares an unknown capability.
+        assert!(first_capable(&w, &["sorcery".to_string()]).is_none());
     }
 
     #[test]
-    fn explicit_run_override_still_wins_over_image_asset_rule() {
+    fn capability_gate_requires_all_listed_capabilities() {
         let w = workers();
-        let ov = RoutingOverrides::default();
-        let candidate =
-            candidate_for_task(&w, &ov, Some("claude-code"), &task("Generate icon assets"));
-        assert_eq!(candidate.worker_id, "claude-code");
-        assert_eq!(candidate.reason, "run override");
-        assert!(!candidate.strict);
-    }
-
-    #[test]
-    fn image_analysis_does_not_trigger_generation_rule() {
-        let w = workers();
-        let ov = RoutingOverrides::default();
-        let candidate = candidate_for_task(
-            &w,
-            &ov,
-            None,
-            &task("Analyze the screenshot and generate CSS to match it"),
-        );
-        assert_eq!(candidate.worker_id, "claude-code");
-        assert_eq!(candidate.reason, "planner preferred");
-        assert!(!candidate.strict);
+        // codex has image_generation but not "video"; both required -> no match.
+        let need = vec!["image_generation".to_string(), "video".to_string()];
+        assert!(!worker_declares(&w, "codex", &need));
+        assert!(first_capable(&w, &need).is_none());
     }
 }

@@ -245,6 +245,13 @@ pub struct Task {
     /// starting this task. Planner-assigned from the catalog.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
+    /// Executable affordances this task requires (e.g. `image_generation`).
+    /// Planner-assigned. Routing constrains the candidate AND fallback set to
+    /// workers whose `capabilities` declare every entry here; if none qualify
+    /// the run fails with a clear message rather than silently mis-routing.
+    /// Replaces the old hardcoded image-keyword router (no magic keywords).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_capabilities: Vec<String>,
     #[serde(default)]
     pub allowed_scope: Vec<String>,
     #[serde(default)]
@@ -352,6 +359,14 @@ pub struct WorkerProfile {
     pub kind: String,
     #[serde(default)]
     pub role_strengths: Vec<String>,
+    /// Executable affordances this worker provides (e.g. `image_generation`).
+    /// User-owned in workers.yaml. Distinct from `best_for` (a soft planner
+    /// rubric) and `skills` (harness docs a worker reads): routing treats a
+    /// task's `required_capabilities` as a HARD, deterministic constraint and
+    /// only considers workers that declare every required capability. Names are
+    /// normalized (lowercase, snake_case) before matching.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
     /// Task characteristics this worker is good at (planner rubric; policy).
     #[serde(default)]
     pub best_for: String,

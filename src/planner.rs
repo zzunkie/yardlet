@@ -74,6 +74,8 @@ struct PlanTask {
     #[serde(default)]
     skills: Vec<String>,
     #[serde(default)]
+    required_capabilities: Vec<String>,
+    #[serde(default)]
     allowed_scope: Vec<String>,
     #[serde(default)]
     acceptance: Vec<String>,
@@ -210,6 +212,7 @@ pub fn plan_goal(
         effort: String::new(),
         depends_on: vec![],
         skills: vec![],
+        required_capabilities: vec![],
         allowed_scope: vec![],
         acceptance: vec![yaml::Value::String(goal.to_string())],
         validation: None,
@@ -217,9 +220,8 @@ pub fn plan_goal(
         interaction: None,
         worker_rationale: Some("express goal (yardlet goal)".to_string()),
     }];
-    for task in &mut tasks {
-        crate::routing::apply_forced_worker(task);
-    }
+    // Express goals bypass the planner, so there is no capability inference here
+    // (no magic keywords): route by `--worker` if a specific worker is needed.
 
     if let Some(v) = verify.map(str::trim).filter(|v| !v.is_empty()) {
         // A separate reviewer task: a fresh pair of eyes, not the worker that
@@ -237,6 +239,7 @@ pub fn plan_goal(
             effort: String::new(),
             depends_on: vec!["YARD-001".to_string()],
             skills: vec![],
+            required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![yaml::Value::String(format!(
                 "Verify against the actual workspace, with evidence: {v}"
@@ -693,7 +696,7 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
         };
         // Follow-up tasks may depend on existing queue tasks or earlier new ones.
         let prior_ids: Vec<String> = queue.tasks.iter().map(|t| t.id.clone()).collect();
-        let mut task = Task {
+        let task = Task {
             id,
             title: pt.title.clone(),
             state: TaskState::Queued,
@@ -709,6 +712,7 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
             effort: pt.effort.clone(),
             depends_on: sanitize_deps(&pt.depends_on, &prior_ids),
             skills: pt.skills.clone(),
+            required_capabilities: pt.required_capabilities.clone(),
             allowed_scope: pt.allowed_scope.clone(),
             acceptance: pt
                 .acceptance
@@ -720,7 +724,6 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
             interaction: None,
             worker_rationale: pt.worker_rationale.clone(),
         };
-        crate::routing::apply_forced_worker(&mut task);
         queue.tasks.push(task);
     }
     plan.tasks.len()
@@ -913,7 +916,7 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
     let mut tasks: Vec<Task> = Vec::with_capacity(plan.tasks.len());
     for (i, t) in plan.tasks.iter().enumerate() {
         let prior_ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
-        let mut task = Task {
+        let task = Task {
             id: if t.id.trim().is_empty() {
                 format!("YARD-{:03}", i + 1)
             } else {
@@ -933,6 +936,7 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             effort: t.effort.clone(),
             depends_on: sanitize_deps(&t.depends_on, &prior_ids),
             skills: t.skills.clone(),
+            required_capabilities: t.required_capabilities.clone(),
             allowed_scope: t.allowed_scope.clone(),
             acceptance: t
                 .acceptance
@@ -944,7 +948,6 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             interaction: None,
             worker_rationale: t.worker_rationale.clone(),
         };
-        crate::routing::apply_forced_worker(&mut task);
         tasks.push(task);
     }
 
@@ -996,6 +999,7 @@ fn ensure_review_task(tasks: &mut Vec<Task>) {
         effort: String::new(),
         depends_on,
         skills: vec![],
+        required_capabilities: vec![],
         allowed_scope: vec![],
         acceptance: vec![yaml::Value::String(
             "Every intent acceptance criterion is verified against the actual workspace, \
@@ -1018,7 +1022,7 @@ fn ensure_review_task(tasks: &mut Vec<Task>) {
 fn build_worker_guidance(workers: &WorkersFile) -> String {
     let mut g = format!("Cost bias: {}.\n", workers.routing.cost_bias);
     for w in &workers.workers {
-        if w.best_for.is_empty() {
+        if w.best_for.is_empty() && w.capabilities.is_empty() {
             continue;
         }
         let cost = if w.cost_weight.is_empty() {
@@ -1026,14 +1030,34 @@ fn build_worker_guidance(workers: &WorkersFile) -> String {
         } else {
             &w.cost_weight
         };
-        g.push_str(&format!(
-            "- {} (cost: {}): best for {}.",
-            w.id, cost, w.best_for
-        ));
+        g.push_str(&format!("- {} (cost: {})", w.id, cost));
+        if !w.best_for.is_empty() {
+            g.push_str(&format!(": best for {}.", w.best_for));
+        }
         if !w.not_for.is_empty() {
             g.push_str(&format!(" Avoid for {}.", w.not_for));
         }
+        if !w.capabilities.is_empty() {
+            g.push_str(&format!(" Capabilities: {}.", w.capabilities.join(", ")));
+        }
         g.push('\n');
+    }
+    // Capabilities are HARD routing constraints, not soft preferences. Tell the
+    // planner to set `required_capabilities` on a task that needs one, rather
+    // than relying on title wording (no magic keywords).
+    let caps: std::collections::BTreeSet<&str> = workers
+        .workers
+        .iter()
+        .flat_map(|w| w.capabilities.iter().map(|c| c.as_str()))
+        .collect();
+    if !caps.is_empty() {
+        let list = caps.into_iter().collect::<Vec<_>>().join(", ");
+        g.push_str(&format!(
+            "\nCapabilities are HARD constraints. If a task needs one of [{list}], set that \
+             task's `required_capabilities` to it: routing then runs only a worker that declares \
+             the capability and fails rather than mis-routing. Decide from the task's meaning, \
+             not keywords; do not set it when no special capability is needed.\n"
+        ));
     }
     g
 }
@@ -1267,11 +1291,13 @@ routing:
     }
 
     #[test]
-    fn image_asset_goal_is_recorded_as_codex_work() {
+    fn express_goal_does_not_keyword_force_a_worker() {
         let root = std::env::temp_dir().join(format!("yard-image-goal-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let ws = Workspace::at(&root);
 
+        // The express path bypasses the planner; with no --worker it must NOT
+        // infer a worker from wording (the old image-keyword router is gone).
         let n = plan_goal(
             &ws,
             "generate icon assets for the settings page",
@@ -1281,11 +1307,15 @@ routing:
         .unwrap();
         assert_eq!(n, 1);
         let q = ws.load_queue().unwrap();
-        assert_eq!(q.tasks[0].preferred_worker, "codex");
-        assert_eq!(
-            q.tasks[0].worker_rationale.as_deref(),
-            Some("hard image/asset generation route: Codex has the image-generation capability")
-        );
+        assert_eq!(q.tasks[0].preferred_worker, "");
+        assert!(q.tasks[0].required_capabilities.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+
+        // An explicit --worker is the escape hatch for express goals.
+        let _ = std::fs::remove_dir_all(&root);
+        let n = plan_goal(&ws, "generate icon assets", None, Some("codex")).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(ws.load_queue().unwrap().tasks[0].preferred_worker, "codex");
         let _ = std::fs::remove_dir_all(&root);
     }
 
