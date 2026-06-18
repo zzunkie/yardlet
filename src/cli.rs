@@ -768,7 +768,7 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         snap.queue.tasks.len(),
     );
     println!(
-        "Workers ready: {}/{}   (planner: {})",
+        "Workers invocable: {}/{}   (planner: {})",
         snap.workers_ready(),
         snap.workers.len(),
         snap.planner,

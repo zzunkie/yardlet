@@ -153,7 +153,7 @@ impl Snapshot {
     pub fn workers_ready(&self) -> usize {
         self.workers
             .iter()
-            .filter(|w| w.readiness == "ready")
+            .filter(|w| w.readiness == "invocable")
             .count()
     }
 

@@ -587,7 +587,7 @@ fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selecte
                 ("\u{00b7}", Color::DarkGray, l.w_disabled)
             } else {
                 match w.readiness.as_str() {
-                    "ready" => ("\u{2713}", Color::Green, l.w_ready),
+                    "invocable" => ("\u{2713}", Color::Green, l.w_ready),
                     "ambiguous" => ("?", Color::Yellow, l.w_ambiguous),
                     _ => ("\u{2715}", Color::Red, l.w_notready),
                 }

@@ -29,7 +29,7 @@ pub enum Readiness {
 impl Readiness {
     pub fn label(self) -> &'static str {
         match self {
-            Readiness::Ready => "ready",
+            Readiness::Ready => "invocable",
             Readiness::NotReady => "not ready",
             Readiness::Ambiguous => "ambiguous",
         }
