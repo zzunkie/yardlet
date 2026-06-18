@@ -39,12 +39,6 @@ pub struct WorkerLine {
     pub enabled: bool,
 }
 
-/// Whether the worker's billing env would hard-stop a run under this policy.
-/// Pure, so it is unit-tested.
-fn billing_blocked(policy: &str, billing_env_present: usize) -> bool {
-    policy == "block" && billing_env_present > 0
-}
-
 impl Snapshot {
     pub fn load(ws: &Workspace) -> Result<Snapshot> {
         Self::load_inner(ws, None)
@@ -91,7 +85,7 @@ impl Snapshot {
                     return WorkerLine {
                         enabled: true,
                         model: p.model.clone(),
-                        billing_blocked: billing_blocked(&policy, c.billing_env_present),
+                        billing_blocked: guard::billing_blocked(&policy, c.billing_env_present),
                         ..c.clone()
                     };
                 }
@@ -102,7 +96,7 @@ impl Snapshot {
                     readiness: s.readiness.label().to_string(),
                     version: s.version,
                     billing_env_present: present,
-                    billing_blocked: billing_blocked(&policy, present),
+                    billing_blocked: guard::billing_blocked(&policy, present),
                     model: p.model.clone(),
                     detail: s.detail,
                     enabled: true,
@@ -194,19 +188,5 @@ impl Snapshot {
             },
             "workers": self.workers,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn billing_blocked_only_when_strict_policy_and_env_present() {
-        // Default scrub policy never blocks, even with billing env present.
-        assert!(!billing_blocked("scrub_or_block", 2));
-        // Strict policy blocks only when billing env is actually present.
-        assert!(billing_blocked("block", 1));
-        assert!(!billing_blocked("block", 0));
     }
 }

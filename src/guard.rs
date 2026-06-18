@@ -88,6 +88,15 @@ pub struct StatusStage {
     pub note: String,
 }
 
+/// Whether a worker's billing env would hard-stop a run under this policy: the
+/// single source of truth for the "blocked" posture, shared by the staged
+/// status, the verdict, and the TUI workers panel (via snapshot). Strict
+/// (`block`) policy hard-stops when any AI-billing env var is present; the
+/// default scrub policy never blocks (it removes the vars before spawn).
+pub fn billing_blocked(policy: &str, billing_env_present: usize) -> bool {
+    policy == "block" && billing_env_present > 0
+}
+
 impl WorkerStatus {
     /// The readiness gates as a staged checklist for `yardlet worker status`.
     ///
@@ -137,7 +146,7 @@ impl WorkerStatus {
                 mark: StageMark::Pass,
                 note: "AI-billing env clean".to_string(),
             }
-        } else if policy == "block" {
+        } else if billing_blocked(policy, self.billing_env_present.len()) {
             StatusStage {
                 label: "billing-env",
                 mark: StageMark::Blocked,
@@ -174,7 +183,7 @@ impl WorkerStatus {
     pub fn invocation_verdict(&self, billing: &BillingPolicy) -> String {
         let policy = billing.worker_invocation.ai_billing_env_policy.as_str();
         match self.readiness {
-            Readiness::Ready if policy == "block" && !self.billing_env_present.is_empty() => {
+            Readiness::Ready if billing_blocked(policy, self.billing_env_present.len()) => {
                 "blocked: strict billing policy refuses to run while AI-billing env is set"
                     .to_string()
             }
@@ -453,6 +462,15 @@ mod tests {
             readiness: Readiness::Ready,
             detail: String::new(),
         }
+    }
+
+    #[test]
+    fn billing_blocked_only_when_strict_policy_and_env_present() {
+        // Default scrub policy never blocks, even with billing env present.
+        assert!(!billing_blocked("scrub_or_block", 2));
+        // Strict policy blocks only when billing env is actually present.
+        assert!(billing_blocked("block", 1));
+        assert!(!billing_blocked("block", 0));
     }
 
     #[test]
