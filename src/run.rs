@@ -135,13 +135,12 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     };
 
     // ---- resolve worker (deterministic: candidate -> readiness -> fallback) --
-    let resolved = routing::resolve_worker(
+    let resolved = routing::resolve_worker_for_task(
         ws,
         &workers,
         &billing,
         opts.worker_override.as_deref(),
-        &task.preferred_worker,
-        &task.kind,
+        &task,
     );
     let candidate_id = opts
         .worker_override

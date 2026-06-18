@@ -217,6 +217,9 @@ pub fn plan_goal(
         interaction: None,
         worker_rationale: Some("express goal (yard goal)".to_string()),
     }];
+    for task in &mut tasks {
+        crate::routing::apply_forced_worker(task);
+    }
 
     if let Some(v) = verify.map(str::trim).filter(|v| !v.is_empty()) {
         // A separate reviewer task: a fresh pair of eyes, not the worker that
@@ -690,7 +693,7 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
         };
         // Follow-up tasks may depend on existing queue tasks or earlier new ones.
         let prior_ids: Vec<String> = queue.tasks.iter().map(|t| t.id.clone()).collect();
-        queue.tasks.push(Task {
+        let mut task = Task {
             id,
             title: pt.title.clone(),
             state: TaskState::Queued,
@@ -716,7 +719,9 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
             approval: None,
             interaction: None,
             worker_rationale: pt.worker_rationale.clone(),
-        });
+        };
+        crate::routing::apply_forced_worker(&mut task);
+        queue.tasks.push(task);
     }
     plan.tasks.len()
 }
@@ -908,7 +913,7 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
     let mut tasks: Vec<Task> = Vec::with_capacity(plan.tasks.len());
     for (i, t) in plan.tasks.iter().enumerate() {
         let prior_ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
-        tasks.push(Task {
+        let mut task = Task {
             id: if t.id.trim().is_empty() {
                 format!("YARD-{:03}", i + 1)
             } else {
@@ -938,7 +943,9 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             approval: None,
             interaction: None,
             worker_rationale: t.worker_rationale.clone(),
-        });
+        };
+        crate::routing::apply_forced_worker(&mut task);
+        tasks.push(task);
     }
 
     ensure_review_task(&mut tasks);
@@ -1256,6 +1263,29 @@ routing:
         let q = ws.load_queue().unwrap();
         assert_eq!(q.tasks[1].kind, "review");
         assert_eq!(q.tasks[1].depends_on, vec!["YARD-001"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn image_asset_goal_is_recorded_as_codex_work() {
+        let root = std::env::temp_dir().join(format!("yard-image-goal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+
+        let n = plan_goal(
+            &ws,
+            "generate icon assets for the settings page",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(n, 1);
+        let q = ws.load_queue().unwrap();
+        assert_eq!(q.tasks[0].preferred_worker, "codex");
+        assert_eq!(
+            q.tasks[0].worker_rationale.as_deref(),
+            Some("hard image/asset generation route: Codex has the image-generation capability")
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
