@@ -346,7 +346,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     };
     // Snapshot the working tree before the worker runs so the evaluator can
     // diff against ACTUAL on-disk changes, not the worker's self-report.
-    let baseline_changes = evaluator::changed_paths(&ws.root);
+    let baseline_fp = evaluator::dirty_fingerprints(&ws.root);
     let started_sys = std::time::SystemTime::now();
     let run_started = std::time::Instant::now();
     let mut outcome = workers::spawn(
@@ -423,16 +423,17 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     ));
 
     // ---- evaluate + compact ---------------------------------------------
-    // Worker-attributed changes = what the tree shows now minus what was already
-    // dirty before the run. Forbidden-path checks run against this real diff.
-    let worker_changed: Vec<String> = {
-        let base: std::collections::HashSet<&String> = baseline_changes.iter().collect();
-        evaluator::changed_paths(&ws.root)
-            .into_iter()
-            .filter(|p| !base.contains(p))
-            .collect()
-    };
-    let mut eval = evaluator::evaluate(&run_dir, &run_id, &task, Some(&worker_changed));
+    // Worker-attributed changes: diff the dirty-file fingerprints before and
+    // after the run, so a path the worker re-modified while it was already dirty
+    // is still attributed (plain path-set subtraction would miss it). `None`
+    // when git evidence is unavailable, in which case the evaluator fails closed
+    // rather than trusting the worker's self-report.
+    let evidence: Option<Vec<String>> =
+        match (&baseline_fp, evaluator::dirty_fingerprints(&ws.root)) {
+            (Some(base), Some(after)) => Some(evaluator::worker_touched(base, &after)),
+            _ => None,
+        };
+    let mut eval = evaluator::evaluate(&run_dir, &run_id, &task, evidence.as_deref());
     // H3: workspace-owned post-run gates run during evaluation. A non-zero hook
     // is a fatal check the task cannot be Done past (e.g. scanning the produced
     // diff for secrets) — fold each into the evaluation and block Done.
@@ -1135,7 +1136,28 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
         }
         match latest {
             Some((run_id, run_dir)) if run_dir.join("result.json").exists() => {
-                let eval = evaluator::evaluate(&run_dir, &run_id, t, None);
+                // Evidence for an orphan: its worktree (isolated, so git status
+                // is exactly the worker's diff) when present. Otherwise this is a
+                // serial-run salvage of already-finished work, where fail-closing
+                // would only force a wasteful re-run (any writes already happened),
+                // so fall back to the worker's reported paths for the gate.
+                let reported: Vec<String> = std::fs::read_to_string(run_dir.join("result.json"))
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<crate::schemas::RunResult>(&s).ok())
+                    .map(|r| {
+                        r.changes
+                            .files_modified
+                            .into_iter()
+                            .chain(r.changes.files_created)
+                            .chain(r.changes.files_deleted)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let evidence = run_worktree(&run_dir)
+                    .filter(|w| w.exists())
+                    .and_then(|w| evaluator::changed_paths(&w))
+                    .unwrap_or(reported);
+                let eval = evaluator::evaluate(&run_dir, &run_id, t, Some(&evidence));
                 // Mark this orphan run finalized so a later pass won't
                 // re-evaluate it (a persistent failure must not loop).
                 let _ = std::fs::remove_file(run_dir.join("worker.pid"));

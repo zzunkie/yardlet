@@ -101,9 +101,10 @@ pub fn evaluate(
                 "worker reported no scope drift".to_string()
             },
         ));
-        // Forbidden-path runs on the ACTUAL on-disk diff when Yardlet could
-        // collect it (the worker's self-reported file list is not trusted); it
-        // falls back to the reported changes only when git evidence is absent.
+        // Forbidden-path runs on the ACTUAL on-disk diff (`actual_changes`).
+        // A worker's self-report is NOT evidence for a safety guarantee, so when
+        // no diff evidence is available the check fails closed (the run cannot
+        // reach Done) rather than trusting the worker's word.
         let reported: Vec<String> = r
             .changes
             .files_modified
@@ -112,38 +113,60 @@ pub fn evaluate(
             .chain(&r.changes.files_deleted)
             .cloned()
             .collect();
-        let basis: &[String] = actual_changes.unwrap_or(&reported);
-        let forbidden = forbidden_in(basis.iter());
-        checks.push(check(
-            "forbidden_paths_untouched",
-            forbidden.is_empty(),
-            if forbidden.is_empty() {
-                "no sensitive or out-of-workspace paths changed".to_string()
-            } else {
-                format!("changed forbidden path(s): {}", forbidden.join(", "))
-            },
-        ));
-        // With the real diff in hand, flag files the worker changed but did not
-        // disclose (advisory: surfaces incomplete/dishonest self-reports without
-        // blocking an otherwise-clean run).
-        if let Some(actual) = actual_changes {
-            let norm = |p: &str| p.trim_start_matches("./").to_string();
-            let reported_norm: std::collections::HashSet<String> =
-                reported.iter().map(|p| norm(p)).collect();
-            let undisclosed: Vec<String> = actual
-                .iter()
-                .map(|p| norm(p))
-                .filter(|p| !reported_norm.contains(p))
-                .collect();
-            checks.push(advisory(
-                "diff_matches_report",
-                undisclosed.is_empty(),
-                if undisclosed.is_empty() {
-                    "worker-reported changes match the actual diff".to_string()
-                } else {
-                    format!("changed but not reported: {}", undisclosed.join(", "))
-                },
-            ));
+        match actual_changes {
+            Some(actual) => {
+                let forbidden = forbidden_in(actual.iter());
+                checks.push(check(
+                    "forbidden_paths_untouched",
+                    forbidden.is_empty(),
+                    if forbidden.is_empty() {
+                        "no sensitive or out-of-workspace paths in the actual diff".to_string()
+                    } else {
+                        format!("changed forbidden path(s): {}", forbidden.join(", "))
+                    },
+                ));
+                // With the real diff in hand, flag files the worker changed but
+                // did not disclose (advisory: surfaces incomplete/dishonest
+                // self-reports without blocking an otherwise-clean run).
+                let norm = |p: &str| p.trim_start_matches("./").to_string();
+                let reported_norm: std::collections::HashSet<String> =
+                    reported.iter().map(|p| norm(p)).collect();
+                let undisclosed: Vec<String> = actual
+                    .iter()
+                    .map(|p| norm(p))
+                    .filter(|p| !reported_norm.contains(p))
+                    .collect();
+                checks.push(advisory(
+                    "diff_matches_report",
+                    undisclosed.is_empty(),
+                    if undisclosed.is_empty() {
+                        "worker-reported changes match the actual diff".to_string()
+                    } else {
+                        format!("changed but not reported: {}", undisclosed.join(", "))
+                    },
+                ));
+            }
+            None => {
+                // Fail closed: no independent evidence to certify the gate.
+                checks.push(check(
+                    "forbidden_paths_untouched",
+                    false,
+                    "no diff evidence (not a git repo, or git failed): cannot certify forbidden \
+                     paths untouched, so the run cannot be Done"
+                        .to_string(),
+                ));
+                let reported_forbidden = forbidden_in(reported.iter());
+                if !reported_forbidden.is_empty() {
+                    checks.push(advisory(
+                        "reported_forbidden_paths",
+                        false,
+                        format!(
+                            "worker self-reported forbidden path(s): {}",
+                            reported_forbidden.join(", ")
+                        ),
+                    ));
+                }
+            }
         }
         checks.push(advisory(
             "validation_ran",
@@ -235,20 +258,21 @@ fn forbidden_in<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
 }
 
 /// Paths git reports as changed or untracked in `cwd`: the actual on-disk
-/// evidence of what a run touched, independent of what the worker claims. Empty
-/// when git is unavailable or `cwd` is not a repository (the evaluator then
-/// falls back to the worker's self-report).
-pub fn changed_paths(cwd: &Path) -> Vec<String> {
+/// evidence of what a run touched, independent of what the worker claims.
+///
+/// Returns `None` when git is unavailable or `cwd` is not a repository, so the
+/// caller can tell "no changes" (`Some(empty)`) apart from "no evidence"
+/// (`None`). A worker's self-report is never treated as evidence for a safety
+/// guarantee, so the evaluator fails closed on `None` rather than trusting it.
+pub fn changed_paths(cwd: &Path) -> Option<Vec<String>> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(cwd)
         .args(["status", "--porcelain=v1", "--untracked-files=all"])
-        .output();
-    let Ok(out) = out else {
-        return Vec::new();
-    };
+        .output()
+        .ok()?;
     if !out.status.success() {
-        return Vec::new();
+        return None;
     }
     let mut paths = Vec::new();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
@@ -262,7 +286,77 @@ pub fn changed_paths(cwd: &Path) -> Vec<String> {
             paths.push(path.to_string());
         }
     }
-    paths
+    Some(paths)
+}
+
+/// A cheap content fingerprint of a workspace file, used to attribute changes to
+/// a run (not a security primitive). `absent` if missing; `len:N` for very large
+/// files (not read, to bound cost); otherwise a non-cryptographic hash of the
+/// bytes.
+fn fingerprint_file(abs: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    const CAP: u64 = 8 * 1024 * 1024;
+    match std::fs::metadata(abs) {
+        Err(_) => "absent".to_string(),
+        Ok(m) if !m.is_file() => "nonfile".to_string(),
+        Ok(m) if m.len() > CAP => format!("len:{}", m.len()),
+        Ok(_) => match std::fs::read(abs) {
+            Ok(bytes) => {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                bytes.hash(&mut h);
+                format!("{:016x}", h.finish())
+            }
+            Err(_) => "unreadable".to_string(),
+        },
+    }
+}
+
+/// Path + content fingerprint for every file git reports dirty/untracked in
+/// `cwd`. `None` when there is no git evidence. Captured before a worker runs
+/// (and persisted to the run dir) so its changes can be attributed afterward,
+/// even for an already-dirty workspace.
+pub fn dirty_fingerprints(cwd: &Path) -> Option<Vec<(String, String)>> {
+    let paths = changed_paths(cwd)?;
+    Some(
+        paths
+            .into_iter()
+            .map(|p| {
+                let fp = fingerprint_file(&cwd.join(&p));
+                (p, fp)
+            })
+            .collect(),
+    )
+}
+
+/// Paths the worker actually touched between `baseline` and `after`: any path
+/// whose fingerprint is new or differs (added/modified), plus any that vanished
+/// from the dirty set (reverted or deleted). Closes the hole where a worker
+/// re-modifies a path that was already dirty before the run (plain path-set
+/// subtraction would filter it out).
+pub fn worker_touched(baseline: &[(String, String)], after: &[(String, String)]) -> Vec<String> {
+    use std::collections::BTreeMap;
+    let base: BTreeMap<&str, &str> = baseline
+        .iter()
+        .map(|(p, f)| (p.as_str(), f.as_str()))
+        .collect();
+    let aft: BTreeMap<&str, &str> = after
+        .iter()
+        .map(|(p, f)| (p.as_str(), f.as_str()))
+        .collect();
+    let mut touched: Vec<String> = Vec::new();
+    for (p, f) in &aft {
+        if base.get(p) != Some(f) {
+            touched.push((*p).to_string());
+        }
+    }
+    for p in base.keys() {
+        if !aft.contains_key(p) {
+            touched.push((*p).to_string());
+        }
+    }
+    touched.sort();
+    touched.dedup();
+    touched
 }
 
 fn decide_state(reported: &str, all_passed: bool, result: Option<&RunResult>) -> TaskState {
@@ -385,7 +479,9 @@ mod tests {
             worker_rationale: None,
         };
         t.kind = kind.into();
-        let e = evaluate(&dir, "run-x", &t, None);
+        // Some(&[]) = git evidence available, nothing forbidden changed (these
+        // tests exercise verdict/state logic, not the no-evidence fail-closed).
+        let e = evaluate(&dir, "run-x", &t, Some(&[]));
         let _ = std::fs::remove_dir_all(&dir);
         e
     }
@@ -481,6 +577,71 @@ mod tests {
     // Regression: a done result with no validation commands must stay Done.
     // "did validation run" is advisory, not an integrity gate.
     #[test]
+    fn worker_touched_catches_a_re_modified_already_dirty_path() {
+        // A path dirty before the run (same content) is NOT attributed; a path
+        // the worker re-modified (fingerprint changed) IS; a newly-dirtied path
+        // IS; a path reverted out of the dirty set IS.
+        let baseline = vec![
+            ("untouched.txt".to_string(), "h1".to_string()),
+            (".env".to_string(), "secret-v1".to_string()),
+            ("reverted.txt".to_string(), "h9".to_string()),
+        ];
+        let after = vec![
+            ("untouched.txt".to_string(), "h1".to_string()),
+            (".env".to_string(), "secret-v2".to_string()), // re-modified while dirty
+            ("new.txt".to_string(), "h2".to_string()),     // newly dirtied
+        ];
+        let touched = worker_touched(&baseline, &after);
+        assert!(touched.contains(&".env".to_string()));
+        assert!(touched.contains(&"new.txt".to_string()));
+        assert!(touched.contains(&"reverted.txt".to_string()));
+        assert!(!touched.contains(&"untouched.txt".to_string()));
+    }
+
+    #[test]
+    fn no_diff_evidence_fails_the_forbidden_gate_closed() {
+        let dir = std::env::temp_dir().join(format!("yard-eval-{}-noevidence", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("handoff.md"), "h").unwrap();
+        let mut r = dummy_result();
+        r.run_id = "run-x".into();
+        r.task_id = "YARD-9".into();
+        r.status = "done".into();
+        std::fs::write(dir.join("result.json"), serde_json::to_string(&r).unwrap()).unwrap();
+        let mut t = crate::schemas::Task {
+            id: "YARD-9".into(),
+            title: "t".into(),
+            state: TaskState::Running,
+            priority: 0,
+            risk: String::new(),
+            kind: "implementation".into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec![],
+            skills: vec![],
+            required_capabilities: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+        };
+        t.kind = "implementation".into();
+        // None = no git evidence: the forbidden gate fails closed, so a worker's
+        // "done" cannot become Done on its self-report alone.
+        let e = evaluate(&dir, "run-x", &t, None);
+        assert_ne!(e.next_task_state, TaskState::Done);
+        assert!(e
+            .checks
+            .iter()
+            .any(|c| c.name == "forbidden_paths_untouched" && c.fatal && !c.passed));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn done_with_no_validation_is_still_done() {
         let dir =
             std::env::temp_dir().join(format!("yard-eval-{}-{}", std::process::id(), "novalidate"));
@@ -526,7 +687,7 @@ mod tests {
             worker_rationale: None,
         };
 
-        let eval = evaluate(&dir, "run-x", &t, None);
+        let eval = evaluate(&dir, "run-x", &t, Some(&[]));
         assert_eq!(eval.next_task_state, TaskState::Done);
         let v = eval
             .checks

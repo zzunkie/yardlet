@@ -304,10 +304,12 @@ pub fn run_batch<F: FnMut(&str)>(
             Err(e) => on_event(&format!("{}: worker error: {e}", p.task.id)),
         }
 
-        // Parallel runs execute in an isolated worktree; the actual-diff check
-        // for that worktree is a follow-up, so fall back to the reported changes
-        // here (forbidden paths still gate via the worker's self-report).
-        let eval = evaluator::evaluate(&p.run_dir, &p.run_id, &p.task, None);
+        // Parallel runs execute in an isolated worktree, so its git status IS
+        // the worker's diff (no baseline to subtract). Evaluate the forbidden
+        // gate against that real evidence, not the worker's self-report. This is
+        // checked before integrate_worktree merges it into the workspace.
+        let evidence = evaluator::changed_paths(&p.wt_path);
+        let eval = evaluator::evaluate(&p.run_dir, &p.run_id, &p.task, evidence.as_deref());
         let _ = state::write_str(
             &p.run_dir.join("evaluation.json"),
             &serde_json::to_string_pretty(&eval).unwrap_or_default(),
