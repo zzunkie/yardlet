@@ -837,21 +837,18 @@ fn cmd_worker(cwd: &std::path::Path, args: WorkerArgs) -> Result<()> {
             for p in &workers.workers {
                 let s = guard::probe(p, &billing);
                 println!("{} [{}]", s.id, s.readiness.label());
-                if let Some(v) = &s.version {
-                    println!("  version: {v}");
-                }
                 println!("  command: {}", s.command);
-                if let Some(path) = &s.binary_path {
-                    println!("  path: {}", path.display());
-                }
-                if !s.billing_env_present.is_empty() {
-                    // names only, never values
+                // Staged checklist: each readiness gate, with auth reported as
+                // unverifiable offline (Yardlet never makes a billed call).
+                for stage in s.stages(&billing) {
                     println!(
-                        "  billing env present: {}",
-                        s.billing_env_present.join(", ")
+                        "  [{:>5}] {:<11} {}",
+                        stage.mark.marker(),
+                        stage.label,
+                        stage.note
                     );
                 }
-                println!("  {}", s.detail);
+                println!("  => {}", s.invocation_verdict(&billing));
                 println!();
             }
             Ok(())

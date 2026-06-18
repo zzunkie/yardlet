@@ -436,7 +436,7 @@ pub fn record_run_suggestions(
 /// proposed it; Yardlet (the deterministic core) writes it. No clobber. Returns
 /// the slugs written. Unlike learned skills these are not auto-pruned (an
 /// always-on rule has no per-task attribution to score), but they are
-/// reversible (git) and surfaced by `yard harness review`.
+/// reversible (git) and surfaced by `yardlet harness review`.
 pub fn record_run_rules(
     ws: &Workspace,
     suggestions: &[crate::schemas::HarnessSuggestion],
@@ -466,7 +466,7 @@ pub fn record_run_rules(
 }
 
 /// Learned rule files (`.agents/rules/learned-*.md`) in this workspace, for
-/// `yard harness review`. Returns bare names (without the `.md`).
+/// `yardlet harness review`. Returns bare names (without the `.md`).
 pub fn learned_rules(ws: &Workspace) -> Vec<String> {
     let mut out: Vec<String> = std::fs::read_dir(ws.agents_dir().join("rules"))
         .into_iter()

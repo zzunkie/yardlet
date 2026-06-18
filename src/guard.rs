@@ -48,6 +48,147 @@ pub struct WorkerStatus {
     pub detail: String,
 }
 
+/// The outcome of one readiness gate in the staged worker-status display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageMark {
+    /// Gate satisfied.
+    Pass,
+    /// Gate failed; blocks readiness.
+    Fail,
+    /// Billing env present, but the policy scrubs it before spawning (safe).
+    Scrubbed,
+    /// Hard stop: strict (`block`) policy refuses to run while billing env is set.
+    Blocked,
+    /// Cannot be checked offline. Not a failure: Yardlet never makes a billed
+    /// call to verify auth, so it relies on the worker's own subscription login.
+    Offline,
+    /// Gate does not apply (e.g. version when no binary was found).
+    Skipped,
+}
+
+impl StageMark {
+    /// A short marker for the staged checklist.
+    pub fn marker(self) -> &'static str {
+        match self {
+            StageMark::Pass => "ok",
+            StageMark::Fail => "FAIL",
+            StageMark::Scrubbed => "scrub",
+            StageMark::Blocked => "BLOCK",
+            StageMark::Offline => "n/a",
+            StageMark::Skipped => "-",
+        }
+    }
+}
+
+/// One line of the staged worker-status checklist.
+#[derive(Debug, Clone)]
+pub struct StatusStage {
+    pub label: &'static str,
+    pub mark: StageMark,
+    pub note: String,
+}
+
+impl WorkerStatus {
+    /// The readiness gates as a staged checklist for `yardlet worker status`.
+    ///
+    /// Auth is deliberately reported as unverifiable offline: Yardlet never
+    /// makes a billed call to confirm a subscription login, so it never claims
+    /// the login was verified. It only reports what it can prove locally.
+    pub fn stages(&self, billing: &BillingPolicy) -> Vec<StatusStage> {
+        let binary = match &self.binary_path {
+            Some(p) => StatusStage {
+                label: "binary",
+                mark: StageMark::Pass,
+                note: format!("found: {}", p.display()),
+            },
+            None => StatusStage {
+                label: "binary",
+                mark: StageMark::Fail,
+                note: format!(
+                    "'{}' not found on PATH or known install paths",
+                    self.command
+                ),
+            },
+        };
+
+        let version = match (&self.binary_path, &self.version) {
+            (Some(_), Some(v)) => StatusStage {
+                label: "version",
+                mark: StageMark::Pass,
+                note: v.clone(),
+            },
+            (Some(_), None) => StatusStage {
+                label: "version",
+                mark: StageMark::Fail,
+                note: "offline `--version` probe failed; resolved CLI or its runtime is unverified"
+                    .to_string(),
+            },
+            (None, _) => StatusStage {
+                label: "version",
+                mark: StageMark::Skipped,
+                note: "no binary to probe".to_string(),
+            },
+        };
+
+        let policy = billing.worker_invocation.ai_billing_env_policy.as_str();
+        let billing_env = if self.billing_env_present.is_empty() {
+            StatusStage {
+                label: "billing-env",
+                mark: StageMark::Pass,
+                note: "AI-billing env clean".to_string(),
+            }
+        } else if policy == "block" {
+            StatusStage {
+                label: "billing-env",
+                mark: StageMark::Blocked,
+                note: format!(
+                    "{} var(s) present and policy is strict (block): the worker will refuse to run until unset [{}]",
+                    self.billing_env_present.len(),
+                    self.billing_env_present.join(", ")
+                ),
+            }
+        } else {
+            StatusStage {
+                label: "billing-env",
+                mark: StageMark::Scrubbed,
+                note: format!(
+                    "{} var(s) present, scrubbed before the worker runs (policy: {}) [{}]",
+                    self.billing_env_present.len(),
+                    policy,
+                    self.billing_env_present.join(", ")
+                ),
+            }
+        };
+
+        let auth = StatusStage {
+            label: "auth",
+            mark: StageMark::Offline,
+            note: "not verified offline; Yardlet never makes a billed call to check, it relies on the worker's own subscription login".to_string(),
+        };
+
+        vec![binary, version, billing_env, auth]
+    }
+
+    /// One-line verdict framed as invocation safety under the current policy,
+    /// never as a claim that the subscription login itself was verified.
+    pub fn invocation_verdict(&self, billing: &BillingPolicy) -> String {
+        let policy = billing.worker_invocation.ai_billing_env_policy.as_str();
+        match self.readiness {
+            Readiness::Ready if policy == "block" && !self.billing_env_present.is_empty() => {
+                "blocked: strict billing policy refuses to run while AI-billing env is set"
+                    .to_string()
+            }
+            Readiness::Ready => {
+                "safe to invoke under current policy (auth not verified offline)".to_string()
+            }
+            Readiness::Ambiguous => {
+                "not invocable: binary found but unverified (see version gate)".to_string()
+            }
+            Readiness::NotReady => "not invocable: worker CLI not installed".to_string(),
+        }
+    }
+}
+
 /// Locate an executable on PATH (a small, dependency-free `which`).
 pub fn find_binary(command: &str) -> Option<PathBuf> {
     // An explicit path is honored as-is.
@@ -289,5 +430,68 @@ mod tests {
         assert!(keys.contains(&"HOME"));
         assert!(!keys.contains(&"OPENAI_API_KEY"));
         assert!(!keys.contains(&"ANTHROPIC_API_KEY"));
+    }
+
+    fn billing_with_policy(policy: &str) -> BillingPolicy {
+        let mut b = BillingPolicy {
+            schema_version: 1,
+            mode: String::new(),
+            worker_invocation: Default::default(),
+            blocked_worker_env_names: vec![],
+        };
+        b.worker_invocation.ai_billing_env_policy = policy.to_string();
+        b
+    }
+
+    fn ready_status(billing_env_present: Vec<String>) -> WorkerStatus {
+        WorkerStatus {
+            id: "codex".into(),
+            command: "codex".into(),
+            binary_path: Some(PathBuf::from("/usr/local/bin/codex")),
+            version: Some("codex 1.0.0".into()),
+            billing_env_present,
+            readiness: Readiness::Ready,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn staged_status_reports_auth_as_unverified_offline_never_claims_verified() {
+        let billing = billing_with_policy("scrub_or_block");
+        let stages = ready_status(vec![]).stages(&billing);
+        let auth = stages.iter().find(|s| s.label == "auth").unwrap();
+        assert_eq!(auth.mark, StageMark::Offline);
+        assert!(auth.note.contains("not verified offline"));
+        // The verdict speaks to invocation safety, not auth verification.
+        let verdict = ready_status(vec![]).invocation_verdict(&billing);
+        assert!(verdict.contains("safe to invoke under current policy"));
+        assert!(!verdict.to_lowercase().contains("auth verified"));
+    }
+
+    #[test]
+    fn staged_status_marks_billing_env_scrubbed_vs_blocked_by_policy() {
+        let present = vec!["OPENAI_API_KEY".to_string()];
+        // scrub policy: present env is scrubbed, still safe to invoke.
+        let scrub = billing_with_policy("scrub_or_block");
+        let stage = ready_status(present.clone())
+            .stages(&scrub)
+            .into_iter()
+            .find(|s| s.label == "billing-env")
+            .unwrap();
+        assert_eq!(stage.mark, StageMark::Scrubbed);
+        assert!(ready_status(present.clone())
+            .invocation_verdict(&scrub)
+            .contains("safe to invoke"));
+        // block policy: present env is a hard stop.
+        let block = billing_with_policy("block");
+        let stage = ready_status(present.clone())
+            .stages(&block)
+            .into_iter()
+            .find(|s| s.label == "billing-env")
+            .unwrap();
+        assert_eq!(stage.mark, StageMark::Blocked);
+        assert!(ready_status(present)
+            .invocation_verdict(&block)
+            .contains("blocked"));
     }
 }
