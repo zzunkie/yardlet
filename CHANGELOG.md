@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.0 - 2026-06-18
+
+### Changed
+
+- **"Done" is now backed by workspace evidence, not the worker's self-report.**
+  The evaluator's forbidden-path check runs against the actual git diff a run
+  produced (baseline vs after), not the paths the worker claimed to touch, and a
+  task's `validation` commands now run deterministically after the worker exits:
+  a failing validation (or a required one that never ran) blocks the Done state.
+  This closes the gap where a worker could report success while the workspace
+  said otherwise.
+- **Hard image/asset-generation routing.** Image and asset *generation* tasks
+  now route to `codex` through a deterministic capability rule, not just the
+  planner rubric, and may opt out of the fallback chain when no other worker has
+  the capability. Image *analysis* tasks are unaffected.
+- **Learned auto-rules are off by default.** `auto_rule` no longer defaults on;
+  always-on rules are promoted by hand via `yardlet harness review`, so the
+  deterministic core never silently rewrites its own guidance.
+
+### Added
+
+- **Staged `yardlet worker status`.** Each readiness gate (binary, version,
+  billing-env, auth) is shown as a discrete stage with a marker. Auth is
+  reported as "not verified offline" (Yardlet never makes a billed call to
+  confirm a subscription login), and the per-worker verdict is framed as "safe
+  to invoke under current policy", never as "auth verified".
+
 ## 0.5.6 - 2026-06-17
 
 ### Changed
