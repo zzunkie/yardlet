@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.6.1 - 2026-06-18
+
+### Changed
+
+- **Capability-based worker routing replaces the image-keyword router.** A task
+  routes by a typed `required_capabilities` (planner-assigned) matched against a
+  worker's declared `capabilities` in workers.yaml, instead of a hardcoded
+  English/Korean keyword list in the router. Routing restricts both the
+  candidate and the fallback set to workers that declare the capability; an
+  explicit override to an incapable worker fails with a clear message. The
+  "is this image generation?" judgment moves to the planner (the right layer);
+  the deterministic core only matches the structured field. `yardlet goal` gains
+  `--requires <capability>` for the express path.
+- **"Done" is backed by real git evidence, and fails closed without it.** The
+  forbidden-path gate runs against the actual diff, attributed by content
+  fingerprints (so a worker re-modifying an already-dirty path is still caught),
+  and the serial, parallel, and recovery paths all feed real git status rather
+  than the worker's self-report. With no git evidence the gate fails closed, so
+  a run cannot reach Done on the worker's word alone.
+- **Workers are labelled "invocable", not "ready".** Readiness means the binary
+  and version probed and the billing-env posture is known, not that the
+  subscription login was verified (Yardlet never makes a billed call to check).
+
+### Added
+
+- The Home workers panel shows each worker's billing/auth posture and model;
+  `yardlet worker status` and `yardlet status --json` expose the same.
+
+### Fixed
+
+- **A worker-added follow-up task is no longer clobbered.** A run re-reads the
+  latest queue before saving its end state, so a task the worker appended during
+  the run survives (the user-cancel path too).
+- **The configured `routing.default_worker` is reachable** again: the planner no
+  longer rewrites a blank `preferred_worker` to `codex`.
+- **Validation commands get a timeout, captured output, and a scrubbed env.**
+  Each runs in its own process group and is killed (whole tree) on a 300s
+  timeout, with stdout/stderr captured; it runs with a billing-scrubbed core
+  environment, so a validation command cannot consume provider credentials.
+
 ## 0.6.0 - 2026-06-18
 
 ### Changed
