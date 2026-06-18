@@ -27,3 +27,4 @@ Cargo.lock.orig
 # internal planning docs (kept local, not public)
 docs/yardlet-final-plan.md
 docs/yardlet-roadmap.md
+docs/yardlet-queue-ownership-design.md
