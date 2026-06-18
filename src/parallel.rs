@@ -126,7 +126,7 @@ pub fn run_batch<F: FnMut(&str)>(
             match routing::resolve_worker_for_task(ws, &workers_file, &billing, None, &task) {
                 Ok(r) => r,
                 Err(e) => {
-                    on_event(&format!("{}: no ready worker ({e}); skipped", task.id));
+                    on_event(&format!("{}: no invocable worker ({e}); skipped", task.id));
                     continue;
                 }
             };

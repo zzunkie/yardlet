@@ -237,7 +237,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         lines.push(String::new());
         match &resolved {
             Ok(r) => lines.push(format!("will use {} ({})", r.worker_id, r.reason)),
-            Err(e) => lines.push(format!("no ready worker: {e}")),
+            Err(e) => lines.push(format!("no invocable worker: {e}")),
         }
         lines.push("re-run with --execute to invoke the worker.".to_string());
         return Ok(RunReport {
@@ -401,8 +401,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // User stopped it (Esc): requeue rather than evaluate as a real failure.
     if cancelled_marker.exists() {
         let _ = std::fs::remove_file(&cancelled_marker);
-        queue.tasks[idx].state = TaskState::Queued;
-        ws.save_queue(&queue)?;
+        // Re-read the latest queue before saving: the worker may have written a
+        // follow-up task before the cancel was observed (no stale clobber).
+        save_task_state_on_latest_queue(ws, &mut queue, &task.id, TaskState::Queued)?;
         lines.push(format!("stopped by user; {} requeued", task.id));
         return Ok(RunReport {
             run_id: run_id.clone(),
@@ -1021,6 +1022,23 @@ fn validation_required(task: &crate::schemas::Task) -> bool {
 /// stuck command must not hang the orchestrator after the worker has finished.
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Kill a timed-out validation command and its whole process group (so children
+/// spawned by `npm test` / `cargo test` etc. do not survive the timeout), then
+/// reap it. On unix the child leads its own group (process_group(0)), so a
+/// negative pgid signals the group; the direct kill is a backstop.
+fn kill_validation_child(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id();
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .arg(format!("-{pgid}"))
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Run the task's validation commands as a deterministic gate. These commands
 /// are planner-authored, so Yardlet runs them itself (not the worker) with a
 /// billing-scrubbed core environment (no provider keys, no worker `pass_env`),
@@ -1048,6 +1066,13 @@ fn run_validation_commands(
             .env_clear()
             .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::null());
+        // Put the command in its own process group so a timeout can kill the
+        // whole tree (children of `sh` too), not just the shell.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         if let Some(f) = &log {
             if let (Ok(o), Ok(e)) = (f.try_clone(), f.try_clone()) {
                 cmd.stdout(Stdio::from(o)).stderr(Stdio::from(e));
@@ -1060,8 +1085,7 @@ fn run_validation_commands(
                     Ok(Some(status)) => break (status.success(), status.code(), false),
                     Ok(None) => {
                         if started.elapsed() > VALIDATION_TIMEOUT {
-                            let _ = child.kill();
-                            let _ = child.wait();
+                            kill_validation_child(&mut child);
                             break (false, None, true);
                         }
                         std::thread::sleep(Duration::from_millis(100));
@@ -1181,27 +1205,16 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
         match latest {
             Some((run_id, run_dir)) if run_dir.join("result.json").exists() => {
                 // Evidence for an orphan: its worktree (isolated, so git status
-                // is exactly the worker's diff) when present. Otherwise this is a
-                // serial-run salvage of already-finished work, where fail-closing
-                // would only force a wasteful re-run (any writes already happened),
-                // so fall back to the worker's reported paths for the gate.
-                let reported: Vec<String> = std::fs::read_to_string(run_dir.join("result.json"))
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<crate::schemas::RunResult>(&s).ok())
-                    .map(|r| {
-                        r.changes
-                            .files_modified
-                            .into_iter()
-                            .chain(r.changes.files_created)
-                            .chain(r.changes.files_deleted)
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                // is exactly the worker's diff) when present, else the workspace's
+                // own git status (an orphan froze the tree at the crash, so its
+                // status is real evidence, not the worker's self-report). `None`
+                // only when neither is a git repo, in which case the evaluator
+                // fails closed.
                 let evidence = run_worktree(&run_dir)
                     .filter(|w| w.exists())
                     .and_then(|w| evaluator::changed_paths(&w))
-                    .unwrap_or(reported);
-                let eval = evaluator::evaluate(&run_dir, &run_id, t, Some(&evidence));
+                    .or_else(|| evaluator::changed_paths(&ws.root));
+                let eval = evaluator::evaluate(&run_dir, &run_id, t, evidence.as_deref());
                 // Mark this orphan run finalized so a later pass won't
                 // re-evaluate it (a persistent failure must not loop).
                 let _ = std::fs::remove_file(run_dir.join("worker.pid"));
@@ -1612,10 +1625,16 @@ mod tests {
         // The reported gap: a task got stuck Failed because the orchestrator
         // died after the worker finished but before evaluating it. The run's
         // worker.pid is still on disk (dead) and a clean result was written.
-        // Recovery must re-evaluate that stranded result and flip the task to
-        // Done — not leave completed work unrecoverable and force a full re-run.
+        // Recovery re-evaluates that stranded result (instead of a full re-run)
+        // against the workspace's real git status (not the worker's self-report);
+        // with no forbidden path in the diff it salvages to Done.
         let root = std::env::temp_dir().join(format!("yard-salvage-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&root)
+            .output();
         let ws = Workspace::at(&root);
         let mut t = task("YARD-001", TaskState::Failed, 10, false);
         t.kind = "implementation".into();
@@ -1653,6 +1672,7 @@ mod tests {
 
         let msgs = recover_orphans(&ws);
         assert!(msgs.iter().any(|m| m.contains("recovered")), "{msgs:?}");
+        // Salvaged to Done from real git evidence (not a full re-run).
         assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
         // Finalized: the pid file is cleared so a later pass is a no-op.
         assert!(!run_dir.join("worker.pid").exists());

@@ -162,6 +162,11 @@ pub struct GoalArgs {
     /// Force a worker for the goal task (codex | claude-code | <id>).
     #[arg(long)]
     worker: Option<String>,
+    /// Capability the goal task hard-requires (e.g. image_generation): routes to
+    /// a worker that declares it, since the express path skips the planner.
+    /// Repeatable.
+    #[arg(long = "requires")]
+    requires: Vec<String>,
     /// Plan only; do not start the drain.
     #[arg(long)]
     plan_only: bool,
@@ -553,7 +558,13 @@ fn cmd_goal(cwd: &std::path::Path, args: GoalArgs) -> Result<()> {
         println!("Initialized Yardlet workspace (.agents/).");
     }
     let goal = args.goal.join(" ");
-    let n = crate::planner::plan_goal(&ws, &goal, args.verify.as_deref(), args.worker.as_deref())?;
+    let n = crate::planner::plan_goal(
+        &ws,
+        &goal,
+        args.verify.as_deref(),
+        args.worker.as_deref(),
+        &args.requires,
+    )?;
     println!("Goal queued ({n} task{}).", if n == 1 { "" } else { "s" });
     if args.plan_only {
         println!("Next: `yardlet run --auto` to execute.");

@@ -192,6 +192,7 @@ pub fn plan_goal(
     goal: &str,
     verify: Option<&str>,
     worker_override: Option<&str>,
+    required_capabilities: &[String],
 ) -> Result<usize> {
     let goal = goal.trim();
     if goal.is_empty() {
@@ -212,7 +213,7 @@ pub fn plan_goal(
         effort: String::new(),
         depends_on: vec![],
         skills: vec![],
-        required_capabilities: vec![],
+        required_capabilities: required_capabilities.to_vec(),
         allowed_scope: vec![],
         acceptance: vec![yaml::Value::String(goal.to_string())],
         validation: None,
@@ -220,8 +221,9 @@ pub fn plan_goal(
         interaction: None,
         worker_rationale: Some("express goal (yardlet goal)".to_string()),
     }];
-    // Express goals bypass the planner, so there is no capability inference here
-    // (no magic keywords): route by `--worker` if a specific worker is needed.
+    // Express goals bypass the planner, so capability routing is explicit (no
+    // magic keywords): pass `--requires <capability>` for a hard route, or
+    // `--worker` to force a specific worker.
 
     if let Some(v) = verify.map(str::trim).filter(|v| !v.is_empty()) {
         // A separate reviewer task: a fresh pair of eyes, not the worker that
@@ -703,11 +705,9 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
             priority: base_priority + ((i + 1) * 10) as i64,
             risk: pt.risk.clone(),
             kind: pt.kind.clone(),
-            preferred_worker: if pt.preferred_worker.trim().is_empty() {
-                "codex".to_string()
-            } else {
-                pt.preferred_worker.clone()
-            },
+            // Blank stays blank so routing's configured default_worker applies
+            // (precedence: planner preferred -> learned rule -> default).
+            preferred_worker: pt.preferred_worker.clone(),
             model: pt.model.clone(),
             effort: pt.effort.clone(),
             depends_on: sanitize_deps(&pt.depends_on, &prior_ids),
@@ -927,11 +927,8 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             priority: ((i + 1) * 10) as i64,
             risk: t.risk.clone(),
             kind: t.kind.clone(),
-            preferred_worker: if t.preferred_worker.trim().is_empty() {
-                "codex".to_string()
-            } else {
-                t.preferred_worker.clone()
-            },
+            // Blank stays blank so routing's configured default_worker applies.
+            preferred_worker: t.preferred_worker.clone(),
             model: t.model.clone(),
             effort: t.effort.clone(),
             depends_on: sanitize_deps(&t.depends_on, &prior_ids),
@@ -1101,7 +1098,7 @@ pub(crate) fn pick_ready_worker(
     }
 
     Err(anyhow!(
-        "no ready planning worker among {tried:?}. Run `yardlet worker status` to diagnose. \
+        "no invocable planning worker among {tried:?}. Run `yardlet worker status` to diagnose. \
          Yardlet did not call an AI API and did not ask for an API key."
     ))
 }
@@ -1266,7 +1263,7 @@ routing:
         let ws = Workspace::at(&root);
 
         // No verify: a single implementation task, no ambiguity gate.
-        let n = plan_goal(&ws, "fix the login redirect", None, None).unwrap();
+        let n = plan_goal(&ws, "fix the login redirect", None, None, &[]).unwrap();
         assert_eq!(n, 1);
         let q = ws.load_queue().unwrap();
         assert_eq!(q.tasks.len(), 1);
@@ -1281,6 +1278,7 @@ routing:
             "polish the title screen",
             Some("no clipped text and the theme is consistent"),
             None,
+            &[],
         )
         .unwrap();
         assert_eq!(n, 2);
@@ -1296,13 +1294,14 @@ routing:
         let _ = std::fs::remove_dir_all(&root);
         let ws = Workspace::at(&root);
 
-        // The express path bypasses the planner; with no --worker it must NOT
-        // infer a worker from wording (the old image-keyword router is gone).
+        // The express path bypasses the planner; with no --worker/--requires it
+        // must NOT infer a worker from wording (the old keyword router is gone).
         let n = plan_goal(
             &ws,
             "generate icon assets for the settings page",
             None,
             None,
+            &[],
         )
         .unwrap();
         assert_eq!(n, 1);
@@ -1311,11 +1310,29 @@ routing:
         assert!(q.tasks[0].required_capabilities.is_empty());
         let _ = std::fs::remove_dir_all(&root);
 
-        // An explicit --worker is the escape hatch for express goals.
+        // --worker forces a worker for the express goal.
         let _ = std::fs::remove_dir_all(&root);
-        let n = plan_goal(&ws, "generate icon assets", None, Some("codex")).unwrap();
+        let n = plan_goal(&ws, "generate icon assets", None, Some("codex"), &[]).unwrap();
         assert_eq!(n, 1);
         assert_eq!(ws.load_queue().unwrap().tasks[0].preferred_worker, "codex");
+        let _ = std::fs::remove_dir_all(&root);
+
+        // --requires sets a hard capability route (the escape hatch for the
+        // express path that the capability router can then honor).
+        let _ = std::fs::remove_dir_all(&root);
+        let n = plan_goal(
+            &ws,
+            "generate icon assets",
+            None,
+            None,
+            &["image_generation".to_string()],
+        )
+        .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(
+            ws.load_queue().unwrap().tasks[0].required_capabilities,
+            vec!["image_generation".to_string()]
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

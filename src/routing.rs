@@ -143,7 +143,7 @@ fn resolve_candidate(
                 let reason = if id == &candidate {
                     source.to_string()
                 } else {
-                    format!("fallback ({candidate} not ready)")
+                    format!("fallback ({candidate} not invocable)")
                 };
                 return Ok(Resolved {
                     worker_id: id.clone(),
@@ -154,7 +154,7 @@ fn resolve_candidate(
         }
     }
     Err(anyhow!(
-        "no ready worker among {tried:?}. Run `yardlet worker status` to diagnose. \
+        "no invocable worker among {tried:?}. Run `yardlet worker status` to diagnose. \
          Yardlet did not call an AI API and did not ask for an API key."
     ))
 }
