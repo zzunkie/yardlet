@@ -467,7 +467,7 @@ impl Default for Limits {
 // .agents/billing-policy.yaml
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BillingPolicy {
     pub schema_version: u32,
     #[serde(default)]

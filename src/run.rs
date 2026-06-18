@@ -7,7 +7,7 @@
 //! real usage. Pass `execute: true` to actually invoke the worker.
 
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
 use chrono::Local;
@@ -463,7 +463,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // and blocks Done.
     let validation_cmds = validation_commands(&task);
     let (validation_ran, validation_passed) =
-        run_validation_commands(&validation_cmds, &ws.root, &run_dir);
+        run_validation_commands(&validation_cmds, &ws.root, &run_dir, &billing);
     if (validation_ran && !validation_passed) || (validation_required(&task) && !validation_ran) {
         lines.push("validation failed (blocks Done)".to_string());
         eval.checks.push(evaluator::fatal_failure(
@@ -1017,32 +1017,76 @@ fn validation_required(task: &crate::schemas::Task) -> bool {
 /// Run `cmds` in `cwd` via `sh -c`, write the deterministic outcome to
 /// `run_dir/validation.json`, and return `(any_ran, all_passed)`. Yardlet (not
 /// the worker) decides whether validation passed.
+/// How long a single validation command may run before Yardlet kills it. A
+/// stuck command must not hang the orchestrator after the worker has finished.
+const VALIDATION_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Run the task's validation commands as a deterministic gate. These commands
+/// are planner-authored, so Yardlet runs them itself (not the worker) with a
+/// billing-scrubbed core environment (no provider keys, no worker `pass_env`),
+/// captures each command's output to the run dir, and kills any command that
+/// exceeds VALIDATION_TIMEOUT. Returns (ran_any, all_passed); a timeout counts
+/// as a failure. Note: the kill targets the `sh` process, not its whole process
+/// tree, so a command that backgrounds a grandchild may leave it running.
 fn run_validation_commands(
     cmds: &[String],
     cwd: &std::path::Path,
     run_dir: &std::path::Path,
+    billing: &crate::schemas::BillingPolicy,
 ) -> (bool, bool) {
+    use std::process::{Command, Stdio};
+    let env = guard::scrub_env(std::env::vars(), &billing.blocked_worker_env_names);
     let mut results = Vec::new();
     let mut all_passed = true;
-    for c in cmds {
-        let out = std::process::Command::new("sh")
-            .arg("-c")
+    for (i, c) in cmds.iter().enumerate() {
+        let log_rel = format!("validation-{i}.log");
+        let log = std::fs::File::create(run_dir.join(&log_rel)).ok();
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
             .arg(c)
             .current_dir(cwd)
-            .stdin(std::process::Stdio::null())
-            .output();
-        let (passed, code) = match out {
-            Ok(o) => (o.status.success(), o.status.code()),
-            Err(_) => (false, None),
+            .env_clear()
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .stdin(Stdio::null());
+        if let Some(f) = &log {
+            if let (Ok(o), Ok(e)) = (f.try_clone(), f.try_clone()) {
+                cmd.stdout(Stdio::from(o)).stderr(Stdio::from(e));
+            }
+        }
+        let started = Instant::now();
+        let (passed, code, timed_out) = match cmd.spawn() {
+            Ok(mut child) => loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break (status.success(), status.code(), false),
+                    Ok(None) => {
+                        if started.elapsed() > VALIDATION_TIMEOUT {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            break (false, None, true);
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    Err(_) => break (false, None, false),
+                }
+            },
+            Err(_) => (false, None, false),
         };
         if !passed {
             all_passed = false;
         }
-        results.push(serde_json::json!({ "command": c, "passed": passed, "exit_code": code }));
+        results.push(serde_json::json!({
+            "command": c,
+            "passed": passed,
+            "exit_code": code,
+            "timed_out": timed_out,
+            "log": log_rel,
+        }));
     }
     let report = serde_json::json!({
         "ran": !cmds.is_empty(),
         "all_passed": all_passed,
+        "note": "planner-authored commands, run by Yardlet with a billing-scrubbed env; \
+                 not sandboxed like a worker",
         "commands": results,
     });
     let _ = write_str(
@@ -1346,15 +1390,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("yard-valrun-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        let billing = crate::schemas::BillingPolicy::default();
         // A passing command -> ran and passed.
-        let (ran, passed) = run_validation_commands(&["true".to_string()], &dir, &dir);
+        let (ran, passed) = run_validation_commands(&["true".to_string()], &dir, &dir, &billing);
         assert!(ran && passed);
         // A failing command -> ran but not passed (this is the gate that blocks Done).
-        let (ran, passed) = run_validation_commands(&["false".to_string()], &dir, &dir);
+        let (ran, passed) = run_validation_commands(&["false".to_string()], &dir, &dir, &billing);
         assert!(ran && !passed);
         assert!(dir.join("validation.json").is_file());
         // No commands -> nothing ran (a task with nothing to validate is allowed).
-        let (ran, _) = run_validation_commands(&[], &dir, &dir);
+        let (ran, _) = run_validation_commands(&[], &dir, &dir, &billing);
         assert!(!ran);
         let _ = std::fs::remove_dir_all(&dir);
     }
