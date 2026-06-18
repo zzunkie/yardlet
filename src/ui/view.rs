@@ -604,10 +604,27 @@ fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selecte
             } else {
                 id_style
             };
+            // Read-only billing/auth posture: clean / N scrubbed / blocked.
+            // Mirrors `yardlet worker status`: auth itself is never claimed
+            // verified (it cannot be checked offline); this only reflects how
+            // the billing env will be handled at spawn under the current policy.
+            let (posture, posture_color) = if !w.enabled {
+                (String::new(), Color::DarkGray)
+            } else if w.billing_blocked {
+                (l.w_env_blocked.to_string(), Color::Red)
+            } else if w.billing_env_present > 0 {
+                (
+                    format!("{} {}", w.billing_env_present, l.w_env_scrubbed),
+                    Color::Yellow,
+                )
+            } else {
+                (l.w_env_clean.to_string(), Color::DarkGray)
+            };
             let mut spans = vec![
                 Span::styled(format!("{marker}{glyph} "), Style::default().fg(color)),
                 Span::styled(format!("{:<14}", w.id), id_style),
                 Span::styled(format!("{word:<11}"), Style::default().fg(color)),
+                Span::styled(format!("{posture:<13}"), Style::default().fg(posture_color)),
                 Span::styled(
                     w.version
                         .clone()
@@ -616,8 +633,15 @@ fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selecte
                 ),
             ];
             if is_sel {
+                // The selected worker also surfaces its model alongside the
+                // toggle hint (room is tight on every row, so show it here).
+                let model = if w.model.is_empty() {
+                    l.w_model_default
+                } else {
+                    w.model.as_str()
+                };
                 spans.push(Span::styled(
-                    l.worker_toggle_hint,
+                    format!("  {}: {} ·{}", l.w_model, model, l.worker_toggle_hint),
                     Style::default().fg(Color::DarkGray),
                 ));
             }

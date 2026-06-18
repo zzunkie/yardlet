@@ -29,8 +29,20 @@ pub struct WorkerLine {
     pub readiness: String,
     pub version: Option<String>,
     pub billing_env_present: usize,
+    /// True when AI-billing env is present AND the policy is strict (`block`),
+    /// so the worker would hard-stop at run time. Distinguishes a real block
+    /// from the default scrub (present-but-removed-before-spawn).
+    pub billing_blocked: bool,
+    /// Model this worker runs with (alias or full id); empty = the CLI default.
+    pub model: String,
     pub detail: String,
     pub enabled: bool,
+}
+
+/// Whether the worker's billing env would hard-stop a run under this policy.
+/// Pure, so it is unit-tested.
+fn billing_blocked(policy: &str, billing_env_present: usize) -> bool {
+    policy == "block" && billing_env_present > 0
 }
 
 impl Snapshot {
@@ -51,10 +63,11 @@ impl Snapshot {
         let queue = ws.load_queue()?;
         let billing = ws.load_billing()?;
         let workers_file = ws.load_workers()?;
+        let policy = billing.worker_invocation.ai_billing_env_policy.clone();
 
-        // The enabled flag is always re-read from workers.yaml (it is cheap and
-        // user-toggled); only the expensive probe (spawning `--version`) is
-        // reused from the cache, matched by worker id.
+        // The enabled flag, model, and billing-policy posture are always re-read
+        // from config (cheap and user-editable); only the expensive probe
+        // (spawning `--version`) is reused from the cache, matched by worker id.
         let workers = workers_file
             .workers
             .iter()
@@ -65,6 +78,8 @@ impl Snapshot {
                         readiness: "disabled".to_string(),
                         version: None,
                         billing_env_present: 0,
+                        billing_blocked: false,
+                        model: p.model.clone(),
                         detail: "disabled (toggle on the Home workers panel)".to_string(),
                         enabled: false,
                     };
@@ -75,15 +90,20 @@ impl Snapshot {
                 }) {
                     return WorkerLine {
                         enabled: true,
+                        model: p.model.clone(),
+                        billing_blocked: billing_blocked(&policy, c.billing_env_present),
                         ..c.clone()
                     };
                 }
                 let s = guard::probe(p, &billing);
+                let present = s.billing_env_present.len();
                 WorkerLine {
                     id: s.id,
                     readiness: s.readiness.label().to_string(),
                     version: s.version,
-                    billing_env_present: s.billing_env_present.len(),
+                    billing_env_present: present,
+                    billing_blocked: billing_blocked(&policy, present),
+                    model: p.model.clone(),
                     detail: s.detail,
                     enabled: true,
                 }
@@ -174,5 +194,19 @@ impl Snapshot {
             },
             "workers": self.workers,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn billing_blocked_only_when_strict_policy_and_env_present() {
+        // Default scrub policy never blocks, even with billing env present.
+        assert!(!billing_blocked("scrub_or_block", 2));
+        // Strict policy blocks only when billing env is actually present.
+        assert!(billing_blocked("block", 1));
+        assert!(!billing_blocked("block", 0));
     }
 }
