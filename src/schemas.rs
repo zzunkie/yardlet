@@ -595,6 +595,47 @@ pub struct FollowUpTask {
     pub runs_before: Vec<String>,
 }
 
+// ---------------------------------------------------------------------------
+// .agents/conversations/<task_id>.yaml — needs_user conversation transcript
+// ---------------------------------------------------------------------------
+
+/// Who authored a conversation turn on a task paused for the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnRole {
+    /// The worker's user-facing message (its `question_for_user`).
+    Worker,
+    /// The user's reply (a clarifying question or the actual decision).
+    User,
+}
+
+/// One turn in a task's `needs_user` conversation. Yardlet is the sole writer:
+/// the worker authors its message via `question_for_user`, the user replies via
+/// `yardlet answer`, and the core records both here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationTurn {
+    pub role: TurnRole,
+    pub text: String,
+    /// The run that produced a worker turn; empty for user turns. Used to
+    /// dedupe so a retried run does not double-record the same message.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub run_id: String,
+    /// RFC3339 timestamp the turn was recorded.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ts: String,
+}
+
+/// The append-only transcript of a task's conversation with the user. Persisted
+/// per task so a resume can thread the whole exchange back to the worker
+/// (conversational memory), not just the last question.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Conversation {
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default)]
+    pub turns: Vec<ConversationTurn>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Verdict {
     /// The acceptance-criterion id being judged (e.g. "AC-004").

@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::schemas::{BillingPolicy, IntentContract, WorkQueue, WorkersFile, YardConfig};
+use crate::schemas::{
+    BillingPolicy, Conversation, ConversationTurn, IntentContract, TurnRole, WorkQueue,
+    WorkersFile, YardConfig,
+};
 use crate::yaml;
 
 pub const STATE_DIR: &str = ".agents";
@@ -79,6 +82,12 @@ impl Workspace {
     pub fn workers_path(&self) -> PathBuf {
         self.agents_dir().join("workers.yaml")
     }
+    pub fn conversations_dir(&self) -> PathBuf {
+        self.agents_dir().join("conversations")
+    }
+    pub fn conversation_path(&self, task_id: &str) -> PathBuf {
+        self.conversations_dir().join(format!("{task_id}.yaml"))
+    }
     pub fn billing_path(&self) -> PathBuf {
         self.agents_dir().join("billing-policy.yaml")
     }
@@ -110,6 +119,22 @@ impl Workspace {
         load_yaml(&self.workers_path())
     }
 
+    /// A task's conversation transcript (empty when the task never paused for
+    /// the user). A malformed file reads as empty rather than failing the run.
+    pub fn load_conversation(&self, task_id: &str) -> Conversation {
+        let p = self.conversation_path(task_id);
+        if !p.is_file() {
+            return Conversation {
+                task_id: task_id.to_string(),
+                turns: Vec::new(),
+            };
+        }
+        load_yaml(&p).unwrap_or_else(|_| Conversation {
+            task_id: task_id.to_string(),
+            turns: Vec::new(),
+        })
+    }
+
     pub fn load_billing(&self) -> Result<BillingPolicy> {
         load_yaml(&self.billing_path())
     }
@@ -138,10 +163,99 @@ pub fn save_yaml<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
+/// Append a turn to a task's conversation transcript. Yardlet stays the sole
+/// writer of `.agents/`: the worker authors its message via `question_for_user`
+/// and the user replies through `yardlet answer`; the core records both here.
+/// Worker turns dedupe by `run_id`, and an identical consecutive turn is
+/// skipped, so a retried run never double-records.
+pub fn append_conversation_turn(
+    ws: &Workspace,
+    task_id: &str,
+    turn: ConversationTurn,
+) -> Result<()> {
+    let mut conv = ws.load_conversation(task_id);
+    if conv.task_id.is_empty() {
+        conv.task_id = task_id.to_string();
+    }
+    if turn.role == TurnRole::Worker
+        && !turn.run_id.is_empty()
+        && conv
+            .turns
+            .iter()
+            .any(|t| t.role == TurnRole::Worker && t.run_id == turn.run_id)
+    {
+        return Ok(());
+    }
+    if conv
+        .turns
+        .last()
+        .is_some_and(|t| t.role == turn.role && t.text.trim() == turn.text.trim())
+    {
+        return Ok(());
+    }
+    conv.turns.push(turn);
+    save_yaml(&ws.conversation_path(task_id), &conv)
+}
+
 pub fn write_str(path: &Path, contents: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn worker(text: &str, run_id: &str) -> ConversationTurn {
+        ConversationTurn {
+            role: TurnRole::Worker,
+            text: text.into(),
+            run_id: run_id.into(),
+            ts: String::new(),
+        }
+    }
+    fn user(text: &str) -> ConversationTurn {
+        ConversationTurn {
+            role: TurnRole::User,
+            text: text.into(),
+            run_id: String::new(),
+            ts: String::new(),
+        }
+    }
+
+    #[test]
+    fn conversation_appends_dedupes_and_roundtrips() {
+        let dir = std::env::temp_dir().join(format!("yard-conv-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let ws = Workspace::at(&dir);
+
+        // First worker question seeds the transcript.
+        append_conversation_turn(&ws, "YARD-1", worker("Forward+ or GL?", "run-1")).unwrap();
+        // The same run's worker turn is deduped by run_id.
+        append_conversation_turn(&ws, "YARD-1", worker("dup of run-1", "run-1")).unwrap();
+        // A user reply lands.
+        append_conversation_turn(&ws, "YARD-1", user("what is Forward+?")).unwrap();
+        // An identical consecutive user turn is skipped.
+        append_conversation_turn(&ws, "YARD-1", user("what is Forward+?")).unwrap();
+        // A worker turn from a different run lands.
+        append_conversation_turn(&ws, "YARD-1", worker("Forward+ is the advanced path", "run-2"))
+            .unwrap();
+
+        let conv = ws.load_conversation("YARD-1");
+        assert_eq!(conv.task_id, "YARD-1");
+        assert_eq!(conv.turns.len(), 3, "the two duplicate turns are dropped");
+        assert_eq!(conv.turns[0].role, TurnRole::Worker);
+        assert_eq!(conv.turns[0].text, "Forward+ or GL?");
+        assert_eq!(conv.turns[1].role, TurnRole::User);
+        assert_eq!(conv.turns[2].run_id, "run-2");
+
+        // A task that never paused reads as an empty transcript.
+        assert!(ws.load_conversation("YARD-2").turns.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
