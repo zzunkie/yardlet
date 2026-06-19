@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.6.2 - 2026-06-19
+
+### Added
+
+- **Workers propose follow-up tasks; Yardlet ingests them (propose -> ingest).**
+  A worker that finds adjacent work no longer edits `.agents/work-queue.yaml`
+  itself. It proposes tasks in `result.json` `follow_up_tasks` (title + reason,
+  optional kind/risk/scope/acceptance/skills/depends_on/preferred_worker/
+  required_capabilities) and Yardlet ingests them as the sole queue writer:
+  assigns ids and priority, sanitizes dependencies, dedups by title, and tags
+  each `provenance: worker-proposed` so an enqueued follow-up is a tracked
+  candidate, never a silent scope expansion. Runs on the serial and parallel
+  paths.
+- **Positional insert for proposed tasks.** `insert: "next"` slots a follow-up
+  before the tasks already queued (soft ordering); `runs_before: [ids]` injects
+  a dependency so each named existing task waits for the new one (a true "insert
+  between"), dropping self, unknown, and cycle-forming targets. Lets a worker
+  that hits a capability ceiling hand work to the capable worker, placed before
+  its dependents.
+- TUI: up/down arrows move the caret between lines in the multi-line New Work
+  and Answer inputs (column-preserving, CJK-safe).
+
+### Changed
+
+- **A worker writing Yardlet-owned canonical state is now a fatal violation.**
+  The evaluator's forbidden-path gate, run on the real diff, rejects a worker
+  write to `work-queue.yaml`, `intent-contract.yaml`, `workers.yaml`,
+  `*-policy.yaml`, `yardlet.yaml`, or `telemetry/`. The harness assets
+  (`runs/`, `rules/`, `skills/`, `agents/`) stay writable.
+
+### Fixed
+
+- A task's `model: auto` / `effort: auto` no longer clobbers the worker
+  profile's pinned model/effort. A per-task value overrides the profile only
+  when explicit (set and not "auto"); "auto"/empty keeps the profile pin, so
+  resolution is a consistent cascade task -> profile -> CLI default. Only
+  affects workers that pin a model in workers.yaml; the default (empty pin) is
+  unchanged.
+
 ## 0.6.1 - 2026-06-18
 
 ### Changed
