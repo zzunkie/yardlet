@@ -463,6 +463,58 @@ impl App {
     fn caret_end(&mut self) {
         self.input_caret = self.input_len_chars();
     }
+    /// Move the caret up one line in the multi-line input, keeping the column
+    /// (clamped to the previous line's length). On the first line, jump to the
+    /// very start. Char-indexed, so it stays correct with multibyte/CJK text.
+    fn caret_up(&mut self) {
+        let chars: Vec<char> = self.input.chars().collect();
+        let caret = self.input_caret.min(chars.len());
+        let line_start = chars[..caret]
+            .iter()
+            .rposition(|&c| c == '\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        if line_start == 0 {
+            self.input_caret = 0;
+            return;
+        }
+        let col = caret - line_start;
+        let prev_end = line_start - 1; // the '\n' ending the previous line
+        let prev_start = chars[..prev_end]
+            .iter()
+            .rposition(|&c| c == '\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        self.input_caret = prev_start + col.min(prev_end - prev_start);
+    }
+    /// Move the caret down one line, keeping the column. On the last line, jump
+    /// to the very end.
+    fn caret_down(&mut self) {
+        let chars: Vec<char> = self.input.chars().collect();
+        let caret = self.input_caret.min(chars.len());
+        let line_start = chars[..caret]
+            .iter()
+            .rposition(|&c| c == '\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let col = caret - line_start;
+        let line_end = chars[caret..]
+            .iter()
+            .position(|&c| c == '\n')
+            .map(|i| caret + i)
+            .unwrap_or(chars.len());
+        if line_end >= chars.len() {
+            self.input_caret = chars.len();
+            return;
+        }
+        let next_start = line_end + 1;
+        let next_end = chars[next_start..]
+            .iter()
+            .position(|&c| c == '\n')
+            .map(|i| next_start + i)
+            .unwrap_or(chars.len());
+        self.input_caret = next_start + col.min(next_end - next_start);
+    }
 }
 
 pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
@@ -1023,6 +1075,8 @@ fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Right => app.caret_right(),
         KeyCode::Home => app.caret_home(),
         KeyCode::End => app.caret_end(),
+        KeyCode::Up => app.caret_up(),
+        KeyCode::Down => app.caret_down(),
         KeyCode::Char(c) => app.input_insert(&c.to_string()),
         _ => {}
     }
@@ -1427,6 +1481,8 @@ fn handle_answer_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Right => app.caret_right(),
         KeyCode::Home => app.caret_home(),
         KeyCode::End => app.caret_end(),
+        KeyCode::Up => app.caret_up(),
+        KeyCode::Down => app.caret_down(),
         KeyCode::Char(c) => app.input_insert(&c.to_string()),
         _ => {}
     }
@@ -1864,6 +1920,34 @@ mod tests {
         app.input_delete(); // delete 가 -> "나다"
         assert_eq!(app.input, "나다");
         assert_eq!(app.input_caret, 0);
+    }
+
+    #[test]
+    fn caret_up_down_moves_between_lines_keeping_column() {
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-caret-vert-test"));
+        let mut app = App::new(ws);
+        // Lines: "ab" / "cde" / "fg" (chars a b \n c d e \n f g, caret at end).
+        app.input_insert("ab\ncde\nfg");
+        assert_eq!(app.input_caret, 9);
+        app.caret_up(); // last line col 2 -> "cde" col 2
+        assert_eq!(app.input_caret, 5);
+        app.caret_up(); // -> "ab" clamped to its length
+        assert_eq!(app.input_caret, 2);
+        app.caret_up(); // first line -> jump to the very start
+        assert_eq!(app.input_caret, 0);
+        app.caret_down(); // -> "cde" col 0
+        assert_eq!(app.input_caret, 3);
+        app.caret_down(); // -> "fg" col 0
+        assert_eq!(app.input_caret, 7);
+        app.caret_down(); // last line -> jump to the very end
+        assert_eq!(app.input_caret, 9);
+
+        // Column is kept across a multibyte source line (가나다 -> xy).
+        app.input_clear();
+        app.input_insert("가나다\nxy");
+        app.input_caret = 2; // col 2 on "가나다"
+        app.caret_down(); // -> "xy", clamped to its length 2
+        assert_eq!(app.input_caret, 6);
     }
 
     #[test]
