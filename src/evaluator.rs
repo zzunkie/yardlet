@@ -233,8 +233,9 @@ pub fn evaluate(
     }
 }
 
-/// Paths that are sensitive (secrets/keys) or escape the workspace. A worker
-/// touching these fails the run regardless of its self-report.
+/// Paths that are sensitive (secrets/keys), escape the workspace, or are
+/// Yardlet-owned canonical state a worker must never write directly. A worker
+/// touching any of these fails the run regardless of its self-report.
 fn forbidden_in<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
     const SENSITIVE: &[&str] = &[
         ".env",
@@ -250,11 +251,38 @@ fn forbidden_in<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
         let lower = f.to_lowercase();
         let escapes = f.starts_with('/') || f.contains("..");
         let sensitive = SENSITIVE.iter().any(|p| lower.contains(p));
-        if escapes || sensitive {
+        if escapes || sensitive || is_canonical_state_path(f) {
             bad.push(f.clone());
         }
     }
     bad
+}
+
+/// Is this path a Yardlet-owned canonical-state file a worker must NOT write
+/// directly (it proposes follow-ups via result.json instead — propose ->
+/// ingest)? Scoped PRECISELY so legitimate worker writes are not false-failed:
+/// the harness assets (`.agents/rules|skills|agents/`) and a run's own
+/// artifacts (`.agents/runs/`) are NOT canonical and stay writable. Forbidden:
+/// the top-level config files (`work-queue.yaml`, `intent-contract.yaml`,
+/// `workers.yaml`, `*-policy.yaml`, `yardlet.yaml`, legacy `yard.yaml`) and the
+/// whole telemetry tree.
+pub fn is_canonical_state_path(path: &str) -> bool {
+    let p = path.trim_start_matches("./").trim_matches('"');
+    let Some(rest) = p.strip_prefix(".agents/") else {
+        return false;
+    };
+    if rest.starts_with("telemetry/") {
+        return true;
+    }
+    // Only top-level files directly under .agents/ are config (no nested path);
+    // a nested file lives in an allowed subtree (runs/rules/skills/agents).
+    if rest.contains('/') {
+        return false;
+    }
+    matches!(
+        rest,
+        "work-queue.yaml" | "intent-contract.yaml" | "workers.yaml" | "yardlet.yaml" | "yard.yaml"
+    ) || rest.ends_with("-policy.yaml")
 }
 
 /// Paths git reports as changed or untracked in `cwd`: the actual on-disk
@@ -397,6 +425,7 @@ mod tests {
             compact_summary: String::new(),
             verdict: vec![],
             harness_suggestions: vec![],
+            follow_up_tasks: vec![],
         }
     }
 
@@ -443,6 +472,95 @@ mod tests {
         assert!(!bad.contains(&"src/main.rs".to_string()));
     }
 
+    #[test]
+    fn canonical_state_paths_are_precisely_scoped() {
+        // Forbidden: the top-level config files + the telemetry tree.
+        for p in [
+            ".agents/work-queue.yaml",
+            ".agents/intent-contract.yaml",
+            ".agents/workers.yaml",
+            ".agents/billing-policy.yaml",
+            ".agents/yardlet.yaml",
+            ".agents/yard.yaml",         // legacy
+            "./.agents/work-queue.yaml", // normalized leading ./
+            ".agents/telemetry/runs.jsonl",
+        ] {
+            assert!(is_canonical_state_path(p), "{p} should be canonical");
+        }
+        // Allowed: harness assets, a run's own artifacts, and normal source.
+        for p in [
+            ".agents/runs/run-x/result.json",
+            ".agents/skills/foo/SKILL.md",
+            ".agents/rules/team.md",
+            ".agents/agents/reviewer.md",
+            "src/main.rs",
+            ".github/workflows/ci.yml",
+        ] {
+            assert!(!is_canonical_state_path(p), "{p} should be allowed");
+        }
+
+        // The forbidden gate flags a worker write to the queue, and passes a
+        // diff that only touched a run artifact / a skill / source.
+        let bad = forbidden_in([".agents/work-queue.yaml".to_string()].iter());
+        assert_eq!(bad, vec![".agents/work-queue.yaml".to_string()]);
+        let clean = forbidden_in(
+            [
+                ".agents/runs/run-x/result.json".to_string(),
+                ".agents/skills/foo/SKILL.md".to_string(),
+                "src/main.rs".to_string(),
+            ]
+            .iter(),
+        );
+        assert!(clean.is_empty());
+    }
+
+    #[test]
+    fn writing_the_queue_blocks_done() {
+        let dir = std::env::temp_dir().join(format!("yard-eval-canon-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("handoff.md"), "h").unwrap();
+        let mut r = dummy_result();
+        r.run_id = "run-x".into();
+        r.task_id = "YARD-9".into();
+        r.status = "done".into();
+        std::fs::write(dir.join("result.json"), serde_json::to_string(&r).unwrap()).unwrap();
+        let t = crate::schemas::Task {
+            id: "YARD-9".into(),
+            title: "t".into(),
+            state: TaskState::Running,
+            priority: 0,
+            risk: String::new(),
+            kind: "implementation".into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec![],
+            skills: vec![],
+            required_capabilities: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+            provenance: String::new(),
+        };
+        // The worker wrote the canonical queue directly: a fatal violation even
+        // though it claimed done — propose -> ingest is the only allowed path.
+        let actual = vec![
+            "src/main.rs".to_string(),
+            ".agents/work-queue.yaml".to_string(),
+        ];
+        let e = evaluate(&dir, "run-x", &t, Some(&actual));
+        assert!(e
+            .checks
+            .iter()
+            .any(|c| c.name == "forbidden_paths_untouched" && c.fatal && !c.passed));
+        assert_eq!(e.next_task_state, TaskState::Failed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn eval_with(kind: &str, status: &str, verdict: Vec<crate::schemas::Verdict>) -> Evaluation {
         let dir = std::env::temp_dir().join(format!(
             "yard-eval-verdict-{}-{}",
@@ -477,6 +595,7 @@ mod tests {
             approval: None,
             interaction: None,
             worker_rationale: None,
+            provenance: String::new(),
         };
         t.kind = kind.into();
         // Some(&[]) = git evidence available, nothing forbidden changed (these
@@ -518,6 +637,7 @@ mod tests {
             approval: None,
             interaction: None,
             worker_rationale: None,
+            provenance: String::new(),
         };
         // The real on-disk diff shows it actually wrote .env.
         let actual = vec!["src/main.rs".to_string(), ".env".to_string()];
@@ -628,6 +748,7 @@ mod tests {
             approval: None,
             interaction: None,
             worker_rationale: None,
+            provenance: String::new(),
         };
         t.kind = "implementation".into();
         // None = no git evidence: the forbidden gate fails closed, so a worker's
@@ -659,6 +780,7 @@ mod tests {
             compact_summary: "ok".into(),
             verdict: vec![],
             harness_suggestions: vec![],
+            follow_up_tasks: vec![],
         };
         std::fs::write(
             dir.join("result.json"),
@@ -685,6 +807,7 @@ mod tests {
             approval: None,
             interaction: None,
             worker_rationale: None,
+            provenance: String::new(),
         };
 
         let eval = evaluate(&dir, "run-x", &t, Some(&[]));

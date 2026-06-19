@@ -265,6 +265,13 @@ pub struct Task {
     /// One-line reason the planner chose this task's preferred_worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_rationale: Option<String>,
+    /// How this task entered the queue. Empty = planner/express goal (the
+    /// default). `worker-proposed` = ingested from a run's result.json
+    /// `follow_up_tasks` (propose -> ingest). Kept visible so an enqueued
+    /// follow-up is a tracked CANDIDATE, never a silent expansion of the
+    /// current task.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub provenance: String,
 }
 
 impl Task {
@@ -538,6 +545,54 @@ pub struct RunResult {
     /// records them; the worker never writes canonical state itself.
     #[serde(default)]
     pub harness_suggestions: Vec<HarnessSuggestion>,
+    /// Follow-up tasks this run PROPOSES for the queue (propose -> ingest). The
+    /// worker authors intent here instead of editing `.agents/work-queue.yaml`;
+    /// Yardlet assigns ids/priority and is the sole writer of the queue.
+    #[serde(default)]
+    pub follow_up_tasks: Vec<FollowUpTask>,
+}
+
+/// A follow-up task a worker PROPOSES in its result (propose -> ingest). A
+/// strict subset of the planner `PlanTask`: the worker authors intent; Yardlet
+/// assigns `id`, `state`, and `priority` and stays the sole writer of the
+/// queue. `reason` is the audit trail (why this follow-up exists). Every field
+/// defaults so a malformed entry never crashes the whole result parse — empty
+/// `title` entries are dropped at ingestion.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FollowUpTask {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub risk: String,
+    #[serde(default)]
+    pub allowed_scope: Vec<String>,
+    #[serde(default)]
+    pub acceptance: Vec<String>,
+    #[serde(default)]
+    pub skills: Vec<String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub preferred_worker: String,
+    #[serde(default)]
+    pub required_capabilities: Vec<String>,
+    #[serde(default)]
+    pub worker_rationale: Option<String>,
+    /// Where to place this task. `"next"` = run before the tasks already
+    /// waiting (a priority nudge, soft ordering). `""` / `"end"` (default) =
+    /// append after them. For a HARD "run before X" guarantee use `runs_before`.
+    #[serde(default)]
+    pub insert: String,
+    /// Ids of existing queued tasks that must WAIT for this new one: Yardlet
+    /// injects a dependency so each named task depends on this task (true
+    /// "insert between"). Self-references, unknown ids, and entries that would
+    /// form a dependency cycle are dropped.
+    #[serde(default)]
+    pub runs_before: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -637,5 +692,46 @@ tasks:
         assert_eq!(t.state, TaskState::Queued); // #[default]
         assert_eq!(t.priority, 0);
         assert!(t.preferred_worker.is_empty());
+        assert!(t.provenance.is_empty());
+    }
+
+    // A worker proposes follow-ups in result.json; parsing must be tolerant
+    // (every FollowUpTask field defaults), so a minimal entry, a rich one, and
+    // a malformed one missing its title all deserialize.
+    #[test]
+    fn follow_up_tasks_parse_tolerantly() {
+        let src = r#"{
+            "schema_version": 1,
+            "run_id": "run-x",
+            "task_id": "YARD-001",
+            "status": "done",
+            "follow_up_tasks": [
+                { "title": "add tests", "reason": "coverage gap" },
+                { "title": "refactor parser", "reason": "duplication",
+                  "kind": "implementation", "risk": "low",
+                  "acceptance": ["no dupes"], "depends_on": ["YARD-001"] },
+                { "reason": "no title, should still parse" }
+            ]
+        }"#;
+        let r: RunResult = serde_json::from_str(src).unwrap();
+        assert_eq!(r.follow_up_tasks.len(), 3);
+        assert_eq!(r.follow_up_tasks[0].title, "add tests");
+        assert_eq!(r.follow_up_tasks[0].reason, "coverage gap");
+        assert_eq!(
+            r.follow_up_tasks[1].depends_on,
+            vec!["YARD-001".to_string()]
+        );
+        assert!(r.follow_up_tasks[2].title.is_empty());
+    }
+
+    // A result.json with no follow_up_tasks field at all still parses (the
+    // field defaults to empty) — back-compat with pre-0.6.2 workers.
+    #[test]
+    fn result_without_follow_up_tasks_defaults_empty() {
+        let r: RunResult = serde_json::from_str(
+            r#"{ "schema_version": 1, "run_id": "r", "task_id": "t", "status": "done" }"#,
+        )
+        .unwrap();
+        assert!(r.follow_up_tasks.is_empty());
     }
 }

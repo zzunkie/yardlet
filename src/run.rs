@@ -501,8 +501,22 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         }
     }
 
-    // ---- update queue ----------------------------------------------------
-    save_task_state_on_latest_queue(ws, &mut queue, &task.id, eval.next_task_state)?;
+    // ---- update queue: set the task's state AND ingest any follow-up tasks
+    // the worker proposed in result.json (propose -> ingest). Yardlet stays the
+    // sole queue writer — both updates land in one re-read-then-save.
+    let follow_ups = result
+        .as_ref()
+        .map(|r| r.follow_up_tasks.clone())
+        .unwrap_or_default();
+    let ingested =
+        finalize_on_latest_queue(ws, &mut queue, &task.id, eval.next_task_state, &follow_ups)?;
+    if !ingested.is_empty() {
+        lines.push(format!(
+            "ingested {} worker-proposed follow-up task(s): {}",
+            ingested.len(),
+            ingested.join(", ")
+        ));
+    }
 
     // ---- telemetry (best effort; feeds routing suggestions) -------------
     let user_override = opts.worker_override.as_ref().map(|o| {
@@ -1213,7 +1227,21 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 let evidence = run_worktree(&run_dir)
                     .filter(|w| w.exists())
                     .and_then(|w| evaluator::changed_paths(&w))
-                    .or_else(|| evaluator::changed_paths(&ws.root));
+                    .or_else(|| {
+                        // No worktree: the workspace git status is the evidence,
+                        // but it also carries Yardlet's OWN canonical-state
+                        // writes (it wrote the queue when it marked this task
+                        // Running). With no pre-run baseline those cannot be
+                        // attributed to the worker, so drop them rather than
+                        // false-fail the canonical-state gate on Yardlet's own
+                        // writes.
+                        evaluator::changed_paths(&ws.root).map(|paths| {
+                            paths
+                                .into_iter()
+                                .filter(|p| !evaluator::is_canonical_state_path(p))
+                                .collect()
+                        })
+                    });
                 let eval = evaluator::evaluate(&run_dir, &run_id, t, evidence.as_deref());
                 // Mark this orphan run finalized so a later pass won't
                 // re-evaluate it (a persistent failure must not loop).
@@ -1302,18 +1330,39 @@ fn save_task_state_on_latest_queue(
     task_id: &str,
     state: TaskState,
 ) -> Result<()> {
+    finalize_on_latest_queue(ws, fallback_queue, task_id, state, &[]).map(|_| ())
+}
+
+/// Re-read the latest on-disk queue, set the finished task's state, ingest any
+/// worker-proposed follow-up tasks, and save once. Re-reading first means a
+/// change made since the run started is not clobbered by a stale start-of-run
+/// copy; folding the state update and follow-up ingestion into one write keeps
+/// Yardlet the sole queue writer (propose -> ingest). Returns the ids of the
+/// follow-up tasks ingested.
+fn finalize_on_latest_queue(
+    ws: &Workspace,
+    fallback_queue: &mut WorkQueue,
+    task_id: &str,
+    state: TaskState,
+    follow_ups: &[crate::schemas::FollowUpTask],
+) -> Result<Vec<String>> {
     let mut latest = ws.load_queue().unwrap_or_else(|_| fallback_queue.clone());
     if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == task_id) {
         t.state = state;
+        let ingested = crate::planner::ingest_follow_ups(&mut latest, follow_ups);
         ws.save_queue(&latest)?;
         *fallback_queue = latest;
-        return Ok(());
+        return Ok(ingested);
     }
 
+    // The task vanished from the on-disk queue (rare): fall back to the
+    // in-memory copy so the state update is not lost.
     if let Some(t) = fallback_queue.tasks.iter_mut().find(|t| t.id == task_id) {
         t.state = state;
     }
-    ws.save_queue(fallback_queue)
+    let ingested = crate::planner::ingest_follow_ups(fallback_queue, follow_ups);
+    ws.save_queue(fallback_queue)?;
+    Ok(ingested)
 }
 
 /// Context for CONTINUING a Partial task instead of redoing it: the previous
@@ -1441,6 +1490,7 @@ mod tests {
             },
             interaction: None,
             worker_rationale: None,
+            provenance: String::new(),
         }
     }
 
@@ -1557,6 +1607,7 @@ mod tests {
             compact_summary: "ok".into(),
             verdict: vec![],
             harness_suggestions: vec![],
+            follow_up_tasks: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -1655,6 +1706,7 @@ mod tests {
             compact_summary: "ok".into(),
             verdict: vec![],
             harness_suggestions: vec![],
+            follow_up_tasks: vec![],
         };
         write_str(
             &run_dir.join("result.json"),

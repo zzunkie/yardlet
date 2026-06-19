@@ -372,6 +372,20 @@ pub fn run_batch<F: FnMut(&str)>(
         }
 
         queue.tasks[p.queue_idx].state = next;
+        // Ingest any follow-up tasks this worker proposed in result.json
+        // (propose -> ingest; Yardlet is the sole queue writer). Appending
+        // never shifts existing indices, so the queue_idx bookkeeping holds.
+        if let Some(r) = &result {
+            let ingested = crate::planner::ingest_follow_ups(&mut queue, &r.follow_up_tasks);
+            if !ingested.is_empty() {
+                on_event(&format!(
+                    "{}: ingested {} worker-proposed follow-up task(s): {}",
+                    p.task.id,
+                    ingested.len(),
+                    ingested.join(", ")
+                ));
+            }
+        }
         ws.save_queue(&queue)?;
         states.push((p.task.id.clone(), next));
 
@@ -595,6 +609,7 @@ mod tests {
             approval: None,
             interaction: None,
             worker_rationale: None,
+            provenance: String::new(),
         }
     }
 

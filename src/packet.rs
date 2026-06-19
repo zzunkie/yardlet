@@ -564,8 +564,8 @@ pub fn compile(inputs: &PacketInputs) -> String {
 
     // Evidence anchors (not pasted content).
     p.push_str("## Read anchors (do not load unrelated docs)\n\n");
-    p.push_str("- .agents/intent-contract.yaml\n");
-    p.push_str("- .agents/work-queue.yaml\n");
+    p.push_str("- .agents/intent-contract.yaml (read-only)\n");
+    p.push_str("- .agents/work-queue.yaml (read-only; do NOT write it)\n");
     p.push_str(&format!(
         "- {}/evidence/repo-summary.md\n",
         inputs.run_dir_rel
@@ -613,6 +613,25 @@ pub fn compile(inputs: &PacketInputs) -> String {
          - reading, writing, or exposing secrets/credentials, or editing CI secrets\n\
          If a needed local action is denied by the sandbox (e.g. network or a package install), \
          also stop and report what you need instead of trying to bypass it.\n\n",
+    );
+
+    // Queue ownership (propose -> ingest): workers never write the queue.
+    p.push_str("## Proposing follow-up work\n\n");
+    p.push_str(
+        "If you find adjacent work worth doing later, do NOT edit \
+         `.agents/work-queue.yaml` \u{2014} Yardlet owns the queue. PROPOSE it in `result.json` \
+         under `follow_up_tasks`: each entry needs a `title` and a `reason` (why it exists), \
+         plus optional `kind`, `risk`, `allowed_scope`, `acceptance`, `skills`, `depends_on`, \
+         `preferred_worker`, `required_capabilities`. Yardlet assigns the id and priority, \
+         validates, dedups, and enqueues it as a tracked candidate. Stay within THIS task's \
+         scope; a follow-up is a candidate for later, not license to expand the current task.\n\n",
+    );
+    p.push_str(
+        "If a follow-up must run BEFORE work already queued (e.g. you hit a capability \
+         ceiling and a worker with the right `required_capabilities`/`preferred_worker` should \
+         take over first), set its `runs_before` to the ids of the existing tasks that depend on \
+         it \u{2014} Yardlet makes those tasks wait for it (a true \"insert between\"). For a softer \
+         \"just run this next\" nudge without hard dependencies, set `insert: \"next\"`.\n\n",
     );
 
     // Output language.
@@ -896,6 +915,13 @@ const RESULT_SCHEMA_HINT: &str = r#"```json
   ],
   "harness_suggestions": [
     { "kind": "rule|skill", "title": "...", "content": "short, imperative, reusable" }
+  ],
+  "follow_up_tasks": [
+    { "title": "...", "reason": "why this follow-up exists",
+      "kind": "implementation|review|...", "risk": "low|medium|high",
+      "acceptance": ["..."], "allowed_scope": ["..."], "depends_on": [],
+      "preferred_worker": "", "required_capabilities": [],
+      "insert": "end|next", "runs_before": [] }
   ]
 }
 ```
@@ -908,6 +934,8 @@ not verify. Build tasks may leave `verdict` empty. Fill `harness_suggestions`
 only when you learned something reusable about THIS repo. A "skill" suggestion
 should be a self-contained procedure (how to do a recurring task in this repo)
 that a future worker could follow; a "rule" is a short always-apply constraint.
+Leave `follow_up_tasks` empty unless you found adjacent work worth queueing for
+later; never edit `.agents/work-queue.yaml` yourself — Yardlet ingests these.
 "#;
 
 #[cfg(test)]
@@ -1086,6 +1114,7 @@ mod tests {
             approval: None,
             interaction: None,
             worker_rationale: None,
+            provenance: String::new(),
         };
         let repo = crate::inspect::RepoSummary::default();
         let harness = Harness {
@@ -1167,6 +1196,7 @@ mod tests {
             approval: None,
             interaction: None,
             worker_rationale: None,
+            provenance: String::new(),
         };
         let repo = crate::inspect::RepoSummary::default();
         compile(&PacketInputs {
@@ -1207,6 +1237,7 @@ mod tests {
             approval: None,
             interaction: None,
             worker_rationale: None,
+            provenance: String::new(),
         };
         let repo = crate::inspect::RepoSummary::default();
         let p = compile(&PacketInputs {
@@ -1250,6 +1281,7 @@ mod tests {
             approval: None,
             interaction: None,
             worker_rationale: None,
+            provenance: String::new(),
         };
         let repo = crate::inspect::RepoSummary::default();
         let p = compile(&PacketInputs {

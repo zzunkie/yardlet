@@ -220,6 +220,7 @@ pub fn plan_goal(
         approval: None,
         interaction: None,
         worker_rationale: Some("express goal (yardlet goal)".to_string()),
+        provenance: String::new(),
     }];
     // Express goals bypass the planner, so capability routing is explicit (no
     // magic keywords): pass `--requires <capability>` for a hard route, or
@@ -250,6 +251,7 @@ pub fn plan_goal(
             approval: None,
             interaction: None,
             worker_rationale: Some("verifier is never the doer".to_string()),
+            provenance: String::new(),
         });
     }
 
@@ -723,10 +725,160 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
             approval: None,
             interaction: None,
             worker_rationale: pt.worker_rationale.clone(),
+            provenance: String::new(),
         };
         queue.tasks.push(task);
     }
     plan.tasks.len()
+}
+
+/// Ingest worker-PROPOSED follow-up tasks into a queue (propose -> ingest).
+/// The worker proposes follow-ups in its `result.json`; Yardlet assigns ids,
+/// sanitizes deps to backward-only, dedups by title, and tags each
+/// `provenance: worker-proposed` so an enqueued follow-up is a visible, tracked
+/// CANDIDATE rather than a silent expansion of the current task (CLAUDE.md: an
+/// adjacent idea becomes a queue candidate, never a silent scope broadening).
+/// Yardlet stays the sole writer of the queue — the worker never edits
+/// `.agents/work-queue.yaml` itself.
+///
+/// Placement: `insert: "next"` slots the task's priority below every currently
+/// queued task so the selector prefers it (soft ordering); the default appends
+/// after the current max. `runs_before: [ids]` is the HARD form — Yardlet
+/// injects a dependency so each named existing task waits for this one (true
+/// "insert between"), dropping self/unknown/cycle-forming targets.
+///
+/// Empty-title entries and titles that duplicate an existing queued task are
+/// skipped. Returns the ids of the tasks actually ingested.
+pub(crate) fn ingest_follow_ups(
+    queue: &mut WorkQueue,
+    follow_ups: &[crate::schemas::FollowUpTask],
+) -> Vec<String> {
+    let mut next_num = queue
+        .tasks
+        .iter()
+        .filter_map(|t| {
+            t.id.strip_prefix("YARD-")
+                .and_then(|n| n.parse::<usize>().ok())
+        })
+        .max()
+        .unwrap_or(queue.tasks.len())
+        + 1;
+    let mut tail_priority = queue.tasks.iter().map(|t| t.priority).max().unwrap_or(0);
+    // "next" tasks share one priority just below the lowest currently-queued
+    // task, so the selector runs them first; equal priorities tie-break by
+    // queue order, preserving the worker's proposal order among them.
+    let head_priority = queue
+        .tasks
+        .iter()
+        .filter(|t| t.state == TaskState::Queued)
+        .map(|t| t.priority)
+        .min()
+        .map(|m| m - 10)
+        .unwrap_or(tail_priority + 10);
+    let mut ingested = Vec::new();
+    for fu in follow_ups {
+        let title = fu.title.trim();
+        if title.is_empty() {
+            continue;
+        }
+        // Dedup: skip a follow-up whose title already names a queued task.
+        if queue
+            .tasks
+            .iter()
+            .any(|t| t.state == TaskState::Queued && t.title.trim().eq_ignore_ascii_case(title))
+        {
+            continue;
+        }
+        let prior_ids: Vec<String> = queue.tasks.iter().map(|t| t.id.clone()).collect();
+        let id = format!("YARD-{next_num:03}");
+        let priority = if fu.insert.eq_ignore_ascii_case("next") {
+            head_priority
+        } else {
+            tail_priority += 10;
+            tail_priority
+        };
+        // Record the worker's `reason` as the task's rationale when it gave no
+        // explicit one — it is the audit trail for why the follow-up exists.
+        let rationale = fu.worker_rationale.clone().or_else(|| {
+            let r = fu.reason.trim();
+            (!r.is_empty()).then(|| format!("worker-proposed follow-up: {r}"))
+        });
+        queue.tasks.push(Task {
+            id: id.clone(),
+            title: title.to_string(),
+            state: TaskState::Queued,
+            priority,
+            risk: fu.risk.clone(),
+            kind: fu.kind.clone(),
+            preferred_worker: fu.preferred_worker.clone(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: sanitize_deps(&fu.depends_on, &prior_ids),
+            skills: fu.skills.clone(),
+            required_capabilities: fu.required_capabilities.clone(),
+            allowed_scope: fu.allowed_scope.clone(),
+            acceptance: fu
+                .acceptance
+                .iter()
+                .map(|s| yaml::Value::String(s.clone()))
+                .collect(),
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: rationale,
+            provenance: "worker-proposed".to_string(),
+        });
+        // HARD placement: make each named existing task depend on this new one.
+        inject_runs_before(queue, &id, &fu.runs_before);
+        ingested.push(id);
+        next_num += 1;
+    }
+    ingested
+}
+
+/// Inject a "must run before" dependency: make each existing task named in
+/// `targets` depend on `new_id`. Drops self-references, unknown ids, duplicates,
+/// and any target that would form a dependency cycle (i.e. `new_id` already
+/// depends, transitively, on that target).
+fn inject_runs_before(queue: &mut WorkQueue, new_id: &str, targets: &[String]) {
+    for target in targets {
+        let target = target.trim();
+        if target.is_empty() || target == new_id {
+            continue;
+        }
+        if !queue.tasks.iter().any(|t| t.id == target) {
+            continue; // unknown id
+        }
+        if depends_transitively(queue, new_id, target) {
+            continue; // would create a cycle
+        }
+        if let Some(t) = queue.tasks.iter_mut().find(|t| t.id == target) {
+            if !t.depends_on.iter().any(|d| d == new_id) {
+                t.depends_on.push(new_id.to_string());
+            }
+        }
+    }
+}
+
+/// Does task `from` depend, directly or transitively, on `target`? Used as a
+/// cycle guard before injecting a `runs_before` dependency.
+fn depends_transitively(queue: &WorkQueue, from: &str, target: &str) -> bool {
+    let mut stack = vec![from.to_string()];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(cur) = stack.pop() {
+        if !seen.insert(cur.clone()) {
+            continue;
+        }
+        if let Some(t) = queue.tasks.iter().find(|t| t.id == cur) {
+            for d in &t.depends_on {
+                if d == target {
+                    return true;
+                }
+                stack.push(d.clone());
+            }
+        }
+    }
+    false
 }
 
 /// Recover a planning result left unconsumed by an interrupted session: the
@@ -944,6 +1096,7 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             approval: None,
             interaction: None,
             worker_rationale: t.worker_rationale.clone(),
+            provenance: String::new(),
         };
         tasks.push(task);
     }
@@ -1009,6 +1162,7 @@ fn ensure_review_task(tasks: &mut Vec<Task>) {
         worker_rationale: Some(
             "deterministic semantic-verification rung: the verifier is never the doer".to_string(),
         ),
+        provenance: String::new(),
     });
 }
 
@@ -1472,6 +1626,157 @@ routing:
         assert_eq!(intent.raw_request, "make the game feel like a game");
         assert!(recover_unconsumed_plan(&ws).is_none());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ingest_follow_ups_assigns_ids_dedups_and_tags_provenance() {
+        use crate::schemas::FollowUpTask;
+        // Start from a one-task queue (YARD-001 "existing", priority 10, Queued).
+        let plan: PlanningResult = serde_json::from_str(
+            r#"{ "summary": "s", "tasks": [{ "id": "YARD-001", "title": "existing", "risk": "low" }] }"#,
+        )
+        .unwrap();
+        let mut queue = build_queue("intent-x", &plan);
+
+        let fus = vec![
+            FollowUpTask {
+                title: "add tests".into(),
+                reason: "coverage gap".into(),
+                // backward dep kept; unknown forward dep dropped by sanitize_deps
+                depends_on: vec!["YARD-001".into(), "YARD-999".into()],
+                ..Default::default()
+            },
+            FollowUpTask {
+                title: "   ".into(), // empty after trim -> dropped
+                reason: "blank".into(),
+                ..Default::default()
+            },
+            FollowUpTask {
+                title: "existing".into(), // duplicates a queued title -> skipped
+                reason: "dup".into(),
+                ..Default::default()
+            },
+        ];
+        let ingested = ingest_follow_ups(&mut queue, &fus);
+
+        // Only "add tests" survives, as the next YARD id.
+        assert_eq!(ingested, vec!["YARD-002".to_string()]);
+        let t = queue.tasks.iter().find(|t| t.id == "YARD-002").unwrap();
+        assert_eq!(t.title, "add tests");
+        assert_eq!(t.state, TaskState::Queued);
+        assert_eq!(t.provenance, "worker-proposed");
+        assert!(t.priority > 10, "priority sequenced after the current max");
+        assert_eq!(t.depends_on, vec!["YARD-001".to_string()]);
+        assert!(t
+            .worker_rationale
+            .as_deref()
+            .unwrap()
+            .contains("coverage gap"));
+        // Total: original + one ingested (blank + dup were not added).
+        assert_eq!(queue.tasks.len(), 2);
+    }
+
+    #[test]
+    fn ingest_insert_next_sorts_before_existing_queued() {
+        use crate::schemas::FollowUpTask;
+        let plan: PlanningResult = serde_json::from_str(
+            r#"{ "summary": "s", "tasks": [
+                { "id": "YARD-001", "title": "a", "risk": "low" },
+                { "id": "YARD-002", "title": "b", "risk": "low" } ] }"#,
+        )
+        .unwrap();
+        let mut queue = build_queue("i", &plan);
+        let min_before = queue
+            .tasks
+            .iter()
+            .filter(|t| t.state == TaskState::Queued)
+            .map(|t| t.priority)
+            .min()
+            .unwrap();
+
+        let ingested = ingest_follow_ups(
+            &mut queue,
+            &[FollowUpTask {
+                title: "urgent regen".into(),
+                reason: "hit a capability ceiling".into(),
+                insert: "next".into(),
+                ..Default::default()
+            }],
+        );
+        assert_eq!(ingested, vec!["YARD-003".to_string()]);
+        let t = queue.tasks.iter().find(|t| t.id == "YARD-003").unwrap();
+        assert!(
+            t.priority < min_before,
+            "insert:next must sort before every currently-queued task (got {} vs min {})",
+            t.priority,
+            min_before
+        );
+        // The default (append) still lands after the current max.
+        let ingested = ingest_follow_ups(
+            &mut queue,
+            &[FollowUpTask {
+                title: "later cleanup".into(),
+                reason: "tidy up".into(),
+                ..Default::default()
+            }],
+        );
+        assert_eq!(ingested, vec!["YARD-004".to_string()]);
+        let appended = queue.tasks.iter().find(|t| t.id == "YARD-004").unwrap();
+        assert!(appended.priority > min_before);
+    }
+
+    #[test]
+    fn ingest_runs_before_injects_dependency_and_guards_cycles() {
+        use crate::schemas::FollowUpTask;
+        let plan: PlanningResult = serde_json::from_str(
+            r#"{ "summary": "s", "tasks": [
+                { "id": "YARD-001", "title": "a", "risk": "low" },
+                { "id": "YARD-002", "title": "b", "risk": "low" } ] }"#,
+        )
+        .unwrap();
+
+        // runs_before YARD-002 -> YARD-002 now WAITS for the inserted task.
+        // Self ("YARD-003") and unknown ("NOPE") targets are dropped.
+        let mut queue = build_queue("i", &plan);
+        let ingested = ingest_follow_ups(
+            &mut queue,
+            &[FollowUpTask {
+                title: "prerequisite".into(),
+                reason: "must run first".into(),
+                runs_before: vec!["YARD-002".into(), "YARD-003".into(), "NOPE".into()],
+                ..Default::default()
+            }],
+        );
+        assert_eq!(ingested, vec!["YARD-003".to_string()]);
+        let target = queue.tasks.iter().find(|t| t.id == "YARD-002").unwrap();
+        assert!(
+            target.depends_on.contains(&"YARD-003".to_string()),
+            "YARD-002 must depend on the inserted task"
+        );
+        let inserted = queue.tasks.iter().find(|t| t.id == "YARD-003").unwrap();
+        assert!(
+            !inserted.depends_on.contains(&"YARD-003".to_string()),
+            "self-reference must be dropped"
+        );
+
+        // Cycle guard: a follow-up that itself depends on YARD-002 cannot also
+        // make YARD-002 wait for it (that would deadlock the queue).
+        let mut q2 = build_queue("i", &plan);
+        ingest_follow_ups(
+            &mut q2,
+            &[FollowUpTask {
+                title: "cyclic".into(),
+                reason: "r".into(),
+                depends_on: vec!["YARD-002".into()],
+                runs_before: vec!["YARD-002".into()],
+                ..Default::default()
+            }],
+        );
+        let y2 = q2.tasks.iter().find(|t| t.id == "YARD-002").unwrap();
+        assert!(
+            !y2.depends_on.contains(&"YARD-003".to_string()),
+            "cycle-forming runs_before injection must be dropped"
+        );
     }
 
     #[test]
