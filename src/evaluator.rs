@@ -184,7 +184,16 @@ pub fn evaluate(
         // of trusting prose. For a review/safety task it is the contract —
         // an empty verdict or any failed criterion blocks Done.
         let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
-        if is_review {
+        // A review that paused for the user has not finished judging — it is
+        // mid-conversation, not failing. Defer the verdict/criteria gate so a
+        // clarifying turn does not read as a wall of failed criteria.
+        if is_review && r.status == "needs_user" {
+            checks.push(advisory(
+                "review_paused_for_user",
+                true,
+                "review is waiting on the user; criteria not yet judged".to_string(),
+            ));
+        } else if is_review {
             let failed: Vec<&str> = r
                 .verdict
                 .iter()
@@ -680,6 +689,10 @@ mod tests {
         // review correctly reports needs_user with a failed criterion -> NeedsUser
         let e = eval_with("review", "needs_user", vec![v("AC-001", false)]);
         assert_eq!(e.next_task_state, TaskState::NeedsUser);
+        // A review paused for the user has not finished judging: defer the gate
+        // (no AC-fail wall) and record only an advisory that it is waiting.
+        assert!(!e.checks.iter().any(|c| c.name == "review_criteria_pass"));
+        assert!(e.checks.iter().any(|c| c.name == "review_paused_for_user"));
 
         // review wrote no verdict -> didn't do its job -> Failed
         let e = eval_with("review", "done", vec![]);
