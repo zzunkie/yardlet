@@ -203,8 +203,7 @@ pub fn run_batch<F: FnMut(&str)>(
             intent: intent.as_ref(),
             repo: &repo_summary,
             run_dir_rel: &run_dir_abs,
-            prior_question: None,
-            user_answer: None,
+            conversation: &[],
             continuation: None, // batches only pick Queued tasks
             chained_from: None,
             language: &language,

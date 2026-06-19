@@ -633,12 +633,9 @@ fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
 fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let reply = args.reply.join(" ");
-    if reply.trim().is_empty() {
-        anyhow::bail!("provide an answer, e.g. `yardlet answer \"use postgres\"`");
-    }
     let queue = ws.load_queue()?;
-    let task_id = match args.task {
-        Some(t) => t,
+    let task_id = match &args.task {
+        Some(t) => t.clone(),
         None => queue
             .tasks
             .iter()
@@ -650,13 +647,31 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
                 )
             })?,
     };
-    println!("Answering {task_id}: {reply}\n");
+
+    // No reply yet: show the worker's pending message so the user can read it
+    // and decide, instead of erroring. Replying then continues the conversation.
+    if reply.trim().is_empty() {
+        match run::latest_question_for(&ws, &task_id) {
+            Some(q) => {
+                println!("{task_id} is waiting on you:\n");
+                println!("{q}\n");
+                println!(
+                    "Reply with `yardlet answer \"...\" --task {task_id}` \
+                     (ask a follow-up question, or give your decision)."
+                );
+            }
+            None => println!("{task_id} has no recorded message. See `yardlet handoff`."),
+        }
+        return Ok(());
+    }
+
+    println!("You: {reply}\n");
     let report = run::run_next(
         &ws,
         &RunOptions {
             execute: true,
             worker_override: None,
-            target: Some(task_id),
+            target: Some(task_id.clone()),
             answer: Some(reply),
             full_access: args.full_access,
             accept_ambiguity: false,
@@ -666,7 +681,16 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
     for line in &report.lines {
         println!("{line}");
     }
-    println!("\nrun {} resumed", report.run_id);
+    // Surface the worker's reply so the conversation is visible in the terminal.
+    if report.result_state == Some(crate::schemas::TaskState::NeedsUser) {
+        if let Some(q) = run::latest_question_for(&ws, &task_id) {
+            println!("\n{task_id} replied:\n");
+            println!("{q}");
+            println!("\nStill needs you. Reply with `yardlet answer \"...\" --task {task_id}`.");
+        }
+    } else {
+        println!("\nrun {} resumed", report.run_id);
+    }
     Ok(())
 }
 
@@ -918,8 +942,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         intent: intent.as_ref(),
         repo: &summary,
         run_dir_rel: ".agents/runs/<run-id>",
-        prior_question: None,
-        user_answer: None,
+        conversation: &[],
         continuation: continuation.as_deref(),
         chained_from: None,
         language: &language,

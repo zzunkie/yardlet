@@ -16,7 +16,9 @@ use serde::Serialize;
 use crate::guard;
 use crate::inspect;
 use crate::packet::{self, PacketInputs};
-use crate::schemas::{RunResult, TaskState, WorkQueue, WorkerProfile};
+use crate::schemas::{
+    ConversationTurn, RunResult, TaskState, TurnRole, WorkQueue, WorkerProfile,
+};
 use crate::state::{self, write_str, Workspace};
 use crate::{compact, evaluator, routing, telemetry, workers};
 
@@ -120,11 +122,42 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     };
     let task = queue.tasks[idx].clone();
 
-    // If resuming with an answer, recover the worker's prior question for context.
-    let prior_question = if opts.answer.is_some() {
-        latest_question_for(ws, &task.id)
+    // Resuming after a question: record the user's reply and thread the whole
+    // conversation back so the worker has memory of it. Seed the worker's prior
+    // question for a task that paused before transcripts existed (legacy/first).
+    let conversation: Vec<ConversationTurn> = if let Some(answer) = opts
+        .answer
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+    {
+        if ws.load_conversation(&task.id).turns.is_empty() {
+            if let Some(q) = latest_question_for(ws, &task.id) {
+                let _ = state::append_conversation_turn(
+                    ws,
+                    &task.id,
+                    ConversationTurn {
+                        role: TurnRole::Worker,
+                        text: q,
+                        run_id: String::new(),
+                        ts: String::new(),
+                    },
+                );
+            }
+        }
+        let _ = state::append_conversation_turn(
+            ws,
+            &task.id,
+            ConversationTurn {
+                role: TurnRole::User,
+                text: answer.to_string(),
+                run_id: String::new(),
+                ts: Local::now().to_rfc3339(),
+            },
+        );
+        ws.load_conversation(&task.id).turns
     } else {
-        None
+        Vec::new()
     };
     // Re-running a Partial task: continue from the previous run's checkpoint
     // instead of redoing the work from scratch.
@@ -200,8 +233,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         intent: intent.as_ref(),
         repo: &summary,
         run_dir_rel: &run_dir_rel,
-        prior_question: prior_question.as_deref(),
-        user_answer: opts.answer.as_deref(),
+        conversation: &conversation,
         continuation: continuation.as_deref(),
         chained_from: chained_from.as_deref(),
         language: &language,
@@ -479,6 +511,29 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         std::fs::read_to_string(run_dir.join("result.json"))
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok());
+
+    // Record the worker's user-facing message into the conversation transcript
+    // whenever a run pauses for the user, so the next resume threads the full
+    // exchange back (deduped by run_id). This also seeds the transcript the
+    // first time a task hits needs_user, before any answer has been given.
+    if let Some(q) = result.as_ref().filter(|r| r.status == "needs_user").and_then(|r| {
+        r.question_for_user
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+    }) {
+        let _ = state::append_conversation_turn(
+            ws,
+            &task.id,
+            ConversationTurn {
+                role: TurnRole::Worker,
+                text: q.to_string(),
+                run_id: run_id.clone(),
+                ts: Local::now().to_rfc3339(),
+            },
+        );
+    }
+
     let intent_summary = intent.as_ref().map(|i| i.summary.as_str()).unwrap_or("");
     compact::write_checkpoint(&run_dir, &task, &eval, result.as_ref(), intent_summary)?;
     compact::write_handoff(&run_dir, &task, &eval, result.as_ref())?;

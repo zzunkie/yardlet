@@ -5,7 +5,7 @@
 //! planning/review. Both prefer anchors over pasted content to save tokens.
 
 use crate::inspect::RepoSummary;
-use crate::schemas::{IntentContract, Task};
+use crate::schemas::{ConversationTurn, IntentContract, Task, TurnRole};
 
 pub struct PacketInputs<'a> {
     pub worker_id: &'a str,
@@ -13,10 +13,9 @@ pub struct PacketInputs<'a> {
     pub intent: Option<&'a IntentContract>,
     pub repo: &'a RepoSummary,
     pub run_dir_rel: &'a str,
-    /// A question this worker (or a peer) left on a previous run of this task.
-    pub prior_question: Option<&'a str>,
-    /// The user's answer to that question, when resuming.
-    pub user_answer: Option<&'a str>,
+    /// The conversation transcript when resuming a task that paused for the
+    /// user (oldest turn first). Empty unless this is a conversational resume.
+    pub conversation: &'a [ConversationTurn],
     /// Continuation context for a Partial re-run: the previous run's
     /// checkpoint + unmet acceptance, so the worker continues instead of
     /// redoing finished work.
@@ -550,16 +549,38 @@ pub fn compile(inputs: &PacketInputs) -> String {
         p.push_str("\n\n");
     }
 
-    // Resume context: the user answered a question from a prior run.
-    if let Some(answer) = inputs.user_answer {
-        p.push_str("## Continuing after a question\n\n");
-        if let Some(q) = inputs.prior_question {
-            p.push_str(&format!("You previously stopped and asked:\n> {q}\n\n"));
+    // Resume context: a conversation with the user (this task paused as
+    // needs_user). Thread the whole exchange back so the worker has memory of
+    // it, then let the worker decide whether the latest message is the decision
+    // (proceed) or another question (answer it and stay needs_user).
+    if !inputs.conversation.is_empty() {
+        p.push_str("## Conversation with the user\n\n");
+        p.push_str(
+            "This task paused to talk with the user. The full exchange so far, oldest \
+             first:\n\n",
+        );
+        for turn in inputs.conversation {
+            let who = match turn.role {
+                TurnRole::Worker => "you",
+                TurnRole::User => "user",
+            };
+            for (i, line) in turn.text.trim().lines().enumerate() {
+                if i == 0 {
+                    p.push_str(&format!("> [{who}] {line}\n"));
+                } else {
+                    p.push_str(&format!(">   {line}\n"));
+                }
+            }
         }
-        p.push_str(&format!(
-            "The user has now answered:\n> {answer}\n\nUse this answer to finish the task. Do \
-             not ask the same question again.\n\n"
-        ));
+        p.push_str(
+            "\nRespond to the user's latest message:\n\
+             - If it gives you the decision or information you needed, proceed and complete the \
+             task. Do not redo work finished in an earlier turn.\n\
+             - If it is a question, or you still lack what you need to finish, do NOT force \
+             completion: put your full user-facing reply (the explanation plus the specific \
+             choice you need) in `question_for_user`, keep it self-contained (the user may not \
+             see report.md), and return status `needs_user`.\n\n",
+        );
     }
 
     // Evidence anchors (not pasted content).
@@ -1136,8 +1157,7 @@ mod tests {
             intent: None,
             repo: &repo,
             run_dir_rel: ".agents/runs/run-x",
-            prior_question: None,
-            user_answer: None,
+            conversation: &[],
             continuation: None,
             chained_from: None,
             language: "en",
@@ -1205,8 +1225,7 @@ mod tests {
             intent: None,
             repo: &repo,
             run_dir_rel: ".agents/runs/run-x",
-            prior_question: None,
-            user_answer: None,
+            conversation: &[],
             continuation: None,
             chained_from: None,
             language: "en",
@@ -1246,8 +1265,7 @@ mod tests {
             intent: None,
             repo: &repo,
             run_dir_rel: ".agents/runs/run-x",
-            prior_question: None,
-            user_answer: None,
+            conversation: &[],
             continuation: None,
             chained_from: Some("YARD-1"),
             language: "en",
@@ -1290,8 +1308,7 @@ mod tests {
             intent: None,
             repo: &repo,
             run_dir_rel: ".agents/runs/run-x",
-            prior_question: None,
-            user_answer: None,
+            conversation: &[],
             continuation: Some("- Checkpoint: AC-004 unmet (wrong background)"),
             chained_from: None,
             language: "en",
@@ -1302,6 +1319,66 @@ mod tests {
         assert!(p.contains("## Continuing a partial run"));
         assert!(p.contains("do not redo finished work"));
         assert!(p.contains("AC-004 unmet"));
+    }
+
+    #[test]
+    fn conversation_renders_transcript_and_lets_the_worker_decide() {
+        let task = crate::schemas::Task {
+            id: "YARD-1".into(),
+            title: "decide renderer".into(),
+            state: Default::default(),
+            priority: 0,
+            risk: String::new(),
+            kind: "review".into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec![],
+            skills: vec![],
+            required_capabilities: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+            provenance: String::new(),
+        };
+        let repo = crate::inspect::RepoSummary::default();
+        let turns = vec![
+            ConversationTurn {
+                role: TurnRole::Worker,
+                text: "Forward+ or GL Compatibility?".into(),
+                run_id: "run-1".into(),
+                ts: String::new(),
+            },
+            ConversationTurn {
+                role: TurnRole::User,
+                text: "what is Forward+?".into(),
+                run_id: String::new(),
+                ts: String::new(),
+            },
+        ];
+        let p = compile(&PacketInputs {
+            worker_id: "codex",
+            task: &task,
+            intent: None,
+            repo: &repo,
+            run_dir_rel: ".agents/runs/run-x",
+            conversation: &turns,
+            continuation: None,
+            chained_from: None,
+            language: "en",
+            images: &[],
+            role_notes: "",
+            harness: &Harness::default(),
+        });
+        assert!(p.contains("## Conversation with the user"));
+        assert!(p.contains("[you] Forward+ or GL Compatibility?"));
+        assert!(p.contains("[user] what is Forward+?"));
+        // Worker-decides stance: it may answer and stay needs_user, or proceed.
+        assert!(p.contains("question_for_user"));
+        assert!(p.contains("needs_user"));
     }
 
     #[test]
