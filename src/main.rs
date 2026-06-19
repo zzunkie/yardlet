@@ -19,6 +19,7 @@ mod planner;
 mod report;
 mod review;
 mod routing;
+mod rubric;
 mod run;
 mod schemas;
 mod skill_author;
