@@ -26,6 +26,28 @@ fn explicit(v: &str) -> bool {
     !v.trim().is_empty() && !v.eq_ignore_ascii_case("auto")
 }
 
+/// The profile a task actually runs with. A per-task `model`/`effort` overrides
+/// the worker profile only when EXPLICIT (set and not the "auto" sentinel);
+/// "auto"/empty keeps the profile's pinned value. This makes model/effort a
+/// consistent cascade task -> profile -> CLI default: a worker-level model pin
+/// is honored, and build_command falls back to the CLI's own default only when
+/// the profile itself is empty/auto. (Without this, a task's `model: auto` would
+/// clobber the profile pin and resolve straight to the CLI default.)
+pub fn effective_profile(
+    profile: &WorkerProfile,
+    task_model: &str,
+    task_effort: &str,
+) -> WorkerProfile {
+    let mut p = profile.clone();
+    if explicit(task_model) {
+        p.model = task_model.to_string();
+    }
+    if explicit(task_effort) {
+        p.effort = task_effort.to_string();
+    }
+    p
+}
+
 /// How a given worker turns a packet file into a subprocess command.
 ///
 /// Argument shapes are isolated here so a single adapter edit fixes flag drift
@@ -511,6 +533,32 @@ fn codex_config_default_model() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effective_profile_honors_pin_unless_task_is_explicit() {
+        let base: WorkerProfile = crate::yaml::from_str(
+            "id: claude-code\nmodel: opus\neffort: high\ninvocation: { command: claude }",
+        )
+        .unwrap();
+        // "auto" / empty per-task values keep the profile's pin.
+        let p = effective_profile(&base, "auto", "");
+        assert_eq!(p.model, "opus");
+        assert_eq!(p.effort, "high");
+        let p = effective_profile(&base, "AUTO", "auto");
+        assert_eq!(p.model, "opus");
+        assert_eq!(p.effort, "high");
+        // An explicit per-task value overrides the pin.
+        let p = effective_profile(&base, "sonnet", "low");
+        assert_eq!(p.model, "sonnet");
+        assert_eq!(p.effort, "low");
+        // No profile pin + "auto" task = empty, so build_command later omits the
+        // flag and the worker CLI picks its own default.
+        let bare: WorkerProfile =
+            crate::yaml::from_str("id: codex\ninvocation: { command: codex }").unwrap();
+        let p = effective_profile(&bare, "auto", "auto");
+        assert!(p.model.is_empty());
+        assert!(p.effort.is_empty());
+    }
 
     fn args_of(cmd: &Command) -> Vec<String> {
         cmd.get_args()

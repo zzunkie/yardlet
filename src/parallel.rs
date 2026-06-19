@@ -131,19 +131,15 @@ pub fn run_batch<F: FnMut(&str)>(
                 }
             };
         let profile = match run::find_worker(&workers_file.workers, &resolved.worker_id) {
-            Ok(p) => p.clone(),
+            Ok(p) => p,
             Err(e) => {
                 on_event(&format!("{}: {e}; skipped", task.id));
                 continue;
             }
         };
-        let mut eff_profile = profile;
-        if !task.model.trim().is_empty() {
-            eff_profile.model = task.model.clone();
-        }
-        if !task.effort.trim().is_empty() {
-            eff_profile.effort = task.effort.clone();
-        }
+        // "auto"/empty task model/effort keeps the profile pin (see
+        // workers::effective_profile); only an explicit value overrides.
+        let eff_profile = crate::workers::effective_profile(profile, &task.model, &task.effort);
         let run_id = format!(
             "run-{}-{}",
             Local::now().format("%Y%m%d-%H%M%S"),

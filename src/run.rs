@@ -273,16 +273,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let reason = resolved.reason;
     let bin = resolved.bin;
     let profile = find_worker(&workers.workers, &worker_id)?;
-    // Per-task model/effort override the worker profile; an empty value falls
-    // back to the profile, and build_command treats "auto" as the CLI's own
-    // default. The in-flight task thus captures its own effective profile.
-    let mut eff_profile = profile.clone();
-    if !task.model.trim().is_empty() {
-        eff_profile.model = task.model.clone();
-    }
-    if !task.effort.trim().is_empty() {
-        eff_profile.effort = task.effort.clone();
-    }
+    // A per-task model/effort overrides the worker profile only when explicit;
+    // "auto"/empty keeps the profile's pin (so the planner's `model: auto` does
+    // not clobber a worker-level model pin). The in-flight task thus captures
+    // its own effective profile.
+    let eff_profile = workers::effective_profile(profile, &task.model, &task.effort);
     // Per-run --full-access OR the workspace's default_access=full.
     let full_access = opts.full_access || config.default_access.eq_ignore_ascii_case("full");
     let env = guard::sanitized_worker_env_for(&billing, &eff_profile.invocation.pass_env)
