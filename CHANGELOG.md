@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.7.0 - 2026-06-21
+
+### Added
+
+- **`yardlet rubric drift` / `yardlet rubric sync`.** Diagnose how a workspace's
+  `.agents/workers.yaml` rubric has fallen behind the binary's embedded worker
+  template, and merge the improvements back in non-destructively. `sync` is
+  additive by default: it unions `capabilities` and `role_strengths`, fills
+  empty `best_for`/`not_for`/`cost_weight`, and adds template-only workers,
+  while leaving operational config (`invocation`, `model`, `effort`, `limits`,
+  `billing`), the `routing` block, and workspace-only workers untouched.
+  `--adopt-text` also replaces customized rubric text. This closes the gap where
+  template rubric improvements never reached workspaces created earlier.
+- **needs_user is now a conversation.** A task paused for the user keeps a
+  transcript at `.agents/conversations/<id>.yaml`; resuming threads the whole
+  exchange back to the worker, so it remembers the conversation. The worker
+  decides whether your message is the decision (proceed) or a question (reply
+  and stay paused). A bare `yardlet answer` now prints the worker's pending
+  message instead of erroring, and answering surfaces the worker's reply, so the
+  back-and-forth is visible.
+
+### Changed
+
+- **The queue renders in attention order.** `yardlet queue` and the TUI now show
+  the running and next-to-run tasks on top and completed work at the bottom
+  (grouped by state, then priority), and `yardlet queue` marks the task that
+  runs next. Display-only; the on-disk queue keeps its order.
+- **A needs_user task no longer halts the whole drain.** Autonomous draining
+  skips a task that is waiting on you (or blocked) and keeps running independent
+  ready work; tasks that depend on the paused one stay gated. The drain stops
+  only when nothing is runnable, and then reports what needs you versus what is
+  waiting on approval or dependencies.
+- A review task that returns `needs_user` defers its verdict/criteria gate
+  instead of reporting every acceptance criterion as failed, so a clarifying
+  turn reads cleanly.
+
 ## 0.6.2 - 2026-06-19
 
 ### Added
