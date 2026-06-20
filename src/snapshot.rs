@@ -54,8 +54,8 @@ impl Snapshot {
     fn load_inner(ws: &Workspace, cached_workers: Option<Vec<WorkerLine>>) -> Result<Snapshot> {
         let config = ws.load_config()?;
         let intent = ws.load_intent()?;
-        // Display the queue in execution order so the list reads top-to-bottom
-        // as the scheduler runs it (in-memory only; the on-disk queue is unchanged).
+        // Sort for display (active work on top, done at the bottom); in-memory
+        // only, the on-disk queue order is unchanged.
         let mut queue = ws.load_queue()?;
         queue.sort_for_display();
         let billing = ws.load_billing()?;

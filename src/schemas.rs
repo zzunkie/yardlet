@@ -301,14 +301,27 @@ impl WorkQueue {
         })
     }
 
-    /// Sort tasks into execution order for display: ascending `priority`, ties
-    /// kept in insertion order (a stable sort). This mirrors how `select_next`
-    /// picks the next task (lowest priority, earliest in the queue on a tie), so
-    /// the rendered list reads top-to-bottom as the order tasks actually run.
-    /// Display-only: the on-disk queue keeps its insertion / positional-insert
-    /// order untouched.
+    /// Sort tasks for display so what needs attention is on top and finished
+    /// work sinks to the bottom: group by state (running first, then the
+    /// needs-attention states, then queued, then done), and within each group by
+    /// ascending `priority` (the scheduler's `select_next` key), ties kept in
+    /// insertion order. So the running task and the next-to-run queued task sit
+    /// at the top instead of below a long completed history. Display-only: the
+    /// on-disk queue keeps its insertion / positional-insert order untouched.
     pub fn sort_for_display(&mut self) {
-        self.tasks.sort_by_key(|t| t.priority);
+        fn rank(s: &TaskState) -> u8 {
+            match s {
+                TaskState::Running => 0,
+                TaskState::NeedsUser => 1,
+                TaskState::Blocked => 2,
+                TaskState::Failed => 3,
+                TaskState::Partial => 4,
+                TaskState::Queued => 5,
+                TaskState::Done => 6,
+            }
+        }
+        self.tasks
+            .sort_by(|a, b| rank(&a.state).cmp(&rank(&b.state)).then(a.priority.cmp(&b.priority)));
     }
 }
 

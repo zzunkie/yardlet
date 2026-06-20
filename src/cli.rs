@@ -754,8 +754,8 @@ fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
         println!("Queue is empty. Run `yardlet new \"...\"` to create work.");
         return Ok(());
     }
-    // Execution order, not insertion order: the list reads as the scheduler runs
-    // it, and the task that runs next is marked.
+    // Sort for display (active work on top, done at the bottom) and mark the
+    // task that runs next, so live work is not buried under completed history.
     queue.sort_for_display();
     let next = run::select_next(
         &queue,

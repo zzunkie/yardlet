@@ -1581,18 +1581,19 @@ mod tests {
     }
 
     #[test]
-    fn sort_for_display_is_execution_order() {
-        // Insertion order (A,RUN,done1,B) does not match execution order. Sorting
-        // for display yields ascending priority, ties kept in insertion order.
+    fn sort_for_display_puts_active_on_top_done_at_bottom() {
+        // Active work rises to the top, done work sinks to the bottom, and within
+        // a group it is priority order: RUN (pri 200) outranks the queued tasks
+        // despite a higher number, and done1 (pri 10) sinks below them.
         let mut q = queue(vec![
-            task("A", TaskState::Queued, 110, false),
-            task("RUN", TaskState::Running, 100, false),
-            task("done1", TaskState::Done, 100, false), // ties RUN at 100
+            task("done1", TaskState::Done, 10, false),
             task("B", TaskState::Queued, 120, false),
+            task("RUN", TaskState::Running, 200, false),
+            task("A", TaskState::Queued, 110, false),
         ]);
         q.sort_for_display();
         let ids: Vec<&str> = q.tasks.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, vec!["RUN", "done1", "A", "B"]);
+        assert_eq!(ids, vec!["RUN", "A", "B", "done1"]);
     }
 
     #[test]
