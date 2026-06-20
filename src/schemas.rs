@@ -300,6 +300,16 @@ impl WorkQueue {
                 .unwrap_or(true)
         })
     }
+
+    /// Sort tasks into execution order for display: ascending `priority`, ties
+    /// kept in insertion order (a stable sort). This mirrors how `select_next`
+    /// picks the next task (lowest priority, earliest in the queue on a tie), so
+    /// the rendered list reads top-to-bottom as the order tasks actually run.
+    /// Display-only: the on-disk queue keeps its insertion / positional-insert
+    /// order untouched.
+    pub fn sort_for_display(&mut self) {
+        self.tasks.sort_by_key(|t| t.priority);
+    }
 }
 
 // ---------------------------------------------------------------------------

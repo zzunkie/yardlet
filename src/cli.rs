@@ -749,14 +749,32 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
 
 fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
-    let queue = ws.load_queue()?;
+    let mut queue = ws.load_queue()?;
     if queue.tasks.is_empty() {
         println!("Queue is empty. Run `yardlet new \"...\"` to create work.");
         return Ok(());
     }
-    for t in &queue.tasks {
+    // Execution order, not insertion order: the list reads as the scheduler runs
+    // it, and the task that runs next is marked.
+    queue.sort_for_display();
+    let next = run::select_next(
+        &queue,
+        &RunOptions {
+            execute: false,
+            worker_override: None,
+            target: None,
+            answer: None,
+            full_access: false,
+            accept_ambiguity: false,
+            chain: None,
+        },
+    )
+    .ok()
+    .flatten();
+    for (i, t) in queue.tasks.iter().enumerate() {
+        let marker = if Some(i) == next { "\u{25b8}" } else { " " };
         println!(
-            "{} {:<12} {:<48} {:>6}  {}",
+            "{marker}{} {:<12} {:<48} {:>6}  {}",
             t.state.glyph(),
             t.id,
             truncate(&t.title, 48),
