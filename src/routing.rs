@@ -201,8 +201,9 @@ fn candidate_for_task(
 
 /// Normalize a capability name for matching: trimmed, lowercase, with spaces and
 /// hyphens folded to underscores. Keeps matching exact without forcing an enum
-/// (a new worker capability needs no Yardlet code change).
-fn norm_cap(s: &str) -> String {
+/// (a new worker capability needs no Yardlet code change). Shared with the
+/// rubric diff/merge so both compare capabilities the same way routing gates do.
+pub(crate) fn norm_cap(s: &str) -> String {
     s.trim().to_lowercase().replace([' ', '-'], "_")
 }
 

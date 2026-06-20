@@ -56,6 +56,8 @@ pub enum Command {
     Report,
     /// Review routing telemetry and apply suggested worker preferences.
     Routing(RoutingArgs),
+    /// Show worker-rubric drift from the template and merge improvements in.
+    Rubric(RubricArgs),
     /// Recover state from an interrupted session (orphaned runs, unread plans).
     Recover,
     /// Classify the repo and equip skills from the library (docs/skills.md).
@@ -124,6 +126,25 @@ enum RoutingCmd {
         kind: String,
         #[arg(long)]
         worker: String,
+    },
+}
+
+#[derive(Args)]
+pub struct RubricArgs {
+    #[command(subcommand)]
+    cmd: RubricCmd,
+}
+
+#[derive(Subcommand)]
+enum RubricCmd {
+    /// Show how this workspace's worker rubric drifts from the current template.
+    Drift,
+    /// Merge template rubric improvements into workers.yaml (non-destructive).
+    Sync {
+        /// Also replace customized best_for/not_for/cost_weight text with the
+        /// template's wording (default only fills empty text fields).
+        #[arg(long)]
+        adopt_text: bool,
     },
 }
 
@@ -300,6 +321,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Handoff) => cmd_handoff(&cwd),
         Some(Command::Report) => cmd_report(&cwd),
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
+        Some(Command::Rubric(a)) => cmd_rubric(&cwd, a),
         Some(Command::Recover) => cmd_recover(&cwd),
         Some(Command::Skill(a)) => cmd_skill(&cwd, a),
         Some(Command::Harness(a)) => cmd_harness(&cwd, a),
@@ -533,6 +555,121 @@ fn cmd_routing(cwd: &std::path::Path, args: RoutingArgs) -> Result<()> {
             println!("Pinned '{kind}' tasks to {worker} (.agents/routing-overrides.yaml).");
             Ok(())
         }
+    }
+}
+
+fn cmd_rubric(cwd: &std::path::Path, args: RubricArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let workspace = ws.load_workers()?;
+    let template = crate::rubric::template_workers()?;
+    let drift = crate::rubric::diff(&workspace, &template);
+    match args.cmd {
+        RubricCmd::Drift => {
+            print_drift(&drift);
+            Ok(())
+        }
+        RubricCmd::Sync { adopt_text } => {
+            let (merged, changes) = crate::rubric::merge(&workspace, &template, adopt_text);
+            if changes.is_empty() {
+                println!("workers.yaml rubric already matches the template; nothing to sync.");
+                hint_adopt_text(&drift, adopt_text);
+                return Ok(());
+            }
+            // Rewriting from the struct normalizes formatting and drops inline
+            // comments; the commented reference is the template / `rubric drift`.
+            println!(
+                "note: this rewrites .agents/workers.yaml from the merged rubric and drops inline \
+                 comments (the commented reference lives in the template)."
+            );
+            crate::state::save_yaml(&ws.workers_path(), &merged)?;
+            println!("Synced {} rubric change(s) into .agents/workers.yaml:", changes.len());
+            for c in &changes {
+                println!("  \u{2022} {:<12} {}", c.worker, c.detail);
+            }
+            hint_adopt_text(&drift, adopt_text);
+            Ok(())
+        }
+    }
+}
+
+fn print_drift(d: &crate::rubric::RubricDrift) {
+    if d.schema_version_template != d.schema_version_workspace {
+        println!(
+            "schema_version: workspace {} vs template {} (structural; sync does not change it).",
+            d.schema_version_workspace, d.schema_version_template
+        );
+    }
+    if !d.has_drift() {
+        println!("No rubric drift: workers.yaml matches the current template.");
+        if !d.extra_workers.is_empty() {
+            println!("  (local-only worker(s), untouched: {})", d.extra_workers.join(", "));
+        }
+        return;
+    }
+    println!("Rubric drift vs the current template:\n");
+    for w in &d.workers {
+        if w.capabilities_added.is_empty()
+            && w.role_strengths_added.is_empty()
+            && w.text_changes.is_empty()
+        {
+            continue;
+        }
+        println!("  {}:", w.id);
+        for c in &w.capabilities_added {
+            println!("    + capability {c}  (hard routing gap: template declares it, you do not)");
+        }
+        for r in &w.role_strengths_added {
+            println!("    + role_strength {r}");
+        }
+        for t in &w.text_changes {
+            if t.workspace_empty() {
+                println!("    ~ {} is empty; template has a value (sync fills it)", t.field);
+            } else {
+                println!("    ~ {} differs (local wording kept unless --adopt-text):", t.field);
+                println!("        template:  {}", clip(&t.template));
+                println!("        workspace: {}", clip(&t.workspace));
+            }
+        }
+        if !w.capabilities_local.is_empty() {
+            println!(
+                "    . local-only capability kept: {}",
+                w.capabilities_local.join(", ")
+            );
+        }
+    }
+    for id in &d.missing_workers {
+        println!("  + worker {id}  (template ships it; sync adds it)");
+    }
+    if !d.extra_workers.is_empty() {
+        println!("\n  local-only worker(s), untouched: {}", d.extra_workers.join(", "));
+    }
+    println!("\nApply:");
+    println!("  yardlet rubric sync               # capabilities + missing workers + fill empty text");
+    println!("  yardlet rubric sync --adopt-text  # also replace customized best_for/not_for/cost_weight");
+}
+
+fn hint_adopt_text(d: &crate::rubric::RubricDrift, adopt_text: bool) {
+    if adopt_text {
+        return;
+    }
+    let kept = d.kept_text_fields();
+    if kept > 0 {
+        println!(
+            "\n{kept} customized text field(s) kept. Re-run with --adopt-text to replace them with \
+             the template wording."
+        );
+    }
+}
+
+/// Collapse whitespace and clip to a readable preview width for the drift report.
+fn clip(s: &str) -> String {
+    let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let max = 100;
+    if collapsed.chars().count() <= max {
+        collapsed
+    } else {
+        let head: String = collapsed.chars().take(max).collect();
+        format!("{head}...")
     }
 }
 
