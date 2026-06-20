@@ -737,18 +737,10 @@ pub fn run_auto<F: FnMut(&str)>(
             }
             continue;
         }
-        // NeedsUser/Blocked genuinely need a human: halt (don't skip past them).
-        if let Some(t) = queue
-            .tasks
-            .iter()
-            .find(|t| matches!(t.state, TaskState::NeedsUser | TaskState::Blocked))
-        {
-            emit(format!(
-                "stopped: {} is {:?} \u{2014} answer (a) or resolve it, then run auto again",
-                t.id, t.state
-            ));
-            break;
-        }
+        // NeedsUser/Blocked tasks do NOT halt the drain. They are not Queued, so
+        // select_next skips them, and any task depending on one stays gated by
+        // deps_met. Independent ready work keeps flowing; only when nothing else
+        // is runnable does the select_next `None` branch below report them.
         // A merge-conflict Partial needs a human; a self-reported Partial is
         // auto-continued from its checkpoint (retry path below, attempts-capped).
         if let Some(t) = queue.tasks.iter().find(|t| t.state == TaskState::Partial) {
@@ -811,15 +803,27 @@ pub fn run_auto<F: FnMut(&str)>(
             None => match select_next(&queue, &probe_opts)? {
                 Some(idx) => queue.tasks[idx].id.clone(),
                 None => {
-                    // Nothing eligible. Distinguish "all done" from "queued tasks
-                    // remain but are gated" (approval, or deps on a gated task).
+                    // Nothing runnable. Report why, in priority of action: tasks
+                    // that need a human (NeedsUser/Blocked) first, then
+                    // queued-but-gated (approval or deps), else a drained queue.
+                    let needs_you: Vec<&str> = queue
+                        .tasks
+                        .iter()
+                        .filter(|t| matches!(t.state, TaskState::NeedsUser | TaskState::Blocked))
+                        .map(|t| t.id.as_str())
+                        .collect();
                     let waiting: Vec<&str> = queue
                         .tasks
                         .iter()
                         .filter(|t| t.state == TaskState::Queued)
                         .map(|t| t.id.as_str())
                         .collect();
-                    if waiting.is_empty() {
+                    if !needs_you.is_empty() {
+                        emit(format!(
+                            "stopped: {} need you \u{2014} answer (a) or resolve, then run auto again",
+                            needs_you.join(", ")
+                        ));
+                    } else if waiting.is_empty() {
                         emit("done: queue drained, all tasks complete".to_string());
                     } else {
                         emit(format!(
@@ -1574,6 +1578,42 @@ mod tests {
             task("C", TaskState::Queued, 20, false),
         ]);
         assert_eq!(select_next(&q, &opts()).unwrap(), Some(1)); // B, priority 10
+    }
+
+    #[test]
+    fn sort_for_display_is_execution_order() {
+        // Insertion order (A,RUN,done1,B) does not match execution order. Sorting
+        // for display yields ascending priority, ties kept in insertion order.
+        let mut q = queue(vec![
+            task("A", TaskState::Queued, 110, false),
+            task("RUN", TaskState::Running, 100, false),
+            task("done1", TaskState::Done, 100, false), // ties RUN at 100
+            task("B", TaskState::Queued, 120, false),
+        ]);
+        q.sort_for_display();
+        let ids: Vec<&str> = q.tasks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["RUN", "done1", "A", "B"]);
+    }
+
+    #[test]
+    fn drain_skips_needs_user_for_independent_ready_work() {
+        // A task waiting on the user must not block independent ready work:
+        // select_next skips the NeedsUser task even though it is lower priority.
+        let q = queue(vec![
+            task("stuck", TaskState::NeedsUser, 10, false),
+            task("ready", TaskState::Queued, 20, false),
+        ]);
+        assert_eq!(select_next(&q, &opts()).unwrap(), Some(1)); // ready, not stuck
+    }
+
+    #[test]
+    fn drain_does_not_run_a_dependent_of_a_needs_user_task() {
+        // The safety side of skipping: a task depending on the stuck one stays
+        // gated (deps_met requires Done), so the drain cannot leap ahead of it.
+        let mut dependent = task("dep", TaskState::Queued, 5, false);
+        dependent.depends_on = vec!["stuck".into()];
+        let q = queue(vec![task("stuck", TaskState::NeedsUser, 10, false), dependent]);
+        assert_eq!(select_next(&q, &opts()).unwrap(), None);
     }
 
     #[test]
