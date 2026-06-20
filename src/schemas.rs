@@ -320,8 +320,11 @@ impl WorkQueue {
                 TaskState::Done => 6,
             }
         }
-        self.tasks
-            .sort_by(|a, b| rank(&a.state).cmp(&rank(&b.state)).then(a.priority.cmp(&b.priority)));
+        self.tasks.sort_by(|a, b| {
+            rank(&a.state)
+                .cmp(&rank(&b.state))
+                .then(a.priority.cmp(&b.priority))
+        });
     }
 }
 

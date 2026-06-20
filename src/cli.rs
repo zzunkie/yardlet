@@ -582,7 +582,10 @@ fn cmd_rubric(cwd: &std::path::Path, args: RubricArgs) -> Result<()> {
                  comments (the commented reference lives in the template)."
             );
             crate::state::save_yaml(&ws.workers_path(), &merged)?;
-            println!("Synced {} rubric change(s) into .agents/workers.yaml:", changes.len());
+            println!(
+                "Synced {} rubric change(s) into .agents/workers.yaml:",
+                changes.len()
+            );
             for c in &changes {
                 println!("  \u{2022} {:<12} {}", c.worker, c.detail);
             }
@@ -602,7 +605,10 @@ fn print_drift(d: &crate::rubric::RubricDrift) {
     if !d.has_drift() {
         println!("No rubric drift: workers.yaml matches the current template.");
         if !d.extra_workers.is_empty() {
-            println!("  (local-only worker(s), untouched: {})", d.extra_workers.join(", "));
+            println!(
+                "  (local-only worker(s), untouched: {})",
+                d.extra_workers.join(", ")
+            );
         }
         return;
     }
@@ -623,9 +629,15 @@ fn print_drift(d: &crate::rubric::RubricDrift) {
         }
         for t in &w.text_changes {
             if t.workspace_empty() {
-                println!("    ~ {} is empty; template has a value (sync fills it)", t.field);
+                println!(
+                    "    ~ {} is empty; template has a value (sync fills it)",
+                    t.field
+                );
             } else {
-                println!("    ~ {} differs (local wording kept unless --adopt-text):", t.field);
+                println!(
+                    "    ~ {} differs (local wording kept unless --adopt-text):",
+                    t.field
+                );
                 println!("        template:  {}", clip(&t.template));
                 println!("        workspace: {}", clip(&t.workspace));
             }
@@ -641,10 +653,15 @@ fn print_drift(d: &crate::rubric::RubricDrift) {
         println!("  + worker {id}  (template ships it; sync adds it)");
     }
     if !d.extra_workers.is_empty() {
-        println!("\n  local-only worker(s), untouched: {}", d.extra_workers.join(", "));
+        println!(
+            "\n  local-only worker(s), untouched: {}",
+            d.extra_workers.join(", ")
+        );
     }
     println!("\nApply:");
-    println!("  yardlet rubric sync               # capabilities + missing workers + fill empty text");
+    println!(
+        "  yardlet rubric sync               # capabilities + missing workers + fill empty text"
+    );
     println!("  yardlet rubric sync --adopt-text  # also replace customized best_for/not_for/cost_weight");
 }
 

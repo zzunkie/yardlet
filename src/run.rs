@@ -16,9 +16,7 @@ use serde::Serialize;
 use crate::guard;
 use crate::inspect;
 use crate::packet::{self, PacketInputs};
-use crate::schemas::{
-    ConversationTurn, RunResult, TaskState, TurnRole, WorkQueue, WorkerProfile,
-};
+use crate::schemas::{ConversationTurn, RunResult, TaskState, TurnRole, WorkQueue, WorkerProfile};
 use crate::state::{self, write_str, Workspace};
 use crate::{compact, evaluator, routing, telemetry, workers};
 
@@ -516,12 +514,16 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // whenever a run pauses for the user, so the next resume threads the full
     // exchange back (deduped by run_id). This also seeds the transcript the
     // first time a task hits needs_user, before any answer has been given.
-    if let Some(q) = result.as_ref().filter(|r| r.status == "needs_user").and_then(|r| {
-        r.question_for_user
-            .as_deref()
-            .map(str::trim)
-            .filter(|q| !q.is_empty())
-    }) {
+    if let Some(q) = result
+        .as_ref()
+        .filter(|r| r.status == "needs_user")
+        .and_then(|r| {
+            r.question_for_user
+                .as_deref()
+                .map(str::trim)
+                .filter(|q| !q.is_empty())
+        })
+    {
         let _ = state::append_conversation_turn(
             ws,
             &task.id,
@@ -1613,7 +1615,10 @@ mod tests {
         // gated (deps_met requires Done), so the drain cannot leap ahead of it.
         let mut dependent = task("dep", TaskState::Queued, 5, false);
         dependent.depends_on = vec!["stuck".into()];
-        let q = queue(vec![task("stuck", TaskState::NeedsUser, 10, false), dependent]);
+        let q = queue(vec![
+            task("stuck", TaskState::NeedsUser, 10, false),
+            dependent,
+        ]);
         assert_eq!(select_next(&q, &opts()).unwrap(), None);
     }
 

@@ -242,8 +242,12 @@ mod tests {
         // An identical consecutive user turn is skipped.
         append_conversation_turn(&ws, "YARD-1", user("what is Forward+?")).unwrap();
         // A worker turn from a different run lands.
-        append_conversation_turn(&ws, "YARD-1", worker("Forward+ is the advanced path", "run-2"))
-            .unwrap();
+        append_conversation_turn(
+            &ws,
+            "YARD-1",
+            worker("Forward+ is the advanced path", "run-2"),
+        )
+        .unwrap();
 
         let conv = ws.load_conversation("YARD-1");
         assert_eq!(conv.task_id, "YARD-1");

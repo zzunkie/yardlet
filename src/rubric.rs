@@ -215,7 +215,11 @@ pub struct SyncChange {
 /// - workspace-only workers, operational config, and `routing` are untouched.
 ///
 /// Pure; the caller decides whether to persist the result.
-pub fn merge(ws: &WorkersFile, template: &WorkersFile, adopt_text: bool) -> (WorkersFile, Vec<SyncChange>) {
+pub fn merge(
+    ws: &WorkersFile,
+    template: &WorkersFile,
+    adopt_text: bool,
+) -> (WorkersFile, Vec<SyncChange>) {
     let mut out = ws.clone();
     let mut changes = Vec::new();
 
@@ -361,7 +365,11 @@ routing:
         let tmpl = template_workers().unwrap();
         let (merged, _) = merge(&ws, &tmpl, false);
         let codex = merged.workers.iter().find(|w| w.id == "codex").unwrap();
-        let claude = merged.workers.iter().find(|w| w.id == "claude-code").unwrap();
+        let claude = merged
+            .workers
+            .iter()
+            .find(|w| w.id == "claude-code")
+            .unwrap();
         // codex had a customized best_for -> kept as-is without --adopt-text.
         assert_eq!(codex.best_for, "old codex rubric");
         // codex had no cost_weight -> filled from the template ("low").
@@ -416,6 +424,9 @@ routing:
     fn merge_is_idempotent() {
         let tmpl = template_workers().unwrap();
         let (_, changes) = merge(&tmpl, &tmpl, true);
-        assert!(changes.is_empty(), "syncing the template onto itself is a no-op");
+        assert!(
+            changes.is_empty(),
+            "syncing the template onto itself is a no-op"
+        );
     }
 }
