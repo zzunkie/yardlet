@@ -317,7 +317,7 @@ routing:
         let tmpl = template_workers().unwrap();
         let d = diff(&ws, &tmpl);
         let codex = d.workers.iter().find(|w| w.id == "codex").unwrap();
-        // The Deadline12 case: template declares image_generation, workspace doesn't.
+        // The stale-workspace case: the template declares image_generation, the workspace does not.
         assert!(codex
             .capabilities_added
             .iter()
