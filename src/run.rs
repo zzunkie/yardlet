@@ -459,118 +459,6 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             (Some(base), Some(after)) => Some(evaluator::worker_touched(base, &after)),
             _ => None,
         };
-    let mut eval = evaluator::evaluate(&run_dir, &run_id, &task, evidence.as_deref());
-    // H3: workspace-owned post-run gates run during evaluation. A non-zero hook
-    // is a fatal check the task cannot be Done past (e.g. scanning the produced
-    // diff for secrets) — fold each into the evaluation and block Done.
-    let post = crate::hooks::run_phase(
-        ws,
-        crate::hooks::Phase::Post,
-        &task.id,
-        &run_dir,
-        &worker_id,
-    );
-    if !post.ok() {
-        for f in &post.failures {
-            lines.push(format!(
-                "post-run hook failed (blocks Done): {}",
-                f.summary()
-            ));
-            eval.checks
-                .push(evaluator::fatal_failure("post-run hook", f.summary()));
-        }
-        if eval.next_task_state == TaskState::Done {
-            eval.next_task_state = TaskState::Failed;
-        }
-    }
-    // Deterministic validation: Yardlet core runs the task's configured
-    // validation commands itself; a worker's self-reported validation stays
-    // advisory. Any failure (or a `required` task with nothing to run) is fatal
-    // and blocks Done.
-    let validation_cmds = validation_commands(&task);
-    let (validation_ran, validation_passed) =
-        run_validation_commands(&validation_cmds, &ws.root, &run_dir, &billing);
-    if (validation_ran && !validation_passed) || (validation_required(&task) && !validation_ran) {
-        lines.push("validation failed (blocks Done)".to_string());
-        eval.checks.push(evaluator::fatal_failure(
-            "validation",
-            "configured validation did not pass",
-        ));
-        if eval.next_task_state == TaskState::Done {
-            eval.next_task_state = TaskState::Failed;
-        }
-    }
-    state::write_str(
-        &run_dir.join("evaluation.json"),
-        &serde_json::to_string_pretty(&eval)?,
-    )?;
-
-    let result: Option<crate::schemas::RunResult> =
-        std::fs::read_to_string(run_dir.join("result.json"))
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok());
-
-    // Record the worker's user-facing message into the conversation transcript
-    // whenever a run pauses for the user, so the next resume threads the full
-    // exchange back (deduped by run_id). This also seeds the transcript the
-    // first time a task hits needs_user, before any answer has been given.
-    if let Some(q) = result
-        .as_ref()
-        .filter(|r| r.status == "needs_user")
-        .and_then(|r| {
-            r.question_for_user
-                .as_deref()
-                .map(str::trim)
-                .filter(|q| !q.is_empty())
-        })
-    {
-        let _ = state::append_conversation_turn(
-            ws,
-            &task.id,
-            ConversationTurn {
-                role: TurnRole::Worker,
-                text: q.to_string(),
-                run_id: run_id.clone(),
-                ts: Local::now().to_rfc3339(),
-            },
-        );
-    }
-
-    let intent_summary = intent.as_ref().map(|i| i.summary.as_str()).unwrap_or("");
-    compact::write_checkpoint(&run_dir, &task, &eval, result.as_ref(), intent_summary)?;
-    compact::write_handoff(&run_dir, &task, &eval, result.as_ref())?;
-
-    // Harness learning loop (S3): record skills the worker proposed. The
-    // worker authored the content; Yardlet (the core) does the writing.
-    if let Some(r) = &result {
-        let learned = crate::skills::record_run_suggestions(ws, &r.harness_suggestions);
-        if !learned.is_empty() {
-            lines.push(format!("learned skill(s): {}", learned.join(", ")));
-        }
-        let rules = crate::skills::record_run_rules(ws, &r.harness_suggestions);
-        if !rules.is_empty() {
-            lines.push(format!("learned rule(s): {}", rules.join(", ")));
-        }
-    }
-
-    // ---- update queue: set the task's state AND ingest any follow-up tasks
-    // the worker proposed in result.json (propose -> ingest). Yardlet stays the
-    // sole queue writer — both updates land in one re-read-then-save.
-    let follow_ups = result
-        .as_ref()
-        .map(|r| r.follow_up_tasks.clone())
-        .unwrap_or_default();
-    let ingested =
-        finalize_on_latest_queue(ws, &mut queue, &task.id, eval.next_task_state, &follow_ups)?;
-    if !ingested.is_empty() {
-        lines.push(format!(
-            "ingested {} worker-proposed follow-up task(s): {}",
-            ingested.len(),
-            ingested.join(", ")
-        ));
-    }
-
-    // ---- telemetry (best effort; feeds routing suggestions) -------------
     let user_override = opts.worker_override.as_ref().map(|o| {
         let from = if task.preferred_worker.is_empty() {
             "(default)".to_string()
@@ -579,32 +467,24 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         };
         format!("{from}->{o}")
     });
-    let _ = telemetry::append_run(
+    let intent_summary = intent.as_ref().map(|i| i.summary.as_str()).unwrap_or("");
+    let report = finalize_run(FinalizeInput {
         ws,
-        &telemetry::RunTelemetry {
-            ts: Local::now().to_rfc3339(),
-            task_id: task.id.clone(),
-            kind: task.kind.clone(),
-            risk: task.risk.clone(),
-            worker: worker_id.clone(),
-            chosen_reason: reason.clone(),
-            result_status: result
-                .as_ref()
-                .map(|r| r.status.clone())
-                .unwrap_or_else(|| "no-result".to_string()),
-            eval_state: format!("{:?}", eval.next_task_state),
-            wall_seconds,
-            user_override,
-            skills: task.skills.clone(),
-            verdict_pass: result.as_ref().and_then(|r| {
-                (!r.verdict.is_empty())
-                    .then(|| (r.verdict.iter().filter(|v| v.pass).count(), r.verdict.len()))
-            }),
-        },
-    );
-
-    lines.push(format!("evaluation status: {}", eval.status));
-    lines.push(format!("next task state: {:?}", eval.next_task_state));
+        run_dir: &run_dir,
+        run_id: &run_id,
+        task: &task,
+        evidence,
+        worker_id: &worker_id,
+        reason: &reason,
+        wall_seconds,
+        user_override,
+        intent_summary,
+        billing: &billing,
+        queue: &mut queue,
+        flags: FinalizeFlags::serial(),
+    })?;
+    let next_state = report.next_state;
+    lines.extend(report.lines);
 
     Ok(RunReport {
         run_id,
@@ -614,7 +494,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         prepared: true,
         executed: true,
         lines,
-        result_state: Some(eval.next_task_state),
+        result_state: Some(next_state),
         session: session_id,
         chained,
     })
@@ -1419,6 +1299,233 @@ fn finalize_on_latest_queue(
     let ingested = crate::planner::ingest_follow_ups(fallback_queue, follow_ups);
     ws.save_queue(fallback_queue)?;
     Ok(ingested)
+}
+
+/// Per-path divergences in the finalization pipeline. The serial path runs
+/// every step; parallel skips the in-place-only gates (hooks/validation/
+/// conversation/learned); recovery skips artifacts/telemetry too. Slice 1
+/// wires the serial path only — the flags exist so a later slice can flip
+/// them for parallel/recovery without re-deriving the pipeline.
+pub(crate) struct FinalizeFlags {
+    pub post_hooks: bool,
+    pub validation: bool,
+    pub conversation: bool,
+    pub learned: bool,
+    pub artifacts: bool,
+    pub telemetry: bool,
+}
+
+impl FinalizeFlags {
+    /// The serial path runs the full finalization pipeline.
+    pub fn serial() -> Self {
+        Self {
+            post_hooks: true,
+            validation: true,
+            conversation: true,
+            learned: true,
+            artifacts: true,
+            telemetry: true,
+        }
+    }
+}
+
+/// Everything one finished worker run needs to turn its raw output into
+/// committed state. `evidence` is computed by the caller because the serial
+/// (fingerprint-diff) and parallel (worktree status) paths derive it
+/// differently; finalize_run evaluates from it.
+pub(crate) struct FinalizeInput<'a> {
+    pub ws: &'a Workspace,
+    pub run_dir: &'a std::path::Path,
+    pub run_id: &'a str,
+    pub task: &'a crate::schemas::Task,
+    pub evidence: Option<Vec<String>>,
+    pub worker_id: &'a str,
+    pub reason: &'a str,
+    pub wall_seconds: u64,
+    pub user_override: Option<String>,
+    pub intent_summary: &'a str,
+    pub billing: &'a crate::schemas::BillingPolicy,
+    pub queue: &'a mut WorkQueue,
+    pub flags: FinalizeFlags,
+}
+
+pub(crate) struct FinalizeReport {
+    pub next_state: TaskState,
+    pub lines: Vec<String>,
+}
+
+/// The single finalization pipeline shared by the run paths (Slice 1: serial
+/// only). Evaluate -> gates -> artifacts -> conversation -> learned -> queue
+/// state + follow-up ingestion -> telemetry. Behavior is identical to the
+/// inline serial code it replaces; only the structure changed.
+pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
+    let FinalizeInput {
+        ws,
+        run_dir,
+        run_id,
+        task,
+        evidence,
+        worker_id,
+        reason,
+        wall_seconds,
+        user_override,
+        intent_summary,
+        billing,
+        queue,
+        flags,
+    } = input;
+    let mut lines = Vec::new();
+
+    let mut eval = evaluator::evaluate(run_dir, run_id, task, evidence.as_deref());
+
+    // H3: workspace-owned post-run gates. A non-zero hook is a fatal check the
+    // task cannot be Done past (e.g. scanning the produced diff for secrets).
+    if flags.post_hooks {
+        let post =
+            crate::hooks::run_phase(ws, crate::hooks::Phase::Post, &task.id, run_dir, worker_id);
+        if !post.ok() {
+            for f in &post.failures {
+                lines.push(format!(
+                    "post-run hook failed (blocks Done): {}",
+                    f.summary()
+                ));
+                eval.checks
+                    .push(evaluator::fatal_failure("post-run hook", f.summary()));
+            }
+            if eval.next_task_state == TaskState::Done {
+                eval.next_task_state = TaskState::Failed;
+            }
+        }
+    }
+
+    // Deterministic validation: Yardlet core runs the task's configured
+    // validation commands itself. Any failure (or a `required` task with
+    // nothing to run) is fatal and blocks Done.
+    if flags.validation {
+        let validation_cmds = validation_commands(task);
+        let (validation_ran, validation_passed) =
+            run_validation_commands(&validation_cmds, &ws.root, run_dir, billing);
+        if (validation_ran && !validation_passed) || (validation_required(task) && !validation_ran)
+        {
+            lines.push("validation failed (blocks Done)".to_string());
+            eval.checks.push(evaluator::fatal_failure(
+                "validation",
+                "configured validation did not pass",
+            ));
+            if eval.next_task_state == TaskState::Done {
+                eval.next_task_state = TaskState::Failed;
+            }
+        }
+    }
+
+    if flags.artifacts {
+        state::write_str(
+            &run_dir.join("evaluation.json"),
+            &serde_json::to_string_pretty(&eval)?,
+        )?;
+    }
+
+    let result: Option<RunResult> = std::fs::read_to_string(run_dir.join("result.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok());
+
+    // Record the worker's user-facing message into the conversation transcript
+    // whenever a run pauses for the user, so the next resume threads the full
+    // exchange back (deduped by run_id).
+    if flags.conversation {
+        if let Some(q) = result
+            .as_ref()
+            .filter(|r| r.status == "needs_user")
+            .and_then(|r| {
+                r.question_for_user
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|q| !q.is_empty())
+            })
+        {
+            let _ = state::append_conversation_turn(
+                ws,
+                &task.id,
+                ConversationTurn {
+                    role: TurnRole::Worker,
+                    text: q.to_string(),
+                    run_id: run_id.to_string(),
+                    ts: Local::now().to_rfc3339(),
+                },
+            );
+        }
+    }
+
+    if flags.artifacts {
+        compact::write_checkpoint(run_dir, task, &eval, result.as_ref(), intent_summary)?;
+        compact::write_handoff(run_dir, task, &eval, result.as_ref())?;
+    }
+
+    // Harness learning loop (S3): record skills/rules the worker proposed. The
+    // worker authored the content; Yardlet (the core) does the writing.
+    if flags.learned {
+        if let Some(r) = &result {
+            let learned = crate::skills::record_run_suggestions(ws, &r.harness_suggestions);
+            if !learned.is_empty() {
+                lines.push(format!("learned skill(s): {}", learned.join(", ")));
+            }
+            let rules = crate::skills::record_run_rules(ws, &r.harness_suggestions);
+            if !rules.is_empty() {
+                lines.push(format!("learned rule(s): {}", rules.join(", ")));
+            }
+        }
+    }
+
+    // Update the queue: set state AND ingest any follow-up tasks the worker
+    // proposed (propose -> ingest). Yardlet stays the sole queue writer — both
+    // land in one re-read-then-save.
+    let follow_ups = result
+        .as_ref()
+        .map(|r| r.follow_up_tasks.clone())
+        .unwrap_or_default();
+    let ingested =
+        finalize_on_latest_queue(ws, queue, &task.id, eval.next_task_state, &follow_ups)?;
+    if !ingested.is_empty() {
+        lines.push(format!(
+            "ingested {} worker-proposed follow-up task(s): {}",
+            ingested.len(),
+            ingested.join(", ")
+        ));
+    }
+
+    if flags.telemetry {
+        let _ = telemetry::append_run(
+            ws,
+            &telemetry::RunTelemetry {
+                ts: Local::now().to_rfc3339(),
+                task_id: task.id.clone(),
+                kind: task.kind.clone(),
+                risk: task.risk.clone(),
+                worker: worker_id.to_string(),
+                chosen_reason: reason.to_string(),
+                result_status: result
+                    .as_ref()
+                    .map(|r| r.status.clone())
+                    .unwrap_or_else(|| "no-result".to_string()),
+                eval_state: format!("{:?}", eval.next_task_state),
+                wall_seconds,
+                user_override,
+                skills: task.skills.clone(),
+                verdict_pass: result.as_ref().and_then(|r| {
+                    (!r.verdict.is_empty())
+                        .then(|| (r.verdict.iter().filter(|v| v.pass).count(), r.verdict.len()))
+                }),
+            },
+        );
+    }
+
+    lines.push(format!("evaluation status: {}", eval.status));
+    lines.push(format!("next task state: {:?}", eval.next_task_state));
+
+    Ok(FinalizeReport {
+        next_state: eval.next_task_state,
+        lines,
+    })
 }
 
 /// Context for CONTINUING a Partial task instead of redoing it: the previous
