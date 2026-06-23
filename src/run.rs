@@ -525,6 +525,20 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let next_state = report.next_state;
     lines.extend(report.lines);
 
+    // Auto-commit (1d): when enabled, snapshot the worker's changes to git after
+    // a Done serial run (the parallel/recovery paths already commit via their
+    // worktree merge). Best-effort — a commit hiccup is reported, never fails
+    // the task. Pushing stays manual and gated (approval-policy
+    // deploy_publish_send); auto-commit never touches a remote.
+    if config.auto_commit && next_state == TaskState::Done {
+        let msg = format!("yardlet: {} {}", task.id, task.title);
+        match git_commit_worker_changes(&ws.root, &msg) {
+            Ok(true) => lines.push(format!("auto-committed {} changes", task.id)),
+            Ok(false) => {}
+            Err(e) => lines.push(format!("auto-commit skipped: {e}")),
+        }
+    }
+
     Ok(RunReport {
         run_id,
         task_id: task.id,
@@ -537,6 +551,50 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         session: session_id,
         chained,
     })
+}
+
+/// Commit the worker's changes in `root` — everything except Yardlet's own
+/// `.agents/` state — and return whether a commit was actually made (false when
+/// not a git repo or nothing changed). Used by auto-commit; the caller treats
+/// any error as non-fatal so a git hiccup never fails a finished task. Mirrors
+/// the worktree integration's staging (`:(exclude).agents`) and identity.
+fn git_commit_worker_changes(root: &std::path::Path, message: &str) -> Result<bool> {
+    let run = |args: &[&str]| -> Result<String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .map_err(|e| anyhow!("git not available: {e}"))?;
+        if !out.status.success() {
+            return Err(anyhow!(
+                "git {} failed: {}",
+                args.first().copied().unwrap_or(""),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let inside = run(&["rev-parse", "--is-inside-work-tree"])
+        .map(|s| s.trim() == "true")
+        .unwrap_or(false);
+    if !inside {
+        return Ok(false);
+    }
+    run(&["add", "-A", "--", ".", ":(exclude).agents"])?;
+    if run(&["diff", "--cached", "--name-only"])?.trim().is_empty() {
+        return Ok(false);
+    }
+    run(&[
+        "-c",
+        "user.name=yardlet",
+        "-c",
+        "user.email=yardlet@localhost",
+        "commit",
+        "-m",
+        message,
+    ])?;
+    Ok(true)
 }
 
 /// Autonomous mode: drain the queue, stopping only at genuine human gates.
@@ -1957,6 +2015,57 @@ mod tests {
         let r = rev(&ws);
         assert_eq!(r.state, TaskState::NeedsUser);
         assert_eq!(r.depends_on, vec!["FIX".to_string()]); // no duplicate
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn auto_commit_commits_worker_changes_excluding_agents() {
+        // 1d: auto-commit snapshots the worker's diff but never Yardlet's own
+        // .agents/ state, and reports "nothing to commit" cleanly.
+        let root = std::env::temp_dir().join(format!("yard-autocommit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let sh = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        sh(&["init", "-q"]);
+        sh(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "init",
+        ]);
+        // The worker edits a real file; Yardlet writes .agents state alongside.
+        std::fs::write(root.join("feature.txt"), "work\n").unwrap();
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        std::fs::write(root.join(".agents/work-queue.yaml"), "state\n").unwrap();
+
+        assert!(git_commit_worker_changes(&root, "yardlet: T1 do it").unwrap());
+        let tracked = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["ls-files"])
+            .output()
+            .unwrap();
+        let files = String::from_utf8_lossy(&tracked.stdout);
+        assert!(files.contains("feature.txt"), "worker file committed");
+        assert!(
+            !files.contains(".agents"),
+            ".agents excluded from the commit"
+        );
+        // Nothing left to commit -> false, not an error.
+        assert!(!git_commit_worker_changes(&root, "yardlet: T1 again").unwrap());
         let _ = std::fs::remove_dir_all(&root);
     }
 

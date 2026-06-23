@@ -49,6 +49,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
         auto_rule: true,
         auto_prune: true,
         hooks: true,
+        auto_commit: false,
     };
     state::save_yaml(&ws.config_path(), &config)?;
     written.push("yardlet.yaml".to_string());

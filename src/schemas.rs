@@ -93,6 +93,13 @@ pub struct YardConfig {
     /// Done. On by default; the dirs are empty until you add executables.
     #[serde(default = "default_true")]
     pub hooks: bool,
+    /// After a Done serial run, commit the worker's changes to git (everything
+    /// except `.agents/`). Best-effort and non-fatal; never pushes to a remote
+    /// (pushing stays manual and gated by approval-policy `deploy_publish_send`).
+    /// OFF by default: opt in, since it writes to the user's git history. The
+    /// parallel/recovery paths already commit via their worktree merge.
+    #[serde(default)]
+    pub auto_commit: bool,
 }
 
 fn default_access() -> String {
