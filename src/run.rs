@@ -122,6 +122,42 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     };
     let task = queue.tasks[idx].clone();
 
+    // Capability backstop: if this task requires a capability no enabled worker
+    // declares, park it Blocked HERE — before any run dir or worker spawn —
+    // instead of letting routing hard-fail and strand an orphaned run. Queue
+    // creation already grounds capabilities (planner::reconcile_queue_capabilities);
+    // this guards the path that bypasses that: a named `--task` the user forced.
+    {
+        let vocab = routing::declared_capabilities(&workers);
+        let unsatisfiable: Vec<String> = task
+            .required_capabilities
+            .iter()
+            .map(|c| routing::norm_cap(c))
+            .filter(|c| !c.is_empty() && !vocab.contains(c))
+            .collect();
+        if !unsatisfiable.is_empty() {
+            save_task_state_on_latest_queue(ws, &mut queue, &task.id, TaskState::Blocked)?;
+            return Ok(RunReport {
+                run_id: String::new(),
+                task_id: task.id.clone(),
+                worker_id: String::new(),
+                run_dir: ws.runs_dir(),
+                prepared: false,
+                executed: false,
+                lines: vec![format!(
+                    "{}: parked Blocked — no enabled worker declares required \
+                     capability/capabilities [{}]; add a worker that declares it (then unblock), \
+                     or handle it as a human decision",
+                    task.id,
+                    unsatisfiable.join(", ")
+                )],
+                result_state: Some(TaskState::Blocked),
+                session: None,
+                chained: false,
+            });
+        }
+    }
+
     // Resuming after a question: record the user's reply and thread the whole
     // conversation back so the worker has memory of it. Seed the worker's prior
     // question for a task that paused before transcripts existed (legacy/first).
