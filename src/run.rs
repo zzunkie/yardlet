@@ -482,6 +482,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         billing: &billing,
         queue: &mut queue,
         flags: FinalizeFlags::serial(),
+        merge: None,
     })?;
     let next_state = report.next_state;
     lines.extend(report.lines);
@@ -1327,6 +1328,32 @@ impl FinalizeFlags {
             telemetry: true,
         }
     }
+
+    /// The parallel path skips the in-place-only gates: post-run hooks and
+    /// validation run against the workspace, but a parallel task's edits live in
+    /// its worktree until merged, so they are deferred (the merge is sequential
+    /// and a later slice can run them post-merge). Conversation/learned are
+    /// skipped too (batches only pick Queued tasks, never a paused resume).
+    /// Artifacts and telemetry still land, exactly as the inline code did.
+    pub fn parallel() -> Self {
+        Self {
+            post_hooks: false,
+            validation: false,
+            conversation: false,
+            learned: false,
+            artifacts: true,
+            telemetry: true,
+        }
+    }
+}
+
+/// A worker's isolated worktree to merge back into the main workspace when its
+/// run lands Done. Set by the parallel and recovery paths (which run in a
+/// worktree on branch `yard/<task-id>`); `None` for the serial path, which edits
+/// the workspace in place and has nothing to merge.
+pub(crate) struct MergeBack<'a> {
+    pub wt_path: &'a std::path::Path,
+    pub branch: &'a str,
 }
 
 /// Everything one finished worker run needs to turn its raw output into
@@ -1347,6 +1374,9 @@ pub(crate) struct FinalizeInput<'a> {
     pub billing: &'a crate::schemas::BillingPolicy,
     pub queue: &'a mut WorkQueue,
     pub flags: FinalizeFlags,
+    /// When the run lands Done, merge this worktree back (parallel/recovery). A
+    /// conflict downgrades the task to Partial and keeps the worktree.
+    pub merge: Option<MergeBack<'a>>,
 }
 
 pub(crate) struct FinalizeReport {
@@ -1373,6 +1403,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         billing,
         queue,
         flags,
+        merge,
     } = input;
     let mut lines = Vec::new();
 
@@ -1476,6 +1507,60 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         }
     }
 
+    // Integrate the worktree (parallel/recovery only). A Done run is merged
+    // back into the workspace in completion order; a conflict (or any merge
+    // error) is never auto-resolved — the task drops to Partial and its worktree
+    // is kept for manual integration. The committed state below is this
+    // post-merge state, so the queue and telemetry both record what really
+    // happened.
+    let mut next_state = eval.next_task_state;
+    if let Some(m) = &merge {
+        if next_state == TaskState::Done {
+            match crate::parallel::integrate_worktree(&ws.root, m.wt_path, m.branch, &task.id) {
+                Ok(crate::parallel::Integration::Merged) => {
+                    lines.push(format!("{}: merged {} into the workspace", task.id, m.branch));
+                    crate::parallel::remove_worktree(&ws.root, m.wt_path, m.branch);
+                }
+                Ok(crate::parallel::Integration::NoChanges) => {
+                    lines.push(format!("{}: no file changes to merge", task.id));
+                    crate::parallel::remove_worktree(&ws.root, m.wt_path, m.branch);
+                }
+                Ok(crate::parallel::Integration::Conflict(why)) => {
+                    next_state = TaskState::Partial;
+                    let _ = state::write_str(&run_dir.join("partial-reason"), "merge_conflict");
+                    let note = format!(
+                        "\n## Merge conflict\n\nYard could not merge `{}` back: {}\n\
+                         The worktree is kept at `{}` for manual integration.\n",
+                        m.branch,
+                        why.trim(),
+                        m.wt_path.display()
+                    );
+                    let hp = run_dir.join("handoff.md");
+                    let mut existing = std::fs::read_to_string(&hp).unwrap_or_default();
+                    existing.push_str(&note);
+                    let _ = std::fs::write(&hp, existing);
+                    lines.push(format!(
+                        "{}: merge conflict — task is partial; worktree kept at {}",
+                        task.id,
+                        m.wt_path.display()
+                    ));
+                }
+                Err(e) => {
+                    next_state = TaskState::Partial;
+                    let _ = state::write_str(&run_dir.join("partial-reason"), "merge_conflict");
+                    lines.push(format!("{}: integration error: {e}", task.id));
+                }
+            }
+        } else {
+            lines.push(format!(
+                "{}: {:?} — worktree kept at {}",
+                task.id,
+                next_state,
+                m.wt_path.display()
+            ));
+        }
+    }
+
     // Update the queue: set state AND ingest any follow-up tasks the worker
     // proposed (propose -> ingest). Yardlet stays the sole queue writer — both
     // land in one re-read-then-save.
@@ -1483,8 +1568,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         .as_ref()
         .map(|r| r.follow_up_tasks.clone())
         .unwrap_or_default();
-    let ingested =
-        finalize_on_latest_queue(ws, queue, &task.id, eval.next_task_state, &follow_ups)?;
+    let ingested = finalize_on_latest_queue(ws, queue, &task.id, next_state, &follow_ups)?;
     if !ingested.is_empty() {
         lines.push(format!(
             "ingested {} worker-proposed follow-up task(s): {}",
@@ -1507,7 +1591,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     .as_ref()
                     .map(|r| r.status.clone())
                     .unwrap_or_else(|| "no-result".to_string()),
-                eval_state: format!("{:?}", eval.next_task_state),
+                eval_state: format!("{next_state:?}"),
                 wall_seconds,
                 user_override,
                 skills: task.skills.clone(),
@@ -1520,12 +1604,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     }
 
     lines.push(format!("evaluation status: {}", eval.status));
-    lines.push(format!("next task state: {:?}", eval.next_task_state));
+    lines.push(format!("next task state: {next_state:?}"));
 
-    Ok(FinalizeReport {
-        next_state: eval.next_task_state,
-        lines,
-    })
+    Ok(FinalizeReport { next_state, lines })
 }
 
 /// Context for CONTINUING a Partial task instead of redoing it: the previous

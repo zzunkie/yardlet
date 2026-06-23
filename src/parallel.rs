@@ -26,7 +26,7 @@ use chrono::Local;
 use crate::packet::{self, PacketInputs};
 use crate::schemas::{Task, TaskState, WorkQueue, WorkerProfile};
 use crate::state::{self, write_str, Workspace};
-use crate::{compact, evaluator, guard, inspect, routing, run, telemetry, workers};
+use crate::{evaluator, guard, inspect, routing, run, workers};
 
 /// Indices of tasks eligible to run together right now: queued, dependencies
 /// met, not approval-gated. Priority order, up to `max`.
@@ -300,113 +300,36 @@ pub fn run_batch<F: FnMut(&str)>(
         }
 
         // Parallel runs execute in an isolated worktree, so its git status IS
-        // the worker's diff (no baseline to subtract). Evaluate the forbidden
-        // gate against that real evidence, not the worker's self-report. This is
-        // checked before integrate_worktree merges it into the workspace.
+        // the worker's diff (no baseline to subtract). finalize_run evaluates
+        // the forbidden gate against that real evidence (not the worker's
+        // self-report), then — only on a Done run — merges the worktree back;
+        // it writes artifacts, the queue state, follow-ups, and telemetry. The
+        // single finalization pipeline is shared with the serial path.
         let evidence = evaluator::changed_paths(&p.wt_path);
-        let eval = evaluator::evaluate(&p.run_dir, &p.run_id, &p.task, evidence.as_deref());
-        let _ = state::write_str(
-            &p.run_dir.join("evaluation.json"),
-            &serde_json::to_string_pretty(&eval).unwrap_or_default(),
-        );
-        let result: Option<crate::schemas::RunResult> =
-            std::fs::read_to_string(p.run_dir.join("result.json"))
-                .ok()
-                .and_then(|t| serde_json::from_str(&t).ok());
-        let _ =
-            compact::write_checkpoint(&p.run_dir, &p.task, &eval, result.as_ref(), intent_summary);
-        let _ = compact::write_handoff(&p.run_dir, &p.task, &eval, result.as_ref());
-
-        let mut next = eval.next_task_state;
-        if next == TaskState::Done {
-            match integrate_worktree(&ws.root, &p.wt_path, &p.branch, &p.task.id) {
-                Ok(Integration::Merged) => {
-                    on_event(&format!(
-                        "{}: merged {} into the workspace",
-                        p.task.id, p.branch
-                    ));
-                    remove_worktree(&ws.root, &p.wt_path, &p.branch);
-                }
-                Ok(Integration::NoChanges) => {
-                    on_event(&format!("{}: no file changes to merge", p.task.id));
-                    remove_worktree(&ws.root, &p.wt_path, &p.branch);
-                }
-                Ok(Integration::Conflict(why)) => {
-                    next = TaskState::Partial;
-                    // Mark WHY it is partial: a conflict needs a human, so the
-                    // auto-drain must not continue it like a worker self-report.
-                    let _ = write_str(&p.run_dir.join("partial-reason"), "merge_conflict");
-                    let note = format!(
-                        "\n## Merge conflict\n\nYard could not merge `{}` back: {}\n\
-                         The worktree is kept at `{}` for manual integration.\n",
-                        p.branch,
-                        why.trim(),
-                        p.wt_path.display()
-                    );
-                    append_to(&p.run_dir.join("handoff.md"), &note);
-                    on_event(&format!(
-                        "{}: merge conflict — task is partial; worktree kept at {}",
-                        p.task.id,
-                        p.wt_path.display()
-                    ));
-                }
-                Err(e) => {
-                    next = TaskState::Partial;
-                    let _ = write_str(&p.run_dir.join("partial-reason"), "merge_conflict");
-                    on_event(&format!("{}: integration error: {e}", p.task.id));
-                }
-            }
-        } else {
-            // Not Done: keep the worktree as evidence; a retry starts fresh.
-            on_event(&format!(
-                "{}: {:?} — worktree kept at {}",
-                p.task.id,
-                next,
-                p.wt_path.display()
-            ));
-        }
-
-        queue.tasks[p.queue_idx].state = next;
-        // Ingest any follow-up tasks this worker proposed in result.json
-        // (propose -> ingest; Yardlet is the sole queue writer). Appending
-        // never shifts existing indices, so the queue_idx bookkeeping holds.
-        if let Some(r) = &result {
-            let ingested = crate::planner::ingest_follow_ups(&mut queue, &r.follow_up_tasks);
-            if !ingested.is_empty() {
-                on_event(&format!(
-                    "{}: ingested {} worker-proposed follow-up task(s): {}",
-                    p.task.id,
-                    ingested.len(),
-                    ingested.join(", ")
-                ));
-            }
-        }
-        ws.save_queue(&queue)?;
-        states.push((p.task.id.clone(), next));
-
-        let _ = telemetry::append_run(
+        let report = run::finalize_run(run::FinalizeInput {
             ws,
-            &telemetry::RunTelemetry {
-                ts: Local::now().to_rfc3339(),
-                task_id: p.task.id.clone(),
-                kind: p.task.kind.clone(),
-                risk: p.task.risk.clone(),
-                worker: p.worker_id.clone(),
-                chosen_reason: p.reason.clone(),
-                result_status: result
-                    .as_ref()
-                    .map(|r| r.status.clone())
-                    .unwrap_or_else(|| "no-result".to_string()),
-                eval_state: format!("{next:?}"),
-                wall_seconds: fin.wall_seconds,
-                user_override: None,
-                skills: p.task.skills.clone(),
-                verdict_pass: result.as_ref().and_then(|r| {
-                    (!r.verdict.is_empty())
-                        .then(|| (r.verdict.iter().filter(|v| v.pass).count(), r.verdict.len()))
-                }),
-            },
-        );
+            run_dir: &p.run_dir,
+            run_id: &p.run_id,
+            task: &p.task,
+            evidence,
+            worker_id: &p.worker_id,
+            reason: &p.reason,
+            wall_seconds: fin.wall_seconds,
+            user_override: None,
+            intent_summary,
+            billing: &billing,
+            queue: &mut queue,
+            flags: run::FinalizeFlags::parallel(),
+            merge: Some(run::MergeBack {
+                wt_path: &p.wt_path,
+                branch: &p.branch,
+            }),
+        })?;
+        let next = report.next_state;
+        for line in report.lines {
+            on_event(&line);
+        }
+        states.push((p.task.id.clone(), next));
     }
     for h in handles {
         let _ = h.join();
@@ -553,12 +476,6 @@ fn copy_dir(src: &Path, dst: &Path) {
             let _ = std::fs::copy(&from, &to);
         }
     }
-}
-
-fn append_to(path: &Path, text: &str) {
-    let mut existing = std::fs::read_to_string(path).unwrap_or_default();
-    existing.push_str(text);
-    let _ = std::fs::write(path, existing);
 }
 
 /// Run git in `dir`, returning stdout on success and stderr in the error.
