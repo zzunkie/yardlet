@@ -16,7 +16,9 @@ use serde::Serialize;
 use crate::guard;
 use crate::inspect;
 use crate::packet::{self, PacketInputs};
-use crate::schemas::{ConversationTurn, RunResult, TaskState, TurnRole, WorkQueue, WorkerProfile};
+use crate::schemas::{
+    ConversationTurn, RunResult, TaskState, TurnRole, WorkQueue, WorkerProfile, WorkersFile,
+};
 use crate::state::{self, write_str, Workspace};
 use crate::{compact, evaluator, routing, telemetry, workers};
 
@@ -1139,11 +1141,8 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
     // Snapshot (id, state): the finalize branch borrows the queue mutably
     // through finalize_run, so we cannot hold an iter_mut over it here. Each
     // task's recover decision keys off its state at recovery start.
-    let candidates: Vec<(String, TaskState)> = q
-        .tasks
-        .iter()
-        .map(|t| (t.id.clone(), t.state))
-        .collect();
+    let candidates: Vec<(String, TaskState)> =
+        q.tasks.iter().map(|t| (t.id.clone(), t.state)).collect();
     for (id, state) in candidates {
         let latest = latest_run_for(ws, &id);
         let recover_this = match state {
@@ -1290,7 +1289,7 @@ fn save_task_state_on_latest_queue(
     task_id: &str,
     state: TaskState,
 ) -> Result<()> {
-    finalize_on_latest_queue(ws, fallback_queue, task_id, state, &[]).map(|_| ())
+    finalize_on_latest_queue(ws, fallback_queue, task_id, state, &[], None).map(|_| ())
 }
 
 /// Re-read the latest on-disk queue, set the finished task's state, ingest any
@@ -1305,11 +1304,21 @@ fn finalize_on_latest_queue(
     task_id: &str,
     state: TaskState,
     follow_ups: &[crate::schemas::FollowUpTask],
+    workers: Option<&WorkersFile>,
 ) -> Result<Vec<String>> {
+    // Ground any just-ingested follow-up's capabilities against the real
+    // workers before saving: a follow-up requiring a capability no worker has is
+    // parked Blocked at ingest, not crashed into when the drain later picks it.
+    let reconcile = |q: &mut WorkQueue| {
+        if let Some(w) = workers {
+            let _ = crate::planner::reconcile_queue_capabilities(q, w);
+        }
+    };
     let mut latest = ws.load_queue().unwrap_or_else(|_| fallback_queue.clone());
     if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == task_id) {
         t.state = state;
         let ingested = crate::planner::ingest_follow_ups(&mut latest, follow_ups);
+        reconcile(&mut latest);
         ws.save_queue(&latest)?;
         *fallback_queue = latest;
         return Ok(ingested);
@@ -1321,6 +1330,7 @@ fn finalize_on_latest_queue(
         t.state = state;
     }
     let ingested = crate::planner::ingest_follow_ups(fallback_queue, follow_ups);
+    reconcile(fallback_queue);
     ws.save_queue(fallback_queue)?;
     Ok(ingested)
 }
@@ -1556,7 +1566,10 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         if next_state == TaskState::Done {
             match crate::parallel::integrate_worktree(&ws.root, m.wt_path, m.branch, &task.id) {
                 Ok(crate::parallel::Integration::Merged) => {
-                    lines.push(format!("{}: merged {} into the workspace", task.id, m.branch));
+                    lines.push(format!(
+                        "{}: merged {} into the workspace",
+                        task.id, m.branch
+                    ));
                     crate::parallel::remove_worktree(&ws.root, m.wt_path, m.branch);
                 }
                 Ok(crate::parallel::Integration::NoChanges) => {
@@ -1606,7 +1619,18 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         .as_ref()
         .map(|r| r.follow_up_tasks.clone())
         .unwrap_or_default();
-    let ingested = finalize_on_latest_queue(ws, queue, &task.id, next_state, &follow_ups)?;
+    // Workers (when loadable) let the queue commit ground a proposed follow-up's
+    // capabilities; if workers.yaml can't be read we skip grounding rather than
+    // false-park everything.
+    let workers = ws.load_workers().ok();
+    let ingested = finalize_on_latest_queue(
+        ws,
+        queue,
+        &task.id,
+        next_state,
+        &follow_ups,
+        workers.as_ref(),
+    )?;
     if !ingested.is_empty() {
         lines.push(format!(
             "ingested {} worker-proposed follow-up task(s): {}",

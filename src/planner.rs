@@ -530,7 +530,16 @@ fn plan_core(
     // Derive canonical state. Yardlet owns these files.
     let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let intent = build_intent(&intent_id, store_request, &plan, images);
-    let queue = build_queue(&intent_id, &plan);
+    let mut queue = build_queue(&intent_id, &plan);
+    // Ground capabilities against the real workers at creation: a task needing a
+    // capability no worker has is parked now, not crashed into at run time.
+    let parked = reconcile_queue_capabilities(&mut queue, workers);
+    if !parked.is_empty() {
+        lines.push(format!(
+            "parked (no worker for required capability): {}",
+            parked.join(", ")
+        ));
+    }
 
     // (Fresh plans already archived + cleared the prior queue before the
     // worker ran; here we just write the new canonical state.)
@@ -651,6 +660,14 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
     // Merge: append the new tasks to the existing queue (continue the numbering).
     let mut queue = existing_queue;
     let added = append_plan_tasks(&mut queue, &plan);
+    // Ground capabilities against the real workers at creation (see run_planning).
+    let parked = reconcile_queue_capabilities(&mut queue, &workers);
+    if !parked.is_empty() {
+        lines.push(format!(
+            "parked (no worker for required capability): {}",
+            parked.join(", ")
+        ));
+    }
     ws.save_queue(&queue)?;
 
     // Note the follow-up in the intent summary (keep the same intent).
@@ -730,6 +747,56 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
         queue.tasks.push(task);
     }
     plan.tasks.len()
+}
+
+/// Ground every Queued task's `required_capabilities` against the workers that
+/// actually exist: normalize the strings and, when a task requires a capability
+/// no enabled worker declares, PARK it (Queued -> Blocked) with a note — at
+/// queue-creation time, not at run time. Capabilities are free-form text the
+/// planner/worker authors; an off-vocab one is either a human-gated need the
+/// worker flagged or a typo no worker has, and either way it must not reach
+/// routing as a hard failure that stops the drain. We cannot enumerate every
+/// capability with an alias table, so the rule is structural: a required
+/// capability outside the real worker vocabulary means "no worker can do this"
+/// -> park for a human (or a newly added worker). Idempotent; touches only
+/// Queued tasks. Returns one `id (caps)` note per task parked.
+pub(crate) fn reconcile_queue_capabilities(
+    queue: &mut WorkQueue,
+    workers: &WorkersFile,
+) -> Vec<String> {
+    let vocab = crate::routing::declared_capabilities(workers);
+    let mut parked = Vec::new();
+    for t in queue.tasks.iter_mut() {
+        if t.state != TaskState::Queued || t.required_capabilities.is_empty() {
+            continue;
+        }
+        let normalized: Vec<String> = t
+            .required_capabilities
+            .iter()
+            .map(|c| crate::routing::norm_cap(c))
+            .filter(|c| !c.is_empty())
+            .collect();
+        let unsatisfiable: Vec<String> = normalized
+            .iter()
+            .filter(|c| !vocab.contains(*c))
+            .cloned()
+            .collect();
+        t.required_capabilities = normalized;
+        if !unsatisfiable.is_empty() {
+            t.state = TaskState::Blocked;
+            let note = format!(
+                "blocked at queue creation: no enabled worker declares required \
+                 capability/capabilities [{}] — needs a human decision or a new worker",
+                unsatisfiable.join(", ")
+            );
+            t.worker_rationale = Some(match t.worker_rationale.take() {
+                Some(r) if !r.trim().is_empty() => format!("{r}\n{note}"),
+                _ => note,
+            });
+            parked.push(format!("{} ({})", t.id, unsatisfiable.join(", ")));
+        }
+    }
+    parked
 }
 
 /// Ingest worker-PROPOSED follow-up tasks into a queue (propose -> ingest).
@@ -1204,10 +1271,14 @@ fn build_worker_guidance(workers: &WorkersFile) -> String {
     if !caps.is_empty() {
         let list = caps.into_iter().collect::<Vec<_>>().join(", ");
         g.push_str(&format!(
-            "\nCapabilities are HARD constraints. If a task needs one of [{list}], set that \
-             task's `required_capabilities` to it: routing then runs only a worker that declares \
-             the capability and fails rather than mis-routing. Decide from the task's meaning, \
-             not keywords; do not set it when no special capability is needed.\n"
+            "\nCapabilities are HARD constraints. For special work a listed worker CAN do, set the \
+             task's `required_capabilities` to the matching capability from [{list}] (exact \
+             string): routing then runs only a worker that declares it. Decide from the task's \
+             meaning, not keywords; leave it empty when no special capability is needed. For work \
+             that genuinely needs something NO listed worker can do (licensing, procurement, an \
+             external or human decision), name that needed capability anyway even though it is not \
+             in [{list}] — Yardlet parks such a task for a human instead of mis-running it. So: a \
+             capability IN [{list}] routes to a worker; one OUTSIDE it flags a human-gated task.\n"
         ));
     }
     g
@@ -1293,6 +1364,81 @@ routing:
         assert!(!g.contains("best for refactors. Avoid"));
         // Empty best_for -> worker skipped entirely.
         assert!(!g.contains("blankworker"));
+    }
+
+    #[test]
+    fn reconcile_parks_unsatisfiable_capability_at_creation() {
+        fn cap_task(id: &str, state: TaskState, caps: &[&str]) -> Task {
+            Task {
+                id: id.into(),
+                title: id.into(),
+                state,
+                priority: 10,
+                risk: String::new(),
+                kind: String::new(),
+                preferred_worker: String::new(),
+                model: String::new(),
+                effort: String::new(),
+                depends_on: vec![],
+                skills: vec![],
+                required_capabilities: caps.iter().map(|s| s.to_string()).collect(),
+                allowed_scope: vec![],
+                acceptance: vec![],
+                validation: None,
+                approval: None,
+                interaction: None,
+                worker_rationale: None,
+                provenance: String::new(),
+            }
+        }
+        let wf: WorkersFile = serde_yaml_ng::from_str(
+            r#"
+schema_version: 1
+workers:
+  - id: codex
+    enabled: true
+    capabilities: [image_generation]
+    invocation: { command: codex }
+routing:
+  cost_bias: balanced
+"#,
+        )
+        .unwrap();
+        let mut q = WorkQueue {
+            schema_version: 1,
+            queue_id: "q".into(),
+            intent_id: String::new(),
+            selection_policy: SelectionPolicy::default(),
+            tasks: vec![
+                cap_task("A", TaskState::Queued, &["image_generation"]), // satisfiable
+                cap_task("B", TaskState::Queued, &["licensed_3d_asset_intake"]), // no worker
+                cap_task("C", TaskState::Queued, &["Image-Generation"]), // normalizes -> satisfiable
+                cap_task("D", TaskState::Done, &["sorcery"]),            // non-Queued: untouched
+                cap_task("E", TaskState::Queued, &[]),                   // no caps: untouched
+            ],
+        };
+        let parked = reconcile_queue_capabilities(&mut q, &wf);
+
+        assert_eq!(q.tasks[0].state, TaskState::Queued); // A satisfiable
+        assert_eq!(q.tasks[1].state, TaskState::Blocked); // B parked
+        assert!(q.tasks[1]
+            .worker_rationale
+            .as_deref()
+            .unwrap()
+            .contains("licensed_3d_asset_intake"));
+        assert_eq!(q.tasks[2].state, TaskState::Queued); // C normalized + satisfiable
+        assert_eq!(
+            q.tasks[2].required_capabilities,
+            vec!["image_generation".to_string()]
+        );
+        assert_eq!(q.tasks[3].state, TaskState::Done); // D untouched (not Queued)
+        assert_eq!(
+            q.tasks[3].required_capabilities,
+            vec!["sorcery".to_string()]
+        );
+        assert_eq!(q.tasks[4].state, TaskState::Queued); // E untouched (no caps)
+        assert_eq!(parked.len(), 1);
+        assert!(parked[0].starts_with("B "));
     }
 
     // Regression: a worker emitted `questions_for_user` as objects

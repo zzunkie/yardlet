@@ -207,6 +207,21 @@ pub(crate) fn norm_cap(s: &str) -> String {
     s.trim().to_lowercase().replace([' ', '-'], "_")
 }
 
+/// The set of capabilities declared by ENABLED workers, normalized. A task's
+/// `required_capabilities` must be a subset of this to be runnable; any other
+/// capability is unsatisfiable (a human decision, or a typo no worker has), and
+/// the planner/ingest parks such a task Blocked at queue-creation time rather
+/// than letting routing hard-fail when the drain later selects it.
+pub(crate) fn declared_capabilities(workers: &WorkersFile) -> std::collections::BTreeSet<String> {
+    workers
+        .workers
+        .iter()
+        .filter(|w| w.enabled)
+        .flat_map(|w| w.capabilities.iter().map(|c| norm_cap(c)))
+        .filter(|c| !c.is_empty())
+        .collect()
+}
+
 /// Whether `worker_id` is an enabled worker declaring EVERY required capability.
 /// `required` must already be normalized.
 fn worker_declares(workers: &WorkersFile, worker_id: &str, required: &[String]) -> bool {
