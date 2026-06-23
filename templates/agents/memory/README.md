@@ -28,6 +28,15 @@ present in every worktree). Yardlet only reads them — it never edits them.
 
 - No frontmatter? The index line falls back to the first `# heading` (title)
   and the first prose line (summary).
+- Optional `look_at:` lists the code paths a fact depends on. `yardlet memory`
+  flags the doc **possibly stale** when a listed path changed in git *after* the
+  doc did — your cue to re-check or rewrite it:
+
+  ```yaml
+  look_at:
+    - src/render/forward_plus.gd
+    - project.godot
+  ```
 
 ## What belongs here
 

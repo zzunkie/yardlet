@@ -937,19 +937,67 @@ fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
         println!("No project memory yet. Add markdown docs under .agents/memory/.");
         return Ok(());
     }
+    // A doc is possibly stale when a `look_at` landmark changed in git AFTER the
+    // doc itself last did. Best-effort: an untracked doc or non-git repo is not
+    // flagged (no evidence either way).
+    let staleness: Vec<bool> = h
+        .memory
+        .iter()
+        .map(|m| {
+            if m.look_at.is_empty() {
+                return false;
+            }
+            let Some(doc_ct) = git_commit_time(&ws.root, &m.path) else {
+                return false;
+            };
+            m.look_at
+                .iter()
+                .any(|p| git_commit_time(&ws.root, p).is_some_and(|t| t > doc_ct))
+        })
+        .collect();
+    let stale_count = staleness.iter().filter(|s| **s).count();
+    let suffix = if stale_count > 0 {
+        format!(", {stale_count} possibly stale")
+    } else {
+        String::new()
+    };
     println!(
-        "Project memory ({}) — injected as an index into every packet, bodies read on demand:",
-        h.memory.len()
+        "Project memory ({}{suffix}) — injected as an index into every packet, bodies read on demand:",
+        h.memory.len(),
     );
-    for m in &h.memory {
-        if m.summary.is_empty() {
-            println!("  \u{2022} {}", m.title);
+    for (m, stale) in h.memory.iter().zip(&staleness) {
+        let mark = if *stale {
+            " \u{26a0} possibly stale (a look_at landmark changed since)"
         } else {
-            println!("  \u{2022} {} \u{2014} {}", m.title, m.summary);
+            ""
+        };
+        if m.summary.is_empty() {
+            println!("  \u{2022} {}{mark}", m.title);
+        } else {
+            println!("  \u{2022} {} \u{2014} {}{mark}", m.title, m.summary);
         }
         println!("    {}", m.path);
     }
     Ok(())
+}
+
+/// Unix time of the last commit touching `pathspec` under `root`, or None when
+/// the path is untracked or `root` is not a git repo.
+fn git_commit_time(root: &std::path::Path, pathspec: &str) -> Option<i64> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["log", "-1", "--format=%ct", "--", pathspec])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    std::str::from_utf8(&out.stdout)
+        .ok()?
+        .trim()
+        .parse::<i64>()
+        .ok()
 }
 
 fn cmd_handoff(cwd: &std::path::Path) -> Result<()> {

@@ -229,6 +229,10 @@ pub struct HarnessMemory {
     pub summary: String,
     /// Repo-relative anchor (".agents/memory/x.md").
     pub path: String,
+    /// Landmark paths this fact depends on (frontmatter `look_at:`). Used by
+    /// `yardlet memory` to flag a doc as possibly stale when a landmark changed
+    /// in git after the doc did. Empty = no staleness signal.
+    pub look_at: Vec<String>,
 }
 
 #[derive(Default)]
@@ -238,43 +242,77 @@ pub struct Harness {
     pub memory: Vec<HarnessMemory>,
 }
 
-/// Pull a memory doc's index line — its title and a one-line summary — from
-/// `name:`/`title:` and `description:`/`summary:` frontmatter when present,
-/// else the first `# ` heading and first prose line. Bodies are never inlined.
-fn parse_memory_doc(text: &str, fallback: &str) -> (String, String) {
+/// Pull a memory doc's index line — title, one-line summary, and any `look_at:`
+/// landmark paths — from `name:`/`title:`, `description:`/`summary:`, and
+/// `look_at:`/`paths:` frontmatter when present, else the first `# ` heading and
+/// first prose line. Bodies are never inlined.
+fn parse_memory_doc(text: &str, fallback: &str) -> (String, String, Vec<String>) {
+    let unquote = |s: &str| s.trim().trim_matches(['"', '\'']).to_string();
     let mut title = String::new();
     let mut summary = String::new();
+    let mut look_at: Vec<String> = Vec::new();
     let mut lines = text.lines();
+    let mut fm: Vec<&str> = Vec::new();
     let mut body: Vec<&str> = Vec::new();
     if text.trim_start().starts_with("---") {
-        // Skip past the opening fence, then read frontmatter until the close.
         for l in lines.by_ref() {
             if l.trim() == "---" {
-                break;
+                break; // opening fence
             }
         }
         for l in lines.by_ref() {
-            let t = l.trim();
-            if t == "---" {
-                break;
+            if l.trim() == "---" {
+                break; // closing fence
             }
-            if let Some(v) = t.strip_prefix("name:").or_else(|| t.strip_prefix("title:")) {
-                if title.is_empty() {
-                    title = v.trim().trim_matches('"').to_string();
-                }
-            } else if let Some(v) = t
-                .strip_prefix("description:")
-                .or_else(|| t.strip_prefix("summary:"))
-            {
-                if summary.is_empty() {
-                    summary = v.trim().trim_matches('"').to_string();
-                }
-            }
+            fm.push(l);
         }
     }
     for l in lines {
         body.push(l);
     }
+
+    let mut i = 0;
+    while i < fm.len() {
+        let t = fm[i].trim();
+        if let Some(v) = t.strip_prefix("name:").or_else(|| t.strip_prefix("title:")) {
+            if title.is_empty() {
+                title = unquote(v);
+            }
+        } else if let Some(v) = t
+            .strip_prefix("description:")
+            .or_else(|| t.strip_prefix("summary:"))
+        {
+            if summary.is_empty() {
+                summary = unquote(v);
+            }
+        } else if let Some(v) = t
+            .strip_prefix("look_at:")
+            .or_else(|| t.strip_prefix("paths:"))
+        {
+            let v = v.trim();
+            if v.is_empty() {
+                // Multi-line list: consume the following `- item` lines.
+                while i + 1 < fm.len() {
+                    if let Some(item) = fm[i + 1].trim().strip_prefix("- ") {
+                        look_at.push(unquote(item));
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                // Inline: `[a, b]` or `a, b`.
+                for part in v.trim_start_matches('[').trim_end_matches(']').split(',') {
+                    let p = unquote(part);
+                    if !p.is_empty() {
+                        look_at.push(p);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
     if title.is_empty() {
         title = body
             .iter()
@@ -293,7 +331,7 @@ fn parse_memory_doc(text: &str, fallback: &str) -> (String, String) {
     if summary.chars().count() > CAP {
         summary = summary.chars().take(CAP - 1).collect::<String>() + "\u{2026}";
     }
-    (title, summary)
+    (title, summary, look_at)
 }
 
 /// Discover the workspace harness. Yardlet-native `.agents/` sources always
@@ -390,11 +428,12 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
             continue;
         }
         let stem = f.file_stem().and_then(|n| n.to_str()).unwrap_or(name);
-        let (title, summary) = parse_memory_doc(&text, stem);
+        let (title, summary, look_at) = parse_memory_doc(&text, stem);
         h.memory.push(HarnessMemory {
             title,
             summary,
             path: format!(".agents/memory/{name}"),
+            look_at,
         });
     }
 
@@ -1192,11 +1231,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("yard-mem-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join(".agents/memory")).unwrap();
-        // Frontmatter doc: title/summary come from name:/description:.
+        // Frontmatter doc: title/summary from name:/description:, plus a
+        // multi-line look_at: landmark list.
         std::fs::write(
             root.join(".agents/memory/decisions.md"),
             "---\nname: v0.8 decisions\ndescription: Loop-engineering tracks and the finalize_run \
-             foundation.\n---\n\n# inner heading\n\nLONGBODY that must not be inlined.",
+             foundation.\nlook_at:\n  - src/run.rs\n  - docs/v0.8-decisions.md\n---\n\n# inner \
+             heading\n\nLONGBODY that must not be inlined.",
         )
         .unwrap();
         // Heading-only doc: title from `# `, summary from the first prose line.
@@ -1219,6 +1260,14 @@ mod tests {
         let titles: Vec<&str> = h.memory.iter().map(|m| m.title.as_str()).collect();
         assert_eq!(titles, vec!["Coding conventions", "v0.8 decisions"]);
         assert_eq!(h.memory[1].path, ".agents/memory/decisions.md");
+        assert_eq!(
+            h.memory[1].look_at,
+            vec![
+                "src/run.rs".to_string(),
+                "docs/v0.8-decisions.md".to_string()
+            ]
+        );
+        assert!(h.memory[0].look_at.is_empty()); // heading-only doc has none
         assert_eq!(
             h.memory[1].summary,
             "Loop-engineering tracks and the finalize_run foundation."
