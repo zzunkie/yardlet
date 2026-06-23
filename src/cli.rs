@@ -56,6 +56,8 @@ pub enum Command {
     Report,
     /// Summarize run telemetry into a trust report (first-pass vs retried Done).
     Trust,
+    /// List the project-memory index discovered under .agents/memory/.
+    Memory,
     /// Review routing telemetry and apply suggested worker preferences.
     Routing(RoutingArgs),
     /// Show worker-rubric drift from the template and merge improvements in.
@@ -323,6 +325,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Handoff) => cmd_handoff(&cwd),
         Some(Command::Report) => cmd_report(&cwd),
         Some(Command::Trust) => cmd_trust(&cwd),
+        Some(Command::Memory) => cmd_memory(&cwd),
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
         Some(Command::Rubric(a)) => cmd_rubric(&cwd, a),
         Some(Command::Recover) => cmd_recover(&cwd),
@@ -912,6 +915,29 @@ fn cmd_report(cwd: &std::path::Path) -> Result<()> {
 fn cmd_trust(cwd: &std::path::Path) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     print!("{}", crate::trust::report(&ws)?);
+    Ok(())
+}
+
+fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let config = ws.load_config()?;
+    let h = crate::packet::discover_harness(&ws.root, config.harness_discovery);
+    if h.memory.is_empty() {
+        println!("No project memory yet. Add markdown docs under .agents/memory/.");
+        return Ok(());
+    }
+    println!(
+        "Project memory ({}) — injected as an index into every packet, bodies read on demand:",
+        h.memory.len()
+    );
+    for m in &h.memory {
+        if m.summary.is_empty() {
+            println!("  \u{2022} {}", m.title);
+        } else {
+            println!("  \u{2022} {} \u{2014} {}", m.title, m.summary);
+        }
+        println!("    {}", m.path);
+    }
     Ok(())
 }
 

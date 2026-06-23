@@ -221,10 +221,79 @@ pub struct HarnessSkill {
     pub native_to: Vec<String>,
 }
 
+/// One project-memory doc: a durable fact or decision about this workspace,
+/// surfaced as an index line with the body read on demand (the same
+/// progressive-disclosure discipline as skills — v0.8 T1).
+pub struct HarnessMemory {
+    pub title: String,
+    pub summary: String,
+    /// Repo-relative anchor (".agents/memory/x.md").
+    pub path: String,
+}
+
 #[derive(Default)]
 pub struct Harness {
     pub rules: Vec<HarnessRule>,
     pub skills: Vec<HarnessSkill>,
+    pub memory: Vec<HarnessMemory>,
+}
+
+/// Pull a memory doc's index line — its title and a one-line summary — from
+/// `name:`/`title:` and `description:`/`summary:` frontmatter when present,
+/// else the first `# ` heading and first prose line. Bodies are never inlined.
+fn parse_memory_doc(text: &str, fallback: &str) -> (String, String) {
+    let mut title = String::new();
+    let mut summary = String::new();
+    let mut lines = text.lines();
+    let mut body: Vec<&str> = Vec::new();
+    if text.trim_start().starts_with("---") {
+        // Skip past the opening fence, then read frontmatter until the close.
+        for l in lines.by_ref() {
+            if l.trim() == "---" {
+                break;
+            }
+        }
+        for l in lines.by_ref() {
+            let t = l.trim();
+            if t == "---" {
+                break;
+            }
+            if let Some(v) = t.strip_prefix("name:").or_else(|| t.strip_prefix("title:")) {
+                if title.is_empty() {
+                    title = v.trim().trim_matches('"').to_string();
+                }
+            } else if let Some(v) = t
+                .strip_prefix("description:")
+                .or_else(|| t.strip_prefix("summary:"))
+            {
+                if summary.is_empty() {
+                    summary = v.trim().trim_matches('"').to_string();
+                }
+            }
+        }
+    }
+    for l in lines {
+        body.push(l);
+    }
+    if title.is_empty() {
+        title = body
+            .iter()
+            .find_map(|l| l.trim().strip_prefix("# ").map(|h| h.trim().to_string()))
+            .unwrap_or_else(|| fallback.to_string());
+    }
+    if summary.is_empty() {
+        summary = body
+            .iter()
+            .map(|l| l.trim())
+            .find(|l| !l.is_empty() && !l.starts_with('#'))
+            .unwrap_or("")
+            .to_string();
+    }
+    const CAP: usize = 140;
+    if summary.chars().count() > CAP {
+        summary = summary.chars().take(CAP - 1).collect::<String>() + "\u{2026}";
+    }
+    (title, summary)
 }
 
 /// Discover the workspace harness. Yardlet-native `.agents/` sources always
@@ -295,6 +364,35 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
         ".agents/skills",
         &[],
     );
+
+    // 1c. Project memory (always on): durable workspace facts/decisions, each
+    // surfaced as one index line with the body read on demand. The generated
+    // index.yaml is skipped here (only .md docs are read).
+    let mem_dir = root.join(crate::state::STATE_DIR).join("memory");
+    let mut mfiles: Vec<_> = std::fs::read_dir(&mem_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .collect();
+    mfiles.sort();
+    for f in &mfiles {
+        let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("memory");
+        let Ok(text) = std::fs::read_to_string(f) else {
+            continue;
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        let stem = f.file_stem().and_then(|n| n.to_str()).unwrap_or(name);
+        let (title, summary) = parse_memory_doc(&text, stem);
+        h.memory.push(HarnessMemory {
+            title,
+            summary,
+            path: format!(".agents/memory/{name}"),
+        });
+    }
 
     if discovery {
         // 2. Root instruction files other agents already use.
@@ -452,6 +550,27 @@ fn push_harness_sections(
                     .map(|s| s.path.clone())
                     .unwrap_or_else(|| format!(".agents/skills/{name}/SKILL.md"));
                 p.push_str(&format!("- `{path}`\n"));
+            }
+        }
+        p.push('\n');
+    }
+
+    // Project memory: durable workspace facts as an index, bodies on demand
+    // (progressive disclosure). Not native to any worker, so always projected.
+    if !harness.memory.is_empty() {
+        p.push_str("## Project memory (read on demand)\n\n");
+        p.push_str(
+            "Durable facts and decisions about this workspace. Read an entry's file when it \
+             bears on the task:\n",
+        );
+        for m in &harness.memory {
+            if m.summary.is_empty() {
+                p.push_str(&format!("- {} (`{}`)\n", m.title, m.path));
+            } else {
+                p.push_str(&format!(
+                    "- {} \u{2014} {} (`{}`)\n",
+                    m.title, m.summary, m.path
+                ));
             }
         }
         p.push('\n');
@@ -1062,6 +1181,57 @@ mod tests {
     }
 
     #[test]
+    fn discovers_project_memory_as_index_with_bodies_on_demand() {
+        // v0.8 Project Memory: .agents/memory/*.md docs are discovered (always
+        // on, even with foreign-tool discovery off) and projected as an index —
+        // title + one-line summary + anchor — with bodies NEVER inlined.
+        let root = std::env::temp_dir().join(format!("yard-mem-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agents/memory")).unwrap();
+        // Frontmatter doc: title/summary come from name:/description:.
+        std::fs::write(
+            root.join(".agents/memory/decisions.md"),
+            "---\nname: v0.8 decisions\ndescription: Loop-engineering tracks and the finalize_run \
+             foundation.\n---\n\n# inner heading\n\nLONGBODY that must not be inlined.",
+        )
+        .unwrap();
+        // Heading-only doc: title from `# `, summary from the first prose line.
+        std::fs::write(
+            root.join(".agents/memory/conventions.md"),
+            "# Coding conventions\n\nMatch the surrounding code; small typed structs.",
+        )
+        .unwrap();
+        // The generated index is skipped (not a .md doc).
+        std::fs::write(root.join(".agents/memory/index.yaml"), "ignored: true").unwrap();
+
+        // Memory is always-on, so discovery=false still finds it (sorted by file).
+        let h = discover_harness(&root, false);
+        let titles: Vec<&str> = h.memory.iter().map(|m| m.title.as_str()).collect();
+        assert_eq!(titles, vec!["Coding conventions", "v0.8 decisions"]);
+        assert_eq!(h.memory[1].path, ".agents/memory/decisions.md");
+        assert_eq!(
+            h.memory[1].summary,
+            "Loop-engineering tracks and the finalize_run foundation."
+        );
+        assert_eq!(
+            h.memory[0].summary,
+            "Match the surrounding code; small typed structs."
+        );
+
+        // The packet projects the index but never the body.
+        let mut p = String::new();
+        push_harness_sections(&mut p, &h, "codex", &[]);
+        assert!(p.contains("## Project memory (read on demand)"));
+        assert!(p.contains("v0.8 decisions"));
+        assert!(p.contains(".agents/memory/decisions.md"));
+        assert!(
+            !p.contains("LONGBODY"),
+            "memory bodies must stay on-demand, not inlined: {p}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn projection_skips_natively_consumed_sources() {
         let harness = Harness {
             rules: vec![
@@ -1082,6 +1252,7 @@ mod tests {
                 path: ".claude/skills/borrowed-skill/SKILL.md".into(),
                 native_to: vec!["claude-code".into()],
             }],
+            memory: vec![],
         };
         let mut for_claude = String::new();
         push_harness_sections(&mut for_claude, &harness, "claude-code", &[]);
@@ -1112,6 +1283,7 @@ mod tests {
                 },
             ],
             skills: vec![],
+            memory: vec![],
         };
         let mut out = String::new();
         push_harness_sections(&mut out, &harness, "codex", &[]);
@@ -1156,6 +1328,7 @@ mod tests {
                 path: ".agents/skills/deploy-check/SKILL.md".into(),
                 native_to: vec![],
             }],
+            memory: vec![],
         };
         let p = compile(&PacketInputs {
             worker_id: "codex",
