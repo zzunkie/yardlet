@@ -621,6 +621,7 @@ mod tests {
         let mut tel = |skill: &str, state: &str| RunTelemetry {
             ts: String::new(),
             task_id: "t".into(),
+            intent_id: String::new(),
             kind: String::new(),
             risk: String::new(),
             worker: "codex".into(),

@@ -152,16 +152,27 @@ fn humanize(secs: u64) -> String {
     }
 }
 
-/// Render a trust report as a compact, deterministic text block.
-pub fn render(report: &TrustReport) -> String {
+/// Render a trust report as a compact, deterministic text block. `intent` is the
+/// intent the report is scoped to (when the active intent's runs were isolated);
+/// `None` means the cumulative-across-intents view.
+pub fn render(report: &TrustReport, intent: Option<&str>) -> String {
     let mut s = String::new();
     let tasks = report.task_count();
-    s.push_str(&format!(
-        "Trust report — {} runs across {} tasks, {} total worker wall\n",
-        report.total_runs,
-        tasks,
-        humanize(report.total_wall_seconds),
-    ));
+    match intent {
+        Some(id) => s.push_str(&format!(
+            "Trust report — intent {} — {} runs across {} tasks, {} total worker wall\n",
+            id,
+            report.total_runs,
+            tasks,
+            humanize(report.total_wall_seconds),
+        )),
+        None => s.push_str(&format!(
+            "Trust report — {} runs across {} tasks, {} total worker wall\n",
+            report.total_runs,
+            tasks,
+            humanize(report.total_wall_seconds),
+        )),
+    }
     s.push_str(&format!(
         "  first-pass Done:    {}/{} ({:.0}%)\n",
         report.first_pass_done(),
@@ -218,16 +229,32 @@ pub fn render(report: &TrustReport) -> String {
                 t.workers.join(", "),
             ));
         }
-        // Telemetry is workspace-cumulative and carries no intent id yet, so a
-        // task id reused across intents folds its attempts together here. Until
-        // run telemetry records an intent id, read the heavy-retry rows as
-        // per-id-across-the-workspace, not necessarily one intent's retries.
-        s.push_str(
-            "\n  (cumulative across intents; a task id reused across intents folds together)\n",
-        );
+        // The cumulative view spans intents, so a task id reused across intents
+        // folds its attempts together. Only warn when that can actually happen —
+        // an intent-scoped report has no folding.
+        if intent.is_none() {
+            s.push_str(
+                "\n  (cumulative across intents; a task id reused across intents folds together)\n",
+            );
+        }
     }
 
     s
+}
+
+/// Pick the runs to report on: prefer the active intent's runs (so a task id
+/// reused across intents does not fold together), falling back to the cumulative
+/// view when no telemetry carries the active intent yet (e.g. records written
+/// before `intent_id` existed). Returns the slice and whether it is intent-scoped.
+fn scope_runs(runs: &[RunTelemetry], active: Option<&str>) -> (Vec<RunTelemetry>, bool) {
+    if let Some(id) = active.filter(|s| !s.is_empty()) {
+        let scoped: Vec<RunTelemetry> =
+            runs.iter().filter(|r| r.intent_id == id).cloned().collect();
+        if !scoped.is_empty() {
+            return (scoped, true);
+        }
+    }
+    (runs.to_vec(), false)
 }
 
 /// Read this workspace's telemetry and render its trust report.
@@ -236,7 +263,10 @@ pub fn report(ws: &Workspace) -> Result<String> {
     if runs.is_empty() {
         return Ok("No run telemetry yet. The trust report fills in as runs accrue.\n".to_string());
     }
-    Ok(render(&summarize(&runs)))
+    let active = ws.load_queue().ok().map(|q| q.intent_id);
+    let (slice, scoped) = scope_runs(&runs, active.as_deref());
+    let label = scoped.then_some(active.as_deref()).flatten();
+    Ok(render(&summarize(&slice), label))
 }
 
 #[cfg(test)]
@@ -247,6 +277,7 @@ mod tests {
         RunTelemetry {
             ts: String::new(),
             task_id: task.into(),
+            intent_id: String::new(),
             kind: "implementation".into(),
             risk: "low".into(),
             worker: worker.into(),
@@ -292,10 +323,42 @@ mod tests {
         assert_eq!(cc.no_result, 1);
         assert!((cc.done_rate() - 0.5).abs() < 1e-9);
 
-        // Render is non-empty and lists the retried task.
-        let out = render(&r);
+        // Render is non-empty and lists the retried task; cumulative view warns
+        // about cross-intent folding.
+        let out = render(&r, None);
         assert!(out.contains("Needed multiple attempts"));
         assert!(out.contains("B "));
+        assert!(out.contains("cumulative across intents"));
+        // An intent-scoped render names the intent and drops the folding caveat.
+        let scoped = render(&r, Some("intent-x"));
+        assert!(scoped.contains("intent intent-x"));
+        assert!(!scoped.contains("cumulative across intents"));
+    }
+
+    #[test]
+    fn scope_prefers_active_intent_then_falls_back() {
+        let mut a = rec("A", "codex", "done", "Done", 10);
+        a.intent_id = "i1".into();
+        let mut b = rec("B", "codex", "done", "Done", 10);
+        b.intent_id = "i2".into();
+        let legacy = rec("C", "codex", "done", "Done", 10); // intent_id == ""
+        let runs = vec![a, b, legacy];
+
+        // Active intent with matching runs -> scoped to just those.
+        let (slice, scoped) = scope_runs(&runs, Some("i2"));
+        assert!(scoped);
+        assert_eq!(slice.len(), 1);
+        assert_eq!(slice[0].task_id, "B");
+
+        // Active intent with no telemetry yet -> cumulative fallback.
+        let (slice, scoped) = scope_runs(&runs, Some("i9"));
+        assert!(!scoped);
+        assert_eq!(slice.len(), 3);
+
+        // No active intent -> cumulative.
+        let (slice, scoped) = scope_runs(&runs, None);
+        assert!(!scoped);
+        assert_eq!(slice.len(), 3);
     }
 
     #[test]
@@ -304,6 +367,6 @@ mod tests {
         assert_eq!(r.task_count(), 0);
         assert_eq!(r.first_pass_done(), 0);
         // No divide-by-zero in render.
-        let _ = render(&r);
+        let _ = render(&r, None);
     }
 }

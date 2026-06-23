@@ -1798,6 +1798,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             &telemetry::RunTelemetry {
                 ts: Local::now().to_rfc3339(),
                 task_id: task.id.clone(),
+                intent_id: queue.intent_id.clone(),
                 kind: task.kind.clone(),
                 risk: task.risk.clone(),
                 worker: worker_id.to_string(),

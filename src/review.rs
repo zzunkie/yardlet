@@ -165,6 +165,7 @@ mod tests {
         RunTelemetry {
             ts: String::new(),
             task_id: "t".into(),
+            intent_id: String::new(),
             kind: kind.into(),
             risk: String::new(),
             worker: worker.into(),

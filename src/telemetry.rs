@@ -12,6 +12,11 @@ use crate::state::Workspace;
 pub struct RunTelemetry {
     pub ts: String,
     pub task_id: String,
+    /// The intent this run served. Lets the trust report scope to one intent so
+    /// a task id reused across intents does not fold its attempts together.
+    /// Absent on records written before this field existed (default "").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub intent_id: String,
     #[serde(default)]
     pub kind: String,
     #[serde(default)]
