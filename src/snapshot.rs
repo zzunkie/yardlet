@@ -187,6 +187,7 @@ impl Snapshot {
                 "blocked": self.count(TaskState::Blocked),
                 "failed": self.count(TaskState::Failed),
                 "needs_user": self.count(TaskState::NeedsUser),
+                "deferred": self.count(TaskState::Deferred),
                 "total": self.queue.tasks.len(),
             },
             "workers": self.workers,

@@ -48,6 +48,8 @@ pub enum Command {
     Answer(AnswerArgs),
     /// Grant single-use approval to a gated task.
     Approve(ApproveArgs),
+    /// Set a task aside by decision (Deferred: not pending, not done).
+    Defer(DeferArgs),
     /// Set the default worker permission: sandboxed | full.
     Access(AccessArgs),
     /// Print the latest run's handoff.
@@ -156,6 +158,14 @@ enum RubricCmd {
 pub struct ApproveArgs {
     /// The task id to approve (single use).
     task: String,
+}
+
+#[derive(Args)]
+pub struct DeferArgs {
+    /// The task id to set aside.
+    task: String,
+    /// Why you are deferring it (recorded on the task).
+    reason: Vec<String>,
 }
 
 #[derive(Args)]
@@ -321,6 +331,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Run(a)) => cmd_run(&cwd, a),
         Some(Command::Answer(a)) => cmd_answer(&cwd, a),
         Some(Command::Approve(a)) => cmd_approve(&cwd, a),
+        Some(Command::Defer(a)) => cmd_defer(&cwd, a),
         Some(Command::Access(a)) => cmd_access(&cwd, a),
         Some(Command::Handoff) => cmd_handoff(&cwd),
         Some(Command::Report) => cmd_report(&cwd),
@@ -897,6 +908,41 @@ fn cmd_approve(cwd: &std::path::Path, args: ApproveArgs) -> Result<()> {
     Ok(())
 }
 
+fn cmd_defer(cwd: &std::path::Path, args: DeferArgs) -> Result<()> {
+    use crate::schemas::TaskState;
+    let ws = init::ensure_initialized(cwd)?.0;
+    let mut queue = ws.load_queue()?;
+    let reason = args.reason.join(" ");
+    let Some(t) = queue.tasks.iter_mut().find(|t| t.id == args.task) else {
+        anyhow::bail!("task '{}' not found in the queue", args.task);
+    };
+    match t.state {
+        TaskState::Done => anyhow::bail!("{} is already done; nothing to defer", args.task),
+        TaskState::Running => {
+            anyhow::bail!(
+                "{} is running; let it finish or recover it first",
+                args.task
+            )
+        }
+        _ => {}
+    }
+    t.state = TaskState::Deferred;
+    if !reason.trim().is_empty() {
+        let note = format!("deferred by you: {}", reason.trim());
+        t.worker_rationale = Some(match t.worker_rationale.take() {
+            Some(r) if !r.trim().is_empty() => format!("{r}\n{note}"),
+            _ => note,
+        });
+    }
+    let id = t.id.clone();
+    ws.save_queue(&queue)?;
+    println!(
+        "Deferred {id}: set aside, not pending and not done. The intent can wrap with it on \
+         record. Revive it by re-queuing or a new plan."
+    );
+    Ok(())
+}
+
 fn cmd_access(cwd: &std::path::Path, args: AccessArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let level = args.level.to_lowercase();
@@ -1059,12 +1105,13 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
     println!("Yardlet workspace: {}", snap.config.workspace_id);
     println!("Intent: {}", snap.intent_summary());
     println!(
-        "Queue: {} queued, {} running, {} needs-you, {} blocked, {} failed, {} done, {} total",
+        "Queue: {} queued, {} running, {} needs-you, {} blocked, {} failed, {} deferred, {} done, {} total",
         snap.count(TaskState::Queued),
         snap.count(TaskState::Running),
         snap.count(TaskState::NeedsUser),
         snap.count(TaskState::Blocked),
         snap.count(TaskState::Failed),
+        snap.count(TaskState::Deferred),
         snap.count(TaskState::Done),
         snap.queue.tasks.len(),
     );
@@ -1135,6 +1182,16 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         println!(
             "  retry:     yardlet run --task <id> --execute   (add --full-access if it needs network/installs)"
         );
+    }
+    let deferred: Vec<&str> = snap
+        .queue
+        .tasks
+        .iter()
+        .filter(|t| t.state == TaskState::Deferred)
+        .map(|t| t.id.as_str())
+        .collect();
+    if !deferred.is_empty() {
+        println!("\ndeferred (set aside by you): {}", deferred.join(", "));
     }
     let needs_approval: Vec<&str> = snap
         .queue

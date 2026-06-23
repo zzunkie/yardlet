@@ -206,6 +206,12 @@ pub enum TaskState {
     NeedsUser,
     /// Ran but did not fully complete — acceptance not met or a blocker found.
     Partial,
+    /// Consciously set aside by a human decision (`yardlet defer`): not pending,
+    /// not done. Acknowledged work that will not run this cycle (e.g. a P0
+    /// ceiling needing user-provided input or a capability no worker declares).
+    /// Skipped by the scheduler like Blocked, but it reads as a decision, not a
+    /// problem, and lets an intent wrap with the deferral recorded.
+    Deferred,
 }
 
 impl TaskState {
@@ -216,8 +222,9 @@ impl TaskState {
             TaskState::Blocked => "\u{2715}", // x
             TaskState::Failed => "!",
             TaskState::NeedsUser => "?",
-            TaskState::Partial => "\u{25d0}", // half-filled circle
-            TaskState::Queued => "\u{00b7}",  // middle dot
+            TaskState::Partial => "\u{25d0}",  // half-filled circle
+            TaskState::Deferred => "\u{00bb}", // double angle: set aside
+            TaskState::Queued => "\u{00b7}",   // middle dot
         }
     }
 }
@@ -324,7 +331,8 @@ impl WorkQueue {
                 TaskState::Failed => 3,
                 TaskState::Partial => 4,
                 TaskState::Queued => 5,
-                TaskState::Done => 6,
+                TaskState::Deferred => 6,
+                TaskState::Done => 7,
             }
         }
         self.tasks.sort_by(|a, b| {

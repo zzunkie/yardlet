@@ -876,7 +876,9 @@ pub fn run_auto<F: FnMut(&str)>(
         };
 
         match state {
-            TaskState::Done | TaskState::Queued => continue,
+            // Deferred never arises from a run (it is a manual decision), but if
+            // it did it is resolved-not-pending, so move on like Done/Queued.
+            TaskState::Done | TaskState::Queued | TaskState::Deferred => continue,
             TaskState::Blocked => {
                 emit(format!(
                     "stopped: {} blocked \u{2014} see `yardlet handoff`",
@@ -1874,6 +1876,7 @@ fn run_outcome_label(state: TaskState) -> &'static str {
         TaskState::Failed => "failed",
         TaskState::NeedsUser => "needs_user",
         TaskState::Partial => "partial",
+        TaskState::Deferred => "deferred",
     }
 }
 
@@ -2182,10 +2185,13 @@ mod tests {
             task("B", TaskState::Queued, 120, false),
             task("RUN", TaskState::Running, 200, false),
             task("A", TaskState::Queued, 110, false),
+            // Deferred is resolved-not-pending: it sinks below queued but stays
+            // above done (a decision, not finished work).
+            task("DEF", TaskState::Deferred, 5, false),
         ]);
         q.sort_for_display();
         let ids: Vec<&str> = q.tasks.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, vec!["RUN", "A", "B", "done1"]);
+        assert_eq!(ids, vec!["RUN", "A", "B", "DEF", "done1"]);
     }
 
     #[test]
