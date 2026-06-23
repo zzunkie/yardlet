@@ -89,6 +89,16 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
         written.push("hooks/README.md".to_string());
     }
 
+    // Project memory: an empty (git-tracked) home for durable workspace facts,
+    // with a README documenting the convention. The README is not itself a
+    // memory fact (discovery skips it).
+    std::fs::create_dir_all(agents.join("memory"))?;
+    let memory_readme = agents.join("memory/README.md");
+    if !memory_readme.exists() || force {
+        write_str(&memory_readme, templates::MEMORY_README)?;
+        written.push("memory/README.md".to_string());
+    }
+
     Ok(written)
 }
 

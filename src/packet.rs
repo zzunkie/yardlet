@@ -379,6 +379,10 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
     mfiles.sort();
     for f in &mfiles {
         let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("memory");
+        // The scaffolded README documents the convention; it is not a fact.
+        if name.eq_ignore_ascii_case("README.md") {
+            continue;
+        }
         let Ok(text) = std::fs::read_to_string(f) else {
             continue;
         };
@@ -1201,8 +1205,14 @@ mod tests {
             "# Coding conventions\n\nMatch the surrounding code; small typed structs.",
         )
         .unwrap();
-        // The generated index is skipped (not a .md doc).
+        // The generated index is skipped (not a .md doc); the scaffolded README
+        // documents the convention and is not itself a memory fact.
         std::fs::write(root.join(".agents/memory/index.yaml"), "ignored: true").unwrap();
+        std::fs::write(
+            root.join(".agents/memory/README.md"),
+            "# Project memory\nDocs.",
+        )
+        .unwrap();
 
         // Memory is always-on, so discovery=false still finds it (sorted by file).
         let h = discover_harness(&root, false);

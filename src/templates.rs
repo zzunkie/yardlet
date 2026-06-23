@@ -14,3 +14,4 @@ pub const WORK_QUEUE: &str = include_str!("../templates/agents/work-queue.yaml")
 pub const PLANNING_GATE_SKILL: &str =
     include_str!("../templates/agents/skills/planning-gate/SKILL.md");
 pub const HOOKS_README: &str = include_str!("../templates/agents/hooks/README.md");
+pub const MEMORY_README: &str = include_str!("../templates/agents/memory/README.md");
