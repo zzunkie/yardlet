@@ -1185,6 +1185,16 @@ fn run_worktree(run_dir: &std::path::Path) -> Option<PathBuf> {
     (v != "." && !v.is_empty()).then(|| PathBuf::from(v))
 }
 
+/// The worker a run used, read from its run.yaml so a recovered run's salvaged
+/// telemetry stays attributable to the worker that produced it.
+fn run_worker(run_dir: &std::path::Path) -> Option<String> {
+    let yaml = std::fs::read_to_string(run_dir.join("run.yaml")).ok()?;
+    yaml.lines()
+        .find_map(|l| l.trim().strip_prefix("worker:"))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// The pid of a run's worker, if that process is still alive. The pid file is
 /// written at spawn and removed when the worker exits cleanly under a live
 /// Yardlet; an orphaned worker (Yardlet quit mid-run) keeps running with the file
@@ -1305,13 +1315,16 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                     wt_path: w.as_path(),
                     branch: branch.as_str(),
                 });
+                // Attribute the salvaged telemetry to the worker that actually
+                // ran it (recorded in run.yaml), not an empty string.
+                let recovered_worker = run_worker(&run_dir).unwrap_or_default();
                 match finalize_run(FinalizeInput {
                     ws,
                     run_dir: &run_dir,
                     run_id: &run_id,
                     task: &task,
                     evidence,
-                    worker_id: "",
+                    worker_id: &recovered_worker,
                     reason: "recovery",
                     wall_seconds: 0,
                     user_override: None,
@@ -1507,9 +1520,11 @@ impl FinalizeFlags {
     }
 
     /// Recovery salvages an interrupted run: re-evaluate its stranded result,
-    /// merge a Done worktree back, and commit the state. It deliberately skips
-    /// everything else — the artifacts/checkpoint were the dead session's job,
-    /// and re-emitting telemetry/hooks for a crash would distort the record.
+    /// merge a Done worktree back, and commit the state. Artifacts/hooks stay off
+    /// — the checkpoint/handoff were the dead session's job. Telemetry IS emitted
+    /// (labeled `reason: recovery`, attributed to the run.yaml worker): the
+    /// salvaged outcome is real, and without it the trust report would silently
+    /// undercount every recovered task.
     pub fn recovery() -> Self {
         Self {
             post_hooks: false,
@@ -1517,7 +1532,7 @@ impl FinalizeFlags {
             conversation: false,
             learned: false,
             artifacts: false,
-            telemetry: false,
+            telemetry: true,
         }
     }
 }
@@ -2404,6 +2419,68 @@ mod tests {
             !again.iter().any(|m| m.contains("recovered")),
             "second pass should not re-recover: {again:?}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recovery_emits_attributed_salvage_telemetry() {
+        // The trust report reads telemetry; a run salvaged by recovery must still
+        // land there — labeled reason=recovery, attributed to its run.yaml worker
+        // — or every recovered task is invisible to trust accounting.
+        let root = std::env::temp_dir().join(format!("yard-rectel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&root)
+            .output();
+        let ws = Workspace::at(&root);
+        let mut t = task("YARD-001", TaskState::Failed, 10, false);
+        t.kind = "implementation".into();
+        ws.save_queue(&queue(vec![t])).unwrap();
+
+        let run_id = "run-20990101-000000-yard-001";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: "YARD-001".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "ok".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        // run.yaml carries the worker so the salvage telemetry is attributable.
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!("run_id: {run_id}\ntask_id: YARD-001\nworker: codex\n"),
+        )
+        .unwrap();
+        write_str(&run_dir.join("worker.pid"), "2147483647").unwrap();
+
+        assert!(telemetry::read_runs(&ws).is_empty());
+        let msgs = recover_orphans(&ws);
+        assert!(msgs.iter().any(|m| m.contains("recovered")), "{msgs:?}");
+
+        // One telemetry row for the salvaged outcome, attributed + labeled.
+        let runs = telemetry::read_runs(&ws);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].task_id, "YARD-001");
+        assert_eq!(runs[0].worker, "codex");
+        assert_eq!(runs[0].chosen_reason, "recovery");
+        assert_eq!(runs[0].eval_state, "Done");
         let _ = std::fs::remove_dir_all(&root);
     }
 
