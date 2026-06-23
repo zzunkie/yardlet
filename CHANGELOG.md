@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.8.0 - 2026-06-24
+
+### Added
+
+- **Project memory.** Drop durable facts and decisions about a workspace as
+  Markdown under `.agents/memory/` (git-tracked, one fact per file, optional
+  `name`/`description` frontmatter). Yardlet discovers them and injects a short
+  **index** — title, one-line summary, anchor — into every worker packet and the
+  planner, with bodies read on demand, so the always-loaded cost stays tiny.
+  `yardlet memory` lists the index; `yardlet init` scaffolds the folder with a
+  convention README. A doc can declare `look_at:` landmark paths, and
+  `yardlet memory` flags it **possibly stale** when a landmark changed in git
+  after the doc did.
+- **Trust report.** `yardlet trust` summarizes run telemetry into a trust view:
+  first-pass Done vs Done-after-retry vs never-Done, per-worker reliability
+  (done-rate, partial/failed/no-result counts, wall time, user overrides), and
+  the tasks that needed the most attempts. Scoped to the active intent so a task
+  id reused across intents does not fold its attempts together. Read-only — it
+  reports, it never changes policy.
+- **Outcome mining.** `yardlet harness review` now surfaces telemetry-mined,
+  threshold-crossing observations next to learned rules and skills: a worker
+  with a high no-result rate (an output-contract problem), and a task kind that
+  averages many attempts to reach Done (wants a skill or sharper acceptance).
+  Suggestions only — you apply the rule/skill/scope change.
+- **Capability grounding.** The planner validates each task's
+  `required_capabilities` against the workers that actually declare them at queue
+  creation, and a run-time backstop parks an unmet task as blocked instead of
+  hard-erroring — so a capability gap is a clean human gate, never a crash.
+- **Auto-commit (opt-in).** With `auto_commit: true` in `.agents/yard.yaml`, a
+  Done serial run commits the worker's changes (never Yardlet's own `.agents/`
+  state); failure is non-fatal. Push stays manual.
+
+### Changed
+
+- **One finalization pipeline.** Serial, parallel, and recovery runs now share a
+  single `finalize_run` path, so evaluation, gates, queue updates, and telemetry
+  behave consistently across all three. Each run's `run.yaml` is now sealed to
+  its real terminal outcome with a `completed_at` (it previously stayed
+  `running` forever). Parallel runs validate in their worktree before the merge,
+  so a task that fails validation never reaches the workspace. Recovery now
+  emits telemetry for the salvaged outcome, attributed to the original worker, so
+  the trust report no longer undercounts recovered tasks.
+- **Review auto-remediation.** A review that fails its criteria and proposes a
+  fix is re-queued behind that fix to re-verify (bounded retries), instead of
+  blindly re-reviewing unchanged code; a review with no proposed fix surfaces to
+  you.
+
 ## 0.7.0 - 2026-06-21
 
 ### Added
