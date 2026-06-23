@@ -371,9 +371,20 @@ fn cmd_harness(cwd: &std::path::Path, args: HarnessArgs) -> Result<()> {
                     signal
                 );
             }
+            let mined = crate::trust::mine(&crate::telemetry::read_runs(&ws));
+            println!("\nMined observations ({}):", mined.len());
+            if mined.is_empty() {
+                println!("  (none — telemetry shows no recurring problem pattern yet)");
+            }
+            for o in &mined {
+                println!("  \u{2022} {}", o.detail);
+                println!("    \u{2192} {}", o.suggestion);
+            }
+
             println!(
                 "\nLearned skills below score floor over enough runs are auto-pruned \
                  (auto_prune). Learned rules are kept until removed (git-reversible). \
+                 Mined observations only SUGGEST — apply a rule/skill/scope change yourself. \
                  Full skill table: `yardlet skill review`."
             );
         }

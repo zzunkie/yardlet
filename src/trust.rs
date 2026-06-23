@@ -269,6 +269,98 @@ pub fn report(ws: &Workspace) -> Result<String> {
     Ok(render(&summarize(&slice), label))
 }
 
+// ---- outcome mining (v0.8 Slice 6) -----------------------------------------
+//
+// Turn deterministic run outcomes into human-applicable harness signals. This
+// is distinct from routing review (which suggests worker *selection*) and the
+// trust dashboard (raw stats): it crosses a threshold and names a concrete
+// harness action to consider. Like everything telemetry-driven it only
+// SUGGESTS — a human applies the rule/skill/scope change.
+
+/// One mined, threshold-crossing observation with a suggested harness action.
+#[derive(Debug, Clone)]
+pub struct MinedObservation {
+    pub detail: String,
+    pub suggestion: String,
+}
+
+const MIN_WORKER_RUNS: usize = 6;
+const NO_RESULT_FLOOR: f64 = 0.10;
+const MIN_KIND_TASKS: usize = 3;
+const RETRY_AVG_FLOOR: f64 = 2.5;
+
+/// Mine telemetry for recurring problem patterns worth a harness change.
+pub fn mine(runs: &[RunTelemetry]) -> Vec<MinedObservation> {
+    let report = summarize(runs);
+    let mut out = Vec::new();
+
+    // 1. No-result hotspots: a worker that often finished without a parseable
+    //    result is a packet/output-contract problem (each one wastes a full
+    //    attempt) — not a routing one.
+    for (worker, w) in &report.workers {
+        if w.runs < MIN_WORKER_RUNS {
+            continue;
+        }
+        let rate = w.no_result as f64 / w.runs as f64;
+        if rate >= NO_RESULT_FLOOR {
+            out.push(MinedObservation {
+                detail: format!(
+                    "{worker}: {}/{} runs produced no parseable result ({:.0}%)",
+                    w.no_result,
+                    w.runs,
+                    rate * 100.0
+                ),
+                suggestion:
+                    "check this worker's packet/output contract or model — no-result runs burn a \
+                     whole attempt"
+                        .to_string(),
+            });
+        }
+    }
+
+    // 2. High-retry kinds: a task kind that rarely lands first-pass is
+    //    consistently hard — a skill or sharper acceptance may help. Averaged
+    //    over tasks that DID reach Done, so it measures effort, not failure.
+    let mut task_kind: BTreeMap<String, String> = BTreeMap::new();
+    for r in runs {
+        if !r.kind.is_empty() {
+            task_kind
+                .entry(r.task_id.clone())
+                .or_insert_with(|| r.kind.clone());
+        }
+    }
+    let mut kind_stats: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for (id, t) in &report.tasks {
+        if !t.reached_done {
+            continue;
+        }
+        if let Some(k) = task_kind.get(id) {
+            let e = kind_stats.entry(k.clone()).or_default();
+            e.0 += t.attempts;
+            e.1 += 1;
+        }
+    }
+    for (kind, (sum, n)) in &kind_stats {
+        if *n < MIN_KIND_TASKS {
+            continue;
+        }
+        let avg = *sum as f64 / *n as f64;
+        if avg >= RETRY_AVG_FLOOR {
+            out.push(MinedObservation {
+                detail: format!(
+                    "kind '{kind}': {n} tasks averaged {avg:.1} attempts to reach Done"
+                ),
+                suggestion:
+                    "consider a skill or sharper acceptance for this kind — it rarely lands \
+                     first-pass"
+                        .to_string(),
+            });
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +451,53 @@ mod tests {
         let (slice, scoped) = scope_runs(&runs, None);
         assert!(!scoped);
         assert_eq!(slice.len(), 3);
+    }
+
+    #[test]
+    fn mine_flags_no_result_workers_and_high_retry_kinds() {
+        let mut runs = Vec::new();
+        // Worker "flaky": 8 runs over 8 tasks, 2 produced no result (25%).
+        for i in 0..8 {
+            let (status, eval) = if i < 2 {
+                ("no-result", "Failed")
+            } else {
+                ("done", "Done")
+            };
+            runs.push(rec(&format!("N{i}"), "flaky", status, eval, 1));
+        }
+        // Kind "research": 3 tasks, each needing 3 attempts (2 fail then done).
+        for t in 0..3 {
+            for a in 0..3 {
+                let (status, eval) = if a < 2 {
+                    ("failed", "Failed")
+                } else {
+                    ("done", "Done")
+                };
+                let mut r = rec(&format!("R{t}"), "builder", status, eval, 1);
+                r.kind = "research".into();
+                runs.push(r);
+            }
+        }
+
+        let obs = mine(&runs);
+        assert_eq!(obs.len(), 2, "{obs:?}");
+        assert!(
+            obs.iter()
+                .any(|o| o.detail.contains("flaky") && o.detail.contains("no parseable")),
+            "{obs:?}"
+        );
+        assert!(
+            obs.iter()
+                .any(|o| o.detail.contains("research") && o.detail.contains("3.0 attempts")),
+            "{obs:?}"
+        );
+
+        // Below thresholds -> nothing mined (a clean workspace is quiet).
+        let quiet = vec![
+            rec("A", "codex", "done", "Done", 1),
+            rec("B", "codex", "done", "Done", 1),
+        ];
+        assert!(mine(&quiet).is_empty());
     }
 
     #[test]
