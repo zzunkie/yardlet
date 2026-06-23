@@ -1062,6 +1062,16 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
     if suggestions > 0 {
         println!("\nrouting: {suggestions} suggestion(s) \u{2014} run `yardlet routing review`");
     }
+    let memory = crate::packet::discover_harness(&ws.root, snap.config.harness_discovery)
+        .memory
+        .len();
+    if memory > 0 {
+        println!("\nProject memory: {memory} doc(s) \u{2014} `yardlet memory`");
+    }
+    let runs = crate::telemetry::read_runs(&ws).len();
+    if runs > 0 {
+        println!("Run telemetry: {runs} run(s) \u{2014} `yardlet trust`");
+    }
     Ok(())
 }
 
