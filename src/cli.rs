@@ -1087,6 +1087,28 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         );
         println!("  answer with:  yardlet answer \"<your reply>\"");
     }
+    // A task blocked on a capability no enabled worker declares is not "stuck"
+    // you can retry — it is parked on a human decision or a new worker. Split it
+    // out so a decided/deferred ceiling does not read as a broken task (and so an
+    // intent with only such tasks left does not look falsely complete).
+    let vocab = ws
+        .load_workers()
+        .map(|w| crate::routing::declared_capabilities(&w))
+        .unwrap_or_default();
+    let cap_gated = |t: &crate::schemas::Task| {
+        t.state == TaskState::Blocked
+            && !t.required_capabilities.is_empty()
+            && t.required_capabilities
+                .iter()
+                .any(|c| !vocab.contains(&crate::routing::norm_cap(c)))
+    };
+    let awaiting: Vec<&str> = snap
+        .queue
+        .tasks
+        .iter()
+        .filter(|t| cap_gated(t))
+        .map(|t| t.id.as_str())
+        .collect();
     let stuck: Vec<&str> = snap
         .queue
         .tasks
@@ -1095,12 +1117,20 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
             matches!(
                 t.state,
                 TaskState::Blocked | TaskState::Failed | TaskState::Partial
-            )
+            ) && !cap_gated(t)
         })
         .map(|t| t.id.as_str())
         .collect();
+    if !awaiting.is_empty() {
+        println!(
+            "\nawaiting you (no worker can do these yet): {}",
+            awaiting.join(", ")
+        );
+        println!("  parked on a decision or a capability no worker declares —");
+        println!("  provide what they need or add a capable worker; see `yardlet handoff`.");
+    }
     if !stuck.is_empty() {
-        println!("\nstuck (blocked/failed): {}", stuck.join(", "));
+        println!("\nstuck (failed/partial): {}", stuck.join(", "));
         println!("  see why:   yardlet handoff");
         println!(
             "  retry:     yardlet run --task <id> --execute   (add --full-access if it needs network/installs)"
