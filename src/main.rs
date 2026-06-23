@@ -28,6 +28,7 @@ mod snapshot;
 mod state;
 mod telemetry;
 mod templates;
+mod trust;
 mod ui;
 mod workers;
 mod yaml;
