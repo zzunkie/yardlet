@@ -130,11 +130,17 @@ fn role_guidance(role: &str) -> &'static str {
              verify by reading the actual code, not a diff summary.\n\
              - Rate each finding (critical/major/minor) and propose a concrete fix.\n\
              - Emit a structured `verdict` (one entry per acceptance criterion, \
-             pass/fail + evidence) in result.json. If ANY criterion fails, set \
-             `status` to `needs_user` (or `partial`) \u{2014} not `done`; never pass a \
-             criterion you could not actually verify.\n\
-             - Do not rewrite the code; only fix something if it is trivial and clearly \
-             inside scope.\n\
+             pass/fail + evidence) in result.json; never pass a criterion you could \
+             not actually verify.\n\
+             - If ANY criterion fails, do NOT just stop at a wall of fail \u{2014} set \
+             `status` to `partial` and PROPOSE the fix in `follow_up_tasks`: one \
+             implementation task scoped to the failing findings, with `acceptance` \
+             listing exactly what must change (a builder, not you, will do it). \
+             Yardlet runs that fix, then re-runs THIS review to verify, with bounded \
+             retries. If you cannot name a concrete fix, set `status` to `needs_user` \
+             and ask instead.\n\
+             - Do not rewrite the code yourself; only fix something if it is trivial \
+             and clearly inside scope.\n\
              - Your findings go in the required report.md, in clear prose.\n\n"
         }
         "researcher" => {

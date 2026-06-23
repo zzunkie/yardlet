@@ -1328,6 +1328,31 @@ fn save_task_state_on_latest_queue(
     finalize_on_latest_queue(ws, fallback_queue, task_id, state, &[], None).map(|_| ())
 }
 
+/// Re-point a finished review at the queue (1c review auto-remediation): set its
+/// state and append any remediation dependencies (the fix tasks it must now wait
+/// for before re-verifying). Re-reads the latest queue first so a concurrent
+/// change is not clobbered.
+fn requeue_review(
+    ws: &Workspace,
+    fallback_queue: &mut WorkQueue,
+    review_id: &str,
+    state: TaskState,
+    dep_ids: &[String],
+) -> Result<()> {
+    let mut latest = ws.load_queue().unwrap_or_else(|_| fallback_queue.clone());
+    if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == review_id) {
+        t.state = state;
+        for d in dep_ids {
+            if !t.depends_on.contains(d) {
+                t.depends_on.push(d.clone());
+            }
+        }
+    }
+    ws.save_queue(&latest)?;
+    *fallback_queue = latest;
+    Ok(())
+}
+
 /// Re-read the latest on-disk queue, set the finished task's state, ingest any
 /// worker-proposed follow-up tasks, and save once. Re-reading first means a
 /// change made since the run started is not clobbered by a stale start-of-run
@@ -1675,6 +1700,32 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         ));
     }
 
+    // Review auto-remediation (1c): a review that failed its criteria must not
+    // blind-loop on the same unchanged code. If the reviewer proposed
+    // remediation follow-up(s), re-queue THIS review BEHIND them (depends_on) so
+    // the fix runs first and the review then re-verifies; the drain's per-task
+    // attempt cap bounds the cycles. If it proposed nothing actionable, surface
+    // the findings to the user instead of retrying an unchanged target.
+    let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
+    if is_review && matches!(next_state, TaskState::Failed | TaskState::Partial) {
+        if ingested.is_empty() {
+            requeue_review(ws, queue, &task.id, TaskState::NeedsUser, &[])?;
+            next_state = TaskState::NeedsUser;
+            lines.push(format!(
+                "{}: review failed and proposed no fix — needs you",
+                task.id
+            ));
+        } else {
+            requeue_review(ws, queue, &task.id, TaskState::Queued, &ingested)?;
+            next_state = TaskState::Queued;
+            lines.push(format!(
+                "{}: review failed — re-queued behind remediation [{}] to re-verify",
+                task.id,
+                ingested.join(", ")
+            ));
+        }
+    }
+
     if flags.telemetry {
         let _ = telemetry::append_run(
             ws,
@@ -1856,6 +1907,57 @@ mod tests {
             accept_ambiguity: false,
             chain: None,
         }
+    }
+
+    #[test]
+    fn requeue_review_behind_remediation_then_needs_user() {
+        // 1c: a failed review with a proposed fix is re-queued BEHIND it
+        // (depends_on) to re-verify; with no fix it goes to needs_user.
+        let root = std::env::temp_dir().join(format!("yard-requeue-rev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        ws.save_queue(&queue(vec![
+            task("REV", TaskState::Failed, 50, false),
+            task("FIX", TaskState::Queued, 60, false),
+        ]))
+        .unwrap();
+        let mut fallback = ws.load_queue().unwrap();
+
+        // Remediation proposed: review -> Queued, waiting on the fix.
+        requeue_review(
+            &ws,
+            &mut fallback,
+            "REV",
+            TaskState::Queued,
+            &["FIX".into()],
+        )
+        .unwrap();
+        let rev = |ws: &Workspace| {
+            ws.load_queue()
+                .unwrap()
+                .tasks
+                .into_iter()
+                .find(|t| t.id == "REV")
+                .unwrap()
+        };
+        let r = rev(&ws);
+        assert_eq!(r.state, TaskState::Queued);
+        assert_eq!(r.depends_on, vec!["FIX".to_string()]);
+
+        // Called again (e.g. next cycle) it does not duplicate the dependency,
+        // and the no-fix path surfaces to the user.
+        requeue_review(
+            &ws,
+            &mut fallback,
+            "REV",
+            TaskState::NeedsUser,
+            &["FIX".into()],
+        )
+        .unwrap();
+        let r = rev(&ws);
+        assert_eq!(r.state, TaskState::NeedsUser);
+        assert_eq!(r.depends_on, vec!["FIX".to_string()]); // no duplicate
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
