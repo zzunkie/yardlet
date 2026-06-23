@@ -222,6 +222,7 @@ pub fn run_batch<F: FnMut(&str)>(
                 worker: p.worker_id.clone(),
                 state: "running".to_string(),
                 started_at: Local::now().to_rfc3339(),
+                completed_at: None,
                 worktree: p.wt_path.display().to_string(),
             },
         )?;

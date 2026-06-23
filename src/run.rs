@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
 use chrono::Local;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::guard;
 use crate::inspect;
@@ -72,15 +72,22 @@ pub struct RunReport {
     pub chained: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct RunRecord {
     pub schema_version: u32,
     pub run_id: String,
     pub task_id: String,
     pub intent_id: String,
     pub worker: String,
+    /// Lifecycle: `prepared`/`running` at spawn, then sealed by `finalize_run`
+    /// to the run's terminal outcome (`done`/`failed`/`partial`/`needs_user`/…).
     pub state: String,
     pub started_at: String,
+    /// Set when `finalize_run` seals the record; absent while the run is in
+    /// flight. Lets the Trust Report and run-dir scans tell a finished run from
+    /// a stranded one without re-deriving it from the queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
     pub worktree: String,
 }
 
@@ -288,6 +295,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         worker: worker_id.clone(),
         state: if opts.execute { "running" } else { "prepared" }.to_string(),
         started_at: Local::now().to_rfc3339(),
+        completed_at: None,
         worktree: ".".to_string(),
     };
     state::save_yaml(&run_dir.join("run.yaml"), &record)?;
@@ -1813,7 +1821,68 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     lines.push(format!("evaluation status: {}", eval.status));
     lines.push(format!("next task state: {next_state:?}"));
 
+    // Seal the run record. It was written "running" at spawn and never updated,
+    // so without this every run.yaml looks in-flight forever — the Trust Report
+    // and any run-dir scan cannot tell a finished run from a stranded one. All
+    // paths (serial/parallel/recovery) end here, so this single write keeps the
+    // record honest. Best-effort: a record failure must not fail the run.
+    seal_run_record(
+        run_dir,
+        run_id,
+        task,
+        queue.intent_id.as_str(),
+        worker_id,
+        next_state,
+        merge.as_ref(),
+    );
+
     Ok(FinalizeReport { next_state, lines })
+}
+
+/// Snake-case label for a run's terminal outcome, matching the queue's
+/// `TaskState` vocabulary so a sealed run.yaml reads the same as the queue.
+fn run_outcome_label(state: TaskState) -> &'static str {
+    match state {
+        TaskState::Queued => "queued",
+        TaskState::Running => "running",
+        TaskState::Done => "done",
+        TaskState::Blocked => "blocked",
+        TaskState::Failed => "failed",
+        TaskState::NeedsUser => "needs_user",
+        TaskState::Partial => "partial",
+    }
+}
+
+/// Rewrite `run.yaml` from its in-flight `running` to the run's real terminal
+/// outcome with a `completed_at`. Preserves the spawn-time fields by re-reading
+/// the existing record; falls back to what `finalize_run` already knows if the
+/// file is missing or unreadable.
+fn seal_run_record(
+    run_dir: &std::path::Path,
+    run_id: &str,
+    task: &crate::schemas::Task,
+    intent_id: &str,
+    worker_id: &str,
+    next_state: TaskState,
+    merge: Option<&MergeBack>,
+) {
+    let path = run_dir.join("run.yaml");
+    let mut rec: RunRecord = state::load_yaml(&path).unwrap_or(RunRecord {
+        schema_version: 1,
+        run_id: run_id.to_string(),
+        task_id: task.id.clone(),
+        intent_id: intent_id.to_string(),
+        worker: worker_id.to_string(),
+        state: String::new(),
+        started_at: String::new(),
+        completed_at: None,
+        worktree: merge
+            .map(|m| m.wt_path.display().to_string())
+            .unwrap_or_else(|| ".".to_string()),
+    });
+    rec.state = run_outcome_label(next_state).to_string();
+    rec.completed_at = Some(Local::now().to_rfc3339());
+    let _ = state::save_yaml(&path, &rec);
 }
 
 /// Context for CONTINUING a Partial task instead of redoing it: the previous
@@ -2326,6 +2395,78 @@ mod tests {
             !again.iter().any(|m| m.contains("recovered")),
             "second pass should not re-recover: {again:?}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn finalize_seals_run_record_to_terminal_outcome() {
+        // run.yaml is written "running" at spawn and was never updated, so every
+        // record looked in-flight forever — a Trust Report / run-dir scan could
+        // not tell a finished run from a stranded one. finalize_run (here via
+        // recovery) must seal it to the real terminal state + a completed_at,
+        // while preserving the spawn-time started_at.
+        let root = std::env::temp_dir().join(format!("yard-seal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&root)
+            .output();
+        let ws = Workspace::at(&root);
+        let mut t = task("YARD-001", TaskState::Failed, 10, false);
+        t.kind = "implementation".into();
+        ws.save_queue(&queue(vec![t])).unwrap();
+
+        let run_id = "run-20990101-000000-yard-001";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: "YARD-001".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "ok".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        // A full spawn-time record: in-flight "running" with a started_at to keep.
+        let started = "2099-01-01T00:00:00+00:00";
+        state::save_yaml(
+            &run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 1,
+                run_id: run_id.into(),
+                task_id: "YARD-001".into(),
+                intent_id: String::new(),
+                worker: "codex".into(),
+                state: "running".into(),
+                started_at: started.into(),
+                completed_at: None,
+                worktree: ".".into(),
+            },
+        )
+        .unwrap();
+        write_str(&run_dir.join("worker.pid"), "2147483647").unwrap();
+
+        let msgs = recover_orphans(&ws);
+        assert!(msgs.iter().any(|m| m.contains("recovered")), "{msgs:?}");
+
+        // Sealed: terminal state, a completed_at, original started_at preserved.
+        let sealed: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).unwrap();
+        assert_eq!(sealed.state, "done");
+        assert!(sealed.completed_at.is_some());
+        assert_eq!(sealed.started_at, started);
         let _ = std::fs::remove_dir_all(&root);
     }
 
