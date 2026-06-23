@@ -28,6 +28,14 @@
   `required_capabilities` against the workers that actually declare them at queue
   creation, and a run-time backstop parks an unmet task as blocked instead of
   hard-erroring — so a capability gap is a clean human gate, never a crash.
+  `yardlet status` lists such tasks under "awaiting you (no worker can do these
+  yet)" rather than as broken/retryable work.
+- **Defer a task.** `yardlet defer <id> [reason]` sets a task aside by decision
+  (new `Deferred` state): not pending, not done. It is skipped by the scheduler
+  but reads as a decision, not a problem, so a P0 ceiling you have chosen to
+  postpone (e.g. work needing files you will provide later, or a capability no
+  worker has) stops looking like a broken task and lets the intent wrap with the
+  deferral on record. Revive it by re-queuing.
 - **Auto-commit (opt-in).** With `auto_commit: true` in `.agents/yard.yaml`, a
   Done serial run commits the worker's changes (never Yardlet's own `.agents/`
   state); failure is non-fatal. Push stays manual.
