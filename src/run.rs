@@ -1489,16 +1489,16 @@ impl FinalizeFlags {
         }
     }
 
-    /// The parallel path skips the in-place-only gates: post-run hooks and
-    /// validation run against the workspace, but a parallel task's edits live in
-    /// its worktree until merged, so they are deferred (the merge is sequential
-    /// and a later slice can run them post-merge). Conversation/learned are
-    /// skipped too (batches only pick Queued tasks, never a paused resume).
+    /// The parallel path validates each task in ITS WORKTREE before the merge,
+    /// so a task that fails validation never reaches the workspace (it stays
+    /// Partial, worktree kept). Post-run hooks are still deferred (they run
+    /// against the workspace, not the pre-merge worktree). Conversation/learned
+    /// are skipped (batches only pick Queued tasks, never a paused resume).
     /// Artifacts and telemetry still land, exactly as the inline code did.
     pub fn parallel() -> Self {
         Self {
             post_hooks: false,
-            validation: false,
+            validation: true,
             conversation: false,
             learned: false,
             artifacts: true,
@@ -1608,9 +1608,17 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // validation commands itself. Any failure (or a `required` task with
     // nothing to run) is fatal and blocks Done.
     if flags.validation {
+        // A worktree run (parallel/recovery) validates its worktree — its edits
+        // live there until merged — so a failing task is caught BEFORE the merge
+        // and never reaches the workspace (it stays Partial, worktree kept). The
+        // serial path edits in place and validates the workspace itself.
+        let validation_cwd = merge
+            .as_ref()
+            .map(|m| m.wt_path)
+            .unwrap_or(ws.root.as_path());
         let validation_cmds = validation_commands(task);
         let (validation_ran, validation_passed) =
-            run_validation_commands(&validation_cmds, &ws.root, run_dir, billing);
+            run_validation_commands(&validation_cmds, validation_cwd, run_dir, billing);
         if (validation_ran && !validation_passed) || (validation_required(task) && !validation_ran)
         {
             lines.push("validation failed (blocks Done)".to_string());
@@ -2468,6 +2476,120 @@ mod tests {
         assert_eq!(sealed.state, "done");
         assert!(sealed.completed_at.is_some());
         assert_eq!(sealed.started_at, started);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parallel_validation_runs_in_the_worktree_not_the_workspace() {
+        // 1e: a parallel task validates IN ITS WORKTREE before the merge. The
+        // command here passes only when run from the worktree (the marker lives
+        // only there), so a Done outcome + a completed merge proves validation
+        // used the worktree cwd, not the still-clean workspace. Were it run in
+        // ws.root (the old bug) the marker would be absent → Failed → no merge.
+        let root = std::env::temp_dir().join(format!("yard-pval-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let sh = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        sh(&["init", "-q"]);
+        std::fs::write(root.join("base.txt"), "base\n").unwrap();
+        sh(&["add", "base.txt"]);
+        sh(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "init",
+        ]);
+
+        let ws = Workspace::at(&root);
+        let mut t = task("YARD-001", TaskState::Running, 10, false);
+        t.kind = "implementation".into();
+        // Passes only in the worktree, where `wt_marker` exists.
+        t.validation = Some(crate::yaml::from_str("commands:\n- test -f wt_marker").unwrap());
+
+        let run_id = "run-20990101-000000-yard-001";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let wt = ws.agents_dir().join("worktrees").join("yard-001");
+        sh(&[
+            "worktree",
+            "add",
+            &wt.display().to_string(),
+            "-b",
+            "yard/yard-001",
+        ]);
+        std::fs::write(wt.join("feature.txt"), "from worker\n").unwrap();
+        std::fs::write(wt.join("wt_marker"), "only in worktree\n").unwrap();
+
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: "YARD-001".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "ok".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "run_id: {run_id}\ntask_id: YARD-001\nworktree: {}\n",
+                wt.display()
+            ),
+        )
+        .unwrap();
+
+        let billing = crate::schemas::BillingPolicy::default();
+        let mut q = queue(vec![t.clone()]);
+        let report = finalize_run(FinalizeInput {
+            ws: &ws,
+            run_dir: &run_dir,
+            run_id,
+            task: &t,
+            evidence: Some(vec!["feature.txt".into(), "wt_marker".into()]),
+            worker_id: "codex",
+            reason: "parallel",
+            wall_seconds: 0,
+            user_override: None,
+            intent_summary: "",
+            billing: &billing,
+            queue: &mut q,
+            flags: FinalizeFlags::parallel(),
+            merge: Some(MergeBack {
+                wt_path: &wt,
+                branch: "yard/yard-001",
+            }),
+        })
+        .unwrap();
+
+        // Worktree validation passed -> Done, and the worktree merged back.
+        assert_eq!(report.next_state, TaskState::Done, "{:?}", report.lines);
+        assert!(
+            root.join("feature.txt").exists(),
+            "worktree change should have merged into the workspace"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
