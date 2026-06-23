@@ -1133,11 +1133,20 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
     let Ok(mut q) = ws.load_queue() else {
         return msgs;
     };
+    let billing = ws.load_billing().unwrap_or_default();
     let mut requeued = Vec::new();
     let mut finished = Vec::new();
-    for t in q.tasks.iter_mut() {
-        let latest = latest_run_for(ws, &t.id);
-        let recover_this = match t.state {
+    // Snapshot (id, state): the finalize branch borrows the queue mutably
+    // through finalize_run, so we cannot hold an iter_mut over it here. Each
+    // task's recover decision keys off its state at recovery start.
+    let candidates: Vec<(String, TaskState)> = q
+        .tasks
+        .iter()
+        .map(|t| (t.id.clone(), t.state))
+        .collect();
+    for (id, state) in candidates {
+        let latest = latest_run_for(ws, &id);
+        let recover_this = match state {
             TaskState::Running => true,
             // Salvage a task wrongly stuck terminal because the orchestrator
             // died before evaluating a finished orphan run (worker.pid still on
@@ -1179,37 +1188,50 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                                 .collect()
                         })
                     });
-                let eval = evaluator::evaluate(&run_dir, &run_id, t, evidence.as_deref());
                 // Mark this orphan run finalized so a later pass won't
                 // re-evaluate it (a persistent failure must not loop).
                 let _ = std::fs::remove_file(run_dir.join("worker.pid"));
-                t.state = eval.next_task_state;
-                if let Some(wt) = run_worktree(&run_dir).filter(|w| w.exists()) {
-                    let branch = format!("yard/{}", t.id.to_lowercase());
-                    if t.state == TaskState::Done {
-                        match crate::parallel::integrate_worktree(&ws.root, &wt, &branch, &t.id) {
-                            Ok(crate::parallel::Integration::Conflict(why)) => {
-                                t.state = TaskState::Partial;
-                                let _ =
-                                    write_str(&run_dir.join("partial-reason"), "merge_conflict");
-                                msgs.push(format!(
-                                    "{}: merge conflict on recovery ({}); worktree kept at {}",
-                                    t.id,
-                                    why.trim(),
-                                    wt.display()
-                                ));
-                            }
-                            Ok(_) => crate::parallel::remove_worktree(&ws.root, &wt, &branch),
-                            Err(e) => {
-                                t.state = TaskState::Partial;
-                                let _ =
-                                    write_str(&run_dir.join("partial-reason"), "merge_conflict");
-                                msgs.push(format!("{}: recovery integration error: {e}", t.id));
+                let Some(task) = q.tasks.iter().find(|t| t.id == id).cloned() else {
+                    continue;
+                };
+                // Finalize through the shared pipeline: evaluate the stranded
+                // result, merge a Done worktree back (conflict -> Partial,
+                // worktree kept), and commit the state. Recovery flags keep it
+                // to just that — no re-emitted artifacts/telemetry/hooks.
+                let branch = format!("yard/{}", id.to_lowercase());
+                let wt = run_worktree(&run_dir).filter(|w| w.exists());
+                let merge = wt.as_ref().map(|w| MergeBack {
+                    wt_path: w.as_path(),
+                    branch: branch.as_str(),
+                });
+                match finalize_run(FinalizeInput {
+                    ws,
+                    run_dir: &run_dir,
+                    run_id: &run_id,
+                    task: &task,
+                    evidence,
+                    worker_id: "",
+                    reason: "recovery",
+                    wall_seconds: 0,
+                    user_override: None,
+                    intent_summary: "",
+                    billing: &billing,
+                    queue: &mut q,
+                    flags: FinalizeFlags::recovery(),
+                    merge,
+                }) {
+                    Ok(report) => {
+                        // Surface only the task-prefixed merge lines; the generic
+                        // eval/ingest lines would clutter the recovery summary.
+                        for line in report.lines {
+                            if line.starts_with(&format!("{id}: ")) {
+                                msgs.push(line);
                             }
                         }
+                        finished.push(format!("{} \u{2192} {:?}", id, report.next_state));
                     }
+                    Err(e) => msgs.push(format!("{id}: recovery finalize error: {e}")),
                 }
-                finished.push(format!("{} \u{2192} {:?}", t.id, t.state));
             }
             run => {
                 // Worker still alive: adopt it — its original session keeps
@@ -1218,8 +1240,7 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 if let Some((_, run_dir)) = &run {
                     if let Some(pid) = live_worker_pid(run_dir) {
                         msgs.push(format!(
-                            "adopted: {} still running from a previous session (pid {pid})",
-                            t.id
+                            "adopted: {id} still running from a previous session (pid {pid})"
                         ));
                         continue;
                     }
@@ -1227,12 +1248,14 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 // Dead with no result: redo from scratch; drop the worktree.
                 if let Some((_, run_dir)) = run {
                     if let Some(wt) = run_worktree(&run_dir).filter(|w| w.exists()) {
-                        let branch = format!("yard/{}", t.id.to_lowercase());
+                        let branch = format!("yard/{}", id.to_lowercase());
                         crate::parallel::remove_worktree(&ws.root, &wt, &branch);
                     }
                 }
-                t.state = TaskState::Queued;
-                requeued.push(t.id.clone());
+                if let Some(t) = q.tasks.iter_mut().find(|t| t.id == id) {
+                    t.state = TaskState::Queued;
+                }
+                requeued.push(id.clone());
             }
         }
     }
@@ -1343,6 +1366,21 @@ impl FinalizeFlags {
             learned: false,
             artifacts: true,
             telemetry: true,
+        }
+    }
+
+    /// Recovery salvages an interrupted run: re-evaluate its stranded result,
+    /// merge a Done worktree back, and commit the state. It deliberately skips
+    /// everything else — the artifacts/checkpoint were the dead session's job,
+    /// and re-emitting telemetry/hooks for a crash would distort the record.
+    pub fn recovery() -> Self {
+        Self {
+            post_hooks: false,
+            validation: false,
+            conversation: false,
+            learned: false,
+            artifacts: false,
+            telemetry: false,
         }
     }
 }
