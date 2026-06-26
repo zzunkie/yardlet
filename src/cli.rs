@@ -1382,15 +1382,19 @@ fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
     for line in &report.lines {
         println!("{line}");
     }
-    println!(
-        "\nrun {} {}",
-        report.run_id,
-        if report.executed {
-            "executed"
-        } else {
-            "prepared"
-        }
-    );
+    // A backstop-parked task returns an empty run id (no run was prepared); the
+    // lines above already explain it, so don't print a blank "run  prepared".
+    if !report.run_id.is_empty() {
+        println!(
+            "\nrun {} {}",
+            report.run_id,
+            if report.executed {
+                "executed"
+            } else {
+                "prepared"
+            }
+        );
+    }
     let _ = (
         report.task_id,
         report.worker_id,

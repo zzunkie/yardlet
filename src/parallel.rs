@@ -36,7 +36,12 @@ pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter(|(_, t)| {
-            t.state == TaskState::Queued && !t.approval_required() && queue.deps_met(t)
+            // A required-validation task is excluded: parallel skips validation,
+            // so it must run serially where validation actually gates Done.
+            t.state == TaskState::Queued
+                && !t.approval_required()
+                && !t.requires_validation()
+                && queue.deps_met(t)
         })
         .map(|(i, _)| i)
         .collect();
@@ -331,8 +336,11 @@ pub fn run_batch<F: FnMut(&str)>(
         }) {
             Ok(r) => r,
             Err(e) => {
+                // The merge may already have happened (the error can come from a
+                // later queue write), so don't claim the worktree is kept — just
+                // point at recover, which reconciles whatever state remains.
                 on_event(&format!(
-                    "{}: finalize failed ({e}); worktree kept, run `yardlet recover`",
+                    "{}: finalize failed ({e}); run `yardlet recover` to reconcile",
                     p.task.id
                 ));
                 continue;
@@ -559,6 +567,17 @@ mod tests {
         ]);
         assert_eq!(ready_independent(&q, 10), vec![1, 0, 4]); // B(10), A(30), E(40)
         assert_eq!(ready_independent(&q, 2), vec![1, 0]);
+    }
+
+    #[test]
+    fn ready_set_excludes_required_validation_tasks() {
+        // A required-validation task is held back from parallel batches (parallel
+        // skips validation), so it runs serially where validation gates Done.
+        let mut needs_val = task("V", TaskState::Queued, 5, vec![]);
+        needs_val.validation = Some(crate::yaml::from_str("required: true").unwrap());
+        let q = queue(vec![task("A", TaskState::Queued, 10, vec![]), needs_val]);
+        // Only A is parallel-ready; V is excluded despite its lower priority.
+        assert_eq!(ready_independent(&q, 10), vec![0]);
     }
 
     fn sh_git(dir: &Path, args: &[&str]) -> String {

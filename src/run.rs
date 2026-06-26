@@ -512,9 +512,19 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             (Some(base), Some(after)) => Some(evaluator::worker_touched(base, &after)),
             _ => None,
         };
-    // Keep a copy for auto-commit: it stages exactly the worker's touched paths,
-    // never a blind `add -A` that would sweep in foreign/untracked files.
-    let evidence_for_commit = evidence.clone();
+    // For auto-commit: the worker's touched paths, MINUS any file already dirty
+    // before the run (the user's own uncommitted edit the worker happened to
+    // also touch). Staging only files the worker made dirty from a clean state
+    // keeps the user's in-progress work out of Yardlet's commit.
+    let evidence_for_commit = match (&evidence, &baseline_fp) {
+        (Some(ev), Some(base)) => Some(
+            ev.iter()
+                .filter(|p| !base.iter().any(|(bp, _)| bp == *p))
+                .cloned()
+                .collect::<Vec<String>>(),
+        ),
+        _ => evidence.clone(),
+    };
     let user_override = opts.worker_override.as_ref().map(|o| {
         let from = if task.preferred_worker.is_empty() {
             "(default)".to_string()
@@ -830,24 +840,60 @@ pub fn run_auto<F: FnMut(&str)>(
                         .filter(|t| matches!(t.state, TaskState::NeedsUser | TaskState::Blocked))
                         .map(|t| t.id.as_str())
                         .collect();
-                    let waiting: Vec<&str> = queue
+                    let deferred = queue
                         .tasks
                         .iter()
-                        .filter(|t| t.state == TaskState::Queued)
-                        .map(|t| t.id.as_str())
-                        .collect();
+                        .filter(|t| t.state == TaskState::Deferred)
+                        .count();
+                    // A dependency that will never reach Done on its own.
+                    let dead_dep = |dep: &str| {
+                        queue
+                            .tasks
+                            .iter()
+                            .find(|t| t.id == dep)
+                            .map(|t| {
+                                matches!(
+                                    t.state,
+                                    TaskState::Failed
+                                        | TaskState::Deferred
+                                        | TaskState::NeedsUser
+                                        | TaskState::Blocked
+                                )
+                            })
+                            .unwrap_or(false)
+                    };
+                    // Split Queued-but-gated tasks: stuck behind a dep that won't
+                    // complete (surface it) vs benignly waiting on a runnable dep.
+                    let mut stuck: Vec<String> = Vec::new();
+                    let mut waiting: Vec<&str> = Vec::new();
+                    for t in queue.tasks.iter().filter(|t| t.state == TaskState::Queued) {
+                        match t.depends_on.iter().find(|d| dead_dep(d)) {
+                            Some(d) => stuck.push(format!("{} (behind {})", t.id, d)),
+                            None => waiting.push(t.id.as_str()),
+                        }
+                    }
                     if !needs_you.is_empty() {
                         emit(format!(
                             "stopped: {} need you \u{2014} answer (a) or resolve, then run auto again",
                             needs_you.join(", ")
                         ));
-                    } else if waiting.is_empty() {
-                        emit("done: queue drained, all tasks complete".to_string());
-                    } else {
+                    } else if !stuck.is_empty() {
+                        emit(format!(
+                            "stopped: {} \u{2014} the blocking task will not complete; fix, defer, \
+                             or re-scope it",
+                            stuck.join("; ")
+                        ));
+                    } else if !waiting.is_empty() {
                         emit(format!(
                             "stopped: {} waiting on approval or dependencies",
                             waiting.join(", ")
                         ));
+                    } else if deferred > 0 {
+                        emit(format!(
+                            "done: queue drained \u{2014} {deferred} deferred (set aside), the rest complete"
+                        ));
+                    } else {
+                        emit("done: queue drained, all tasks complete".to_string());
                     }
                     break;
                 }
@@ -856,8 +902,23 @@ pub fn run_auto<F: FnMut(&str)>(
         let n = attempts.entry(task_id.clone()).or_default();
         *n += 1;
         if *n > 2 {
+            // Surface tasks gated behind this one (e.g. a review re-queued behind
+            // a fix that keeps failing) so they are not silently stranded.
+            let gated: Vec<&str> = queue
+                .tasks
+                .iter()
+                .filter(|t| {
+                    t.state == TaskState::Queued && t.depends_on.iter().any(|d| d == &task_id)
+                })
+                .map(|t| t.id.as_str())
+                .collect();
+            let gated_note = if gated.is_empty() {
+                String::new()
+            } else {
+                format!(" ({} depend on it and stay gated)", gated.join(", "))
+            };
             emit(format!(
-                "stopped: {task_id} did not complete after retries \u{2014} needs you"
+                "stopped: {task_id} did not complete after retries \u{2014} needs you{gated_note}"
             ));
             break;
         }
@@ -1402,6 +1463,9 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 if let Some(t) = q.tasks.iter_mut().find(|t| t.id == id) {
                     t.state = TaskState::Queued;
                 }
+                // Persist now: a later sibling's finalize_run re-reads the queue
+                // from disk, which would otherwise clobber this in-memory requeue.
+                let _ = ws.save_queue(&q);
                 requeued.push(id.clone());
             }
         }
@@ -1840,6 +1904,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         ));
     }
 
+    // The run's evaluated outcome, captured BEFORE review auto-remediation may
+    // overwrite next_state to Queued/NeedsUser — telemetry must record what the
+    // run actually evaluated to (a failed review), not the queue-management
+    // decision, or the trust report would not see the failure.
+    let evaluated_state = next_state;
+
     // Review auto-remediation (1c): a review that failed its criteria must not
     // blind-loop on the same unchanged code. Re-queue THIS review BEHIND the
     // reviewer's proposed remediation so the fix runs first and the review then
@@ -1894,7 +1964,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     .as_ref()
                     .map(|r| r.status.clone())
                     .unwrap_or_else(|| "no-result".to_string()),
-                eval_state: format!("{next_state:?}"),
+                eval_state: format!("{evaluated_state:?}"),
                 wall_seconds,
                 user_override,
                 skills: task.skills.clone(),

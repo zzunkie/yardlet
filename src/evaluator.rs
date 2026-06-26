@@ -305,7 +305,15 @@ pub fn changed_paths(cwd: &Path) -> Option<Vec<String>> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(cwd)
-        .args(["status", "--porcelain=v1", "--untracked-files=all"])
+        // core.quotepath=false: emit non-ASCII paths verbatim (UTF-8) instead of
+        // C-quoting them, so paths stay usable as a literal `git add` pathspec.
+        .args([
+            "-c",
+            "core.quotepath=false",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ])
         .output()
         .ok()?;
     if !out.status.success() {

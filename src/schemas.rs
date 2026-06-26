@@ -299,6 +299,18 @@ impl Task {
             _ => false,
         }
     }
+
+    /// Does this task mark its validation as required? Such tasks must run on the
+    /// serial path: the parallel path validates nothing (its pre-merge worktree
+    /// lacks the build env), so a required-validation task there could merge
+    /// without ever being validated.
+    pub fn requires_validation(&self) -> bool {
+        self.validation
+            .as_ref()
+            .and_then(|v| v.get("required"))
+            .and_then(|r| r.as_bool())
+            .unwrap_or(false)
+    }
 }
 
 impl WorkQueue {
