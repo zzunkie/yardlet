@@ -776,11 +776,7 @@ pub(crate) fn reconcile_queue_capabilities(
             .map(|c| crate::routing::norm_cap(c))
             .filter(|c| !c.is_empty())
             .collect();
-        let unsatisfiable: Vec<String> = normalized
-            .iter()
-            .filter(|c| !vocab.contains(*c))
-            .cloned()
-            .collect();
+        let unsatisfiable = crate::routing::unsatisfiable_capabilities(&normalized, &vocab);
         t.required_capabilities = normalized;
         if !unsatisfiable.is_empty() {
             t.state = TaskState::Blocked;

@@ -307,7 +307,10 @@ pub fn run_batch<F: FnMut(&str)>(
         // it writes artifacts, the queue state, follow-ups, and telemetry. The
         // single finalization pipeline is shared with the serial path.
         let evidence = evaluator::changed_paths(&p.wt_path);
-        let report = run::finalize_run(run::FinalizeInput {
+        // A finalize error for one task (e.g. a transient queue-write hiccup)
+        // must not abort the whole batch and strand the other already-finished
+        // worktrees — log it and move on; `yardlet recover` salvages this one.
+        let report = match run::finalize_run(run::FinalizeInput {
             ws,
             run_dir: &p.run_dir,
             run_id: &p.run_id,
@@ -325,7 +328,16 @@ pub fn run_batch<F: FnMut(&str)>(
                 wt_path: &p.wt_path,
                 branch: &p.branch,
             }),
-        })?;
+        }) {
+            Ok(r) => r,
+            Err(e) => {
+                on_event(&format!(
+                    "{}: finalize failed ({e}); worktree kept, run `yardlet recover`",
+                    p.task.id
+                ));
+                continue;
+            }
+        };
         let next = report.next_state;
         for line in report.lines {
             on_event(&line);

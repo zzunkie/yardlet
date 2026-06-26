@@ -934,11 +934,30 @@ fn cmd_defer(cwd: &std::path::Path, args: DeferArgs) -> Result<()> {
             _ => note,
         });
     }
-    let id = t.id.clone();
+    let id = args.task.clone();
+    // A dependency is satisfied only by Done, so deferring a task strands every
+    // task that depends on it. Surface that instead of letting them silently
+    // never run.
+    let stranded: Vec<&str> = queue
+        .tasks
+        .iter()
+        .filter(|t| t.state != TaskState::Done && t.depends_on.iter().any(|d| d == &id))
+        .map(|t| t.id.as_str())
+        .collect();
+    let stranded_note = if stranded.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nWARNING: {} now cannot run (they depend on it): {}. Defer or re-scope them too, \
+             or revive {id}.",
+            stranded.len(),
+            stranded.join(", ")
+        )
+    };
     ws.save_queue(&queue)?;
     println!(
         "Deferred {id}: set aside, not pending and not done. The intent can wrap with it on \
-         record. Revive it by re-queuing or a new plan."
+         record. Revive it by re-queuing or a new plan.{stranded_note}"
     );
     Ok(())
 }
@@ -996,9 +1015,12 @@ fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
             let Some(doc_ct) = git_commit_time(&ws.root, &m.path) else {
                 return false;
             };
-            m.look_at
-                .iter()
-                .any(|p| git_commit_time(&ws.root, p).is_some_and(|t| t > doc_ct))
+            // Stale if a landmark was committed after the doc, OR has an
+            // uncommitted working-tree edit the doc has not caught up with.
+            m.look_at.iter().any(|p| {
+                git_commit_time(&ws.root, p).is_some_and(|t| t > doc_ct)
+                    || git_has_uncommitted(&ws.root, p)
+            })
         })
         .collect();
     let stale_count = staleness.iter().filter(|s| **s).count();
@@ -1025,6 +1047,19 @@ fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
         println!("    {}", m.path);
     }
     Ok(())
+}
+
+/// Whether `pathspec` has uncommitted working-tree changes under `root` (so a
+/// memory doc that look_at's it may be stale even before the edit is committed).
+fn git_has_uncommitted(root: &std::path::Path, pathspec: &str) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["status", "--porcelain", "--", pathspec])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .is_some_and(|o| !o.stdout.is_empty())
 }
 
 /// Unix time of the last commit touching `pathspec` under `root`, or None when
@@ -1144,10 +1179,8 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         .unwrap_or_default();
     let cap_gated = |t: &crate::schemas::Task| {
         t.state == TaskState::Blocked
-            && !t.required_capabilities.is_empty()
-            && t.required_capabilities
-                .iter()
-                .any(|c| !vocab.contains(&crate::routing::norm_cap(c)))
+            && !crate::routing::unsatisfiable_capabilities(&t.required_capabilities, &vocab)
+                .is_empty()
     };
     let awaiting: Vec<&str> = snap
         .queue

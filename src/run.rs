@@ -72,22 +72,33 @@ pub struct RunReport {
     pub chained: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+// Every field defaults so a partial run.yaml (e.g. an older or hand-written one
+// that only carries run_id/task_id/worker) still deserializes — both
+// `seal_run_record` and `run_worker` read it through `state::load_yaml`.
+#[derive(Serialize, Deserialize, Default)]
 pub(crate) struct RunRecord {
+    #[serde(default)]
     pub schema_version: u32,
+    #[serde(default)]
     pub run_id: String,
+    #[serde(default)]
     pub task_id: String,
+    #[serde(default)]
     pub intent_id: String,
+    #[serde(default)]
     pub worker: String,
     /// Lifecycle: `prepared`/`running` at spawn, then sealed by `finalize_run`
     /// to the run's terminal outcome (`done`/`failed`/`partial`/`needs_user`/…).
+    #[serde(default)]
     pub state: String,
+    #[serde(default)]
     pub started_at: String,
     /// Set when `finalize_run` seals the record; absent while the run is in
     /// flight. Lets the Trust Report and run-dir scans tell a finished run from
     /// a stranded one without re-deriving it from the queue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,
+    #[serde(default)]
     pub worktree: String,
 }
 
@@ -136,12 +147,8 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // this guards the path that bypasses that: a named `--task` the user forced.
     {
         let vocab = routing::declared_capabilities(&workers);
-        let unsatisfiable: Vec<String> = task
-            .required_capabilities
-            .iter()
-            .map(|c| routing::norm_cap(c))
-            .filter(|c| !c.is_empty() && !vocab.contains(c))
-            .collect();
+        let unsatisfiable =
+            routing::unsatisfiable_capabilities(&task.required_capabilities, &vocab);
         if !unsatisfiable.is_empty() {
             save_task_state_on_latest_queue(ws, &mut queue, &task.id, TaskState::Blocked)?;
             return Ok(RunReport {
@@ -505,6 +512,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             (Some(base), Some(after)) => Some(evaluator::worker_touched(base, &after)),
             _ => None,
         };
+    // Keep a copy for auto-commit: it stages exactly the worker's touched paths,
+    // never a blind `add -A` that would sweep in foreign/untracked files.
+    let evidence_for_commit = evidence.clone();
     let user_override = opts.worker_override.as_ref().map(|o| {
         let from = if task.preferred_worker.is_empty() {
             "(default)".to_string()
@@ -540,7 +550,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // deploy_publish_send); auto-commit never touches a remote.
     if config.auto_commit && next_state == TaskState::Done {
         let msg = format!("yardlet: {} {}", task.id, task.title);
-        match git_commit_worker_changes(&ws.root, &msg) {
+        match git_commit_worker_changes(&ws.root, &msg, evidence_for_commit.as_deref()) {
             Ok(true) => lines.push(format!("auto-committed {} changes", task.id)),
             Ok(false) => {}
             Err(e) => lines.push(format!("auto-commit skipped: {e}")),
@@ -561,12 +571,17 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     })
 }
 
-/// Commit the worker's changes in `root` — everything except Yardlet's own
-/// `.agents/` state — and return whether a commit was actually made (false when
-/// not a git repo or nothing changed). Used by auto-commit; the caller treats
-/// any error as non-fatal so a git hiccup never fails a finished task. Mirrors
-/// the worktree integration's staging (`:(exclude).agents`) and identity.
-fn git_commit_worker_changes(root: &std::path::Path, message: &str) -> Result<bool> {
+/// Commit the worker's changes in `root` and return whether a commit was made
+/// (false when not a git repo, no evidence, or nothing to commit). Stages ONLY
+/// the worker's touched paths (`evidence`), never `.agents/` and never a blind
+/// `add -A` that would sweep in another session's or the user's unrelated
+/// untracked files (multi-session-safety). With no evidence it does nothing
+/// rather than guess. The caller treats any error as non-fatal.
+fn git_commit_worker_changes(
+    root: &std::path::Path,
+    message: &str,
+    evidence: Option<&[String]>,
+) -> Result<bool> {
     let run = |args: &[&str]| -> Result<String> {
         let out = std::process::Command::new("git")
             .arg("-C")
@@ -589,7 +604,23 @@ fn git_commit_worker_changes(root: &std::path::Path, message: &str) -> Result<bo
     if !inside {
         return Ok(false);
     }
-    run(&["add", "-A", "--", ".", ":(exclude).agents"])?;
+    // No git-diff evidence -> do not commit (cannot scope to the worker's diff).
+    let Some(evidence) = evidence else {
+        return Ok(false);
+    };
+    let scoped: Vec<&str> = evidence
+        .iter()
+        .map(|p| p.trim_start_matches("./"))
+        .filter(|p| !p.starts_with(".agents/") && *p != ".agents")
+        .collect();
+    if scoped.is_empty() {
+        return Ok(false);
+    }
+    // Stage exactly those paths (`--` so a path that looks like a flag is safe);
+    // `add` records modifications, creations, and deletions.
+    let mut add: Vec<&str> = vec!["add", "--"];
+    add.extend(scoped.iter().copied());
+    run(&add)?;
     if run(&["diff", "--cached", "--name-only"])?.trim().is_empty() {
         return Ok(false);
     }
@@ -1188,12 +1219,12 @@ fn run_worktree(run_dir: &std::path::Path) -> Option<PathBuf> {
 }
 
 /// The worker a run used, read from its run.yaml so a recovered run's salvaged
-/// telemetry stays attributable to the worker that produced it.
+/// telemetry stays attributable to the worker that produced it. Uses the typed
+/// `RunRecord` load (every field defaults) rather than a hand-rolled line scan.
 fn run_worker(run_dir: &std::path::Path) -> Option<String> {
-    let yaml = std::fs::read_to_string(run_dir.join("run.yaml")).ok()?;
-    yaml.lines()
-        .find_map(|l| l.trim().strip_prefix("worker:"))
-        .map(|v| v.trim().trim_matches('"').to_string())
+    state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
+        .ok()
+        .map(|r| r.worker)
         .filter(|s| !s.is_empty())
 }
 
@@ -1489,6 +1520,10 @@ pub(crate) struct FinalizeFlags {
     pub learned: bool,
     pub artifacts: bool,
     pub telemetry: bool,
+    /// Ingest worker-proposed follow-ups AND run review auto-remediation (both
+    /// rewrite queue topology from the worker's proposals). Off for recovery,
+    /// which must only finalize the stranded run, not mutate the queue graph.
+    pub follow_ups: bool,
 }
 
 impl FinalizeFlags {
@@ -1501,32 +1536,38 @@ impl FinalizeFlags {
             learned: true,
             artifacts: true,
             telemetry: true,
+            follow_ups: true,
         }
     }
 
-    /// The parallel path validates each task in ITS WORKTREE before the merge,
-    /// so a task that fails validation never reaches the workspace (it stays
-    /// Partial, worktree kept). Post-run hooks are still deferred (they run
-    /// against the workspace, not the pre-merge worktree). Conversation/learned
-    /// are skipped (batches only pick Queued tasks, never a paused resume).
-    /// Artifacts and telemetry still land, exactly as the inline code did.
+    /// The parallel path runs in an isolated worktree, so the in-tree gates that
+    /// need the real workspace are deferred: validation is OFF (the pre-merge
+    /// worktree lacks gitignored build deps like node_modules/target, so running
+    /// it there spuriously fails self-contained-looking tasks — a post-merge gate
+    /// is the proper future design), and post-run hooks are OFF for the same
+    /// reason. The evaluator's forbidden-path gate still runs on the worktree
+    /// diff, so the safety floor holds. Conversation/learned are skipped (batches
+    /// only pick Queued tasks). Artifacts, telemetry, and follow-up ingestion land.
     pub fn parallel() -> Self {
         Self {
             post_hooks: false,
-            validation: true,
+            validation: false,
             conversation: false,
             learned: false,
             artifacts: true,
             telemetry: true,
+            follow_ups: true,
         }
     }
 
     /// Recovery salvages an interrupted run: re-evaluate its stranded result,
-    /// merge a Done worktree back, and commit the state. Artifacts/hooks stay off
-    /// — the checkpoint/handoff were the dead session's job. Telemetry IS emitted
-    /// (labeled `reason: recovery`, attributed to the run.yaml worker): the
-    /// salvaged outcome is real, and without it the trust report would silently
-    /// undercount every recovered task.
+    /// merge a Done worktree back, and commit the state. Artifacts/hooks/
+    /// validation stay off, and follow-up ingestion + review auto-remediation are
+    /// OFF too — recovery must NOT mutate the queue graph (re-queue a review, add
+    /// dependency edges, ingest new tasks) during a crash-recovery pass; it only
+    /// finalizes the one stranded run. Telemetry IS emitted (labeled `reason:
+    /// recovery`, attributed to the run.yaml worker) so the trust report does not
+    /// undercount salvaged tasks.
     pub fn recovery() -> Self {
         Self {
             post_hooks: false,
@@ -1535,6 +1576,7 @@ impl FinalizeFlags {
             learned: false,
             artifacts: false,
             telemetry: true,
+            follow_ups: false,
         }
     }
 }
@@ -1767,10 +1809,17 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // Update the queue: set state AND ingest any follow-up tasks the worker
     // proposed (propose -> ingest). Yardlet stays the sole queue writer — both
     // land in one re-read-then-save.
-    let follow_ups = result
-        .as_ref()
-        .map(|r| r.follow_up_tasks.clone())
-        .unwrap_or_default();
+    // Recovery (follow_ups off) only finalizes the stranded run's state — it must
+    // not ingest new follow-ups or re-queue a review, which would rewrite the
+    // queue graph during a crash-recovery pass.
+    let follow_ups = if flags.follow_ups {
+        result
+            .as_ref()
+            .map(|r| r.follow_up_tasks.clone())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     // Workers (when loadable) let the queue commit ground a proposed follow-up's
     // capabilities; if workers.yaml can't be read we skip grounding rather than
     // false-park everything.
@@ -1792,27 +1841,40 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     }
 
     // Review auto-remediation (1c): a review that failed its criteria must not
-    // blind-loop on the same unchanged code. If the reviewer proposed
-    // remediation follow-up(s), re-queue THIS review BEHIND them (depends_on) so
-    // the fix runs first and the review then re-verifies; the drain's per-task
-    // attempt cap bounds the cycles. If it proposed nothing actionable, surface
-    // the findings to the user instead of retrying an unchanged target.
+    // blind-loop on the same unchanged code. Re-queue THIS review BEHIND the
+    // reviewer's proposed remediation so the fix runs first and the review then
+    // re-verifies; the drain's per-task attempt cap bounds the cycles.
     let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
-    if is_review && matches!(next_state, TaskState::Failed | TaskState::Partial) {
-        if ingested.is_empty() {
+    if flags.follow_ups && is_review && matches!(next_state, TaskState::Failed | TaskState::Partial)
+    {
+        // Depend only on fixes that can actually run: a proposed fix whose
+        // required_capabilities are off-vocabulary was just parked Blocked at
+        // ingest, and a review depends_on a Blocked task would deadlock (deps_met
+        // needs Done). With no runnable fix, surface to the user instead.
+        let runnable: Vec<String> = ingested
+            .iter()
+            .filter(|id| {
+                queue
+                    .tasks
+                    .iter()
+                    .any(|t| &t.id == *id && t.state != TaskState::Blocked)
+            })
+            .cloned()
+            .collect();
+        if runnable.is_empty() {
             requeue_review(ws, queue, &task.id, TaskState::NeedsUser, &[])?;
             next_state = TaskState::NeedsUser;
             lines.push(format!(
-                "{}: review failed and proposed no fix — needs you",
+                "{}: review failed with no runnable fix — needs you",
                 task.id
             ));
         } else {
-            requeue_review(ws, queue, &task.id, TaskState::Queued, &ingested)?;
+            requeue_review(ws, queue, &task.id, TaskState::Queued, &runnable)?;
             next_state = TaskState::Queued;
             lines.push(format!(
                 "{}: review failed — re-queued behind remediation [{}] to re-verify",
                 task.id,
-                ingested.join(", ")
+                runnable.join(", ")
             ));
         }
     }
@@ -2142,12 +2204,19 @@ mod tests {
             "-m",
             "init",
         ]);
-        // The worker edits a real file; Yardlet writes .agents state alongside.
+        // The worker edits a real file; Yardlet writes .agents state alongside;
+        // an UNRELATED untracked file must NOT be swept in (multi-session-safety).
         std::fs::write(root.join("feature.txt"), "work\n").unwrap();
         std::fs::create_dir_all(root.join(".agents")).unwrap();
         std::fs::write(root.join(".agents/work-queue.yaml"), "state\n").unwrap();
+        std::fs::write(root.join("foreign.txt"), "another session\n").unwrap();
 
-        assert!(git_commit_worker_changes(&root, "yardlet: T1 do it").unwrap());
+        // Evidence = the worker's touched paths only (.agents is filtered out).
+        let evidence = [
+            "feature.txt".to_string(),
+            ".agents/work-queue.yaml".to_string(),
+        ];
+        assert!(git_commit_worker_changes(&root, "yardlet: T1 do it", Some(&evidence)).unwrap());
         let tracked = std::process::Command::new("git")
             .arg("-C")
             .arg(&root)
@@ -2160,8 +2229,14 @@ mod tests {
             !files.contains(".agents"),
             ".agents excluded from the commit"
         );
+        assert!(
+            !files.contains("foreign.txt"),
+            "unrelated untracked file must not be swept into the commit"
+        );
         // Nothing left to commit -> false, not an error.
-        assert!(!git_commit_worker_changes(&root, "yardlet: T1 again").unwrap());
+        assert!(!git_commit_worker_changes(&root, "yardlet: T1 again", Some(&evidence)).unwrap());
+        // No evidence -> never commits (cannot scope to the worker's diff).
+        assert!(!git_commit_worker_changes(&root, "yardlet: T1 none", None).unwrap());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2491,6 +2566,80 @@ mod tests {
     }
 
     #[test]
+    fn recovery_does_not_ingest_followups() {
+        // Recovery (follow_ups flag off) must only finalize the stranded run, not
+        // mutate the queue graph: a follow-up proposed in the stranded result is
+        // NOT ingested on recovery (that would resurrect work during a crash pass).
+        let root = std::env::temp_dir().join(format!("yard-recnoing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&root)
+            .output();
+        let ws = Workspace::at(&root);
+        let mut t = task("YARD-001", TaskState::Failed, 10, false);
+        t.kind = "implementation".into();
+        ws.save_queue(&queue(vec![t])).unwrap();
+
+        let run_id = "run-20990101-000000-yard-001";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: "YARD-001".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "ok".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![crate::schemas::FollowUpTask {
+                title: "a follow-up the crash pass must not ingest".into(),
+                reason: String::new(),
+                kind: "implementation".into(),
+                risk: String::new(),
+                allowed_scope: vec![],
+                acceptance: vec![],
+                skills: vec![],
+                depends_on: vec![],
+                preferred_worker: String::new(),
+                required_capabilities: vec![],
+                worker_rationale: None,
+                insert: String::new(),
+                runs_before: vec![],
+            }],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!("run_id: {run_id}\ntask_id: YARD-001\nworker: codex\n"),
+        )
+        .unwrap();
+        write_str(&run_dir.join("worker.pid"), "2147483647").unwrap();
+
+        let msgs = recover_orphans(&ws);
+        assert!(msgs.iter().any(|m| m.contains("recovered")), "{msgs:?}");
+        let q = ws.load_queue().unwrap();
+        // Salvaged to Done, and the proposed follow-up was NOT ingested.
+        assert_eq!(
+            q.tasks.len(),
+            1,
+            "no follow-up should be ingested on recovery"
+        );
+        assert_eq!(q.tasks[0].state, TaskState::Done);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn finalize_seals_run_record_to_terminal_outcome() {
         // run.yaml is written "running" at spawn and was never updated, so every
         // record looked in-flight forever — a Trust Report / run-dir scan could
@@ -2563,12 +2712,11 @@ mod tests {
     }
 
     #[test]
-    fn parallel_validation_runs_in_the_worktree_not_the_workspace() {
-        // 1e: a parallel task validates IN ITS WORKTREE before the merge. The
-        // command here passes only when run from the worktree (the marker lives
-        // only there), so a Done outcome + a completed merge proves validation
-        // used the worktree cwd, not the still-clean workspace. Were it run in
-        // ws.root (the old bug) the marker would be absent → Failed → no merge.
+    fn parallel_finalize_merges_a_done_worktree() {
+        // The parallel path finalizes a worktree run through finalize_run and, on
+        // a Done outcome, merges the worktree back into the workspace. (Validation
+        // is intentionally OFF for parallel — the pre-merge worktree lacks the
+        // workspace build env — so this exercises the merge, not validation.)
         let root = std::env::temp_dir().join(format!("yard-pval-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
@@ -2598,8 +2746,6 @@ mod tests {
         let ws = Workspace::at(&root);
         let mut t = task("YARD-001", TaskState::Running, 10, false);
         t.kind = "implementation".into();
-        // Passes only in the worktree, where `wt_marker` exists.
-        t.validation = Some(crate::yaml::from_str("commands:\n- test -f wt_marker").unwrap());
 
         let run_id = "run-20990101-000000-yard-001";
         let run_dir = ws.runs_dir().join(run_id);
@@ -2613,7 +2759,6 @@ mod tests {
             "yard/yard-001",
         ]);
         std::fs::write(wt.join("feature.txt"), "from worker\n").unwrap();
-        std::fs::write(wt.join("wt_marker"), "only in worktree\n").unwrap();
 
         let result = crate::schemas::RunResult {
             schema_version: 1,
@@ -2651,7 +2796,7 @@ mod tests {
             run_dir: &run_dir,
             run_id,
             task: &t,
-            evidence: Some(vec!["feature.txt".into(), "wt_marker".into()]),
+            evidence: Some(vec!["feature.txt".into()]),
             worker_id: "codex",
             reason: "parallel",
             wall_seconds: 0,
@@ -2667,7 +2812,7 @@ mod tests {
         })
         .unwrap();
 
-        // Worktree validation passed -> Done, and the worktree merged back.
+        // Done -> the worktree merged back into the workspace.
         assert_eq!(report.next_state, TaskState::Done, "{:?}", report.lines);
         assert!(
             root.join("feature.txt").exists(),

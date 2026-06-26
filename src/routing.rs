@@ -222,6 +222,20 @@ pub(crate) fn declared_capabilities(workers: &WorkersFile) -> std::collections::
         .collect()
 }
 
+/// The required capabilities (normalized) that NO enabled worker declares — the
+/// one definition of "off-vocabulary" shared by the planner's queue-creation
+/// park, the run-time backstop, and the `status` view, so all three agree.
+pub(crate) fn unsatisfiable_capabilities(
+    required: &[String],
+    vocab: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    required
+        .iter()
+        .map(|c| norm_cap(c))
+        .filter(|c| !c.is_empty() && !vocab.contains(c))
+        .collect()
+}
+
 /// Whether `worker_id` is an enabled worker declaring EVERY required capability.
 /// `required` must already be normalized.
 fn worker_declares(workers: &WorkersFile, worker_id: &str, required: &[String]) -> bool {
