@@ -512,19 +512,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             (Some(base), Some(after)) => Some(evaluator::worker_touched(base, &after)),
             _ => None,
         };
-    // For auto-commit: the worker's touched paths, MINUS any file already dirty
-    // before the run (the user's own uncommitted edit the worker happened to
-    // also touch). Staging only files the worker made dirty from a clean state
-    // keeps the user's in-progress work out of Yardlet's commit.
-    let evidence_for_commit = match (&evidence, &baseline_fp) {
-        (Some(ev), Some(base)) => Some(
-            ev.iter()
-                .filter(|p| !base.iter().any(|(bp, _)| bp == *p))
-                .cloned()
-                .collect::<Vec<String>>(),
-        ),
-        _ => evidence.clone(),
-    };
+    // Clone the worker's touched paths for auto-commit, but only when it is on
+    // (it consumes `evidence` below; off = no allocation).
+    let evidence_for_commit = config.auto_commit.then(|| evidence.clone()).flatten();
     let user_override = opts.worker_override.as_ref().map(|o| {
         let from = if task.preferred_worker.is_empty() {
             "(default)".to_string()
@@ -559,11 +549,26 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // the task. Pushing stays manual and gated (approval-policy
     // deploy_publish_send); auto-commit never touches a remote.
     if config.auto_commit && next_state == TaskState::Done {
-        let msg = format!("yardlet: {} {}", task.id, task.title);
-        match git_commit_worker_changes(&ws.root, &msg, evidence_for_commit.as_deref()) {
-            Ok(true) => lines.push(format!("auto-committed {} changes", task.id)),
-            Ok(false) => {}
-            Err(e) => lines.push(format!("auto-commit skipped: {e}")),
+        // Only auto-commit from a clean start: when the tree already had
+        // uncommitted (non-.agents) changes, the worker's edits cannot be told
+        // apart from the user's, so skip rather than commit the wrong thing (or
+        // silently drop the worker's edit to a pre-dirty file).
+        let dirty_at_start = baseline_fp
+            .as_ref()
+            .map(|b| b.iter().any(|(p, _)| !p.starts_with(".agents")))
+            .unwrap_or(false);
+        if dirty_at_start {
+            lines.push(
+                "auto-commit skipped: tree had uncommitted changes at run start; commit manually"
+                    .to_string(),
+            );
+        } else {
+            let msg = format!("yardlet: {} {}", task.id, task.title);
+            match git_commit_worker_changes(&ws.root, &msg, evidence_for_commit.as_deref()) {
+                Ok(true) => lines.push(format!("auto-committed {} changes", task.id)),
+                Ok(false) => {}
+                Err(e) => lines.push(format!("auto-commit skipped: {e}")),
+            }
         }
     }
 
@@ -845,29 +850,45 @@ pub fn run_auto<F: FnMut(&str)>(
                         .iter()
                         .filter(|t| t.state == TaskState::Deferred)
                         .count();
-                    // A dependency that will never reach Done on its own.
-                    let dead_dep = |dep: &str| {
-                        queue
-                            .tasks
-                            .iter()
-                            .find(|t| t.id == dep)
-                            .map(|t| {
-                                matches!(
-                                    t.state,
-                                    TaskState::Failed
-                                        | TaskState::Deferred
-                                        | TaskState::NeedsUser
-                                        | TaskState::Blocked
-                                )
-                            })
-                            .unwrap_or(false)
-                    };
-                    // Split Queued-but-gated tasks: stuck behind a dep that won't
-                    // complete (surface it) vs benignly waiting on a runnable dep.
+                    // Tasks that will never reach Done on their own: terminally
+                    // stuck states, then (transitively) any Queued task gated
+                    // behind one — so a whole stalled chain is caught, not just
+                    // the direct dependent.
+                    let mut dead: std::collections::HashSet<&str> = queue
+                        .tasks
+                        .iter()
+                        .filter(|t| {
+                            matches!(
+                                t.state,
+                                TaskState::Failed
+                                    | TaskState::Deferred
+                                    | TaskState::NeedsUser
+                                    | TaskState::Blocked
+                            )
+                        })
+                        .map(|t| t.id.as_str())
+                        .collect();
+                    loop {
+                        let mut grew = false;
+                        for t in &queue.tasks {
+                            if t.state == TaskState::Queued
+                                && !dead.contains(t.id.as_str())
+                                && t.depends_on.iter().any(|d| dead.contains(d.as_str()))
+                            {
+                                dead.insert(t.id.as_str());
+                                grew = true;
+                            }
+                        }
+                        if !grew {
+                            break;
+                        }
+                    }
+                    // Split Queued tasks: stuck (gated behind a dep that won't
+                    // complete) vs benignly waiting on a runnable dep / approval.
                     let mut stuck: Vec<String> = Vec::new();
                     let mut waiting: Vec<&str> = Vec::new();
                     for t in queue.tasks.iter().filter(|t| t.state == TaskState::Queued) {
-                        match t.depends_on.iter().find(|d| dead_dep(d)) {
+                        match t.depends_on.iter().find(|d| dead.contains(d.as_str())) {
                             Some(d) => stuck.push(format!("{} (behind {})", t.id, d)),
                             None => waiting.push(t.id.as_str()),
                         }

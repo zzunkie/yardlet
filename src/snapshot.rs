@@ -21,6 +21,9 @@ pub struct Snapshot {
     pub gate: Option<(Vec<String>, u32)>,
     /// Task ids that are gated and not yet granted approval.
     pub approvals_needed: Vec<String>,
+    /// Capabilities the enabled workers declare (already parsed from
+    /// workers.yaml here, so callers need not re-read it).
+    pub capabilities: std::collections::BTreeSet<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -137,6 +140,8 @@ impl Snapshot {
             .map(|t| t.id.clone())
             .collect();
 
+        let capabilities = crate::routing::declared_capabilities(&workers_file);
+
         Ok(Snapshot {
             config,
             intent,
@@ -146,6 +151,7 @@ impl Snapshot {
             pending,
             gate,
             approvals_needed,
+            capabilities,
         })
     }
 

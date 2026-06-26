@@ -305,30 +305,31 @@ pub fn changed_paths(cwd: &Path) -> Option<Vec<String>> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(cwd)
-        // core.quotepath=false: emit non-ASCII paths verbatim (UTF-8) instead of
-        // C-quoting them, so paths stay usable as a literal `git add` pathspec.
-        .args([
-            "-c",
-            "core.quotepath=false",
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-        ])
+        // -z is NUL-separated and NEVER quotes paths, so non-ASCII and
+        // special-char (tab/backslash/quote) filenames come through verbatim and
+        // stay usable as a literal `git add` pathspec.
+        .args(["status", "--porcelain=v1", "--untracked-files=all", "-z"])
         .output()
         .ok()?;
     if !out.status.success() {
         return None;
     }
+    // Each record is "XY <path>\0"; a rename/copy ("R"/"C") adds a trailing
+    // "<orig>\0" that we consume and drop (we want the new path, which is on disk).
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let mut chunks = raw.split('\0');
     let mut paths = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        if line.len() < 4 {
+    while let Some(entry) = chunks.next() {
+        if entry.len() < 4 {
             continue;
         }
-        // "XY <path>", or a rename "XY old -> new"; the new path is on disk.
-        let rest = line[3..].trim();
-        let path = rest.rsplit(" -> ").next().unwrap_or(rest).trim_matches('"');
+        let xy = &entry[..2];
+        let path = entry[3..].to_string();
         if !path.is_empty() {
-            paths.push(path.to_string());
+            paths.push(path);
+        }
+        if xy.starts_with('R') || xy.starts_with('C') {
+            chunks.next();
         }
     }
     Some(paths)

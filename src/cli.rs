@@ -888,7 +888,7 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
             println!("{q}");
             println!("\nStill needs you. Reply with `yardlet answer \"...\" --task {task_id}`.");
         }
-    } else {
+    } else if !report.run_id.is_empty() {
         println!("\nrun {} resumed", report.run_id);
     }
     Ok(())
@@ -1003,8 +1003,11 @@ fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
         return Ok(());
     }
     // A doc is possibly stale when a `look_at` landmark changed in git AFTER the
-    // doc itself last did. Best-effort: an untracked doc or non-git repo is not
-    // flagged (no evidence either way).
+    // doc, OR has an uncommitted edit. One `git status` up front (instead of one
+    // per landmark) gives the uncommitted set; commit times still need per-path
+    // `git log`. An untracked doc has no commit time, but an uncommitted landmark
+    // still flags it (so a git-ignored memory dir is not falsely "fresh").
+    let uncommitted = git_uncommitted_paths(&ws.root);
     let staleness: Vec<bool> = h
         .memory
         .iter()
@@ -1012,14 +1015,13 @@ fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
             if m.look_at.is_empty() {
                 return false;
             }
-            let Some(doc_ct) = git_commit_time(&ws.root, &m.path) else {
-                return false;
-            };
-            // Stale if a landmark was committed after the doc, OR has an
-            // uncommitted working-tree edit the doc has not caught up with.
+            let doc_ct = git_commit_time(&ws.root, &m.path);
             m.look_at.iter().any(|p| {
-                git_commit_time(&ws.root, p).is_some_and(|t| t > doc_ct)
-                    || git_has_uncommitted(&ws.root, p)
+                uncommitted.contains(p.as_str())
+                    || matches!(
+                        (doc_ct, git_commit_time(&ws.root, p)),
+                        (Some(d), Some(t)) if t > d
+                    )
             })
         })
         .collect();
@@ -1049,17 +1051,33 @@ fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Whether `pathspec` has uncommitted working-tree changes under `root` (so a
-/// memory doc that look_at's it may be stale even before the edit is committed).
-fn git_has_uncommitted(root: &std::path::Path, pathspec: &str) -> bool {
-    std::process::Command::new("git")
+/// The set of paths with uncommitted working-tree changes under `root` (one
+/// `git status` for the whole workspace; `-z` keeps special-char paths intact).
+fn git_uncommitted_paths(root: &std::path::Path) -> std::collections::HashSet<String> {
+    let Some(out) = std::process::Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["status", "--porcelain", "--", pathspec])
+        .args(["status", "--porcelain", "-z", "--untracked-files=all"])
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .is_some_and(|o| !o.stdout.is_empty())
+    else {
+        return std::collections::HashSet::new();
+    };
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let mut chunks = raw.split('\0');
+    let mut set = std::collections::HashSet::new();
+    while let Some(entry) = chunks.next() {
+        if entry.len() < 4 {
+            continue;
+        }
+        let xy = &entry[..2];
+        set.insert(entry[3..].to_string());
+        if xy.starts_with('R') || xy.starts_with('C') {
+            chunks.next();
+        }
+    }
+    set
 }
 
 /// Unix time of the last commit touching `pathspec` under `root`, or None when
@@ -1173,13 +1191,11 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
     // you can retry — it is parked on a human decision or a new worker. Split it
     // out so a decided/deferred ceiling does not read as a broken task (and so an
     // intent with only such tasks left does not look falsely complete).
-    let vocab = ws
-        .load_workers()
-        .map(|w| crate::routing::declared_capabilities(&w))
-        .unwrap_or_default();
+    // Reuse the capability vocab the snapshot already parsed from workers.yaml.
+    let vocab = &snap.capabilities;
     let cap_gated = |t: &crate::schemas::Task| {
         t.state == TaskState::Blocked
-            && !crate::routing::unsatisfiable_capabilities(&t.required_capabilities, &vocab)
+            && !crate::routing::unsatisfiable_capabilities(&t.required_capabilities, vocab)
                 .is_empty()
     };
     let awaiting: Vec<&str> = snap
@@ -1189,16 +1205,21 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         .filter(|t| cap_gated(t))
         .map(|t| t.id.as_str())
         .collect();
+    // Stuck = Failed/Partial only (retryable). Blocked is its own thing.
     let stuck: Vec<&str> = snap
         .queue
         .tasks
         .iter()
-        .filter(|t| {
-            matches!(
-                t.state,
-                TaskState::Blocked | TaskState::Failed | TaskState::Partial
-            ) && !cap_gated(t)
-        })
+        .filter(|t| matches!(t.state, TaskState::Failed | TaskState::Partial))
+        .map(|t| t.id.as_str())
+        .collect();
+    // A non-capability Blocked task (e.g. a worker self-reported `blocked`) is a
+    // real block, not a failed/partial run and not retryable by re-running.
+    let blocked: Vec<&str> = snap
+        .queue
+        .tasks
+        .iter()
+        .filter(|t| t.state == TaskState::Blocked && !cap_gated(t))
         .map(|t| t.id.as_str())
         .collect();
     if !awaiting.is_empty() {
@@ -1208,6 +1229,10 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         );
         println!("  parked on a decision or a capability no worker declares —");
         println!("  provide what they need or add a capable worker; see `yardlet handoff`.");
+    }
+    if !blocked.is_empty() {
+        println!("\nblocked: {}", blocked.join(", "));
+        println!("  see why and how to unblock:  yardlet handoff");
     }
     if !stuck.is_empty() {
         println!("\nstuck (failed/partial): {}", stuck.join(", "));
