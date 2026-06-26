@@ -46,10 +46,11 @@
   single `finalize_run` path, so evaluation, gates, queue updates, and telemetry
   behave consistently across all three. Each run's `run.yaml` is now sealed to
   its real terminal outcome with a `completed_at` (it previously stayed
-  `running` forever). Parallel runs validate in their worktree before the merge,
-  so a task that fails validation never reaches the workspace. Recovery now
-  emits telemetry for the salvaged outcome, attributed to the original worker, so
-  the trust report no longer undercounts recovered tasks.
+  `running` forever). Recovery emits telemetry for the salvaged outcome,
+  attributed to the original worker, so the trust report no longer undercounts
+  recovered tasks, and recovery never mutates the queue graph (it only finalizes
+  the stranded run). Auto-commit stages only the worker's own changed paths,
+  never a blind `git add -A`.
 - **Review auto-remediation.** A review that fails its criteria and proposes a
   fix is re-queued behind that fix to re-verify (bounded retries), instead of
   blindly re-reviewing unchanged code; a review with no proposed fix surfaces to
