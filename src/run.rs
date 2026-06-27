@@ -550,23 +550,15 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // merge (auto-commit is worktree-only for now); when an opted-in serial run
     // actually produced worker changes, point the user at that path or a manual
     // commit. Full serial-in-worktree auto-commit lands as the next slice.
-    if config.auto_commit && next_state == TaskState::Done {
-        let worker_changed = evidence_for_commit
-            .as_deref()
-            .map(|e| {
-                e.iter().any(|p| {
-                    let p = p.trim_start_matches("./");
-                    !p.starts_with(".agents/") && p != ".agents"
-                })
-            })
-            .unwrap_or(false);
-        if worker_changed {
-            lines.push(format!(
-                "auto-commit deferred: a serial in-place run isn't auto-committed \
-                 (worktree/parallel path only for now); commit {}'s changes manually",
-                task.id
-            ));
-        }
+    if config.auto_commit
+        && next_state == TaskState::Done
+        && worker_changed_outside_agents(evidence_for_commit.as_deref())
+    {
+        lines.push(format!(
+            "auto-commit deferred: a serial in-place run isn't auto-committed \
+             (worktree/parallel path only for now); commit {}'s changes manually",
+            task.id
+        ));
     }
 
     Ok(RunReport {
@@ -581,6 +573,22 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         session: session_id,
         chained,
     })
+}
+
+/// Did the worker touch any path OUTSIDE Yardlet's own `.agents/` state? Drives
+/// the serial auto-commit guidance: only worth telling an opted-in user their
+/// changes were left to commit when the run actually produced deliverable
+/// (non-`.agents/`) edits. `None` evidence (no git signal) counts as no change.
+/// A leading `./` is normalized so `./.agents/x` is still recognized as state.
+fn worker_changed_outside_agents(evidence: Option<&[String]>) -> bool {
+    evidence
+        .map(|e| {
+            e.iter().any(|p| {
+                let p = p.trim_start_matches("./");
+                !p.starts_with(".agents/") && p != ".agents"
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Autonomous mode: drain the queue, stopping only at genuine human gates.
@@ -855,8 +863,12 @@ pub fn run_auto<F: FnMut(&str)>(
         let n = attempts.entry(task_id.clone()).or_default();
         *n += 1;
         if *n > 2 {
-            // Surface tasks gated behind this one (e.g. a review re-queued behind
-            // a fix that keeps failing) so they are not silently stranded.
+            // Surface any task hard-gated behind this one (a `depends_on` edge,
+            // e.g. a runs_before-injected dependency) so it is not silently
+            // stranded. A 1c review re-queued behind its fix is NOT listed here:
+            // it is soft-sequenced by priority with no dep edge, so it stays
+            // Queued and simply re-runs on the next drain rather than being
+            // stranded by this stop.
             let gated: Vec<&str> = queue
                 .tasks
                 .iter()
@@ -1467,6 +1479,26 @@ fn save_task_state_on_latest_queue(
 /// and the drain's per-task attempt cap bounds the fix+re-verify loop ("try hard,
 /// then ask"). Re-reads the latest queue first so a concurrent change is not
 /// clobbered.
+/// Of the just-ingested follow-up ids, those that can run RIGHT NOW: `Queued`
+/// AND dependency-satisfied. This mirrors `select_next` eligibility exactly so a
+/// failed review (1c) is soft-sequenced ONLY behind fixes that will actually run
+/// before it — an off-vocabulary fix parked `Blocked`, a `Deferred` one, or a
+/// `Queued` fix carrying its own unmet `depends_on` is excluded, so the dep-free
+/// review can never out-race a still-gated fix and re-verify unchanged code. When
+/// this is empty the review surfaces to the user instead.
+fn runnable_fix_ids(queue: &WorkQueue, ingested: &[String]) -> Vec<String> {
+    ingested
+        .iter()
+        .filter(|id| {
+            queue
+                .tasks
+                .iter()
+                .any(|t| &t.id == *id && t.state == TaskState::Queued && queue.deps_met(t))
+        })
+        .cloned()
+        .collect()
+}
+
 fn requeue_review(
     ws: &Workspace,
     fallback_queue: &mut WorkQueue,
@@ -1897,20 +1929,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
     if flags.follow_ups && is_review && matches!(next_state, TaskState::Failed | TaskState::Partial)
     {
-        // Sequence only behind fixes that can actually run: a proposed fix whose
-        // required_capabilities are off-vocabulary was just parked Blocked at
-        // ingest, and a Deferred/other non-Queued fix never runs either. With no
-        // runnable fix, surface to the user instead of re-verifying unchanged code.
-        let runnable: Vec<String> = ingested
-            .iter()
-            .filter(|id| {
-                queue
-                    .tasks
-                    .iter()
-                    .any(|t| &t.id == *id && t.state == TaskState::Queued)
-            })
-            .cloned()
-            .collect();
+        // Sequence only behind fixes that can actually run NOW (Queued &&
+        // deps_met). With no runnable fix, surface to the user instead.
+        let runnable = runnable_fix_ids(queue, &ingested);
         if runnable.is_empty() {
             requeue_review(ws, queue, &task.id, TaskState::NeedsUser, &[])?;
             next_state = TaskState::NeedsUser;
@@ -1968,7 +1989,10 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         run_dir,
         run_id,
         task,
-        queue.intent_id.as_str(),
+        // The captured spawn-time intent (not the post-reload `queue.intent_id`),
+        // same as telemetry above — attribute the record to the intent the run
+        // belonged to even if the on-disk queue was re-planned mid-run.
+        intent_id.as_str(),
         worker_id,
         next_state,
         merge.as_ref(),
@@ -2225,6 +2249,55 @@ mod tests {
         assert_eq!(r.state, TaskState::NeedsUser);
         assert!(r.depends_on.is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn runnable_fix_ids_excludes_blocked_deferred_and_dep_gated() {
+        // 1c: a failed review is soft-sequenced ONLY behind fixes that will run
+        // before it. A Blocked (off-vocab), Deferred, or dep-gated Queued fix is
+        // not yet runnable, so it must not count — else the dep-free review could
+        // out-race a still-gated fix and re-verify unchanged code.
+        let mut q = queue(vec![
+            task("FIXA", TaskState::Queued, 10, false),   // runnable
+            task("FIXB", TaskState::Blocked, 20, false),  // off-vocab parked
+            task("FIXC", TaskState::Deferred, 30, false), // set aside
+            task("FIXD", TaskState::Queued, 40, false),   // gated by an unmet dep
+            task("DEP", TaskState::Queued, 50, false),    // not Done -> gates FIXD
+        ]);
+        q.tasks
+            .iter_mut()
+            .find(|t| t.id == "FIXD")
+            .unwrap()
+            .depends_on = vec!["DEP".into()];
+        let ingested = vec![
+            "FIXA".to_string(),
+            "FIXB".to_string(),
+            "FIXC".to_string(),
+            "FIXD".to_string(),
+        ];
+        assert_eq!(runnable_fix_ids(&q, &ingested), vec!["FIXA".to_string()]);
+    }
+
+    #[test]
+    fn serial_auto_commit_guidance_fires_only_on_non_agents_changes() {
+        // 1d worktree-only interim: a serial run never auto-commits, but it points
+        // an opted-in user at a manual commit ONLY when the worker produced real
+        // deliverable changes — not on a no-op Done or a .agents-only write.
+        let agents_only = [".agents/work-queue.yaml".to_string(), ".agents".to_string()];
+        let with_work = [
+            ".agents/work-queue.yaml".to_string(),
+            "src/feature.rs".to_string(),
+        ];
+        assert!(!worker_changed_outside_agents(None)); // no git signal
+        assert!(!worker_changed_outside_agents(Some(&[]))); // nothing changed
+        assert!(!worker_changed_outside_agents(Some(&agents_only))); // state-only
+        assert!(!worker_changed_outside_agents(Some(&[
+            "./.agents/telemetry/runs.jsonl".to_string()
+        ]))); // ./-prefixed state still recognized
+        assert!(worker_changed_outside_agents(Some(&with_work))); // real deliverable
+        assert!(worker_changed_outside_agents(Some(&[
+            "./README.md".to_string()
+        ])));
     }
 
     #[test]

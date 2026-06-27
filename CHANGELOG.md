@@ -36,13 +36,14 @@
   postpone (e.g. work needing files you will provide later, or a capability no
   worker has) stops looking like a broken task and lets the intent wrap with the
   deferral on record. Revive it by re-queuing.
-- **Auto-commit (opt-in).** With `auto_commit: true` in `.agents/yard.yaml`,
-  completed work is committed automatically on the worktree/parallel path — each
-  task commits in its own isolated worktree and merges back (never Yardlet's own
-  `.agents/` state), so the commit is provably the worker's. A serial in-place
-  run is left for you to commit: in the shared working tree its changes can't be
-  told apart from a concurrent edit. Push stays manual. (Serial-in-worktree
-  auto-commit is the next slice.)
+- **Auto-commit (opt-in).** The `auto_commit: true` flag in `.agents/yard.yaml`
+  governs the serial path, which currently does NOT auto-commit: in the shared
+  working tree a serial run's changes can't be told apart from a concurrent edit,
+  so it reports that and leaves the commit to you (serial-in-worktree auto-commit
+  is the next slice). The worktree/parallel path is independent of the flag and
+  always commits as part of integration: each task commits in its own isolated
+  worktree and merges back (never Yardlet's own `.agents/` state), so the commit
+  is provably the worker's. Push stays manual either way.
 
 ### Changed
 

@@ -936,15 +936,18 @@ fn cmd_defer(cwd: &std::path::Path, args: DeferArgs) -> Result<()> {
     }
     let id = args.task.clone();
     // A dependency is satisfied only by Done, so deferring a task strands every
-    // task that depends on it — and, transitively, every not-Done task gated
-    // behind those (mirroring the drain/status stuck-chain closure), so a whole
-    // stalled chain is surfaced, not just the direct dependents.
+    // QUEUED task that depends on it — and, transitively, every queued task gated
+    // behind those — so a whole stalled chain is surfaced, not just the direct
+    // dependents. Growth is Queued-only (mirroring the drain/status stuck-chain
+    // closure): an already-terminal Failed/Blocked/NeedsUser dependent is not
+    // "stranded by this defer" (reviving the deferred task would not start it),
+    // so it must not be listed.
     let mut dead: std::collections::HashSet<&str> = std::collections::HashSet::new();
     dead.insert(id.as_str());
     loop {
         let mut grew = false;
         for t in &queue.tasks {
-            if t.state != TaskState::Done
+            if t.state == TaskState::Queued
                 && !dead.contains(t.id.as_str())
                 && t.depends_on.iter().any(|d| dead.contains(d.as_str()))
             {
