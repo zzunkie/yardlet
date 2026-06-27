@@ -543,32 +543,29 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let next_state = report.next_state;
     lines.extend(report.lines);
 
-    // Auto-commit (1d): when enabled, snapshot the worker's changes to git after
-    // a Done serial run (the parallel/recovery paths already commit via their
-    // worktree merge). Best-effort — a commit hiccup is reported, never fails
-    // the task. Pushing stays manual and gated (approval-policy
-    // deploy_publish_send); auto-commit never touches a remote.
+    // Auto-commit (1d): a serial run edits the SHARED working tree, where a
+    // before/after fingerprint cannot tell the worker's changes apart from a
+    // concurrent user/other-session edit — so in-place auto-commit is unsafe and
+    // NOT performed. The parallel path commits safely via its isolated worktree +
+    // merge (auto-commit is worktree-only for now); when an opted-in serial run
+    // actually produced worker changes, point the user at that path or a manual
+    // commit. Full serial-in-worktree auto-commit lands as the next slice.
     if config.auto_commit && next_state == TaskState::Done {
-        // Only auto-commit from a clean start: when the tree already had
-        // uncommitted (non-.agents) changes, the worker's edits cannot be told
-        // apart from the user's, so skip rather than commit the wrong thing (or
-        // silently drop the worker's edit to a pre-dirty file).
-        let dirty_at_start = baseline_fp
-            .as_ref()
-            .map(|b| b.iter().any(|(p, _)| !p.starts_with(".agents")))
+        let worker_changed = evidence_for_commit
+            .as_deref()
+            .map(|e| {
+                e.iter().any(|p| {
+                    let p = p.trim_start_matches("./");
+                    !p.starts_with(".agents/") && p != ".agents"
+                })
+            })
             .unwrap_or(false);
-        if dirty_at_start {
-            lines.push(
-                "auto-commit skipped: tree had uncommitted changes at run start; commit manually"
-                    .to_string(),
-            );
-        } else {
-            let msg = format!("yardlet: {} {}", task.id, task.title);
-            match git_commit_worker_changes(&ws.root, &msg, evidence_for_commit.as_deref()) {
-                Ok(true) => lines.push(format!("auto-committed {} changes", task.id)),
-                Ok(false) => {}
-                Err(e) => lines.push(format!("auto-commit skipped: {e}")),
-            }
+        if worker_changed {
+            lines.push(format!(
+                "auto-commit deferred: a serial in-place run isn't auto-committed \
+                 (worktree/parallel path only for now); commit {}'s changes manually",
+                task.id
+            ));
         }
     }
 
@@ -584,71 +581,6 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         session: session_id,
         chained,
     })
-}
-
-/// Commit the worker's changes in `root` and return whether a commit was made
-/// (false when not a git repo, no evidence, or nothing to commit). Stages ONLY
-/// the worker's touched paths (`evidence`), never `.agents/` and never a blind
-/// `add -A` that would sweep in another session's or the user's unrelated
-/// untracked files (multi-session-safety). With no evidence it does nothing
-/// rather than guess. The caller treats any error as non-fatal.
-fn git_commit_worker_changes(
-    root: &std::path::Path,
-    message: &str,
-    evidence: Option<&[String]>,
-) -> Result<bool> {
-    let run = |args: &[&str]| -> Result<String> {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .output()
-            .map_err(|e| anyhow!("git not available: {e}"))?;
-        if !out.status.success() {
-            return Err(anyhow!(
-                "git {} failed: {}",
-                args.first().copied().unwrap_or(""),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    };
-    let inside = run(&["rev-parse", "--is-inside-work-tree"])
-        .map(|s| s.trim() == "true")
-        .unwrap_or(false);
-    if !inside {
-        return Ok(false);
-    }
-    // No git-diff evidence -> do not commit (cannot scope to the worker's diff).
-    let Some(evidence) = evidence else {
-        return Ok(false);
-    };
-    let scoped: Vec<&str> = evidence
-        .iter()
-        .map(|p| p.trim_start_matches("./"))
-        .filter(|p| !p.starts_with(".agents/") && *p != ".agents")
-        .collect();
-    if scoped.is_empty() {
-        return Ok(false);
-    }
-    // Stage exactly those paths (`--` so a path that looks like a flag is safe);
-    // `add` records modifications, creations, and deletions.
-    let mut add: Vec<&str> = vec!["add", "--"];
-    add.extend(scoped.iter().copied());
-    run(&add)?;
-    if run(&["diff", "--cached", "--name-only"])?.trim().is_empty() {
-        return Ok(false);
-    }
-    run(&[
-        "-c",
-        "user.name=yardlet",
-        "-c",
-        "user.email=yardlet@localhost",
-        "commit",
-        "-m",
-        message,
-    ])?;
-    Ok(true)
 }
 
 /// Autonomous mode: drain the queue, stopping only at genuine human gates.
@@ -1526,24 +1458,46 @@ fn save_task_state_on_latest_queue(
 }
 
 /// Re-point a finished review at the queue (1c review auto-remediation): set its
-/// state and append any remediation dependencies (the fix tasks it must now wait
-/// for before re-verifying). Re-reads the latest queue first so a concurrent
-/// change is not clobbered.
+/// state and, for a soft re-verify (`fix_ids` non-empty, re-queued `Queued`),
+/// re-sequence it to run just AFTER the remediation fixes by PRIORITY — never a
+/// hard `depends_on` edge. A hard edge deadlocks: `deps_met` only clears on Done,
+/// so a fix that fails / is deferred / is title-deduped would strand the review
+/// forever. With soft ordering the fixes run first by priority; if one never
+/// reaches Done it simply leaves the Queued set and the review re-verifies anyway,
+/// and the drain's per-task attempt cap bounds the fix+re-verify loop ("try hard,
+/// then ask"). Re-reads the latest queue first so a concurrent change is not
+/// clobbered.
 fn requeue_review(
     ws: &Workspace,
     fallback_queue: &mut WorkQueue,
     review_id: &str,
     state: TaskState,
-    dep_ids: &[String],
+    fix_ids: &[String],
 ) -> Result<()> {
     let mut latest = ws.load_queue().unwrap_or_else(|_| fallback_queue.clone());
-    if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == review_id) {
-        t.state = state;
-        for d in dep_ids {
-            if !t.depends_on.contains(d) {
-                t.depends_on.push(d.clone());
+    if state == TaskState::Queued && !fix_ids.is_empty() {
+        // Lowest priority among the other queued tasks: pull the fixes just below
+        // it (run first) and slot the review between the fixes and the rest, so
+        // the selector runs every fix before re-verifying. Equal-priority fixes
+        // tie-break by queue order, preserving the reviewer's proposal order.
+        let front = latest
+            .tasks
+            .iter()
+            .filter(|t| t.state == TaskState::Queued && t.id != review_id)
+            .map(|t| t.priority)
+            .min()
+            .unwrap_or(0);
+        for t in latest.tasks.iter_mut() {
+            if fix_ids.iter().any(|f| f == &t.id) {
+                t.priority = front - 20;
             }
         }
+        if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == review_id) {
+            t.state = state;
+            t.priority = front - 10;
+        }
+    } else if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == review_id) {
+        t.state = state;
     }
     ws.save_queue(&latest)?;
     *fallback_queue = latest;
@@ -1725,6 +1679,10 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         merge,
     } = input;
     let mut lines = Vec::new();
+    // Capture the intent this run belonged to BEFORE finalize_on_latest_queue
+    // reloads `queue` from disk (which would swap in a re-plan's intent_id):
+    // telemetry must attribute the run to the intent it actually ran under.
+    let intent_id = queue.intent_id.clone();
 
     let mut eval = evaluator::evaluate(run_dir, run_id, task, evidence.as_deref());
 
@@ -1932,23 +1890,24 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     let evaluated_state = next_state;
 
     // Review auto-remediation (1c): a review that failed its criteria must not
-    // blind-loop on the same unchanged code. Re-queue THIS review BEHIND the
-    // reviewer's proposed remediation so the fix runs first and the review then
-    // re-verifies; the drain's per-task attempt cap bounds the cycles.
+    // blind-loop on the same unchanged code. Re-queue THIS review to run AFTER the
+    // reviewer's proposed remediation (soft priority ordering, no hard dep) so the
+    // fix runs first and the review then re-verifies; the drain's per-task attempt
+    // cap bounds the cycles.
     let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
     if flags.follow_ups && is_review && matches!(next_state, TaskState::Failed | TaskState::Partial)
     {
-        // Depend only on fixes that can actually run: a proposed fix whose
+        // Sequence only behind fixes that can actually run: a proposed fix whose
         // required_capabilities are off-vocabulary was just parked Blocked at
-        // ingest, and a review depends_on a Blocked task would deadlock (deps_met
-        // needs Done). With no runnable fix, surface to the user instead.
+        // ingest, and a Deferred/other non-Queued fix never runs either. With no
+        // runnable fix, surface to the user instead of re-verifying unchanged code.
         let runnable: Vec<String> = ingested
             .iter()
             .filter(|id| {
                 queue
                     .tasks
                     .iter()
-                    .any(|t| &t.id == *id && t.state != TaskState::Blocked)
+                    .any(|t| &t.id == *id && t.state == TaskState::Queued)
             })
             .cloned()
             .collect();
@@ -1976,7 +1935,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             &telemetry::RunTelemetry {
                 ts: Local::now().to_rfc3339(),
                 task_id: task.id.clone(),
-                intent_id: queue.intent_id.clone(),
+                intent_id: intent_id.clone(),
                 kind: task.kind.clone(),
                 risk: task.risk.clone(),
                 worker: worker_id.to_string(),
@@ -2217,9 +2176,10 @@ mod tests {
     }
 
     #[test]
-    fn requeue_review_behind_remediation_then_needs_user() {
-        // 1c: a failed review with a proposed fix is re-queued BEHIND it
-        // (depends_on) to re-verify; with no fix it goes to needs_user.
+    fn requeue_review_soft_sequences_behind_fix_then_needs_user() {
+        // 1c: a failed review with a proposed fix is re-queued to run AFTER it by
+        // PRIORITY (no hard depends_on edge — that deadlocks if the fix never
+        // reaches Done); with no fix it goes to needs_user.
         let root = std::env::temp_dir().join(format!("yard-requeue-rev-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let ws = Workspace::at(&root);
@@ -2230,7 +2190,7 @@ mod tests {
         .unwrap();
         let mut fallback = ws.load_queue().unwrap();
 
-        // Remediation proposed: review -> Queued, waiting on the fix.
+        // Remediation proposed: review -> Queued, sequenced behind the fix.
         requeue_review(
             &ws,
             &mut fallback,
@@ -2239,95 +2199,31 @@ mod tests {
             &["FIX".into()],
         )
         .unwrap();
-        let rev = |ws: &Workspace| {
+        let find = |ws: &Workspace, id: &str| {
             ws.load_queue()
                 .unwrap()
                 .tasks
                 .into_iter()
-                .find(|t| t.id == "REV")
+                .find(|t| t.id == id)
                 .unwrap()
         };
-        let r = rev(&ws);
+        let r = find(&ws, "REV");
+        let f = find(&ws, "FIX");
         assert_eq!(r.state, TaskState::Queued);
-        assert_eq!(r.depends_on, vec!["FIX".to_string()]);
+        assert!(r.depends_on.is_empty(), "no hard dependency edge");
+        // Lower priority runs first: the fix outranks the re-queued review.
+        assert!(
+            f.priority < r.priority,
+            "fix ({}) must sequence before the review ({})",
+            f.priority,
+            r.priority
+        );
 
-        // Called again (e.g. next cycle) it does not duplicate the dependency,
-        // and the no-fix path surfaces to the user.
-        requeue_review(
-            &ws,
-            &mut fallback,
-            "REV",
-            TaskState::NeedsUser,
-            &["FIX".into()],
-        )
-        .unwrap();
-        let r = rev(&ws);
+        // The no-fix path surfaces to the user and leaves no dependency behind.
+        requeue_review(&ws, &mut fallback, "REV", TaskState::NeedsUser, &[]).unwrap();
+        let r = find(&ws, "REV");
         assert_eq!(r.state, TaskState::NeedsUser);
-        assert_eq!(r.depends_on, vec!["FIX".to_string()]); // no duplicate
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn auto_commit_commits_worker_changes_excluding_agents() {
-        // 1d: auto-commit snapshots the worker's diff but never Yardlet's own
-        // .agents/ state, and reports "nothing to commit" cleanly.
-        let root = std::env::temp_dir().join(format!("yard-autocommit-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let sh = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&root)
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "git {args:?}");
-        };
-        sh(&["init", "-q"]);
-        sh(&[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "commit",
-            "--allow-empty",
-            "-q",
-            "-m",
-            "init",
-        ]);
-        // The worker edits a real file; Yardlet writes .agents state alongside;
-        // an UNRELATED untracked file must NOT be swept in (multi-session-safety).
-        std::fs::write(root.join("feature.txt"), "work\n").unwrap();
-        std::fs::create_dir_all(root.join(".agents")).unwrap();
-        std::fs::write(root.join(".agents/work-queue.yaml"), "state\n").unwrap();
-        std::fs::write(root.join("foreign.txt"), "another session\n").unwrap();
-
-        // Evidence = the worker's touched paths only (.agents is filtered out).
-        let evidence = [
-            "feature.txt".to_string(),
-            ".agents/work-queue.yaml".to_string(),
-        ];
-        assert!(git_commit_worker_changes(&root, "yardlet: T1 do it", Some(&evidence)).unwrap());
-        let tracked = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .args(["ls-files"])
-            .output()
-            .unwrap();
-        let files = String::from_utf8_lossy(&tracked.stdout);
-        assert!(files.contains("feature.txt"), "worker file committed");
-        assert!(
-            !files.contains(".agents"),
-            ".agents excluded from the commit"
-        );
-        assert!(
-            !files.contains("foreign.txt"),
-            "unrelated untracked file must not be swept into the commit"
-        );
-        // Nothing left to commit -> false, not an error.
-        assert!(!git_commit_worker_changes(&root, "yardlet: T1 again", Some(&evidence)).unwrap());
-        // No evidence -> never commits (cannot scope to the worker's diff).
-        assert!(!git_commit_worker_changes(&root, "yardlet: T1 none", None).unwrap());
+        assert!(r.depends_on.is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 

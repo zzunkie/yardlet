@@ -93,11 +93,16 @@ pub struct YardConfig {
     /// Done. On by default; the dirs are empty until you add executables.
     #[serde(default = "default_true")]
     pub hooks: bool,
-    /// After a Done serial run, commit the worker's changes to git (everything
-    /// except `.agents/`). Best-effort and non-fatal; never pushes to a remote
+    /// Opt in to autonomous git commits of completed work. A serial in-place run
+    /// is NOT auto-committed — its edits can't be told apart from a concurrent
+    /// user/other-session edit in the shared tree — so when this is ON such a run
+    /// reports that and leaves the commit to you (full serial-in-worktree
+    /// auto-commit lands next). The parallel path is unaffected by this flag: it
+    /// always commits each task in its isolated worktree and merges it back
+    /// (everything except `.agents/`), since merge-back intrinsically needs a
+    /// commit and the worktree is provably the worker's. Never pushes to a remote
     /// (pushing stays manual and gated by approval-policy `deploy_publish_send`).
-    /// OFF by default: opt in, since it writes to the user's git history. The
-    /// parallel/recovery paths already commit via their worktree merge.
+    /// OFF by default, since it writes to the user's git history.
     #[serde(default)]
     pub auto_commit: bool,
 }

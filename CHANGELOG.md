@@ -36,9 +36,13 @@
   postpone (e.g. work needing files you will provide later, or a capability no
   worker has) stops looking like a broken task and lets the intent wrap with the
   deferral on record. Revive it by re-queuing.
-- **Auto-commit (opt-in).** With `auto_commit: true` in `.agents/yard.yaml`, a
-  Done serial run commits the worker's changes (never Yardlet's own `.agents/`
-  state); failure is non-fatal. Push stays manual.
+- **Auto-commit (opt-in).** With `auto_commit: true` in `.agents/yard.yaml`,
+  completed work is committed automatically on the worktree/parallel path — each
+  task commits in its own isolated worktree and merges back (never Yardlet's own
+  `.agents/` state), so the commit is provably the worker's. A serial in-place
+  run is left for you to commit: in the shared working tree its changes can't be
+  told apart from a concurrent edit. Push stays manual. (Serial-in-worktree
+  auto-commit is the next slice.)
 
 ### Changed
 
@@ -49,12 +53,13 @@
   `running` forever). Recovery emits telemetry for the salvaged outcome,
   attributed to the original worker, so the trust report no longer undercounts
   recovered tasks, and recovery never mutates the queue graph (it only finalizes
-  the stranded run). Auto-commit stages only the worker's own changed paths,
-  never a blind `git add -A`.
+  the stranded run).
 - **Review auto-remediation.** A review that fails its criteria and proposes a
-  fix is re-queued behind that fix to re-verify (bounded retries), instead of
-  blindly re-reviewing unchanged code; a review with no proposed fix surfaces to
-  you.
+  fix re-queues to re-verify AFTER that fix — sequenced by priority, not a
+  blocking `depends_on` edge, so a fix that fails, is deferred, or is title-
+  deduped can never deadlock the review — instead of blindly re-reviewing
+  unchanged code. The drain's per-task attempt cap bounds the fix+re-verify loop
+  ("try hard, then ask"); a review with no runnable fix surfaces to you.
 
 ## 0.7.0 - 2026-06-21
 

@@ -936,12 +936,30 @@ fn cmd_defer(cwd: &std::path::Path, args: DeferArgs) -> Result<()> {
     }
     let id = args.task.clone();
     // A dependency is satisfied only by Done, so deferring a task strands every
-    // task that depends on it. Surface that instead of letting them silently
-    // never run.
+    // task that depends on it — and, transitively, every not-Done task gated
+    // behind those (mirroring the drain/status stuck-chain closure), so a whole
+    // stalled chain is surfaced, not just the direct dependents.
+    let mut dead: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    dead.insert(id.as_str());
+    loop {
+        let mut grew = false;
+        for t in &queue.tasks {
+            if t.state != TaskState::Done
+                && !dead.contains(t.id.as_str())
+                && t.depends_on.iter().any(|d| dead.contains(d.as_str()))
+            {
+                dead.insert(t.id.as_str());
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
     let stranded: Vec<&str> = queue
         .tasks
         .iter()
-        .filter(|t| t.state != TaskState::Done && t.depends_on.iter().any(|d| d == &id))
+        .filter(|t| t.id != id && dead.contains(t.id.as_str()))
         .map(|t| t.id.as_str())
         .collect();
     let stranded_note = if stranded.is_empty() {
@@ -1008,6 +1026,10 @@ fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
     // `git log`. An untracked doc has no commit time, but an uncommitted landmark
     // still flags it (so a git-ignored memory dir is not falsely "fresh").
     let uncommitted = git_uncommitted_paths(&ws.root);
+    // `git status --porcelain` reports paths from the repo root, but a landmark is
+    // workspace-root-relative — in a subdirectory workspace they differ, so build
+    // the repo-root-relative form (prefix + landmark) before matching the set.
+    let prefix = git_show_prefix(&ws.root);
     let staleness: Vec<bool> = h
         .memory
         .iter()
@@ -1017,9 +1039,10 @@ fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
             }
             let doc_ct = git_commit_time(&ws.root, &m.path);
             m.look_at.iter().any(|p| {
-                uncommitted.contains(p.as_str())
+                let rel = p.trim_start_matches("./");
+                uncommitted.contains(format!("{prefix}{rel}").as_str())
                     || matches!(
-                        (doc_ct, git_commit_time(&ws.root, p)),
+                        (doc_ct, git_commit_time(&ws.root, rel)),
                         (Some(d), Some(t)) if t > d
                     )
             })
@@ -1078,6 +1101,23 @@ fn git_uncommitted_paths(root: &std::path::Path) -> std::collections::HashSet<St
         }
     }
     set
+}
+
+/// The path of `root` within its git repo, with a trailing slash (empty when
+/// `root` is the repo top-level). `git status --porcelain` reports paths from the
+/// repo root, so a subdirectory workspace prepends this to a workspace-relative
+/// landmark before matching against the uncommitted set.
+fn git_show_prefix(root: &std::path::Path) -> String {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--show-prefix"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 /// Unix time of the last commit touching `pathspec` under `root`, or None when
