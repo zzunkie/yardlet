@@ -7,12 +7,21 @@
 
 **English** | [한국어](README.ko.md)
 
-> **Rent the intelligence. Own the work.**
-> Yardlet is a local console for engineering the loop that turns a few sentences
-> of intent into verified, durable work, using your already-installed coding
-> agents as interchangeable workers.
+> **Rent the intelligence. Own the loop.**
+> Yardlet owns the loop around the coding agents you already run. Describe
+> intent in a few sentences; Yardlet plans it into tasks, drives Claude Code or
+> Codex as interchangeable workers, verifies every result deterministically, and
+> keeps the plan, memory, trust record, and handoffs in your repo. You rent the
+> model; you own the loop.
 
 ![Yardlet terminal UI demo](docs/assets/yardlet-demo.gif)
+
+Yardlet is not a thin wrapper over a coding CLI. The worker CLI is one swappable
+part inside a loop Yardlet owns end to end: a planning gate, per-task routing, a
+deterministic verifier that is never the doer, durable repo-local state, crash
+recovery, project memory, a trust report built from your own run history, and a
+learning loop that compounds in your repo. Swap the worker out and the loop, the
+records, and everything you have taught it stay yours.
 
 *"I don't prompt Claude anymore. I have loops running that prompt Claude…
 my job is to write loops."* That is how Anthropic's Claude Code lead
@@ -98,6 +107,63 @@ with explicit dependencies; each task runs through a hidden worker, is checked
 by a deterministic evaluator, and leaves a checkpoint and handoff under
 `.agents/runs/`.
 
+## Project Memory
+
+A loop that forgets is a wrapper. Yardlet keeps durable workspace knowledge in
+your repo and feeds it to every worker without bloating the prompt.
+
+Drop facts and decisions as plain Markdown under `.agents/memory/`: one fact per
+file, git-tracked, with optional `name` / `description` frontmatter. Yardlet
+discovers them and injects only a short **index** into every worker packet and
+the planner: each doc's title, one-line summary, and path anchor. Bodies are
+read **on demand** by the worker that needs them, so the always-loaded cost
+stays tiny no matter how much you record. This is index-and-anchor, not
+prompt-stuffing: the index points, and the worker opens the few memories that
+bear on its task.
+
+A memory doc can also declare `look_at:` landmark paths. `yardlet memory` lists
+the index and flags a doc **possibly stale** when one of its landmarks changed
+in git after the doc was last updated, so a memory that has drifted from the
+code it describes is surfaced rather than trusted silently. `yardlet init`
+scaffolds the folder with a convention README.
+
+Mechanics: [docs/memory-trust-mining.md](docs/memory-trust-mining.md).
+
+## Trust Report
+
+Because "Done" is checked by a deterministic gate and every run logs its
+outcome, Yardlet can tell you how far to trust the loop, from your own history.
+
+`yardlet trust` summarizes run telemetry into a trust view:
+
+- **First-pass Done vs Done-after-retry vs never-Done**, so you can see how
+  often work lands on the first attempt instead of after rework.
+- **Per-worker reliability**: done-rate, partial / failed / no-result counts,
+  wall time, and how often you overrode the result.
+- The tasks that needed the **most attempts** to reach Done.
+
+It is scoped to the active intent, so a task id reused across intents does not
+fold its attempts together. It is read-only: it reports, it never changes
+routing or policy on its own.
+
+Computation details: [docs/memory-trust-mining.md](docs/memory-trust-mining.md).
+
+## Outcome Mining
+
+The same telemetry feeds the learning loop. `yardlet harness review` shows the
+auto-learned rules and skills with their eval scores, and next to them surfaces
+**mined observations** that cross a threshold: a worker with a high no-result
+rate (an output-contract problem worth a rule), or a task kind that averages
+many attempts to reach Done (it wants a skill or sharper acceptance criteria).
+
+These are **suggestions only**. Mining points at a recurring deterministic
+outcome and proposes a harness improvement; you apply the rule, skill, or scope
+change. Telemetry never rewrites the harness on its own. This is the loop
+compounding: a deterministic result from one run becomes guidance that sharpens
+the next.
+
+Thresholds: [docs/memory-trust-mining.md](docs/memory-trust-mining.md).
+
 ## Terminal UI shortcuts
 
 The terminal UI (`yardlet` with no subcommand) is the main way to drive a
@@ -145,11 +211,16 @@ are mapped to the same shortcuts.
 | `yardlet run --next [--execute] [--worker <id>]` | Prepare (default) or run the next task. |
 | `yardlet run --auto [--parallel N]` | Drain the queue autonomously; optionally N tasks at once. |
 | `yardlet answer "<reply>"` | Answer a task waiting on you (NeedsUser) and resume it. |
+| `yardlet approve <id>` | Grant single-use approval to a gated task. |
+| `yardlet defer <id> [reason]` | Set a task aside by decision (Deferred, not pending and not done); revive by re-queuing. |
 | `yardlet handoff` | Print the latest run's handoff. |
 | `yardlet report` | Print the intent's final report (aggregate of every task). |
+| `yardlet memory` | List the project-memory index; flags docs possibly stale vs their `look_at` landmarks. |
+| `yardlet trust` | Trust report: first-pass vs retried Done and per-worker reliability (read-only). |
 | `yardlet recover` | Recover state from an interrupted session (orphaned runs, unread plans). |
 | `yardlet skill list / suggest / equip <preset> / unequip / research / create / apply / review` | Classify, equip, author, and score skills. |
-| `yardlet harness review` | Show auto-learned rules and skills with their eval scores. |
+| `yardlet harness review` | Show auto-learned rules and skills with their eval scores, plus mined improvement candidates. |
+| `yardlet rubric drift / sync [--adopt-text]` | Diagnose how the workspace rubric lags the template and merge improvements in (non-destructive). |
 | `yardlet routing review` | Per-kind worker success stats + suggested preferences. |
 | `yardlet routing apply --kind K --worker W` | Pin a worker for a task kind (human-approved). |
 
@@ -279,13 +350,17 @@ Yardlet owns state; workers do not. Canonical state lives under `.agents/` in th
 ```
 .agents/
   yardlet.yaml              workspace config
-  intent-contract.yaml   current goal / scope / acceptance
-  work-queue.yaml         tasks
-  *-policy.yaml           tool / approval / interaction / research / billing policy
-  workers.yaml            worker profiles + routing
-  runs/<run-id>/          per-run artifacts (result, validation, checkpoint, handoff)
-  checkpoints/            latest compact resume points
-  handoffs/               teammate-readable summaries
+  intent-contract.yaml      current goal / scope / acceptance
+  work-queue.yaml           tasks
+  *-policy.yaml             tool / approval / interaction / research / billing policy
+  workers.yaml              worker profiles + routing
+  memory/                   durable workspace facts (one fact per .md, git-tracked)
+  rules/ skills/ agents/    harness assets (rules, skill catalog, role notes)
+  runs/<run-id>/            per-run artifacts (result, validation, checkpoint, handoff)
+  conversations/<id>.yaml   needs-user transcripts threaded back to the worker
+  checkpoints/              latest compact resume points
+  handoffs/                 teammate-readable summaries
+  telemetry/                runs.jsonl: per-run outcomes (the trust + mining source)
 ```
 
 User-level, non-secret config lives under `~/.yardlet/`.
