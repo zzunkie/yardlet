@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **The work queue is runtime state.** `yardlet` now treats a missing
+  `.agents/work-queue.yaml` as an empty queue instead of erroring, so the queue
+  file can be gitignored where it is operational rather than shared state. A
+  present but malformed queue still fails loudly.
+
+### Fixed
+
+- **Scope-gated follow-ups.** A worker-proposed follow-up task whose
+  `allowed_scope` reaches outside the parent intent's `allowed_scope` is now
+  ingested as approval-required: the drain skips it until `yardlet approve`
+  rather than auto-running it. An adjacent idea stays a queue candidate, not a
+  silent expansion of the current intent.
+
 ## 0.8.0 - 2026-06-24
 
 ### Added
