@@ -319,6 +319,20 @@ impl Task {
 }
 
 impl WorkQueue {
+    /// An empty queue: no tasks, default selection policy. Returned when no
+    /// `work-queue.yaml` exists yet. The queue is runtime state, not config, so
+    /// a fresh checkout (or one that gitignores the queue) legitimately has none
+    /// and must not error.
+    pub fn empty() -> Self {
+        WorkQueue {
+            schema_version: 1,
+            queue_id: "queue-initial".to_string(),
+            intent_id: String::new(),
+            selection_policy: SelectionPolicy::default(),
+            tasks: Vec::new(),
+        }
+    }
+
     /// Are all of `task`'s dependencies Done? A dependency id that does not
     /// exist in the queue is treated as met (a planner typo must not deadlock
     /// the queue forever).

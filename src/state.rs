@@ -108,7 +108,14 @@ impl Workspace {
     }
 
     pub fn load_queue(&self) -> Result<WorkQueue> {
-        load_yaml(&self.queue_path())
+        let path = self.queue_path();
+        if !path.exists() {
+            // The queue is runtime state, not config: a fresh checkout (or one
+            // that gitignores the queue) can have none. A missing file is an
+            // empty queue, not an error. A present-but-malformed file still fails.
+            return Ok(WorkQueue::empty());
+        }
+        load_yaml(&path)
     }
 
     pub fn save_queue(&self, queue: &WorkQueue) -> Result<()> {
@@ -259,6 +266,26 @@ mod tests {
 
         // A task that never paused reads as an empty transcript.
         assert!(ws.load_conversation("YARD-2").turns.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_queue_loads_as_empty() {
+        let dir = std::env::temp_dir().join(format!("yard-noqueue-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let ws = Workspace::at(&dir);
+
+        // This workspace has no work-queue.yaml at all.
+        assert!(!ws.queue_path().exists());
+
+        // Loading must not error; an absent queue reads as empty (runtime state,
+        // not config, so a fresh or queue-gitignoring checkout has none).
+        let q = ws
+            .load_queue()
+            .expect("a missing queue must load as empty, not error");
+        assert!(q.tasks.is_empty());
 
         let _ = fs::remove_dir_all(&dir);
     }
