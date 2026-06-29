@@ -814,6 +814,7 @@ pub(crate) fn reconcile_queue_capabilities(
 /// skipped. Returns the ids of the tasks actually ingested.
 pub(crate) fn ingest_follow_ups(
     queue: &mut WorkQueue,
+    intent_allowed_scope: &[String],
     follow_ups: &[crate::schemas::FollowUpTask],
 ) -> Vec<String> {
     let mut next_num = queue
@@ -886,7 +887,8 @@ pub(crate) fn ingest_follow_ups(
                 .map(|s| yaml::Value::String(s.clone()))
                 .collect(),
             validation: None,
-            approval: None,
+            approval: follow_up_escapes_intent(intent_allowed_scope, &fu.allowed_scope)
+                .then(scope_escape_approval),
             interaction: None,
             worker_rationale: rationale,
             provenance: "worker-proposed".to_string(),
@@ -897,6 +899,78 @@ pub(crate) fn ingest_follow_ups(
         next_num += 1;
     }
     ingested
+}
+
+fn follow_up_escapes_intent(intent_allowed_scope: &[String], follow_up_scope: &[String]) -> bool {
+    if intent_allowed_scope.is_empty() || follow_up_scope.is_empty() {
+        return false;
+    }
+    follow_up_scope.iter().any(|entry| {
+        let Some(scope) = normalize_scope_entry(entry) else {
+            return false;
+        };
+        !intent_allowed_scope
+            .iter()
+            .filter_map(|intent| normalize_scope_entry(intent))
+            .any(|intent| scope_entry_covered_by(&scope, &intent))
+    })
+}
+
+fn normalize_scope_entry(entry: &str) -> Option<String> {
+    let mut s = entry.trim();
+    while let Some(stripped) = s.strip_prefix("./") {
+        s = stripped;
+    }
+    s = s.trim_end_matches('/');
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+fn scope_entry_covered_by(scope: &str, intent_scope: &str) -> bool {
+    if intent_scope == "." || scope == intent_scope {
+        return true;
+    }
+    if simple_glob_match(intent_scope, scope) {
+        return true;
+    }
+    scope
+        .strip_prefix(intent_scope)
+        .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn simple_glob_match(pattern: &str, text: &str) -> bool {
+    if !pattern.contains('*') {
+        return false;
+    }
+    fn matches(pattern: &[u8], text: &[u8], pi: usize, ti: usize) -> bool {
+        if pi == pattern.len() {
+            return ti == text.len();
+        }
+        if pattern[pi] == b'*' {
+            if pi + 1 < pattern.len() && pattern[pi + 1] == b'*' {
+                let mut next = pi + 2;
+                while next < pattern.len() && pattern[next] == b'*' {
+                    next += 1;
+                }
+                return (ti..=text.len()).any(|i| matches(pattern, text, next, i));
+            }
+            let mut i = ti;
+            loop {
+                if matches(pattern, text, pi + 1, i) {
+                    return true;
+                }
+                if i == text.len() || text[i] == b'/' {
+                    return false;
+                }
+                i += 1;
+            }
+        }
+        ti < text.len() && pattern[pi] == text[ti] && matches(pattern, text, pi + 1, ti + 1)
+    }
+    matches(pattern.as_bytes(), text.as_bytes(), 0, 0)
+}
+
+fn scope_escape_approval() -> yaml::Value {
+    yaml::from_str("required: true").expect("static approval yaml parses")
 }
 
 /// Inject a "must run before" dependency: make each existing task named in
@@ -1799,7 +1873,7 @@ routing:
                 ..Default::default()
             },
         ];
-        let ingested = ingest_follow_ups(&mut queue, &fus);
+        let ingested = ingest_follow_ups(&mut queue, &[], &fus);
 
         // Only "add tests" survives, as the next YARD id.
         assert_eq!(ingested, vec!["YARD-002".to_string()]);
@@ -1816,6 +1890,47 @@ routing:
             .contains("coverage gap"));
         // Total: original + one ingested (blank + dup were not added).
         assert_eq!(queue.tasks.len(), 2);
+    }
+
+    #[test]
+    fn ingest_follow_ups_gates_scope_escape_only() {
+        use crate::schemas::FollowUpTask;
+        let plan: PlanningResult = serde_json::from_str(
+            r#"{ "summary": "s", "tasks": [{ "id": "YARD-001", "title": "existing", "risk": "low" }] }"#,
+        )
+        .unwrap();
+        let mut queue = build_queue("intent-x", &plan);
+        let intent_scope = vec!["src".to_string()];
+
+        let ingested = ingest_follow_ups(
+            &mut queue,
+            &intent_scope,
+            &[
+                FollowUpTask {
+                    title: "write docs".into(),
+                    reason: "adjacent doc idea".into(),
+                    allowed_scope: vec!["docs/*.md".into()],
+                    ..Default::default()
+                },
+                FollowUpTask {
+                    title: "touch planner".into(),
+                    reason: "same intent scope".into(),
+                    allowed_scope: vec!["src/planner.rs".into()],
+                    ..Default::default()
+                },
+            ],
+        );
+
+        assert_eq!(
+            ingested,
+            vec!["YARD-002".to_string(), "YARD-003".to_string()]
+        );
+        let escaping = queue.tasks.iter().find(|t| t.id == "YARD-002").unwrap();
+        let within = queue.tasks.iter().find(|t| t.id == "YARD-003").unwrap();
+        assert!(escaping.approval_required());
+        assert!(!within.approval_required());
+        assert_eq!(escaping.provenance, "worker-proposed");
+        assert_eq!(within.provenance, "worker-proposed");
     }
 
     #[test]
@@ -1838,6 +1953,7 @@ routing:
 
         let ingested = ingest_follow_ups(
             &mut queue,
+            &[],
             &[FollowUpTask {
                 title: "urgent regen".into(),
                 reason: "hit a capability ceiling".into(),
@@ -1856,6 +1972,7 @@ routing:
         // The default (append) still lands after the current max.
         let ingested = ingest_follow_ups(
             &mut queue,
+            &[],
             &[FollowUpTask {
                 title: "later cleanup".into(),
                 reason: "tidy up".into(),
@@ -1882,6 +1999,7 @@ routing:
         let mut queue = build_queue("i", &plan);
         let ingested = ingest_follow_ups(
             &mut queue,
+            &[],
             &[FollowUpTask {
                 title: "prerequisite".into(),
                 reason: "must run first".into(),
@@ -1906,6 +2024,7 @@ routing:
         let mut q2 = build_queue("i", &plan);
         ingest_follow_ups(
             &mut q2,
+            &[],
             &[FollowUpTask {
                 title: "cyclic".into(),
                 reason: "r".into(),

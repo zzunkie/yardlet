@@ -1466,7 +1466,7 @@ fn save_task_state_on_latest_queue(
     task_id: &str,
     state: TaskState,
 ) -> Result<()> {
-    finalize_on_latest_queue(ws, fallback_queue, task_id, state, &[], None).map(|_| ())
+    finalize_on_latest_queue(ws, fallback_queue, task_id, state, &[], &[], None).map(|_| ())
 }
 
 /// Re-point a finished review at the queue (1c review auto-remediation): set its
@@ -1547,6 +1547,7 @@ fn finalize_on_latest_queue(
     fallback_queue: &mut WorkQueue,
     task_id: &str,
     state: TaskState,
+    intent_allowed_scope: &[String],
     follow_ups: &[crate::schemas::FollowUpTask],
     workers: Option<&WorkersFile>,
 ) -> Result<Vec<String>> {
@@ -1561,7 +1562,8 @@ fn finalize_on_latest_queue(
     let mut latest = ws.load_queue().unwrap_or_else(|_| fallback_queue.clone());
     if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == task_id) {
         t.state = state;
-        let ingested = crate::planner::ingest_follow_ups(&mut latest, follow_ups);
+        let ingested =
+            crate::planner::ingest_follow_ups(&mut latest, intent_allowed_scope, follow_ups);
         reconcile(&mut latest);
         ws.save_queue(&latest)?;
         *fallback_queue = latest;
@@ -1573,7 +1575,8 @@ fn finalize_on_latest_queue(
     if let Some(t) = fallback_queue.tasks.iter_mut().find(|t| t.id == task_id) {
         t.state = state;
     }
-    let ingested = crate::planner::ingest_follow_ups(fallback_queue, follow_ups);
+    let ingested =
+        crate::planner::ingest_follow_ups(fallback_queue, intent_allowed_scope, follow_ups);
     reconcile(fallback_queue);
     ws.save_queue(fallback_queue)?;
     Ok(ingested)
@@ -1899,11 +1902,21 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // capabilities; if workers.yaml can't be read we skip grounding rather than
     // false-park everything.
     let workers = ws.load_workers().ok();
+    let intent_allowed_scope = if flags.follow_ups {
+        ws.load_intent()
+            .ok()
+            .flatten()
+            .map(|i| i.allowed_scope)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let ingested = finalize_on_latest_queue(
         ws,
         queue,
         &task.id,
         next_state,
+        &intent_allowed_scope,
         &follow_ups,
         workers.as_ref(),
     )?;
