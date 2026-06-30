@@ -1562,8 +1562,12 @@ fn finalize_on_latest_queue(
     let mut latest = ws.load_queue().unwrap_or_else(|_| fallback_queue.clone());
     if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == task_id) {
         t.state = state;
-        let ingested =
-            crate::planner::ingest_follow_ups(&mut latest, intent_allowed_scope, follow_ups);
+        let ingested = crate::planner::ingest_follow_ups(
+            &mut latest,
+            intent_allowed_scope,
+            follow_ups,
+            Some(ws),
+        );
         reconcile(&mut latest);
         ws.save_queue(&latest)?;
         *fallback_queue = latest;
@@ -1575,8 +1579,12 @@ fn finalize_on_latest_queue(
     if let Some(t) = fallback_queue.tasks.iter_mut().find(|t| t.id == task_id) {
         t.state = state;
     }
-    let ingested =
-        crate::planner::ingest_follow_ups(fallback_queue, intent_allowed_scope, follow_ups);
+    let ingested = crate::planner::ingest_follow_ups(
+        fallback_queue,
+        intent_allowed_scope,
+        follow_ups,
+        Some(ws),
+    );
     reconcile(fallback_queue);
     ws.save_queue(fallback_queue)?;
     Ok(ingested)
@@ -2113,29 +2121,42 @@ pub(crate) fn partial_is_conflict(ws: &Workspace, task_id: &str) -> bool {
 /// The most recent unanswered question a worker left for a given task, if any.
 pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
     let mut best: Option<(SystemTime, String)> = None;
-    for entry in std::fs::read_dir(ws.runs_dir()).ok()?.flatten() {
-        let result_path = entry.path().join("result.json");
-        let Ok(text) = std::fs::read_to_string(&result_path) else {
-            continue;
-        };
-        let Ok(result) = serde_json::from_str::<RunResult>(&text) else {
-            continue;
-        };
-        if result.task_id != task_id {
-            continue;
-        }
-        let Some(q) = result.question_for_user.filter(|q| !q.trim().is_empty()) else {
-            continue;
-        };
-        let mtime = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(UNIX_EPOCH);
-        if best.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
-            best = Some((mtime, q));
+    if let Ok(entries) = std::fs::read_dir(ws.runs_dir()) {
+        for entry in entries.flatten() {
+            let result_path = entry.path().join("result.json");
+            let Ok(text) = std::fs::read_to_string(&result_path) else {
+                continue;
+            };
+            let Ok(result) = serde_json::from_str::<RunResult>(&text) else {
+                continue;
+            };
+            if result.task_id != task_id {
+                continue;
+            }
+            let Some(q) = result.question_for_user.filter(|q| !q.trim().is_empty()) else {
+                continue;
+            };
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(UNIX_EPOCH);
+            if best.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
+                best = Some((mtime, q));
+            }
         }
     }
-    best.map(|(_, q)| q)
+    if let Some((_, q)) = best {
+        return Some(q);
+    }
+    // Fallback: a question seeded straight into the conversation (a
+    // worker-proposed DECISION follow-up ingested as NeedsUser) has no run
+    // result.json. It is pending only while unanswered — i.e. the last turn is
+    // still the worker's; once the user replies, the last turn is theirs.
+    let conv = ws.load_conversation(task_id);
+    match conv.turns.last() {
+        Some(t) if t.role == TurnRole::Worker && !t.text.trim().is_empty() => Some(t.text.clone()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -2210,6 +2231,60 @@ mod tests {
             accept_ambiguity: false,
             chain: None,
         }
+    }
+
+    #[test]
+    fn decision_follow_up_seeds_question_and_resolves_on_answer() {
+        // End-to-end of the human-decision path: a worker-proposed DECISION
+        // follow-up parks NeedsUser (capability dropped), its question is seeded
+        // into the conversation so `status` surfaces it, and it stops being a
+        // pending question once the user answers.
+        use crate::schemas::{ConversationTurn, FollowUpTask, TurnRole};
+        let root = std::env::temp_dir().join(format!("yard-decision-fu-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let mut q = queue(vec![task("YARD-001", TaskState::Done, 10, false)]);
+
+        let ingested = crate::planner::ingest_follow_ups(
+            &mut q,
+            &[],
+            &[FollowUpTask {
+                title: "pick a signature character".into(),
+                reason: "creative A/B choice".into(),
+                required_capabilities: vec!["user-creative-direction-approval".into()],
+                decision_question: "Option A or B?".into(),
+                ..Default::default()
+            }],
+            Some(&ws),
+        );
+        let id = ingested.first().expect("one follow-up ingested").clone();
+
+        let t = q.tasks.iter().find(|t| t.id == id).unwrap();
+        assert_eq!(t.state, TaskState::NeedsUser);
+        assert!(t.required_capabilities.is_empty());
+        assert_eq!(
+            latest_question_for(&ws, &id).as_deref(),
+            Some("Option A or B?"),
+            "seeded question must surface as the pending question"
+        );
+
+        crate::state::append_conversation_turn(
+            &ws,
+            &id,
+            ConversationTurn {
+                role: TurnRole::User,
+                text: "A".into(),
+                run_id: String::new(),
+                ts: String::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            latest_question_for(&ws, &id),
+            None,
+            "an answered decision is no longer a pending question"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -2681,6 +2756,7 @@ mod tests {
                 depends_on: vec![],
                 preferred_worker: String::new(),
                 required_capabilities: vec![],
+                decision_question: String::new(),
                 worker_rationale: None,
                 insert: String::new(),
                 runs_before: vec![],

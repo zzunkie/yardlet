@@ -11,6 +11,14 @@
 
 ### Fixed
 
+- **Human decisions are questions, not capabilities.** A worker can now mark a
+  proposed follow-up that is really a human choice/approval with a
+  `decision_question`; Yardlet ingests it as `needs_user` (seeding the question
+  so `yardlet status` shows it and `yardlet answer` resolves it) and drops any
+  `required_capabilities` on it. Previously such a decision could only be
+  expressed as an off-vocab capability, which parked the task `Blocked` with no
+  clean resolver. `required_capabilities` now means strictly a tool/skill/license
+  a worker needs; the planner/worker prompts no longer conflate the two.
 - **Scope-gated follow-ups.** A worker-proposed follow-up task whose
   `allowed_scope` reaches outside the parent intent's `allowed_scope` is now
   ingested as approval-required: the drain skips it until `yardlet approve`

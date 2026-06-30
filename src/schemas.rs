@@ -652,6 +652,15 @@ pub struct FollowUpTask {
     pub preferred_worker: String,
     #[serde(default)]
     pub required_capabilities: Vec<String>,
+    /// If set, this follow-up is a HUMAN DECISION (a choice/approval only the
+    /// user can make), not work a worker can do unattended. Yardlet ingests it
+    /// as `NeedsUser` with this text as the seeded question, and `yardlet answer`
+    /// resolves it — instead of the decision being mis-filed as a fake
+    /// `required_capabilities` entry that would park the task `Blocked` with no
+    /// clean resolver. Reserve `required_capabilities` for a worker's
+    /// tool/skill/license need; a human decision is a question, never a capability.
+    #[serde(default)]
+    pub decision_question: String,
     #[serde(default)]
     pub worker_rationale: Option<String>,
     /// Where to place this task. `"next"` = run before the tasks already

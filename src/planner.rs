@@ -816,6 +816,7 @@ pub(crate) fn ingest_follow_ups(
     queue: &mut WorkQueue,
     intent_allowed_scope: &[String],
     follow_ups: &[crate::schemas::FollowUpTask],
+    ws: Option<&crate::state::Workspace>,
 ) -> Vec<String> {
     let mut next_num = queue
         .tasks
@@ -867,10 +868,22 @@ pub(crate) fn ingest_follow_ups(
             let r = fu.reason.trim();
             (!r.is_empty()).then(|| format!("worker-proposed follow-up: {r}"))
         });
+        // A follow-up that is a HUMAN DECISION (a choice/approval only the user
+        // can make) is ingested as NeedsUser with its question seeded into the
+        // conversation, and any `required_capabilities` is dropped: the decision
+        // is resolved by `yardlet answer`, not routed to a worker that "declares"
+        // some invented approval capability (which only parks it Blocked with no
+        // clean resolver). Reserve capabilities for a worker's tool/license need.
+        let decision = fu.decision_question.trim();
+        let is_decision = !decision.is_empty();
         queue.tasks.push(Task {
             id: id.clone(),
             title: title.to_string(),
-            state: TaskState::Queued,
+            state: if is_decision {
+                TaskState::NeedsUser
+            } else {
+                TaskState::Queued
+            },
             priority,
             risk: fu.risk.clone(),
             kind: fu.kind.clone(),
@@ -879,7 +892,11 @@ pub(crate) fn ingest_follow_ups(
             effort: String::new(),
             depends_on: sanitize_deps(&fu.depends_on, &prior_ids),
             skills: fu.skills.clone(),
-            required_capabilities: fu.required_capabilities.clone(),
+            required_capabilities: if is_decision {
+                Vec::new()
+            } else {
+                fu.required_capabilities.clone()
+            },
             allowed_scope: fu.allowed_scope.clone(),
             acceptance: fu
                 .acceptance
@@ -895,6 +912,24 @@ pub(crate) fn ingest_follow_ups(
         });
         // HARD placement: make each named existing task depend on this new one.
         inject_runs_before(queue, &id, &fu.runs_before);
+        // Seed the decision question as the worker's opening conversation turn so
+        // `yardlet status` surfaces it and `yardlet answer` threads it back to the
+        // worker on resume. `ws` is None in unit tests (which assert only the
+        // queue mutation).
+        if is_decision {
+            if let Some(ws) = ws {
+                let _ = crate::state::append_conversation_turn(
+                    ws,
+                    &id,
+                    crate::schemas::ConversationTurn {
+                        role: crate::schemas::TurnRole::Worker,
+                        text: decision.to_string(),
+                        run_id: String::new(),
+                        ts: String::new(),
+                    },
+                );
+            }
+        }
         ingested.push(id);
         next_num += 1;
     }
@@ -1341,14 +1376,19 @@ fn build_worker_guidance(workers: &WorkersFile) -> String {
     if !caps.is_empty() {
         let list = caps.into_iter().collect::<Vec<_>>().join(", ");
         g.push_str(&format!(
-            "\nCapabilities are HARD constraints. For special work a listed worker CAN do, set the \
-             task's `required_capabilities` to the matching capability from [{list}] (exact \
-             string): routing then runs only a worker that declares it. Decide from the task's \
-             meaning, not keywords; leave it empty when no special capability is needed. For work \
-             that genuinely needs something NO listed worker can do (licensing, procurement, an \
-             external or human decision), name that needed capability anyway even though it is not \
-             in [{list}] — Yardlet parks such a task for a human instead of mis-running it. So: a \
-             capability IN [{list}] routes to a worker; one OUTSIDE it flags a human-gated task.\n"
+            "\nCapabilities are HARD routing constraints and name TOOLS A WORKER NEEDS. For \
+             special work a listed worker CAN do, set the task's `required_capabilities` to the \
+             matching capability from [{list}] (exact string): routing then runs only a worker \
+             that declares it. Decide from the task's meaning, not keywords; leave it empty when \
+             no special tool is needed. Do NOT conflate two different off-list cases: (1) a pure \
+             HUMAN DECISION / choice / approval that a worker can carry out once answered (pick A \
+             vs B, sign off on a direction) is NOT a capability — never invent one for it; raise \
+             it in `questions_for_user` so Yardlet asks the user, not as a dead-end. (2) work that \
+             needs a TOOL / ASSET / LICENSE / external resource NO listed worker has — THEN name \
+             that needed capability even though it is not in [{list}], so Yardlet parks it for a \
+             human to add a worker or provide the resource. So: a capability IN [{list}] routes to \
+             a worker; an off-list capability flags a genuine tool/resource gap; a human decision \
+             is a question, never a capability.\n"
         ));
     }
     g
@@ -1873,7 +1913,7 @@ routing:
                 ..Default::default()
             },
         ];
-        let ingested = ingest_follow_ups(&mut queue, &[], &fus);
+        let ingested = ingest_follow_ups(&mut queue, &[], &fus, None);
 
         // Only "add tests" survives, as the next YARD id.
         assert_eq!(ingested, vec!["YARD-002".to_string()]);
@@ -1919,6 +1959,7 @@ routing:
                     ..Default::default()
                 },
             ],
+            None,
         );
 
         assert_eq!(
@@ -1931,6 +1972,60 @@ routing:
         assert!(!within.approval_required());
         assert_eq!(escaping.provenance, "worker-proposed");
         assert_eq!(within.provenance, "worker-proposed");
+    }
+
+    #[test]
+    fn ingest_decision_follow_up_parks_needs_user_and_drops_capability() {
+        use crate::schemas::FollowUpTask;
+        let plan: PlanningResult = serde_json::from_str(
+            r#"{ "summary": "s", "tasks": [{ "id": "YARD-001", "title": "existing", "risk": "low" }] }"#,
+        )
+        .unwrap();
+        let mut queue = build_queue("intent-x", &plan);
+
+        let ingested = ingest_follow_ups(
+            &mut queue,
+            &[],
+            &[
+                FollowUpTask {
+                    title: "wire signature character".into(),
+                    reason: "a creative A/B choice".into(),
+                    // A worker mis-filing a human decision as a capability: the
+                    // decision_question must win, dropping the fake capability.
+                    required_capabilities: vec!["user-creative-direction-approval".into()],
+                    decision_question: "Wire character X to dept A, or author a new dept B?".into(),
+                    ..Default::default()
+                },
+                FollowUpTask {
+                    title: "real tool gap".into(),
+                    reason: "needs a tool no worker has".into(),
+                    required_capabilities: vec!["image_generation".into()],
+                    ..Default::default()
+                },
+            ],
+            None,
+        );
+
+        assert_eq!(
+            ingested,
+            vec!["YARD-002".to_string(), "YARD-003".to_string()]
+        );
+        // A human decision parks as NeedsUser with NO capability (resolved by
+        // `yardlet answer`), not Blocked behind an invented capability.
+        let decision = queue.tasks.iter().find(|t| t.id == "YARD-002").unwrap();
+        assert_eq!(decision.state, TaskState::NeedsUser);
+        assert!(
+            decision.required_capabilities.is_empty(),
+            "a decision follow-up must drop required_capabilities"
+        );
+        // A genuine tool need keeps its capability and stays Queued (routing /
+        // reconcile decides routability later; it is not a human decision).
+        let tool = queue.tasks.iter().find(|t| t.id == "YARD-003").unwrap();
+        assert_eq!(tool.state, TaskState::Queued);
+        assert_eq!(
+            tool.required_capabilities,
+            vec!["image_generation".to_string()]
+        );
     }
 
     #[test]
@@ -1960,6 +2055,7 @@ routing:
                 insert: "next".into(),
                 ..Default::default()
             }],
+            None,
         );
         assert_eq!(ingested, vec!["YARD-003".to_string()]);
         let t = queue.tasks.iter().find(|t| t.id == "YARD-003").unwrap();
@@ -1978,6 +2074,7 @@ routing:
                 reason: "tidy up".into(),
                 ..Default::default()
             }],
+            None,
         );
         assert_eq!(ingested, vec!["YARD-004".to_string()]);
         let appended = queue.tasks.iter().find(|t| t.id == "YARD-004").unwrap();
@@ -2006,6 +2103,7 @@ routing:
                 runs_before: vec!["YARD-002".into(), "YARD-003".into(), "NOPE".into()],
                 ..Default::default()
             }],
+            None,
         );
         assert_eq!(ingested, vec!["YARD-003".to_string()]);
         let target = queue.tasks.iter().find(|t| t.id == "YARD-002").unwrap();
@@ -2032,6 +2130,7 @@ routing:
                 runs_before: vec!["YARD-002".into()],
                 ..Default::default()
             }],
+            None,
         );
         let y2 = q2.tasks.iter().find(|t| t.id == "YARD-002").unwrap();
         assert!(

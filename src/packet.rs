@@ -811,9 +811,21 @@ pub fn compile(inputs: &PacketInputs) -> String {
          `.agents/work-queue.yaml` \u{2014} Yardlet owns the queue. PROPOSE it in `result.json` \
          under `follow_up_tasks`: each entry needs a `title` and a `reason` (why it exists), \
          plus optional `kind`, `risk`, `allowed_scope`, `acceptance`, `skills`, `depends_on`, \
-         `preferred_worker`, `required_capabilities`. Yardlet assigns the id and priority, \
-         validates, dedups, and enqueues it as a tracked candidate. Stay within THIS task's \
-         scope; a follow-up is a candidate for later, not license to expand the current task.\n\n",
+         `preferred_worker`, `required_capabilities`, `decision_question`. Yardlet assigns the id \
+         and priority, validates, dedups, and enqueues it as a tracked candidate. Stay within \
+         THIS task's scope; a follow-up is a candidate for later, not license to expand the \
+         current task.\n\n",
+    );
+    p.push_str(
+        "`required_capabilities` names TOOLS A WORKER NEEDS (e.g. image generation) and gates \
+         routing to a worker that declares them. A follow-up that is really a HUMAN DECISION \u{2014} \
+         a choice or approval only the user can make (pick A vs B, sign off on a direction) \u{2014} \
+         is NOT a capability: never invent one like `user-creative-direction-approval` for it. \
+         Instead set `decision_question` to what to ask; Yardlet ingests the follow-up as \
+         `needs_user` with that question and resumes it once the user answers, instead of parking \
+         it Blocked with no resolver. Use `required_capabilities` only for a genuine tool / asset \
+         / license gap a worker lacks (there Blocked-until-a-worker-is-added is the right \
+         outcome).\n\n",
     );
     p.push_str(
         "If a follow-up must run BEFORE work already queued (e.g. you hit a capability \
@@ -1110,6 +1122,7 @@ const RESULT_SCHEMA_HINT: &str = r#"```json
       "kind": "implementation|review|...", "risk": "low|medium|high",
       "acceptance": ["..."], "allowed_scope": ["..."], "depends_on": [],
       "preferred_worker": "", "required_capabilities": [],
+      "decision_question": "<set ONLY if this is a human choice/approval; Yardlet asks the user, leave \"\" otherwise>",
       "insert": "end|next", "runs_before": [] }
   ]
 }
