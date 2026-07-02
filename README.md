@@ -212,7 +212,9 @@ are mapped to the same shortcuts.
 | `yardlet run --auto [--parallel N]` | Drain the queue autonomously; optionally N tasks at once. |
 | `yardlet answer "<reply>"` | Answer a task waiting on you (NeedsUser) and resume it. |
 | `yardlet approve <id>` | Grant single-use approval to a gated task. |
-| `yardlet defer <id> [reason]` | Set a task aside by decision (Deferred, not pending and not done); revive by re-queuing. |
+| `yardlet defer <id> [reason]` | Set one task aside by decision (Deferred, not pending and not done). |
+| `yardlet defer <id> --cascade [reason]` | Also defer queued tasks stranded behind it, transitively, as one revive group. |
+| `yardlet revive <id> [--group]` | Return a Deferred task to Queued; `--group` revives the cascade group recorded with it. |
 | `yardlet handoff` | Print the latest run's handoff. |
 | `yardlet report` | Print the intent's final report (aggregate of every task). |
 | `yardlet memory` | List the project-memory index; flags docs possibly stale vs their `look_at` landmarks. |

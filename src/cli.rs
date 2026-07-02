@@ -50,6 +50,8 @@ pub enum Command {
     Approve(ApproveArgs),
     /// Set a task aside by decision (Deferred: not pending, not done).
     Defer(DeferArgs),
+    /// Bring a Deferred task back to Queued.
+    Revive(ReviveArgs),
     /// Set the default worker permission: sandboxed | full.
     Access(AccessArgs),
     /// Print the latest run's handoff.
@@ -164,8 +166,20 @@ pub struct ApproveArgs {
 pub struct DeferArgs {
     /// The task id to set aside.
     task: String,
+    /// Also defer queued tasks stranded behind this one, transitively.
+    #[arg(long)]
+    cascade: bool,
     /// Why you are deferring it (recorded on the task).
     reason: Vec<String>,
+}
+
+#[derive(Args)]
+pub struct ReviveArgs {
+    /// The Deferred task id to return to Queued.
+    task: String,
+    /// Revive every Deferred task recorded in the same cascade-defer group.
+    #[arg(long)]
+    group: bool,
 }
 
 #[derive(Args)]
@@ -332,6 +346,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Answer(a)) => cmd_answer(&cwd, a),
         Some(Command::Approve(a)) => cmd_approve(&cwd, a),
         Some(Command::Defer(a)) => cmd_defer(&cwd, a),
+        Some(Command::Revive(a)) => cmd_revive(&cwd, a),
         Some(Command::Access(a)) => cmd_access(&cwd, a),
         Some(Command::Handoff) => cmd_handoff(&cwd),
         Some(Command::Report) => cmd_report(&cwd),
@@ -909,77 +924,72 @@ fn cmd_approve(cwd: &std::path::Path, args: ApproveArgs) -> Result<()> {
 }
 
 fn cmd_defer(cwd: &std::path::Path, args: DeferArgs) -> Result<()> {
-    use crate::schemas::TaskState;
     let ws = init::ensure_initialized(cwd)?.0;
     let mut queue = ws.load_queue()?;
     let reason = args.reason.join(" ");
-    let Some(t) = queue.tasks.iter_mut().find(|t| t.id == args.task) else {
-        anyhow::bail!("task '{}' not found in the queue", args.task);
-    };
-    match t.state {
-        TaskState::Done => anyhow::bail!("{} is already done; nothing to defer", args.task),
-        TaskState::Running => {
-            anyhow::bail!(
-                "{} is running; let it finish or recover it first",
-                args.task
-            )
-        }
-        _ => {}
-    }
-    t.state = TaskState::Deferred;
-    if !reason.trim().is_empty() {
-        let note = format!("deferred by you: {}", reason.trim());
-        t.worker_rationale = Some(match t.worker_rationale.take() {
-            Some(r) if !r.trim().is_empty() => format!("{r}\n{note}"),
-            _ => note,
-        });
-    }
     let id = args.task.clone();
-    // A dependency is satisfied only by Done, so deferring a task strands every
-    // QUEUED task that depends on it — and, transitively, every queued task gated
-    // behind those — so a whole stalled chain is surfaced, not just the direct
-    // dependents. Growth is Queued-only (mirroring the drain/status stuck-chain
-    // closure): an already-terminal Failed/Blocked/NeedsUser dependent is not
-    // "stranded by this defer" (reviving the deferred task would not start it),
-    // so it must not be listed.
-    let mut dead: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    dead.insert(id.as_str());
-    loop {
-        let mut grew = false;
-        for t in &queue.tasks {
-            if t.state == TaskState::Queued
-                && !dead.contains(t.id.as_str())
-                && t.depends_on.iter().any(|d| dead.contains(d.as_str()))
-            {
-                dead.insert(t.id.as_str());
-                grew = true;
-            }
-        }
-        if !grew {
-            break;
-        }
-    }
-    let stranded: Vec<&str> = queue
-        .tasks
-        .iter()
-        .filter(|t| t.id != id && dead.contains(t.id.as_str()))
-        .map(|t| t.id.as_str())
-        .collect();
-    let stranded_note = if stranded.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\nWARNING: {} now cannot run (they depend on it): {}. Defer or re-scope them too, \
-             or revive {id}.",
-            stranded.len(),
-            stranded.join(", ")
-        )
-    };
+    let outcome = queue
+        .defer_task(&id, args.cascade, &reason)
+        .map_err(anyhow::Error::msg)?;
     ws.save_queue(&queue)?;
-    println!(
-        "Deferred {id}: set aside, not pending and not done. The intent can wrap with it on \
-         record. Revive it by re-queuing or a new plan.{stranded_note}"
-    );
+    if args.cascade && outcome.deferred.len() > 1 {
+        println!(
+            "Deferred {} tasks as group {}: {}",
+            outcome.deferred.len(),
+            outcome.group_id,
+            outcome.deferred.join(", ")
+        );
+        println!("Revive the whole group:  yardlet revive {id} --group");
+        println!("Revive only {id}:       yardlet revive {id}");
+    } else {
+        println!(
+            "Deferred {id}: set aside, not pending and not done. Revive it with `yardlet revive {id}`."
+        );
+    }
+    if !args.cascade && !outcome.stranded.is_empty() {
+        println!(
+            "WARNING: {} queued task(s) now cannot run because they depend on {id}: {}.",
+            outcome.stranded.len(),
+            outcome.stranded.join(", ")
+        );
+        println!("  Defer the stranded chain:  yardlet defer {id} --cascade");
+        println!("  Revive {id}:              yardlet revive {id}");
+    }
+    Ok(())
+}
+
+fn cmd_revive(cwd: &std::path::Path, args: ReviveArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let mut queue = ws.load_queue()?;
+    let outcome = queue
+        .revive_task(&args.task, args.group)
+        .map_err(anyhow::Error::msg)?;
+    ws.save_queue(&queue)?;
+
+    if outcome.revived.len() == 1 {
+        println!(
+            "Revived {}: queued again. Run it with `yardlet run --task {} --execute`.",
+            outcome.revived[0], outcome.revived[0]
+        );
+    } else {
+        println!(
+            "Revived {} tasks: {}",
+            outcome.revived.len(),
+            outcome.revived.join(", ")
+        );
+        println!("Run the queue with `yardlet run --auto --execute`.");
+    }
+
+    if !outcome.blocked_dependencies.is_empty() {
+        println!("WARNING: revived task(s) still have dependency blockers:");
+        for dep in outcome.blocked_dependencies {
+            println!(
+                "  {} depends on {} ({:?})",
+                dep.task_id, dep.dependency_id, dep.dependency_state
+            );
+        }
+        println!("  Resolve or revive those dependencies before the task can run.");
+    }
     Ok(())
 }
 
@@ -1293,6 +1303,8 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         .collect();
     if !deferred.is_empty() {
         println!("\ndeferred (set aside by you): {}", deferred.join(", "));
+        println!("  revive one:    yardlet revive <id>");
+        println!("  revive group:  yardlet revive <id> --group");
     }
     let needs_approval: Vec<&str> = snap
         .queue

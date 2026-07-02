@@ -6,6 +6,7 @@
 //! model does not over-constrain user-edited files.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::yaml;
 
@@ -293,6 +294,41 @@ pub struct Task {
     pub provenance: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeferredBy {
+    pub group_id: String,
+    pub root_task_id: String,
+}
+
+impl DeferredBy {
+    pub fn new(root_task_id: &str) -> Self {
+        Self {
+            group_id: format!("defer:{root_task_id}"),
+            root_task_id: root_task_id.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferOutcome {
+    pub group_id: String,
+    pub deferred: Vec<String>,
+    pub stranded: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviveOutcome {
+    pub revived: Vec<String>,
+    pub blocked_dependencies: Vec<ReviveBlockedDependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviveBlockedDependency {
+    pub task_id: String,
+    pub dependency_id: String,
+    pub dependency_state: TaskState,
+}
+
 impl Task {
     /// Does this task require an explicit approval before it may run?
     pub fn approval_required(&self) -> bool {
@@ -315,6 +351,46 @@ impl Task {
             .and_then(|v| v.get("required"))
             .and_then(|r| r.as_bool())
             .unwrap_or(false)
+    }
+
+    pub fn deferred_by(&self) -> Option<DeferredBy> {
+        let deferred = self.interaction.as_ref()?.get("deferred_by")?;
+        Some(DeferredBy {
+            group_id: deferred.get("group_id")?.as_str()?.to_string(),
+            root_task_id: deferred.get("root_task_id")?.as_str()?.to_string(),
+        })
+    }
+
+    pub fn set_deferred_by(&mut self, deferred_by: Option<DeferredBy>) {
+        let key = yaml::Value::String("deferred_by".to_string());
+        match deferred_by {
+            Some(deferred_by) => {
+                let mut root = match self.interaction.take() {
+                    Some(yaml::Value::Mapping(m)) => m,
+                    _ => serde_yaml_ng::Mapping::new(),
+                };
+                let mut nested = serde_yaml_ng::Mapping::new();
+                nested.insert(
+                    yaml::Value::String("group_id".to_string()),
+                    yaml::Value::String(deferred_by.group_id),
+                );
+                nested.insert(
+                    yaml::Value::String("root_task_id".to_string()),
+                    yaml::Value::String(deferred_by.root_task_id),
+                );
+                root.insert(key, yaml::Value::Mapping(nested));
+                self.interaction = Some(yaml::Value::Mapping(root));
+            }
+            None => match self.interaction.take() {
+                Some(yaml::Value::Mapping(mut root)) => {
+                    root.remove(&key);
+                    self.interaction = (!root.is_empty()).then_some(yaml::Value::Mapping(root));
+                }
+                other => {
+                    self.interaction = other;
+                }
+            },
+        }
     }
 }
 
@@ -343,6 +419,149 @@ impl WorkQueue {
                 .find(|t| &t.id == dep)
                 .map(|t| t.state == TaskState::Done)
                 .unwrap_or(true)
+        })
+    }
+
+    /// Queued tasks stranded by setting `task_id` aside. This mirrors the
+    /// queue-drain stuck-chain rule: growth is Queued-only and transitive.
+    pub fn stranded_by(&self, task_id: &str) -> Vec<String> {
+        let mut dead: HashSet<String> = HashSet::new();
+        dead.insert(task_id.to_string());
+        loop {
+            let mut grew = false;
+            for t in &self.tasks {
+                if t.state == TaskState::Queued
+                    && !dead.contains(&t.id)
+                    && t.depends_on.iter().any(|d| dead.contains(d))
+                {
+                    dead.insert(t.id.clone());
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        self.tasks
+            .iter()
+            .filter(|t| t.id != task_id && dead.contains(&t.id))
+            .map(|t| t.id.clone())
+            .collect()
+    }
+
+    pub fn defer_task(
+        &mut self,
+        task_id: &str,
+        cascade: bool,
+        reason: &str,
+    ) -> Result<DeferOutcome, String> {
+        let Some(target) = self.tasks.iter().find(|t| t.id == task_id) else {
+            return Err(format!("task '{task_id}' not found in the queue"));
+        };
+        match target.state {
+            TaskState::Done => return Err(format!("{task_id} is already done; nothing to defer")),
+            TaskState::Running => {
+                return Err(format!(
+                    "{task_id} is running; let it finish or recover it first"
+                ))
+            }
+            _ => {}
+        }
+
+        let stranded = self.stranded_by(task_id);
+        let mut deferred = vec![task_id.to_string()];
+        if cascade {
+            deferred.extend(stranded.iter().cloned());
+        }
+        let group = DeferredBy::new(task_id);
+        let reason = reason.trim();
+        for t in self.tasks.iter_mut().filter(|t| deferred.contains(&t.id)) {
+            t.state = TaskState::Deferred;
+            t.set_deferred_by(Some(group.clone()));
+            if t.id == task_id && !reason.is_empty() {
+                let note = format!("deferred by you: {reason}");
+                t.worker_rationale = Some(match t.worker_rationale.take() {
+                    Some(r) if !r.trim().is_empty() => format!("{r}\n{note}"),
+                    _ => note,
+                });
+            }
+        }
+
+        Ok(DeferOutcome {
+            group_id: group.group_id,
+            deferred,
+            stranded,
+        })
+    }
+
+    pub fn revive_task(&mut self, task_id: &str, group: bool) -> Result<ReviveOutcome, String> {
+        let Some(target) = self.tasks.iter().find(|t| t.id == task_id) else {
+            return Err(format!("task '{task_id}' not found in the queue"));
+        };
+        match target.state {
+            TaskState::Done => return Err(format!("{task_id} is already done; cannot revive")),
+            TaskState::Running => return Err(format!("{task_id} is running; cannot revive")),
+            TaskState::Deferred => {}
+            other => {
+                return Err(format!(
+                    "{task_id} is {other:?}; only Deferred tasks can be revived"
+                ))
+            }
+        }
+
+        let group_id = target.deferred_by().map(|d| d.group_id);
+        let revive_ids: Vec<String> = if group {
+            if let Some(group_id) = group_id {
+                self.tasks
+                    .iter()
+                    .filter(|t| {
+                        t.state == TaskState::Deferred
+                            && t.deferred_by().is_some_and(|d| d.group_id == group_id)
+                    })
+                    .map(|t| t.id.clone())
+                    .collect()
+            } else {
+                vec![task_id.to_string()]
+            }
+        } else {
+            vec![task_id.to_string()]
+        };
+
+        for t in self.tasks.iter_mut().filter(|t| revive_ids.contains(&t.id)) {
+            t.state = TaskState::Queued;
+            t.set_deferred_by(None);
+        }
+
+        let revived_set: HashSet<&str> = revive_ids.iter().map(String::as_str).collect();
+        let mut blocked_dependencies = Vec::new();
+        for t in self
+            .tasks
+            .iter()
+            .filter(|t| revived_set.contains(t.id.as_str()))
+        {
+            for dep in &t.depends_on {
+                if let Some(dep_task) = self.tasks.iter().find(|candidate| &candidate.id == dep) {
+                    if matches!(
+                        dep_task.state,
+                        TaskState::Deferred
+                            | TaskState::Failed
+                            | TaskState::Blocked
+                            | TaskState::NeedsUser
+                            | TaskState::Partial
+                    ) {
+                        blocked_dependencies.push(ReviveBlockedDependency {
+                            task_id: t.id.clone(),
+                            dependency_id: dep_task.id.clone(),
+                            dependency_state: dep_task.state,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(ReviveOutcome {
+            revived: revive_ids,
+            blocked_dependencies,
         })
     }
 
@@ -815,6 +1034,170 @@ tasks:
         assert_eq!(t.priority, 0);
         assert!(t.preferred_worker.is_empty());
         assert!(t.provenance.is_empty());
+        assert!(t.deferred_by().is_none());
+    }
+
+    #[test]
+    fn cascade_defer_marks_transitive_queued_closure_with_group() {
+        let mut q: WorkQueue = yaml::from_str(
+            r#"
+schema_version: 1
+queue_id: q
+tasks:
+  - id: A
+    title: root
+    state: queued
+  - id: B
+    title: child
+    state: queued
+    depends_on: [A]
+  - id: C
+    title: grandchild
+    state: queued
+    depends_on: [B]
+  - id: D
+    title: already failed
+    state: failed
+    depends_on: [A]
+  - id: E
+    title: behind failed
+    state: queued
+    depends_on: [D]
+"#,
+        )
+        .unwrap();
+
+        let outcome = q.defer_task("A", true, "park the chain").unwrap();
+
+        assert_eq!(outcome.deferred, vec!["A", "B", "C"]);
+        assert_eq!(outcome.stranded, vec!["B", "C"]);
+        for id in ["A", "B", "C"] {
+            let task = q.tasks.iter().find(|t| t.id == id).unwrap();
+            assert_eq!(task.state, TaskState::Deferred);
+            assert_eq!(
+                task.deferred_by().map(|d| d.group_id),
+                Some("defer:A".to_string())
+            );
+        }
+        assert_eq!(
+            q.tasks.iter().find(|t| t.id == "D").unwrap().state,
+            TaskState::Failed
+        );
+        assert_eq!(
+            q.tasks.iter().find(|t| t.id == "E").unwrap().state,
+            TaskState::Queued
+        );
+    }
+
+    #[test]
+    fn plain_defer_only_marks_target_but_reports_stranded() {
+        let mut q: WorkQueue = yaml::from_str(
+            r#"
+schema_version: 1
+queue_id: q
+tasks:
+  - id: A
+    title: root
+    state: queued
+  - id: B
+    title: child
+    state: queued
+    depends_on: [A]
+"#,
+        )
+        .unwrap();
+
+        let outcome = q.defer_task("A", false, "").unwrap();
+
+        assert_eq!(outcome.deferred, vec!["A"]);
+        assert_eq!(outcome.stranded, vec!["B"]);
+        assert_eq!(q.tasks[0].state, TaskState::Deferred);
+        assert_eq!(q.tasks[1].state, TaskState::Queued);
+    }
+
+    #[test]
+    fn revive_group_restores_deferred_group_and_warns_on_unrunnable_deps() {
+        let mut q: WorkQueue = yaml::from_str(
+            r#"
+schema_version: 1
+queue_id: q
+tasks:
+  - id: A
+    title: root
+    state: deferred
+    interaction:
+      deferred_by:
+        group_id: defer:A
+        root_task_id: A
+  - id: B
+    title: child
+    state: deferred
+    depends_on: [A]
+    interaction:
+      deferred_by:
+        group_id: defer:A
+        root_task_id: A
+  - id: C
+    title: unrelated
+    state: deferred
+    interaction:
+      deferred_by:
+        group_id: defer:C
+        root_task_id: C
+  - id: F
+    title: failed dependency
+    state: failed
+  - id: G
+    title: blocked child
+    state: deferred
+    depends_on: [F]
+    interaction:
+      deferred_by:
+        group_id: defer:A
+        root_task_id: A
+"#,
+        )
+        .unwrap();
+
+        let outcome = q.revive_task("B", true).unwrap();
+
+        assert_eq!(outcome.revived, vec!["A", "B", "G"]);
+        assert_eq!(q.tasks[0].state, TaskState::Queued);
+        assert_eq!(q.tasks[1].state, TaskState::Queued);
+        assert_eq!(q.tasks[2].state, TaskState::Deferred);
+        assert!(q.tasks[0].deferred_by().is_none());
+        assert_eq!(
+            outcome.blocked_dependencies,
+            vec![ReviveBlockedDependency {
+                task_id: "G".to_string(),
+                dependency_id: "F".to_string(),
+                dependency_state: TaskState::Failed,
+            }]
+        );
+    }
+
+    #[test]
+    fn revive_refuses_done_and_running_tasks() {
+        let mut q: WorkQueue = yaml::from_str(
+            r#"
+schema_version: 1
+queue_id: q
+tasks:
+  - id: A
+    title: done
+    state: done
+  - id: B
+    title: running
+    state: running
+"#,
+        )
+        .unwrap();
+
+        assert!(q
+            .revive_task("A", false)
+            .unwrap_err()
+            .contains("already done"));
+        assert!(q.revive_task("B", false).unwrap_err().contains("running"));
     }
 
     // A worker proposes follow-ups in result.json; parsing must be tolerant

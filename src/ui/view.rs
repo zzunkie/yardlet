@@ -493,6 +493,11 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
         ),
         Span::raw(", "),
         Span::styled(
+            format!("{} deferred", snap.count(TaskState::Deferred)),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::raw(", "),
+        Span::styled(
             format!("{} {}", snap.count(TaskState::Done), l.s_done),
             Style::default().fg(Color::Green),
         ),

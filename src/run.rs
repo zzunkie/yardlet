@@ -785,11 +785,12 @@ pub fn run_auto<F: FnMut(&str)>(
                         .filter(|t| matches!(t.state, TaskState::NeedsUser | TaskState::Blocked))
                         .map(|t| t.id.as_str())
                         .collect();
-                    let deferred = queue
+                    let deferred_tasks: Vec<&str> = queue
                         .tasks
                         .iter()
                         .filter(|t| t.state == TaskState::Deferred)
-                        .count();
+                        .map(|t| t.id.as_str())
+                        .collect();
                     // Tasks that will never reach Done on their own: terminally
                     // stuck states, then (transitively) any Queued task gated
                     // behind one — so a whole stalled chain is caught, not just
@@ -849,9 +850,11 @@ pub fn run_auto<F: FnMut(&str)>(
                             "stopped: {} waiting on approval or dependencies",
                             waiting.join(", ")
                         ));
-                    } else if deferred > 0 {
+                    } else if !deferred_tasks.is_empty() {
                         emit(format!(
-                            "done: queue drained \u{2014} {deferred} deferred (set aside), the rest complete"
+                            "done: queue drained - {} deferred (set aside): {}; revive with `yardlet revive <id>`",
+                            deferred_tasks.len(),
+                            deferred_tasks.join(", ")
                         ));
                     } else {
                         emit("done: queue drained, all tasks complete".to_string());

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- **Cascade defer and revive.** `yardlet defer <id> --cascade [reason]`
+  now sets the target task and every queued task stranded behind it,
+  transitively, to `Deferred` as one recorded group. `yardlet revive <id>`
+  returns a Deferred task to `Queued`, and `yardlet revive <id> --group`
+  revives every Deferred task recorded in the same cascade group, warning when
+  revived tasks still depend on Deferred, Failed, Blocked, NeedsUser, or Partial
+  work.
+
 ### Changed
 
 - **The work queue is runtime state.** `yardlet` now treats a missing
