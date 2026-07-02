@@ -1288,6 +1288,22 @@ fn is_orphaned_unfinalized(run_dir: &std::path::Path) -> bool {
         && run_dir.join("result.json").exists()
 }
 
+/// A run that was prepared/started but never finalized and is no longer alive:
+/// its run.yaml still reads `prepared`/`running` (never sealed), no worker
+/// process is alive, and it left NO result.json. Distinct from
+/// `is_orphaned_unfinalized`, which HAS a result to salvage. Such a run strands
+/// its task when the task's own state (e.g. `NeedsUser` after a `yardlet answer`
+/// run died before finalize) does not itself flag the task for recovery.
+fn is_abandoned_run(run_dir: &std::path::Path) -> bool {
+    let Ok(rec) = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")) else {
+        return false;
+    };
+    rec.completed_at.is_none()
+        && matches!(rec.state.as_str(), "prepared" | "running" | "")
+        && live_worker_pid(run_dir).is_none()
+        && !run_dir.join("result.json").exists()
+}
+
 /// Recover tasks left "running" by an interrupted/quit session: if the task's
 /// latest run produced a result, evaluate it (keep the finished work); if its
 /// worker is still alive (quitting Yardlet does not kill workers), ADOPT it —
@@ -1326,6 +1342,16 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
             TaskState::Failed => latest
                 .as_ref()
                 .map(|(_, rd)| is_orphaned_unfinalized(rd))
+                .unwrap_or(false),
+            // A task stranded by an ABANDONED run: an answer/run spawned an
+            // execution that died before finalize without persisting a Running
+            // state (e.g. the worker never produced anything), so the task keeps
+            // its pre-run NeedsUser state while its run.yaml is stuck `running`
+            // with no result. The arms above key off task state and miss it;
+            // catch it by the abandoned run record and requeue it to re-run.
+            TaskState::NeedsUser => latest
+                .as_ref()
+                .map(|(_, rd)| is_abandoned_run(rd))
                 .unwrap_or(false),
             _ => false,
         };
@@ -1418,12 +1444,27 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                         continue;
                     }
                 }
-                // Dead with no result: redo from scratch; drop the worktree.
-                if let Some((_, run_dir)) = run {
+                // Dead with no result: redo from scratch; drop the worktree and
+                // SEAL the stranded run record (it was left stuck `running`) so a
+                // later recovery pass does not re-detect it as an abandoned run.
+                if let Some((run_id, run_dir)) = run {
                     if let Some(wt) = run_worktree(&run_dir).filter(|w| w.exists()) {
                         let branch = format!("yard/{}", id.to_lowercase());
                         crate::parallel::remove_worktree(&ws.root, &wt, &branch);
                     }
+                    if let Some(t) = q.tasks.iter().find(|t| t.id == id).cloned() {
+                        let worker = run_worker(&run_dir).unwrap_or_default();
+                        seal_run_record(
+                            &run_dir,
+                            &run_id,
+                            &t,
+                            &q.intent_id,
+                            &worker,
+                            TaskState::Failed,
+                            None,
+                        );
+                    }
+                    let _ = std::fs::remove_file(run_dir.join("worker.pid"));
                 }
                 if let Some(t) = q.tasks.iter_mut().find(|t| t.id == id) {
                     t.state = TaskState::Queued;
@@ -2283,6 +2324,61 @@ mod tests {
             latest_question_for(&ws, &id),
             None,
             "an answered decision is no longer a pending question"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recover_requeues_needs_user_task_stranded_by_an_abandoned_run() {
+        // An answer-triggered run died before finalize without persisting Running:
+        // the task stays NeedsUser while its run.yaml is stuck `running` with no
+        // result. recover must seal the abandoned run and requeue the task, and
+        // not re-detect it on a later pass.
+        let root = std::env::temp_dir().join(format!("yard-abandoned-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        ws.save_queue(&queue(vec![task(
+            "YARD-020",
+            TaskState::NeedsUser,
+            50,
+            false,
+        )]))
+        .unwrap();
+
+        let run_dir = ws.runs_dir().join("run-20260701-034822");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            "schema_version: 1\nrun_id: run-20260701-034822\ntask_id: YARD-020\nworker: codex\nstate: running\nworktree: .\n",
+        )
+        .unwrap();
+
+        let msgs = recover_orphans(&ws);
+
+        let t = ws
+            .load_queue()
+            .unwrap()
+            .tasks
+            .into_iter()
+            .find(|t| t.id == "YARD-020")
+            .unwrap();
+        assert_eq!(
+            t.state,
+            TaskState::Queued,
+            "a NeedsUser task stranded by an abandoned run must be requeued"
+        );
+        let rec: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).unwrap();
+        assert_eq!(rec.state, "failed", "the abandoned run must be sealed");
+        assert!(rec.completed_at.is_some());
+        assert!(
+            msgs.iter().any(|m| m.contains("YARD-020")),
+            "recovery must report the requeue"
+        );
+
+        // Idempotent: the sealed run is not re-detected on a second pass.
+        assert!(
+            recover_orphans(&ws).is_empty(),
+            "a sealed run must not re-trigger recovery"
         );
         let _ = std::fs::remove_dir_all(&root);
     }

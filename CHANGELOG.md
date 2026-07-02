@@ -11,6 +11,12 @@
 
 ### Fixed
 
+- **Recover abandoned runs.** `yardlet recover` now salvages a task stranded by
+  an abandoned run: a run left stuck `running` (no live worker, no result) whose
+  task is not itself flagged `Running` — e.g. a `NeedsUser` task whose
+  `yardlet answer` run died before finalize. Previously recover keyed only off
+  task state and reported "nothing to recover" while the task sat stuck. It now
+  seals the stranded run record and requeues the task so it can re-run.
 - **Human decisions are questions, not capabilities.** A worker can now mark a
   proposed follow-up that is really a human choice/approval with a
   `decision_question`; Yardlet ingests it as `needs_user` (seeding the question
