@@ -3,11 +3,13 @@
 **/*.rs.bk
 Cargo.lock.orig
 
-# Yard runtime state. This repo now self-hosts Yard: we TRACK the .agents/
-# config (yardlet.yaml, *-policy.yaml, workers.yaml, skills/) and ignore the
-# per-run operational artifacts below. The work queue is runtime state, not
-# config, so THIS repo gitignores it to keep dogfood runs out of the product
-# tree (other repos may choose to track their own queue).
+# Yard runtime state. This repo now self-hosts Yard: we TRACK the shared
+# .agents/ policy content (*-policy.yaml, workers.yaml, skills/) and ignore
+# per-run operational artifacts AND per-machine state below. The work queue is
+# runtime state, not config (82432d8); yardlet.yaml/yard.yaml holds a
+# machine-generated workspace identity (workspace_id/created_at) plus personal
+# preferences (default_access/max_parallel/auto_ime), so it is per-machine too
+# (other repos may choose to track their own).
 /.agents/runs/
 /.agents/checkpoints/
 /.agents/handoffs/
@@ -16,6 +18,8 @@ Cargo.lock.orig
 /.agents/intent-contract.yaml
 /.agents/work-queue.yaml
 /.agents/conversations/
+/.agents/yardlet.yaml
+/.agents/yard.yaml
 
 # Personal / per-machine harness files
 *.local
