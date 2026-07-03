@@ -15,6 +15,7 @@ Cargo.lock.orig
 /.agents/intents/
 /.agents/intent-contract.yaml
 /.agents/work-queue.yaml
+/.agents/conversations/
 
 # Personal / per-machine harness files
 *.local

@@ -1317,7 +1317,7 @@ fn save_settings(app: &mut App) {
                 _ => {}
             }
         }
-        let _ = crate::state::save_yaml(&app.ws.config_path(), &cfg);
+        let _ = crate::state::save_config_preserving_format(&app.ws.config_path(), &cfg);
     }
     if let Ok(mut wf) = app.ws.load_workers() {
         for f in &draft.fields {
@@ -1331,7 +1331,7 @@ fn save_settings(app: &mut App) {
                 }
             }
         }
-        let _ = crate::state::save_yaml(&app.ws.workers_path(), &wf);
+        let _ = crate::state::save_workers_preserving_format(&app.ws.workers_path(), &wf);
     }
     app.reload();
     // Settings can be changed mid-run; a running worker keeps the model it was
@@ -1357,7 +1357,7 @@ fn toggle_access(app: &mut App) {
         } else {
             "full".to_string()
         };
-        let _ = crate::state::save_yaml(&app.ws.config_path(), &cfg);
+        let _ = crate::state::save_config_preserving_format(&app.ws.config_path(), &cfg);
         app.toast = Some((
             true,
             format!("{}: {}", app.lang.l().access_word, cfg.default_access),
@@ -1388,7 +1388,7 @@ fn toggle_worker(app: &mut App, widx: usize) {
         if let Some(w) = wf.workers.get_mut(widx) {
             w.enabled = !w.enabled;
             let (id, on) = (w.id.clone(), w.enabled);
-            let _ = crate::state::save_yaml(&app.ws.workers_path(), &wf);
+            let _ = crate::state::save_workers_preserving_format(&app.ws.workers_path(), &wf);
             let l = app.lang.l();
             app.toast = Some((
                 true,
@@ -1449,7 +1449,7 @@ fn toggle_language(app: &mut App) {
             i18n::Lang::Ko => "en".to_string(),
             i18n::Lang::En => "ko".to_string(),
         };
-        let _ = crate::state::save_yaml(&app.ws.config_path(), &cfg);
+        let _ = crate::state::save_config_preserving_format(&app.ws.config_path(), &cfg);
     }
     app.reload();
 }
@@ -1897,6 +1897,61 @@ fn load_latest_handoff(app: &App) -> String {
 mod tests {
     use super::*;
 
+    const CONFIG_WITH_COMMENTS: &str = r#"schema_version: 1
+product: yardlet
+workspace_id: ui-test
+created_at: "2026-07-03T00:00:00Z"
+state_dir: .agents
+default_interface: tui
+canonical_queue: work-queue.yaml
+current_intent: ""
+# keep language comment
+language: auto
+default_access: sandboxed # keep access comment
+max_parallel: 1
+auto_ime: true
+ambiguity_gate: true
+harness_discovery: true
+skill_library: ""
+auto_equip: true
+auto_skill: true
+auto_rule: false
+auto_prune: true
+hooks: true
+auto_commit: false
+"#;
+
+    const WORKERS_WITH_COMMENTS: &str = r#"schema_version: 1
+workers:
+  - id: codex
+    # keep codex comment
+    enabled: true # keep enabled comment
+    model: "" # keep model comment
+    effort: ""
+    invocation:
+      command: codex
+  - id: claude-code
+    # keep claude comment
+    enabled: true
+    model: sonnet
+    effort: medium
+    invocation:
+      command: claude
+routing:
+  default_worker: codex
+  fallback_order: [codex, claude-code]
+"#;
+
+    fn workspace_with_user_config(name: &str) -> Workspace {
+        let root = std::env::temp_dir().join(format!("yard-ui-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        std::fs::create_dir_all(ws.agents_dir()).unwrap();
+        std::fs::write(ws.config_path(), CONFIG_WITH_COMMENTS).unwrap();
+        std::fs::write(ws.workers_path(), WORKERS_WITH_COMMENTS).unwrap();
+        ws
+    }
+
     #[test]
     fn input_caret_edits_midstring_with_hangul() {
         let ws = Workspace::at(std::path::Path::new("/tmp/yard-caret-test"));
@@ -1975,5 +2030,79 @@ mod tests {
         let tail = read_tail(&p, 15);
         assert_eq!(tail, "third line\n");
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn settings_save_noop_keeps_config_and_workers_bytes() {
+        let ws = workspace_with_user_config("settings-noop");
+        let mut app = App::new(ws.clone());
+        open_settings(&mut app);
+        let before_config = std::fs::read(ws.config_path()).unwrap();
+        let before_workers = std::fs::read(ws.workers_path()).unwrap();
+
+        save_settings(&mut app);
+
+        assert_eq!(std::fs::read(ws.config_path()).unwrap(), before_config);
+        assert_eq!(std::fs::read(ws.workers_path()).unwrap(), before_workers);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn settings_save_changes_only_target_config_and_worker_keys() {
+        let ws = workspace_with_user_config("settings-edit");
+        let mut app = App::new(ws.clone());
+        open_settings(&mut app);
+        let draft = app.settings.as_mut().unwrap();
+        for field in &mut draft.fields {
+            match field.key.as_str() {
+                "access" => field.value = "full".to_string(),
+                "parallel" => field.value = "3".to_string(),
+                "ime" => field.value = "off".to_string(),
+                "language" => field.value = "ko".to_string(),
+                "model:codex" => field.value = "gpt-5".to_string(),
+                "effort:codex" => field.value = "high".to_string(),
+                _ => {}
+            }
+        }
+
+        save_settings(&mut app);
+
+        let config = std::fs::read_to_string(ws.config_path()).unwrap();
+        assert!(config.contains("# keep language comment"));
+        assert!(config.contains("language: ko"));
+        assert!(config.contains("default_access: full # keep access comment"));
+        assert!(config.contains("max_parallel: 3"));
+        assert!(config.contains("auto_ime: false"));
+        assert!(config.contains("auto_commit: false"));
+
+        let workers = std::fs::read_to_string(ws.workers_path()).unwrap();
+        assert!(workers.contains("# keep codex comment"));
+        assert!(workers.contains("model: \"gpt-5\" # keep model comment"));
+        assert!(workers.contains("effort: \"high\""));
+        assert!(workers.contains("# keep claude comment"));
+        assert!(workers.contains("model: sonnet"));
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn access_language_and_worker_toggles_preserve_comments() {
+        let ws = workspace_with_user_config("toggles");
+        let mut app = App::new(ws.clone());
+
+        toggle_access(&mut app);
+        toggle_language(&mut app);
+        toggle_worker(&mut app, 0);
+
+        let config = std::fs::read_to_string(ws.config_path()).unwrap();
+        assert!(config.contains("# keep language comment"));
+        assert!(config.contains("language: ko"));
+        assert!(config.contains("default_access: full # keep access comment"));
+
+        let workers = std::fs::read_to_string(ws.workers_path()).unwrap();
+        assert!(workers.contains("# keep codex comment"));
+        assert!(workers.contains("enabled: false # keep enabled comment"));
+        assert!(workers.contains("model: \"\" # keep model comment"));
+        assert!(workers.contains("# keep claude comment"));
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 }

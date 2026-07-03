@@ -170,6 +170,335 @@ pub fn save_yaml<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
+pub fn save_config_preserving_format(path: &Path, config: &YardConfig) -> Result<bool> {
+    let current: YardConfig = load_yaml(path)?;
+    let mut edits = Vec::new();
+    if current.language != config.language {
+        edits.push(LineEdit::string("language", &config.language));
+    }
+    if current.default_access != config.default_access {
+        edits.push(LineEdit::string("default_access", &config.default_access));
+    }
+    if current.max_parallel != config.max_parallel {
+        edits.push(LineEdit::usize("max_parallel", config.max_parallel));
+    }
+    if current.auto_ime != config.auto_ime {
+        edits.push(LineEdit::bool("auto_ime", config.auto_ime));
+    }
+    if edits.is_empty() {
+        return Ok(false);
+    }
+
+    let original =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let updated = apply_top_level_edits(&original, &edits)?;
+    if updated == original {
+        return Ok(false);
+    }
+    fs::write(path, updated).with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
+pub fn save_workers_preserving_format(path: &Path, workers: &WorkersFile) -> Result<bool> {
+    let current: WorkersFile = load_yaml(path)?;
+    let mut text =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let original = text.clone();
+
+    for desired in &workers.workers {
+        let Some(existing) = current.workers.iter().find(|w| w.id == desired.id) else {
+            continue;
+        };
+        if existing.enabled != desired.enabled {
+            text = apply_worker_edit(
+                &text,
+                &desired.id,
+                &LineEdit::bool("enabled", desired.enabled),
+            )?;
+        }
+        if existing.model != desired.model {
+            text = apply_worker_edit(
+                &text,
+                &desired.id,
+                &LineEdit::string("model", &desired.model),
+            )?;
+        }
+        if existing.effort != desired.effort {
+            text = apply_worker_edit(
+                &text,
+                &desired.id,
+                &LineEdit::string("effort", &desired.effort),
+            )?;
+        }
+    }
+
+    if text == original {
+        return Ok(false);
+    }
+    fs::write(path, text).with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
+#[derive(Debug)]
+struct LineEdit<'a> {
+    key: &'static str,
+    value: ScalarValue<'a>,
+}
+
+impl<'a> LineEdit<'a> {
+    fn string(key: &'static str, value: &'a str) -> Self {
+        Self {
+            key,
+            value: ScalarValue::String(value),
+        }
+    }
+
+    fn bool(key: &'static str, value: bool) -> Self {
+        Self {
+            key,
+            value: ScalarValue::Bool(value),
+        }
+    }
+
+    fn usize(key: &'static str, value: usize) -> Self {
+        Self {
+            key,
+            value: ScalarValue::Usize(value),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ScalarValue<'a> {
+    String(&'a str),
+    Bool(bool),
+    Usize(usize),
+}
+
+fn apply_top_level_edits(input: &str, edits: &[LineEdit<'_>]) -> Result<String> {
+    let mut lines = split_preserving_newlines(input);
+    for edit in edits {
+        let mut found = false;
+        for line in &mut lines {
+            let (body, eol) = split_line_ending(line);
+            let Some((indent, key, _)) = yaml_key_line(body) else {
+                continue;
+            };
+            if indent == 0 && key == edit.key {
+                *line = format!("{}{}", replace_line_value(body, &edit.value), eol);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            lines.push(format!(
+                "{}: {}\n",
+                edit.key,
+                render_scalar("", &edit.value)
+            ));
+        }
+    }
+    Ok(lines.concat())
+}
+
+fn apply_worker_edit(input: &str, worker_id: &str, edit: &LineEdit<'_>) -> Result<String> {
+    let mut lines = split_preserving_newlines(input);
+    let Some((start, end, child_indent)) = find_worker_block(&lines, worker_id) else {
+        anyhow::bail!("worker '{worker_id}' not found in workers.yaml");
+    };
+
+    for line in lines.iter_mut().take(end).skip(start + 1) {
+        let (body, eol) = split_line_ending(line);
+        let Some((indent, key, _)) = yaml_key_line(body) else {
+            continue;
+        };
+        if indent == child_indent && key == edit.key {
+            *line = format!("{}{}", replace_line_value(body, &edit.value), eol);
+            return Ok(lines.concat());
+        }
+    }
+
+    let eol = lines
+        .get(start)
+        .map(|line| split_line_ending(line).1)
+        .filter(|e| !e.is_empty())
+        .unwrap_or("\n");
+    lines.insert(
+        start + 1,
+        format!(
+            "{}{}: {}{}",
+            " ".repeat(child_indent),
+            edit.key,
+            render_scalar("", &edit.value),
+            eol
+        ),
+    );
+    Ok(lines.concat())
+}
+
+fn find_worker_block(lines: &[String], worker_id: &str) -> Option<(usize, usize, usize)> {
+    for (idx, line) in lines.iter().enumerate() {
+        let (body, _) = split_line_ending(line);
+        let Some((item_indent, id)) = worker_id_line(body) else {
+            continue;
+        };
+        if id != worker_id {
+            continue;
+        }
+        let mut end = lines.len();
+        for (j, next) in lines.iter().enumerate().skip(idx + 1) {
+            let (next_body, _) = split_line_ending(next);
+            let trimmed = next_body.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let indent = leading_spaces(next_body);
+            if indent <= item_indent {
+                end = j;
+                break;
+            }
+        }
+        return Some((idx, end, item_indent + 2));
+    }
+    None
+}
+
+fn worker_id_line(line: &str) -> Option<(usize, &str)> {
+    let item_indent = leading_spaces(line);
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix("- ")?;
+    let (_, key, value) = yaml_key_line(rest)?;
+    if key != "id" {
+        return None;
+    }
+    Some((
+        item_indent,
+        value_without_comment(value)
+            .trim_matches('"')
+            .trim_matches('\''),
+    ))
+}
+
+fn yaml_key_line(line: &str) -> Option<(usize, &str, &str)> {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let colon = trimmed.find(':')?;
+    let key = trimmed[..colon].trim();
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return None;
+    }
+    Some((line.len() - trimmed.len(), key, &trimmed[colon + 1..]))
+}
+
+fn replace_line_value(line: &str, value: &ScalarValue<'_>) -> String {
+    let Some(colon) = line.find(':') else {
+        return line.to_string();
+    };
+    let (prefix, rest) = line.split_at(colon + 1);
+    let rest = rest.strip_prefix(' ').unwrap_or(rest);
+    let (old_value, comment) = split_inline_comment(rest);
+    let rendered = render_scalar(old_value.trim(), value);
+    if comment.is_empty() {
+        format!("{prefix} {rendered}")
+    } else {
+        format!("{prefix} {rendered}{comment}")
+    }
+}
+
+fn render_scalar(existing: &str, value: &ScalarValue<'_>) -> String {
+    match value {
+        ScalarValue::Bool(v) => v.to_string(),
+        ScalarValue::Usize(v) => v.to_string(),
+        ScalarValue::String(v) => render_string_scalar(existing, v),
+    }
+}
+
+fn render_string_scalar(existing: &str, value: &str) -> String {
+    if existing.starts_with('\'') {
+        return format!("'{}'", value.replace('\'', "''"));
+    }
+    if existing.starts_with('"') {
+        return serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string());
+    }
+    if value.is_empty() {
+        return "\"\"".to_string();
+    }
+    if is_plain_scalar(value) {
+        value.to_string()
+    } else {
+        serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+    }
+}
+
+fn is_plain_scalar(value: &str) -> bool {
+    if value.trim() != value || matches!(value, "true" | "false" | "null" | "~") {
+        return false;
+    }
+    value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '@'))
+}
+
+fn split_inline_comment(rest: &str) -> (&str, &str) {
+    let mut quote: Option<char> = None;
+    for (idx, ch) in rest.char_indices() {
+        match (quote, ch) {
+            (Some('\''), '\'') => quote = None,
+            (Some('"'), '"') => quote = None,
+            (None, '\'' | '"') => quote = Some(ch),
+            (None, '#') if idx == 0 || rest[..idx].ends_with(char::is_whitespace) => {
+                let mut comment_start = idx;
+                while comment_start > 0
+                    && rest[..comment_start]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_whitespace)
+                {
+                    comment_start -= rest[..comment_start]
+                        .chars()
+                        .next_back()
+                        .map(char::len_utf8)
+                        .unwrap_or(1);
+                }
+                return (&rest[..comment_start], &rest[comment_start..]);
+            }
+            _ => {}
+        }
+    }
+    (rest, "")
+}
+
+fn value_without_comment(value: &str) -> &str {
+    split_inline_comment(value).0.trim()
+}
+
+fn split_preserving_newlines(input: &str) -> Vec<String> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+    input.split_inclusive('\n').map(str::to_string).collect()
+}
+
+fn split_line_ending(line: &str) -> (&str, &str) {
+    if let Some(body) = line.strip_suffix("\r\n") {
+        (body, "\r\n")
+    } else if let Some(body) = line.strip_suffix('\n') {
+        (body, "\n")
+    } else {
+        (line, "")
+    }
+}
+
+fn leading_spaces(line: &str) -> usize {
+    line.bytes().take_while(|b| *b == b' ').count()
+}
+
 /// Append a turn to a task's conversation transcript. Yardlet stays the sole
 /// writer of `.agents/`: the worker authors its message via `question_for_user`
 /// and the user replies through `yardlet answer`; the core records both here.
@@ -215,6 +544,55 @@ pub fn write_str(path: &Path, contents: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const CONFIG_WITH_COMMENTS: &str = r#"schema_version: 1
+product: yardlet
+workspace_id: test-workspace
+created_at: "2026-07-03T00:00:00Z"
+state_dir: .agents
+default_interface: tui
+canonical_queue: work-queue.yaml
+current_intent: ""
+# language stays user-owned
+language: auto
+default_access: sandboxed # keep access comment
+max_parallel: 1
+auto_ime: true
+ambiguity_gate: true
+harness_discovery: true
+skill_library: ""
+auto_equip: true
+auto_skill: true
+auto_rule: false
+auto_prune: true
+hooks: true
+auto_commit: false
+"#;
+
+    const WORKERS_WITH_COMMENTS: &str = r#"schema_version: 1
+workers:
+  - id: codex
+    # user note for codex
+    enabled: true # keep enabled comment
+    model: "" # keep model comment
+    effort: ""
+    invocation:
+      command: codex
+  - id: claude-code
+    # untouched worker comment
+    enabled: true
+    model: sonnet
+    effort: medium
+    invocation:
+      command: claude
+routing:
+  default_worker: codex
+  fallback_order: [codex, claude-code]
+"#;
+
+    fn temp_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("yard-{name}-{}", std::process::id()))
+    }
 
     fn worker(text: &str, run_id: &str) -> ConversationTurn {
         ConversationTurn {
@@ -286,6 +664,118 @@ mod tests {
             .load_queue()
             .expect("a missing queue must load as empty, not error");
         assert!(q.tasks.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn serde_yaml_save_reproduces_comment_loss_for_user_config_files() {
+        let dir = temp_root("serde-comment-loss");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+        fs::write(ws.config_path(), CONFIG_WITH_COMMENTS).unwrap();
+        fs::write(ws.workers_path(), WORKERS_WITH_COMMENTS).unwrap();
+
+        let cfg: YardConfig = load_yaml(&ws.config_path()).unwrap();
+        save_yaml(&ws.config_path(), &cfg).unwrap();
+        let rewritten_config = fs::read_to_string(ws.config_path()).unwrap();
+        assert!(!rewritten_config.contains("language stays user-owned"));
+        assert!(!rewritten_config.contains("keep access comment"));
+
+        let workers: WorkersFile = load_yaml(&ws.workers_path()).unwrap();
+        save_yaml(&ws.workers_path(), &workers).unwrap();
+        let rewritten_workers = fs::read_to_string(ws.workers_path()).unwrap();
+        assert!(!rewritten_workers.contains("user note for codex"));
+        assert!(!rewritten_workers.contains("untouched worker comment"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_preserving_save_noops_and_keeps_legacy_path() {
+        let dir = temp_root("legacy-config-preserve");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+        let legacy = ws.agents_dir().join(LEGACY_CONFIG_FILE);
+        fs::write(&legacy, CONFIG_WITH_COMMENTS).unwrap();
+
+        assert_eq!(ws.config_path(), legacy);
+        let before = fs::read(&legacy).unwrap();
+        let cfg = ws.load_config().unwrap();
+        assert!(!save_config_preserving_format(&ws.config_path(), &cfg).unwrap());
+        assert_eq!(fs::read(&legacy).unwrap(), before);
+        assert!(!ws.agents_dir().join(CONFIG_FILE).exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_preserving_save_changes_only_target_scalar_lines() {
+        let dir = temp_root("config-target-edit");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+        fs::write(ws.config_path(), CONFIG_WITH_COMMENTS).unwrap();
+
+        let mut cfg = ws.load_config().unwrap();
+        cfg.default_access = "full".to_string();
+        cfg.language = "ko".to_string();
+        assert!(save_config_preserving_format(&ws.config_path(), &cfg).unwrap());
+        let updated = fs::read_to_string(ws.config_path()).unwrap();
+        assert!(updated.contains("# language stays user-owned"));
+        assert!(updated.contains("language: ko"));
+        assert!(updated.contains("default_access: full # keep access comment"));
+        assert!(updated.contains("workspace_id: test-workspace"));
+        assert!(updated.contains("auto_commit: false"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workers_preserving_save_changes_only_target_worker_keys() {
+        let dir = temp_root("workers-target-edit");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+        fs::write(ws.workers_path(), WORKERS_WITH_COMMENTS).unwrap();
+
+        let before = fs::read_to_string(ws.workers_path()).unwrap();
+        let mut workers = ws.load_workers().unwrap();
+        let codex = workers
+            .workers
+            .iter_mut()
+            .find(|w| w.id == "codex")
+            .unwrap();
+        codex.enabled = false;
+        codex.model = "gpt-5".to_string();
+        codex.effort = "high".to_string();
+        assert!(save_workers_preserving_format(&ws.workers_path(), &workers).unwrap());
+        let updated = fs::read_to_string(ws.workers_path()).unwrap();
+        assert_ne!(updated, before);
+        assert!(updated.contains("# user note for codex"));
+        assert!(updated.contains("enabled: false # keep enabled comment"));
+        assert!(updated.contains("model: \"gpt-5\" # keep model comment"));
+        assert!(updated.contains("effort: \"high\""));
+        assert!(updated.contains("# untouched worker comment"));
+        assert!(updated.contains("model: sonnet"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workers_preserving_save_noops_when_values_are_unchanged() {
+        let dir = temp_root("workers-noop");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+        fs::write(ws.workers_path(), WORKERS_WITH_COMMENTS).unwrap();
+
+        let before = fs::read(ws.workers_path()).unwrap();
+        let workers = ws.load_workers().unwrap();
+        assert!(!save_workers_preserving_format(&ws.workers_path(), &workers).unwrap());
+        assert_eq!(fs::read(ws.workers_path()).unwrap(), before);
 
         let _ = fs::remove_dir_all(&dir);
     }

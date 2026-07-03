@@ -1001,7 +1001,7 @@ fn cmd_access(cwd: &std::path::Path, args: AccessArgs) -> Result<()> {
     }
     let mut config = ws.load_config()?;
     config.default_access = level.clone();
-    crate::state::save_yaml(&ws.config_path(), &config)?;
+    crate::state::save_config_preserving_format(&ws.config_path(), &config)?;
     println!("Default worker access set to '{level}'.");
     if level == "full" {
         println!(
@@ -1482,4 +1482,55 @@ fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
         report.prepared,
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CONFIG_WITH_COMMENTS: &str = r#"schema_version: 1
+product: yardlet
+workspace_id: cli-test
+created_at: "2026-07-03T00:00:00Z"
+state_dir: .agents
+default_interface: tui
+canonical_queue: work-queue.yaml
+current_intent: ""
+language: auto
+default_access: sandboxed # keep access comment
+max_parallel: 1
+auto_ime: true
+ambiguity_gate: true
+harness_discovery: true
+skill_library: ""
+auto_equip: true
+auto_skill: true
+auto_rule: false
+auto_prune: true
+hooks: true
+auto_commit: false
+"#;
+
+    #[test]
+    fn access_command_preserves_config_comments_and_order() {
+        let root = std::env::temp_dir().join(format!("yard-cli-access-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        std::fs::create_dir_all(ws.agents_dir()).unwrap();
+        std::fs::write(ws.config_path(), CONFIG_WITH_COMMENTS).unwrap();
+
+        cmd_access(
+            &root,
+            AccessArgs {
+                level: "full".to_string(),
+            },
+        )
+        .unwrap();
+
+        let updated = std::fs::read_to_string(ws.config_path()).unwrap();
+        assert!(updated.contains("default_access: full # keep access comment"));
+        assert!(updated.contains("language: auto"));
+        assert!(updated.contains("auto_commit: false"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

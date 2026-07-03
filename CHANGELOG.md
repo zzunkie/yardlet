@@ -21,6 +21,10 @@
 
 ### Fixed
 
+- **Preserve user-owned config files.** TUI settings saves and `yardlet access`
+  now update only the targeted `yardlet.yaml` / legacy `yard.yaml` /
+  `workers.yaml` keys, preserving comments, key order, and untouched values
+  instead of round-tripping the whole file through YAML serialization.
 - **Recover abandoned runs.** `yardlet recover` now salvages a task stranded by
   an abandoned run: a run left stuck `running` (no live worker, no result) whose
   task is not itself flagged `Running` — e.g. a `NeedsUser` task whose
