@@ -21,6 +21,15 @@
 
 ### Fixed
 
+- **Done-first completion for non-blocking leftovers.** Worker packets now
+  reserve `needs_user` for questions or gates that actually block acceptance.
+  When acceptance is met, minor cleanup or adjacent work should finish as
+  `done`, with leftovers preserved in handoff/checkpoint notes and, when useful,
+  proposed through `follow_up_tasks` so the auto loop can continue.
+- **Preserve contradictory done questions.** If a worker reports `status=done`
+  while also filling `question_for_user`, the evaluator now records the mismatch
+  as an advisory check and the question remains visible in the run handoff and
+  checkpoint instead of being silently lost.
 - **Preserve user-owned config files.** TUI settings saves and `yardlet access`
   now update only the targeted `yardlet.yaml` / legacy `yard.yaml` /
   `workers.yaml` keys, preserving comments, key order, and untouched values

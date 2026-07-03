@@ -180,6 +180,18 @@ pub fn evaluate(
                 )
             },
         ));
+        if r.status == "done"
+            && r.question_for_user
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|q| !q.is_empty())
+        {
+            checks.push(advisory(
+                "done_status_has_question",
+                false,
+                "worker reported done but also left question_for_user; keeping Done eligible while preserving the question in run artifacts".to_string(),
+            ));
+        }
         // Structured review verdict: the quality signal Yardlet records instead
         // of trusting prose. For a review/safety task it is the contract —
         // an empty verdict or any failed criterion blocks Done.
@@ -407,7 +419,9 @@ pub fn worker_touched(baseline: &[(String, String)], after: &[(String, String)])
 
 fn decide_state(reported: &str, all_passed: bool, result: Option<&RunResult>) -> TaskState {
     // A worker can only earn `done` if it claims done *and* the mechanical
-    // checks pass. Anything else falls back to a safe, resumable state.
+    // checks pass. Non-blocking leftovers belong in follow_up_tasks while the
+    // status stays done; needs_user remains reserved for acceptance-blocking
+    // questions or gated actions.
     match reported {
         "done" if all_passed => TaskState::Done,
         "done" => TaskState::Failed, // claimed done but evidence is incomplete
@@ -452,6 +466,78 @@ mod tests {
         assert_eq!(decide_state("done", true, None), TaskState::Done);
         // claimed done but evidence incomplete -> not trusted
         assert_eq!(decide_state("done", false, None), TaskState::Failed);
+    }
+
+    #[test]
+    fn done_with_nonblocking_followups_stays_done() {
+        let mut r = dummy_result();
+        r.status = "done".into();
+        r.follow_up_tasks = vec![crate::schemas::FollowUpTask {
+            title: "tidy optional docs".into(),
+            reason: "non-blocking cleanup after acceptance passed".into(),
+            ..Default::default()
+        }];
+        assert_eq!(decide_state("done", true, Some(&r)), TaskState::Done);
+    }
+
+    #[test]
+    fn done_with_question_records_advisory_but_stays_done() {
+        let dir =
+            std::env::temp_dir().join(format!("yard-eval-done-question-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("handoff.md"), "h").unwrap();
+
+        let mut r = dummy_result();
+        r.run_id = "run-x".into();
+        r.task_id = "YARD-9".into();
+        r.status = "done".into();
+        r.question_for_user = Some("Is this optional cleanup worth scheduling later?".into());
+        std::fs::write(dir.join("result.json"), serde_json::to_string(&r).unwrap()).unwrap();
+
+        let t = crate::schemas::Task {
+            id: "YARD-9".into(),
+            title: "t".into(),
+            state: TaskState::Running,
+            priority: 0,
+            risk: String::new(),
+            kind: "implementation".into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec![],
+            skills: vec![],
+            required_capabilities: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+            provenance: String::new(),
+        };
+
+        let e = evaluate(&dir, "run-x", &t, Some(&[]));
+        assert_eq!(e.next_task_state, TaskState::Done);
+        let c = e
+            .checks
+            .iter()
+            .find(|c| c.name == "done_status_has_question")
+            .expect("done/question contradiction must be recorded");
+        assert!(!c.fatal, "contradiction is advisory, not a Done gate");
+        assert!(!c.passed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn acceptance_blocking_question_still_needs_user() {
+        let mut r = dummy_result();
+        r.status = "needs_user".into();
+        r.question_for_user = Some("Which production region should this target?".into());
+        assert_eq!(
+            decide_state("needs_user", true, Some(&r)),
+            TaskState::NeedsUser
+        );
     }
 
     #[test]

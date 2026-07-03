@@ -804,6 +804,16 @@ pub fn compile(inputs: &PacketInputs) -> String {
          also stop and report what you need instead of trying to bypass it.\n\n",
     );
 
+    // Done-first status rule: non-blocking leftovers should not pause the queue.
+    p.push_str("## Completion status rule\n\n");
+    p.push_str(
+        "Use `status: \"needs_user\"` only when a missing user answer, approval, or gated action \
+         blocks the task's acceptance criteria. If the acceptance criteria are met, return \
+         `status: \"done\"` even when minor cleanup, optional choices, or adjacent work remains. \
+         Record those non-blocking leftovers as notes in the handoff/checkpoint and, when they \
+         are real future work, propose them in `follow_up_tasks`.\n\n",
+    );
+
     // Queue ownership (propose -> ingest): workers never write the queue.
     p.push_str("## Proposing follow-up work\n\n");
     p.push_str(
@@ -1138,6 +1148,9 @@ should be a self-contained procedure (how to do a recurring task in this repo)
 that a future worker could follow; a "rule" is a short always-apply constraint.
 Leave `follow_up_tasks` empty unless you found adjacent work worth queueing for
 later; never edit `.agents/work-queue.yaml` yourself — Yardlet ingests these.
+Use `needs_user` only when the question blocks acceptance. If acceptance is met,
+finish with `done` and leave non-blocking leftovers as handoff/checkpoint notes
+or `follow_up_tasks`.
 "#;
 
 #[cfg(test)]
@@ -1643,6 +1656,17 @@ mod tests {
         assert!(build.contains("role: builder"));
         assert!(build.contains("Workspace role notes"));
         assert!(build.contains("Prefer small commits."));
+    }
+
+    #[test]
+    fn packet_instructs_done_for_nonblocking_leftovers() {
+        let p = packet_for("implementation", "");
+        assert!(p.contains("## Completion status rule"));
+        assert!(p.contains("Use `status: \"needs_user\"` only when"));
+        assert!(p.contains("If the acceptance criteria are met, return"));
+        assert!(p.contains("`status: \"done\"`"));
+        assert!(p.contains("propose them in `follow_up_tasks`"));
+        assert!(p.contains("finish with `done` and leave non-blocking leftovers"));
     }
 
     #[test]

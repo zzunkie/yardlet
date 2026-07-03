@@ -19,7 +19,7 @@ use crate::packet::{self, PacketInputs};
 use crate::schemas::{
     ConversationTurn, RunResult, TaskState, TurnRole, WorkQueue, WorkerProfile, WorkersFile,
 };
-use crate::state::{self, write_str, Workspace};
+use crate::state::{self, append_str, write_str, Workspace};
 use crate::{compact, evaluator, routing, telemetry, workers};
 
 /// A live worker session a previous task finished in, offered to the next
@@ -1862,6 +1862,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     if flags.artifacts {
         compact::write_checkpoint(run_dir, task, &eval, result.as_ref(), intent_summary)?;
         compact::write_handoff(run_dir, task, &eval, result.as_ref())?;
+        if let Some(r) = &result {
+            append_nonblocking_follow_up_notes(run_dir, r)?;
+        }
     }
 
     // Harness learning loop (S3): record skills/rules the worker proposed. The
@@ -1913,7 +1916,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     let hp = run_dir.join("handoff.md");
                     let mut existing = std::fs::read_to_string(&hp).unwrap_or_default();
                     existing.push_str(&note);
-                    let _ = std::fs::write(&hp, existing);
+                    let _ = state::write_str(&hp, &existing);
                     lines.push(format!(
                         "{}: merge conflict — task is partial; worktree kept at {}",
                         task.id,
@@ -2111,6 +2114,39 @@ fn seal_run_record(
     rec.state = run_outcome_label(next_state).to_string();
     rec.completed_at = Some(Local::now().to_rfc3339());
     let _ = state::save_yaml(&path, &rec);
+}
+
+fn append_nonblocking_follow_up_notes(run_dir: &std::path::Path, result: &RunResult) -> Result<()> {
+    if result.status != "done" || result.follow_up_tasks.is_empty() {
+        return Ok(());
+    }
+    let mut note = String::from("\n## Non-blocking follow-up notes\n\n");
+    note.push_str(
+        "Acceptance was reported as complete. These leftovers did not block Done and were \
+         kept as follow-up notes:\n",
+    );
+    let mut wrote_item = false;
+    for fu in &result.follow_up_tasks {
+        let title = fu.title.trim();
+        if title.is_empty() {
+            continue;
+        }
+        wrote_item = true;
+        note.push_str("- ");
+        note.push_str(title);
+        let reason = fu.reason.trim();
+        if !reason.is_empty() {
+            note.push_str(": ");
+            note.push_str(reason);
+        }
+        note.push('\n');
+    }
+    if !wrote_item {
+        return Ok(());
+    }
+    append_str(&run_dir.join("checkpoint.md"), &note)?;
+    append_str(&run_dir.join("handoff.md"), &note)?;
+    Ok(())
 }
 
 /// Context for CONTINUING a Partial task instead of redoing it: the previous
@@ -2884,6 +2920,175 @@ mod tests {
             "no follow-up should be ingested on recovery"
         );
         assert_eq!(q.tasks[0].state, TaskState::Done);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn done_with_nonblocking_followups_records_notes_and_leaves_queue_runnable() {
+        let root = std::env::temp_dir().join(format!("yard-done-fu-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&root)
+            .output();
+        let ws = Workspace::at(&root);
+        let mut t = task("YARD-001", TaskState::Running, 10, false);
+        t.kind = "implementation".into();
+        ws.save_queue(&queue(vec![t.clone()])).unwrap();
+
+        let run_id = "run-20990101-000000-yard-001";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: "YARD-001".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "acceptance met; optional cleanup remains".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![crate::schemas::FollowUpTask {
+                title: "Tidy optional documentation".into(),
+                reason: "Useful cleanup, but not required for the accepted task".into(),
+                kind: "implementation".into(),
+                risk: "low".into(),
+                ..Default::default()
+            }],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Worker handoff\n").unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!("run_id: {run_id}\ntask_id: YARD-001\nworker: codex\n"),
+        )
+        .unwrap();
+
+        let billing = crate::schemas::BillingPolicy::default();
+        let mut q = ws.load_queue().unwrap();
+        let report = finalize_run(FinalizeInput {
+            ws: &ws,
+            run_dir: &run_dir,
+            run_id,
+            task: &t,
+            evidence: Some(vec![]),
+            worker_id: "codex",
+            reason: "serial",
+            wall_seconds: 0,
+            user_override: None,
+            intent_summary: "core acceptance met",
+            billing: &billing,
+            queue: &mut q,
+            flags: FinalizeFlags::serial(),
+            merge: None,
+        })
+        .unwrap();
+
+        assert_eq!(report.next_state, TaskState::Done);
+        let q = ws.load_queue().unwrap();
+        assert_eq!(q.tasks[0].state, TaskState::Done);
+        assert_eq!(q.tasks[1].state, TaskState::Queued);
+        assert_eq!(select_next(&q, &opts()).unwrap(), Some(1));
+
+        let checkpoint = std::fs::read_to_string(run_dir.join("checkpoint.md")).unwrap();
+        let handoff = std::fs::read_to_string(run_dir.join("handoff.md")).unwrap();
+        for text in [checkpoint, handoff] {
+            assert!(text.contains("Non-blocking follow-up notes"));
+            assert!(text.contains("Tidy optional documentation"));
+            assert!(text.contains("not required for the accepted task"));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn done_with_question_preserves_question_in_run_artifacts() {
+        let root = std::env::temp_dir().join(format!("yard-done-q-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&root)
+            .output();
+        let ws = Workspace::at(&root);
+        let mut t = task("YARD-001", TaskState::Running, 10, false);
+        t.kind = "implementation".into();
+        ws.save_queue(&queue(vec![t.clone()])).unwrap();
+
+        let run_id = "run-20990101-000000-yard-001";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let question = "Should this optional cleanup become a later task?";
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: "YARD-001".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: Some(question.into()),
+            compact_summary: "acceptance met; optional question preserved".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Worker handoff\n").unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!("run_id: {run_id}\ntask_id: YARD-001\nworker: codex\n"),
+        )
+        .unwrap();
+
+        let billing = crate::schemas::BillingPolicy::default();
+        let mut q = ws.load_queue().unwrap();
+        let report = finalize_run(FinalizeInput {
+            ws: &ws,
+            run_dir: &run_dir,
+            run_id,
+            task: &t,
+            evidence: Some(vec![]),
+            worker_id: "codex",
+            reason: "serial",
+            wall_seconds: 0,
+            user_override: None,
+            intent_summary: "core acceptance met",
+            billing: &billing,
+            queue: &mut q,
+            flags: FinalizeFlags::serial(),
+            merge: None,
+        })
+        .unwrap();
+
+        assert_eq!(report.next_state, TaskState::Done);
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+
+        let eval: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join("evaluation.json")).unwrap(),
+        )
+        .unwrap();
+        let checks = eval["checks"].as_array().unwrap();
+        assert!(checks.iter().any(|c| {
+            c["name"] == "done_status_has_question" && c["fatal"] == false && c["passed"] == false
+        }));
+
+        let checkpoint = std::fs::read_to_string(run_dir.join("checkpoint.md")).unwrap();
+        let handoff = std::fs::read_to_string(run_dir.join("handoff.md")).unwrap();
+        for text in [checkpoint, handoff] {
+            assert!(text.contains(question));
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

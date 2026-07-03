@@ -5,6 +5,7 @@
 //! and readable without any previous chat context.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -538,6 +539,20 @@ pub fn write_str(path: &Path, contents: &str) -> Result<()> {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+pub fn append_str(path: &Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
