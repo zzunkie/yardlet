@@ -4,7 +4,8 @@
 //! evidence on disk and decides the next task state. The first evaluator is
 //! intentionally shallow but honest: every check is mechanical.
 
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -151,8 +152,8 @@ pub fn evaluate(
                 checks.push(check(
                     "forbidden_paths_untouched",
                     false,
-                    "no diff evidence (not a git repo, or git failed): cannot certify forbidden \
-                     paths untouched, so the run cannot be Done"
+                    "no independent change evidence (git status or workspace scan failed): \
+                     cannot certify forbidden paths untouched, so the run cannot be Done"
                         .to_string(),
                 ));
                 let reported_forbidden = forbidden_in(reported.iter());
@@ -314,17 +315,45 @@ pub fn is_canonical_state_path(path: &str) -> bool {
 /// (`None`). A worker's self-report is never treated as evidence for a safety
 /// guarantee, so the evaluator fails closed on `None` rather than trusting it.
 pub fn changed_paths(cwd: &Path) -> Option<Vec<String>> {
-    let out = std::process::Command::new("git")
+    git_changed_paths(cwd).ok()
+}
+
+#[derive(Debug)]
+enum GitEvidenceError {
+    NotRepo,
+    Failed,
+}
+
+fn git_changed_paths(cwd: &Path) -> Result<Vec<String>, GitEvidenceError> {
+    git_changed_paths_with(cwd, OsStr::new("git"))
+}
+
+fn git_changed_paths_with(cwd: &Path, git_bin: &OsStr) -> Result<Vec<String>, GitEvidenceError> {
+    let rev_parse = std::process::Command::new(git_bin)
+        .arg("-C")
+        .arg(cwd)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .output()
+        .map_err(|_| GitEvidenceError::Failed)?;
+    if !rev_parse.status.success() || String::from_utf8_lossy(&rev_parse.stdout).trim() != "true" {
+        return Err(GitEvidenceError::NotRepo);
+    }
+
+    let out = std::process::Command::new(git_bin)
         .arg("-C")
         .arg(cwd)
         // -z is NUL-separated and NEVER quotes paths, so non-ASCII and
         // special-char (tab/backslash/quote) filenames come through verbatim and
         // stay usable as a literal `git add` pathspec.
         .args(["status", "--porcelain=v1", "--untracked-files=all", "-z"])
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
         .output()
-        .ok()?;
+        .map_err(|_| GitEvidenceError::Failed)?;
     if !out.status.success() {
-        return None;
+        return Err(GitEvidenceError::Failed);
     }
     // Each record is "XY <path>\0"; a rename/copy ("R"/"C") adds a trailing
     // "<orig>\0" that we consume and drop (we want the new path, which is on disk).
@@ -344,7 +373,7 @@ pub fn changed_paths(cwd: &Path) -> Option<Vec<String>> {
             chunks.next();
         }
     }
-    Some(paths)
+    Ok(paths)
 }
 
 /// A cheap content fingerprint of a workspace file, used to attribute changes to
@@ -352,38 +381,129 @@ pub fn changed_paths(cwd: &Path) -> Option<Vec<String>> {
 /// files (not read, to bound cost); otherwise a non-cryptographic hash of the
 /// bytes.
 fn fingerprint_file(abs: &Path) -> String {
-    use std::hash::{Hash, Hasher};
-    const CAP: u64 = 8 * 1024 * 1024;
-    match std::fs::metadata(abs) {
-        Err(_) => "absent".to_string(),
-        Ok(m) if !m.is_file() => "nonfile".to_string(),
-        Ok(m) if m.len() > CAP => format!("len:{}", m.len()),
-        Ok(_) => match std::fs::read(abs) {
-            Ok(bytes) => {
-                let mut h = std::collections::hash_map::DefaultHasher::new();
-                bytes.hash(&mut h);
-                format!("{:016x}", h.finish())
-            }
-            Err(_) => "unreadable".to_string(),
-        },
-    }
+    fingerprint_regular_file(abs).unwrap_or_else(|_| "unreadable".to_string())
 }
 
-/// Path + content fingerprint for every file git reports dirty/untracked in
-/// `cwd`. `None` when there is no git evidence. Captured before a worker runs
-/// (and persisted to the run dir) so its changes can be attributed afterward,
-/// even for an already-dirty workspace.
-pub fn dirty_fingerprints(cwd: &Path) -> Option<Vec<(String, String)>> {
-    let paths = changed_paths(cwd)?;
-    Some(
-        paths
+fn fingerprint_regular_file(abs: &Path) -> std::io::Result<String> {
+    use std::hash::{Hash, Hasher};
+    const CAP: u64 = 8 * 1024 * 1024;
+    let m = match std::fs::metadata(abs) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok("absent".to_string()),
+        Err(e) => return Err(e),
+        Ok(m) => m,
+    };
+    if !m.is_file() {
+        return Ok("nonfile".to_string());
+    }
+    if m.len() > CAP {
+        return Ok(format!("len:{}", m.len()));
+    }
+    let bytes = std::fs::read(abs)?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    Ok(format!("{:016x}", h.finish()))
+}
+
+/// Fingerprints used for a worker run. Git repositories prefer the existing
+/// status-based evidence path; if git evidence is unavailable for any reason,
+/// Yardlet falls back to a bounded folder scan. `excluded_roots` is for
+/// Yardlet-owned runtime output, especially the current run directory, so
+/// result/checkpoint/handoff writes are not attributed to the worker's
+/// deliverable diff.
+pub fn run_fingerprints(
+    cwd: &Path,
+    excluded_roots: &[PathBuf],
+) -> Result<Vec<(String, String)>, String> {
+    run_fingerprints_with_git(cwd, excluded_roots, OsStr::new("git"))
+}
+
+fn run_fingerprints_with_git(
+    cwd: &Path,
+    excluded_roots: &[PathBuf],
+    git_bin: &OsStr,
+) -> Result<Vec<(String, String)>, String> {
+    match git_changed_paths_with(cwd, git_bin) {
+        Ok(paths) => Ok(paths
             .into_iter()
             .map(|p| {
                 let fp = fingerprint_file(&cwd.join(&p));
                 (p, fp)
             })
-            .collect(),
-    )
+            .collect()),
+        Err(GitEvidenceError::NotRepo | GitEvidenceError::Failed) => {
+            workspace_fingerprints(cwd, excluded_roots)
+                .map_err(|e| format!("workspace scan failed: {e}"))
+        }
+    }
+}
+
+fn workspace_fingerprints(
+    cwd: &Path,
+    excluded_roots: &[PathBuf],
+) -> std::io::Result<Vec<(String, String)>> {
+    let excluded: Vec<PathBuf> = excluded_roots
+        .iter()
+        .filter_map(|p| {
+            let abs = if p.is_absolute() {
+                p.clone()
+            } else {
+                cwd.join(p)
+            };
+            abs.strip_prefix(cwd).ok().map(PathBuf::from)
+        })
+        .collect();
+    let mut out = Vec::new();
+    scan_workspace_dir(cwd, cwd, &excluded, &mut out)?;
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+fn scan_workspace_dir(
+    root: &Path,
+    dir: &Path,
+    excluded_roots: &[PathBuf],
+    out: &mut Vec<(String, String)>,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let rel = path.strip_prefix(root).unwrap_or(path.as_path());
+        if skip_workspace_path(rel, excluded_roots) {
+            continue;
+        }
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            scan_workspace_dir(root, &path, excluded_roots, out)?;
+        } else if ft.is_file() {
+            out.push((rel_path_string(rel), fingerprint_regular_file(&path)?));
+        } else if ft.is_symlink() {
+            let target = std::fs::read_link(&path)?;
+            out.push((
+                rel_path_string(rel),
+                format!("symlink:{}", target.to_string_lossy()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn skip_workspace_path(rel: &Path, excluded_roots: &[PathBuf]) -> bool {
+    if rel.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy();
+        matches!(s.as_ref(), ".git" | "target" | "node_modules")
+    }) {
+        return true;
+    }
+    excluded_roots
+        .iter()
+        .any(|ex| rel == ex || rel.starts_with(ex))
+}
+
+fn rel_path_string(path: &Path) -> String {
+    path.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Paths the worker actually touched between `baseline` and `after`: any path
@@ -442,7 +562,15 @@ fn decide_state(reported: &str, all_passed: bool, result: Option<&RunResult>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schemas::Changes;
+    use crate::schemas::{Changes, Task};
+
+    fn temp_path(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("yard-{name}-{}-{nanos}", std::process::id()))
+    }
 
     fn dummy_result() -> RunResult {
         RunResult {
@@ -459,6 +587,43 @@ mod tests {
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
         }
+    }
+
+    fn implementation_task(id: &str) -> Task {
+        Task {
+            id: id.into(),
+            title: "t".into(),
+            state: TaskState::Running,
+            priority: 0,
+            risk: String::new(),
+            kind: "implementation".into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec![],
+            skills: vec![],
+            required_capabilities: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+            provenance: String::new(),
+        }
+    }
+
+    fn write_done_result(run_dir: &Path, run_id: &str, task_id: &str) {
+        std::fs::write(run_dir.join("handoff.md"), "h").unwrap();
+        let mut r = dummy_result();
+        r.run_id = run_id.into();
+        r.task_id = task_id.into();
+        r.status = "done".into();
+        std::fs::write(
+            run_dir.join("result.json"),
+            serde_json::to_string(&r).unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -616,6 +781,182 @@ mod tests {
             .iter(),
         );
         assert!(clean.is_empty());
+    }
+
+    #[test]
+    fn git_changed_paths_classifies_non_git_without_locale_stderr_matching() {
+        let root = temp_path("non-git-notrepo");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("work.txt"), "content\n").unwrap();
+
+        assert!(
+            matches!(git_changed_paths(&root), Err(GitEvidenceError::NotRepo)),
+            "non-git workspaces must be classified before parsing localized git stderr"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_evidence_forces_c_locale_for_rev_parse_and_status() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_path("forced-git-locale");
+        std::fs::create_dir_all(&root).unwrap();
+        let fake_git = root.join("git");
+        std::fs::write(
+            &fake_git,
+            r#"#!/bin/sh
+if [ "$LC_ALL" != "C" ] || [ "$LANG" != "C" ]; then
+  echo "unexpected locale: LC_ALL=$LC_ALL LANG=$LANG" >&2
+  exit 88
+fi
+if [ "$3" = "rev-parse" ]; then
+  echo true
+  exit 0
+fi
+if [ "$3" = "status" ]; then
+  printf '?? src/lib.rs\0'
+  exit 0
+fi
+echo "unexpected git invocation: $*" >&2
+exit 89
+"#,
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&fake_git).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_git, perms).unwrap();
+
+        let paths = git_changed_paths_with(&root, fake_git.as_os_str()).unwrap();
+        assert_eq!(paths, vec!["src/lib.rs".to_string()]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_git_binary_falls_back_to_workspace_fingerprints() {
+        let root = temp_path("missing-git");
+        let run_dir = root.join(".agents/runs/run-x");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn before() {}\n").unwrap();
+
+        let baseline = run_fingerprints_with_git(
+            &root,
+            std::slice::from_ref(&run_dir),
+            OsStr::new("/definitely/missing/yardlet-git"),
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn after() {}\n").unwrap();
+        let after = run_fingerprints_with_git(
+            &root,
+            std::slice::from_ref(&run_dir),
+            OsStr::new("/definitely/missing/yardlet-git"),
+        )
+        .unwrap();
+
+        let actual = worker_touched(&baseline, &after);
+        assert_eq!(actual, vec!["src/lib.rs".to_string()]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn workspace_scan_error_is_the_run_fingerprints_fail_closed_boundary() {
+        let missing = temp_path("missing-workspace");
+        let err =
+            run_fingerprints_with_git(&missing, &[], OsStr::new("/definitely/missing/yardlet-git"))
+                .unwrap_err();
+
+        assert!(
+            err.starts_with("workspace scan failed:"),
+            "git evidence failure should fall back; only scan IO failure should return Err: {err}"
+        );
+    }
+
+    #[test]
+    fn non_git_clean_run_gets_folder_evidence_and_can_finish_done() {
+        let root = temp_path("non-git-clean");
+        let run_dir = root.join(".agents/runs/run-x");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn ok() {}\n").unwrap();
+
+        let baseline = run_fingerprints(&root, std::slice::from_ref(&run_dir)).unwrap();
+        write_done_result(&run_dir, "run-x", "YARD-9");
+        let after = run_fingerprints(&root, std::slice::from_ref(&run_dir)).unwrap();
+        let actual = worker_touched(&baseline, &after);
+
+        assert!(
+            actual.is_empty(),
+            "current run artifacts must not count as worker file changes: {actual:?}"
+        );
+        let e = evaluate(
+            &run_dir,
+            "run-x",
+            &implementation_task("YARD-9"),
+            Some(&actual),
+        );
+        assert_eq!(e.next_task_state, TaskState::Done);
+        assert!(e
+            .checks
+            .iter()
+            .any(|c| c.name == "forbidden_paths_untouched" && c.fatal && c.passed));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn non_git_forbidden_env_change_fails_on_actual_folder_evidence() {
+        let root = temp_path("non-git-env");
+        let run_dir = root.join(".agents/runs/run-x");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(root.join("safe.txt"), "before\n").unwrap();
+
+        let baseline = run_fingerprints(&root, std::slice::from_ref(&run_dir)).unwrap();
+        std::fs::write(root.join(".env"), "SECRET=value\n").unwrap();
+        write_done_result(&run_dir, "run-x", "YARD-9");
+        let after = run_fingerprints(&root, std::slice::from_ref(&run_dir)).unwrap();
+        let actual = worker_touched(&baseline, &after);
+
+        assert!(actual.contains(&".env".to_string()), "{actual:?}");
+        let e = evaluate(
+            &run_dir,
+            "run-x",
+            &implementation_task("YARD-9"),
+            Some(&actual),
+        );
+        let forbidden = e
+            .checks
+            .iter()
+            .find(|c| c.name == "forbidden_paths_untouched")
+            .unwrap();
+        assert!(!forbidden.passed);
+        assert_eq!(e.next_task_state, TaskState::Failed);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn non_git_folder_scan_skips_heavy_and_runtime_paths() {
+        let root = temp_path("non-git-skip");
+        let run_dir = root.join(".agents/runs/run-x");
+        for dir in [
+            root.join(".git"),
+            root.join("target"),
+            root.join("node_modules"),
+            run_dir.clone(),
+            root.join("src"),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(root.join(".git/config"), "git\n").unwrap();
+        std::fs::write(root.join("target/cache"), "target\n").unwrap();
+        std::fs::write(root.join("node_modules/pkg"), "node\n").unwrap();
+        std::fs::write(run_dir.join("result.json"), "{}\n").unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let scan = run_fingerprints(&root, std::slice::from_ref(&run_dir)).unwrap();
+        let paths: Vec<String> = scan.into_iter().map(|(p, _)| p).collect();
+        assert_eq!(paths, vec!["src/main.rs".to_string()]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

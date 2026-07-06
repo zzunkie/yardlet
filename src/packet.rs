@@ -803,6 +803,11 @@ pub fn compile(inputs: &PacketInputs) -> String {
          If a needed local action is denied by the sandbox (e.g. network or a package install), \
          also stop and report what you need instead of trying to bypass it.\n\n",
     );
+    p.push_str(
+        "Yardlet itself captures change evidence around the worker run. Do not initialize a \
+         repository, create commits, or otherwise reshape version-control state just to satisfy \
+         validation; make the requested file changes and write the required artifacts.\n\n",
+    );
 
     // Done-first status rule: non-blocking leftovers should not pause the queue.
     p.push_str("## Completion status rule\n\n");
@@ -1667,6 +1672,15 @@ mod tests {
         assert!(p.contains("`status: \"done\"`"));
         assert!(p.contains("propose them in `follow_up_tasks`"));
         assert!(p.contains("finish with `done` and leave non-blocking leftovers"));
+    }
+
+    #[test]
+    fn packet_assigns_change_evidence_to_yardlet_not_git_setup() {
+        let p = packet_for("implementation", "");
+        assert!(p.contains("Yardlet itself captures change evidence around the worker run."));
+        assert!(p.contains("Do not initialize a repository, create commits"));
+        assert!(!p.contains("git init"));
+        assert!(!p.contains("git commit"));
     }
 
     #[test]

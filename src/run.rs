@@ -438,9 +438,13 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     } else {
         None
     };
-    // Snapshot the working tree before the worker runs so the evaluator can
-    // diff against ACTUAL on-disk changes, not the worker's self-report.
-    let baseline_fp = evaluator::dirty_fingerprints(&ws.root);
+    // Snapshot the workspace before the worker runs so the evaluator can diff
+    // against ACTUAL on-disk changes, not the worker's self-report. Git
+    // workspaces use `git status`; non-git workspaces use a bounded folder scan.
+    // The current run dir is excluded so Yardlet's own result/handoff artifacts
+    // are not attributed as worker deliverables.
+    let run_excludes = vec![run_dir.clone()];
+    let baseline_fp = evaluator::run_fingerprints(&ws.root, &run_excludes);
     let started_sys = std::time::SystemTime::now();
     let run_started = std::time::Instant::now();
     let mut outcome = workers::spawn(
@@ -613,16 +617,27 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     ));
 
     // ---- evaluate + compact ---------------------------------------------
-    // Worker-attributed changes: diff the dirty-file fingerprints before and
-    // after the run, so a path the worker re-modified while it was already dirty
-    // is still attributed (plain path-set subtraction would miss it). `None`
-    // when git evidence is unavailable, in which case the evaluator fails closed
+    // Worker-attributed changes: diff the file fingerprints before and after
+    // the run, so a path the worker re-modified while it was already dirty is
+    // still attributed (plain path-set subtraction would miss it). `None` means
+    // evidence capture itself failed, in which case the evaluator fails closed
     // rather than trusting the worker's self-report.
-    let evidence: Option<Vec<String>> =
-        match (&baseline_fp, evaluator::dirty_fingerprints(&ws.root)) {
-            (Some(base), Some(after)) => Some(evaluator::worker_touched(base, &after)),
-            _ => None,
-        };
+    let evidence: Option<Vec<String>> = match (
+        &baseline_fp,
+        evaluator::run_fingerprints(&ws.root, &run_excludes),
+    ) {
+        (Ok(base), Ok(after)) => Some(evaluator::worker_touched(base, &after)),
+        (Err(e), _) => {
+            lines.push(format!(
+                "change evidence unavailable before worker run: {e}"
+            ));
+            None
+        }
+        (_, Err(e)) => {
+            lines.push(format!("change evidence unavailable after worker run: {e}"));
+            None
+        }
+    };
     // Clone the worker's touched paths for auto-commit, but only when it is on
     // (it consumes `evidence` below; off = no allocation).
     let evidence_for_commit = config.auto_commit.then(|| evidence.clone()).flatten();
