@@ -935,6 +935,44 @@ exit 89
     }
 
     #[test]
+    fn non_git_canonical_agent_yaml_change_fails_on_actual_folder_evidence() {
+        let root = temp_path("non-git-canonical-yaml");
+        let run_dir = root.join(".agents/runs/run-x");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(root.join("safe.txt"), "before\n").unwrap();
+
+        let baseline = run_fingerprints(&root, std::slice::from_ref(&run_dir)).unwrap();
+        std::fs::write(root.join(".agents/work-queue.yaml"), "schema_version: 1\n").unwrap();
+        write_done_result(&run_dir, "run-x", "YARD-9");
+        let after = run_fingerprints(&root, std::slice::from_ref(&run_dir)).unwrap();
+        let actual = worker_touched(&baseline, &after);
+
+        assert!(
+            actual.contains(&".agents/work-queue.yaml".to_string()),
+            "folder scan must surface the canonical queue write: {actual:?}"
+        );
+        let e = evaluate(
+            &run_dir,
+            "run-x",
+            &implementation_task("YARD-9"),
+            Some(&actual),
+        );
+        let forbidden = e
+            .checks
+            .iter()
+            .find(|c| c.name == "forbidden_paths_untouched")
+            .unwrap();
+        assert!(!forbidden.passed);
+        assert!(forbidden.fatal);
+        assert!(
+            forbidden.note.contains(".agents/work-queue.yaml"),
+            "{forbidden:?}"
+        );
+        assert_ne!(e.next_task_state, TaskState::Done);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn non_git_folder_scan_skips_heavy_and_runtime_paths() {
         let root = temp_path("non-git-skip");
         let run_dir = root.join(".agents/runs/run-x");
