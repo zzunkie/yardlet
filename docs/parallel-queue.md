@@ -78,6 +78,16 @@ Implementation notes (src/parallel.rs):
   worker as an absolute path plus an extra writable root, while the worker's
   cwd is its worktree. The two contract files (intent, queue) are copied into
   the worktree so the packet's read anchors resolve.
+- Resultless worker failover matches the serial path's bounded retry semantics:
+  if a parallel task finishes without `result.json`, Yardlet resolves one
+  alternate ready worker through the same routing/capability/readiness gates,
+  reruns that task once in the same worktree and run dir, records
+  `failover.json`, then finalizes the alternate worker's output. If no
+  alternate is invocable or the alternate also leaves no result, finalization
+  proceeds through the normal evaluator failure path with no further retry.
+  Parallel batches do not attempt same-worker session resume first; fan-out runs
+  are fresh contexts by design, so the shared guarantee here is the one-shot
+  alternate-worker failover, not hot-session continuation.
 - Integration commits as `yard <yard@localhost>`, excluding `.agents/` from
   the worker's staged changes; merges are `--no-ff` in completion order; a
   conflict aborts cleanly, drops the task to Partial, appends the conflict to

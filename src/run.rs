@@ -102,6 +102,14 @@ pub(crate) struct RunRecord {
     pub worktree: String,
 }
 
+#[derive(Serialize, Deserialize, Default)]
+pub(crate) struct RunFailover {
+    pub from: String,
+    pub to: String,
+    pub reason: String,
+    pub at: String,
+}
+
 pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let mut queue = ws.load_queue()?;
     let workers = ws.load_workers()?;
@@ -353,26 +361,33 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         }
     }
     let resolved = resolved?; // hard stop if no ready worker
-    let reason = resolved.reason;
-    let bin = resolved.bin;
-    let profile = find_worker(&workers.workers, &worker_id)?;
+    let mut active_worker_id = worker_id.clone();
+    let mut active_reason = resolved.reason;
+    let mut active_bin = resolved.bin;
+    let profile = find_worker(&workers.workers, &active_worker_id)?;
     // A per-task model/effort overrides the worker profile only when explicit;
     // "auto"/empty keeps the profile's pin (so the planner's `model: auto` does
     // not clobber a worker-level model pin). The in-flight task thus captures
     // its own effective profile.
-    let eff_profile = workers::effective_profile(profile, &task.model, &task.effort);
+    let mut eff_profile = workers::effective_profile(profile, &task.model, &task.effort);
     // Per-run --full-access OR the workspace's default_access=full.
     let full_access = opts.full_access || config.default_access.eq_ignore_ascii_case("full");
-    let env = guard::sanitized_worker_env_for(&billing, &eff_profile.invocation.pass_env)
+    let mut env = guard::sanitized_worker_env_for(&billing, &eff_profile.invocation.pass_env)
         .map_err(|e| anyhow!(e))?;
-    let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
-    lines.push(format!("worker: {worker_id} ({reason})"));
+    let mut timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
+    lines.push(format!("worker: {active_worker_id} ({active_reason})"));
 
     // H3: workspace-owned pre-run gates bind every worker. A non-zero hook
     // blocks the run before any worker spawns (detect-secrets, lint, "don't
     // run while CI is red"). The task fails with the hook's reason so the
     // auto-drain stops on it rather than looping; fix the cause and re-run.
-    let pre = crate::hooks::run_phase(ws, crate::hooks::Phase::Pre, &task.id, &run_dir, &worker_id);
+    let pre = crate::hooks::run_phase(
+        ws,
+        crate::hooks::Phase::Pre,
+        &task.id,
+        &run_dir,
+        &active_worker_id,
+    );
     if !pre.ok() {
         for f in &pre.failures {
             lines.push(format!("pre-run hook blocked the run: {}", f.summary()));
@@ -382,7 +397,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         return Ok(RunReport {
             run_id: run_id.clone(),
             task_id: task.id.clone(),
-            worker_id: worker_id.clone(),
+            worker_id: active_worker_id.clone(),
             run_dir: run_dir.clone(),
             prepared: true,
             executed: false,
@@ -403,11 +418,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let chained = opts
         .chain
         .as_ref()
-        .is_some_and(|c| c.worker_id == worker_id);
+        .is_some_and(|c| c.worker_id == active_worker_id);
     if chained {
         lines.push(format!(
             "chaining into {}'s session (task {} of a hot chain)",
-            worker_id,
+            active_worker_id,
             opts.chain.as_ref().map(|c| c.length + 1).unwrap_or(1)
         ));
     }
@@ -415,9 +430,10 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // Session id for resume-on-transient: claude lets us set one up front; codex
     // generates its own, captured from its rollout file after the run starts.
     let log_path = run_dir.join("worker-output.log");
+    let mut effective_chained = chained;
     let mut session_id: Option<String> = if chained {
         opts.chain.as_ref().map(|c| c.session.clone())
-    } else if worker_id == "claude-code" {
+    } else if active_worker_id == "claude-code" {
         Some(gen_session_uuid(&run_id))
     } else {
         None
@@ -429,7 +445,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let run_started = std::time::Instant::now();
     let mut outcome = workers::spawn(
         &eff_profile,
-        &bin,
+        &active_bin,
         &packet_text,
         &ws.root,
         &env,
@@ -440,7 +456,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         session_id.as_deref(),
         chained,
     )?;
-    if worker_id == "codex" && session_id.is_none() {
+    if active_worker_id == "codex" && session_id.is_none() {
         session_id = find_codex_session(started_sys);
     }
     // Resume on a transient failure (e.g. a dropped connection) instead of redoing
@@ -462,7 +478,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                     exactly as specified in the original task packet.";
         outcome = workers::spawn(
             &eff_profile,
-            &bin,
+            &active_bin,
             cont,
             &ws.root,
             &env,
@@ -474,7 +490,6 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             true,
         )?;
     }
-    let wall_seconds = run_started.elapsed().as_secs();
 
     // User stopped it (Esc): requeue rather than evaluate as a real failure.
     if cancelled_marker.exists() {
@@ -486,16 +501,112 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         return Ok(RunReport {
             run_id: run_id.clone(),
             task_id: task.id.clone(),
-            worker_id: worker_id.clone(),
+            worker_id: active_worker_id.clone(),
             run_dir: run_dir.clone(),
             prepared: true,
             executed: true,
             lines,
             result_state: Some(TaskState::Queued),
             session: session_id.clone(),
-            chained,
+            chained: effective_chained,
         });
     }
+
+    let mut failover_note: Option<String> = None;
+    if !run_dir.join("result.json").exists() {
+        match routing::resolve_failover_worker_for_task(
+            &workers,
+            &billing,
+            &active_worker_id,
+            &task,
+        ) {
+            Ok(alt) => {
+                let from = active_worker_id.clone();
+                let to = alt.worker_id.clone();
+                let note = format!(
+                    "worker failover: {from} -> {to}; {from} exited without result.json \
+                     after {resumes}/{max_retries} resume attempt(s)"
+                );
+                lines.push(note.clone());
+                record_failover(&run_dir, &from, &to, &note);
+
+                active_worker_id = to;
+                active_reason = format!("failover from {from} ({})", alt.reason);
+                active_bin = alt.bin;
+                let profile = find_worker(&workers.workers, &active_worker_id)?;
+                eff_profile = workers::effective_profile(profile, &task.model, &task.effort);
+                env = guard::sanitized_worker_env_for(&billing, &eff_profile.invocation.pass_env)
+                    .map_err(|e| anyhow!(e))?;
+                timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
+                effective_chained = false;
+                session_id = if active_worker_id == "claude-code" {
+                    Some(gen_session_uuid(&format!("{run_id}-{active_worker_id}")))
+                } else {
+                    None
+                };
+                let failover_packet = packet::compile(&PacketInputs {
+                    worker_id: &active_worker_id,
+                    task: &task,
+                    intent: intent.as_ref(),
+                    repo: &summary,
+                    run_dir_rel: &run_dir_rel,
+                    conversation: &conversation,
+                    continuation: continuation.as_deref(),
+                    chained_from: None,
+                    language: &language,
+                    images: &images,
+                    role_notes: &role_notes,
+                    harness: &harness,
+                });
+                write_str(&workers::packet_path(&run_dir), &failover_packet)?;
+                let failover_started = SystemTime::now();
+                outcome = workers::spawn(
+                    &eff_profile,
+                    &active_bin,
+                    &failover_packet,
+                    &ws.root,
+                    &env,
+                    &log_path,
+                    timeout,
+                    full_access,
+                    &images,
+                    session_id.as_deref(),
+                    false,
+                )?;
+                if active_worker_id == "codex" && session_id.is_none() {
+                    session_id = find_codex_session(failover_started);
+                }
+                failover_note = Some(note);
+            }
+            Err(e) => {
+                let note = format!(
+                    "worker failover unavailable after {} exited without result.json: {e}",
+                    active_worker_id
+                );
+                lines.push(note.clone());
+                failover_note = Some(note);
+            }
+        }
+    }
+
+    if cancelled_marker.exists() {
+        let _ = std::fs::remove_file(&cancelled_marker);
+        save_task_state_on_latest_queue(ws, &mut queue, &task.id, TaskState::Queued)?;
+        lines.push(format!("stopped by user; {} requeued", task.id));
+        return Ok(RunReport {
+            run_id: run_id.clone(),
+            task_id: task.id.clone(),
+            worker_id: active_worker_id.clone(),
+            run_dir: run_dir.clone(),
+            prepared: true,
+            executed: true,
+            lines,
+            result_state: Some(TaskState::Queued),
+            session: session_id.clone(),
+            chained: effective_chained,
+        });
+    }
+    let wall_seconds = run_started.elapsed().as_secs();
     lines.push(format!(
         "worker outcome: {} (exit_ok={}, timed_out={})",
         outcome.note, outcome.exit_ok, outcome.timed_out
@@ -530,8 +641,8 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         run_id: &run_id,
         task: &task,
         evidence,
-        worker_id: &worker_id,
-        reason: &reason,
+        worker_id: &active_worker_id,
+        reason: &active_reason,
         wall_seconds,
         user_override,
         intent_summary,
@@ -542,6 +653,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     })?;
     let next_state = report.next_state;
     lines.extend(report.lines);
+    if let Some(note) = &failover_note {
+        append_failover_note(&run_dir, note)?;
+    }
 
     // Auto-commit (1d): a serial run edits the SHARED working tree, where a
     // before/after fingerprint cannot tell the worker's changes apart from a
@@ -564,14 +678,14 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     Ok(RunReport {
         run_id,
         task_id: task.id,
-        worker_id,
+        worker_id: active_worker_id,
         run_dir,
         prepared: true,
         executed: true,
         lines,
         result_state: Some(next_state),
         session: session_id,
-        chained,
+        chained: effective_chained,
     })
 }
 
@@ -2112,8 +2226,31 @@ fn seal_run_record(
             .unwrap_or_else(|| ".".to_string()),
     });
     rec.state = run_outcome_label(next_state).to_string();
+    rec.worker = worker_id.to_string();
     rec.completed_at = Some(Local::now().to_rfc3339());
     let _ = state::save_yaml(&path, &rec);
+}
+
+fn record_failover(run_dir: &std::path::Path, from: &str, to: &str, reason: &str) {
+    let event = RunFailover {
+        from: from.to_string(),
+        to: to.to_string(),
+        reason: reason.to_string(),
+        at: Local::now().to_rfc3339(),
+    };
+    let _ = write_str(
+        &run_dir.join("failover.json"),
+        &serde_json::to_string_pretty(&event).unwrap_or_default(),
+    );
+}
+
+fn append_failover_note(run_dir: &std::path::Path, note: &str) -> Result<()> {
+    let mut md = String::from("\n## Worker failover\n\n");
+    md.push_str(note);
+    md.push('\n');
+    append_str(&run_dir.join("checkpoint.md"), &md)?;
+    append_str(&run_dir.join("handoff.md"), &md)?;
+    Ok(())
 }
 
 fn append_nonblocking_follow_up_notes(run_dir: &std::path::Path, result: &RunResult) -> Result<()> {
@@ -2311,6 +2448,277 @@ mod tests {
             accept_ambiguity: false,
             chain: None,
         }
+    }
+
+    fn init_test_workspace(name: &str, worker_yaml: &str) -> Workspace {
+        let root = std::env::temp_dir().join(format!("yard-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let ws = Workspace::at(&root);
+        let _ = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&root)
+            .output();
+        write_str(
+            &ws.config_path(),
+            "schema_version: 1\nproduct: yardlet\nworkspace_id: test\ncreated_at: \"2026-07-03T00:00:00Z\"\nstate_dir: .agents\ndefault_interface: tui\ncanonical_queue: work-queue.yaml\ncurrent_intent: intent-contract.yaml\n",
+        )
+        .unwrap();
+        write_str(&ws.billing_path(), "schema_version: 1\n").unwrap();
+        write_str(
+            &ws.intent_path(),
+            "schema_version: 1\nid: intent-test\nsummary: test\nstatus: accepted\n",
+        )
+        .unwrap();
+        write_str(&ws.workers_path(), worker_yaml).unwrap();
+        ws
+    }
+
+    fn shell_literal(path: &std::path::Path) -> String {
+        serde_json::to_string(&path.display().to_string()).unwrap()
+    }
+
+    fn write_worker_script(root: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let path = root.join(name);
+        write_str(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn no_result_worker_fails_over_once_to_alternate_worker() {
+        let root = std::env::temp_dir().join(format!("yard-failover-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let dead = write_worker_script(
+            &root,
+            "dead.sh",
+            "#!/bin/sh\nrun_dir=\"$1\"\ncat >/dev/null\nexit 1\n",
+        );
+        let builder = write_worker_script(
+            &root,
+            "builder.sh",
+            r#"#!/bin/sh
+run_dir="$1"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-001",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": [], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "done by failover worker",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+cat > "$run_dir/handoff.md" <<EOF
+# Worker handoff
+done by builder
+EOF
+exit 0
+"#,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, builder]\nworkers:\n  - id: dead\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: builder\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&dead),
+            shell_literal(&builder)
+        );
+        let ws = init_test_workspace("failover", &worker_yaml);
+        ws.save_queue(&queue(vec![task("YARD-001", TaskState::Queued, 10, false)]))
+            .unwrap();
+
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-001".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.worker_id, "builder");
+        assert_eq!(report.result_state, Some(TaskState::Done));
+        assert!(report.lines.iter().any(|l| l.contains("dead -> builder")));
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+
+        let handoff = std::fs::read_to_string(report.run_dir.join("handoff.md")).unwrap();
+        assert!(handoff.contains("Worker failover"));
+        assert!(handoff.contains("dead -> builder"));
+        let rec: RunRecord = state::load_yaml(&report.run_dir.join("run.yaml")).unwrap();
+        assert_eq!(rec.worker, "builder");
+        let failover: RunFailover = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("failover.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(failover.from, "dead");
+        assert_eq!(failover.to, "builder");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn result_file_evaluation_failure_does_not_failover() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-no-failover-result-src-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let bad = write_worker_script(
+            &root,
+            "bad.sh",
+            r#"#!/bin/sh
+run_dir="$1"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "OTHER",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": [], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "bad ids",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+cat > "$run_dir/handoff.md" <<EOF
+# Worker handoff
+bad ids
+EOF
+exit 0
+"#,
+        );
+        let marker = root.join("fallback-ran");
+        let fallback = write_worker_script(
+            &root,
+            "fallback.sh",
+            &format!(
+                "#!/bin/sh\nrun_dir=\"$1\"\nmarker={}\ncat >/dev/null\ntouch \"$marker\"\nexit 0\n",
+                shell_literal(&marker)
+            ),
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: bad-result\n  fallback_order: [bad-result, fallback]\nworkers:\n  - id: bad-result\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fallback\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&bad),
+            shell_literal(&fallback)
+        );
+        let ws = init_test_workspace("no-failover-result", &worker_yaml);
+        ws.save_queue(&queue(vec![task("YARD-001", TaskState::Queued, 10, false)]))
+            .unwrap();
+
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-001".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.worker_id, "bad-result");
+        assert_eq!(report.result_state, Some(TaskState::Failed));
+        assert!(
+            !marker.exists(),
+            "fallback worker must not run when result.json exists"
+        );
+        assert!(!report.lines.iter().any(|l| l.contains("worker failover")));
+        let handoff = std::fs::read_to_string(report.run_dir.join("handoff.md")).unwrap();
+        assert!(!handoff.contains("Worker failover"));
+        assert_eq!(
+            ws.load_queue().unwrap().tasks[0].state,
+            TaskState::Failed,
+            "existing evaluation-failure retry semantics stay unchanged"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn failover_unready_alternate_does_not_fall_back_to_failed_worker() {
+        let root =
+            std::env::temp_dir().join(format!("yard-failover-unready-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let attempts = root.join("dead-attempts");
+        let dead = write_worker_script(
+            &root,
+            "dead.sh",
+            r#"#!/bin/sh
+run_dir="$1"
+attempts="$2"
+cat >/dev/null
+if [ -f "$attempts" ]; then
+  count=$(cat "$attempts")
+else
+  count=0
+fi
+count=$((count + 1))
+printf "%s" "$count" > "$attempts"
+exit 1
+"#,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, missing]\nworkers:\n  - id: dead\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: missing\n    invocation:\n      command: yardlet-definitely-missing-worker-command\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&dead),
+            shell_literal(&attempts)
+        );
+        let ws = init_test_workspace("failover-unready", &worker_yaml);
+        ws.save_queue(&queue(vec![task("YARD-004", TaskState::Queued, 10, false)]))
+            .unwrap();
+
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-004".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.worker_id, "dead");
+        assert_eq!(report.result_state, Some(TaskState::Failed));
+        assert_eq!(
+            std::fs::read_to_string(&attempts).unwrap(),
+            "1",
+            "failed worker must not be selected again during failover readiness fallback"
+        );
+        assert!(report.lines.iter().any(|l| {
+            l.contains("worker failover unavailable")
+                && l.contains("no invocable worker among")
+                && l.contains("missing")
+                && !l.contains("\"dead\"")
+        }));
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Failed);
+        assert!(!report.run_dir.join("failover.json").exists());
+
+        let eval: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("evaluation.json")).unwrap(),
+        )
+        .unwrap();
+        let checks = eval["checks"].as_array().unwrap();
+        assert!(checks.iter().any(|c| {
+            c["name"] == "result_file_present" && c["passed"] == false && c["fatal"] == true
+        }));
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     #[test]

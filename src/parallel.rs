@@ -22,10 +22,11 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use chrono::Local;
+use serde::Serialize;
 
 use crate::packet::{self, PacketInputs};
 use crate::schemas::{Task, TaskState, WorkQueue, WorkerProfile};
-use crate::state::{self, write_str, Workspace};
+use crate::state::{self, append_str, write_str, Workspace};
 use crate::{evaluator, guard, inspect, routing, run, workers};
 
 /// Indices of tasks eligible to run together right now: queued, dependencies
@@ -86,6 +87,14 @@ struct Finished {
     prep_idx: usize,
     outcome: Result<workers::WorkerOutcome>,
     wall_seconds: u64,
+}
+
+#[derive(Serialize)]
+struct ParallelFailover {
+    from: String,
+    to: String,
+    reason: String,
+    at: String,
 }
 
 /// Run the tasks at `indices` concurrently and integrate their results.
@@ -297,12 +306,103 @@ pub fn run_batch<F: FnMut(&str)>(
     let intent_summary = intent.as_ref().map(|i| i.summary.as_str()).unwrap_or("");
     for fin in rx {
         let p = &preps[fin.prep_idx];
-        match &fin.outcome {
+        let mut outcome = fin.outcome;
+        let mut worker_id = p.worker_id.clone();
+        let mut reason = p.reason.clone();
+        let mut wall_seconds = fin.wall_seconds;
+        let mut failover_note: Option<String> = None;
+
+        match &outcome {
             Ok(o) => on_event(&format!(
                 "{}: worker finished ({}); integrating",
                 p.task.id, o.note
             )),
             Err(e) => on_event(&format!("{}: worker error: {e}", p.task.id)),
+        }
+
+        if !p.run_dir.join("result.json").exists() {
+            match routing::resolve_failover_worker_for_task(
+                &workers_file,
+                &billing,
+                &worker_id,
+                &p.task,
+            ) {
+                Ok(alt) => {
+                    let from = worker_id.clone();
+                    let to = alt.worker_id.clone();
+                    let note = format!(
+                        "worker failover: {from} -> {to}; {from} exited without result.json"
+                    );
+                    on_event(&format!("{}: {note}", p.task.id));
+                    record_failover(&p.run_dir, &from, &to, &note);
+
+                    worker_id = to;
+                    reason = format!("failover from {from} ({})", alt.reason);
+                    let failover_started = std::time::Instant::now();
+                    outcome = (|| -> Result<workers::WorkerOutcome> {
+                        let profile = run::find_worker(&workers_file.workers, &worker_id)?;
+                        let eff_profile =
+                            workers::effective_profile(profile, &p.task.model, &p.task.effort);
+                        let env = guard::sanitized_worker_env_for(
+                            &billing,
+                            &eff_profile.invocation.pass_env,
+                        )
+                        .map_err(|e| anyhow!(e))?;
+                        let timeout =
+                            Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
+                        let role_notes =
+                            packet::load_role_notes(&ws.root, packet::role_for(&p.task.kind));
+                        let run_dir_abs = p.run_dir.display().to_string();
+                        let failover_packet = packet::compile(&PacketInputs {
+                            worker_id: &worker_id,
+                            task: &p.task,
+                            intent: intent.as_ref(),
+                            repo: &repo_summary,
+                            run_dir_rel: &run_dir_abs,
+                            conversation: &[],
+                            continuation: None,
+                            chained_from: None,
+                            language: &language,
+                            images: &images,
+                            role_notes: &role_notes,
+                            harness: &harness,
+                        });
+                        write_str(&workers::packet_path(&p.run_dir), &failover_packet)?;
+                        let session = (worker_id == "claude-code")
+                            .then(|| run::gen_session_uuid(&format!("{}-{worker_id}", p.run_id)));
+                        workers::spawn(
+                            &eff_profile,
+                            &alt.bin,
+                            &failover_packet,
+                            &p.wt_path,
+                            &env,
+                            &p.run_dir.join("worker-output.log"),
+                            timeout,
+                            full_access,
+                            &images,
+                            session.as_deref(),
+                            false,
+                        )
+                    })();
+                    wall_seconds += failover_started.elapsed().as_secs();
+                    match &outcome {
+                        Ok(o) => on_event(&format!(
+                            "{}: failover worker finished ({})",
+                            p.task.id, o.note
+                        )),
+                        Err(e) => on_event(&format!("{}: failover worker error: {e}", p.task.id)),
+                    }
+                    failover_note = Some(note);
+                }
+                Err(e) => {
+                    let note = format!(
+                        "worker failover unavailable after {} exited without result.json: {e}",
+                        worker_id
+                    );
+                    on_event(&format!("{}: {note}", p.task.id));
+                    failover_note = Some(note);
+                }
+            }
         }
 
         // Parallel runs execute in an isolated worktree, so its git status IS
@@ -311,7 +411,12 @@ pub fn run_batch<F: FnMut(&str)>(
         // self-report), then — only on a Done run — merges the worktree back;
         // it writes artifacts, the queue state, follow-ups, and telemetry. The
         // single finalization pipeline is shared with the serial path.
-        let evidence = evaluator::changed_paths(&p.wt_path);
+        let evidence = evaluator::changed_paths(&p.wt_path).map(|paths| {
+            paths
+                .into_iter()
+                .filter(|path| !path.starts_with(".agents/"))
+                .collect()
+        });
         // A finalize error for one task (e.g. a transient queue-write hiccup)
         // must not abort the whole batch and strand the other already-finished
         // worktrees — log it and move on; `yardlet recover` salvages this one.
@@ -321,9 +426,9 @@ pub fn run_batch<F: FnMut(&str)>(
             run_id: &p.run_id,
             task: &p.task,
             evidence,
-            worker_id: &p.worker_id,
-            reason: &p.reason,
-            wall_seconds: fin.wall_seconds,
+            worker_id: &worker_id,
+            reason: &reason,
+            wall_seconds,
             user_override: None,
             intent_summary,
             billing: &billing,
@@ -347,6 +452,14 @@ pub fn run_batch<F: FnMut(&str)>(
             }
         };
         let next = report.next_state;
+        if let Some(note) = &failover_note {
+            if let Err(e) = append_failover_note(&p.run_dir, note) {
+                on_event(&format!(
+                    "{}: failed to append failover note: {e}",
+                    p.task.id
+                ));
+            }
+        }
         for line in report.lines {
             on_event(&line);
         }
@@ -356,6 +469,28 @@ pub fn run_batch<F: FnMut(&str)>(
         let _ = h.join();
     }
     Ok(states)
+}
+
+fn record_failover(run_dir: &Path, from: &str, to: &str, reason: &str) {
+    let event = ParallelFailover {
+        from: from.to_string(),
+        to: to.to_string(),
+        reason: reason.to_string(),
+        at: Local::now().to_rfc3339(),
+    };
+    let _ = write_str(
+        &run_dir.join("failover.json"),
+        &serde_json::to_string_pretty(&event).unwrap_or_default(),
+    );
+}
+
+fn append_failover_note(run_dir: &Path, note: &str) -> Result<()> {
+    let mut md = String::from("\n## Worker failover\n\n");
+    md.push_str(note);
+    md.push('\n');
+    append_str(&run_dir.join("checkpoint.md"), &md)?;
+    append_str(&run_dir.join("handoff.md"), &md)?;
+    Ok(())
 }
 
 pub(crate) enum Integration {
@@ -521,6 +656,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
 mod tests {
     use super::*;
     use crate::schemas::{SelectionPolicy, WorkQueue};
+    use crate::state::Workspace;
 
     fn task(id: &str, state: TaskState, priority: i64, deps: Vec<String>) -> Task {
         Task {
@@ -605,6 +741,160 @@ mod tests {
             ],
         );
         root
+    }
+
+    fn setup_workspace(root: &Path, worker_yaml: &str, tasks: Vec<Task>) -> Workspace {
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let ws = Workspace::at(root);
+        write_str(
+            &ws.config_path(),
+            "schema_version: 1\nproduct: yardlet\nworkspace_id: test\ncreated_at: \"2026-07-03T00:00:00Z\"\nstate_dir: .agents\ndefault_interface: tui\ncanonical_queue: work-queue.yaml\ncurrent_intent: intent-contract.yaml\n",
+        )
+        .unwrap();
+        write_str(&ws.billing_path(), "schema_version: 1\n").unwrap();
+        write_str(
+            &ws.intent_path(),
+            "schema_version: 1\nid: intent-test\nsummary: 병렬 페일오버 테스트\nstatus: accepted\n",
+        )
+        .unwrap();
+        write_str(&ws.workers_path(), worker_yaml).unwrap();
+        ws.save_queue(&queue(tasks)).unwrap();
+        ws
+    }
+
+    fn yaml_string(path: &Path) -> String {
+        serde_json::to_string(&path.display().to_string()).unwrap()
+    }
+
+    fn write_test_worker(root: &Path, name: &str, body: &str) -> PathBuf {
+        let path = root.join(".agents").join(name);
+        write_str(&path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&path, perms).unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn parallel_resultless_worker_fails_over_once_to_alternate_worker() {
+        let root = temp_repo("failover");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let dead_attempts = root.join(".agents/dead-attempts");
+        let builder_attempts = root.join(".agents/builder-attempts");
+        let dead = write_test_worker(
+            &root,
+            "dead-worker.sh",
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "dead-worker 1.0"
+  exit 0
+fi
+run_dir="$1"
+attempts="$2"
+cat >/dev/null
+if [ -f "$attempts" ]; then
+  count=$(cat "$attempts")
+else
+  count=0
+fi
+count=$((count + 1))
+printf "%s" "$count" > "$attempts"
+exit 1
+"#,
+        );
+        let builder = write_test_worker(
+            &root,
+            "builder-worker.sh",
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "builder-worker 1.0"
+  exit 0
+fi
+run_dir="$1"
+attempts="$2"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+if [ -f "$attempts" ]; then
+  count=$(cat "$attempts")
+else
+  count=0
+fi
+count=$((count + 1))
+printf "%s" "$count" > "$attempts"
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-PAR",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": [], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "병렬 페일오버 worker가 완료했다.",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+cat > "$run_dir/handoff.md" <<EOF
+# Worker handoff
+
+병렬 페일오버 worker가 완료했다.
+EOF
+exit 0
+"#,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, builder]\nworkers:\n  - id: dead\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            yaml_string(&dead),
+            yaml_string(&dead_attempts),
+            yaml_string(&builder),
+            yaml_string(&builder_attempts)
+        );
+        let ws = setup_workspace(
+            &root,
+            &worker_yaml,
+            vec![task("YARD-PAR", TaskState::Queued, 10, vec![])],
+        );
+        let mut events = Vec::new();
+
+        let states = run_batch(&ws, &[0], false, |s| events.push(s.to_string())).unwrap();
+
+        assert_eq!(states, vec![("YARD-PAR".to_string(), TaskState::Done)]);
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+        assert_eq!(std::fs::read_to_string(&dead_attempts).unwrap(), "1");
+        assert_eq!(std::fs::read_to_string(&builder_attempts).unwrap(), "1");
+        assert!(events.iter().any(|e| e.contains("dead -> builder")));
+        assert!(events
+            .iter()
+            .any(|e| e.contains("failover worker finished")));
+
+        let run_dirs: Vec<PathBuf> = std::fs::read_dir(ws.runs_dir())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.is_dir())
+            .collect();
+        assert_eq!(run_dirs.len(), 1);
+        let run_dir = &run_dirs[0];
+        let failover: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(run_dir.join("failover.json")).unwrap())
+                .unwrap();
+        assert_eq!(failover["from"], "dead");
+        assert_eq!(failover["to"], "builder");
+        let handoff = std::fs::read_to_string(run_dir.join("handoff.md")).unwrap();
+        assert!(handoff.contains("Worker failover"));
+        assert!(handoff.contains("dead -> builder"));
+        let run_record: serde_json::Value =
+            crate::yaml::from_str(&std::fs::read_to_string(run_dir.join("run.yaml")).unwrap())
+                .unwrap();
+        assert_eq!(run_record["worker"], "builder");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

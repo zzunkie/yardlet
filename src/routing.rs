@@ -39,6 +39,7 @@ pub fn load_overrides(ws: &Workspace) -> RoutingOverrides {
         .unwrap_or_default()
 }
 
+#[derive(Debug)]
 pub struct Resolved {
     pub worker_id: String,
     pub bin: PathBuf,
@@ -101,6 +102,46 @@ pub fn resolve_worker_for_task(
     )
 }
 
+pub fn resolve_failover_worker_for_task(
+    workers: &WorkersFile,
+    billing: &BillingPolicy,
+    failed_worker: &str,
+    task: &Task,
+) -> Result<Resolved> {
+    let required: Vec<String> = task
+        .required_capabilities
+        .iter()
+        .map(|c| norm_cap(c))
+        .filter(|c| !c.is_empty())
+        .collect();
+    let mut order = Vec::new();
+    for id in workers
+        .routing
+        .fallback_order
+        .iter()
+        .chain(std::iter::once(&workers.routing.default_worker))
+        .chain(workers.workers.iter().map(|w| &w.id))
+    {
+        if id != failed_worker && !order.contains(id) {
+            order.push(id.clone());
+        }
+    }
+    if !required.is_empty() {
+        order.retain(|id| worker_declares(workers, id, &required));
+    }
+    if order.is_empty() {
+        let cap_note = if required.is_empty() {
+            String::new()
+        } else {
+            format!(" declaring required capability/capabilities {required:?}")
+        };
+        return Err(anyhow!(
+            "no alternate worker{cap_note} after excluding '{failed_worker}'"
+        ));
+    }
+    resolve_order(workers, billing, order[0].clone(), "failover", &order)
+}
+
 fn resolve_candidate(
     workers: &WorkersFile,
     billing: &BillingPolicy,
@@ -128,8 +169,18 @@ fn resolve_candidate(
         ));
     }
 
+    resolve_order(workers, billing, candidate, source, &order)
+}
+
+fn resolve_order(
+    workers: &WorkersFile,
+    billing: &BillingPolicy,
+    candidate: String,
+    source: &'static str,
+    order: &[String],
+) -> Result<Resolved> {
     let mut tried = Vec::new();
-    for id in &order {
+    for id in order {
         let Some(profile) = workers.workers.iter().find(|w| &w.id == id) else {
             continue;
         };
@@ -332,5 +383,54 @@ mod tests {
         let need = vec!["image_generation".to_string(), "video".to_string()];
         assert!(!worker_declares(&w, "codex", &need));
         assert!(first_capable(&w, &need).is_none());
+    }
+
+    #[test]
+    fn failover_excludes_failed_worker_and_keeps_capability_gate() {
+        let w: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, second, third]\nworkers:\n  - id: first\n    capabilities: [image_generation]\n    invocation: { command: sh }\n  - id: second\n    capabilities: [image_generation]\n    invocation: { command: sh }\n  - id: third\n    invocation: { command: sh }\n",
+        )
+        .unwrap();
+        let task: Task =
+            crate::yaml::from_str("id: T\ntitle: t\nrequired_capabilities: [image-generation]\n")
+                .unwrap();
+
+        let resolved =
+            resolve_failover_worker_for_task(&w, &BillingPolicy::default(), "first", &task)
+                .unwrap();
+        assert_eq!(resolved.worker_id, "second");
+
+        let w_without_alternate: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, third]\nworkers:\n  - id: first\n    capabilities: [image_generation]\n    invocation: { command: sh }\n  - id: third\n    invocation: { command: sh }\n",
+        )
+        .unwrap();
+        let err = resolve_failover_worker_for_task(
+            &w_without_alternate,
+            &BillingPolicy::default(),
+            "first",
+            &task,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("no alternate worker") && err.contains("image_generation"),
+            "the failed worker must stay excluded and only capable alternatives may be tried: {err}"
+        );
+    }
+
+    #[test]
+    fn failover_uses_remaining_order_for_readiness_without_readding_failed_worker() {
+        let w: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nrouting:\n  default_worker: failed\n  fallback_order: [failed, missing, ready]\nworkers:\n  - id: failed\n    invocation: { command: sh }\n  - id: missing\n    invocation: { command: yardlet-definitely-missing-worker-command }\n  - id: ready\n    invocation: { command: sh }\n",
+        )
+        .unwrap();
+        let task: Task = crate::yaml::from_str("id: T\ntitle: t\n").unwrap();
+
+        let resolved =
+            resolve_failover_worker_for_task(&w, &BillingPolicy::default(), "failed", &task)
+                .unwrap();
+
+        assert_eq!(resolved.worker_id, "ready");
+        assert_eq!(resolved.reason, "fallback (missing not invocable)");
     }
 }
