@@ -10,7 +10,7 @@ use crate::guard;
 use crate::inspect;
 use crate::run::{self, RunOptions};
 use crate::snapshot::Snapshot;
-use crate::state::Workspace;
+use crate::state::{UserTaskInput, Workspace};
 use crate::{init, packet};
 
 #[derive(Parser)]
@@ -30,6 +30,8 @@ pub enum Command {
     Init(InitArgs),
     /// Turn a natural-language request into an intent contract + queue.
     New(NewArgs),
+    /// Add a user-authored task to the current queue without rebuilding it.
+    Add(AddArgs),
     /// Express lane: skip planning, run one goal (to a --verify condition).
     Goal(GoalArgs),
     /// Report workspace, intent, queue, and worker state.
@@ -243,6 +245,27 @@ pub struct NewArgs {
 }
 
 #[derive(Args)]
+pub struct AddArgs {
+    /// Task title/request to append to the current queue.
+    request: Vec<String>,
+    /// Dependency task id. Repeat for multiple dependencies.
+    #[arg(long = "depends-on")]
+    depends_on: Vec<String>,
+    /// Task kind recorded in the queue.
+    #[arg(long, default_value = "implementation")]
+    kind: String,
+    /// Risk label recorded in the queue.
+    #[arg(long, default_value = "low")]
+    risk: String,
+    /// Preferred worker id, if any.
+    #[arg(long)]
+    worker: Option<String>,
+    /// Allowed-scope entry. Repeat to add multiple scope hints.
+    #[arg(long = "scope")]
+    scope: Vec<String>,
+}
+
+#[derive(Args)]
 pub struct InitArgs {
     /// Overwrite existing policy templates.
     #[arg(long)]
@@ -336,6 +359,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         None => launch_tui(&cwd),
         Some(Command::Init(a)) => cmd_init(&cwd, a),
         Some(Command::New(a)) => cmd_new(&cwd, a),
+        Some(Command::Add(a)) => cmd_add(&cwd, a),
         Some(Command::Goal(a)) => cmd_goal(&cwd, a),
         Some(Command::Status(a)) => cmd_status(&cwd, a),
         Some(Command::Queue) => cmd_queue(&cwd),
@@ -804,6 +828,33 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
         return Ok(());
     }
     println!("\nNext: `yardlet queue` to review, `yardlet run --next --execute` to run.");
+    Ok(())
+}
+
+fn cmd_add(cwd: &std::path::Path, args: AddArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let request = args.request.join(" ");
+    if request.trim().is_empty() {
+        anyhow::bail!("provide a task, e.g. `yardlet add \"add admin order search\"`");
+    }
+    let task = ws.append_user_task(UserTaskInput {
+        title: request.trim().to_string(),
+        risk: args.risk,
+        kind: args.kind,
+        preferred_worker: args.worker.unwrap_or_default(),
+        depends_on: args.depends_on,
+        allowed_scope: args.scope,
+    })?;
+    println!(
+        "Added {} to the queue: {}{}",
+        task.id,
+        task.title,
+        if task.depends_on.is_empty() {
+            String::new()
+        } else {
+            format!(" (depends on {})", task.depends_on.join(", "))
+        }
+    );
     Ok(())
 }
 

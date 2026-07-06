@@ -13,8 +13,8 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use crate::schemas::{
-    BillingPolicy, Conversation, ConversationTurn, IntentContract, TurnRole, WorkQueue,
-    WorkersFile, YardConfig,
+    BillingPolicy, Conversation, ConversationTurn, IntentContract, Task, TaskState, TurnRole,
+    WorkQueue, WorkersFile, YardConfig,
 };
 use crate::yaml;
 
@@ -150,6 +150,49 @@ impl Workspace {
         save_yaml(&self.queue_path(), queue)
     }
 
+    /// Append a user-authored task to the latest queue without re-planning or
+    /// rewriting existing tasks. This is the `yardlet add` path used while an
+    /// auto-drain may already be running; always load the current queue first so
+    /// a stale caller cannot clobber runtime state.
+    pub fn append_user_task(&self, input: UserTaskInput) -> Result<Task> {
+        let mut queue = self.load_queue()?;
+        let next_num = queue
+            .tasks
+            .iter()
+            .filter_map(|t| {
+                t.id.strip_prefix("YARD-")
+                    .and_then(|n| n.parse::<usize>().ok())
+            })
+            .max()
+            .unwrap_or(queue.tasks.len())
+            + 1;
+        let base_priority = queue.tasks.iter().map(|t| t.priority).max().unwrap_or(0);
+        let task = Task {
+            id: format!("YARD-{next_num:03}"),
+            title: input.title,
+            state: TaskState::Queued,
+            priority: base_priority + 10,
+            risk: input.risk,
+            kind: input.kind,
+            preferred_worker: input.preferred_worker,
+            model: String::new(),
+            effort: String::new(),
+            depends_on: input.depends_on,
+            skills: Vec::new(),
+            required_capabilities: Vec::new(),
+            allowed_scope: input.allowed_scope,
+            acceptance: Vec::new(),
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: Some("added directly by user with yardlet add".to_string()),
+            provenance: "user-added".to_string(),
+        };
+        queue.tasks.push(task.clone());
+        self.save_queue(&queue)?;
+        Ok(task)
+    }
+
     pub fn load_workers(&self) -> Result<WorkersFile> {
         load_yaml(&self.workers_path())
     }
@@ -182,6 +225,15 @@ impl Workspace {
         }
         Ok(Some(load_yaml(&p)?))
     }
+}
+
+pub struct UserTaskInput {
+    pub title: String,
+    pub risk: String,
+    pub kind: String,
+    pub preferred_worker: String,
+    pub depends_on: Vec<String>,
+    pub allowed_scope: Vec<String>,
 }
 
 pub fn load_yaml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
@@ -707,6 +759,58 @@ routing:
             .expect("a missing queue must load as empty, not error");
         assert!(q.tasks.is_empty());
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn append_user_task_preserves_existing_runtime_queue() {
+        let dir = std::env::temp_dir().join(format!("yard-add-task-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let ws = Workspace::at(&dir);
+        let mut queue = WorkQueue::empty();
+        queue.tasks.push(Task {
+            id: "YARD-001".to_string(),
+            title: "running".to_string(),
+            state: TaskState::Running,
+            priority: 10,
+            risk: "medium".to_string(),
+            kind: "implementation".to_string(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: Vec::new(),
+            skills: Vec::new(),
+            required_capabilities: Vec::new(),
+            allowed_scope: Vec::new(),
+            acceptance: Vec::new(),
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+            provenance: String::new(),
+        });
+        ws.save_queue(&queue).unwrap();
+
+        let added = ws
+            .append_user_task(UserTaskInput {
+                title: "새 독립 작업".to_string(),
+                risk: "low".to_string(),
+                kind: "implementation".to_string(),
+                preferred_worker: String::new(),
+                depends_on: Vec::new(),
+                allowed_scope: vec!["src/run.rs".to_string()],
+            })
+            .unwrap();
+
+        let q = ws.load_queue().unwrap();
+        assert_eq!(added.id, "YARD-002");
+        assert_eq!(q.tasks.len(), 2);
+        assert_eq!(q.tasks[0].state, TaskState::Running);
+        assert_eq!(q.tasks[1].id, "YARD-002");
+        assert_eq!(q.tasks[1].state, TaskState::Queued);
+        assert!(q.tasks[1].depends_on.is_empty());
+        assert_eq!(q.tasks[1].provenance, "user-added");
         let _ = fs::remove_dir_all(&dir);
     }
 
