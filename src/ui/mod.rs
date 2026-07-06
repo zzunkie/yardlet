@@ -159,6 +159,10 @@ pub struct App {
     /// Set when the screen opens — a NeedsUser question, or a Partial/Blocked
     /// task's remaining-work context (the answer becomes rerun instructions).
     pub answer_target: Option<(String, String)>,
+    /// The current Answer submission should grant the selected task's
+    /// single-use approval before resuming it. This keeps input+approval work in
+    /// one deliberate UI flow without weakening run_next's approval gate.
+    pub answer_grants_approval: bool,
     /// The non-ASCII input source we auto-switched away from (restored when a
     /// text-input screen opens, or on quit).
     pub ime_saved: Option<String>,
@@ -268,6 +272,7 @@ impl App {
             update_available: false,
             want_restart: false,
             answer_target: None,
+            answer_grants_approval: false,
             ime_saved: None,
             ime_checked: Instant::now(),
             lang,
@@ -895,12 +900,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             // Answer a NeedsUser question — or give rerun instructions to a
             // Partial/Blocked task (threaded into its continuation packet).
             match compute_answer_target(app) {
-                Some(t) => {
-                    app.answer_target = Some(t);
-                    app.input_clear();
-                    app.toast = None;
-                    app.screen = Screen::Answer;
-                }
+                Some(t) => open_answer_target(app, t),
                 None => app.toast = Some((true, app.lang.l().no_pending.into())),
             }
         }
@@ -979,14 +979,17 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
 /// What Enter does on the selected queue row, decided purely from the task's
 /// state, whether it is waiting on an ungranted approval, and whether a worker
 /// is already running. Kept pure so the state→action mapping is unit-tested
-/// without spawning workers — in particular the approval invariant (an
-/// approval-pending task is never `Run`) is verified here.
+/// without spawning workers. Approval-pending tasks never go straight to `Run`;
+/// a NeedsUser task may open the answer flow, which grants approval only when
+/// the user submits the answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HomeEnterAction {
     /// Run (or retry) this task now.
     Run,
     /// Open the answer screen for a NeedsUser task.
     Answer,
+    /// Open the answer screen and grant approval when the answer is submitted.
+    AnswerThenApprove,
     /// Approval-required and not granted: point at the approval flow (p), never
     /// run. Approval stays a deliberate, explicit act — Enter cannot grant it.
     ApprovalHint,
@@ -1010,7 +1013,9 @@ fn home_enter_action(state: TaskState, approval_pending: bool, busy: bool) -> Ho
         // or resumes a worker run. An ungranted approval-required task must go
         // through the approval flow first — Enter must never silently run it.
         _ => {
-            if approval_pending {
+            if approval_pending && state == TaskState::NeedsUser {
+                HomeEnterAction::AnswerThenApprove
+            } else if approval_pending {
                 HomeEnterAction::ApprovalHint
             } else if busy {
                 HomeEnterAction::Busy
@@ -1039,6 +1044,7 @@ fn handle_home_enter(app: &mut App) {
     match home_enter_action(state, approval_pending, app.is_busy()) {
         HomeEnterAction::Run => start_run_target(app, id),
         HomeEnterAction::Answer => open_answer_for_task(app, &id),
+        HomeEnterAction::AnswerThenApprove => open_answer_for_task(app, &id),
         HomeEnterAction::ApprovalHint => {
             app.toast = Some((true, format!("{id}: {}", app.lang.l().approval_enter_hint)));
         }
@@ -1081,14 +1087,31 @@ fn open_answer_for_task(app: &mut App, id: &str) {
         .and_then(|s| s.queue.tasks.iter().find(|t| t.id == id).cloned())
         .map(|t| task_answer_target(app, &t));
     match target {
-        Some(t) => {
-            app.answer_target = Some(t);
-            app.input_clear();
-            app.toast = None;
-            app.screen = Screen::Answer;
-        }
+        Some(t) => open_answer_target(app, t),
         None => app.toast = Some((true, app.lang.l().no_pending.into())),
     }
+}
+
+fn answer_target_will_grant(
+    target_id: &str,
+    already_marked: bool,
+    approvals_needed: &[String],
+) -> bool {
+    target_id != INTERVIEW_TARGET
+        && (already_marked || approvals_needed.iter().any(|id| id == target_id))
+}
+
+fn open_answer_target(app: &mut App, target: (String, String)) {
+    let approvals_needed = app
+        .snapshot
+        .as_ref()
+        .map(|s| s.approvals_needed.as_slice())
+        .unwrap_or(&[]);
+    app.answer_grants_approval = answer_target_will_grant(&target.0, false, approvals_needed);
+    app.answer_target = Some(target);
+    app.input_clear();
+    app.toast = None;
+    app.screen = Screen::Answer;
 }
 
 /// Run one specific task by id (Enter on a Queued/Partial/Failed/Blocked row).
@@ -1659,6 +1682,7 @@ fn handle_answer_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
     match code {
         KeyCode::Esc => {
             app.answer_target = None;
+            app.answer_grants_approval = false;
             app.screen = Screen::Home;
         }
         KeyCode::Enter if mods.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
@@ -1822,15 +1846,32 @@ fn start_run(app: &mut App) {
 }
 
 fn start_approve(app: &mut App) {
-    let Some(id) = app
-        .snapshot
-        .as_ref()
-        .and_then(|s| s.approvals_needed.first().cloned())
-    else {
+    let selected = app.snapshot.as_ref().and_then(|s| {
+        s.queue
+            .tasks
+            .get(app.selected)
+            .map(|t| (t.id.clone(), t.state))
+    });
+    let Some(id) = app.snapshot.as_ref().and_then(|s| {
+        choose_approval_target(
+            selected.as_ref().map(|(id, _)| id.as_str()),
+            &s.approvals_needed,
+        )
+    }) else {
         app.toast = Some((true, app.lang.l().no_approval.into()));
         return;
     };
-    let _ = crate::approvals::grant(&app.ws, &id);
+    if selected
+        .as_ref()
+        .is_some_and(|(selected_id, state)| selected_id == &id && *state == TaskState::NeedsUser)
+    {
+        open_answer_for_task(app, &id);
+        return;
+    }
+    if let Err(e) = crate::approvals::grant(&app.ws, &id) {
+        app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+        return;
+    }
     let ws = app.ws.clone();
     let lbl = app.lang.l();
     let (via, failed) = (lbl.via_word, lbl.run_failed);
@@ -1868,6 +1909,15 @@ fn start_approve(app: &mut App) {
         started: Instant::now(),
         rx,
     };
+}
+
+fn choose_approval_target(selected: Option<&str>, approvals_needed: &[String]) -> Option<String> {
+    if let Some(id) = selected {
+        if approvals_needed.iter().any(|approval| approval == id) {
+            return Some(id.to_string());
+        }
+    }
+    approvals_needed.first().cloned()
 }
 
 fn start_auto(app: &mut App) {
@@ -2006,6 +2056,8 @@ fn start_interview(app: &mut App) {
 }
 
 fn start_answer(app: &mut App) {
+    let grant_after_answer = app.answer_grants_approval;
+    app.answer_grants_approval = false;
     let target = app
         .answer_target
         .take()
@@ -2017,6 +2069,17 @@ fn start_answer(app: &mut App) {
     if task_id == INTERVIEW_TARGET {
         start_interview(app);
         return;
+    }
+    let approvals_needed = app
+        .snapshot
+        .as_ref()
+        .map(|s| s.approvals_needed.as_slice())
+        .unwrap_or(&[]);
+    if answer_target_will_grant(&task_id, grant_after_answer, approvals_needed) {
+        if let Err(e) = crate::approvals::grant(&app.ws, &task_id) {
+            app.toast = Some((false, format!("{} {e}", app.lang.l().answer_failed)));
+            return;
+        }
     }
     let ws = app.ws.clone();
     let answer = app.input.trim().to_string();
@@ -2226,7 +2289,11 @@ routing:
         );
         assert_eq!(
             home_enter_action(TaskState::NeedsUser, true, false),
-            ApprovalHint
+            AnswerThenApprove
+        );
+        assert_eq!(
+            home_enter_action(TaskState::NeedsUser, true, true),
+            AnswerThenApprove
         );
         // State dispatch (no approval pending, idle).
         assert_eq!(home_enter_action(TaskState::Queued, false, false), Run);
@@ -2253,6 +2320,33 @@ routing:
             home_enter_action(TaskState::Deferred, false, true),
             DeferredHint
         );
+    }
+
+    #[test]
+    fn selected_approval_target_wins_over_first_global_approval() {
+        let approvals = vec!["A".to_string(), "B".to_string()];
+        assert_eq!(
+            choose_approval_target(Some("B"), &approvals),
+            Some("B".to_string())
+        );
+        assert_eq!(
+            choose_approval_target(Some("C"), &approvals),
+            Some("A".to_string())
+        );
+        assert_eq!(choose_approval_target(None, &[]), None);
+    }
+
+    #[test]
+    fn answer_submission_grants_only_task_approval_targets() {
+        let approvals = vec!["YARD-003".to_string()];
+        assert!(answer_target_will_grant("YARD-003", false, &approvals));
+        assert!(answer_target_will_grant("YARD-004", true, &approvals));
+        assert!(!answer_target_will_grant(
+            INTERVIEW_TARGET,
+            true,
+            &approvals
+        ));
+        assert!(!answer_target_will_grant("YARD-005", false, &approvals));
     }
 
     #[test]

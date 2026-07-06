@@ -628,44 +628,145 @@ fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected:
             Style::default().fg(Color::DarkGray),
         )))]
     } else {
-        let sel = selected.min(snap.tasks().len().saturating_sub(1));
-        snap.tasks()
+        let mut items = Vec::new();
+        if snap
+            .tasks()
             .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let color = match t.state {
-                    TaskState::Done => Color::Green,
-                    TaskState::Running => Color::Yellow,
-                    TaskState::Blocked | TaskState::Failed => Color::Red,
-                    TaskState::NeedsUser => Color::Magenta,
-                    TaskState::Partial => Color::LightYellow,
-                    TaskState::Deferred => Color::DarkGray,
-                    TaskState::Queued => Color::Gray,
-                };
-                let is_sel = i == sel;
-                let marker = if is_sel { "\u{25b8}" } else { " " };
-                let id_style = if is_sel {
-                    Style::default().fg(Color::White).bold()
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!("{marker}{} ", t.state.glyph()),
-                        Style::default().fg(color),
-                    ),
-                    Span::styled(format!("{:<11}", t.id), id_style),
-                    Span::raw(truncate(&t.title, 44)),
-                    Span::styled(
-                        format!("  {}", t.preferred_worker),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]))
-            })
-            .collect()
+            .any(|t| task_waiting_kind(snap, &t.id, t.state, l).is_some())
+        {
+            items.push(ListItem::new(Line::from(Span::styled(
+                l.waiting_any_order,
+                Style::default().fg(Color::Cyan),
+            ))));
+        }
+        items.push(ListItem::new(parallel_status_line(snap, l)));
+        let sel = selected.min(snap.tasks().len().saturating_sub(1));
+        items.extend(snap.tasks().iter().enumerate().map(|(i, t)| {
+            let color = match t.state {
+                TaskState::Done => Color::Green,
+                TaskState::Running => Color::Yellow,
+                TaskState::Blocked | TaskState::Failed => Color::Red,
+                TaskState::NeedsUser => Color::Magenta,
+                TaskState::Partial => Color::LightYellow,
+                TaskState::Deferred => Color::DarkGray,
+                TaskState::Queued => Color::Gray,
+            };
+            let is_sel = i == sel;
+            let marker = if is_sel { "\u{25b8}" } else { " " };
+            let id_style = if is_sel {
+                Style::default().fg(Color::White).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let mut spans = vec![
+                Span::styled(
+                    format!("{marker}{} ", t.state.glyph()),
+                    Style::default().fg(color),
+                ),
+                Span::styled(format!("{:<11}", t.id), id_style),
+                Span::raw(truncate(&t.title, 44)),
+                Span::styled(
+                    format!("  {}", t.preferred_worker),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ];
+            if let Some(kind) = task_waiting_kind(snap, &t.id, t.state, l) {
+                spans.push(Span::styled(
+                    format!("  [{}:{}]", l.tag_anytime, kind),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        }));
+        items
     };
     let block = Block::bordered().title(format!(" {} ({}) ", l.queue_word, snap.tasks().len()));
     frame.render_widget(List::new(items).block(block), area);
+}
+
+fn task_waiting_kind(snap: &Snapshot, id: &str, state: TaskState, l: &L) -> Option<String> {
+    let input = state == TaskState::NeedsUser;
+    let approval = snap.approvals_needed.iter().any(|a| a == id);
+    match (input, approval) {
+        (true, true) => Some(format!("{}/{}", l.tag_input, l.tag_approval)),
+        (true, false) => Some(l.tag_input.to_string()),
+        (false, true) => Some(l.tag_approval.to_string()),
+        (false, false) => None,
+    }
+}
+
+fn parallel_status_line(snap: &Snapshot, l: &L) -> Line<'static> {
+    let assessment = crate::parallel::assess_parallelism(&snap.queue, snap.config.max_parallel);
+    if assessment.is_parallel_ready() {
+        return Line::from(vec![
+            Span::styled(
+                format!("{}: ", l.parallel_ready_label),
+                Style::default().fg(Color::Green).bold(),
+            ),
+            Span::styled(
+                assessment.runnable.join(", "),
+                Style::default().fg(Color::Green),
+            ),
+        ]);
+    }
+    let reason = if assessment.reasons.is_empty() {
+        l.seq_runnable_count.to_string()
+    } else {
+        assessment
+            .reasons
+            .iter()
+            .map(|r| sequential_reason_text(r, l))
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let fix = if assessment.reasons.is_empty() {
+        l.fix_runnable_count.to_string()
+    } else {
+        assessment
+            .reasons
+            .iter()
+            .map(|r| sequential_fix_text(r, l))
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    Line::from(vec![
+        Span::styled(
+            format!("{}: ", l.sequential_label),
+            Style::default().fg(Color::Yellow).bold(),
+        ),
+        Span::styled(reason, Style::default().fg(Color::Yellow)),
+        Span::styled(
+            format!("  {}: ", l.parallel_fix_label),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(fix, Style::default().fg(Color::Cyan)),
+    ])
+}
+
+fn sequential_reason_text(reason: &crate::parallel::SequentialReason, l: &L) -> String {
+    use crate::parallel::SequentialReason::*;
+    match reason {
+        ParallelDisabled { max_parallel } => {
+            format!("{} (max_parallel={max_parallel})", l.seq_parallel_disabled)
+        }
+        RunnableTaskCount { runnable } => format!("{} ({runnable})", l.seq_runnable_count),
+        DependencyChain { tasks } => format!("{}: {}", l.seq_dependency_chain, tasks.join(", ")),
+        ApprovalRequired { tasks } => format!("{}: {}", l.seq_approval_required, tasks.join(", ")),
+        ValidationRequired { tasks } => {
+            format!("{}: {}", l.seq_validation_required, tasks.join(", "))
+        }
+    }
+}
+
+fn sequential_fix_text(reason: &crate::parallel::SequentialReason, l: &L) -> String {
+    use crate::parallel::SequentialReason::*;
+    match reason {
+        ParallelDisabled { .. } => l.fix_parallel_disabled.to_string(),
+        RunnableTaskCount { .. } => l.fix_runnable_count.to_string(),
+        DependencyChain { .. } => l.fix_dependency_chain.to_string(),
+        ApprovalRequired { .. } => l.fix_approval_required.to_string(),
+        ValidationRequired { .. } => l.fix_validation_required.to_string(),
+    }
 }
 
 fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected: Option<usize>) {
@@ -894,7 +995,12 @@ fn render_answer(frame: &mut Frame, app: &App) {
         chunks[1],
     );
     place_input_cursor(frame, chunks[1], &app.input, app.input_caret);
-    render_footer(frame, chunks[2], l.footer_answer);
+    let footer = if app.answer_grants_approval {
+        l.footer_answer_approve
+    } else {
+        l.footer_answer
+    };
+    render_footer(frame, chunks[2], footer);
 }
 
 fn render_handoff(frame: &mut Frame, app: &mut App) {
