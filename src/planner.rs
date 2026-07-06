@@ -16,7 +16,7 @@ use crate::inspect;
 use crate::schemas::{
     IntentContract, SelectionPolicy, Task, TaskState, WorkQueue, WorkerProfile, WorkersFile,
 };
-use crate::state::{self, write_str, Workspace};
+use crate::state::{self, write_str, PlanningWorkerConfig, Workspace};
 use crate::{packet, workers, yaml};
 
 // ---- worker-authored plan shape -------------------------------------------
@@ -426,9 +426,11 @@ fn plan_core(
     archive: bool,
 ) -> Result<PlanningReport> {
     let language = packet::resolve_language(&config.language, store_request);
+    let planning_config = ws.load_planning_worker_config()?;
 
     // Choose a ready planning worker.
-    let (profile, bin, worker_id) = pick_ready_worker(workers, billing, worker_override)?;
+    let (base_profile, bin, worker_id) = pick_ready_worker(workers, billing, worker_override)?;
+    let profile = planning_worker_profile(&base_profile, &planning_config);
 
     let run_id = format!("plan-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let run_dir = ws.runs_dir().join(&run_id);
@@ -593,9 +595,11 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
     let workers = ws.load_workers()?;
     let billing = ws.load_billing()?;
     let config = ws.load_config()?;
+    let planning_config = ws.load_planning_worker_config()?;
     let language = packet::resolve_language(&config.language, &ctx);
     let images: Vec<String> = Vec::new();
-    let (profile, bin, worker_id) = pick_ready_worker(&workers, &billing, None)?;
+    let (base_profile, bin, worker_id) = pick_ready_worker(&workers, &billing, None)?;
+    let profile = planning_worker_profile(&base_profile, &planning_config);
     let run_id = format!("plan-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let run_dir = ws.runs_dir().join(&run_id);
     std::fs::create_dir_all(run_dir.join("evidence"))?;
@@ -1438,6 +1442,17 @@ pub(crate) fn pick_ready_worker(
     ))
 }
 
+fn planning_worker_profile(
+    profile: &WorkerProfile,
+    planning_config: &PlanningWorkerConfig,
+) -> WorkerProfile {
+    workers::effective_profile(
+        profile,
+        &planning_config.planning_model,
+        &planning_config.planning_effort,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1474,6 +1489,44 @@ routing:
         assert!(!g.contains("best for refactors. Avoid"));
         // Empty best_for -> worker skipped entirely.
         assert!(!g.contains("blankworker"));
+    }
+
+    #[test]
+    fn planning_worker_profile_uses_planning_overrides_and_auto_falls_back() {
+        let base: WorkerProfile = crate::yaml::from_str(
+            r#"
+id: codex
+enabled: true
+model: gpt-run
+effort: medium
+invocation: { command: codex }
+"#,
+        )
+        .unwrap();
+
+        let fallback = planning_worker_profile(&base, &PlanningWorkerConfig::default());
+        assert_eq!(fallback.model, "gpt-run");
+        assert_eq!(fallback.effort, "medium");
+
+        let explicit = planning_worker_profile(
+            &base,
+            &PlanningWorkerConfig {
+                planning_model: "gpt-plan".to_string(),
+                planning_effort: "high".to_string(),
+            },
+        );
+        assert_eq!(explicit.model, "gpt-plan");
+        assert_eq!(explicit.effort, "high");
+
+        let mixed = planning_worker_profile(
+            &base,
+            &PlanningWorkerConfig {
+                planning_model: "auto".to_string(),
+                planning_effort: "low".to_string(),
+            },
+        );
+        assert_eq!(mixed.model, "gpt-run");
+        assert_eq!(mixed.effort, "low");
     }
 
     #[test]
