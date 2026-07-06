@@ -133,10 +133,23 @@ impl Snapshot {
             .filter(|i| crate::planner::intent_gated(i, config.ambiguity_gate))
             .map(|i| (i.open_questions.clone(), i.interview_turns));
 
+        // Approval is only "needed" for a task that could still run: a Done or
+        // Deferred (or Blocked/Running) task keeps its approval flag but must not
+        // light up the status bar. Only pending, runnable-next states count.
         let approvals_needed = queue
             .tasks
             .iter()
-            .filter(|t| t.approval_required() && !crate::approvals::is_granted(ws, &t.id))
+            .filter(|t| {
+                t.approval_required()
+                    && matches!(
+                        t.state,
+                        TaskState::Queued
+                            | TaskState::NeedsUser
+                            | TaskState::Partial
+                            | TaskState::Failed
+                    )
+                    && !crate::approvals::is_granted(ws, &t.id)
+            })
             .map(|t| t.id.clone())
             .collect();
 
