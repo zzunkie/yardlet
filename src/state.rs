@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use serde::Deserialize;
+
 use crate::schemas::{
     BillingPolicy, Conversation, ConversationTurn, IntentContract, TurnRole, WorkQueue,
     WorkersFile, YardConfig,
@@ -26,6 +28,27 @@ pub const LEGACY_CONFIG_FILE: &str = "yard.yaml";
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PlanningWorkerConfig {
+    #[serde(default = "default_auto")]
+    pub planning_model: String,
+    #[serde(default = "default_auto")]
+    pub planning_effort: String,
+}
+
+impl Default for PlanningWorkerConfig {
+    fn default() -> Self {
+        Self {
+            planning_model: default_auto(),
+            planning_effort: default_auto(),
+        }
+    }
+}
+
+fn default_auto() -> String {
+    "auto".to_string()
 }
 
 impl Workspace {
@@ -105,6 +128,10 @@ impl Workspace {
     // ---- typed loaders -------------------------------------------------
 
     pub fn load_config(&self) -> Result<YardConfig> {
+        load_yaml(&self.config_path())
+    }
+
+    pub fn load_planning_worker_config(&self) -> Result<PlanningWorkerConfig> {
         load_yaml(&self.config_path())
     }
 
@@ -744,6 +771,38 @@ routing:
         assert!(updated.contains("default_access: full # keep access comment"));
         assert!(updated.contains("workspace_id: test-workspace"));
         assert!(updated.contains("auto_commit: false"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn planning_worker_config_defaults_to_auto_when_keys_are_missing() {
+        let dir = temp_root("planning-config-default");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+        fs::write(ws.config_path(), CONFIG_WITH_COMMENTS).unwrap();
+
+        let cfg = ws.load_planning_worker_config().unwrap();
+        assert_eq!(cfg.planning_model, "auto");
+        assert_eq!(cfg.planning_effort, "auto");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn planning_worker_config_reads_explicit_model_and_effort() {
+        let dir = temp_root("planning-config-explicit");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+        let config =
+            format!("{CONFIG_WITH_COMMENTS}planning_model: gpt-5.5\nplanning_effort: high\n");
+        fs::write(ws.config_path(), config).unwrap();
+
+        let cfg = ws.load_planning_worker_config().unwrap();
+        assert_eq!(cfg.planning_model, "gpt-5.5");
+        assert_eq!(cfg.planning_effort, "high");
 
         let _ = fs::remove_dir_all(&dir);
     }
