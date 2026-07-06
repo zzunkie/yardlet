@@ -942,26 +942,29 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
                 app.selected += 1;
             }
         }
-        KeyCode::Enter | KeyCode::Char(' ') => {
+        // Enter drives the selected row: a queue task's state-appropriate next
+        // action (run / answer / approve-guidance / monitor / handoff), or a
+        // worker toggle past the queue. Space only toggles workers — queue rows
+        // ignore it, so a stray Space never fires a task action.
+        KeyCode::Enter => {
             let tasks = app
                 .snapshot
                 .as_ref()
                 .map(|s| s.queue.tasks.len())
                 .unwrap_or(0);
             if app.selected < tasks {
-                if code == KeyCode::Enter {
-                    let id = app
-                        .snapshot
-                        .as_ref()
-                        .and_then(|s| s.queue.tasks.get(app.selected))
-                        .map(|t| t.id.clone());
-                    if let Some(id) = id {
-                        app.handoff_text = load_handoff_for_task(app, &id);
-                        app.scroll = 0;
-                        app.screen = Screen::Handoff;
-                    }
-                }
+                handle_home_enter(app);
             } else {
+                toggle_worker(app, app.selected - tasks);
+            }
+        }
+        KeyCode::Char(' ') => {
+            let tasks = app
+                .snapshot
+                .as_ref()
+                .map(|s| s.queue.tasks.len())
+                .unwrap_or(0);
+            if app.selected >= tasks {
                 toggle_worker(app, app.selected - tasks);
             }
         }
@@ -971,6 +974,165 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         _ => {}
     }
     false
+}
+
+/// What Enter does on the selected queue row, decided purely from the task's
+/// state, whether it is waiting on an ungranted approval, and whether a worker
+/// is already running. Kept pure so the state→action mapping is unit-tested
+/// without spawning workers — in particular the approval invariant (an
+/// approval-pending task is never `Run`) is verified here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HomeEnterAction {
+    /// Run (or retry) this task now.
+    Run,
+    /// Open the answer screen for a NeedsUser task.
+    Answer,
+    /// Approval-required and not granted: point at the approval flow (p), never
+    /// run. Approval stays a deliberate, explicit act — Enter cannot grant it.
+    ApprovalHint,
+    /// Follow the running task's live output in the Monitor.
+    Monitor,
+    /// View this task's handoff (Done).
+    Handoff,
+    /// Deferred (set aside by a decision): nothing to run.
+    DeferredHint,
+    /// A worker is already running; a new run/answer can't start yet.
+    Busy,
+}
+
+fn home_enter_action(state: TaskState, approval_pending: bool, busy: bool) -> HomeEnterAction {
+    match state {
+        // Read-only views never spawn a worker, so approval/busy don't gate them.
+        TaskState::Done => HomeEnterAction::Handoff,
+        TaskState::Running => HomeEnterAction::Monitor,
+        TaskState::Deferred => HomeEnterAction::DeferredHint,
+        // Queued / Partial / Failed / Blocked / NeedsUser: the next action starts
+        // or resumes a worker run. An ungranted approval-required task must go
+        // through the approval flow first — Enter must never silently run it.
+        _ => {
+            if approval_pending {
+                HomeEnterAction::ApprovalHint
+            } else if busy {
+                HomeEnterAction::Busy
+            } else if state == TaskState::NeedsUser {
+                HomeEnterAction::Answer
+            } else {
+                HomeEnterAction::Run
+            }
+        }
+    }
+}
+
+/// Enter on a selected queue task: run its state-appropriate next action.
+fn handle_home_enter(app: &mut App) {
+    let Some((id, state, approval_pending)) = app.snapshot.as_ref().and_then(|s| {
+        s.queue.tasks.get(app.selected).map(|t| {
+            (
+                t.id.clone(),
+                t.state,
+                s.approvals_needed.iter().any(|a| a == &t.id),
+            )
+        })
+    }) else {
+        return;
+    };
+    match home_enter_action(state, approval_pending, app.is_busy()) {
+        HomeEnterAction::Run => start_run_target(app, id),
+        HomeEnterAction::Answer => open_answer_for_task(app, &id),
+        HomeEnterAction::ApprovalHint => {
+            app.toast = Some((true, format!("{id}: {}", app.lang.l().approval_enter_hint)));
+        }
+        HomeEnterAction::Monitor => {
+            focus_monitor_on(app, &id);
+            app.screen = Screen::Monitor;
+        }
+        HomeEnterAction::Handoff => {
+            app.handoff_text = load_handoff_for_task(app, &id);
+            app.scroll = 0;
+            app.screen = Screen::Handoff;
+        }
+        HomeEnterAction::DeferredHint => {
+            app.toast = Some((true, format!("{id}: {}", app.lang.l().deferred_enter_hint)));
+        }
+        HomeEnterAction::Busy => app.toast = Some((true, app.lang.l().busy.into())),
+    }
+}
+
+/// Point the Run Monitor at this task's run. Best-effort: the index matches the
+/// order refresh_monitor_runs rebuilds (Running tasks in queue order), so the
+/// tab lands on the intended task.
+fn focus_monitor_on(app: &mut App, id: &str) {
+    if let Some(pos) = app.snapshot.as_ref().and_then(|s| {
+        s.queue
+            .tasks
+            .iter()
+            .filter(|t| t.state == TaskState::Running)
+            .position(|t| t.id == id)
+    }) {
+        app.monitor_sel = pos;
+    }
+}
+
+/// Open the answer screen aimed at one specific task (Enter on a NeedsUser row).
+fn open_answer_for_task(app: &mut App, id: &str) {
+    let target = app
+        .snapshot
+        .as_ref()
+        .and_then(|s| s.queue.tasks.iter().find(|t| t.id == id).cloned())
+        .map(|t| task_answer_target(app, &t));
+    match target {
+        Some(t) => {
+            app.answer_target = Some(t);
+            app.input_clear();
+            app.toast = None;
+            app.screen = Screen::Answer;
+        }
+        None => app.toast = Some((true, app.lang.l().no_pending.into())),
+    }
+}
+
+/// Run one specific task by id (Enter on a Queued/Partial/Failed/Blocked row).
+/// A named target is an explicit human override, same as `yardlet run --task`;
+/// run_next's approval gate still refuses an ungranted approval-required task,
+/// so this path cannot bypass approval.
+fn start_run_target(app: &mut App, target_id: String) {
+    let ws = app.ws.clone();
+    let lbl = app.lang.l();
+    let (via, failed) = (lbl.via_word, lbl.run_failed);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let res = match run::run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                worker_override: None,
+                target: Some(target_id),
+                answer: None,
+                full_access: false,
+                accept_ambiguity: false,
+                chain: None,
+            },
+        ) {
+            Ok(r) => {
+                let tail = r.lines.last().cloned().unwrap_or_default();
+                JobResult {
+                    ok: true,
+                    summary: format!("{} {via} {}: {}", r.task_id, r.worker_id, tail),
+                }
+            }
+            Err(e) => JobResult {
+                ok: false,
+                summary: format!("{failed} {e}"),
+            },
+        };
+        let _ = tx.send(JobMsg::Done(res));
+    });
+    app.progress = None;
+    app.job = Job::Running {
+        label: lbl.run_word.into(),
+        started: Instant::now(),
+        rx,
+    };
 }
 
 fn short(s: &str, n: usize) -> String {
@@ -1785,7 +1947,17 @@ fn compute_answer_target(app: &App) -> Option<(String, String)> {
         .get(app.selected)
         .filter(|t| answerable(t.state))
         .or_else(|| s.queue.tasks.iter().find(|t| answerable(t.state)))?;
-    // Show what the previous run says is missing, so the user can instruct.
+    Some(task_answer_target(app, t))
+}
+
+/// The (task id, context) the answer screen replies to: a NeedsUser task's
+/// recorded question, else what the previous run reported still missing (so the
+/// user can instruct a retry). Empty/never-run tasks fall back to the title.
+fn task_answer_target(app: &App, t: &crate::schemas::Task) -> (String, String) {
+    if t.state == TaskState::NeedsUser {
+        let q = crate::run::latest_question_for(&app.ws, &t.id).unwrap_or_default();
+        return (t.id.clone(), q);
+    }
     let context = crate::run::latest_run_for(&app.ws, &t.id)
         .and_then(|(_, dir)| std::fs::read_to_string(dir.join("result.json")).ok())
         .and_then(|raw| serde_json::from_str::<crate::schemas::RunResult>(&raw).ok())
@@ -1798,7 +1970,7 @@ fn compute_answer_target(app: &App) -> Option<(String, String)> {
             s
         })
         .unwrap_or_else(|| t.title.clone());
-    Some((t.id.clone(), context))
+    (t.id.clone(), context)
 }
 
 /// One interview turn: send the user's answer to the planning worker and
@@ -2036,6 +2208,51 @@ routing:
         app.input_caret = 2; // col 2 on "가나다"
         app.caret_down(); // -> "xy", clamped to its length 2
         assert_eq!(app.input_caret, 6);
+    }
+
+    #[test]
+    fn home_enter_action_maps_state_to_next_action() {
+        use HomeEnterAction::*;
+        // Approval invariant: an ungranted approval-required task is NEVER Run by
+        // Enter — it points at the approval flow, whatever the underlying state
+        // and even when a worker is busy (approval is checked before busy).
+        assert_eq!(
+            home_enter_action(TaskState::Queued, true, false),
+            ApprovalHint
+        );
+        assert_eq!(
+            home_enter_action(TaskState::Queued, true, true),
+            ApprovalHint
+        );
+        assert_eq!(
+            home_enter_action(TaskState::NeedsUser, true, false),
+            ApprovalHint
+        );
+        // State dispatch (no approval pending, idle).
+        assert_eq!(home_enter_action(TaskState::Queued, false, false), Run);
+        assert_eq!(home_enter_action(TaskState::Partial, false, false), Run);
+        assert_eq!(home_enter_action(TaskState::Failed, false, false), Run);
+        assert_eq!(home_enter_action(TaskState::Blocked, false, false), Run);
+        assert_eq!(
+            home_enter_action(TaskState::NeedsUser, false, false),
+            Answer
+        );
+        assert_eq!(home_enter_action(TaskState::Done, false, false), Handoff);
+        assert_eq!(home_enter_action(TaskState::Running, false, false), Monitor);
+        assert_eq!(
+            home_enter_action(TaskState::Deferred, false, false),
+            DeferredHint
+        );
+        // Busy blocks a new run/answer, but read-only views still work and a
+        // deferred row is still just informational.
+        assert_eq!(home_enter_action(TaskState::Queued, false, true), Busy);
+        assert_eq!(home_enter_action(TaskState::NeedsUser, false, true), Busy);
+        assert_eq!(home_enter_action(TaskState::Done, false, true), Handoff);
+        assert_eq!(home_enter_action(TaskState::Running, false, true), Monitor);
+        assert_eq!(
+            home_enter_action(TaskState::Deferred, false, true),
+            DeferredHint
+        );
     }
 
     #[test]
