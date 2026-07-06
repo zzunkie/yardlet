@@ -639,7 +639,19 @@ fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected:
                 Style::default().fg(Color::Cyan),
             ))));
         }
-        items.push(ListItem::new(parallel_status_line(snap, l)));
+        // Show parallelism only when it is actually happening: 2+ tasks running
+        // concurrently. No "why sequential" prose in the queue box.
+        let running = snap
+            .tasks()
+            .iter()
+            .filter(|t| t.state == TaskState::Running)
+            .count();
+        if running >= 2 {
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("\u{25b6}\u{25b6} {} \u{00b7} {running}", l.parallel_running_label),
+                Style::default().fg(Color::Yellow).bold(),
+            ))));
+        }
         let sel = selected.min(snap.tasks().len().saturating_sub(1));
         items.extend(snap.tasks().iter().enumerate().map(|(i, t)| {
             let color = match t.state {
@@ -692,80 +704,6 @@ fn task_waiting_kind(snap: &Snapshot, id: &str, state: TaskState, l: &L) -> Opti
         (true, false) => Some(l.tag_input.to_string()),
         (false, true) => Some(l.tag_approval.to_string()),
         (false, false) => None,
-    }
-}
-
-fn parallel_status_line(snap: &Snapshot, l: &L) -> Line<'static> {
-    let assessment = crate::parallel::assess_parallelism(&snap.queue, snap.config.max_parallel);
-    if assessment.is_parallel_ready() {
-        return Line::from(vec![
-            Span::styled(
-                format!("{}: ", l.parallel_ready_label),
-                Style::default().fg(Color::Green).bold(),
-            ),
-            Span::styled(
-                assessment.runnable.join(", "),
-                Style::default().fg(Color::Green),
-            ),
-        ]);
-    }
-    let reason = if assessment.reasons.is_empty() {
-        l.seq_runnable_count.to_string()
-    } else {
-        assessment
-            .reasons
-            .iter()
-            .map(|r| sequential_reason_text(r, l))
-            .collect::<Vec<_>>()
-            .join("; ")
-    };
-    let fix = if assessment.reasons.is_empty() {
-        l.fix_runnable_count.to_string()
-    } else {
-        assessment
-            .reasons
-            .iter()
-            .map(|r| sequential_fix_text(r, l))
-            .collect::<Vec<_>>()
-            .join("; ")
-    };
-    Line::from(vec![
-        Span::styled(
-            format!("{}: ", l.sequential_label),
-            Style::default().fg(Color::Yellow).bold(),
-        ),
-        Span::styled(reason, Style::default().fg(Color::Yellow)),
-        Span::styled(
-            format!("  {}: ", l.parallel_fix_label),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(fix, Style::default().fg(Color::Cyan)),
-    ])
-}
-
-fn sequential_reason_text(reason: &crate::parallel::SequentialReason, l: &L) -> String {
-    use crate::parallel::SequentialReason::*;
-    match reason {
-        ParallelDisabled { max_parallel } => {
-            format!("{} (max_parallel={max_parallel})", l.seq_parallel_disabled)
-        }
-        RunnableTaskCount { runnable } => format!("{} ({runnable})", l.seq_runnable_count),
-        DependencyChain { tasks } => format!("{}: {}", l.seq_dependency_chain, tasks.join(", ")),
-        ApprovalRequired { tasks } => format!("{}: {}", l.seq_approval_required, tasks.join(", ")),
-        ValidationRequired { tasks } => {
-            format!("{}: {}", l.seq_validation_required, tasks.join(", "))
-        }
-    }
-}
-
-fn sequential_fix_text(reason: &crate::parallel::SequentialReason, l: &L) -> String {
-    use crate::parallel::SequentialReason::*;
-    match reason {
-        ParallelDisabled { .. } => l.fix_parallel_disabled.to_string(),
-        RunnableTaskCount { .. } => l.fix_runnable_count.to_string(),
-        DependencyChain { .. } => l.fix_dependency_chain.to_string(),
-        ApprovalRequired { .. } => l.fix_approval_required.to_string(),
-        ValidationRequired { .. } => l.fix_validation_required.to_string(),
     }
 }
 
