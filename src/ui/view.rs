@@ -6,10 +6,10 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::i18n::L;
-use super::{App, Job, Screen};
+use super::{App, Job, Screen, ScrollViewport};
 use crate::schemas::TaskState;
 use crate::snapshot::Snapshot;
 
@@ -33,7 +33,8 @@ fn safe_area(frame: &Frame) -> Rect {
     }
 }
 
-pub fn render(frame: &mut Frame, app: &App) {
+pub fn render(frame: &mut Frame, app: &mut App) {
+    app.scroll_viewport = None;
     match app.screen {
         Screen::Home => render_home(frame, app),
         Screen::NewWork => render_new_work(frame, app),
@@ -259,6 +260,89 @@ fn render_settings(frame: &mut Frame, app: &App) {
 /// styled lines for the handoff/report screens.
 fn md_lines(text: &str) -> Vec<Line<'static>> {
     text.lines().map(md_line).collect()
+}
+
+pub(crate) fn max_scroll_offset(text: &str, viewport: ScrollViewport) -> u16 {
+    if viewport.width == 0 || viewport.height == 0 {
+        return 0;
+    }
+    let rendered_lines: usize = md_lines(text)
+        .iter()
+        .map(|line| wrapped_line_count(line, viewport.width))
+        .sum();
+    rendered_lines
+        .saturating_sub(viewport.height as usize)
+        .min(u16::MAX as usize) as u16
+}
+
+fn wrapped_line_count(line: &Line, width: u16) -> usize {
+    let width = (width as usize).max(1);
+    let mut row = 0usize;
+    let mut col = 0usize;
+    let text: String = line
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>()
+        .join("");
+    let mut chars = text.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            let cw = UnicodeWidthChar::width(c).unwrap_or(0);
+            if cw > width {
+                continue;
+            }
+            if col + cw > width {
+                row += 1;
+                col = 0;
+            }
+            col += cw;
+            continue;
+        }
+
+        let mut word = String::new();
+        while let Some(&c) = chars.peek() {
+            if c.is_whitespace() {
+                break;
+            }
+            word.push(c);
+            chars.next();
+        }
+        let ww = UnicodeWidthStr::width(word.as_str());
+        if ww <= width {
+            if col + ww <= width {
+                col += ww;
+            } else {
+                row += 1;
+                col = ww;
+            }
+        } else {
+            if col > 0 {
+                row += 1;
+                col = 0;
+            }
+            for ch in word.chars() {
+                let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+                if cw > width {
+                    continue;
+                }
+                if col + cw > width {
+                    row += 1;
+                    col = 0;
+                }
+                col += cw;
+            }
+        }
+    }
+    row + 1
+}
+
+fn scroll_viewport(area: Rect) -> ScrollViewport {
+    let inner = Block::bordered().inner(area);
+    ScrollViewport {
+        width: inner.width,
+        height: inner.height,
+    }
 }
 
 fn md_line(line: &str) -> Line<'static> {
@@ -813,10 +897,15 @@ fn render_answer(frame: &mut Frame, app: &App) {
     render_footer(frame, chunks[2], l.footer_answer);
 }
 
-fn render_handoff(frame: &mut Frame, app: &App) {
+fn render_handoff(frame: &mut Frame, app: &mut App) {
     let l = app.lang.l();
     let area = safe_area(frame);
     let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
+    let viewport = scroll_viewport(chunks[0]);
+    app.scroll_viewport = Some(viewport);
+    app.scroll = app
+        .scroll
+        .min(max_scroll_offset(&app.handoff_text, viewport));
     frame.render_widget(
         Paragraph::new(md_lines(&app.handoff_text))
             .wrap(Wrap { trim: false })
@@ -827,10 +916,15 @@ fn render_handoff(frame: &mut Frame, app: &App) {
     render_footer(frame, chunks[1], l.footer_handoff);
 }
 
-fn render_intent(frame: &mut Frame, app: &App) {
+fn render_intent(frame: &mut Frame, app: &mut App) {
     let l = app.lang.l();
     let area = safe_area(frame);
     let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
+    let viewport = scroll_viewport(chunks[0]);
+    app.scroll_viewport = Some(viewport);
+    app.scroll = app
+        .scroll
+        .min(max_scroll_offset(&app.intent_text, viewport));
     frame.render_widget(
         Paragraph::new(md_lines(&app.intent_text))
             .wrap(Wrap { trim: false })
@@ -879,10 +973,15 @@ fn render_report_list(frame: &mut Frame, app: &App) {
     render_footer(frame, chunks[1], l.footer_reports);
 }
 
-fn render_completion(frame: &mut Frame, app: &App) {
+fn render_completion(frame: &mut Frame, app: &mut App) {
     let l = app.lang.l();
     let area = safe_area(frame);
     let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
+    let viewport = scroll_viewport(chunks[0]);
+    app.scroll_viewport = Some(viewport);
+    app.scroll = app
+        .scroll
+        .min(max_scroll_offset(&app.report_text, viewport));
     frame.render_widget(
         Paragraph::new(md_lines(&app.report_text))
             .wrap(Wrap { trim: false })
@@ -926,7 +1025,6 @@ fn place_input_cursor(frame: &mut Frame, area: Rect, input: &str, caret: usize) 
 /// straddle the right edge moves wholly to the next row. The old width/inner
 /// division drifted one cell per wrapped line for Korean text.
 fn wrapped_caret(input: &str, width: usize) -> (u16, u16) {
-    use unicode_width::UnicodeWidthChar;
     let width = width.max(1);
     let mut row = 0usize;
     let mut col = 0usize;
@@ -1025,5 +1123,39 @@ mod tests {
         // Korean prose with spaces: words move wholly, like the renderer.
         // width 6: "안녕 하세요" -> 안녕(4)+space(5), 하세요(6) doesn't fit -> row 1.
         assert_eq!(wrapped_caret("안녕 하세요", 6), (1, 6));
+    }
+
+    #[test]
+    fn max_scroll_offset_uses_wrapped_lines_and_viewport_height() {
+        let viewport = ScrollViewport {
+            width: 5,
+            height: 3,
+        };
+        assert_eq!(max_scroll_offset("one\ntwo", viewport), 0);
+        assert_eq!(max_scroll_offset("hello world\nlast", viewport), 1);
+    }
+
+    #[test]
+    fn max_scroll_offset_is_zero_for_empty_viewport() {
+        assert_eq!(
+            max_scroll_offset(
+                "content",
+                ScrollViewport {
+                    width: 0,
+                    height: 10
+                }
+            ),
+            0
+        );
+        assert_eq!(
+            max_scroll_offset(
+                "content",
+                ScrollViewport {
+                    width: 10,
+                    height: 0
+                }
+            ),
+            0
+        );
     }
 }

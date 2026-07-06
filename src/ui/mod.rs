@@ -104,6 +104,12 @@ pub enum Job {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScrollViewport {
+    pub width: u16,
+    pub height: u16,
+}
+
 pub struct App {
     pub ws: Workspace,
     pub screen: Screen,
@@ -126,6 +132,8 @@ pub struct App {
     pub pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Vertical scroll offset for the handoff/report screens.
     pub scroll: u16,
+    /// Last rendered inner viewport for the active scrollable text screen.
+    pub scroll_viewport: Option<ScrollViewport>,
     /// Selected row in the Home queue (for per-task handoff view).
     pub selected: usize,
     /// Reports browser: (label, source) — None source = current (live) report,
@@ -248,6 +256,7 @@ impl App {
             amend: false,
             pause: None,
             scroll: 0,
+            scroll_viewport: None,
             selected: 0,
             reports: Vec::new(),
             report_sel: 0,
@@ -723,7 +732,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
         if app.screen == Screen::Monitor {
             app.refresh_monitor_log();
         }
-        terminal.draw(|frame| view::render(frame, &app))?;
+        terminal.draw(|frame| view::render(frame, &mut app))?;
 
         // Reflect Yardlet's state in the terminal title (OSC sequence), only when
         // it changes.
@@ -1183,6 +1192,30 @@ fn apply_scroll(app: &mut App, code: KeyCode) {
         KeyCode::PageDown => app.scroll = app.scroll.saturating_add(10),
         _ => {}
     }
+    clamp_scroll(app);
+}
+
+fn scroll_text(app: &App) -> Option<&str> {
+    match app.screen {
+        Screen::Handoff => Some(&app.handoff_text),
+        Screen::Intent => Some(&app.intent_text),
+        Screen::Completion => Some(&app.report_text),
+        _ => None,
+    }
+}
+
+fn max_scroll_for_current_screen(app: &App) -> u16 {
+    let Some(viewport) = app.scroll_viewport else {
+        return app.scroll;
+    };
+    let Some(text) = scroll_text(app) else {
+        return 0;
+    };
+    view::max_scroll_offset(text, viewport)
+}
+
+fn clamp_scroll(app: &mut App) {
+    app.scroll = app.scroll.min(max_scroll_for_current_screen(app));
 }
 
 fn redo_all(app: &mut App) {
@@ -2017,6 +2050,60 @@ routing:
         // Non-jamo input passes through untouched.
         assert_eq!(dekorean(KeyCode::Char('m'), false), KeyCode::Char('m'));
         assert_eq!(dekorean(KeyCode::Enter, false), KeyCode::Enter);
+    }
+
+    #[test]
+    fn scroll_down_and_page_down_stop_at_rendered_content_end() {
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-scroll-clamp-test"));
+        let mut app = App::new(ws);
+        app.screen = Screen::Handoff;
+        app.handoff_text = "hello world\nlast".to_string();
+        app.scroll_viewport = Some(ScrollViewport {
+            width: 5,
+            height: 3,
+        });
+
+        apply_scroll(&mut app, KeyCode::Down);
+        assert_eq!(app.scroll, 1);
+        apply_scroll(&mut app, KeyCode::Down);
+        assert_eq!(app.scroll, 1);
+        apply_scroll(&mut app, KeyCode::PageDown);
+        assert_eq!(app.scroll, 1);
+    }
+
+    #[test]
+    fn scroll_stays_zero_when_content_is_shorter_than_viewport() {
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-scroll-short-test"));
+        let mut app = App::new(ws);
+        app.screen = Screen::Completion;
+        app.report_text = "one\ntwo".to_string();
+        app.scroll_viewport = Some(ScrollViewport {
+            width: 20,
+            height: 5,
+        });
+
+        apply_scroll(&mut app, KeyCode::PageDown);
+        assert_eq!(app.scroll, 0);
+        apply_scroll(&mut app, KeyCode::Down);
+        assert_eq!(app.scroll, 0);
+    }
+
+    #[test]
+    fn scroll_up_and_page_up_keep_existing_saturating_behavior() {
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-scroll-up-test"));
+        let mut app = App::new(ws);
+        app.screen = Screen::Intent;
+        app.intent_text = "hello world\nlast".to_string();
+        app.scroll_viewport = Some(ScrollViewport {
+            width: 5,
+            height: 3,
+        });
+        app.scroll = 1;
+
+        apply_scroll(&mut app, KeyCode::Up);
+        assert_eq!(app.scroll, 0);
+        apply_scroll(&mut app, KeyCode::PageUp);
+        assert_eq!(app.scroll, 0);
     }
 
     #[test]
