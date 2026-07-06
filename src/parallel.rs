@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use chrono::Local;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::packet::{self, PacketInputs};
 use crate::schemas::{Task, TaskState, WorkQueue, WorkerProfile};
@@ -49,6 +49,114 @@ pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
     ready.sort_by_key(|&i| queue.tasks[i].priority);
     ready.truncate(max);
     ready
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum SequentialReason {
+    ParallelDisabled { max_parallel: usize },
+    RunnableTaskCount { runnable: usize },
+    DependencyChain { tasks: Vec<String> },
+    ApprovalRequired { tasks: Vec<String> },
+    ValidationRequired { tasks: Vec<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParallelAssessment {
+    pub runnable: Vec<String>,
+    pub reasons: Vec<SequentialReason>,
+}
+
+impl ParallelAssessment {
+    pub fn is_parallel_ready(&self) -> bool {
+        self.reasons.is_empty() && self.runnable.len() >= 2
+    }
+
+    pub fn summary(&self) -> String {
+        if self.is_parallel_ready() {
+            return format!("parallel-ready: {}", self.runnable.join(", "));
+        }
+        self.reasons
+            .iter()
+            .map(|reason| match reason {
+                SequentialReason::ParallelDisabled { max_parallel } => {
+                    format!("parallel disabled (max_parallel={max_parallel})")
+                }
+                SequentialReason::RunnableTaskCount { runnable } => {
+                    format!("only {runnable} runnable task(s)")
+                }
+                SequentialReason::DependencyChain { tasks } => {
+                    format!("dependency chain: {}", tasks.join(", "))
+                }
+                SequentialReason::ApprovalRequired { tasks } => {
+                    format!("approval required: {}", tasks.join(", "))
+                }
+                SequentialReason::ValidationRequired { tasks } => {
+                    format!("validation required: {}", tasks.join(", "))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}
+
+/// Explain, as structured data, why the queue will not form a parallel batch
+/// right now. The TUI can render this directly and tests can assert exact
+/// scheduler causes instead of scraping prose.
+pub fn assess_parallelism(queue: &WorkQueue, max_parallel: usize) -> ParallelAssessment {
+    let runnable_indices = ready_independent(queue, max_parallel.max(1));
+    let runnable = runnable_indices
+        .iter()
+        .map(|&i| queue.tasks[i].id.clone())
+        .collect::<Vec<_>>();
+    let mut reasons = Vec::new();
+    if max_parallel <= 1 {
+        reasons.push(SequentialReason::ParallelDisabled { max_parallel });
+    }
+
+    let blocked_by_deps = queue
+        .tasks
+        .iter()
+        .filter(|t| t.state == TaskState::Queued && !queue.deps_met(t))
+        .map(|t| t.id.clone())
+        .collect::<Vec<_>>();
+    if !blocked_by_deps.is_empty() {
+        reasons.push(SequentialReason::DependencyChain {
+            tasks: blocked_by_deps,
+        });
+    }
+
+    let approval_required = queue
+        .tasks
+        .iter()
+        .filter(|t| t.state == TaskState::Queued && t.approval_required() && queue.deps_met(t))
+        .map(|t| t.id.clone())
+        .collect::<Vec<_>>();
+    if !approval_required.is_empty() {
+        reasons.push(SequentialReason::ApprovalRequired {
+            tasks: approval_required,
+        });
+    }
+
+    let validation_required = queue
+        .tasks
+        .iter()
+        .filter(|t| t.state == TaskState::Queued && t.requires_validation() && queue.deps_met(t))
+        .map(|t| t.id.clone())
+        .collect::<Vec<_>>();
+    if !validation_required.is_empty() {
+        reasons.push(SequentialReason::ValidationRequired {
+            tasks: validation_required,
+        });
+    }
+
+    if max_parallel > 1 && runnable.len() < 2 {
+        reasons.push(SequentialReason::RunnableTaskCount {
+            runnable: runnable.len(),
+        });
+    }
+
+    ParallelAssessment { runnable, reasons }
 }
 
 /// Can this workspace host parallel worktree runs right now? Requires a git
@@ -717,6 +825,75 @@ mod tests {
         let q = queue(vec![task("A", TaskState::Queued, 10, vec![]), needs_val]);
         // Only A is parallel-ready; V is excluded despite its lower priority.
         assert_eq!(ready_independent(&q, 10), vec![0]);
+    }
+
+    #[test]
+    fn sequential_assessment_reports_structured_causes() {
+        let mut approval = task("APPROVE", TaskState::Queued, 10, vec![]);
+        approval.approval = Some(crate::yaml::from_str("required: true").unwrap());
+        let mut validation = task("VALIDATE", TaskState::Queued, 20, vec![]);
+        validation.validation = Some(crate::yaml::from_str("required: true").unwrap());
+        let q = queue(vec![
+            task("A", TaskState::Queued, 30, vec![]),
+            task("B", TaskState::Queued, 40, vec!["A".into()]),
+            approval,
+            validation,
+        ]);
+
+        let assessment = assess_parallelism(&q, 4);
+
+        assert_eq!(assessment.runnable, vec!["A"]);
+        assert!(assessment
+            .reasons
+            .contains(&SequentialReason::DependencyChain {
+                tasks: vec!["B".to_string()]
+            }));
+        assert!(assessment
+            .reasons
+            .contains(&SequentialReason::ApprovalRequired {
+                tasks: vec!["APPROVE".to_string()]
+            }));
+        assert!(assessment
+            .reasons
+            .contains(&SequentialReason::ValidationRequired {
+                tasks: vec!["VALIDATE".to_string()]
+            }));
+        assert!(assessment
+            .reasons
+            .contains(&SequentialReason::RunnableTaskCount { runnable: 1 }));
+    }
+
+    #[test]
+    fn appended_independent_task_enters_parallel_ready_set() {
+        let root = temp_repo("add-ready");
+        let ws = Workspace::at(&root);
+        std::fs::create_dir_all(ws.agents_dir()).unwrap();
+        ws.save_queue(&queue(vec![task(
+            "YARD-001",
+            TaskState::Queued,
+            10,
+            vec![],
+        )]))
+        .unwrap();
+
+        ws.append_user_task(crate::state::UserTaskInput {
+            title: "새 독립 작업".to_string(),
+            risk: "low".to_string(),
+            kind: "implementation".to_string(),
+            preferred_worker: String::new(),
+            depends_on: Vec::new(),
+            allowed_scope: Vec::new(),
+        })
+        .unwrap();
+
+        let q = ws.load_queue().unwrap();
+        let ready_ids = ready_independent(&q, 4)
+            .into_iter()
+            .map(|idx| q.tasks[idx].id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ready_ids, vec!["YARD-001", "YARD-002"]);
+        assert!(assess_parallelism(&q, 4).is_parallel_ready());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn sh_git(dir: &Path, args: &[&str]) -> String {

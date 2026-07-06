@@ -852,6 +852,7 @@ pub fn run_auto<F: FnMut(&str)>(
         // tasks: run them as a concurrent worktree batch instead. (A Failed
         // task still gets its sequential retry first.)
         if retry_target.is_none() && max_parallel > 1 {
+            let assessment = crate::parallel::assess_parallelism(&queue, max_parallel);
             let ready = crate::parallel::ready_independent(&queue, max_parallel);
             if ready.len() >= 2 {
                 match crate::parallel::git_preflight(&ws.root) {
@@ -882,6 +883,9 @@ pub fn run_auto<F: FnMut(&str)>(
                         }
                     }
                 }
+            } else if !parallel_warned && !assessment.reasons.is_empty() {
+                emit(format!("parallel sequential: {}", assessment.summary()));
+                parallel_warned = true;
             }
         }
         // Pick the work: retry the failed task first, else the next queued one.
