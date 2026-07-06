@@ -537,36 +537,14 @@ pub(crate) fn integrate_worktree(
     git(wt, &["add", "-A", "--", ".", ":(exclude).agents"])?;
     let staged = git(wt, &["diff", "--cached", "--name-only"])?;
     if !staged.trim().is_empty() {
-        git(
-            wt,
-            &[
-                "-c",
-                "user.name=yardlet",
-                "-c",
-                "user.email=yardlet@localhost",
-                "commit",
-                "-m",
-                &format!("yardlet: {task_id}"),
-            ],
-        )?;
+        let message = commit_message(root, task_id);
+        git(wt, &["commit", "-m", &message])?;
     }
     let ahead = git(root, &["rev-list", "--count", &format!("HEAD..{branch}")])?;
     if ahead.trim() == "0" {
         return Ok(Integration::NoChanges);
     }
-    match git(
-        root,
-        &[
-            "-c",
-            "user.name=yardlet",
-            "-c",
-            "user.email=yardlet@localhost",
-            "merge",
-            "--no-ff",
-            "--no-edit",
-            branch,
-        ],
-    ) {
+    match git(root, &["merge", "--no-ff", "--no-edit", branch]) {
         Ok(_) => Ok(Integration::Merged),
         Err(e) => {
             // Abort only if the failed merge is OURS (a content conflict from
@@ -579,12 +557,37 @@ pub(crate) fn integrate_worktree(
     }
 }
 
+fn commit_message(root: &Path, task_id: &str) -> String {
+    let title = task_title(root, task_id)
+        .map(|t| single_line(&t))
+        .filter(|t| !t.is_empty() && t != task_id)
+        .unwrap_or_else(|| "task changes".to_string());
+    format!("yardlet({task_id}): {title}")
+}
+
+fn task_title(root: &Path, task_id: &str) -> Option<String> {
+    let queue_path = root.join(crate::state::STATE_DIR).join("work-queue.yaml");
+    let text = std::fs::read_to_string(queue_path).ok()?;
+    let queue: WorkQueue = crate::yaml::from_str(&text).ok()?;
+    queue
+        .tasks
+        .into_iter()
+        .find(|task| task.id == task_id)
+        .map(|task| task.title)
+}
+
+fn single_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn create_worktree(root: &Path, wt: &Path, branch: &str) -> Result<()> {
     // Clear stale leftovers from a crashed/conflicted earlier run of this task.
     let wt_s = wt.display().to_string();
     let _ = git(root, &["worktree", "remove", "--force", &wt_s]);
     let _ = std::fs::remove_dir_all(wt);
+    let _ = git(root, &["worktree", "prune"]);
     let _ = git(root, &["branch", "-D", branch]);
+    let _ = git(root, &["worktree", "prune"]);
     git(root, &["worktree", "add", &wt_s, "-b", branch]).map(|_| ())
 }
 
@@ -725,21 +728,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         sh_git(&root, &["init", "-q"]);
+        sh_git(&root, &["config", "user.name", "Local User"]);
+        sh_git(&root, &["config", "user.email", "local@example.test"]);
         std::fs::write(root.join("base.txt"), "base\n").unwrap();
         sh_git(&root, &["add", "base.txt"]);
-        sh_git(
-            &root,
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "commit",
-                "-q",
-                "-m",
-                "init",
-            ],
-        );
+        sh_git(&root, &["commit", "-q", "-m", "init"]);
         root
     }
 
@@ -901,6 +894,10 @@ exit 0
     fn worktree_roundtrip_merges_worker_changes() {
         let root = temp_repo("merge");
         assert!(git_preflight(&root).is_ok());
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let mut t = task("YARD-001", TaskState::Queued, 10, vec![]);
+        t.title = "병렬 worktree 정리".into();
+        state::save_yaml(&root.join(".agents/work-queue.yaml"), &queue(vec![t])).unwrap();
         let wt = root.join(".agents/worktrees/yard-001");
         create_worktree(&root, &wt, "yard/yard-001").unwrap();
         // Simulate a worker: edit a file in the worktree, plus .agents noise
@@ -913,9 +910,46 @@ exit 0
             _ => panic!("expected a merge"),
         }
         assert!(root.join("feature.txt").is_file());
-        assert!(!root.join(".agents/work-queue.yaml").exists());
+        let root_queue = std::fs::read_to_string(root.join(".agents/work-queue.yaml")).unwrap();
+        assert!(root_queue.contains("병렬 worktree 정리"));
+        assert_ne!(root_queue.trim(), "copy");
+        let worker_commit = sh_git(
+            &root,
+            &["log", "--format=%an|%ae|%s", "-1", "yard/yard-001"],
+        );
+        assert_eq!(
+            worker_commit.trim(),
+            "Local User|local@example.test|yardlet(YARD-001): 병렬 worktree 정리"
+        );
+        let merge_commit = sh_git(&root, &["log", "--format=%an|%ae", "-1", "HEAD"]);
+        assert_eq!(merge_commit.trim(), "Local User|local@example.test");
         remove_worktree(&root, &wt, "yard/yard-001");
         assert!(!wt.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn create_worktree_prunes_stale_checkout_before_recreate() {
+        let root = temp_repo("stale");
+        let wt = root.join(".agents/worktrees/yard-004");
+        create_worktree(&root, &wt, "yard/yard-004").unwrap();
+        std::fs::write(wt.join("stale.txt"), "leftover\n").unwrap();
+
+        // Simulate a crash where the worktree directory disappeared but Git's
+        // common metadata still marks the branch as checked out there.
+        std::fs::remove_dir_all(&wt).unwrap();
+
+        create_worktree(&root, &wt, "yard/yard-004").unwrap();
+
+        assert!(wt.is_dir());
+        assert!(!wt.join("stale.txt").exists());
+        assert_eq!(
+            sh_git(&wt, &["branch", "--show-current"]).trim(),
+            "yard/yard-004"
+        );
+        let listed = sh_git(&root, &["worktree", "list", "--porcelain"]);
+        assert_eq!(listed.matches("branch refs/heads/yard/yard-004").count(), 1);
+        remove_worktree(&root, &wt, "yard/yard-004");
         let _ = std::fs::remove_dir_all(&root);
     }
 
