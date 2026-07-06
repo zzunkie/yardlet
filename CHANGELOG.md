@@ -4,6 +4,16 @@
 
 ### Added
 
+- **One-shot worker failover.** A run that dies leaving no result artifacts is
+  retried once on the next capable worker in `fallback_order` (readiness-checked,
+  recorded in telemetry with the failover attribution), on both the serial and
+  parallel paths.
+- **State-aware Enter in the TUI.** Enter on the selected task runs its next
+  action: queued/failed/partial = run, needs-user = answer, running = follow in
+  monitor, done = view handoff, deferred = revive hint. An approval-required
+  task without a grant is never run from Enter; it points at the approval flow
+  instead. Stop messages now say why nothing ran and which key to press next,
+  in both the English and Korean label tables.
 - **Cascade defer and revive.** `yardlet defer <id> --cascade [reason]`
   now sets the target task and every queued task stranded behind it,
   transitively, to `Deferred` as one recorded group. `yardlet revive <id>`
@@ -21,6 +31,19 @@
 
 ### Fixed
 
+- **The approval gate holds on every spawn path.** `run_next` is the single
+  choke-point: an approval-required task spawns a worker only with a valid
+  grant, the grant is consumed on execution, and retry, failover, checkpoint
+  auto-continue, and recover all re-enter through the gate. The auto drain now
+  routes an unapproved retry to needs-user and continues runnable work instead
+  of stalling.
+- **Worktree commits carry your git identity.** Parallel-batch auto-commits and
+  merges no longer use a hardcoded `yardlet <yardlet@localhost>` identity; they
+  inherit the repository's configured `user.name`/`user.email`, and the commit
+  message includes the task title, not just its id. Stale worktrees and branches
+  from an earlier failed run are pruned before a task's worktree is recreated.
+- **Viewer scroll is clamped to content.** Monitor/handoff viewers no longer
+  scroll past the end of wrapped content.
 - **Done-first completion for non-blocking leftovers.** Worker packets now
   reserve `needs_user` for questions or gates that actually block acceptance.
   When acceptance is met, minor cleanup or adjacent work should finish as
