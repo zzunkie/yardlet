@@ -18,6 +18,7 @@ Cargo.lock.orig
 /.agents/intent-contract.yaml
 /.agents/work-queue.yaml
 /.agents/conversations/
+/.agents/approvals.yaml
 /.agents/yardlet.yaml
 /.agents/yard.yaml
 
