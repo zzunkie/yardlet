@@ -977,6 +977,22 @@ pub fn run_auto<F: FnMut(&str)>(
                 }
             },
         };
+        if retry_target.is_some()
+            && queue
+                .tasks
+                .iter()
+                .find(|t| t.id == task_id)
+                .is_some_and(|t| t.approval_required())
+            && !crate::approvals::is_granted(ws, &task_id)
+        {
+            let mut fallback = queue.clone();
+            save_task_state_on_latest_queue(ws, &mut fallback, &task_id, TaskState::NeedsUser)?;
+            chain = None;
+            emit(format!(
+                "{task_id} requires approval; skipped retry and continued runnable work"
+            ));
+            continue;
+        }
         let n = attempts.entry(task_id.clone()).or_default();
         *n += 1;
         if *n > 2 {
@@ -2559,6 +2575,233 @@ exit 0
         .unwrap();
         assert_eq!(failover.from, "dead");
         assert_eq!(failover.to, "builder");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn approval_gate_blocks_unapproved_and_grant_is_single_use() {
+        // Security: run_next is the single choke-point for approval. An
+        // approval_required task spawns a worker ONLY with a valid grant, the
+        // grant is consumed on execution, and a retry after consumption STOPS
+        // unless re-approved. The worker increments an on-disk attempt counter so
+        // the assertions can prove it did / did not actually run — the failover,
+        // checkpoint-retry, and recover paths all re-enter through this gate.
+        let root =
+            std::env::temp_dir().join(format!("yard-approval-gate-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let attempts = root.join("attempts");
+        let builder = write_worker_script(
+            &root,
+            "builder.sh",
+            &format!(
+                r#"#!/bin/sh
+run_dir="$1"
+attempts={}
+run_id=$(basename "$run_dir")
+cat >/dev/null
+if [ -f "$attempts" ]; then count=$(cat "$attempts"); else count=0; fi
+count=$((count + 1))
+printf "%s" "$count" > "$attempts"
+cat > "$run_dir/result.json" <<EOF
+{{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-APV",
+  "status": "done",
+  "intent_adherence": {{ "drift_detected": false, "notes": "" }},
+  "changes": {{ "files_modified": [], "files_created": [], "files_deleted": [] }},
+  "validation": {{ "commands_run": [], "passed": true, "failures": [] }},
+  "question_for_user": null,
+  "compact_summary": "승인된 실행 완료",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}}
+EOF
+cat > "$run_dir/handoff.md" <<EOF
+# Worker handoff
+
+승인된 실행 완료
+EOF
+exit 0
+"#,
+                shell_literal(&attempts)
+            ),
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\n  fallback_order: [builder]\nworkers:\n  - id: builder\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&builder)
+        );
+        let ws = init_test_workspace("approval-gate", &worker_yaml);
+        ws.save_queue(&queue(vec![task("YARD-APV", TaskState::Queued, 10, true)]))
+            .unwrap();
+
+        let run = |ws: &Workspace| {
+            run_next(
+                ws,
+                &RunOptions {
+                    execute: true,
+                    target: Some("YARD-APV".into()),
+                    ..opts()
+                },
+            )
+        };
+
+        // 1) No grant: the gate refuses and the worker never spawns.
+        let err = run(&ws).err().expect("gate must refuse an ungranted task");
+        assert!(err.to_string().contains("requires approval"), "{err}");
+        assert!(!attempts.exists(), "worker must not run without a grant");
+        assert!(!crate::approvals::is_granted(&ws, "YARD-APV"));
+
+        // 2) Grant once, run: the task executes and the grant is CONSUMED.
+        crate::approvals::grant(&ws, "YARD-APV").unwrap();
+        assert!(crate::approvals::is_granted(&ws, "YARD-APV"));
+        let report = run(&ws).unwrap();
+        assert_eq!(report.result_state, Some(TaskState::Done));
+        assert_eq!(std::fs::read_to_string(&attempts).unwrap(), "1");
+        assert!(report.lines.iter().any(|l| l.contains("approval consumed")));
+        assert!(
+            !crate::approvals::is_granted(&ws, "YARD-APV"),
+            "grant must be single-use"
+        );
+
+        // 3) Retry after consumption WITHOUT re-approval: the gate stops it and
+        //    the worker is NOT re-invoked (the counter stays at 1). This is the
+        //    property the failover / checkpoint-retry / recover paths rely on —
+        //    every re-execution re-enters this gate and needs a fresh grant.
+        let mut q = ws.load_queue().unwrap();
+        q.tasks[0].state = TaskState::Queued; // simulate a retry re-selecting it
+        ws.save_queue(&q).unwrap();
+        let err = run(&ws)
+            .err()
+            .expect("gate must refuse a retry after the grant was consumed");
+        assert!(err.to_string().contains("requires approval"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&attempts).unwrap(),
+            "1",
+            "no re-run without a fresh grant"
+        );
+
+        // 4) A fresh grant re-enables exactly one more execution.
+        crate::approvals::grant(&ws, "YARD-APV").unwrap();
+        let report = run(&ws).unwrap();
+        assert_eq!(report.result_state, Some(TaskState::Done));
+        assert_eq!(std::fs::read_to_string(&attempts).unwrap(), "2");
+        assert!(!crate::approvals::is_granted(&ws, "YARD-APV"));
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn run_auto_skips_unapproved_retry_and_continues_ready_work() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-auto-approval-retry-src-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let attempts_dir = root.join("attempts");
+        std::fs::create_dir_all(&attempts_dir).unwrap();
+        let builder = write_worker_script(
+            &root,
+            "builder.sh",
+            &format!(
+                r#"#!/bin/sh
+run_dir="$1"
+attempts_dir={}
+run_id=$(basename "$run_dir")
+task_id=$(sed -n 's/^task_id: //p' "$run_dir/run.yaml" | head -n 1)
+cat >/dev/null
+counter="$attempts_dir/$task_id"
+if [ -f "$counter" ]; then count=$(cat "$counter"); else count=0; fi
+count=$((count + 1))
+printf "%s" "$count" > "$counter"
+cat > "$run_dir/result.json" <<EOF
+{{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": {{ "drift_detected": false, "notes": "" }},
+  "changes": {{ "files_modified": [], "files_created": [], "files_deleted": [] }},
+  "validation": {{ "commands_run": [], "passed": true, "failures": [] }},
+  "question_for_user": null,
+  "compact_summary": "done",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}}
+EOF
+cat > "$run_dir/handoff.md" <<EOF
+# Worker handoff
+
+done
+EOF
+exit 0
+"#,
+                shell_literal(&attempts_dir)
+            ),
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\n  fallback_order: [builder]\nworkers:\n  - id: builder\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&builder)
+        );
+        let ws = init_test_workspace("auto-approval-retry", &worker_yaml);
+        ws.save_queue(&queue(vec![
+            task("YARD-APV", TaskState::Queued, 10, true),
+            task("YARD-NEXT", TaskState::Queued, 20, false),
+        ]))
+        .unwrap();
+
+        crate::approvals::grant(&ws, "YARD-APV").unwrap();
+        let first = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-APV".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+        assert_eq!(first.result_state, Some(TaskState::Done));
+        assert_eq!(
+            std::fs::read_to_string(attempts_dir.join("YARD-APV")).unwrap(),
+            "1"
+        );
+        assert!(!crate::approvals::is_granted(&ws, "YARD-APV"));
+
+        let mut q = ws.load_queue().unwrap();
+        q.tasks[0].state = TaskState::Failed;
+        q.tasks[1].state = TaskState::Queued;
+        ws.save_queue(&q).unwrap();
+
+        let events = run_auto(&ws, false, None, Some(1), true, |_| {}).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.contains("YARD-APV requires approval; skipped retry")),
+            "{events:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(attempts_dir.join("YARD-APV")).unwrap(),
+            "1",
+            "approval retry must not spawn a worker without a fresh grant"
+        );
+        assert_eq!(
+            std::fs::read_to_string(attempts_dir.join("YARD-NEXT")).unwrap(),
+            "1",
+            "independent ready work should keep draining"
+        );
+
+        let q = ws.load_queue().unwrap();
+        let apv = q.tasks.iter().find(|t| t.id == "YARD-APV").unwrap();
+        let next = q.tasks.iter().find(|t| t.id == "YARD-NEXT").unwrap();
+        assert_eq!(apv.state, TaskState::NeedsUser);
+        assert_eq!(next.state, TaskState::Done);
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(ws.root);
