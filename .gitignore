@@ -17,6 +17,7 @@ Cargo.lock.orig
 /.agents/checkpoints/
 /.agents/handoffs/
 /.agents/telemetry/
+/.agents/transitions/
 /.agents/intents/
 /.agents/intent-contract.yaml
 /.agents/work-queue.yaml
