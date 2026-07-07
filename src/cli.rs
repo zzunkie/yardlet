@@ -38,6 +38,8 @@ pub enum Command {
     Status(StatusArgs),
     /// List the work queue.
     Queue,
+    /// Self-heal workspace state: migrate stale gates, defer non-runnable work, wrap drained intents.
+    Tidy,
     /// Worker readiness and zero-key billing safety.
     Worker(WorkerArgs),
     /// Gather cheap deterministic local evidence.
@@ -363,6 +365,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Goal(a)) => cmd_goal(&cwd, a),
         Some(Command::Status(a)) => cmd_status(&cwd, a),
         Some(Command::Queue) => cmd_queue(&cwd),
+        Some(Command::Tidy) => cmd_tidy(&cwd),
         Some(Command::Worker(a)) => cmd_worker(&cwd, a),
         Some(Command::Inspect(a)) => cmd_inspect(&cwd, a),
         Some(Command::Packet(a)) => cmd_packet(&cwd, a),
@@ -860,38 +863,65 @@ fn cmd_add(cwd: &std::path::Path, args: AddArgs) -> Result<()> {
 
 fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
-    let mut queue = ws.load_queue()?;
-    if queue.tasks.is_empty() {
+    let snap = Snapshot::load(&ws)?;
+    if snap.queue.tasks.is_empty() {
         println!("Queue is empty. Run `yardlet new \"...\"` to create work.");
         return Ok(());
     }
-    // Sort for display (active work on top, done at the bottom) and mark the
-    // task that runs next, so live work is not buried under completed history.
-    queue.sort_for_display();
-    let next = run::select_next(
-        &queue,
-        &RunOptions {
-            execute: false,
-            worker_override: None,
-            target: None,
-            answer: None,
-            full_access: false,
-            accept_ambiguity: false,
-            chain: None,
-        },
-    )
-    .ok()
-    .flatten();
-    for (i, t) in queue.tasks.iter().enumerate() {
+    let next = snap
+        .queue
+        .tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| snap.task_class(t).is_runnable())
+        .min_by_key(|(_, t)| t.priority)
+        .map(|(i, _)| i);
+    for (i, t) in snap.queue.tasks.iter().enumerate() {
+        let class = snap.task_class(t);
         let marker = if Some(i) == next { "\u{25b8}" } else { " " };
+        let reason = snap
+            .last_transitions
+            .get(&t.id)
+            .map(|r| format!(" - {}", r.detail))
+            .unwrap_or_default();
         println!(
-            "{marker}{} {:<12} {:<48} {:>6}  {}",
+            "{marker}{} {:<12} {:<42} {:>6}  {:<18} {}{}",
             t.state.glyph(),
             t.id,
-            truncate(&t.title, 48),
+            truncate(&t.title, 42),
             t.risk,
-            t.preferred_worker
+            class.label(),
+            t.preferred_worker,
+            reason
         );
+    }
+    Ok(())
+}
+
+fn cmd_tidy(cwd: &std::path::Path) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let report = ws.tidy()?;
+    if report.migrated_decisions.is_empty()
+        && report.deferred.is_empty()
+        && report.archived_intent.is_none()
+    {
+        println!("Workspace is already tidy.");
+        return Ok(());
+    }
+    if !report.migrated_decisions.is_empty() {
+        println!(
+            "Migrated stale decision gate(s): {}",
+            report.migrated_decisions.join(", ")
+        );
+    }
+    if !report.deferred.is_empty() {
+        println!(
+            "Set aside non-runnable task(s): {}",
+            report.deferred.join(", ")
+        );
+    }
+    if let Some(intent) = report.archived_intent {
+        println!("Archived drained intent and cleared live queue: {intent}");
     }
     Ok(())
 }
@@ -977,12 +1007,32 @@ fn cmd_approve(cwd: &std::path::Path, args: ApproveArgs) -> Result<()> {
 fn cmd_defer(cwd: &std::path::Path, args: DeferArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let mut queue = ws.load_queue()?;
+    let before = queue.clone();
     let reason = args.reason.join(" ");
     let id = args.task.clone();
     let outcome = queue
         .defer_task(&id, args.cascade, &reason)
         .map_err(anyhow::Error::msg)?;
     ws.save_queue(&queue)?;
+    for task_id in &outcome.deferred {
+        if let Some(prev) = before.tasks.iter().find(|t| &t.id == task_id) {
+            crate::state::append_transition(
+                &ws,
+                crate::state::transition(
+                    task_id,
+                    prev.state,
+                    crate::schemas::TaskState::Deferred,
+                    crate::schemas::TransitionCause::Defer,
+                    if reason.trim().is_empty() {
+                        "deferred by user"
+                    } else {
+                        reason.trim()
+                    },
+                    crate::schemas::TransitionActor::User,
+                ),
+            )?;
+        }
+    }
     if args.cascade && outcome.deferred.len() > 1 {
         println!(
             "Deferred {} tasks as group {}: {}",
@@ -1012,10 +1062,26 @@ fn cmd_defer(cwd: &std::path::Path, args: DeferArgs) -> Result<()> {
 fn cmd_revive(cwd: &std::path::Path, args: ReviveArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let mut queue = ws.load_queue()?;
+    let before = queue.clone();
     let outcome = queue
         .revive_task(&args.task, args.group)
         .map_err(anyhow::Error::msg)?;
     ws.save_queue(&queue)?;
+    for task_id in &outcome.revived {
+        if let Some(prev) = before.tasks.iter().find(|t| &t.id == task_id) {
+            crate::state::append_transition(
+                &ws,
+                crate::state::transition(
+                    task_id,
+                    prev.state,
+                    crate::schemas::TaskState::Queued,
+                    crate::schemas::TransitionCause::Revive,
+                    "revived by user",
+                    crate::schemas::TransitionActor::User,
+                ),
+            )?;
+        }
+    }
 
     if outcome.revived.len() == 1 {
         println!(
@@ -1270,19 +1336,22 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&snap.to_json())?);
         return Ok(());
     }
-    use crate::schemas::TaskState;
+    use crate::schemas::{RunnableClass, TaskState};
+    let health = snap.health();
     println!("Yardlet workspace: {}", snap.config.workspace_id);
     println!("Intent: {}", snap.intent_summary());
     println!(
-        "Queue: {} queued, {} running, {} needs-you, {} blocked, {} failed, {} deferred, {} done, {} total",
-        snap.count(TaskState::Queued),
-        snap.count(TaskState::Running),
-        snap.count(TaskState::NeedsUser),
-        snap.count(TaskState::Blocked),
-        snap.count(TaskState::Failed),
-        snap.count(TaskState::Deferred),
-        snap.count(TaskState::Done),
-        snap.queue.tasks.len(),
+        "Queue: {} ready, {} running, {} awaiting-you, {} approval, {} deps, {} worker, {} held, {} set-aside, {} done, {} total",
+        health.runnable,
+        health.running,
+        health.waiting_decision,
+        health.waiting_approval,
+        health.waiting_dependency,
+        health.waiting_capability,
+        health.held,
+        health.set_aside,
+        health.done,
+        health.total,
     );
     println!(
         "Workers invocable: {}/{}   (planner: {})",
@@ -1308,17 +1377,11 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
     // out so a decided/deferred ceiling does not read as a broken task (and so an
     // intent with only such tasks left does not look falsely complete).
     // Reuse the capability vocab the snapshot already parsed from workers.yaml.
-    let vocab = &snap.capabilities;
-    let cap_gated = |t: &crate::schemas::Task| {
-        t.state == TaskState::Blocked
-            && !crate::routing::unsatisfiable_capabilities(&t.required_capabilities, vocab)
-                .is_empty()
-    };
     let awaiting: Vec<&str> = snap
         .queue
         .tasks
         .iter()
-        .filter(|t| cap_gated(t))
+        .filter(|t| snap.task_class(t) == RunnableClass::WaitingCapability)
         .map(|t| t.id.as_str())
         .collect();
     // Stuck = Failed/Partial only (retryable). Blocked is its own thing.
@@ -1335,7 +1398,7 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         .queue
         .tasks
         .iter()
-        .filter(|t| t.state == TaskState::Blocked && !cap_gated(t))
+        .filter(|t| t.state == TaskState::Blocked && snap.task_class(t) == RunnableClass::Held)
         .map(|t| t.id.as_str())
         .collect();
     if !awaiting.is_empty() {
@@ -1385,6 +1448,32 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
     if !needs_approval.is_empty() {
         println!("\nneeds approval: {}", needs_approval.join(", "));
         println!("  approve:   yardlet approve <id>   then  yardlet run --task <id> --execute");
+    }
+    let reasons: Vec<String> = snap
+        .queue
+        .tasks
+        .iter()
+        .filter_map(|t| {
+            let class = snap.task_class(t);
+            (!matches!(class, RunnableClass::Runnable | RunnableClass::Done)).then(|| {
+                let detail = snap
+                    .last_transitions
+                    .get(&t.id)
+                    .map(|r| r.detail.as_str())
+                    .unwrap_or(t.worker_rationale.as_deref().unwrap_or(""));
+                if detail.trim().is_empty() {
+                    format!("{}: {}", t.id, class.label())
+                } else {
+                    format!("{}: {} - {}", t.id, class.label(), detail.trim())
+                }
+            })
+        })
+        .collect();
+    if !reasons.is_empty() {
+        println!("\nwhy:");
+        for reason in reasons {
+            println!("  - {reason}");
+        }
     }
     let suggestions = crate::review::pending_count(&ws);
     if suggestions > 0 {
