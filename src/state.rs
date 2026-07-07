@@ -13,8 +13,9 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use crate::schemas::{
-    BillingPolicy, Conversation, ConversationTurn, IntentContract, Task, TaskState, TurnRole,
-    WorkQueue, WorkersFile, YardConfig,
+    BillingPolicy, Conversation, ConversationTurn, FollowUpTask, IntentContract,
+    PreservedFollowUps, SelectionPolicy, Task, TaskState, TurnRole, WorkQueue, WorkersFile,
+    YardConfig,
 };
 use crate::yaml;
 
@@ -224,6 +225,88 @@ impl Workspace {
             return Ok(None);
         }
         Ok(Some(load_yaml(&p)?))
+    }
+
+    /// Wipe the live intent + queue so the workspace starts fresh. Call AFTER
+    /// [`crate::report::archive_intent`] has captured the record: this only
+    /// removes the live files, so `load_intent` then reads None and `load_queue`
+    /// reads an empty queue. Missing files are not an error (already clear).
+    pub fn clear_intent_and_queue(&self) -> Result<()> {
+        for p in [self.intent_path(), self.queue_path()] {
+            if p.is_file() {
+                fs::remove_file(&p).with_context(|| format!("removing {}", p.display()))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Load the follow-ups preserved when an intent was archived
+    /// (`.agents/intents/<intent_id>/follow-up-tasks.yaml`). None when the intent
+    /// left no proposed follow-ups (or the file is absent/unreadable).
+    pub fn load_preserved_follow_ups(&self, intent_id: &str) -> Option<PreservedFollowUps> {
+        let p = self
+            .agents_dir()
+            .join("intents")
+            .join(intent_id)
+            .join("follow-up-tasks.yaml");
+        if !p.is_file() {
+            return None;
+        }
+        load_yaml(&p).ok()
+    }
+
+    /// Seed a fresh live intent + queue from a single (typically preserved)
+    /// follow-up: write a new `intent-contract.yaml` derived from the follow-up
+    /// and an empty queue for `seed_fn` to populate. Returns the new intent id.
+    /// The caller (the engine promote path) fills the queue's seed task so the
+    /// planner's ingest logic (id/approval/decision handling) stays the single
+    /// owner of task shaping.
+    pub fn seed_intent_from_follow_up(
+        &self,
+        fu: &FollowUpTask,
+        intent_id: &str,
+        seed_fn: impl FnOnce(&mut WorkQueue),
+    ) -> Result<String> {
+        let summary = {
+            let title = fu.title.trim();
+            let reason = fu.reason.trim();
+            if reason.is_empty() {
+                title.to_string()
+            } else {
+                format!("{title} \u{2014} {reason}")
+            }
+        };
+        let intent = IntentContract {
+            schema_version: 1,
+            id: intent_id.to_string(),
+            source: "promoted-follow-up".to_string(),
+            raw_request: fu.title.trim().to_string(),
+            summary,
+            allowed_scope: fu.allowed_scope.clone(),
+            out_of_scope: Vec::new(),
+            acceptance: fu
+                .acceptance
+                .iter()
+                .map(|s| yaml::Value::String(s.clone()))
+                .collect(),
+            images: Vec::new(),
+            ambiguity: String::new(),
+            open_questions: Vec::new(),
+            clarifications: Vec::new(),
+            interview_turns: 0,
+            status: String::new(),
+        };
+        save_yaml(&self.intent_path(), &intent)?;
+        let mut queue = WorkQueue {
+            schema_version: 1,
+            queue_id: format!("queue-{intent_id}"),
+            intent_id: intent_id.to_string(),
+            selection_policy: SelectionPolicy::default(),
+            tasks: Vec::new(),
+        };
+        seed_fn(&mut queue);
+        self.save_queue(&queue)?;
+        Ok(intent_id.to_string())
     }
 }
 

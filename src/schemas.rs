@@ -221,6 +221,17 @@ pub enum TaskState {
 }
 
 impl TaskState {
+    /// A terminal state won't run again on its own: the scheduler never picks it
+    /// and the drain is finished with it. `Queued`/`Running` are the only live
+    /// states. `Done`/`Deferred` are settled resolutions; `Blocked`/`Failed`/
+    /// `NeedsUser`/`Partial` are settled-with-a-hold (a human may still act, but
+    /// the auto-drain will not advance them without one). This is the shared
+    /// judgment behind [`WorkQueue::drained`] and the holds-included completion
+    /// view.
+    pub fn is_terminal(self) -> bool {
+        !matches!(self, TaskState::Queued | TaskState::Running)
+    }
+
     pub fn glyph(self) -> &'static str {
         match self {
             TaskState::Done => "\u{2713}",    // check
@@ -407,6 +418,17 @@ impl WorkQueue {
             selection_policy: SelectionPolicy::default(),
             tasks: Vec::new(),
         }
+    }
+
+    /// Has the queue drained? True when every task has reached a terminal state
+    /// ([`TaskState::is_terminal`]) — Done, Deferred, or another settled/held
+    /// state. An empty queue is trivially drained. This is a pure judgment with
+    /// no scheduler side effects: it says the drain has nothing left to run, so
+    /// the intent can be wrapped and archived. Holds (NeedsUser/Blocked/Deferred)
+    /// count as terminal, which is why the completion view is holds-included: a
+    /// queue can be "drained" while still carrying tasks a human set aside.
+    pub fn drained(&self) -> bool {
+        self.tasks.iter().all(|t| t.state.is_terminal())
     }
 
     /// Are all of `task`'s dependencies Done? A dependency id that does not
@@ -895,6 +917,23 @@ pub struct FollowUpTask {
     pub runs_before: Vec<String>,
 }
 
+/// The proposed-but-unrun follow-ups an intent leaves behind, preserved under
+/// `.agents/intents/<id>/follow-up-tasks.yaml` when the intent is archived so the
+/// record of "what a run said to do next" survives the reset. A preserved entry
+/// can later be promoted into a fresh intent + queue seed (the same
+/// `FollowUpTask` shape the queue ingests). Every field defaults so a partial or
+/// legacy file still loads.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PreservedFollowUps {
+    #[serde(default)]
+    pub schema_version: u32,
+    /// The archived intent these follow-ups were proposed under.
+    #[serde(default)]
+    pub intent_id: String,
+    #[serde(default)]
+    pub tasks: Vec<FollowUpTask>,
+}
+
 // ---------------------------------------------------------------------------
 // .agents/conversations/<task_id>.yaml — needs_user conversation transcript
 // ---------------------------------------------------------------------------
@@ -1018,6 +1057,45 @@ tasks:
         assert!(q.tasks[1].approval_required());
         // selection_policy defaults applied when absent
         assert!(q.selection_policy.skip_if_approval_required);
+    }
+
+    #[test]
+    fn is_terminal_only_queued_and_running_are_live() {
+        assert!(!TaskState::Queued.is_terminal());
+        assert!(!TaskState::Running.is_terminal());
+        // Done + Deferred are settled; the held states are terminal too.
+        for s in [
+            TaskState::Done,
+            TaskState::Deferred,
+            TaskState::Blocked,
+            TaskState::Failed,
+            TaskState::NeedsUser,
+            TaskState::Partial,
+        ] {
+            assert!(s.is_terminal(), "{s:?} should read as terminal");
+        }
+    }
+
+    #[test]
+    fn drained_counts_done_deferred_and_holds_but_not_queued() {
+        fn q(states: &[TaskState]) -> WorkQueue {
+            let mut queue = WorkQueue::empty();
+            for (i, &state) in states.iter().enumerate() {
+                let mut t: Task = yaml::from_str(&format!("id: T{i}\ntitle: t{i}")).unwrap();
+                t.state = state;
+                queue.tasks.push(t);
+            }
+            queue
+        }
+        // Empty queue is trivially drained.
+        assert!(WorkQueue::empty().drained());
+        // Done + Deferred + a NeedsUser hold: all terminal -> drained (the
+        // holds-included completion case).
+        assert!(q(&[TaskState::Done, TaskState::Deferred, TaskState::NeedsUser]).drained());
+        // A single still-Queued task keeps the queue un-drained even amid Done.
+        assert!(!q(&[TaskState::Done, TaskState::Queued]).drained());
+        // A Running task is live, not drained.
+        assert!(!q(&[TaskState::Running]).drained());
     }
 
     #[test]
