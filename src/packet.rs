@@ -247,6 +247,14 @@ pub struct Harness {
     pub memory: Vec<HarnessMemory>,
 }
 
+pub struct MemoryRefreshTarget {
+    pub slug: String,
+    pub title: String,
+    pub summary: String,
+    pub path: String,
+    pub look_at: Vec<String>,
+}
+
 /// Pull a memory doc's index line — title, one-line summary, and any `look_at:`
 /// landmark paths — from `name:`/`title:`, `description:`/`summary:`, and
 /// `look_at:`/`paths:` frontmatter when present, else the first `# ` heading and
@@ -1091,6 +1099,103 @@ pub fn compile_skill(
     p
 }
 
+/// Compile a one-off project-memory authoring packet. The worker writes only a
+/// draft JSON file in the isolated run directory; Yardlet core later writes the
+/// canonical `.agents/memory` docs through `state.rs`.
+pub fn compile_memory(
+    mode: &str,
+    repo: &RepoSummary,
+    run_dir_rel: &str,
+    language: &str,
+    harness: &Harness,
+    worker_id: &str,
+    targets: &[MemoryRefreshTarget],
+) -> String {
+    let mut p = String::new();
+    p.push_str("# Yardlet project-memory drafting\n\n");
+    p.push_str(&format!(
+        "You are a hidden Yardlet worker ({worker_id}) acting as the researcher. Draft \
+         project-memory documents for THIS repository. Do NOT edit `.agents/memory/`, \
+         `index.yaml`, README files, or any canonical state. Your only deliverable is \
+         `{run_dir_rel}/memory-result.json`; Yardlet core writes canonical memory through \
+         `src/state.rs` after parsing your draft.\n\n"
+    ));
+
+    p.push_str("## This repository (evidence)\n\n");
+    p.push_str(&format!("- root: `{}`\n", repo.root));
+    if !repo.package_managers.is_empty() {
+        p.push_str(&format!(
+            "- package managers: {}\n",
+            repo.package_managers.join(", ")
+        ));
+    }
+    if !repo.test_commands.is_empty() {
+        p.push_str(&format!(
+            "- test commands: {}\n",
+            repo.test_commands.join(", ")
+        ));
+    }
+    p.push_str(&format!("- top level: {}\n\n", repo.top_level.join(", ")));
+
+    push_harness_sections(&mut p, harness, worker_id, &[]);
+
+    if mode == "refresh" {
+        p.push_str("## Refresh targets\n\n");
+        if targets.is_empty() {
+            p.push_str("No targets were selected. Return an empty `documents` array.\n\n");
+        } else {
+            p.push_str(
+                "Refresh ONLY the target slugs below. Read each target file and its `look_at` \
+                 landmarks before drafting. Keep each returned document's `slug` exactly as \
+                 listed so Yardlet can update only the selected canonical file.\n\n",
+            );
+            for t in targets {
+                p.push_str(&format!(
+                    "- slug: `{}`\n  path: `{}`\n  title: {}\n",
+                    t.slug, t.path, t.title
+                ));
+                if !t.summary.is_empty() {
+                    p.push_str(&format!("  summary: {}\n", t.summary));
+                }
+                if !t.look_at.is_empty() {
+                    p.push_str("  look_at:\n");
+                    for path in &t.look_at {
+                        p.push_str(&format!("    - `{path}`\n"));
+                    }
+                }
+            }
+            p.push('\n');
+        }
+    } else {
+        p.push_str("## Initialize memory\n\n");
+        p.push_str(
+            "Scan the repo for durable, non-obvious facts or decisions a future worker would \
+             otherwise rediscover. Prefer a small starter set over exhaustive notes. Do not \
+             copy AGENTS.md rules or facts directly derivable from filenames; memory is for \
+             decisions, gotchas, and invariants.\n\n",
+        );
+    }
+
+    p.push_str("## Drafting rules\n\n");
+    p.push_str(
+        "- Return one document per durable fact or decision.\n\
+         - Use a stable kebab-case `slug`; for refresh, reuse the target slug exactly.\n\
+         - `title` and `summary` become the packet index line.\n\
+         - `look_at` should list repo-relative landmark paths whose later edits may stale the memory.\n\
+         - `body` is Markdown body only: no YAML frontmatter and no top-level `#` heading.\n\
+         - If there is nothing worth recording, return an empty `documents` array and explain why in `rationale`.\n\n",
+    );
+
+    p.push_str(&language_directive(language));
+
+    p.push_str("## Required output\n\n");
+    p.push_str(&format!(
+        "Write exactly one file: `{run_dir_rel}/memory-result.json`, matching this shape:\n\n"
+    ));
+    p.push_str(MEMORY_SCHEMA_HINT);
+    p
+}
+
 const SKILL_SCHEMA_HINT: &str = r#"```json
 {
   "name": "kebab-case-skill-name",
@@ -1102,6 +1207,22 @@ const SKILL_SCHEMA_HINT: &str = r#"```json
 
 Do NOT put YAML frontmatter inside `body` — Yardlet writes the `name`/`description`
 frontmatter itself. `body` is just the Markdown procedure.
+"#;
+
+const MEMORY_SCHEMA_HINT: &str = r#"```json
+{
+  "documents": [
+    {
+      "slug": "short-kebab-case-slug",
+      "title": "Human-readable memory title",
+      "summary": "One-line packet index summary.",
+      "look_at": ["src/example.rs", "docs/example.md"],
+      "body": "Markdown body only. No YAML frontmatter and no top-level H1."
+    }
+  ],
+  "rationale": "Why these memories were drafted or why none were needed."
+}
+```
 "#;
 
 const PLANNING_SCHEMA_HINT: &str = r#"```json
@@ -1339,6 +1460,38 @@ mod tests {
             "memory bodies must stay on-demand, not inlined: {p}"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn memory_packet_keeps_worker_to_draft_only() {
+        let repo = RepoSummary {
+            root: "/tmp/repo".to_string(),
+            git: Default::default(),
+            package_managers: vec!["cargo".to_string()],
+            test_commands: vec!["cargo test".to_string()],
+            top_level: vec!["src".to_string(), ".agents".to_string()],
+        };
+        let h = Harness::default();
+        let packet = compile_memory(
+            "refresh",
+            &repo,
+            ".agents/runs/memory-1",
+            "en",
+            &h,
+            "codex",
+            &[MemoryRefreshTarget {
+                slug: "stale-doc".to_string(),
+                title: "Stale doc".to_string(),
+                summary: "Needs refresh".to_string(),
+                path: ".agents/memory/stale-doc.md".to_string(),
+                look_at: vec!["src/lib.rs".to_string()],
+            }],
+        );
+        assert!(packet.contains("Do NOT edit `.agents/memory/`"));
+        assert!(packet.contains("`.agents/runs/memory-1/memory-result.json`"));
+        assert!(packet.contains("Keep each returned document's `slug` exactly as listed"));
+        assert!(packet.contains("\"slug\": \"short-kebab-case-slug\""));
+        assert!(packet.contains("src/state.rs"));
     }
 
     #[test]
