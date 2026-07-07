@@ -64,8 +64,8 @@ pub enum Command {
     Report,
     /// Summarize run telemetry into a trust report (first-pass vs retried Done).
     Trust,
-    /// List the project-memory index discovered under .agents/memory/.
-    Memory,
+    /// List, initialize, or refresh project memory under .agents/memory/.
+    Memory(MemoryArgs),
     /// Review routing telemetry and apply suggested worker preferences.
     Routing(RoutingArgs),
     /// Show worker-rubric drift from the template and merge improvements in.
@@ -298,6 +298,24 @@ pub struct InspectArgs {
     cmd: InspectCmd,
 }
 
+#[derive(Args)]
+pub struct MemoryArgs {
+    #[command(subcommand)]
+    cmd: Option<MemoryCmd>,
+}
+
+#[derive(Subcommand)]
+enum MemoryCmd {
+    /// Ask a worker for memory drafts, then let Yardlet core write canonical docs.
+    Init,
+    /// Refresh memory docs from a worker draft.
+    Refresh {
+        /// Refresh only docs whose look_at landmarks changed after the memory.
+        #[arg(long)]
+        stale_only: bool,
+    },
+}
+
 #[derive(Subcommand)]
 enum InspectCmd {
     /// Summarize the repo for worker pre-inspection.
@@ -378,7 +396,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Handoff) => cmd_handoff(&cwd),
         Some(Command::Report) => cmd_report(&cwd),
         Some(Command::Trust) => cmd_trust(&cwd),
-        Some(Command::Memory) => cmd_memory(&cwd),
+        Some(Command::Memory(a)) => cmd_memory(&cwd, a),
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
         Some(Command::Rubric(a)) => cmd_rubric(&cwd, a),
         Some(Command::Recover) => cmd_recover(&cwd),
@@ -1142,43 +1160,35 @@ fn cmd_trust(cwd: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
+fn cmd_memory(cwd: &std::path::Path, args: MemoryArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
-    let config = ws.load_config()?;
-    let h = crate::packet::discover_harness(&ws.root, config.harness_discovery);
-    if h.memory.is_empty() {
-        println!("No project memory yet. Add markdown docs under .agents/memory/.");
+    match args.cmd {
+        None => cmd_memory_list(&ws),
+        Some(MemoryCmd::Init) => {
+            let report = crate::memory::init(&ws)?;
+            print_memory_command_report("initialized project memory", &report);
+            Ok(())
+        }
+        Some(MemoryCmd::Refresh { stale_only }) => {
+            let report = crate::memory::refresh(&ws, stale_only)?;
+            let label = if stale_only {
+                "refreshed stale project memory"
+            } else {
+                "refreshed project memory"
+            };
+            print_memory_command_report(label, &report);
+            Ok(())
+        }
+    }
+}
+
+fn cmd_memory_list(ws: &crate::state::Workspace) -> Result<()> {
+    let memory = crate::memory::indexed(ws)?;
+    if memory.is_empty() {
+        println!("No project memory yet. Run `yardlet memory init` or add markdown docs under .agents/memory/.");
         return Ok(());
     }
-    // A doc is possibly stale when a `look_at` landmark changed in git AFTER the
-    // doc, OR has an uncommitted edit. One `git status` up front (instead of one
-    // per landmark) gives the uncommitted set; commit times still need per-path
-    // `git log`. An untracked doc has no commit time, but an uncommitted landmark
-    // still flags it (so a git-ignored memory dir is not falsely "fresh").
-    let uncommitted = git_uncommitted_paths(&ws.root);
-    // `git status --porcelain` reports paths from the repo root, but a landmark is
-    // workspace-root-relative — in a subdirectory workspace they differ, so build
-    // the repo-root-relative form (prefix + landmark) before matching the set.
-    let prefix = git_show_prefix(&ws.root);
-    let staleness: Vec<bool> = h
-        .memory
-        .iter()
-        .map(|m| {
-            if m.look_at.is_empty() {
-                return false;
-            }
-            let doc_ct = git_commit_time(&ws.root, &m.path);
-            m.look_at.iter().any(|p| {
-                let rel = p.trim_start_matches("./");
-                uncommitted.contains(format!("{prefix}{rel}").as_str())
-                    || matches!(
-                        (doc_ct, git_commit_time(&ws.root, rel)),
-                        (Some(d), Some(t)) if t > d
-                    )
-            })
-        })
-        .collect();
-    let stale_count = staleness.iter().filter(|s| **s).count();
+    let stale_count = memory.iter().filter(|m| m.stale).count();
     let suffix = if stale_count > 0 {
         format!(", {stale_count} possibly stale")
     } else {
@@ -1186,10 +1196,10 @@ fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
     };
     println!(
         "Project memory ({}{suffix}) — injected as an index into every packet, bodies read on demand:",
-        h.memory.len(),
+        memory.len(),
     );
-    for (m, stale) in h.memory.iter().zip(&staleness) {
-        let mark = if *stale {
+    for m in &memory {
+        let mark = if m.stale {
             " \u{26a0} possibly stale (a look_at landmark changed since)"
         } else {
             ""
@@ -1204,69 +1214,28 @@ fn cmd_memory(cwd: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// The set of paths with uncommitted working-tree changes under `root` (one
-/// `git status` for the whole workspace; `-z` keeps special-char paths intact).
-fn git_uncommitted_paths(root: &std::path::Path) -> std::collections::HashSet<String> {
-    let Some(out) = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["status", "--porcelain", "-z", "--untracked-files=all"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-    else {
-        return std::collections::HashSet::new();
-    };
-    let raw = String::from_utf8_lossy(&out.stdout);
-    let mut chunks = raw.split('\0');
-    let mut set = std::collections::HashSet::new();
-    while let Some(entry) = chunks.next() {
-        if entry.len() < 4 {
-            continue;
-        }
-        let xy = &entry[..2];
-        set.insert(entry[3..].to_string());
-        if xy.starts_with('R') || xy.starts_with('C') {
-            chunks.next();
+fn print_memory_command_report(label: &str, report: &crate::memory::MemoryCommandReport) {
+    println!("{label}:");
+    if let Some(run_id) = &report.run_id {
+        match &report.worker_id {
+            Some(worker) => {
+                println!("  draft: .agents/runs/{run_id}/memory-result.json ({worker})")
+            }
+            None => println!("  draft: .agents/runs/{run_id}/memory-result.json"),
         }
     }
-    set
-}
-
-/// The path of `root` within its git repo, with a trailing slash (empty when
-/// `root` is the repo top-level). `git status --porcelain` reports paths from the
-/// repo root, so a subdirectory workspace prepends this to a workspace-relative
-/// landmark before matching against the uncommitted set.
-fn git_show_prefix(root: &std::path::Path) -> String {
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "--show-prefix"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
-}
-
-/// Unix time of the last commit touching `pathspec` under `root`, or None when
-/// the path is untracked or `root` is not a git repo.
-fn git_commit_time(root: &std::path::Path, pathspec: &str) -> Option<i64> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["log", "-1", "--format=%ct", "--", pathspec])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    for p in &report.written {
+        println!("  wrote: {p}");
     }
-    std::str::from_utf8(&out.stdout)
-        .ok()?
-        .trim()
-        .parse::<i64>()
-        .ok()
+    for s in &report.skipped {
+        println!("  skipped: {s}");
+    }
+    if let Some(index) = &report.index_path {
+        println!("  index: {index}");
+    }
+    if !report.rationale.trim().is_empty() {
+        println!("  rationale: {}", report.rationale.trim());
+    }
 }
 
 fn cmd_handoff(cwd: &std::path::Path) -> Result<()> {

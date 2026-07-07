@@ -13,6 +13,7 @@ mod guard;
 mod hooks;
 mod init;
 mod inspect;
+mod memory;
 mod packet;
 mod parallel;
 mod planner;

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::Local;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::schemas::{
     BillingPolicy, Conversation, ConversationTurn, FollowUpTask, IntentContract,
@@ -131,6 +131,9 @@ impl Workspace {
     }
     pub fn handoffs_dir(&self) -> PathBuf {
         self.agents_dir().join("handoffs")
+    }
+    pub fn memory_dir(&self) -> PathBuf {
+        self.agents_dir().join("memory")
     }
 
     // ---- typed loaders -------------------------------------------------
@@ -465,6 +468,99 @@ impl Workspace {
 
         Ok(report)
     }
+
+    /// Deterministic writer for canonical project memory. Workers may draft
+    /// memory content into a run directory, but only this state-layer method
+    /// writes `.agents/memory/*.md` and the generated `index.yaml`.
+    pub fn write_memory_documents(
+        &self,
+        drafts: &[MemoryDocumentDraft],
+        mode: MemoryWriteMode,
+    ) -> Result<MemoryWriteReport> {
+        let dir = self.memory_dir();
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+
+        let readme = dir.join("README.md");
+        if !readme.is_file() {
+            write_str(&readme, crate::templates::MEMORY_README)?;
+        }
+
+        let mut report = MemoryWriteReport::default();
+        let mut occupied = existing_memory_slugs(&dir);
+        for draft in drafts {
+            let title = draft.title.trim();
+            let body = draft.body.trim();
+            if title.is_empty() || body.is_empty() {
+                report.skipped.push(MemorySkip {
+                    slug: draft.slug.clone(),
+                    reason: "empty title or body".to_string(),
+                });
+                continue;
+            }
+
+            let mut slug = memory_slug(if draft.slug.trim().is_empty() {
+                title
+            } else {
+                draft.slug.trim()
+            });
+            if slug.is_empty() {
+                slug = "memory".to_string();
+            }
+            let existing = dir.join(format!("{slug}.md"));
+            if mode == MemoryWriteMode::Init {
+                let base = slug.clone();
+                let mut n = 2;
+                while occupied.contains(&slug) {
+                    slug = format!("{base}-{n}");
+                    n += 1;
+                }
+            } else if !existing.is_file() {
+                report.skipped.push(MemorySkip {
+                    slug,
+                    reason: "refresh target does not exist".to_string(),
+                });
+                continue;
+            }
+
+            let path = dir.join(format!("{slug}.md"));
+            let markdown = render_memory_markdown(&slug, draft)?;
+            write_str(&path, &markdown)?;
+            occupied.insert(slug.clone());
+            report.written.push(format!(".agents/memory/{slug}.md"));
+        }
+
+        self.write_memory_index()?;
+        report.index_path = Some(".agents/memory/index.yaml".to_string());
+        Ok(report)
+    }
+
+    pub fn write_memory_index(&self) -> Result<()> {
+        let dir = self.memory_dir();
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let mut docs: Vec<_> = fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let path = e.path();
+                let name = path.file_name()?.to_str()?.to_string();
+                if !name.ends_with(".md") || name.eq_ignore_ascii_case("README.md") {
+                    return None;
+                }
+                Some(MemoryIndexDocument {
+                    path: format!(".agents/memory/{name}"),
+                })
+            })
+            .collect();
+        docs.sort_by(|a, b| a.path.cmp(&b.path));
+        let index = MemoryIndex {
+            schema_version: 1,
+            generated_by: "yardlet".to_string(),
+            generated_at: Local::now().to_rfc3339(),
+            documents: docs,
+        };
+        save_yaml(&dir.join("index.yaml"), &index)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -488,6 +584,143 @@ pub struct UserTaskInput {
     pub preferred_worker: String,
     pub depends_on: Vec<String>,
     pub allowed_scope: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemoryDocumentDraft {
+    pub slug: String,
+    pub title: String,
+    pub summary: String,
+    pub look_at: Vec<String>,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryWriteMode {
+    Init,
+    Refresh,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemoryWriteReport {
+    pub written: Vec<String>,
+    pub skipped: Vec<MemorySkip>,
+    pub index_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemorySkip {
+    pub slug: String,
+    pub reason: String,
+}
+
+#[derive(Serialize)]
+struct MemoryFrontmatter<'a> {
+    name: &'a str,
+    description: &'a str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    look_at: Vec<String>,
+    source: &'static str,
+    updated_at: String,
+}
+
+#[derive(Serialize)]
+struct MemoryIndex {
+    schema_version: u8,
+    generated_by: String,
+    generated_at: String,
+    documents: Vec<MemoryIndexDocument>,
+}
+
+#[derive(Serialize)]
+struct MemoryIndexDocument {
+    path: String,
+}
+
+fn render_memory_markdown(slug: &str, draft: &MemoryDocumentDraft) -> Result<String> {
+    let title = draft.title.trim();
+    let summary = if draft.summary.trim().is_empty() {
+        title
+    } else {
+        draft.summary.trim()
+    };
+    let frontmatter = MemoryFrontmatter {
+        name: title,
+        description: summary,
+        look_at: draft
+            .look_at
+            .iter()
+            .map(|p| p.trim().trim_start_matches("./").to_string())
+            .filter(|p| !p.is_empty())
+            .collect(),
+        source: "yardlet-memory-draft",
+        updated_at: Local::now().to_rfc3339(),
+    };
+    Ok(format!(
+        "---\n{}---\n\n# {}\n\n{}\n",
+        yaml::to_string(&frontmatter)?,
+        title,
+        strip_memory_body_wrappers(&draft.body, title, slug)
+    ))
+}
+
+fn strip_memory_body_wrappers(body: &str, title: &str, slug: &str) -> String {
+    let mut lines: Vec<&str> = body.trim().lines().collect();
+    while lines.first().is_some_and(|l| l.trim().is_empty()) {
+        lines.remove(0);
+    }
+    if lines.first().is_some_and(|l| l.trim() == "---") {
+        lines.remove(0);
+        while let Some(line) = lines.first() {
+            let done = line.trim() == "---";
+            lines.remove(0);
+            if done {
+                break;
+            }
+        }
+    }
+    if let Some(first) = lines.first() {
+        let heading = first.trim().strip_prefix("# ").map(str::trim);
+        if heading.is_some_and(|h| h == title || memory_slug(h) == slug) {
+            lines.remove(0);
+        }
+    }
+    lines.join("\n").trim().to_string()
+}
+
+fn existing_memory_slugs(dir: &Path) -> std::collections::HashSet<String> {
+    fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "md") {
+                p.file_stem().and_then(|s| s.to_str()).map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .filter(|s| !s.eq_ignore_ascii_case("README"))
+        .collect()
+}
+
+fn memory_slug(input: &str) -> String {
+    let s: String = input
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    s.split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+        .chars()
+        .take(64)
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
 }
 
 pub fn load_yaml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
@@ -997,6 +1230,92 @@ routing:
 
     fn temp_root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("yard-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn memory_writer_creates_docs_and_index_as_core() {
+        let dir = temp_root("memory-writer");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        let report = ws
+            .write_memory_documents(
+                &[MemoryDocumentDraft {
+                    slug: "runtime-routing".to_string(),
+                    title: "Runtime routing".to_string(),
+                    summary: "Routing is deterministic at runtime.".to_string(),
+                    look_at: vec!["src/routing.rs".to_string()],
+                    body: "---\nignored: true\n---\n# Runtime routing\n\nUse routing.rs as the source of truth."
+                        .to_string(),
+                }],
+                MemoryWriteMode::Init,
+            )
+            .unwrap();
+        assert_eq!(report.written, vec![".agents/memory/runtime-routing.md"]);
+        assert_eq!(
+            report.index_path,
+            Some(".agents/memory/index.yaml".to_string())
+        );
+
+        let doc = fs::read_to_string(ws.memory_dir().join("runtime-routing.md")).unwrap();
+        assert!(doc.contains("source: yardlet-memory-draft"));
+        assert!(doc.contains("look_at:"));
+        assert!(doc.contains("- src/routing.rs"));
+        assert!(doc.contains("# Runtime routing"));
+        assert!(!doc.contains("ignored: true"));
+
+        let index = fs::read_to_string(ws.memory_dir().join("index.yaml")).unwrap();
+        assert!(index.contains("schema_version: 1"));
+        assert!(index.contains(".agents/memory/runtime-routing.md"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_refresh_updates_existing_doc_only() {
+        let dir = temp_root("memory-refresh");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        ws.write_memory_documents(
+            &[MemoryDocumentDraft {
+                slug: "existing".to_string(),
+                title: "Existing".to_string(),
+                summary: "Old".to_string(),
+                look_at: vec![],
+                body: "Old body".to_string(),
+            }],
+            MemoryWriteMode::Init,
+        )
+        .unwrap();
+
+        let report = ws
+            .write_memory_documents(
+                &[
+                    MemoryDocumentDraft {
+                        slug: "existing".to_string(),
+                        title: "Existing".to_string(),
+                        summary: "New".to_string(),
+                        look_at: vec![],
+                        body: "New body".to_string(),
+                    },
+                    MemoryDocumentDraft {
+                        slug: "new-doc".to_string(),
+                        title: "New doc".to_string(),
+                        summary: String::new(),
+                        look_at: vec![],
+                        body: "Must be skipped".to_string(),
+                    },
+                ],
+                MemoryWriteMode::Refresh,
+            )
+            .unwrap();
+        assert_eq!(report.written, vec![".agents/memory/existing.md"]);
+        assert_eq!(report.skipped.len(), 1);
+        assert!(!ws.memory_dir().join("new-doc.md").exists());
+        let doc = fs::read_to_string(ws.memory_dir().join("existing.md")).unwrap();
+        assert!(doc.contains("New body"));
+        assert!(!doc.contains("Old body"));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn worker(text: &str, run_id: &str) -> ConversationTurn {

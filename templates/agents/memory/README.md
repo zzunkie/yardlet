@@ -7,7 +7,10 @@ planner), with the body read on demand. So the always-loaded cost stays tiny
 while the knowledge is one anchor away.
 
 These docs are **yours** and meant to be **git-tracked** (shared with the team,
-present in every worktree). Yardlet only reads them — it never edits them.
+present in every worktree). Normal workers never write them directly. If you run
+`yardlet memory init` or `yardlet memory refresh`, a worker drafts JSON in an
+isolated run directory and Yardlet core writes the canonical Markdown docs and
+generated `index.yaml`.
 
 ## Layout
 
@@ -54,5 +57,9 @@ present in every worktree). Yardlet only reads them — it never edits them.
 
 - One fact per file; keep each index line short (it rides in every packet).
 - Delete a doc when it stops being true.
-- `yardlet memory` lists the discovered index. The generated `index.yaml`
-  (if any) is a cache — keep it out of git.
+- `yardlet memory` lists the discovered index.
+- `yardlet memory init` asks a worker for starter memory drafts, then Yardlet
+  core writes `.agents/memory/*.md` and `index.yaml`.
+- `yardlet memory refresh --stale-only` refreshes only docs whose `look_at`
+  landmarks are possibly stale; fresh docs are skipped.
+- The generated `index.yaml` is a cache — keep it out of git.
