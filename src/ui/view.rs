@@ -548,42 +548,48 @@ fn truncate_width(s: &str, max: usize) -> String {
 }
 
 fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
+    let health = snap.health();
     let status = Line::from(vec![
         Span::raw(l.status),
         Span::styled(
-            format!("{} {}", snap.count(TaskState::Running), l.s_running),
+            format!("{} ready", health.runnable),
+            Style::default().fg(Color::Green),
+        ),
+        Span::raw(", "),
+        Span::styled(
+            format!("{} {}", health.running, l.s_running),
             Style::default().fg(Color::Yellow),
         ),
         Span::raw(", "),
-        Span::raw(format!("{} {}", snap.count(TaskState::Queued), l.s_queued)),
+        Span::raw(format!("{} deps", health.waiting_dependency)),
         Span::raw(", "),
         Span::styled(
-            format!("{} {}", snap.count(TaskState::NeedsUser), l.s_needs),
+            format!("{} {}", health.waiting_decision, l.s_needs),
             Style::default().fg(Color::Magenta),
         ),
         Span::raw(", "),
         Span::styled(
-            format!("{} {}", snap.count(TaskState::Blocked), l.s_blocked),
+            format!("{} approval", health.waiting_approval),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(", "),
+        Span::styled(
+            format!("{} worker", health.waiting_capability),
             Style::default().fg(Color::Red),
         ),
         Span::raw(", "),
         Span::styled(
-            format!("{} {}", snap.count(TaskState::Failed), l.s_failed),
-            Style::default().fg(Color::Red),
-        ),
-        Span::raw(", "),
-        Span::styled(
-            format!("{} {}", snap.count(TaskState::Partial), l.s_partial),
+            format!("{} {}", health.held, l.s_blocked),
             Style::default().fg(Color::LightYellow),
         ),
         Span::raw(", "),
         Span::styled(
-            format!("{} deferred", snap.count(TaskState::Deferred)),
+            format!("{} deferred", health.set_aside),
             Style::default().fg(Color::DarkGray),
         ),
         Span::raw(", "),
         Span::styled(
-            format!("{} {}", snap.count(TaskState::Done), l.s_done),
+            format!("{} {}", health.done, l.s_done),
             Style::default().fg(Color::Green),
         ),
     ]);
@@ -690,6 +696,18 @@ fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected:
                 spans.push(Span::styled(
                     format!("  [{}:{}]", l.tag_anytime, kind),
                     Style::default().fg(Color::Cyan),
+                ));
+            } else {
+                let class = snap.task_class(t);
+                spans.push(Span::styled(
+                    format!("  [{}]", class.label()),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            if let Some(rec) = snap.last_transitions.get(&t.id) {
+                spans.push(Span::styled(
+                    format!("  {}", truncate(&rec.detail, 34)),
+                    Style::default().fg(Color::DarkGray),
                 ));
             }
             ListItem::new(Line::from(spans))

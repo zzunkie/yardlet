@@ -918,6 +918,9 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         }
         KeyCode::Char('r') if !app.is_busy() => start_run(app),
         KeyCode::Char('A') if !app.is_busy() => start_auto(app),
+        KeyCode::Char('t') if !app.is_busy() => tidy_workspace(app),
+        KeyCode::Char('d') if !app.is_busy() => defer_selected_task(app),
+        KeyCode::Char('v') if !app.is_busy() => revive_selected_task(app),
         KeyCode::Char('p') if !app.is_busy() => start_approve(app),
         // While an auto-drain runs, p requests a graceful pause (finish current
         // task, then stop). Esc stops immediately; A resumes.
@@ -1054,6 +1057,26 @@ fn home_enter_action(state: TaskState, approval_pending: bool, busy: bool) -> Ho
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HomeHoldAction {
+    Defer,
+    Revive,
+    Busy,
+    Noop,
+}
+
+fn home_hold_action(state: Option<TaskState>, busy: bool, revive_key: bool) -> HomeHoldAction {
+    if busy {
+        return HomeHoldAction::Busy;
+    }
+    match (state, revive_key) {
+        (Some(TaskState::Deferred), true) => HomeHoldAction::Revive,
+        (Some(TaskState::Done | TaskState::Running), _) => HomeHoldAction::Noop,
+        (Some(_), false) => HomeHoldAction::Defer,
+        _ => HomeHoldAction::Noop,
+    }
+}
+
 /// Enter on a selected queue task: run its state-appropriate next action.
 fn handle_home_enter(app: &mut App) {
     let Some((id, state, approval_pending)) = app.snapshot.as_ref().and_then(|s| {
@@ -1102,6 +1125,131 @@ fn focus_monitor_on(app: &mut App, id: &str) {
             .position(|t| t.id == id)
     }) {
         app.monitor_sel = pos;
+    }
+}
+
+fn selected_task_state(app: &App) -> Option<(String, TaskState)> {
+    app.snapshot.as_ref().and_then(|s| {
+        s.queue
+            .tasks
+            .get(app.selected)
+            .map(|t| (t.id.clone(), t.state))
+    })
+}
+
+fn defer_selected_task(app: &mut App) {
+    let Some((id, state)) = selected_task_state(app) else {
+        app.toast = Some((true, app.lang.l().no_answer_target.into()));
+        return;
+    };
+    match home_hold_action(Some(state), app.is_busy(), false) {
+        HomeHoldAction::Defer => {}
+        HomeHoldAction::Busy => {
+            app.toast = Some((true, app.lang.l().busy.into()));
+            return;
+        }
+        _ => {
+            app.toast = Some((true, format!("{id}: cannot defer this state")));
+            return;
+        }
+    }
+    let before = app.ws.load_queue().ok();
+    let mut queue = match before.clone() {
+        Some(q) => q,
+        None => return,
+    };
+    match queue.defer_task(&id, false, "deferred from the TUI") {
+        Ok(outcome) => {
+            if let Err(e) = app.ws.save_queue(&queue) {
+                app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+                return;
+            }
+            if let Some(prev) = before.and_then(|q| q.tasks.into_iter().find(|t| t.id == id)) {
+                let _ = crate::state::append_transition(
+                    &app.ws,
+                    crate::state::transition(
+                        &id,
+                        prev.state,
+                        TaskState::Deferred,
+                        crate::schemas::TransitionCause::Defer,
+                        "deferred from the TUI",
+                        crate::schemas::TransitionActor::User,
+                    ),
+                );
+            }
+            app.reload();
+            app.toast = Some((true, format!("Deferred {}", outcome.deferred.join(", "))));
+        }
+        Err(e) => app.toast = Some((false, e)),
+    }
+}
+
+fn revive_selected_task(app: &mut App) {
+    let Some((id, state)) = selected_task_state(app) else {
+        app.toast = Some((true, app.lang.l().no_answer_target.into()));
+        return;
+    };
+    match home_hold_action(Some(state), app.is_busy(), true) {
+        HomeHoldAction::Revive => {}
+        HomeHoldAction::Busy => {
+            app.toast = Some((true, app.lang.l().busy.into()));
+            return;
+        }
+        _ => {
+            app.toast = Some((true, format!("{id}: only deferred tasks can be revived")));
+            return;
+        }
+    }
+    let before = app.ws.load_queue().ok();
+    let mut queue = match before.clone() {
+        Some(q) => q,
+        None => return,
+    };
+    match queue.revive_task(&id, false) {
+        Ok(outcome) => {
+            if let Err(e) = app.ws.save_queue(&queue) {
+                app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+                return;
+            }
+            if let Some(prev) = before.and_then(|q| q.tasks.into_iter().find(|t| t.id == id)) {
+                let _ = crate::state::append_transition(
+                    &app.ws,
+                    crate::state::transition(
+                        &id,
+                        prev.state,
+                        TaskState::Queued,
+                        crate::schemas::TransitionCause::Revive,
+                        "revived from the TUI",
+                        crate::schemas::TransitionActor::User,
+                    ),
+                );
+            }
+            app.reload();
+            app.toast = Some((true, format!("Revived {}", outcome.revived.join(", "))));
+        }
+        Err(e) => app.toast = Some((false, e)),
+    }
+}
+
+fn tidy_workspace(app: &mut App) {
+    match app.ws.tidy() {
+        Ok(report) => {
+            app.reload_full();
+            app.toast = Some((
+                true,
+                format!(
+                    "tidy: {} migrated, {} deferred{}",
+                    report.migrated_decisions.len(),
+                    report.deferred.len(),
+                    report
+                        .archived_intent
+                        .as_ref()
+                        .map(|id| format!(", archived {id}"))
+                        .unwrap_or_default()
+                ),
+            ));
+        }
+        Err(e) => app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed))),
     }
 }
 
@@ -1891,7 +2039,8 @@ fn start_continue(app: &mut App) {
 }
 
 fn start_run(app: &mut App) {
-    // A Failed/Blocked task blocks the drain (see run_auto's gate), so `r` retries
+    // A Failed/Partial task can be retried first; Blocked/stale gates are
+    // surfaced by tidy or the run-time migration path instead of blindly rerun.
     // it first; otherwise it runs the next queued task. NeedsUser is resolved via a.
     let (stuck, has_queued) = app
         .snapshot
@@ -1901,12 +2050,7 @@ fn start_run(app: &mut App) {
                 .queue
                 .tasks
                 .iter()
-                .find(|t| {
-                    matches!(
-                        t.state,
-                        TaskState::Blocked | TaskState::Failed | TaskState::Partial
-                    )
-                })
+                .find(|t| matches!(t.state, TaskState::Failed | TaskState::Partial))
                 .map(|t| t.id.clone());
             let has_queued = s.queue.tasks.iter().any(|t| t.state == TaskState::Queued);
             (stuck, has_queued)
@@ -2614,6 +2758,34 @@ routing:
             home_enter_action(TaskState::Deferred, false, true),
             DeferredHint
         );
+    }
+
+    #[test]
+    fn home_hold_action_maps_defer_and_revive_keys() {
+        use HomeHoldAction::*;
+        assert_eq!(
+            home_hold_action(Some(TaskState::Queued), false, false),
+            Defer
+        );
+        assert_eq!(
+            home_hold_action(Some(TaskState::Partial), false, false),
+            Defer
+        );
+        assert_eq!(
+            home_hold_action(Some(TaskState::Deferred), false, true),
+            Revive
+        );
+        assert_eq!(
+            home_hold_action(Some(TaskState::Deferred), false, false),
+            Defer
+        );
+        assert_eq!(home_hold_action(Some(TaskState::Done), false, false), Noop);
+        assert_eq!(
+            home_hold_action(Some(TaskState::Running), false, false),
+            Noop
+        );
+        assert_eq!(home_hold_action(Some(TaskState::Queued), true, false), Busy);
+        assert_eq!(home_hold_action(None, false, false), Noop);
     }
 
     #[test]
