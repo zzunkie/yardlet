@@ -37,6 +37,7 @@ pub enum Screen {
     Monitor,
     Completion,
     ReportList,
+    Approvals,
 }
 
 /// One editable settings row. `key` routes the value back to the right file:
@@ -89,6 +90,30 @@ pub struct JobResult {
     pub summary: String,
 }
 
+#[derive(Clone)]
+pub struct ApprovalBatchRow {
+    pub id: String,
+    pub title: String,
+    pub needs_answer: bool,
+    pub selected: bool,
+}
+
+#[derive(Clone)]
+pub enum ReportEntry {
+    Current {
+        label: String,
+    },
+    Archived {
+        label: String,
+        dir: std::path::PathBuf,
+    },
+    FollowUp {
+        label: String,
+        intent_id: String,
+        task: Box<crate::schemas::FollowUpTask>,
+    },
+}
+
 /// Messages a background job streams to the UI loop.
 pub enum JobMsg {
     Progress(String),
@@ -136,12 +161,15 @@ pub struct App {
     pub scroll_viewport: Option<ScrollViewport>,
     /// Selected row in the Home queue (for per-task handoff view).
     pub selected: usize,
-    /// Reports browser: (label, source) — None source = current (live) report,
-    /// Some(dir) = an archived intent under .agents/intents/.
-    pub reports: Vec<(String, Option<std::path::PathBuf>)>,
+    /// Reports/history browser: live report, archived intents, and preserved
+    /// follow-ups that can be promoted into fresh work.
+    pub reports: Vec<ReportEntry>,
     pub report_sel: usize,
     /// True while viewing an archived report (read-only; no new/continue/redo).
     pub viewing_archived: bool,
+    /// Multi-approval picker rows and cursor.
+    pub approval_rows: Vec<ApprovalBatchRow>,
+    pub approval_sel: usize,
     pub settings: Option<SettingsDraft>,
     pub last_title: Option<String>,
     /// Which running task the Run Monitor is following (Tab cycles when
@@ -265,6 +293,8 @@ impl App {
             reports: Vec::new(),
             report_sel: 0,
             viewing_archived: false,
+            approval_rows: Vec::new(),
+            approval_sel: 0,
             settings: None,
             last_title: None,
             monitor_sel: 0,
@@ -701,22 +731,17 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
             }
             // When a job finishes and the whole queue is done, surface the
             // intent-level final report and let the user pick what's next.
-            if job_done {
-                let all_done = app
+            if job_done
+                && app
                     .snapshot
                     .as_ref()
-                    .map(|s| {
-                        !s.queue.tasks.is_empty()
-                            && s.queue.tasks.iter().all(|t| t.state == TaskState::Done)
-                    })
-                    .unwrap_or(false);
-                if all_done {
-                    app.report_text =
-                        crate::report::build_final_report(&app.ws).unwrap_or_default();
-                    app.scroll = 0;
-                    app.viewing_archived = false;
-                    app.screen = Screen::Completion;
-                }
+                    .map(|s| queue_ready_for_completion(&s.queue))
+                    .unwrap_or(false)
+            {
+                app.report_text = crate::report::build_final_report(&app.ws).unwrap_or_default();
+                app.scroll = 0;
+                app.viewing_archived = false;
+                app.screen = Screen::Completion;
             }
         }
 
@@ -793,6 +818,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
             Screen::Settings => handle_settings_key(&mut app, key.code),
             Screen::Completion => handle_completion_key(&mut app, code),
             Screen::ReportList => handle_reportlist_key(&mut app, code),
+            Screen::Approvals => handle_approvals_key(&mut app, code),
             Screen::Handoff => handle_handoff_key(&mut app, code),
             Screen::Intent => handle_intent_key(&mut app, code),
             Screen::Monitor => match code {
@@ -1168,13 +1194,15 @@ fn short(s: &str, n: usize) -> String {
 }
 
 fn open_reports(app: &mut App) {
-    let mut list: Vec<(String, Option<std::path::PathBuf>)> = Vec::new();
+    let mut list: Vec<ReportEntry> = Vec::new();
     let cur = app
         .snapshot
         .as_ref()
         .map(|s| s.intent_summary().to_string())
         .unwrap_or_default();
-    list.push((format!("current \u{2014} {}", short(&cur, 50)), None));
+    list.push(ReportEntry::Current {
+        label: format!("current \u{2014} {}", short(&cur, 50)),
+    });
     if let Ok(rd) = std::fs::read_dir(app.ws.agents_dir().join("intents")) {
         let mut dirs: Vec<std::path::PathBuf> = rd
             .flatten()
@@ -1199,7 +1227,29 @@ fn open_reports(app: &mut App) {
                     })
                 })
                 .unwrap_or_default();
-            list.push((format!("{id} \u{2014} {}", short(&summary, 44)), Some(d)));
+            list.push(ReportEntry::Archived {
+                label: format!("{id} \u{2014} {}", short(&summary, 44)),
+                dir: d.clone(),
+            });
+            if let Some(preserved) = app.ws.load_preserved_follow_ups(&id) {
+                for (i, fu) in preserved.tasks.into_iter().enumerate() {
+                    let title = if fu.title.trim().is_empty() {
+                        format!("follow-up {}", i + 1)
+                    } else {
+                        fu.title.trim().to_string()
+                    };
+                    let reason = if fu.reason.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!(" \u{00b7} {}", short(&fu.reason, 38))
+                    };
+                    list.push(ReportEntry::FollowUp {
+                        label: format!("  \u{21b3} follow-up: {}{}", short(&title, 44), reason),
+                        intent_id: id.clone(),
+                        task: Box::new(fu),
+                    });
+                }
+            }
         }
     }
     app.reports = list;
@@ -1217,27 +1267,81 @@ fn handle_reportlist_key(app: &mut App, code: KeyCode) {
             }
         }
         KeyCode::Enter => {
-            let src = app.reports.get(app.report_sel).map(|(_, s)| s.clone());
-            if let Some(src) = src {
-                let (body, archived) = match src {
-                    None => (
-                        crate::report::build_final_report(&app.ws).unwrap_or_default(),
-                        false,
-                    ),
-                    Some(d) => (
-                        std::fs::read_to_string(d.join("final-report.md"))
-                            .unwrap_or_else(|_| "(no report)".into()),
-                        true,
-                    ),
-                };
-                app.report_text = body;
-                app.viewing_archived = archived;
-                app.scroll = 0;
-                app.screen = Screen::Completion;
+            let entry = app.reports.get(app.report_sel).cloned();
+            match (reportlist_enter_action(entry.as_ref()), entry) {
+                (Some(ReportListEnterAction::OpenCurrent), Some(ReportEntry::Current { .. })) => {
+                    app.report_text =
+                        crate::report::build_final_report(&app.ws).unwrap_or_default();
+                    app.viewing_archived = false;
+                    app.scroll = 0;
+                    app.screen = Screen::Completion;
+                }
+                (
+                    Some(ReportListEnterAction::OpenArchived),
+                    Some(ReportEntry::Archived { dir, .. }),
+                ) => {
+                    app.report_text = std::fs::read_to_string(dir.join("final-report.md"))
+                        .unwrap_or_else(|_| "(no report)".into());
+                    app.viewing_archived = true;
+                    app.scroll = 0;
+                    app.screen = Screen::Completion;
+                }
+                (
+                    Some(ReportListEnterAction::PromoteFollowUp),
+                    Some(ReportEntry::FollowUp {
+                        intent_id, task, ..
+                    }),
+                ) => {
+                    promote_history_follow_up(app, &intent_id, &task);
+                }
+                _ => {}
             }
         }
         _ => {}
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReportListEnterAction {
+    OpenCurrent,
+    OpenArchived,
+    PromoteFollowUp,
+}
+
+fn reportlist_enter_action(entry: Option<&ReportEntry>) -> Option<ReportListEnterAction> {
+    match entry {
+        Some(ReportEntry::Current { .. }) => Some(ReportListEnterAction::OpenCurrent),
+        Some(ReportEntry::Archived { .. }) => Some(ReportListEnterAction::OpenArchived),
+        Some(ReportEntry::FollowUp { .. }) => Some(ReportListEnterAction::PromoteFollowUp),
+        None => None,
+    }
+}
+
+fn promote_history_follow_up(
+    app: &mut App,
+    source_intent: &str,
+    task: &crate::schemas::FollowUpTask,
+) {
+    if let Err(e) = crate::report::archive_intent(&app.ws)
+        .and_then(|_| app.ws.clear_intent_and_queue())
+        .and_then(|_| crate::report::promote_follow_up(&app.ws, task).map(|_| ()))
+    {
+        app.toast = Some((
+            false,
+            format!("{} {e}", app.lang.l().history_promote_failed),
+        ));
+        return;
+    }
+    app.reload_full();
+    app.toast = Some((
+        true,
+        format!(
+            "{}: {} ({source_intent})",
+            app.lang.l().history_promoted,
+            short(&task.title, 52)
+        ),
+    ));
+    app.screen = Screen::Home;
 }
 
 fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
@@ -1287,8 +1391,16 @@ fn handle_completion_key(app: &mut App, code: KeyCode) {
     }
     match code {
         KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Home,
-        // New work: start_planning archives the finished intent before overwriting.
+        // New work: archive + clear the finished intent now, then collect the
+        // next request against an empty live state.
         KeyCode::Char('n') => {
+            if let Err(e) =
+                crate::report::archive_intent(&app.ws).and_then(|_| app.ws.clear_intent_and_queue())
+            {
+                app.toast = Some((false, format!("{} {e}", app.lang.l().archive_failed)));
+                return;
+            }
+            app.reload_full();
             app.input_clear();
             app.toast = None;
             app.amend = false;
@@ -1846,18 +1958,25 @@ fn start_run(app: &mut App) {
 }
 
 fn start_approve(app: &mut App) {
+    let approvals_needed = app
+        .snapshot
+        .as_ref()
+        .map(|s| s.approvals_needed.clone())
+        .unwrap_or_default();
+    if approvals_needed.len() >= 2 {
+        open_approval_batch(app, approvals_needed);
+        return;
+    }
     let selected = app.snapshot.as_ref().and_then(|s| {
         s.queue
             .tasks
             .get(app.selected)
             .map(|t| (t.id.clone(), t.state))
     });
-    let Some(id) = app.snapshot.as_ref().and_then(|s| {
-        choose_approval_target(
-            selected.as_ref().map(|(id, _)| id.as_str()),
-            &s.approvals_needed,
-        )
-    }) else {
+    let Some(id) = choose_approval_target(
+        selected.as_ref().map(|(id, _)| id.as_str()),
+        &approvals_needed,
+    ) else {
         app.toast = Some((true, app.lang.l().no_approval.into()));
         return;
     };
@@ -1918,6 +2037,181 @@ fn choose_approval_target(selected: Option<&str>, approvals_needed: &[String]) -
         }
     }
     approvals_needed.first().cloned()
+}
+
+fn queue_ready_for_completion(queue: &crate::schemas::WorkQueue) -> bool {
+    !queue.tasks.is_empty() && queue.drained()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApprovalBatchAction {
+    Back,
+    MoveUp,
+    MoveDown,
+    ToggleSelected,
+    ApproveAll,
+    ApproveSelected,
+    HoldSelected,
+    Noop,
+}
+
+fn approval_batch_action(
+    code: KeyCode,
+    selected_count: usize,
+    total_count: usize,
+) -> ApprovalBatchAction {
+    match code {
+        KeyCode::Esc | KeyCode::Char('q') => ApprovalBatchAction::Back,
+        KeyCode::Up => ApprovalBatchAction::MoveUp,
+        KeyCode::Down => ApprovalBatchAction::MoveDown,
+        KeyCode::Char(' ') => ApprovalBatchAction::ToggleSelected,
+        KeyCode::Char('A') if total_count > 0 => ApprovalBatchAction::ApproveAll,
+        KeyCode::Enter | KeyCode::Char('p') if selected_count > 0 => {
+            ApprovalBatchAction::ApproveSelected
+        }
+        KeyCode::Char('d') if selected_count > 0 => ApprovalBatchAction::HoldSelected,
+        _ => ApprovalBatchAction::Noop,
+    }
+}
+
+fn open_approval_batch(app: &mut App, approvals_needed: Vec<String>) {
+    let Some(snapshot) = &app.snapshot else {
+        return;
+    };
+    app.approval_rows = approvals_needed
+        .into_iter()
+        .filter_map(|id| {
+            snapshot
+                .queue
+                .tasks
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| ApprovalBatchRow {
+                    id: t.id.clone(),
+                    title: t.title.clone(),
+                    needs_answer: t.state == TaskState::NeedsUser,
+                    selected: true,
+                })
+        })
+        .collect();
+    app.approval_sel = 0;
+    app.toast = None;
+    app.screen = Screen::Approvals;
+}
+
+fn handle_approvals_key(app: &mut App, code: KeyCode) {
+    let selected_count = app.approval_rows.iter().filter(|r| r.selected).count();
+    match approval_batch_action(code, selected_count, app.approval_rows.len()) {
+        ApprovalBatchAction::Back => app.screen = Screen::Home,
+        ApprovalBatchAction::MoveUp => app.approval_sel = app.approval_sel.saturating_sub(1),
+        ApprovalBatchAction::MoveDown => {
+            if app.approval_sel + 1 < app.approval_rows.len() {
+                app.approval_sel += 1;
+            }
+        }
+        ApprovalBatchAction::ToggleSelected => {
+            if let Some(row) = app.approval_rows.get_mut(app.approval_sel) {
+                row.selected = !row.selected;
+            }
+        }
+        ApprovalBatchAction::ApproveAll => {
+            let ids: Vec<String> = app.approval_rows.iter().map(|r| r.id.clone()).collect();
+            approve_batch_and_run(app, ids);
+        }
+        ApprovalBatchAction::ApproveSelected => {
+            let ids: Vec<String> = app
+                .approval_rows
+                .iter()
+                .filter(|r| r.selected)
+                .map(|r| r.id.clone())
+                .collect();
+            approve_batch_and_run(app, ids);
+        }
+        ApprovalBatchAction::HoldSelected => {
+            let ids: Vec<String> = app
+                .approval_rows
+                .iter()
+                .filter(|r| r.selected)
+                .map(|r| r.id.clone())
+                .collect();
+            hold_batch(app, ids);
+        }
+        ApprovalBatchAction::Noop => {}
+    }
+}
+
+fn approve_batch_and_run(app: &mut App, ids: Vec<String>) {
+    if let Err(e) = grant_approval_batch(&app.ws, &ids) {
+        app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+        app.screen = Screen::Home;
+        return;
+    }
+    app.toast = Some((
+        true,
+        format!(
+            "{}: {}",
+            app.lang.l().approval_batch_approved,
+            ids.join(", ")
+        ),
+    ));
+    app.approval_rows.clear();
+    app.screen = Screen::Home;
+    start_auto(app);
+}
+
+fn grant_approval_batch(ws: &Workspace, ids: &[String]) -> anyhow::Result<()> {
+    for id in ids {
+        crate::approvals::grant(ws, id)?;
+    }
+    Ok(())
+}
+
+fn hold_batch(app: &mut App, ids: Vec<String>) {
+    let mut queue = match app.ws.load_queue() {
+        Ok(q) => q,
+        Err(e) => {
+            app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+            app.screen = Screen::Home;
+            return;
+        }
+    };
+    let mut held = Vec::new();
+    for id in &ids {
+        match queue.defer_task(id, false, app.lang.l().approval_batch_hold_reason) {
+            Ok(outcome) => held.extend(outcome.deferred),
+            Err(e) => app.toast = Some((false, e)),
+        }
+    }
+    if let Err(e) = app.ws.save_queue(&queue) {
+        app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+        app.screen = Screen::Home;
+        return;
+    }
+    held.sort();
+    held.dedup();
+    app.reload_full();
+    app.toast = Some((
+        true,
+        format!(
+            "{}: {}",
+            app.lang.l().approval_batch_deferred,
+            held.join(", ")
+        ),
+    ));
+    app.approval_rows.clear();
+    if app
+        .snapshot
+        .as_ref()
+        .map(|s| queue_ready_for_completion(&s.queue))
+        .unwrap_or(false)
+    {
+        app.report_text = crate::report::build_final_report(&app.ws).unwrap_or_default();
+        app.scroll = 0;
+        app.viewing_archived = false;
+        app.screen = Screen::Completion;
+    } else {
+        app.screen = Screen::Home;
+    }
 }
 
 fn start_auto(app: &mut App) {
@@ -2334,6 +2628,166 @@ routing:
             Some("A".to_string())
         );
         assert_eq!(choose_approval_target(None, &[]), None);
+    }
+
+    #[test]
+    fn approval_batch_action_keeps_approval_explicit() {
+        use ApprovalBatchAction::*;
+        assert_eq!(approval_batch_action(KeyCode::Char('A'), 0, 2), ApproveAll);
+        assert_eq!(approval_batch_action(KeyCode::Enter, 1, 2), ApproveSelected);
+        assert_eq!(
+            approval_batch_action(KeyCode::Char('p'), 1, 2),
+            ApproveSelected
+        );
+        assert_eq!(
+            approval_batch_action(KeyCode::Char('d'), 1, 2),
+            HoldSelected
+        );
+        assert_eq!(
+            approval_batch_action(KeyCode::Char(' '), 0, 2),
+            ToggleSelected
+        );
+        assert_eq!(approval_batch_action(KeyCode::Enter, 0, 2), Noop);
+        assert_eq!(approval_batch_action(KeyCode::Char('A'), 0, 0), Noop);
+        assert_eq!(approval_batch_action(KeyCode::Esc, 1, 2), Back);
+    }
+
+    #[test]
+    fn approval_batch_grants_each_task_once() {
+        let ws = workspace_with_user_config("approval-batch-grants");
+        let ids = vec!["YARD-A".to_string(), "YARD-B".to_string()];
+
+        grant_approval_batch(&ws, &ids).unwrap();
+
+        assert!(crate::approvals::is_granted(&ws, "YARD-A"));
+        assert!(crate::approvals::is_granted(&ws, "YARD-B"));
+
+        crate::approvals::consume(&ws, "YARD-A").unwrap();
+        assert!(!crate::approvals::is_granted(&ws, "YARD-A"));
+        assert!(
+            crate::approvals::is_granted(&ws, "YARD-B"),
+            "each approval must be an independent single-use grant"
+        );
+    }
+
+    #[test]
+    fn completion_ready_uses_drained_not_all_done() {
+        let mut queue = crate::schemas::WorkQueue::empty();
+        assert!(!queue_ready_for_completion(&queue));
+
+        let mut done: crate::schemas::Task =
+            crate::yaml::from_str("id: DONE\ntitle: done").unwrap();
+        done.state = TaskState::Done;
+        let mut deferred: crate::schemas::Task =
+            crate::yaml::from_str("id: DEF\ntitle: deferred").unwrap();
+        deferred.state = TaskState::Deferred;
+        queue.tasks = vec![done.clone(), deferred];
+        assert!(queue_ready_for_completion(&queue));
+
+        let mut queued: crate::schemas::Task =
+            crate::yaml::from_str("id: TODO\ntitle: todo").unwrap();
+        queued.state = TaskState::Queued;
+        queue.tasks = vec![done, queued];
+        assert!(!queue_ready_for_completion(&queue));
+    }
+
+    #[test]
+    fn report_list_enter_action_maps_history_rows() {
+        let follow_up = crate::schemas::FollowUpTask {
+            title: "Promote me".to_string(),
+            reason: "preserved from archive".to_string(),
+            ..Default::default()
+        };
+        let archived = ReportEntry::Archived {
+            label: "intent-arch".to_string(),
+            dir: std::path::PathBuf::from("/tmp/intent-arch"),
+        };
+        let current = ReportEntry::Current {
+            label: "current".to_string(),
+        };
+        let follow = ReportEntry::FollowUp {
+            label: "follow-up".to_string(),
+            intent_id: "intent-arch".to_string(),
+            task: Box::new(follow_up),
+        };
+
+        assert_eq!(
+            reportlist_enter_action(Some(&current)),
+            Some(ReportListEnterAction::OpenCurrent)
+        );
+        assert_eq!(
+            reportlist_enter_action(Some(&archived)),
+            Some(ReportListEnterAction::OpenArchived)
+        );
+        assert_eq!(
+            reportlist_enter_action(Some(&follow)),
+            Some(ReportListEnterAction::PromoteFollowUp)
+        );
+        assert_eq!(reportlist_enter_action(None), None);
+    }
+
+    #[test]
+    fn reports_list_shows_archived_follow_ups_and_promotes_selected_one() {
+        let root =
+            std::env::temp_dir().join(format!("yard-history-promote-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let archive_dir = ws.agents_dir().join("intents").join("intent-arch");
+        std::fs::create_dir_all(&archive_dir).unwrap();
+        std::fs::write(
+            archive_dir.join("intent-contract.yaml"),
+            "schema_version: 1\nid: intent-arch\nsummary: Archived goal\n",
+        )
+        .unwrap();
+        std::fs::write(archive_dir.join("final-report.md"), "# Final report\n").unwrap();
+        std::fs::write(
+            archive_dir.join("follow-up-tasks.yaml"),
+            "\
+schema_version: 1
+intent_id: intent-arch
+tasks:
+  - title: Promote me
+    reason: preserved from archive
+    acceptance:
+      - promoted task exists
+",
+        )
+        .unwrap();
+
+        let mut app = App::new(ws);
+        open_reports(&mut app);
+
+        assert!(app
+            .reports
+            .iter()
+            .any(|entry| matches!(entry, ReportEntry::Archived { label, .. } if label.contains("Archived goal"))));
+        let follow_idx = app
+            .reports
+            .iter()
+            .position(|entry| {
+                matches!(
+                    entry,
+                    ReportEntry::FollowUp { label, .. } if label.contains("Promote me")
+                )
+            })
+            .expect("preserved follow-up row");
+        assert_eq!(
+            reportlist_enter_action(app.reports.get(follow_idx)),
+            Some(ReportListEnterAction::PromoteFollowUp)
+        );
+
+        app.report_sel = follow_idx;
+        handle_reportlist_key(&mut app, KeyCode::Enter);
+
+        let intent = app.ws.load_intent().unwrap().unwrap();
+        assert_eq!(intent.source, "promoted-follow-up");
+        assert_eq!(intent.raw_request, "Promote me");
+        let queue = app.ws.load_queue().unwrap();
+        assert_eq!(queue.tasks.len(), 1);
+        assert_eq!(queue.tasks[0].title, "Promote me");
+        assert!(matches!(app.screen, Screen::Home));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

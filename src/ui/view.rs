@@ -45,6 +45,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Screen::Intent => render_intent(frame, app),
         Screen::Completion => render_completion(frame, app),
         Screen::ReportList => render_report_list(frame, app),
+        Screen::Approvals => render_approvals(frame, app),
     }
 }
 
@@ -451,7 +452,7 @@ fn render_home(frame: &mut Frame, app: &App) {
             render_workers(frame, chunks[2], snap, l, wsel);
         }
         None => {
-            let p = Paragraph::new("No workspace state loaded. Run `yardlet init`.")
+            let p = Paragraph::new("No workspace state loaded.")
                 .block(Block::bordered().title(" Yardlet "));
             frame.render_widget(p, chunks[0]);
         }
@@ -648,7 +649,10 @@ fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected:
             .count();
         if running >= 2 {
             items.push(ListItem::new(Line::from(Span::styled(
-                format!("\u{25b6}\u{25b6} {} \u{00b7} {running}", l.parallel_running_label),
+                format!(
+                    "\u{25b6}\u{25b6} {} \u{00b7} {running}",
+                    l.parallel_running_label
+                ),
                 Style::default().fg(Color::Yellow).bold(),
             ))));
         }
@@ -993,13 +997,13 @@ fn render_report_list(frame: &mut Frame, app: &App) {
         app.reports
             .iter()
             .enumerate()
-            .map(|(i, (label, src))| {
+            .map(|(i, entry)| {
                 let is_sel = i == sel;
                 let marker = if is_sel { "\u{25b8} " } else { "  " };
-                let color = if src.is_none() {
-                    Color::Cyan
-                } else {
-                    Color::Gray
+                let (label, color) = match entry {
+                    super::ReportEntry::Current { label } => (label, Color::Cyan),
+                    super::ReportEntry::Archived { label, .. } => (label, Color::Gray),
+                    super::ReportEntry::FollowUp { label, .. } => (label, Color::Green),
                 };
                 let style = if is_sel {
                     Style::default().fg(color).bold()
@@ -1015,6 +1019,54 @@ fn render_report_list(frame: &mut Frame, app: &App) {
         chunks[0],
     );
     render_footer(frame, chunks[1], l.footer_reports);
+}
+
+fn render_approvals(frame: &mut Frame, app: &App) {
+    let l = app.lang.l();
+    let area = safe_area(frame);
+    let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
+    let items: Vec<ListItem> = if app.approval_rows.is_empty() {
+        vec![ListItem::new(Line::from(Span::styled(
+            l.approvals_empty,
+            Style::default().fg(Color::DarkGray),
+        )))]
+    } else {
+        let sel = app
+            .approval_sel
+            .min(app.approval_rows.len().saturating_sub(1));
+        app.approval_rows
+            .iter()
+            .enumerate()
+            .map(|(i, row)| {
+                let is_sel = i == sel;
+                let marker = if is_sel { "\u{25b8} " } else { "  " };
+                let check = if row.selected { "[x]" } else { "[ ]" };
+                let style = if is_sel {
+                    Style::default().fg(Color::Yellow).bold()
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                let mut spans = vec![
+                    Span::styled(marker, style),
+                    Span::styled(format!("{check} "), Style::default().fg(Color::Cyan)),
+                    Span::styled(format!("{:<11}", row.id), Style::default().fg(Color::White)),
+                    Span::raw(truncate(&row.title, 54)),
+                ];
+                if row.needs_answer {
+                    spans.push(Span::styled(
+                        format!("  [{}]", l.tag_input),
+                        Style::default().fg(Color::Magenta),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect()
+    };
+    frame.render_widget(
+        List::new(items).block(Block::bordered().title(l.approvals_title)),
+        chunks[0],
+    );
+    render_footer(frame, chunks[1], l.footer_approvals);
 }
 
 fn render_completion(frame: &mut Frame, app: &mut App) {
