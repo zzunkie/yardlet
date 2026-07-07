@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn refresh_filters_worker_draft_to_selected_stale_slugs() {
-        let selected = vec![MemoryRefreshTarget {
+        let selected = [MemoryRefreshTarget {
             slug: "stale-doc".to_string(),
             title: "Stale doc".to_string(),
             summary: String::new(),

@@ -242,6 +242,28 @@ impl Workspace {
         self.load_transition_log(task_id).records.pop()
     }
 
+    /// Read every task's transition log under `.agents/transitions/`. Read-only:
+    /// the trust report (`src/trust.rs`) consumes these; nothing here writes.
+    /// Malformed or empty logs are skipped, and the result is ordered by task id
+    /// so callers fold them deterministically. A missing directory (a fresh or
+    /// queue-gitignored workspace) is simply no logs, not an error.
+    pub fn load_all_transition_logs(&self) -> Vec<TransitionLog> {
+        let Ok(entries) = fs::read_dir(self.transitions_dir()) else {
+            return Vec::new();
+        };
+        let mut paths: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "yaml"))
+            .collect();
+        paths.sort();
+        paths
+            .iter()
+            .filter_map(|p| load_yaml::<TransitionLog>(p).ok())
+            .filter(|log| !log.records.is_empty())
+            .collect()
+    }
+
     pub fn load_billing(&self) -> Result<BillingPolicy> {
         load_yaml(&self.billing_path())
     }
@@ -1396,6 +1418,51 @@ routing:
             ws.latest_transition("YARD-1").unwrap().detail,
             "set aside for later"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_all_transition_logs_reads_every_task_deterministically() {
+        let dir = temp_root("all-transitions");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let ws = Workspace::at(&dir);
+
+        // A missing transitions dir is simply no logs, not an error.
+        assert!(ws.load_all_transition_logs().is_empty());
+
+        append_transition(
+            &ws,
+            transition(
+                "YARD-2",
+                TaskState::Running,
+                TaskState::Done,
+                TransitionCause::RunOutcome,
+                "worker evaluated task as Done",
+                TransitionActor::Worker("run-2".into()),
+            ),
+        )
+        .unwrap();
+        append_transition(
+            &ws,
+            transition(
+                "YARD-1",
+                TaskState::Queued,
+                TaskState::Deferred,
+                TransitionCause::Defer,
+                "set aside",
+                TransitionActor::User,
+            ),
+        )
+        .unwrap();
+
+        let logs = ws.load_all_transition_logs();
+        assert_eq!(logs.len(), 2);
+        // Ordered by task id (path sort), not by write order.
+        assert_eq!(logs[0].task_id, "YARD-1");
+        assert_eq!(logs[1].task_id, "YARD-2");
+        assert_eq!(logs[1].records[0].cause, TransitionCause::RunOutcome);
 
         let _ = fs::remove_dir_all(&dir);
     }

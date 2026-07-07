@@ -8,7 +8,9 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
+use serde::Serialize;
 
+use crate::schemas::{TaskState, TransitionActor, TransitionCause, TransitionLog, TransitionRecord};
 use crate::state::Workspace;
 use crate::telemetry::{self, RunTelemetry};
 
@@ -361,6 +363,519 @@ pub fn mine(runs: &[RunTelemetry]) -> Vec<MinedObservation> {
     out
 }
 
+// ==== Trust Report v2: autonomy from the state-transition audit log ==========
+//
+// v1 (above) folds run *attempts* from telemetry. v2 folds the task *state
+// machine* recorded in `.agents/transitions/` — the only record where a Done
+// that was later reopened (false-done) or a human DECISION/CHORE touch is
+// visible — and cross-checks the same run telemetry. Like v1 it only REPORTS;
+// it never edits policy or state. Pure over its inputs, so it is unit-tested
+// without touching disk. Every number traces to a specific recorded transition
+// or run (see `AutonomyReport::sources`), never a hand-tally.
+
+/// How trustworthy a task's Done is, judged from its recorded history. This is
+/// the "can I trust a Done?" split.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DoneTrust {
+    /// Reached Done on a clean path and stayed there — no wrong turn first,
+    /// never reopened. The Done is evidence-backed.
+    EvidenceBacked,
+    /// Reached Done, but only after a wrong turn (Failed/Partial/Blocked) — the
+    /// loop went wrong then recovered. The Done is real; it cost a correction.
+    RecoveredAfterWrong,
+    /// Marked Done, then transitioned back OUT of Done — a premature Done caught
+    /// and reopened. The worst trust signal (transition-only: telemetry attempts
+    /// never un-Done).
+    FalseDoneCaught,
+    /// No Done in the record yet.
+    Unresolved,
+}
+
+/// A human intervention is either a DECISION the loop legitimately owed the
+/// human, or a CHORE — mechanical un-sticking the loop should absorb itself.
+/// Driving the chore share to zero is the visible autonomy goal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchKind {
+    Decision,
+    Chore,
+}
+
+/// Classify a human-touch transition by its cause. `Defer` (a deliberate "set
+/// this aside") and `DecisionSeed` (a real question the loop routed to the
+/// human) are decisions the loop rightly owed. Everything else a human had to
+/// do — `Revive` (un-park a stalled task), `Recover` (salvage an abandoned
+/// run) — is mechanical toil the self-healing loop should have handled.
+pub fn classify_touch(cause: TransitionCause) -> TouchKind {
+    match cause {
+        TransitionCause::Defer | TransitionCause::DecisionSeed => TouchKind::Decision,
+        _ => TouchKind::Chore,
+    }
+}
+
+/// Is this transition a human intervention we count? A `User`-actor move (a
+/// hand defer/revive/recover) or a seeded decision the loop owed the human.
+/// System/Worker moves under the auto-drain are the loop doing its job, not an
+/// intervention.
+fn is_human_touch(rec: &TransitionRecord) -> bool {
+    matches!(rec.actor, TransitionActor::User) || rec.cause == TransitionCause::DecisionSeed
+}
+
+/// A wrong turn: a state a trustworthy Done should not have passed through.
+fn is_wrong_state(s: TaskState) -> bool {
+    matches!(
+        s,
+        TaskState::Failed | TaskState::Partial | TaskState::Blocked
+    )
+}
+
+/// Classify a single task's Done-trust from its transition timeline alone
+/// (records are append-order = chronological). Used for tasks that have a
+/// transition log; telemetry-only tasks fall back to the attempt heuristic.
+pub fn classify_transitions(records: &[TransitionRecord]) -> DoneTrust {
+    let mut reached_done = false;
+    let mut wrong_before_done = false;
+    let mut seen_wrong = false;
+    let mut false_done = false;
+    for rec in records {
+        if rec.from == TaskState::Done && rec.to != TaskState::Done {
+            false_done = true;
+        }
+        match rec.to {
+            TaskState::Done => {
+                if seen_wrong && !reached_done {
+                    wrong_before_done = true;
+                }
+                reached_done = true;
+            }
+            s if is_wrong_state(s) => seen_wrong = true,
+            _ => {}
+        }
+    }
+    if false_done {
+        DoneTrust::FalseDoneCaught
+    } else if reached_done && wrong_before_done {
+        DoneTrust::RecoveredAfterWrong
+    } else if reached_done {
+        DoneTrust::EvidenceBacked
+    } else {
+        DoneTrust::Unresolved
+    }
+}
+
+/// Per-intent human-touch split. The chore share is the headline the goal
+/// drives to zero.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct IntentTouch {
+    pub decisions: usize,
+    pub chores: usize,
+}
+
+impl IntentTouch {
+    pub fn total(&self) -> usize {
+        self.decisions + self.chores
+    }
+    pub fn chore_ratio(&self) -> f64 {
+        rate(self.chores, self.total())
+    }
+}
+
+/// The v2 autonomy + trust report. Every field is a count folded from recorded
+/// transitions and/or runs — never a manual aggregate.
+#[derive(Debug, Clone, Default)]
+pub struct AutonomyReport {
+    // ---- "Can I trust a Done?" — per (intent, task) instance -------------
+    pub evidence_backed: usize,
+    pub recovered: usize,
+    pub false_done_caught: usize,
+    pub unresolved: usize,
+    pub task_instances: usize,
+    /// Task ids flagged with a Done -> non-Done reversal (traceable list).
+    pub false_done_tasks: Vec<String>,
+
+    // ---- Human interventions — decision vs chore -------------------------
+    pub decisions: usize,
+    pub chores: usize,
+    pub per_intent: BTreeMap<String, IntentTouch>,
+
+    // ---- Unnecessary loop stops (waste) ----------------------------------
+    /// Every transition INTO NeedsUser (the loop halted for a human).
+    pub loop_stops: usize,
+    /// Stops that were a genuine seeded decision the loop owed (good stops).
+    pub decision_stops: usize,
+    /// Stops for approval/pause friction, not a real question — reducible waste.
+    pub wasted_stops: usize,
+
+    // ---- Provenance (each number is backed by this many records) ---------
+    pub transitions_read: usize,
+    pub runs_read: usize,
+}
+
+impl AutonomyReport {
+    /// Task instances that ever reached Done (the denominator for "of the Dones,
+    /// how many were clean?").
+    pub fn done_reached(&self) -> usize {
+        self.evidence_backed + self.recovered + self.false_done_caught
+    }
+    /// Evidence-backed Dones as a share of all Dones — the trustworthy-Done rate.
+    pub fn trustworthy_done_rate(&self) -> f64 {
+        rate(self.evidence_backed, self.done_reached())
+    }
+    pub fn human_touches(&self) -> usize {
+        self.decisions + self.chores
+    }
+    /// Chore share of all human touches — the number the autonomy goal drives to
+    /// zero. 0.0 when there were no touches (nothing to reduce).
+    pub fn chore_ratio(&self) -> f64 {
+        rate(self.chores, self.human_touches())
+    }
+
+    /// Machine-readable projection for `yardlet trust --json`. Nested so a reader
+    /// can map each number back to its source (transitions vs runs).
+    pub fn to_json(&self) -> serde_json::Value {
+        let per_intent: serde_json::Map<String, serde_json::Value> = self
+            .per_intent
+            .iter()
+            .map(|(id, t)| {
+                (
+                    id.clone(),
+                    serde_json::json!({
+                        "decisions": t.decisions,
+                        "chores": t.chores,
+                        "chore_ratio": round2(t.chore_ratio()),
+                    }),
+                )
+            })
+            .collect();
+        serde_json::json!({
+            "done_trust": {
+                "evidence_backed": self.evidence_backed,
+                "recovered": self.recovered,
+                "false_done_caught": self.false_done_caught,
+                "unresolved": self.unresolved,
+                "task_instances": self.task_instances,
+                "trustworthy_done_rate": round2(self.trustworthy_done_rate()),
+                "false_done_tasks": self.false_done_tasks,
+            },
+            "human_touches": {
+                "decisions": self.decisions,
+                "chores": self.chores,
+                "total": self.human_touches(),
+                "chore_ratio": round2(self.chore_ratio()),
+                "per_intent": per_intent,
+            },
+            "loop_stops": {
+                "total": self.loop_stops,
+                "owed_decisions": self.decision_stops,
+                "wasted": self.wasted_stops,
+            },
+            "sources": {
+                "transitions_read": self.transitions_read,
+                "runs_read": self.runs_read,
+            },
+        })
+    }
+}
+
+fn round2(x: f64) -> f64 {
+    (x * 100.0).round() / 100.0
+}
+
+/// A telemetry instance keyed by (intent, task): reused task ids across intents
+/// do not fold. Ordered by first-seen so `first_ts`/`last_ts` bound its window.
+#[derive(Default)]
+struct Instance {
+    task: String,
+    attempts: usize,
+    reached_done: bool,
+    first_pass: bool,
+    first_ts: String,
+}
+
+/// Fold run telemetry + transition logs into the v2 autonomy report. Pure over
+/// its inputs. Done-trust is keyed per (intent, task) from telemetry (so reused
+/// ids stay separate) with false-done overlaid from transition reversals;
+/// task ids that appear only in transitions are classified from the log alone.
+pub fn autonomy(runs: &[RunTelemetry], logs: &[TransitionLog]) -> AutonomyReport {
+    let mut rep = AutonomyReport {
+        runs_read: runs.len(),
+        transitions_read: logs.iter().map(|l| l.records.len()).sum(),
+        ..Default::default()
+    };
+
+    // task_id -> latest intent seen in telemetry. Transitions carry no intent,
+    // so a hand defer/revive is attributed to the intent that last ran the task.
+    let mut task_intent: BTreeMap<String, String> = BTreeMap::new();
+    for r in runs {
+        if !r.intent_id.is_empty() {
+            task_intent.insert(r.task_id.clone(), r.intent_id.clone());
+        }
+    }
+
+    // ---- Done trust: build per (intent, task) instances from telemetry ----
+    let mut order: Vec<(String, String)> = Vec::new();
+    let mut insts: BTreeMap<(String, String), Instance> = BTreeMap::new();
+    for r in runs {
+        let key = (r.intent_id.clone(), r.task_id.clone());
+        let inst = insts.entry(key.clone()).or_insert_with(|| {
+            order.push(key.clone());
+            Instance {
+                task: r.task_id.clone(),
+                ..Default::default()
+            }
+        });
+        let first = inst.attempts == 0;
+        inst.attempts += 1;
+        if first {
+            inst.first_ts = r.ts.clone();
+        }
+        if is_done(&r.eval_state) {
+            if first {
+                inst.first_pass = true;
+            }
+            inst.reached_done = true;
+        }
+    }
+
+    // Reversal timestamps per task id (a Done -> non-Done move). Attribute each
+    // to whichever instance's window [first_ts, next first_ts) contains it.
+    let mut reversals: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for log in logs {
+        for rec in &log.records {
+            if rec.from == TaskState::Done && rec.to != TaskState::Done {
+                reversals
+                    .entry(rec.task_id.clone())
+                    .or_default()
+                    .push(rec.ts.clone());
+            }
+        }
+    }
+    for v in reversals.values_mut() {
+        v.sort();
+    }
+    if !reversals.is_empty() {
+        rep.false_done_tasks = reversals.keys().cloned().collect();
+    }
+
+    // Per task id, the sorted instance start times (to bound each window).
+    let mut starts_by_task: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for key in &order {
+        if let Some(inst) = insts.get(key) {
+            starts_by_task
+                .entry(inst.task.clone())
+                .or_default()
+                .push(inst.first_ts.clone());
+        }
+    }
+    for v in starts_by_task.values_mut() {
+        v.sort();
+    }
+
+    for key in &order {
+        let inst = &insts[key];
+        rep.task_instances += 1;
+        let flagged = reversal_in_window(&reversals, &starts_by_task, &inst.task, &inst.first_ts);
+        let trust = if flagged {
+            DoneTrust::FalseDoneCaught
+        } else if inst.reached_done && inst.first_pass {
+            DoneTrust::EvidenceBacked
+        } else if inst.reached_done {
+            DoneTrust::RecoveredAfterWrong
+        } else {
+            DoneTrust::Unresolved
+        };
+        tally_done_trust(&mut rep, trust);
+    }
+
+    // Task ids that appear ONLY in transitions (no telemetry instance): classify
+    // Done-trust straight from the log so a transition-only workspace still
+    // reports. Attributed to the mapped intent, else "" (unknown).
+    let telemetry_tasks: std::collections::BTreeSet<String> =
+        insts.values().map(|i| i.task.clone()).collect();
+    for log in logs {
+        if telemetry_tasks.contains(&log.task_id) || log.task_id.is_empty() {
+            continue;
+        }
+        rep.task_instances += 1;
+        tally_done_trust(&mut rep, classify_transitions(&log.records));
+    }
+
+    // ---- Human interventions: decision vs chore --------------------------
+    for log in logs {
+        for rec in &log.records {
+            if !is_human_touch(rec) {
+                continue;
+            }
+            let intent = task_intent.get(&rec.task_id).cloned().unwrap_or_default();
+            let bucket = rep.per_intent.entry(intent).or_default();
+            match classify_touch(rec.cause) {
+                TouchKind::Decision => {
+                    rep.decisions += 1;
+                    bucket.decisions += 1;
+                }
+                TouchKind::Chore => {
+                    rep.chores += 1;
+                    bucket.chores += 1;
+                }
+            }
+        }
+    }
+    // A telemetry user_override is a human redirecting a run — a chore.
+    for r in runs {
+        if r.user_override.is_some() {
+            rep.chores += 1;
+            rep.per_intent.entry(r.intent_id.clone()).or_default().chores += 1;
+        }
+    }
+
+    // ---- Unnecessary loop stops (waste) ----------------------------------
+    for log in logs {
+        for rec in &log.records {
+            if rec.to == TaskState::NeedsUser && rec.from != TaskState::NeedsUser {
+                rep.loop_stops += 1;
+                if rec.cause == TransitionCause::DecisionSeed {
+                    rep.decision_stops += 1;
+                } else {
+                    rep.wasted_stops += 1;
+                }
+            }
+        }
+    }
+
+    rep
+}
+
+/// Does a Done-reversal for `task` fall inside the instance that started at
+/// `first_ts` (i.e. between it and the next instance's start)? Attributes a
+/// reversal to the exact (intent, task) instance that was live when it happened.
+fn reversal_in_window(
+    reversals: &BTreeMap<String, Vec<String>>,
+    starts_by_task: &BTreeMap<String, Vec<String>>,
+    task: &str,
+    first_ts: &str,
+) -> bool {
+    let Some(revs) = reversals.get(task) else {
+        return false;
+    };
+    let starts = starts_by_task.get(task);
+    // Upper bound of this window = the next instance's start, if any.
+    let next_start = starts.and_then(|s| {
+        s.iter()
+            .filter(|t| t.as_str() > first_ts)
+            .min()
+            .map(|s| s.as_str())
+    });
+    revs.iter().any(|ts| {
+        ts.as_str() >= first_ts && next_start.map(|n| ts.as_str() < n).unwrap_or(true)
+    })
+}
+
+fn tally_done_trust(rep: &mut AutonomyReport, trust: DoneTrust) {
+    match trust {
+        DoneTrust::EvidenceBacked => rep.evidence_backed += 1,
+        DoneTrust::RecoveredAfterWrong => rep.recovered += 1,
+        DoneTrust::FalseDoneCaught => rep.false_done_caught += 1,
+        DoneTrust::Unresolved => rep.unresolved += 1,
+    }
+}
+
+/// Read this workspace's transitions + telemetry and fold the v2 report.
+pub fn autonomy_report(ws: &Workspace) -> AutonomyReport {
+    autonomy(&telemetry::read_runs(ws), &ws.load_all_transition_logs())
+}
+
+/// Render the v2 autonomy report as a compact, deterministic text block. Shown
+/// under the v1 worker table by `yardlet trust`, and in the TUI trust panel.
+pub fn render_autonomy(rep: &AutonomyReport) -> String {
+    let mut s = String::new();
+    s.push_str(&format!(
+        "Autonomy & trust (v2) \u{2014} from {} run(s) + {} transition record(s)\n",
+        rep.runs_read, rep.transitions_read,
+    ));
+
+    let n = rep.task_instances;
+    s.push_str(&format!("\nCan I trust a Done?  ({n} task-runs)\n"));
+    if n == 0 {
+        s.push_str("  (no runs recorded yet)\n");
+    } else {
+        s.push_str(&format!(
+            "  evidence-backed   {:>4}/{}  ({:.0}%)  clean Done, never reopened\n",
+            rep.evidence_backed,
+            n,
+            rate(rep.evidence_backed, n) * 100.0,
+        ));
+        s.push_str(&format!(
+            "  recovered         {:>4}/{}           Done after a wrong turn\n",
+            rep.recovered, n,
+        ));
+        s.push_str(&format!(
+            "  false-done caught {:>4}/{}           marked Done, later reopened\n",
+            rep.false_done_caught, n,
+        ));
+        s.push_str(&format!(
+            "  unresolved        {:>4}/{}           no Done in the record yet\n",
+            rep.unresolved, n,
+        ));
+        s.push_str(&format!(
+            "  trustworthy-Done rate: {:.0}%  (evidence-backed of {} Done)\n",
+            rep.trustworthy_done_rate() * 100.0,
+            rep.done_reached(),
+        ));
+        if !rep.false_done_tasks.is_empty() {
+            s.push_str(&format!(
+                "  reopened: {}\n",
+                rep.false_done_tasks.join(", ")
+            ));
+        }
+    }
+
+    s.push_str("\nHuman interventions \u{2014} decision vs chore  (goal: chore \u{2192} 0)\n");
+    if rep.human_touches() == 0 {
+        s.push_str("  none recorded \u{2014} the loop needed no hand un-sticking\n");
+    } else {
+        s.push_str(&format!(
+            "  decisions {}   chores {}   chore-ratio {:.0}%\n",
+            rep.decisions,
+            rep.chores,
+            rep.chore_ratio() * 100.0,
+        ));
+        for (intent, t) in &rep.per_intent {
+            if t.total() == 0 {
+                continue;
+            }
+            let label = if intent.is_empty() { "(unattributed)" } else { intent };
+            s.push_str(&format!(
+                "    {:<28} decisions {}  chores {}  ({:.0}% chore)\n",
+                label,
+                t.decisions,
+                t.chores,
+                t.chore_ratio() * 100.0,
+            ));
+        }
+    }
+
+    s.push_str("\nUnnecessary loop stops (waste)\n");
+    s.push_str(&format!(
+        "  loop stops {}   owed decisions {}   wasted {}\n",
+        rep.loop_stops, rep.decision_stops, rep.wasted_stops,
+    ));
+    if rep.wasted_stops > 0 {
+        s.push_str("  (wasted = halted for approval/pause friction, not a real question)\n");
+    }
+
+    s
+}
+
+/// Full trust report text: the v1 worker/attempt table plus the v2 autonomy
+/// block. Used by `yardlet trust` (no --json) and the TUI trust panel so both
+/// surfaces show identical numbers.
+pub fn report_text(ws: &Workspace) -> Result<String> {
+    let mut s = report(ws)?;
+    s.push('\n');
+    s.push_str(&render_autonomy(&autonomy_report(ws)));
+    Ok(s)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,5 +1022,169 @@ mod tests {
         assert_eq!(r.first_pass_done(), 0);
         // No divide-by-zero in render.
         let _ = render(&r, None);
+    }
+
+    // ---- v2 autonomy ------------------------------------------------------
+
+    fn run(task: &str, intent: &str, eval: &str, ts: &str) -> RunTelemetry {
+        let mut r = rec(task, "codex", "done", eval, 1);
+        r.intent_id = intent.into();
+        r.ts = ts.into();
+        r
+    }
+
+    fn tr(
+        task: &str,
+        from: TaskState,
+        to: TaskState,
+        cause: TransitionCause,
+        actor: TransitionActor,
+        ts: &str,
+    ) -> TransitionRecord {
+        TransitionRecord {
+            task_id: task.into(),
+            from,
+            to,
+            cause,
+            detail: String::new(),
+            actor,
+            ts: ts.into(),
+        }
+    }
+
+    fn tlog(task: &str, records: Vec<TransitionRecord>) -> TransitionLog {
+        TransitionLog {
+            task_id: task.into(),
+            records,
+        }
+    }
+
+    #[test]
+    fn done_trust_three_way_split_across_sources() {
+        // A: first-pass Done (evidence). B: Failed then Done (recovered).
+        // C: only Partial (unresolved). All in one intent, from telemetry.
+        let runs = vec![
+            run("A", "i1", "Done", "t01"),
+            run("B", "i1", "Failed", "t02"),
+            run("B", "i1", "Done", "t03"),
+            run("C", "i1", "Partial", "t04"),
+        ];
+        // D: transition-only, reached Done then reopened (false-done).
+        let logs = vec![tlog(
+            "D",
+            vec![
+                tr("D", TaskState::Running, TaskState::Done, TransitionCause::RunOutcome, TransitionActor::Worker("r".into()), "t05"),
+                tr("D", TaskState::Done, TaskState::Queued, TransitionCause::RunOutcome, TransitionActor::System, "t06"),
+            ],
+        )];
+
+        let rep = autonomy(&runs, &logs);
+        assert_eq!(rep.task_instances, 4);
+        assert_eq!(rep.evidence_backed, 1, "A");
+        assert_eq!(rep.recovered, 1, "B");
+        assert_eq!(rep.unresolved, 1, "C");
+        assert_eq!(rep.false_done_caught, 1, "D");
+        assert_eq!(rep.false_done_tasks, vec!["D".to_string()]);
+        assert_eq!(rep.done_reached(), 3);
+        // Numbers survive a render pass (no panic / divide-by-zero).
+        assert!(render_autonomy(&rep).contains("false-done caught    1/4"));
+    }
+
+    #[test]
+    fn false_done_overlay_attributes_to_the_live_instance() {
+        // Task A runs Done in i1 (t01), then is reused and runs Done in i2 (t10).
+        // A reversal at t03 (Done->Failed) belongs to the i1 window, not i2.
+        let runs = vec![run("A", "i1", "Done", "t01"), run("A", "i2", "Done", "t10")];
+        let logs = vec![tlog(
+            "A",
+            vec![
+                tr("A", TaskState::Running, TaskState::Done, TransitionCause::RunOutcome, TransitionActor::Worker("r1".into()), "t02"),
+                tr("A", TaskState::Done, TaskState::Failed, TransitionCause::RunOutcome, TransitionActor::System, "t03"),
+                tr("A", TaskState::Running, TaskState::Done, TransitionCause::RunOutcome, TransitionActor::Worker("r2".into()), "t11"),
+            ],
+        )];
+        let rep = autonomy(&runs, &logs);
+        assert_eq!(rep.task_instances, 2);
+        assert_eq!(rep.false_done_caught, 1, "the i1 instance is the reopened one");
+        assert_eq!(rep.evidence_backed, 1, "the i2 instance stays clean");
+    }
+
+    #[test]
+    fn human_touches_split_decision_vs_chore_per_intent() {
+        // Map tasks to intents via telemetry, then classify their user touches.
+        let runs = vec![
+            run("A", "i1", "Done", "t01"),
+            run("B", "i1", "Done", "t02"),
+            run("C", "i2", "Done", "t03"),
+            {
+                let mut o = run("Z", "i2", "Done", "t04");
+                o.user_override = Some("human redirected the worker".into());
+                o
+            },
+        ];
+        let logs = vec![
+            tlog("A", vec![tr("A", TaskState::Queued, TaskState::Deferred, TransitionCause::Defer, TransitionActor::User, "t05")]),
+            tlog("B", vec![tr("B", TaskState::Deferred, TaskState::Queued, TransitionCause::Revive, TransitionActor::User, "t06")]),
+            tlog("C", vec![tr("C", TaskState::Queued, TaskState::NeedsUser, TransitionCause::DecisionSeed, TransitionActor::System, "t07")]),
+        ];
+        let rep = autonomy(&runs, &logs);
+        // A defer = decision, B revive = chore, C seeded decision = decision,
+        // Z override = chore.
+        assert_eq!(rep.decisions, 2);
+        assert_eq!(rep.chores, 2);
+        assert_eq!(rep.human_touches(), 4);
+        assert!((rep.chore_ratio() - 0.5).abs() < 1e-9);
+        // Per intent: i1 = 1 decision (defer) + 1 chore (revive).
+        let i1 = &rep.per_intent["i1"];
+        assert_eq!((i1.decisions, i1.chores), (1, 1));
+        // i2 = 1 decision (seed) + 1 chore (override).
+        let i2 = &rep.per_intent["i2"];
+        assert_eq!((i2.decisions, i2.chores), (1, 1));
+    }
+
+    #[test]
+    fn waste_counts_needsuser_stops_by_cause() {
+        let logs = vec![
+            // A owed decision (good stop).
+            tlog("A", vec![tr("A", TaskState::Queued, TaskState::NeedsUser, TransitionCause::DecisionSeed, TransitionActor::System, "t01")]),
+            // B approval/pause friction (wasted stop).
+            tlog("B", vec![tr("B", TaskState::Running, TaskState::NeedsUser, TransitionCause::RunOutcome, TransitionActor::System, "t02")]),
+        ];
+        let rep = autonomy(&[], &logs);
+        assert_eq!(rep.loop_stops, 2);
+        assert_eq!(rep.decision_stops, 1);
+        assert_eq!(rep.wasted_stops, 1);
+    }
+
+    #[test]
+    fn to_json_is_traceable_and_matches_render() {
+        let runs = vec![run("A", "i1", "Done", "t01"), run("B", "i1", "Failed", "t02")];
+        let logs = vec![tlog(
+            "A",
+            vec![tr("A", TaskState::Queued, TaskState::Deferred, TransitionCause::Defer, TransitionActor::User, "t03")],
+        )];
+        let rep = autonomy(&runs, &logs);
+        let j = rep.to_json();
+        // Each number is backed by a source count.
+        assert_eq!(j["sources"]["runs_read"], 2);
+        assert_eq!(j["sources"]["transitions_read"], 1);
+        assert_eq!(j["done_trust"]["evidence_backed"], 1);
+        assert_eq!(j["done_trust"]["unresolved"], 1);
+        assert_eq!(j["human_touches"]["decisions"], 1);
+        assert_eq!(j["human_touches"]["per_intent"]["i1"]["decisions"], 1);
+        // The JSON serializes without error.
+        assert!(serde_json::to_string(&j).is_ok());
+    }
+
+    #[test]
+    fn empty_autonomy_is_all_zeroes_and_safe() {
+        let rep = autonomy(&[], &[]);
+        assert_eq!(rep.task_instances, 0);
+        assert_eq!(rep.human_touches(), 0);
+        assert_eq!(rep.chore_ratio(), 0.0);
+        assert_eq!(rep.trustworthy_done_rate(), 0.0);
+        // Renders without panic; JSON is valid.
+        let _ = render_autonomy(&rep);
+        assert!(serde_json::to_string(&rep.to_json()).is_ok());
     }
 }
