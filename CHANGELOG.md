@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Self-healing workspace state.** `yardlet status`, `yardlet queue`, reports,
+  and the TUI now distinguish runnable-now work from waiting decisions,
+  approvals, dependencies, worker capability gaps, held tasks, deferred tasks,
+  and done work. New `yardlet tidy` migrates legacy human-decision capability
+  gates to `NeedsUser`, sets non-runnable tool gaps aside as `Deferred`, and
+  archives drained intents without hard-deleting task history. System-driven
+  task state changes now append per-task transition records under
+  `.agents/transitions/` and surface the latest reason in status/queue/report.
 - **One-shot worker failover.** A run that dies leaving no result artifacts is
   retried once on the next capable worker in `fallback_order` (readiness-checked,
   recorded in telemetry with the failover attribution), on both the serial and
@@ -24,6 +32,11 @@
 
 ### Changed
 
+- **Breaking: `yardlet status --json` queue counts were split.** The
+  `queue.queued` field has been removed instead of kept as a compatibility
+  alias. Consumers should read `queue.runnable` for work that can run now, or
+  add `queue.runnable` and the `queue.waiting_*` fields when they need the old
+  broad "not done yet" bucket.
 - **The work queue is runtime state.** `yardlet` now treats a missing
   `.agents/work-queue.yaml` as an empty queue instead of erroring, so the queue
   file can be gitignored where it is operational rather than shared state. A

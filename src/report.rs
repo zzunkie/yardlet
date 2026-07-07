@@ -7,7 +7,9 @@
 use anyhow::Result;
 
 use crate::run::latest_run_for;
-use crate::schemas::{FollowUpTask, PreservedFollowUps, RunResult, TaskState, WorkQueue};
+use crate::schemas::{
+    FollowUpTask, PreservedFollowUps, RunResult, RunnableClass, TaskState, WorkQueue,
+};
 use crate::state::{self, Workspace};
 use crate::yaml;
 
@@ -119,20 +121,38 @@ pub fn build_final_report(ws: &Workspace) -> Result<String> {
         .iter()
         .filter(|t| t.state == TaskState::Done)
         .count();
-    // Still live (Queued/Running) vs settled-but-held (terminal, not Done): the
-    // completion view is holds-included, so a drained queue reads as complete
-    // even when some tasks are deferred/blocked/needs-user set aside.
-    let live: Vec<&str> = queue
+    let workers = ws.load_workers().ok();
+    let vocab = workers
+        .as_ref()
+        .map(crate::routing::declared_capabilities)
+        .unwrap_or_default();
+    let classified = queue
         .tasks
         .iter()
-        .filter(|t| !t.state.is_terminal())
-        .map(|t| t.id.as_str())
+        .map(|t| {
+            let approved = t.approval_required() && crate::approvals::is_granted(ws, &t.id);
+            (t, queue.runnable_class(t, approved, &vocab))
+        })
+        .collect::<Vec<_>>();
+    let live: Vec<String> = classified
+        .iter()
+        .filter(|(_, class)| {
+            matches!(
+                class,
+                RunnableClass::Runnable
+                    | RunnableClass::Running
+                    | RunnableClass::WaitingDecision
+                    | RunnableClass::WaitingApproval
+                    | RunnableClass::WaitingDependency
+                    | RunnableClass::WaitingCapability
+            )
+        })
+        .map(|(t, class)| format!("{} ({})", t.id, class.label()))
         .collect();
-    let held: Vec<&str> = queue
-        .tasks
+    let held: Vec<String> = classified
         .iter()
-        .filter(|t| t.state.is_terminal() && t.state != TaskState::Done)
-        .map(|t| t.id.as_str())
+        .filter(|(_, class)| matches!(class, RunnableClass::Held | RunnableClass::SetAside))
+        .map(|(t, class)| format!("{} ({})", t.id, class.label()))
         .collect();
     md.push_str(&format!("**Progress:** {done}/{total} tasks done"));
     if !live.is_empty() {
@@ -175,6 +195,9 @@ pub fn build_final_report(ws: &Workspace) -> Result<String> {
             "### {} {} \u{2014} {:?}\n\n",
             t.id, t.title, t.state
         ));
+        if let Some(rec) = ws.latest_transition(&t.id) {
+            md.push_str(&format!("Last transition: {}\n\n", rec.detail.trim()));
+        }
         if let Some((_, dir)) = latest_run_for(ws, &t.id) {
             if let Some(r) = read_result(&dir) {
                 if !r.compact_summary.trim().is_empty() {

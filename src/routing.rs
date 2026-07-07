@@ -287,6 +287,42 @@ pub(crate) fn unsatisfiable_capabilities(
         .collect()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateShape {
+    Decision,
+    ToolGap,
+}
+
+/// Legacy queues sometimes encoded a human decision as a fake capability
+/// (`user_creative_direction_approval`, `stakeholder_choice`, ...). Current
+/// Yardlet represents that as `decision_question` -> NeedsUser. This classifier
+/// is deliberately structural: it only recognizes words that name a human
+/// judgment/approval, and leaves real tool/license gaps parked as capability
+/// gaps. Actor prefixes such as `user_` or `human_` are not enough by
+/// themselves because real tool capabilities can use those terms too
+/// (`user_agent`, `human_pose_estimation`).
+pub fn classify_stale_gate(caps_unsatisfiable: &[String]) -> GateShape {
+    let decision_words = [
+        "approval",
+        "approve",
+        "decision",
+        "choice",
+        "direction",
+        "signoff",
+        "sign_off",
+        "stakeholder",
+        "creative",
+    ];
+    if caps_unsatisfiable.iter().any(|cap| {
+        let cap = norm_cap(cap);
+        decision_words.iter().any(|word| cap.contains(word))
+    }) {
+        GateShape::Decision
+    } else {
+        GateShape::ToolGap
+    }
+}
+
 /// Whether `worker_id` is an enabled worker declaring EVERY required capability.
 /// `required` must already be normalized.
 fn worker_declares(workers: &WorkersFile, worker_id: &str, required: &[String]) -> bool {
@@ -383,6 +419,26 @@ mod tests {
         let need = vec!["image_generation".to_string(), "video".to_string()];
         assert!(!worker_declares(&w, "codex", &need));
         assert!(first_capable(&w, &need).is_none());
+    }
+
+    #[test]
+    fn stale_gate_classifier_distinguishes_decision_from_tool_gap() {
+        assert_eq!(
+            classify_stale_gate(&["user-creative-direction-approval".to_string()]),
+            GateShape::Decision
+        );
+        assert_eq!(
+            classify_stale_gate(&["licensed_3d_asset_intake".to_string()]),
+            GateShape::ToolGap
+        );
+        assert_eq!(
+            classify_stale_gate(&["human_pose_estimation".to_string()]),
+            GateShape::ToolGap
+        );
+        assert_eq!(
+            classify_stale_gate(&["user_agent".to_string()]),
+            GateShape::ToolGap
+        );
     }
 
     #[test]

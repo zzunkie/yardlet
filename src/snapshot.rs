@@ -4,7 +4,11 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::guard;
-use crate::schemas::{IntentContract, Task, TaskState, WorkQueue, YardConfig};
+use std::collections::BTreeMap;
+
+use crate::schemas::{
+    IntentContract, RunnableClass, Task, TaskState, TransitionRecord, WorkQueue, YardConfig,
+};
 use crate::state::Workspace;
 
 pub struct Snapshot {
@@ -24,6 +28,21 @@ pub struct Snapshot {
     /// Capabilities the enabled workers declare (already parsed from
     /// workers.yaml here, so callers need not re-read it).
     pub capabilities: std::collections::BTreeSet<String>,
+    pub last_transitions: BTreeMap<String, TransitionRecord>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct QueueHealth {
+    pub runnable: usize,
+    pub running: usize,
+    pub waiting_decision: usize,
+    pub waiting_approval: usize,
+    pub waiting_dependency: usize,
+    pub waiting_capability: usize,
+    pub held: usize,
+    pub set_aside: usize,
+    pub done: usize,
+    pub total: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -154,6 +173,14 @@ impl Snapshot {
             .collect();
 
         let capabilities = crate::routing::declared_capabilities(&workers_file);
+        let last_transitions = queue
+            .tasks
+            .iter()
+            .filter_map(|task| {
+                ws.latest_transition(&task.id)
+                    .map(|rec| (task.id.clone(), rec))
+            })
+            .collect();
 
         Ok(Snapshot {
             config,
@@ -165,11 +192,8 @@ impl Snapshot {
             gate,
             approvals_needed,
             capabilities,
+            last_transitions,
         })
-    }
-
-    pub fn count(&self, state: TaskState) -> usize {
-        self.queue.tasks.iter().filter(|t| t.state == state).count()
     }
 
     pub fn workers_ready(&self) -> usize {
@@ -177,6 +201,34 @@ impl Snapshot {
             .iter()
             .filter(|w| w.readiness == "invocable")
             .count()
+    }
+
+    pub fn task_class(&self, task: &Task) -> RunnableClass {
+        let approved =
+            task.approval_required() && !self.approvals_needed.iter().any(|id| id == &task.id);
+        self.queue
+            .runnable_class(task, approved, &self.capabilities)
+    }
+
+    pub fn health(&self) -> QueueHealth {
+        let mut health = QueueHealth {
+            total: self.queue.tasks.len(),
+            ..QueueHealth::default()
+        };
+        for task in &self.queue.tasks {
+            match self.task_class(task) {
+                RunnableClass::Runnable => health.runnable += 1,
+                RunnableClass::Running => health.running += 1,
+                RunnableClass::WaitingDecision => health.waiting_decision += 1,
+                RunnableClass::WaitingApproval => health.waiting_approval += 1,
+                RunnableClass::WaitingDependency => health.waiting_dependency += 1,
+                RunnableClass::WaitingCapability => health.waiting_capability += 1,
+                RunnableClass::Held => health.held += 1,
+                RunnableClass::SetAside => health.set_aside += 1,
+                RunnableClass::Done => health.done += 1,
+            }
+        }
+        health
     }
 
     pub fn intent_summary(&self) -> &str {
@@ -193,6 +245,7 @@ impl Snapshot {
 
     /// JSON view for `yardlet status --json`.
     pub fn to_json(&self) -> serde_json::Value {
+        let health = self.health();
         serde_json::json!({
             "product": self.config.product,
             "workspace_id": self.config.workspace_id,
@@ -200,15 +253,25 @@ impl Snapshot {
             "pending": self.pending.as_ref().map(|(id, q)| serde_json::json!({"task": id, "question": q})),
             "intent": self.intent_summary(),
             "queue": {
-                "queued": self.count(TaskState::Queued),
-                "running": self.count(TaskState::Running),
-                "done": self.count(TaskState::Done),
-                "blocked": self.count(TaskState::Blocked),
-                "failed": self.count(TaskState::Failed),
-                "needs_user": self.count(TaskState::NeedsUser),
-                "deferred": self.count(TaskState::Deferred),
-                "total": self.queue.tasks.len(),
+                "runnable": health.runnable,
+                "running": health.running,
+                "waiting_decision": health.waiting_decision,
+                "waiting_approval": health.waiting_approval,
+                "waiting_dependency": health.waiting_dependency,
+                "waiting_capability": health.waiting_capability,
+                "held": health.held,
+                "set_aside": health.set_aside,
+                "done": health.done,
+                "total": health.total,
             },
+            "tasks": self.queue.tasks.iter().map(|task| {
+                serde_json::json!({
+                    "id": task.id,
+                    "state": format!("{:?}", task.state),
+                    "class": self.task_class(task),
+                    "last_transition": self.last_transitions.get(&task.id),
+                })
+            }).collect::<Vec<_>>(),
             "workers": self.workers,
         })
     }

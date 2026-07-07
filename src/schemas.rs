@@ -6,7 +6,7 @@
 //! model does not over-constrain user-edited files.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::yaml;
 
@@ -246,6 +246,81 @@ impl TaskState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunnableClass {
+    Runnable,
+    WaitingDecision,
+    WaitingApproval,
+    WaitingDependency,
+    WaitingCapability,
+    Held,
+    SetAside,
+    Running,
+    Done,
+}
+
+impl RunnableClass {
+    pub fn label(self) -> &'static str {
+        match self {
+            RunnableClass::Runnable => "ready",
+            RunnableClass::WaitingDecision => "awaiting decision",
+            RunnableClass::WaitingApproval => "awaiting approval",
+            RunnableClass::WaitingDependency => "blocked on deps",
+            RunnableClass::WaitingCapability => "needs worker",
+            RunnableClass::Held => "held",
+            RunnableClass::SetAside => "set aside",
+            RunnableClass::Running => "running",
+            RunnableClass::Done => "done",
+        }
+    }
+
+    pub fn is_runnable(self) -> bool {
+        self == RunnableClass::Runnable
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransitionRecord {
+    pub task_id: String,
+    pub from: TaskState,
+    pub to: TaskState,
+    pub cause: TransitionCause,
+    pub detail: String,
+    pub actor: TransitionActor,
+    pub ts: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionCause {
+    RunOutcome,
+    CapabilityPark,
+    StaleMigration,
+    Defer,
+    Revive,
+    TidyDefer,
+    Wrap,
+    DecisionSeed,
+    Recover,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "id")]
+pub enum TransitionActor {
+    System,
+    User,
+    Worker(String),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TransitionLog {
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default)]
+    pub records: Vec<TransitionRecord>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
@@ -442,6 +517,56 @@ impl WorkQueue {
                 .map(|t| t.state == TaskState::Done)
                 .unwrap_or(true)
         })
+    }
+
+    pub fn runnable_class(
+        &self,
+        task: &Task,
+        approved: bool,
+        cap_vocab: &BTreeSet<String>,
+    ) -> RunnableClass {
+        match task.state {
+            TaskState::Running => RunnableClass::Running,
+            TaskState::Done => RunnableClass::Done,
+            TaskState::Deferred => RunnableClass::SetAside,
+            TaskState::NeedsUser => RunnableClass::WaitingDecision,
+            TaskState::Failed | TaskState::Partial => RunnableClass::Held,
+            TaskState::Blocked => {
+                let missing = crate::routing::unsatisfiable_capabilities(
+                    &task.required_capabilities,
+                    cap_vocab,
+                );
+                if missing.is_empty() {
+                    RunnableClass::Held
+                } else {
+                    RunnableClass::WaitingCapability
+                }
+            }
+            TaskState::Queued => {
+                let missing = crate::routing::unsatisfiable_capabilities(
+                    &task.required_capabilities,
+                    cap_vocab,
+                );
+                if !missing.is_empty() {
+                    RunnableClass::WaitingCapability
+                } else if task.approval_required() && !approved {
+                    RunnableClass::WaitingApproval
+                } else if !self.deps_met(task) {
+                    RunnableClass::WaitingDependency
+                } else {
+                    RunnableClass::Runnable
+                }
+            }
+        }
+    }
+
+    pub fn is_runnable_now(
+        &self,
+        task: &Task,
+        approved: bool,
+        cap_vocab: &BTreeSet<String>,
+    ) -> bool {
+        self.runnable_class(task, approved, cap_vocab).is_runnable()
     }
 
     /// Queued tasks stranded by setting `task_id` aside. This mirrors the
@@ -1096,6 +1221,51 @@ tasks:
         assert!(!q(&[TaskState::Done, TaskState::Queued]).drained());
         // A Running task is live, not drained.
         assert!(!q(&[TaskState::Running]).drained());
+    }
+
+    #[test]
+    fn runnable_class_splits_ready_from_waiting_buckets() {
+        let mut queue = WorkQueue::empty();
+        let ready: Task = yaml::from_str("id: READY\ntitle: ready\n").unwrap();
+        let mut dep: Task = yaml::from_str("id: DEP\ntitle: dep\ndepends_on: [READY]\n").unwrap();
+        dep.state = TaskState::Queued;
+        let mut approval: Task =
+            yaml::from_str("id: APPROVE\ntitle: approve\napproval:\n  required: true\n").unwrap();
+        approval.state = TaskState::Queued;
+        let mut capability: Task =
+            yaml::from_str("id: CAP\ntitle: cap\nrequired_capabilities: [video]\n").unwrap();
+        capability.state = TaskState::Queued;
+        let mut needs: Task = yaml::from_str("id: ASK\ntitle: ask\n").unwrap();
+        needs.state = TaskState::NeedsUser;
+        let mut blocked: Task = yaml::from_str("id: BLOCK\ntitle: block\n").unwrap();
+        blocked.state = TaskState::Blocked;
+        queue.tasks = vec![ready, dep, approval, capability, needs, blocked];
+        let caps = BTreeSet::from(["image_generation".to_string()]);
+
+        assert_eq!(
+            queue.runnable_class(&queue.tasks[0], false, &caps),
+            RunnableClass::Runnable
+        );
+        assert_eq!(
+            queue.runnable_class(&queue.tasks[1], false, &caps),
+            RunnableClass::WaitingDependency
+        );
+        assert_eq!(
+            queue.runnable_class(&queue.tasks[2], false, &caps),
+            RunnableClass::WaitingApproval
+        );
+        assert_eq!(
+            queue.runnable_class(&queue.tasks[3], false, &caps),
+            RunnableClass::WaitingCapability
+        );
+        assert_eq!(
+            queue.runnable_class(&queue.tasks[4], false, &caps),
+            RunnableClass::WaitingDecision
+        );
+        assert_eq!(
+            queue.runnable_class(&queue.tasks[5], false, &caps),
+            RunnableClass::Held
+        );
     }
 
     #[test]

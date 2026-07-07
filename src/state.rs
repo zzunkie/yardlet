@@ -9,13 +9,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use chrono::Local;
 
 use serde::Deserialize;
 
 use crate::schemas::{
     BillingPolicy, Conversation, ConversationTurn, FollowUpTask, IntentContract,
-    PreservedFollowUps, SelectionPolicy, Task, TaskState, TurnRole, WorkQueue, WorkersFile,
-    YardConfig,
+    PreservedFollowUps, SelectionPolicy, Task, TaskState, TransitionActor, TransitionCause,
+    TransitionLog, TransitionRecord, TurnRole, WorkQueue, WorkersFile, YardConfig,
 };
 use crate::yaml;
 
@@ -112,6 +113,12 @@ impl Workspace {
     }
     pub fn conversation_path(&self, task_id: &str) -> PathBuf {
         self.conversations_dir().join(format!("{task_id}.yaml"))
+    }
+    pub fn transitions_dir(&self) -> PathBuf {
+        self.agents_dir().join("transitions")
+    }
+    pub fn transition_path(&self, task_id: &str) -> PathBuf {
+        self.transitions_dir().join(format!("{task_id}.yaml"))
     }
     pub fn billing_path(&self) -> PathBuf {
         self.agents_dir().join("billing-policy.yaml")
@@ -214,6 +221,24 @@ impl Workspace {
         })
     }
 
+    pub fn load_transition_log(&self, task_id: &str) -> TransitionLog {
+        let p = self.transition_path(task_id);
+        if !p.is_file() {
+            return TransitionLog {
+                task_id: task_id.to_string(),
+                records: Vec::new(),
+            };
+        }
+        load_yaml(&p).unwrap_or_else(|_| TransitionLog {
+            task_id: task_id.to_string(),
+            records: Vec::new(),
+        })
+    }
+
+    pub fn latest_transition(&self, task_id: &str) -> Option<TransitionRecord> {
+        self.load_transition_log(task_id).records.pop()
+    }
+
     pub fn load_billing(&self) -> Result<BillingPolicy> {
         load_yaml(&self.billing_path())
     }
@@ -308,6 +333,152 @@ impl Workspace {
         self.save_queue(&queue)?;
         Ok(intent_id.to_string())
     }
+
+    pub fn tidy(&self) -> Result<TidyReport> {
+        let workers = self.load_workers().ok();
+        let vocab = workers
+            .as_ref()
+            .map(crate::routing::declared_capabilities)
+            .unwrap_or_default();
+        let mut queue = self.load_queue()?;
+        let snapshot = queue.clone();
+        let mut report = TidyReport::default();
+
+        for task in &mut queue.tasks {
+            let from = task.state;
+            if task.state == TaskState::Blocked && !task.required_capabilities.is_empty() {
+                let missing =
+                    crate::routing::unsatisfiable_capabilities(&task.required_capabilities, &vocab);
+                if missing.is_empty() {
+                    continue;
+                }
+                match crate::routing::classify_stale_gate(&missing) {
+                    crate::routing::GateShape::Decision => {
+                        task.state = TaskState::NeedsUser;
+                        task.required_capabilities.clear();
+                        let detail = format!(
+                            "migrated stale capability gate to a human decision question: {}",
+                            missing.join(", ")
+                        );
+                        append_rationale(task, &detail);
+                        let question = format!(
+                            "This task needs your decision before Yardlet can run it: {}. Reply with the decision or instructions to proceed.",
+                            task.title
+                        );
+                        append_conversation_turn(
+                            self,
+                            &task.id,
+                            ConversationTurn {
+                                role: TurnRole::Worker,
+                                text: question,
+                                run_id: String::new(),
+                                ts: Local::now().to_rfc3339(),
+                            },
+                        )?;
+                        append_transition(
+                            self,
+                            transition(
+                                &task.id,
+                                from,
+                                task.state,
+                                TransitionCause::StaleMigration,
+                                &detail,
+                                TransitionActor::System,
+                            ),
+                        )?;
+                        report.migrated_decisions.push(task.id.clone());
+                    }
+                    crate::routing::GateShape::ToolGap => {
+                        task.state = TaskState::Deferred;
+                        task.set_deferred_by(Some(crate::schemas::DeferredBy::new(&task.id)));
+                        let detail = format!(
+                            "set aside stale capability gate because no enabled worker declares [{}]",
+                            missing.join(", ")
+                        );
+                        append_rationale(task, &detail);
+                        append_transition(
+                            self,
+                            transition(
+                                &task.id,
+                                from,
+                                task.state,
+                                TransitionCause::TidyDefer,
+                                &detail,
+                                TransitionActor::System,
+                            ),
+                        )?;
+                        report.deferred.push(task.id.clone());
+                    }
+                }
+                continue;
+            }
+
+            if task.state == TaskState::Queued {
+                let approved =
+                    task.approval_required() && crate::approvals::is_granted(self, &task.id);
+                let class = snapshot.runnable_class(task, approved, &vocab);
+                if matches!(
+                    class,
+                    crate::schemas::RunnableClass::WaitingDependency
+                        | crate::schemas::RunnableClass::WaitingApproval
+                        | crate::schemas::RunnableClass::WaitingCapability
+                ) {
+                    task.state = TaskState::Deferred;
+                    task.set_deferred_by(Some(crate::schemas::DeferredBy::new(&task.id)));
+                    let detail = format!("tidy set aside non-runnable task: {}", class.label());
+                    append_rationale(task, &detail);
+                    append_transition(
+                        self,
+                        transition(
+                            &task.id,
+                            from,
+                            task.state,
+                            TransitionCause::TidyDefer,
+                            &detail,
+                            TransitionActor::System,
+                        ),
+                    )?;
+                    report.deferred.push(task.id.clone());
+                }
+            }
+        }
+
+        self.save_queue(&queue)?;
+
+        let has_open_decision = queue
+            .tasks
+            .iter()
+            .any(|t| t.state == TaskState::NeedsUser || t.state == TaskState::Running);
+        let has_runnable = queue.tasks.iter().any(|t| {
+            queue.is_runnable_now(
+                t,
+                t.approval_required() && crate::approvals::is_granted(self, &t.id),
+                &vocab,
+            )
+        });
+        if !queue.tasks.is_empty() && queue.drained() && !has_open_decision && !has_runnable {
+            if let Some(intent_id) = crate::report::archive_intent(self)? {
+                clear_intent_and_queue_with_wrap(self, &queue, &intent_id)?;
+                report.archived_intent = Some(intent_id);
+            }
+        }
+
+        Ok(report)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TidyReport {
+    pub archived_intent: Option<String>,
+    pub migrated_decisions: Vec<String>,
+    pub deferred: Vec<String>,
+}
+
+fn append_rationale(task: &mut Task, detail: &str) {
+    task.worker_rationale = Some(match task.worker_rationale.take() {
+        Some(r) if !r.trim().is_empty() => format!("{r}\n{detail}"),
+        _ => detail.to_string(),
+    });
 }
 
 pub struct UserTaskInput {
@@ -696,6 +867,63 @@ pub fn append_conversation_turn(
     save_yaml(&ws.conversation_path(task_id), &conv)
 }
 
+pub fn transition(
+    task_id: &str,
+    from: TaskState,
+    to: TaskState,
+    cause: TransitionCause,
+    detail: &str,
+    actor: TransitionActor,
+) -> TransitionRecord {
+    TransitionRecord {
+        task_id: task_id.to_string(),
+        from,
+        to,
+        cause,
+        detail: detail.to_string(),
+        actor,
+        ts: Local::now().to_rfc3339(),
+    }
+}
+
+pub fn append_transition(ws: &Workspace, rec: TransitionRecord) -> Result<()> {
+    let mut log = ws.load_transition_log(&rec.task_id);
+    if log.task_id.is_empty() {
+        log.task_id = rec.task_id.clone();
+    }
+    if log.records.last().is_some_and(|last| {
+        last.from == rec.from
+            && last.to == rec.to
+            && last.cause == rec.cause
+            && last.detail.trim() == rec.detail.trim()
+    }) {
+        return Ok(());
+    }
+    log.records.push(rec);
+    save_yaml(&ws.transition_path(&log.task_id), &log)
+}
+
+fn clear_intent_and_queue_with_wrap(
+    ws: &Workspace,
+    queue: &WorkQueue,
+    intent_id: &str,
+) -> Result<()> {
+    for task in &queue.tasks {
+        append_transition(
+            ws,
+            transition(
+                &task.id,
+                task.state,
+                task.state,
+                TransitionCause::Wrap,
+                &format!("archived drained intent {intent_id} and cleared the live queue"),
+                TransitionActor::System,
+            ),
+        )?;
+    }
+    ws.clear_intent_and_queue()
+}
+
 pub fn write_str(path: &Path, contents: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
@@ -821,6 +1049,76 @@ routing:
 
         // A task that never paused reads as an empty transcript.
         assert!(ws.load_conversation("YARD-2").turns.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn transition_log_appends_and_dedupes_last_reason() {
+        let dir = temp_root("transition-log");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let ws = Workspace::at(&dir);
+
+        let rec = transition(
+            "YARD-1",
+            TaskState::Queued,
+            TaskState::Deferred,
+            TransitionCause::Defer,
+            "set aside for later",
+            TransitionActor::User,
+        );
+        append_transition(&ws, rec.clone()).unwrap();
+        append_transition(&ws, rec).unwrap();
+
+        let log = ws.load_transition_log("YARD-1");
+        assert_eq!(log.records.len(), 1);
+        assert_eq!(
+            ws.latest_transition("YARD-1").unwrap().detail,
+            "set aside for later"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tidy_migrates_stale_decision_and_defers_tool_gap_without_deleting_done() {
+        let dir = temp_root("tidy-state");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+        fs::write(ws.workers_path(), WORKERS_WITH_COMMENTS).unwrap();
+
+        let mut decision: Task =
+            crate::yaml::from_str("id: DECIDE\ntitle: pick option\nrequired_capabilities: [user_creative_direction_approval]\n").unwrap();
+        decision.state = TaskState::Blocked;
+        let mut tool: Task =
+            crate::yaml::from_str("id: TOOL\ntitle: import licensed asset\nrequired_capabilities: [licensed_3d_asset_intake]\n").unwrap();
+        tool.state = TaskState::Blocked;
+        let mut done: Task = crate::yaml::from_str("id: DONE\ntitle: done\n").unwrap();
+        done.state = TaskState::Done;
+        let mut queue = WorkQueue::empty();
+        queue.tasks = vec![decision, tool, done];
+        ws.save_queue(&queue).unwrap();
+
+        let report = ws.tidy().unwrap();
+
+        assert_eq!(report.migrated_decisions, vec!["DECIDE".to_string()]);
+        assert_eq!(report.deferred, vec!["TOOL".to_string()]);
+        let q = ws.load_queue().unwrap();
+        assert_eq!(q.tasks[0].state, TaskState::NeedsUser);
+        assert!(q.tasks[0].required_capabilities.is_empty());
+        assert_eq!(q.tasks[1].state, TaskState::Deferred);
+        assert_eq!(q.tasks[2].state, TaskState::Done);
+        assert_eq!(
+            ws.latest_transition("DECIDE").unwrap().cause,
+            TransitionCause::StaleMigration
+        );
+        assert_eq!(
+            ws.latest_transition("TOOL").unwrap().cause,
+            TransitionCause::TidyDefer
+        );
+        assert!(!ws.load_conversation("DECIDE").turns.is_empty());
 
         let _ = fs::remove_dir_all(&dir);
     }

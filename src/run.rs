@@ -17,7 +17,8 @@ use crate::guard;
 use crate::inspect;
 use crate::packet::{self, PacketInputs};
 use crate::schemas::{
-    ConversationTurn, RunResult, TaskState, TurnRole, WorkQueue, WorkerProfile, WorkersFile,
+    ConversationTurn, RunResult, TaskState, TransitionActor, TransitionCause, TurnRole, WorkQueue,
+    WorkerProfile, WorkersFile,
 };
 use crate::state::{self, append_str, write_str, Workspace};
 use crate::{compact, evaluator, routing, telemetry, workers};
@@ -143,7 +144,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             .position(|t| &t.id == id)
             .ok_or_else(|| anyhow!("task {id} not found in the queue"))?,
         None => {
-            select_next(&queue, opts)?.ok_or_else(|| anyhow!("no eligible queued task to run"))?
+            let vocab = routing::declared_capabilities(&workers);
+            select_next_ready(&queue, &vocab, |id| crate::approvals::is_granted(ws, id))?
+                .ok_or_else(|| anyhow!("no eligible queued task to run"))?
         }
     };
     let task = queue.tasks[idx].clone();
@@ -158,7 +161,40 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         let unsatisfiable =
             routing::unsatisfiable_capabilities(&task.required_capabilities, &vocab);
         if !unsatisfiable.is_empty() {
-            save_task_state_on_latest_queue(ws, &mut queue, &task.id, TaskState::Blocked)?;
+            match routing::classify_stale_gate(&unsatisfiable) {
+                routing::GateShape::Decision => {
+                    migrate_stale_gate_to_decision(ws, &mut queue, &task, &unsatisfiable)?;
+                    return Ok(RunReport {
+                        run_id: String::new(),
+                        task_id: task.id.clone(),
+                        worker_id: String::new(),
+                        run_dir: ws.runs_dir(),
+                        prepared: false,
+                        executed: false,
+                        lines: vec![format!(
+                            "{}: migrated stale capability gate to NeedsUser; answer it with `yardlet answer --task {}`",
+                            task.id, task.id
+                        )],
+                        result_state: Some(TaskState::NeedsUser),
+                        session: None,
+                        chained: false,
+                    });
+                }
+                routing::GateShape::ToolGap => {
+                    save_task_state_on_latest_queue(
+                        ws,
+                        &mut queue,
+                        &task.id,
+                        TaskState::Deferred,
+                        TransitionCause::TidyDefer,
+                        &format!(
+                            "set aside because no enabled worker declares required capability/capabilities [{}]",
+                            unsatisfiable.join(", ")
+                        ),
+                        TransitionActor::System,
+                    )?;
+                }
+            }
             return Ok(RunReport {
                 run_id: String::new(),
                 task_id: task.id.clone(),
@@ -167,13 +203,12 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 prepared: false,
                 executed: false,
                 lines: vec![format!(
-                    "{}: parked Blocked — no enabled worker declares required \
-                     capability/capabilities [{}]; add a worker that declares it (then unblock), \
-                     or handle it as a human decision",
+                    "{}: set aside Deferred — no enabled worker declares required \
+                     capability/capabilities [{}]; add a capable worker and revive it when ready",
                     task.id,
                     unsatisfiable.join(", ")
                 )],
-                result_state: Some(TaskState::Blocked),
+                result_state: Some(TaskState::Deferred),
                 session: None,
                 chained: false,
             });
@@ -396,8 +431,20 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         for f in &pre.failures {
             lines.push(format!("pre-run hook blocked the run: {}", f.summary()));
         }
+        let from = queue.tasks[idx].state;
         queue.tasks[idx].state = TaskState::Failed;
         ws.save_queue(&queue)?;
+        let _ = state::append_transition(
+            ws,
+            state::transition(
+                &task.id,
+                from,
+                TaskState::Failed,
+                TransitionCause::RunOutcome,
+                "pre-run hook blocked the run",
+                TransitionActor::System,
+            ),
+        );
         return Ok(RunReport {
             run_id: run_id.clone(),
             task_id: task.id.clone(),
@@ -413,8 +460,20 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     }
 
     // mark running
+    let from = queue.tasks[idx].state;
     queue.tasks[idx].state = TaskState::Running;
     ws.save_queue(&queue)?;
+    let _ = state::append_transition(
+        ws,
+        state::transition(
+            &task.id,
+            from,
+            TaskState::Running,
+            TransitionCause::RunOutcome,
+            "worker run started",
+            TransitionActor::System,
+        ),
+    );
 
     // Chaining (P1): when run_auto offers the previous task's live session and
     // routing kept the same worker, continue IN that session — the worker
@@ -504,7 +563,15 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         let _ = std::fs::remove_file(&cancelled_marker);
         // Re-read the latest queue before saving: the worker may have written a
         // follow-up task before the cancel was observed (no stale clobber).
-        save_task_state_on_latest_queue(ws, &mut queue, &task.id, TaskState::Queued)?;
+        save_task_state_on_latest_queue(
+            ws,
+            &mut queue,
+            &task.id,
+            TaskState::Queued,
+            TransitionCause::RunOutcome,
+            "stopped by user; task requeued",
+            TransitionActor::System,
+        )?;
         lines.push(format!("stopped by user; {} requeued", task.id));
         return Ok(RunReport {
             run_id: run_id.clone(),
@@ -600,7 +667,15 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 
     if cancelled_marker.exists() {
         let _ = std::fs::remove_file(&cancelled_marker);
-        save_task_state_on_latest_queue(ws, &mut queue, &task.id, TaskState::Queued)?;
+        save_task_state_on_latest_queue(
+            ws,
+            &mut queue,
+            &task.id,
+            TaskState::Queued,
+            TransitionCause::RunOutcome,
+            "stopped by user after failover; task requeued",
+            TransitionActor::System,
+        )?;
         lines.push(format!("stopped by user; {} requeued", task.id));
         return Ok(RunReport {
             run_id: run_id.clone(),
@@ -791,16 +866,6 @@ pub fn run_auto<F: FnMut(&str)>(
     // P1: the previous Done task's live session, offered to a dependent
     // successor on the same worker. Cut on anything but a clean Done.
     let mut chain: Option<ChainHandle> = None;
-    let probe_opts = RunOptions {
-        execute: false,
-        worker_override: None,
-        target: None,
-        answer: None,
-        full_access: false,
-        accept_ambiguity: false,
-        chain: None,
-    };
-
     // Recover orphans (interrupted runs left "running") and any unconsumed
     // planning result from an interrupted session before draining.
     if let Some(m) = crate::planner::recover_unconsumed_plan(ws) {
@@ -942,91 +1007,100 @@ pub fn run_auto<F: FnMut(&str)>(
         // Pick the work: retry the failed task first, else the next queued one.
         let task_id = match &retry_target {
             Some(id) => id.clone(),
-            None => match select_next(&queue, &probe_opts)? {
-                Some(idx) => queue.tasks[idx].id.clone(),
-                None => {
-                    // Nothing runnable. Report why, in priority of action: tasks
-                    // that need a human (NeedsUser/Blocked) first, then
-                    // queued-but-gated (approval or deps), else a drained queue.
-                    let needs_you: Vec<&str> = queue
-                        .tasks
-                        .iter()
-                        .filter(|t| matches!(t.state, TaskState::NeedsUser | TaskState::Blocked))
-                        .map(|t| t.id.as_str())
-                        .collect();
-                    let deferred_tasks: Vec<&str> = queue
-                        .tasks
-                        .iter()
-                        .filter(|t| t.state == TaskState::Deferred)
-                        .map(|t| t.id.as_str())
-                        .collect();
-                    // Tasks that will never reach Done on their own: terminally
-                    // stuck states, then (transitively) any Queued task gated
-                    // behind one — so a whole stalled chain is caught, not just
-                    // the direct dependent.
-                    let mut dead: std::collections::HashSet<&str> = queue
-                        .tasks
-                        .iter()
-                        .filter(|t| {
-                            matches!(
-                                t.state,
-                                TaskState::Failed
-                                    | TaskState::Deferred
-                                    | TaskState::NeedsUser
-                                    | TaskState::Blocked
-                            )
-                        })
-                        .map(|t| t.id.as_str())
-                        .collect();
-                    loop {
-                        let mut grew = false;
-                        for t in &queue.tasks {
-                            if t.state == TaskState::Queued
-                                && !dead.contains(t.id.as_str())
-                                && t.depends_on.iter().any(|d| dead.contains(d.as_str()))
-                            {
-                                dead.insert(t.id.as_str());
-                                grew = true;
+            None => {
+                let vocab = ws
+                    .load_workers()
+                    .map(|w| routing::declared_capabilities(&w))
+                    .unwrap_or_default();
+                match select_next_ready(&queue, &vocab, |id| crate::approvals::is_granted(ws, id))?
+                {
+                    Some(idx) => queue.tasks[idx].id.clone(),
+                    None => {
+                        // Nothing runnable. Report why, in priority of action: tasks
+                        // that need a human (NeedsUser/Blocked) first, then
+                        // queued-but-gated (approval or deps), else a drained queue.
+                        let needs_you: Vec<&str> = queue
+                            .tasks
+                            .iter()
+                            .filter(|t| {
+                                matches!(t.state, TaskState::NeedsUser | TaskState::Blocked)
+                            })
+                            .map(|t| t.id.as_str())
+                            .collect();
+                        let deferred_tasks: Vec<&str> = queue
+                            .tasks
+                            .iter()
+                            .filter(|t| t.state == TaskState::Deferred)
+                            .map(|t| t.id.as_str())
+                            .collect();
+                        // Tasks that will never reach Done on their own: terminally
+                        // stuck states, then (transitively) any Queued task gated
+                        // behind one — so a whole stalled chain is caught, not just
+                        // the direct dependent.
+                        let mut dead: std::collections::HashSet<&str> = queue
+                            .tasks
+                            .iter()
+                            .filter(|t| {
+                                matches!(
+                                    t.state,
+                                    TaskState::Failed
+                                        | TaskState::Deferred
+                                        | TaskState::NeedsUser
+                                        | TaskState::Blocked
+                                )
+                            })
+                            .map(|t| t.id.as_str())
+                            .collect();
+                        loop {
+                            let mut grew = false;
+                            for t in &queue.tasks {
+                                if t.state == TaskState::Queued
+                                    && !dead.contains(t.id.as_str())
+                                    && t.depends_on.iter().any(|d| dead.contains(d.as_str()))
+                                {
+                                    dead.insert(t.id.as_str());
+                                    grew = true;
+                                }
+                            }
+                            if !grew {
+                                break;
                             }
                         }
-                        if !grew {
-                            break;
+                        // Split Queued tasks: stuck (gated behind a dep that won't
+                        // complete) vs benignly waiting on a runnable dep / approval.
+                        let mut stuck: Vec<String> = Vec::new();
+                        let mut waiting: Vec<&str> = Vec::new();
+                        for t in queue.tasks.iter().filter(|t| t.state == TaskState::Queued) {
+                            match t.depends_on.iter().find(|d| dead.contains(d.as_str())) {
+                                Some(d) => stuck.push(format!("{} (behind {})", t.id, d)),
+                                None => waiting.push(t.id.as_str()),
+                            }
                         }
-                    }
-                    // Split Queued tasks: stuck (gated behind a dep that won't
-                    // complete) vs benignly waiting on a runnable dep / approval.
-                    let mut stuck: Vec<String> = Vec::new();
-                    let mut waiting: Vec<&str> = Vec::new();
-                    for t in queue.tasks.iter().filter(|t| t.state == TaskState::Queued) {
-                        match t.depends_on.iter().find(|d| dead.contains(d.as_str())) {
-                            Some(d) => stuck.push(format!("{} (behind {})", t.id, d)),
-                            None => waiting.push(t.id.as_str()),
-                        }
-                    }
-                    if !needs_you.is_empty() {
-                        emit(format!(
+                        if !needs_you.is_empty() {
+                            emit(format!(
                             "stopped: {} need you \u{2014} answer (a) or resolve, then run auto again",
                             needs_you.join(", ")
                         ));
-                    } else if !stuck.is_empty() {
-                        emit(format!(
+                        } else if !stuck.is_empty() {
+                            emit(format!(
                             "stopped: {} \u{2014} the blocking task will not complete; fix, defer, \
                              or re-scope it",
                             stuck.join("; ")
                         ));
-                    } else if !waiting.is_empty() {
-                        emit(format!(
-                            "stopped: {} waiting on approval or dependencies",
-                            waiting.join(", ")
-                        ));
-                    } else if !deferred_tasks.is_empty() {
-                        emit(gate_msg::drained_with_deferred(&deferred_tasks));
-                    } else {
-                        emit(gate_msg::drained_complete());
+                        } else if !waiting.is_empty() {
+                            emit(format!(
+                                "stopped: {} waiting on approval or dependencies",
+                                waiting.join(", ")
+                            ));
+                        } else if !deferred_tasks.is_empty() {
+                            emit(gate_msg::drained_with_deferred(&deferred_tasks));
+                        } else {
+                            emit(gate_msg::drained_complete());
+                        }
+                        break;
                     }
-                    break;
                 }
-            },
+            }
         };
         if retry_target.is_some()
             && queue
@@ -1037,7 +1111,15 @@ pub fn run_auto<F: FnMut(&str)>(
             && !crate::approvals::is_granted(ws, &task_id)
         {
             let mut fallback = queue.clone();
-            save_task_state_on_latest_queue(ws, &mut fallback, &task_id, TaskState::NeedsUser)?;
+            save_task_state_on_latest_queue(
+                ws,
+                &mut fallback,
+                &task_id,
+                TaskState::NeedsUser,
+                TransitionCause::RunOutcome,
+                "approval required before retry; task paused for user",
+                TransitionActor::System,
+            )?;
             chain = None;
             emit(format!(
                 "{task_id} requires approval; skipped retry and continued runnable work"
@@ -1149,21 +1231,31 @@ pub fn run_auto<F: FnMut(&str)>(
     Ok(out)
 }
 
-/// Pick the highest-priority eligible queued task index.
+/// Pick the highest-priority eligible queued task index. Test-only convenience
+/// wrapper over `select_next_ready` (no capability vocab, nothing approved);
+/// production always routes through `select_next_ready` with the real inputs.
+#[cfg(test)]
 pub fn select_next(queue: &crate::schemas::WorkQueue, _opts: &RunOptions) -> Result<Option<usize>> {
+    select_next_ready(queue, &std::collections::BTreeSet::new(), |_| false)
+}
+
+pub fn select_next_ready(
+    queue: &crate::schemas::WorkQueue,
+    cap_vocab: &std::collections::BTreeSet<String>,
+    approved: impl Fn(&str) -> bool,
+) -> Result<Option<usize>> {
     let pol = &queue.selection_policy;
     let mut best: Option<usize> = None;
     for (i, t) in queue.tasks.iter().enumerate() {
-        if t.state != TaskState::Queued {
+        if !queue.is_runnable_now(t, approved(&t.id), cap_vocab) {
             continue;
         }
-        if pol.skip_if_approval_required && t.approval_required() {
+        if pol.skip_if_blocked && t.state == TaskState::Blocked {
             continue;
         }
-        if !queue.deps_met(t) {
+        if pol.skip_if_approval_required && t.approval_required() && !approved(&t.id) {
             continue;
         }
-        // skip_if_blocked is about the Blocked state, already filtered above.
         match best {
             None => best = Some(i),
             Some(b) => {
@@ -1174,6 +1266,56 @@ pub fn select_next(queue: &crate::schemas::WorkQueue, _opts: &RunOptions) -> Res
         }
     }
     Ok(best)
+}
+
+fn migrate_stale_gate_to_decision(
+    ws: &Workspace,
+    queue: &mut WorkQueue,
+    task: &crate::schemas::Task,
+    unsatisfiable: &[String],
+) -> Result<()> {
+    let mut latest = ws.load_queue().unwrap_or_else(|_| queue.clone());
+    if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == task.id) {
+        let from = t.state;
+        t.state = TaskState::NeedsUser;
+        t.required_capabilities.clear();
+        let detail = format!(
+            "migrated stale capability gate to a human decision question: {}",
+            unsatisfiable.join(", ")
+        );
+        t.worker_rationale = Some(match t.worker_rationale.take() {
+            Some(r) if !r.trim().is_empty() => format!("{r}\n{detail}"),
+            _ => detail.clone(),
+        });
+        let question = format!(
+            "This task needs your decision before Yardlet can run it: {}. Reply with the decision or instructions to proceed.",
+            t.title
+        );
+        state::append_conversation_turn(
+            ws,
+            &t.id,
+            ConversationTurn {
+                role: TurnRole::Worker,
+                text: question,
+                run_id: String::new(),
+                ts: Local::now().to_rfc3339(),
+            },
+        )?;
+        state::append_transition(
+            ws,
+            state::transition(
+                &t.id,
+                from,
+                t.state,
+                TransitionCause::StaleMigration,
+                &detail,
+                TransitionActor::System,
+            ),
+        )?;
+        ws.save_queue(&latest)?;
+        *queue = latest;
+    }
+    Ok(())
 }
 
 /// The newest run directory recorded for a task id, as (run_id, dir). Run dirs
@@ -1684,8 +1826,23 @@ fn save_task_state_on_latest_queue(
     fallback_queue: &mut WorkQueue,
     task_id: &str,
     state: TaskState,
+    cause: TransitionCause,
+    detail: &str,
+    actor: TransitionActor,
 ) -> Result<()> {
-    finalize_on_latest_queue(ws, fallback_queue, task_id, state, &[], &[], None).map(|_| ())
+    finalize_on_latest_queue(
+        ws,
+        fallback_queue,
+        task_id,
+        state,
+        &[],
+        &[],
+        None,
+        cause,
+        detail,
+        actor,
+    )
+    .map(|_| ())
 }
 
 /// Re-point a finished review at the queue (1c review auto-remediation): set its
@@ -1744,11 +1901,39 @@ fn requeue_review(
             }
         }
         if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == review_id) {
+            let from = t.state;
             t.state = state;
             t.priority = front - 10;
+            if from != state {
+                state::append_transition(
+                    ws,
+                    state::transition(
+                        review_id,
+                        from,
+                        state,
+                        TransitionCause::RunOutcome,
+                        "review failed; requeued behind runnable remediation",
+                        TransitionActor::System,
+                    ),
+                )?;
+            }
         }
     } else if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == review_id) {
+        let from = t.state;
         t.state = state;
+        if from != state {
+            state::append_transition(
+                ws,
+                state::transition(
+                    review_id,
+                    from,
+                    state,
+                    TransitionCause::RunOutcome,
+                    "review failed with no runnable fix; paused for user",
+                    TransitionActor::System,
+                ),
+            )?;
+        }
     }
     ws.save_queue(&latest)?;
     *fallback_queue = latest;
@@ -1761,6 +1946,11 @@ fn requeue_review(
 /// copy; folding the state update and follow-up ingestion into one write keeps
 /// Yardlet the sole queue writer (propose -> ingest). Returns the ids of the
 /// follow-up tasks ingested.
+// The single canonical "settle a task on the latest queue" path: it needs the
+// full run context (identity, scope, follow-ups, worker vocab) plus the typed
+// transition record (cause/detail/actor). Bundling would just scatter one
+// cohesive call, so keep the args explicit.
+#[allow(clippy::too_many_arguments)]
 fn finalize_on_latest_queue(
     ws: &Workspace,
     fallback_queue: &mut WorkQueue,
@@ -1769,6 +1959,9 @@ fn finalize_on_latest_queue(
     intent_allowed_scope: &[String],
     follow_ups: &[crate::schemas::FollowUpTask],
     workers: Option<&WorkersFile>,
+    cause: TransitionCause,
+    detail: &str,
+    actor: TransitionActor,
 ) -> Result<Vec<String>> {
     // Ground any just-ingested follow-up's capabilities against the real
     // workers before saving: a follow-up requiring a capability no worker has is
@@ -1780,6 +1973,7 @@ fn finalize_on_latest_queue(
     };
     let mut latest = ws.load_queue().unwrap_or_else(|_| fallback_queue.clone());
     if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == task_id) {
+        let from = t.state;
         t.state = state;
         let ingested = crate::planner::ingest_follow_ups(
             &mut latest,
@@ -1789,6 +1983,13 @@ fn finalize_on_latest_queue(
         );
         reconcile(&mut latest);
         ws.save_queue(&latest)?;
+        if from != state {
+            state::append_transition(
+                ws,
+                state::transition(task_id, from, state, cause, detail, actor.clone()),
+            )?;
+        }
+        append_ingested_decision_transitions(ws, &latest, &ingested)?;
         *fallback_queue = latest;
         return Ok(ingested);
     }
@@ -1796,7 +1997,14 @@ fn finalize_on_latest_queue(
     // The task vanished from the on-disk queue (rare): fall back to the
     // in-memory copy so the state update is not lost.
     if let Some(t) = fallback_queue.tasks.iter_mut().find(|t| t.id == task_id) {
+        let from = t.state;
         t.state = state;
+        if from != state {
+            state::append_transition(
+                ws,
+                state::transition(task_id, from, state, cause, detail, actor),
+            )?;
+        }
     }
     let ingested = crate::planner::ingest_follow_ups(
         fallback_queue,
@@ -1806,7 +2014,35 @@ fn finalize_on_latest_queue(
     );
     reconcile(fallback_queue);
     ws.save_queue(fallback_queue)?;
+    append_ingested_decision_transitions(ws, fallback_queue, &ingested)?;
     Ok(ingested)
+}
+
+fn append_ingested_decision_transitions(
+    ws: &Workspace,
+    queue: &WorkQueue,
+    ingested: &[String],
+) -> Result<()> {
+    for id in ingested {
+        if let Some(task) = queue
+            .tasks
+            .iter()
+            .find(|t| &t.id == id && t.state == TaskState::NeedsUser)
+        {
+            state::append_transition(
+                ws,
+                state::transition(
+                    &task.id,
+                    TaskState::Queued,
+                    TaskState::NeedsUser,
+                    TransitionCause::DecisionSeed,
+                    "seeded worker-proposed human decision as a NeedsUser question",
+                    TransitionActor::System,
+                ),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Per-path divergences in the finalization pipeline. The serial path runs
@@ -2149,6 +2385,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         &intent_allowed_scope,
         &follow_ups,
         workers.as_ref(),
+        TransitionCause::RunOutcome,
+        &format!("worker evaluated task as {next_state:?}"),
+        TransitionActor::Worker(run_id.to_string()),
     )?;
     if !ingested.is_empty() {
         lines.push(format!(
@@ -4033,7 +4272,16 @@ exit 1
         ]))
         .unwrap();
 
-        save_task_state_on_latest_queue(&ws, &mut stale, "YARD-010", TaskState::Partial).unwrap();
+        save_task_state_on_latest_queue(
+            &ws,
+            &mut stale,
+            "YARD-010",
+            TaskState::Partial,
+            TransitionCause::RunOutcome,
+            "test final state update",
+            TransitionActor::System,
+        )
+        .unwrap();
 
         let q = ws.load_queue().unwrap();
         assert_eq!(q.tasks.len(), 2);

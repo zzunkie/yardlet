@@ -25,13 +25,14 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 
 use crate::packet::{self, PacketInputs};
-use crate::schemas::{Task, TaskState, WorkQueue, WorkerProfile};
+use crate::schemas::{RunnableClass, Task, TaskState, WorkQueue, WorkerProfile};
 use crate::state::{self, append_str, write_str, Workspace};
 use crate::{evaluator, guard, inspect, routing, run, workers};
 
 /// Indices of tasks eligible to run together right now: queued, dependencies
 /// met, not approval-gated. Priority order, up to `max`.
 pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
+    let caps = std::collections::BTreeSet::new();
     let mut ready: Vec<usize> = queue
         .tasks
         .iter()
@@ -39,10 +40,9 @@ pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
         .filter(|(_, t)| {
             // A required-validation task is excluded: parallel skips validation,
             // so it must run serially where validation actually gates Done.
-            t.state == TaskState::Queued
+            queue.runnable_class(t, false, &caps) == RunnableClass::Runnable
                 && !t.approval_required()
                 && !t.requires_validation()
-                && queue.deps_met(t)
         })
         .map(|(i, _)| i)
         .collect();
@@ -117,7 +117,10 @@ pub fn assess_parallelism(queue: &WorkQueue, max_parallel: usize) -> ParallelAss
     let blocked_by_deps = queue
         .tasks
         .iter()
-        .filter(|t| t.state == TaskState::Queued && !queue.deps_met(t))
+        .filter(|t| {
+            queue.runnable_class(t, false, &std::collections::BTreeSet::new())
+                == RunnableClass::WaitingDependency
+        })
         .map(|t| t.id.clone())
         .collect::<Vec<_>>();
     if !blocked_by_deps.is_empty() {
@@ -129,7 +132,10 @@ pub fn assess_parallelism(queue: &WorkQueue, max_parallel: usize) -> ParallelAss
     let approval_required = queue
         .tasks
         .iter()
-        .filter(|t| t.state == TaskState::Queued && t.approval_required() && queue.deps_met(t))
+        .filter(|t| {
+            queue.runnable_class(t, false, &std::collections::BTreeSet::new())
+                == RunnableClass::WaitingApproval
+        })
         .map(|t| t.id.clone())
         .collect::<Vec<_>>();
     if !approval_required.is_empty() {
