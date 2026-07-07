@@ -43,6 +43,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Screen::Monitor => render_monitor(frame, app),
         Screen::Handoff => render_handoff(frame, app),
         Screen::Intent => render_intent(frame, app),
+        Screen::Trust => render_trust(frame, app),
         Screen::Completion => render_completion(frame, app),
         Screen::ReportList => render_report_list(frame, app),
         Screen::Approvals => render_approvals(frame, app),
@@ -999,6 +1000,23 @@ fn render_intent(frame: &mut Frame, app: &mut App) {
         chunks[0],
     );
     render_footer(frame, chunks[1], l.footer_intent);
+}
+
+fn render_trust(frame: &mut Frame, app: &mut App) {
+    let l = app.lang.l();
+    let area = safe_area(frame);
+    let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
+    let viewport = scroll_viewport(chunks[0]);
+    app.scroll_viewport = Some(viewport);
+    app.scroll = app.scroll.min(max_scroll_offset(&app.trust_text, viewport));
+    frame.render_widget(
+        Paragraph::new(md_lines(&app.trust_text))
+            .wrap(Wrap { trim: false })
+            .scroll((app.scroll, 0))
+            .block(Block::bordered().title(l.trust_title)),
+        chunks[0],
+    );
+    render_footer(frame, chunks[1], l.footer_trust);
 }
 
 fn render_report_list(frame: &mut Frame, app: &App) {

@@ -62,8 +62,8 @@ pub enum Command {
     Handoff,
     /// Print the intent's final report (aggregate of every task's result).
     Report,
-    /// Summarize run telemetry into a trust report (first-pass vs retried Done).
-    Trust,
+    /// Report trust + autonomy from the transition audit log and run telemetry.
+    Trust(TrustArgs),
     /// List the project-memory index discovered under .agents/memory/.
     Memory,
     /// Review routing telemetry and apply suggested worker preferences.
@@ -281,6 +281,13 @@ pub struct StatusArgs {
 }
 
 #[derive(Args)]
+pub struct TrustArgs {
+    /// Emit the machine-readable autonomy/trust metrics as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
 pub struct WorkerArgs {
     #[command(subcommand)]
     cmd: WorkerCmd,
@@ -377,7 +384,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Access(a)) => cmd_access(&cwd, a),
         Some(Command::Handoff) => cmd_handoff(&cwd),
         Some(Command::Report) => cmd_report(&cwd),
-        Some(Command::Trust) => cmd_trust(&cwd),
+        Some(Command::Trust(a)) => cmd_trust(&cwd, a),
         Some(Command::Memory) => cmd_memory(&cwd),
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
         Some(Command::Rubric(a)) => cmd_rubric(&cwd, a),
@@ -1136,9 +1143,14 @@ fn cmd_report(cwd: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_trust(cwd: &std::path::Path) -> Result<()> {
+fn cmd_trust(cwd: &std::path::Path, args: TrustArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
-    print!("{}", crate::trust::report(&ws)?);
+    if args.json {
+        let rep = crate::trust::autonomy_report(&ws);
+        println!("{}", serde_json::to_string_pretty(&rep.to_json())?);
+        return Ok(());
+    }
+    print!("{}", crate::trust::report_text(&ws)?);
     Ok(())
 }
 

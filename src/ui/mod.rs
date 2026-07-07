@@ -26,13 +26,14 @@ use crate::schemas::TaskState;
 use crate::snapshot::Snapshot;
 use crate::state::Workspace;
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Screen {
     Home,
     NewWork,
     Answer,
     Handoff,
     Intent,
+    Trust,
     Settings,
     Monitor,
     Completion,
@@ -149,6 +150,8 @@ pub struct App {
     pub handoff_text: String,
     pub intent_text: String,
     pub report_text: String,
+    /// Rendered trust + autonomy panel text (v1 table + v2 autonomy block).
+    pub trust_text: String,
     /// When true, NewWork input continues (amends) the current intent instead of
     /// starting a fresh one.
     pub amend: bool,
@@ -285,6 +288,7 @@ impl App {
             handoff_text: String::new(),
             intent_text: String::new(),
             report_text: String::new(),
+            trust_text: String::new(),
             amend: false,
             pause: None,
             scroll: 0,
@@ -821,6 +825,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
             Screen::Approvals => handle_approvals_key(&mut app, code),
             Screen::Handoff => handle_handoff_key(&mut app, code),
             Screen::Intent => handle_intent_key(&mut app, code),
+            Screen::Trust => handle_trust_key(&mut app, code),
             Screen::Monitor => match code {
                 KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Home,
                 // Stop/pause work here too, so the monitor isn't a dead end:
@@ -942,6 +947,12 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             app.handoff_text = load_latest_handoff(app);
             app.scroll = 0;
             app.screen = Screen::Handoff;
+        }
+        // Trust + autonomy panel: same numbers as `yardlet trust --json`.
+        KeyCode::Char('T') => {
+            app.trust_text = build_trust_view(app);
+            app.scroll = 0;
+            app.screen = Screen::Trust;
         }
         // Settings can be opened mid-run; saved changes apply to the next task.
         KeyCode::Char('s') => open_settings(app),
@@ -1629,6 +1640,20 @@ fn handle_handoff_key(app: &mut App, code: KeyCode) {
     }
 }
 
+fn handle_trust_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('T') => app.screen = Screen::Home,
+        _ => apply_scroll(app, code),
+    }
+}
+
+/// Render the trust + autonomy panel text — the same v1 table + v2 autonomy
+/// block `yardlet trust` prints, so the TUI and CLI never diverge.
+fn build_trust_view(app: &App) -> String {
+    crate::trust::report_text(&app.ws)
+        .unwrap_or_else(|e| format!("Could not build the trust report: {e}"))
+}
+
 fn apply_scroll(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Up => app.scroll = app.scroll.saturating_sub(1),
@@ -1644,6 +1669,7 @@ fn scroll_text(app: &App) -> Option<&str> {
     match app.screen {
         Screen::Handoff => Some(&app.handoff_text),
         Screen::Intent => Some(&app.intent_text),
+        Screen::Trust => Some(&app.trust_text),
         Screen::Completion => Some(&app.report_text),
         _ => None,
     }
@@ -2709,6 +2735,24 @@ routing:
         app.input_caret = 2; // col 2 on "가나다"
         app.caret_down(); // -> "xy", clamped to its length 2
         assert_eq!(app.input_caret, 6);
+    }
+
+    #[test]
+    fn trust_panel_opens_from_home_and_closes_back() {
+        let ws = workspace_with_user_config("trust-nav");
+        let mut app = App::new(ws);
+        assert_eq!(app.screen, Screen::Home);
+        // T opens the trust/autonomy panel (read-only; viewable any time).
+        assert!(!handle_home_key(&mut app, KeyCode::Char('T')));
+        assert_eq!(app.screen, Screen::Trust);
+        // The panel text is populated (empty-telemetry case renders, not panics).
+        assert!(!app.trust_text.is_empty());
+        // Each of T / q / Esc returns to Home.
+        for close in [KeyCode::Char('T'), KeyCode::Char('q'), KeyCode::Esc] {
+            app.screen = Screen::Trust;
+            handle_trust_key(&mut app, close);
+            assert_eq!(app.screen, Screen::Home, "{close:?} should close the panel");
+        }
     }
 
     #[test]
