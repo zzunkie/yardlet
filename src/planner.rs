@@ -818,7 +818,11 @@ pub(crate) fn reconcile_queue_capabilities(
 /// skipped. Returns the ids of the tasks actually ingested.
 pub(crate) fn ingest_follow_ups(
     queue: &mut WorkQueue,
-    intent_allowed_scope: &[String],
+    // Retained for signature stability and future scoped policy; approval gating
+    // is now risk/danger-based, not "merely outside the intent scope" (see
+    // `follow_up_needs_approval`). A low-risk doc follow-up outside `src/` is NOT
+    // gated; a destructive or external-call one is.
+    _intent_allowed_scope: &[String],
     follow_ups: &[crate::schemas::FollowUpTask],
     ws: Option<&crate::state::Workspace>,
 ) -> Vec<String> {
@@ -908,8 +912,7 @@ pub(crate) fn ingest_follow_ups(
                 .map(|s| yaml::Value::String(s.clone()))
                 .collect(),
             validation: None,
-            approval: follow_up_escapes_intent(intent_allowed_scope, &fu.allowed_scope)
-                .then(scope_escape_approval),
+            approval: follow_up_needs_approval(fu).then(risk_based_approval),
             interaction: None,
             worker_rationale: rationale,
             provenance: "worker-proposed".to_string(),
@@ -940,75 +943,82 @@ pub(crate) fn ingest_follow_ups(
     ingested
 }
 
-fn follow_up_escapes_intent(intent_allowed_scope: &[String], follow_up_scope: &[String]) -> bool {
-    if intent_allowed_scope.is_empty() || follow_up_scope.is_empty() {
-        return false;
-    }
-    follow_up_scope.iter().any(|entry| {
-        let Some(scope) = normalize_scope_entry(entry) else {
-            return false;
-        };
-        !intent_allowed_scope
-            .iter()
-            .filter_map(|intent| normalize_scope_entry(intent))
-            .any(|intent| scope_entry_covered_by(&scope, &intent))
-    })
-}
-
-fn normalize_scope_entry(entry: &str) -> Option<String> {
-    let mut s = entry.trim();
-    while let Some(stripped) = s.strip_prefix("./") {
-        s = stripped;
-    }
-    s = s.trim_end_matches('/');
-    (!s.is_empty()).then(|| s.to_string())
-}
-
-fn scope_entry_covered_by(scope: &str, intent_scope: &str) -> bool {
-    if intent_scope == "." || scope == intent_scope {
+/// Should an ingested follow-up be gated for human approval before a worker
+/// runs it? Gating is by RISK and by DANGEROUS-ACTION CLASS, never by "merely
+/// outside the intent scope" (a scope-adjacent idea is a tracked candidate, not
+/// a danger). A follow-up is gated when either:
+/// - its `risk` is `high`, or
+/// - its wording names a destructive / deploy-publish-send / network-mutation /
+///   external-API-call action (the classes catalogued in
+///   `.agents/approval-policy.yaml::gated_actions`).
+///
+/// A low-risk documentation follow-up is left ungated; a "delete the old table"
+/// or "call the payments API" follow-up is gated. Deterministic and pure.
+fn follow_up_needs_approval(fu: &crate::schemas::FollowUpTask) -> bool {
+    if fu.risk.trim().eq_ignore_ascii_case("high") {
         return true;
     }
-    if simple_glob_match(intent_scope, scope) {
-        return true;
+    let mut haystack = String::new();
+    haystack.push_str(&fu.title);
+    haystack.push(' ');
+    haystack.push_str(&fu.reason);
+    haystack.push(' ');
+    haystack.push_str(&fu.kind);
+    for a in &fu.acceptance {
+        haystack.push(' ');
+        haystack.push_str(a);
     }
-    scope
-        .strip_prefix(intent_scope)
-        .is_some_and(|rest| rest.starts_with('/'))
+    follow_up_text_is_dangerous(&haystack)
 }
 
-fn simple_glob_match(pattern: &str, text: &str) -> bool {
-    if !pattern.contains('*') {
-        return false;
-    }
-    fn matches(pattern: &[u8], text: &[u8], pi: usize, ti: usize) -> bool {
-        if pi == pattern.len() {
-            return ti == text.len();
-        }
-        if pattern[pi] == b'*' {
-            if pi + 1 < pattern.len() && pattern[pi + 1] == b'*' {
-                let mut next = pi + 2;
-                while next < pattern.len() && pattern[next] == b'*' {
-                    next += 1;
-                }
-                return (ti..=text.len()).any(|i| matches(pattern, text, next, i));
-            }
-            let mut i = ti;
-            loop {
-                if matches(pattern, text, pi + 1, i) {
-                    return true;
-                }
-                if i == text.len() || text[i] == b'/' {
-                    return false;
-                }
-                i += 1;
-            }
-        }
-        ti < text.len() && pattern[pi] == text[ti] && matches(pattern, text, pi + 1, ti + 1)
-    }
-    matches(pattern.as_bytes(), text.as_bytes(), 0, 0)
+/// Word/phrase signals for the gated-action classes in
+/// `.agents/approval-policy.yaml`. Matched case-insensitively as substrings.
+/// Kept deliberately small and high-signal; broadened only alongside the policy.
+const DANGER_SIGNALS: &[&str] = &[
+    // destructive_command
+    "delete",
+    "remove ",
+    "rm -",
+    "drop table",
+    "drop the",
+    "truncate",
+    "wipe",
+    "destroy",
+    "overwrite",
+    "purge",
+    // deploy_publish_send
+    "deploy",
+    "publish",
+    "release to",
+    "ship to",
+    "rollout",
+    "cargo publish",
+    "npm publish",
+    "send email",
+    "send a message",
+    "post to",
+    // network_mutation / real_external_api_validation
+    "external api",
+    "api call",
+    "call the api",
+    "network request",
+    "webhook",
+    "http request",
+    "upload to",
+    "production database",
+    "prod db",
+    // secret_access
+    "secret",
+    "credential",
+    "api key",
+];
+
+fn follow_up_text_is_dangerous(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    DANGER_SIGNALS.iter().any(|sig| lower.contains(sig))
 }
 
-fn scope_escape_approval() -> yaml::Value {
+fn risk_based_approval() -> yaml::Value {
     yaml::from_str("required: true").expect("static approval yaml parses")
 }
 
@@ -1986,7 +1996,7 @@ routing:
     }
 
     #[test]
-    fn ingest_follow_ups_gates_scope_escape_only() {
+    fn ingest_follow_ups_gates_by_risk_and_danger_not_scope_escape() {
         use crate::schemas::FollowUpTask;
         let plan: PlanningResult = serde_json::from_str(
             r#"{ "summary": "s", "tasks": [{ "id": "YARD-001", "title": "existing", "risk": "low" }] }"#,
@@ -1999,32 +2009,60 @@ routing:
             &mut queue,
             &intent_scope,
             &[
+                // Low-risk docs, and it escapes the intent scope (docs vs src) —
+                // scope-escape alone must NOT gate it.
                 FollowUpTask {
                     title: "write docs".into(),
                     reason: "adjacent doc idea".into(),
+                    risk: "low".into(),
                     allowed_scope: vec!["docs/*.md".into()],
                     ..Default::default()
                 },
+                // A destructive action, in-scope — gated by its danger class.
                 FollowUpTask {
-                    title: "touch planner".into(),
-                    reason: "same intent scope".into(),
-                    allowed_scope: vec!["src/planner.rs".into()],
+                    title: "delete the legacy queue file".into(),
+                    reason: "remove stale runtime state".into(),
+                    risk: "low".into(),
+                    allowed_scope: vec!["src/state.rs".into()],
+                    ..Default::default()
+                },
+                // An external API call — gated by its danger class.
+                FollowUpTask {
+                    title: "verify signup".into(),
+                    reason: "call the external api to confirm".into(),
+                    allowed_scope: vec!["src/run.rs".into()],
+                    ..Default::default()
+                },
+                // Explicit high risk — gated regardless of wording.
+                FollowUpTask {
+                    title: "tune the selector".into(),
+                    reason: "safe-looking but flagged".into(),
+                    risk: "high".into(),
+                    allowed_scope: vec!["src/run.rs".into()],
                     ..Default::default()
                 },
             ],
             None,
         );
 
-        assert_eq!(
-            ingested,
-            vec!["YARD-002".to_string(), "YARD-003".to_string()]
+        assert_eq!(ingested.len(), 4);
+        let by_id = |id: &str| queue.tasks.iter().find(|t| t.id == id).unwrap();
+        assert!(
+            !by_id("YARD-002").approval_required(),
+            "low-risk doc follow-up must NOT be gated even when it escapes scope"
         );
-        let escaping = queue.tasks.iter().find(|t| t.id == "YARD-002").unwrap();
-        let within = queue.tasks.iter().find(|t| t.id == "YARD-003").unwrap();
-        assert!(escaping.approval_required());
-        assert!(!within.approval_required());
-        assert_eq!(escaping.provenance, "worker-proposed");
-        assert_eq!(within.provenance, "worker-proposed");
+        assert!(
+            by_id("YARD-003").approval_required(),
+            "a destructive follow-up must be gated"
+        );
+        assert!(
+            by_id("YARD-004").approval_required(),
+            "an external-API follow-up must be gated"
+        );
+        assert!(
+            by_id("YARD-005").approval_required(),
+            "a high-risk follow-up must be gated"
+        );
     }
 
     #[test]

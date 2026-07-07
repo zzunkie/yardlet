@@ -285,6 +285,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let role_notes = packet::load_role_notes(&ws.root, packet::role_for(&task.kind));
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let chained_from = opts.chain.as_ref().map(|c| c.prev_task_id.clone());
+    // A grant present now (consumed below at execute time) means the human has
+    // approved this run's gated action: tell the worker to finish it, not re-ask.
+    let approved = task.approval_required() && crate::approvals::is_granted(ws, &task.id);
     let packet_text = packet::compile(&PacketInputs {
         worker_id: &worker_id,
         task: &task,
@@ -298,6 +301,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         images: &images,
         role_notes: &role_notes,
         harness: &harness,
+        approved,
     });
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
@@ -561,6 +565,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                     images: &images,
                     role_notes: &role_notes,
                     harness: &harness,
+                    approved,
                 });
                 write_str(&workers::packet_path(&run_dir), &failover_packet)?;
                 let failover_started = SystemTime::now();
@@ -718,6 +723,37 @@ fn worker_changed_outside_agents(evidence: Option<&[String]>) -> bool {
             })
         })
         .unwrap_or(false)
+}
+
+/// Surface-neutral auto-drain guidance.
+///
+/// `run_auto` streams these lines to whatever surface drives it — the TUI live
+/// view or the CLI — so they must NOT embed `yardlet ...` command literals. Each
+/// surface names its own affordance: the TUI shows key hints (`a` to answer, `p`
+/// to approve) via `ui/i18n.rs`, and cli.rs command handlers print the imperative
+/// `yardlet ...` form. A stop message that hardcoded one surface's command would
+/// read wrong on the other, so the engine stays neutral and just says WHAT to do.
+pub(crate) mod gate_msg {
+    /// A task paused for the user's answer.
+    pub fn needs_user(id: &str) -> String {
+        format!("stopped: {id} needs you \u{2014} answer it, then run again")
+    }
+    /// A task is blocked and needs a human to resolve it.
+    pub fn blocked(id: &str) -> String {
+        format!("stopped: {id} blocked \u{2014} resolve it, then run again")
+    }
+    /// The queue drained with some tasks set aside (deferred).
+    pub fn drained_with_deferred(ids: &[&str]) -> String {
+        format!(
+            "done: queue drained \u{2014} {} set aside: {}; revive any to continue",
+            ids.len(),
+            ids.join(", ")
+        )
+    }
+    /// The queue fully drained, nothing left.
+    pub fn drained_complete() -> String {
+        "done: queue drained, all tasks complete".to_string()
+    }
 }
 
 /// Autonomous mode: drain the queue, stopping only at genuine human gates.
@@ -984,13 +1020,9 @@ pub fn run_auto<F: FnMut(&str)>(
                             waiting.join(", ")
                         ));
                     } else if !deferred_tasks.is_empty() {
-                        emit(format!(
-                            "done: queue drained - {} deferred (set aside): {}; revive with `yardlet revive <id>`",
-                            deferred_tasks.len(),
-                            deferred_tasks.join(", ")
-                        ));
+                        emit(gate_msg::drained_with_deferred(&deferred_tasks));
                     } else {
-                        emit("done: queue drained, all tasks complete".to_string());
+                        emit(gate_msg::drained_complete());
                     }
                     break;
                 }
@@ -1089,17 +1121,11 @@ pub fn run_auto<F: FnMut(&str)>(
             // it did it is resolved-not-pending, so move on like Done/Queued.
             TaskState::Done | TaskState::Queued | TaskState::Deferred => continue,
             TaskState::Blocked => {
-                emit(format!(
-                    "stopped: {} blocked \u{2014} see `yardlet handoff`",
-                    report.task_id
-                ));
+                emit(gate_msg::blocked(&report.task_id));
                 break;
             }
             TaskState::NeedsUser => {
-                emit(format!(
-                    "stopped: {} needs you \u{2014} `yardlet answer \"...\"`",
-                    report.task_id
-                ));
+                emit(gate_msg::needs_user(&report.task_id));
                 break;
             }
             TaskState::Partial => {
@@ -2415,6 +2441,28 @@ pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::schemas::{SelectionPolicy, Task, WorkQueue};
+
+    #[test]
+    fn gate_messages_are_surface_neutral_no_command_literals() {
+        // AC-004: engine-streamed guidance names WHAT to do, never a `yardlet ...`
+        // command literal (each surface renders its own affordance).
+        let msgs = [
+            gate_msg::needs_user("YARD-007"),
+            gate_msg::blocked("YARD-008"),
+            gate_msg::drained_with_deferred(&["YARD-009", "YARD-010"]),
+            gate_msg::drained_complete(),
+        ];
+        for m in &msgs {
+            assert!(
+                !m.contains("yardlet"),
+                "gate message leaked a command literal: {m:?}"
+            );
+        }
+        assert!(gate_msg::needs_user("YARD-007").contains("YARD-007"));
+        assert!(gate_msg::blocked("YARD-008").contains("YARD-008"));
+        let def = gate_msg::drained_with_deferred(&["YARD-009", "YARD-010"]);
+        assert!(def.contains("YARD-009") && def.contains("YARD-010"));
+    }
 
     #[test]
     fn validation_runner_blocks_on_failure() {

@@ -32,6 +32,11 @@ pub struct PacketInputs<'a> {
     /// The discovered workspace harness (`discover_harness`); projected
     /// per worker at compile time.
     pub harness: &'a Harness,
+    /// This task's gated action was already approved by a human for THIS run
+    /// (an approval grant is present and will be consumed). The packet then
+    /// tells the worker to proceed and finish without re-gating or re-asking,
+    /// so a single human decision carries the task to completion.
+    pub approved: bool,
 }
 
 /// Find existing local image files referenced in `text` (e.g. a path dragged
@@ -809,6 +814,21 @@ pub fn compile(inputs: &PacketInputs) -> String {
          validation; make the requested file changes and write the required artifacts.\n\n",
     );
 
+    // Human-approved action: a grant is present for this run. Tell the worker to
+    // carry the approval through to completion so one decision finishes the task,
+    // rather than stopping again to re-ask for the thing already approved.
+    if inputs.approved {
+        p.push_str("## Approved action\n\n");
+        p.push_str(
+            "A human has ALREADY approved this task's gated action for this run. Proceed and \
+             complete it: do not re-gate it, do not re-ask for approval, and do not return \
+             `needs_user` for the action that was approved \u{2014} carrying out the approved \
+             action here is exactly what was authorized. Only a genuinely NEW dangerous action \
+             beyond that approval (per the boundaries above) still stops for the user; the \
+             approved action itself must be finished, not deferred.\n\n",
+        );
+    }
+
     // Done-first status rule: non-blocking leftovers should not pause the queue.
     p.push_str("## Completion status rule\n\n");
     p.push_str(
@@ -1433,6 +1453,7 @@ mod tests {
             images: &[],
             role_notes: "",
             harness: &harness,
+            approved: false,
         });
         assert!(p.contains("## Workspace rules (always apply)"));
         assert!(p.contains("Never push without review."));
@@ -1501,7 +1522,63 @@ mod tests {
             images: &[],
             role_notes,
             harness: &Harness::default(),
+            approved: false,
         })
+    }
+
+    fn packet_with_approval(approved: bool) -> String {
+        let mut task = crate::schemas::Task {
+            id: "YARD-APV".into(),
+            title: "delete the legacy table".into(),
+            state: Default::default(),
+            priority: 0,
+            risk: "high".into(),
+            kind: "implementation".into(),
+            preferred_worker: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            depends_on: vec![],
+            skills: vec![],
+            required_capabilities: vec![],
+            allowed_scope: vec![],
+            acceptance: vec![],
+            validation: None,
+            approval: None,
+            interaction: None,
+            worker_rationale: None,
+            provenance: String::new(),
+        };
+        task.approval = Some(crate::yaml::from_str("required: true").unwrap());
+        let repo = crate::inspect::RepoSummary::default();
+        compile(&PacketInputs {
+            worker_id: "codex",
+            task: &task,
+            intent: None,
+            repo: &repo,
+            run_dir_rel: ".agents/runs/run-x",
+            conversation: &[],
+            continuation: None,
+            chained_from: None,
+            language: "en",
+            images: &[],
+            role_notes: "",
+            harness: &Harness::default(),
+            approved,
+        })
+    }
+
+    #[test]
+    fn approved_packet_tells_worker_to_finish_without_regating() {
+        // AC-001: an approved run's packet carries a "proceed and complete, do
+        // not re-gate or re-ask" directive; an unapproved one does not.
+        let approved = packet_with_approval(true);
+        assert!(approved.contains("## Approved action"));
+        assert!(approved.contains("ALREADY approved"));
+        assert!(approved.contains("do not re-ask for approval"));
+        assert!(approved.contains("`needs_user`"));
+
+        let plain = packet_with_approval(false);
+        assert!(!plain.contains("## Approved action"));
     }
 
     #[test]
@@ -1541,6 +1618,7 @@ mod tests {
             images: &[],
             role_notes: "",
             harness: &Harness::default(),
+            approved: false,
         });
         assert!(p.contains("## Same session, next task"));
         assert!(p.contains("completed task YARD-1 in this session"));
@@ -1584,6 +1662,7 @@ mod tests {
             images: &[],
             role_notes: "",
             harness: &Harness::default(),
+            approved: false,
         });
         assert!(p.contains("## Continuing a partial run"));
         assert!(p.contains("do not redo finished work"));
@@ -1641,6 +1720,7 @@ mod tests {
             images: &[],
             role_notes: "",
             harness: &Harness::default(),
+            approved: false,
         });
         assert!(p.contains("## Conversation with the user"));
         assert!(p.contains("[you] Forward+ or GL Compatibility?"));

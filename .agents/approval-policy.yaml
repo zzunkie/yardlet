@@ -20,5 +20,21 @@ gated_actions:
   - real_external_api_validation
   - secret_access
 
+# How a PROPOSED follow-up is classified for gating (src/planner.rs
+# ::follow_up_needs_approval). A worker-proposed follow-up is gated when its
+# `risk` is high OR its wording names one of these dangerous-action classes.
+# NOTE: being "merely outside the intent scope" no longer gates a follow-up on
+# its own — a scope-adjacent idea is a tracked candidate, not a danger. The
+# signal words below are the human-auditable mirror of the planner's built-in
+# classifier; keep the two in sync when broadening either.
+follow_up_gating:
+  gate_when_risk: high
+  danger_signals:
+    destructive_command: [delete, remove, "rm -", drop table, truncate, wipe, destroy, overwrite, purge]
+    deploy_publish_send: [deploy, publish, release to, ship to, rollout, cargo publish, npm publish, send email, send a message, post to]
+    network_mutation: [external api, api call, network request, webhook, http request, upload to]
+    production_access: [production database, prod db]
+    secret_access: [secret, credential, api key]
+
 # Approvals are single-use by default; re-asking is required for a new run.
 default_grant: approved_once

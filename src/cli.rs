@@ -1463,6 +1463,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         None
     };
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
+    let approved = task.approval_required() && crate::approvals::is_granted(&ws, &task.id);
     let text = packet::compile(&packet::PacketInputs {
         worker_id: &args.worker,
         task,
@@ -1476,6 +1477,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         images: &images,
         role_notes: &role_notes,
         harness: &harness,
+        approved,
     });
     if args.dry_run {
         eprintln!("(dry-run: packet not persisted)\n");

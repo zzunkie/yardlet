@@ -332,6 +332,9 @@ pub fn run_batch<F: FnMut(&str)>(
             images: &images,
             role_notes: &role_notes,
             harness: &harness,
+            // The parallel path never carries approval-gated tasks (they are held
+            // for the serial path), so no approval directive applies here.
+            approved: false,
         });
         write_str(&workers::packet_path(&p.run_dir), &p.packet_text)?;
         state::save_yaml(
@@ -474,6 +477,7 @@ pub fn run_batch<F: FnMut(&str)>(
                             images: &images,
                             role_notes: &role_notes,
                             harness: &harness,
+                            approved: false,
                         });
                         write_str(&workers::packet_path(&p.run_dir), &failover_packet)?;
                         let session = (worker_id == "claude-code")
