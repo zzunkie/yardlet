@@ -1251,6 +1251,18 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// A task is surfaced as "needs approval" only while it can still act on that
+/// approval: it is live (not terminal — see [`TaskState::is_terminal`]) and its
+/// gate is unmet. A Done/Deferred/otherwise-settled task never awaits approval,
+/// even though its single-use grant was consumed or never issued.
+fn task_awaits_approval(
+    state: crate::schemas::TaskState,
+    approval_required: bool,
+    granted: bool,
+) -> bool {
+    !state.is_terminal() && approval_required && !granted
+}
+
 fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let snap = Snapshot::load(&ws)?;
@@ -1361,7 +1373,13 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         .queue
         .tasks
         .iter()
-        .filter(|t| t.approval_required() && !crate::approvals::is_granted(&ws, &t.id))
+        .filter(|t| {
+            task_awaits_approval(
+                t.state,
+                t.approval_required(),
+                crate::approvals::is_granted(&ws, &t.id),
+            )
+        })
         .map(|t| t.id.as_str())
         .collect();
     if !needs_approval.is_empty() {
@@ -1540,6 +1558,33 @@ fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn needs_approval_excludes_terminal_tasks() {
+        use crate::schemas::TaskState;
+
+        // A live, gated, ungranted task is the only thing that awaits approval.
+        assert!(task_awaits_approval(TaskState::Queued, true, false));
+        // Granting it clears the prompt.
+        assert!(!task_awaits_approval(TaskState::Queued, true, true));
+        // A task with no gate never awaits approval.
+        assert!(!task_awaits_approval(TaskState::Queued, false, false));
+        // Terminal states never await approval, even gated-and-ungranted:
+        // Done (grant consumed) and Deferred (set aside) must not be listed.
+        for terminal in [
+            TaskState::Done,
+            TaskState::Deferred,
+            TaskState::Blocked,
+            TaskState::Failed,
+            TaskState::NeedsUser,
+            TaskState::Partial,
+        ] {
+            assert!(
+                !task_awaits_approval(terminal, true, false),
+                "{terminal:?} should not await approval"
+            );
+        }
+    }
 
     const CONFIG_WITH_COMMENTS: &str = r#"schema_version: 1
 product: yardlet
