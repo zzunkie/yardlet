@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::schemas::{TaskState, TransitionActor, TransitionCause, TransitionLog, TransitionRecord};
+use crate::schemas::{
+    TaskState, TransitionActor, TransitionCause, TransitionLog, TransitionRecord,
+};
 use crate::state::Workspace;
 use crate::telemetry::{self, RunTelemetry};
 
@@ -603,8 +605,8 @@ pub fn autonomy(runs: &[RunTelemetry], logs: &[TransitionLog]) -> AutonomyReport
         ..Default::default()
     };
 
-    // task_id -> latest intent seen in telemetry. Transitions carry no intent,
-    // so a hand defer/revive is attributed to the intent that last ran the task.
+    // task_id -> latest intent seen in telemetry. Legacy transition records
+    // carry no intent, so those fall back to the intent that last ran the task.
     let mut task_intent: BTreeMap<String, String> = BTreeMap::new();
     for r in runs {
         if !r.intent_id.is_empty() {
@@ -706,7 +708,11 @@ pub fn autonomy(runs: &[RunTelemetry], logs: &[TransitionLog]) -> AutonomyReport
             if !is_human_touch(rec) {
                 continue;
             }
-            let intent = task_intent.get(&rec.task_id).cloned().unwrap_or_default();
+            let intent = if rec.intent_id.is_empty() {
+                task_intent.get(&rec.task_id).cloned().unwrap_or_default()
+            } else {
+                rec.intent_id.clone()
+            };
             let bucket = rep.per_intent.entry(intent).or_default();
             match classify_touch(rec.cause) {
                 TouchKind::Decision => {
@@ -724,7 +730,10 @@ pub fn autonomy(runs: &[RunTelemetry], logs: &[TransitionLog]) -> AutonomyReport
     for r in runs {
         if r.user_override.is_some() {
             rep.chores += 1;
-            rep.per_intent.entry(r.intent_id.clone()).or_default().chores += 1;
+            rep.per_intent
+                .entry(r.intent_id.clone())
+                .or_default()
+                .chores += 1;
         }
     }
 
@@ -765,9 +774,8 @@ fn reversal_in_window(
             .min()
             .map(|s| s.as_str())
     });
-    revs.iter().any(|ts| {
-        ts.as_str() >= first_ts && next_start.map(|n| ts.as_str() < n).unwrap_or(true)
-    })
+    revs.iter()
+        .any(|ts| ts.as_str() >= first_ts && next_start.map(|n| ts.as_str() < n).unwrap_or(true))
 }
 
 fn tally_done_trust(rep: &mut AutonomyReport, trust: DoneTrust) {
@@ -843,7 +851,11 @@ pub fn render_autonomy(rep: &AutonomyReport) -> String {
             if t.total() == 0 {
                 continue;
             }
-            let label = if intent.is_empty() { "(unattributed)" } else { intent };
+            let label = if intent.is_empty() {
+                "(unattributed)"
+            } else {
+                intent
+            };
             s.push_str(&format!(
                 "    {:<28} decisions {}  chores {}  ({:.0}% chore)\n",
                 label,
@@ -1043,6 +1055,7 @@ mod tests {
     ) -> TransitionRecord {
         TransitionRecord {
             task_id: task.into(),
+            intent_id: String::new(),
             from,
             to,
             cause,
@@ -1073,8 +1086,22 @@ mod tests {
         let logs = vec![tlog(
             "D",
             vec![
-                tr("D", TaskState::Running, TaskState::Done, TransitionCause::RunOutcome, TransitionActor::Worker("r".into()), "t05"),
-                tr("D", TaskState::Done, TaskState::Queued, TransitionCause::RunOutcome, TransitionActor::System, "t06"),
+                tr(
+                    "D",
+                    TaskState::Running,
+                    TaskState::Done,
+                    TransitionCause::RunOutcome,
+                    TransitionActor::Worker("r".into()),
+                    "t05",
+                ),
+                tr(
+                    "D",
+                    TaskState::Done,
+                    TaskState::Queued,
+                    TransitionCause::RunOutcome,
+                    TransitionActor::System,
+                    "t06",
+                ),
             ],
         )];
 
@@ -1098,20 +1125,45 @@ mod tests {
         let logs = vec![tlog(
             "A",
             vec![
-                tr("A", TaskState::Running, TaskState::Done, TransitionCause::RunOutcome, TransitionActor::Worker("r1".into()), "t02"),
-                tr("A", TaskState::Done, TaskState::Failed, TransitionCause::RunOutcome, TransitionActor::System, "t03"),
-                tr("A", TaskState::Running, TaskState::Done, TransitionCause::RunOutcome, TransitionActor::Worker("r2".into()), "t11"),
+                tr(
+                    "A",
+                    TaskState::Running,
+                    TaskState::Done,
+                    TransitionCause::RunOutcome,
+                    TransitionActor::Worker("r1".into()),
+                    "t02",
+                ),
+                tr(
+                    "A",
+                    TaskState::Done,
+                    TaskState::Failed,
+                    TransitionCause::RunOutcome,
+                    TransitionActor::System,
+                    "t03",
+                ),
+                tr(
+                    "A",
+                    TaskState::Running,
+                    TaskState::Done,
+                    TransitionCause::RunOutcome,
+                    TransitionActor::Worker("r2".into()),
+                    "t11",
+                ),
             ],
         )];
         let rep = autonomy(&runs, &logs);
         assert_eq!(rep.task_instances, 2);
-        assert_eq!(rep.false_done_caught, 1, "the i1 instance is the reopened one");
+        assert_eq!(
+            rep.false_done_caught, 1,
+            "the i1 instance is the reopened one"
+        );
         assert_eq!(rep.evidence_backed, 1, "the i2 instance stays clean");
     }
 
     #[test]
     fn human_touches_split_decision_vs_chore_per_intent() {
-        // Map tasks to intents via telemetry, then classify their user touches.
+        // Legacy transition records have no intent, so map tasks to intents via
+        // telemetry, then classify their user touches.
         let runs = vec![
             run("A", "i1", "Done", "t01"),
             run("B", "i1", "Done", "t02"),
@@ -1123,9 +1175,39 @@ mod tests {
             },
         ];
         let logs = vec![
-            tlog("A", vec![tr("A", TaskState::Queued, TaskState::Deferred, TransitionCause::Defer, TransitionActor::User, "t05")]),
-            tlog("B", vec![tr("B", TaskState::Deferred, TaskState::Queued, TransitionCause::Revive, TransitionActor::User, "t06")]),
-            tlog("C", vec![tr("C", TaskState::Queued, TaskState::NeedsUser, TransitionCause::DecisionSeed, TransitionActor::System, "t07")]),
+            tlog(
+                "A",
+                vec![tr(
+                    "A",
+                    TaskState::Queued,
+                    TaskState::Deferred,
+                    TransitionCause::Defer,
+                    TransitionActor::User,
+                    "t05",
+                )],
+            ),
+            tlog(
+                "B",
+                vec![tr(
+                    "B",
+                    TaskState::Deferred,
+                    TaskState::Queued,
+                    TransitionCause::Revive,
+                    TransitionActor::User,
+                    "t06",
+                )],
+            ),
+            tlog(
+                "C",
+                vec![tr(
+                    "C",
+                    TaskState::Queued,
+                    TaskState::NeedsUser,
+                    TransitionCause::DecisionSeed,
+                    TransitionActor::System,
+                    "t07",
+                )],
+            ),
         ];
         let rep = autonomy(&runs, &logs);
         // A defer = decision, B revive = chore, C seeded decision = decision,
@@ -1143,12 +1225,52 @@ mod tests {
     }
 
     #[test]
+    fn human_touches_prefer_transition_intent_over_telemetry_mapping() {
+        let runs = vec![run("A", "telemetry-intent", "Done", "t01")];
+        let mut touch = tr(
+            "A",
+            TaskState::Queued,
+            TaskState::Deferred,
+            TransitionCause::Defer,
+            TransitionActor::User,
+            "t02",
+        );
+        touch.intent_id = "transition-intent".to_string();
+
+        let rep = autonomy(&runs, &[tlog("A", vec![touch])]);
+
+        assert_eq!(rep.decisions, 1);
+        assert_eq!(rep.per_intent["transition-intent"].decisions, 1);
+        assert!(!rep.per_intent.contains_key("telemetry-intent"));
+    }
+
+    #[test]
     fn waste_counts_needsuser_stops_by_cause() {
         let logs = vec![
             // A owed decision (good stop).
-            tlog("A", vec![tr("A", TaskState::Queued, TaskState::NeedsUser, TransitionCause::DecisionSeed, TransitionActor::System, "t01")]),
+            tlog(
+                "A",
+                vec![tr(
+                    "A",
+                    TaskState::Queued,
+                    TaskState::NeedsUser,
+                    TransitionCause::DecisionSeed,
+                    TransitionActor::System,
+                    "t01",
+                )],
+            ),
             // B approval/pause friction (wasted stop).
-            tlog("B", vec![tr("B", TaskState::Running, TaskState::NeedsUser, TransitionCause::RunOutcome, TransitionActor::System, "t02")]),
+            tlog(
+                "B",
+                vec![tr(
+                    "B",
+                    TaskState::Running,
+                    TaskState::NeedsUser,
+                    TransitionCause::RunOutcome,
+                    TransitionActor::System,
+                    "t02",
+                )],
+            ),
         ];
         let rep = autonomy(&[], &logs);
         assert_eq!(rep.loop_stops, 2);
@@ -1158,10 +1280,20 @@ mod tests {
 
     #[test]
     fn to_json_is_traceable_and_matches_render() {
-        let runs = vec![run("A", "i1", "Done", "t01"), run("B", "i1", "Failed", "t02")];
+        let runs = vec![
+            run("A", "i1", "Done", "t01"),
+            run("B", "i1", "Failed", "t02"),
+        ];
         let logs = vec![tlog(
             "A",
-            vec![tr("A", TaskState::Queued, TaskState::Deferred, TransitionCause::Defer, TransitionActor::User, "t03")],
+            vec![tr(
+                "A",
+                TaskState::Queued,
+                TaskState::Deferred,
+                TransitionCause::Defer,
+                TransitionActor::User,
+                "t03",
+            )],
         )];
         let rep = autonomy(&runs, &logs);
         let j = rep.to_json();

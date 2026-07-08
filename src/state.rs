@@ -1132,6 +1132,7 @@ pub fn transition(
 ) -> TransitionRecord {
     TransitionRecord {
         task_id: task_id.to_string(),
+        intent_id: String::new(),
         from,
         to,
         cause,
@@ -1142,12 +1143,14 @@ pub fn transition(
 }
 
 pub fn append_transition(ws: &Workspace, rec: TransitionRecord) -> Result<()> {
+    let rec = with_transition_intent(ws, rec);
     let mut log = ws.load_transition_log(&rec.task_id);
     if log.task_id.is_empty() {
         log.task_id = rec.task_id.clone();
     }
     if log.records.last().is_some_and(|last| {
-        last.from == rec.from
+        last.intent_id == rec.intent_id
+            && last.from == rec.from
             && last.to == rec.to
             && last.cause == rec.cause
             && last.detail.trim() == rec.detail.trim()
@@ -1156,6 +1159,18 @@ pub fn append_transition(ws: &Workspace, rec: TransitionRecord) -> Result<()> {
     }
     log.records.push(rec);
     save_yaml(&ws.transition_path(&log.task_id), &log)
+}
+
+fn with_transition_intent(ws: &Workspace, mut rec: TransitionRecord) -> TransitionRecord {
+    if !rec.intent_id.is_empty() {
+        return rec;
+    }
+    if let Ok(queue) = ws.load_queue() {
+        if !queue.intent_id.is_empty() && queue.tasks.iter().any(|t| t.id == rec.task_id) {
+            rec.intent_id = queue.intent_id;
+        }
+    }
+    rec
 }
 
 fn clear_intent_and_queue_with_wrap(
@@ -1418,6 +1433,68 @@ routing:
             ws.latest_transition("YARD-1").unwrap().detail,
             "set aside for later"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn transition_log_stamps_intent_from_live_queue() {
+        let dir = temp_root("transition-intent");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+
+        let task: Task = crate::yaml::from_str("id: YARD-1\ntitle: test task\n").unwrap();
+        let mut queue = WorkQueue::empty();
+        queue.intent_id = "intent-live".to_string();
+        queue.tasks = vec![task];
+        ws.save_queue(&queue).unwrap();
+
+        append_transition(
+            &ws,
+            transition(
+                "YARD-1",
+                TaskState::Queued,
+                TaskState::Running,
+                TransitionCause::RunOutcome,
+                "worker run started",
+                TransitionActor::System,
+            ),
+        )
+        .unwrap();
+
+        let log = ws.load_transition_log("YARD-1");
+        assert_eq!(log.records[0].intent_id, "intent-live");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_transition_records_without_intent_still_read() {
+        let dir = temp_root("legacy-transition-intent");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        fs::create_dir_all(ws.transitions_dir()).unwrap();
+        fs::write(
+            ws.transition_path("YARD-1"),
+            r#"task_id: YARD-1
+records:
+  - task_id: YARD-1
+    from: queued
+    to: done
+    cause: run_outcome
+    detail: old record
+    actor:
+      kind: system
+    ts: "2026-07-08T00:00:00+09:00"
+"#,
+        )
+        .unwrap();
+
+        let log = ws.load_transition_log("YARD-1");
+        assert_eq!(log.records.len(), 1);
+        assert_eq!(log.records[0].intent_id, "");
+        assert_eq!(log.records[0].to, TaskState::Done);
 
         let _ = fs::remove_dir_all(&dir);
     }
