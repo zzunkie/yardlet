@@ -283,6 +283,8 @@ impl RunnableClass {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransitionRecord {
     pub task_id: String,
+    #[serde(default)]
+    pub intent_id: String,
     pub from: TaskState,
     pub to: TaskState,
     pub cause: TransitionCause,
