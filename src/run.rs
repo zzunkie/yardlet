@@ -3570,18 +3570,14 @@ exit 1
             assert!(out.status.success(), "git {args:?}");
         };
         sh(&["init", "-q"]);
+        // The worktree integration commit inherits the repository's identity;
+        // configure one locally so the test passes on runners with no global
+        // git config.
+        sh(&["config", "user.name", "t"]);
+        sh(&["config", "user.email", "t@t"]);
         std::fs::write(root.join("base.txt"), "base\n").unwrap();
         sh(&["add", "base.txt"]);
-        sh(&[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "commit",
-            "-q",
-            "-m",
-            "init",
-        ]);
+        sh(&["commit", "-q", "-m", "init"]);
 
         let ws = Workspace::at(&root);
         let mut t = task("YARD-001", TaskState::Running, 10, false);
@@ -4140,18 +4136,14 @@ exit 1
             assert!(out.status.success(), "git {args:?}");
         };
         sh(&["init", "-q"]);
+        // The worktree integration commit inherits the repository's identity;
+        // configure one locally so the test passes on runners with no global
+        // git config.
+        sh(&["config", "user.name", "t"]);
+        sh(&["config", "user.email", "t@t"]);
         std::fs::write(root.join("base.txt"), "base\n").unwrap();
         sh(&["add", "base.txt"]);
-        sh(&[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "commit",
-            "-q",
-            "-m",
-            "init",
-        ]);
+        sh(&["commit", "-q", "-m", "init"]);
 
         let ws = Workspace::at(&root);
         let mut t = task("YARD-001", TaskState::Running, 10, false);
