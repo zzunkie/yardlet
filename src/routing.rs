@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn failover_excludes_failed_worker_and_keeps_capability_gate() {
         let w: WorkersFile = crate::yaml::from_str(
-            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, second, third]\nworkers:\n  - id: first\n    capabilities: [image_generation]\n    invocation: { command: sh }\n  - id: second\n    capabilities: [image_generation]\n    invocation: { command: sh }\n  - id: third\n    invocation: { command: sh }\n",
+            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, second, third]\nworkers:\n  - id: first\n    capabilities: [image_generation]\n    invocation: { command: bash }\n  - id: second\n    capabilities: [image_generation]\n    invocation: { command: bash }\n  - id: third\n    invocation: { command: bash }\n",
         )
         .unwrap();
         let task: Task =
@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(resolved.worker_id, "second");
 
         let w_without_alternate: WorkersFile = crate::yaml::from_str(
-            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, third]\nworkers:\n  - id: first\n    capabilities: [image_generation]\n    invocation: { command: sh }\n  - id: third\n    invocation: { command: sh }\n",
+            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, third]\nworkers:\n  - id: first\n    capabilities: [image_generation]\n    invocation: { command: bash }\n  - id: third\n    invocation: { command: bash }\n",
         )
         .unwrap();
         let err = resolve_failover_worker_for_task(
@@ -477,7 +477,7 @@ mod tests {
     #[test]
     fn failover_uses_remaining_order_for_readiness_without_readding_failed_worker() {
         let w: WorkersFile = crate::yaml::from_str(
-            "schema_version: 1\nrouting:\n  default_worker: failed\n  fallback_order: [failed, missing, ready]\nworkers:\n  - id: failed\n    invocation: { command: sh }\n  - id: missing\n    invocation: { command: yardlet-definitely-missing-worker-command }\n  - id: ready\n    invocation: { command: sh }\n",
+            "schema_version: 1\nrouting:\n  default_worker: failed\n  fallback_order: [failed, missing, ready]\nworkers:\n  - id: failed\n    invocation: { command: bash }\n  - id: missing\n    invocation: { command: yardlet-definitely-missing-worker-command }\n  - id: ready\n    invocation: { command: bash }\n",
         )
         .unwrap();
         let task: Task = crate::yaml::from_str("id: T\ntitle: t\n").unwrap();

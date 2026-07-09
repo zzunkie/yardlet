@@ -2847,7 +2847,7 @@ exit 0
 "#,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, builder]\nworkers:\n  - id: dead\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: builder\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, builder]\nworkers:\n  - id: dead\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&dead),
             shell_literal(&builder)
         );
@@ -2938,7 +2938,7 @@ exit 0
             ),
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\n  fallback_order: [builder]\nworkers:\n  - id: builder\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\n  fallback_order: [builder]\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&builder)
         );
         let ws = init_test_workspace("approval-gate", &worker_yaml);
@@ -3053,7 +3053,7 @@ exit 0
             ),
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\n  fallback_order: [builder]\nworkers:\n  - id: builder\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\n  fallback_order: [builder]\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&builder)
         );
         let ws = init_test_workspace("auto-approval-retry", &worker_yaml);
@@ -3161,7 +3161,7 @@ exit 0
             ),
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: bad-result\n  fallback_order: [bad-result, fallback]\nworkers:\n  - id: bad-result\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fallback\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: bad-result\n  fallback_order: [bad-result, fallback]\nworkers:\n  - id: bad-result\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fallback\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&bad),
             shell_literal(&fallback)
         );
@@ -3223,7 +3223,7 @@ exit 1
 "#,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, missing]\nworkers:\n  - id: dead\n    invocation:\n      command: sh\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: missing\n    invocation:\n      command: yardlet-definitely-missing-worker-command\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, missing]\nworkers:\n  - id: dead\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: missing\n    invocation:\n      command: yardlet-definitely-missing-worker-command\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&dead),
             shell_literal(&attempts)
         );

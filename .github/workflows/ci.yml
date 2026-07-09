@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # v* covers long-running integration branches (e.g. v0.8-finalize-run) so
+    # cross-platform breakage surfaces before a release commit reaches main.
+    branches: [main, "v*"]
   pull_request:
 
 env:
