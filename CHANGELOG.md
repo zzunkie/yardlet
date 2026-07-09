@@ -4,6 +4,29 @@
 
 ### Added
 
+- **Trust Report v2: autonomy from the transition audit log.** `yardlet trust`
+  now prints a second layer above the attempt view. A "can I trust a Done?"
+  grade per (intent, task) instance (evidence-backed, recovered, false-done
+  caught, unresolved, with a trustworthy-Done rate), a decision-vs-chore split
+  of human interventions with a per-intent chore share, and a count of
+  unnecessary loop stops. It folds the per-task transition records under
+  `.agents/transitions/` and cross-checks run telemetry, so a Done that was
+  later reopened is visible where telemetry attempts alone cannot show it. Every
+  number traces to a recorded transition or run. `yardlet trust --json` emits
+  the metrics as machine-readable JSON (nested under `done_trust`,
+  `human_touches`, `loop_stops`, `sources`), and the terminal UI shows the same
+  numbers in a Trust panel (the `T` key). Read-only, like v1.
+- **Transition records carry `intent_id`.** System-driven task state changes now
+  record the intent that owned the task, so the autonomy report attributes
+  decisions and chores to the right intent instead of folding a reused task id
+  across unrelated intents.
+- **Worker-drafted project memory: `yardlet memory init` / `refresh`.** `init`
+  asks a worker to draft memory documents from the repo into an isolated run
+  directory; Yardlet's core is the sole writer that turns the drafts into
+  canonical `.agents/memory/*.md`. `refresh` re-drafts existing docs the same
+  way, and `refresh --stale-only` limits the worker to the docs currently
+  flagged possibly stale. The worker proposes content; the deterministic core
+  owns every write.
 - **Self-healing workspace state.** `yardlet status`, `yardlet queue`, reports,
   and the TUI now distinguish runnable-now work from waiting decisions,
   approvals, dependencies, worker capability gaps, held tasks, deferred tasks,

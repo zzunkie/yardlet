@@ -127,14 +127,24 @@ in git after the doc was last updated, so a memory that has drifted from the
 code it describes is surfaced rather than trusted silently. `yardlet init`
 scaffolds the folder with a convention README.
 
+You can also seed and maintain memory through a worker instead of hand-writing
+the files. `yardlet memory init` asks a worker to draft memory documents from
+the repo, then Yardlet's core writes the canonical `.agents/memory/*.md` (the
+worker drafts, Yardlet is the sole writer). `yardlet memory refresh` re-drafts
+existing docs the same way, and `yardlet memory refresh --stale-only` touches
+only the docs flagged possibly stale.
+
 Mechanics: [docs/memory-trust-mining.md](docs/memory-trust-mining.md).
 
 ## Trust Report
 
-Because "Done" is checked by a deterministic gate and every run logs its
-outcome, Yardlet can tell you how far to trust the loop, from your own history.
+Because "Done" is checked by a deterministic gate, every run logs its outcome,
+and every task state change is recorded, Yardlet can tell you how far to trust
+the loop, from your own history. `yardlet trust` reads your run telemetry and
+the state-transition audit log under `.agents/transitions/`, then prints two
+layers.
 
-`yardlet trust` summarizes run telemetry into a trust view:
+The attempt view, from run telemetry, scoped to the active intent:
 
 - **First-pass Done vs Done-after-retry vs never-Done**, so you can see how
   often work lands on the first attempt instead of after rework.
@@ -142,9 +152,25 @@ outcome, Yardlet can tell you how far to trust the loop, from your own history.
   wall time, and how often you overrode the result.
 - The tasks that needed the **most attempts** to reach Done.
 
-It is scoped to the active intent, so a task id reused across intents does not
-fold its attempts together. It is read-only: it reports, it never changes
-routing or policy on its own.
+The autonomy view, folded from the transition audit log:
+
+- **Can I trust a Done?** Every Done is graded from its recorded history as
+  evidence-backed (a clean Done, never reopened), recovered (Done after a wrong
+  turn), false-done caught (marked Done, then reopened), or unresolved, with a
+  trustworthy-Done rate over the Dones.
+- **Human interventions, decision vs chore.** A hand step is split into a
+  decision the loop legitimately owed you and a chore it should absorb itself
+  (un-parking, recovery). The chore share is the number the autonomy goal drives
+  toward zero, broken down per intent.
+- **Unnecessary loop stops.** Halts for approval or pause friction that were not
+  a real question, counted as reducible waste.
+
+Every number traces to a specific recorded transition or run, keyed per
+(intent, task) instance so a task id reused across intents never folds together.
+`yardlet trust --json` emits the autonomy metrics as machine-readable JSON, and
+the terminal UI shows the same numbers in a **Trust panel** (press `T`). The
+whole report is read-only: it reports, it never changes routing or policy on its
+own.
 
 Computation details: [docs/memory-trust-mining.md](docs/memory-trust-mining.md).
 
@@ -174,14 +200,18 @@ session. From the Home screen:
 | `n` | New work: describe a request (when idle). |
 | `r` | Run the next task. |
 | `A` | Auto-drain the queue. |
+| `t` | Tidy: self-heal workspace state (migrate stale gates, defer non-runnable work, wrap drained intents). |
 | `p` | Approve the next task; while a drain runs, request a graceful pause. |
 | `a` | Answer a task waiting on you (NeedsUser). |
+| `d` | Defer the selected task by decision. |
+| `v` | Revive the selected Deferred task. |
 | `Esc` | Stop the running worker. |
 | `↑` / `↓` | Browse the queue, then the workers panel past its end. |
-| `Enter` | Open the selected task's handoff. |
+| `Enter` | Run the selected task's next action (run / answer / approval hint / monitor / handoff), or toggle a worker past the queue. |
 | `Space` / `Enter` | Toggle the selected worker on/off (in the workers panel). |
 | `i` | View the intent contract. |
 | `h` | View the latest handoff. |
+| `T` | Trust and autonomy panel (same numbers as `yardlet trust`). |
 | `R` | Reports and history browser. |
 | `m` | Monitor the worker's live output. |
 | `s` | Settings (can be opened mid-run). |
@@ -203,7 +233,9 @@ are mapped to the same shortcuts.
 | `yardlet new "<request>" [--worker <id>]` | Plan a request into an intent contract + queue. |
 | `yardlet goal "<goal>" [--verify "..."]` | Express lane: skip planning, run one goal to a verify condition. |
 | `yardlet new "..." --image <path>` | Attach a local image to the goal (also auto-detected from the request). |
+| `yardlet add "<title>" [--depends-on <id>]` | Append a user-authored task to the current queue without replanning. |
 | `yardlet queue` | List the work queue. |
+| `yardlet tidy` | Self-heal workspace state: migrate stale gates, defer non-runnable work, archive drained intents. |
 | `yardlet status [--json]` | Workspace, intent, queue, and worker summary. |
 | `yardlet worker status` | Worker readiness and billing-env safety. |
 | `yardlet inspect repo [--json]` | Cheap deterministic local evidence. |
@@ -215,10 +247,11 @@ are mapped to the same shortcuts.
 | `yardlet defer <id> [reason]` | Set one task aside by decision (Deferred, not pending and not done). |
 | `yardlet defer <id> --cascade [reason]` | Also defer queued tasks stranded behind it, transitively, as one revive group. |
 | `yardlet revive <id> [--group]` | Return a Deferred task to Queued; `--group` revives the cascade group recorded with it. |
+| `yardlet access <sandboxed\|full>` | Set the default worker permission level. |
 | `yardlet handoff` | Print the latest run's handoff. |
 | `yardlet report` | Print the intent's final report (aggregate of every task). |
-| `yardlet memory` | List the project-memory index; flags docs possibly stale vs their `look_at` landmarks. |
-| `yardlet trust` | Trust report: first-pass vs retried Done and per-worker reliability (read-only). |
+| `yardlet memory [init \| refresh [--stale-only]]` | List the project-memory index (flags possibly stale docs); `init`/`refresh` draft docs via a worker that Yardlet's core then writes. |
+| `yardlet trust [--json]` | Trust + autonomy report from run telemetry and the transition audit log (read-only); `--json` emits the metrics. |
 | `yardlet recover` | Recover state from an interrupted session (orphaned runs, unread plans). |
 | `yardlet skill list / suggest / equip <preset> / unequip / research / create / apply / review` | Classify, equip, author, and score skills. |
 | `yardlet harness review` | Show auto-learned rules and skills with their eval scores, plus mined improvement candidates. |
@@ -363,6 +396,8 @@ Yardlet owns state; workers do not. Canonical state lives under `.agents/` in th
   checkpoints/              latest compact resume points
   handoffs/                 teammate-readable summaries
   telemetry/                runs.jsonl: per-run outcomes (the trust + mining source)
+  transitions/<task>.yaml   per-task state-change audit log (the autonomy source)
+  intents/                  archived drained intents (task history preserved)
 ```
 
 User-level, non-secret config lives under `~/.yardlet/`.

@@ -41,14 +41,23 @@ marked `possibly stale` when a landmark has an uncommitted change or a newer git
 commit time than the memory doc. The packet hot path stays git-free; staleness
 is a diagnostic view in the command.
 
+`yardlet memory init` and `yardlet memory refresh` maintain the docs through a
+worker without hand-editing. `init` asks a worker to draft memory documents from
+the repo into an isolated run directory (`memory-result.json`); Yardlet's core is
+the single writer that turns those drafts into canonical `.agents/memory/*.md`.
+`refresh` re-drafts the existing docs the same way, and `refresh --stale-only`
+limits the worker to the docs currently flagged possibly stale. The worker only
+proposes content; the deterministic core owns every write.
+
 ## Trust Report
 
-The Trust Report is a deterministic read over run telemetry. It answers a local
-question: how much should this workspace trust the loop's `Done` outcomes based
-on its own history?
+The Trust Report is a deterministic read over your own history. It answers a
+local question: how much should this workspace trust the loop's `Done` outcomes?
+`yardlet trust` folds two sources, run telemetry (`.agents/telemetry/runs.jsonl`)
+and the state-transition audit log (`.agents/transitions/<task>.yaml`), into two
+layers, and only reports.
 
-`yardlet trust` reads `.agents/telemetry/runs.jsonl` and folds run attempts into
-a trust view:
+### Attempt view (from run telemetry)
 
 - first-pass Done, for tasks whose first recorded attempt reached `Done`
 - Done after retry, for tasks that reached `Done` only after more than one
@@ -58,13 +67,39 @@ a trust view:
   no-result count, wall time, and user override count
 - tasks that needed multiple attempts, sorted by most attempts first
 
-Telemetry records now carry `intent_id`. When the active intent has matching
-telemetry, the report scopes to that intent so reused task ids do not fold
+Telemetry records carry `intent_id`. When the active intent has matching
+telemetry, the attempt view scopes to that intent so reused task ids do not fold
 together across unrelated intents. If there is no intent-scoped telemetry yet,
 it falls back to the cumulative view and labels that caveat.
 
-The Trust Report is read-only. It reports from telemetry, but it does not edit
-`.agents/workers.yaml`, rewrite routing policy, mark tasks done, or promote
+### Autonomy view (from the transition audit log)
+
+The transition log is the only record where a `Done` that was later reopened, or
+a human intervention, is visible. Yardlet folds it, keyed per (intent, task)
+instance, into:
+
+- **Can I trust a Done?** Each Done is graded as evidence-backed (a clean Done,
+  never reopened), recovered (Done only after a Failed/Partial/Blocked detour),
+  false-done caught (marked Done, then transitioned back out of Done), or
+  unresolved (no Done yet). The trustworthy-Done rate is the evidence-backed
+  share of all Dones.
+- **Human interventions, decision vs chore.** A counted human touch is either a
+  decision the loop legitimately owed you (a deliberate defer, or a seeded
+  question routed to you) or a chore the self-healing loop should have absorbed
+  (un-parking a revived task, recovering an abandoned run). The chore share, per
+  intent, is the number the autonomy goal drives toward zero.
+- **Unnecessary loop stops.** Every halt into `NeedsUser` is counted; the ones
+  that were approval or pause friction rather than a real seeded question are
+  reported as reducible waste.
+
+Every number traces to a specific transition or run, never a hand-tally.
+`yardlet trust --json` emits the autonomy metrics (nested under `done_trust`,
+`human_touches`, `loop_stops`, and `sources`) as machine-readable JSON. The
+terminal UI shows the same numbers in a Trust panel (the `T` key on the Home
+screen).
+
+The Trust Report is read-only across both layers. It reports, but it does not
+edit `.agents/workers.yaml`, rewrite routing policy, mark tasks done, or promote
 harness assets.
 
 ## Outcome Mining
