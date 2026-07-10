@@ -21,6 +21,7 @@ use crate::schemas::{
     WorkerProfile, WorkersFile,
 };
 use crate::state::{self, append_str, write_str, Workspace};
+use crate::ui::i18n::{self, Lang};
 use crate::{compact, evaluator, routing, telemetry, workers};
 
 /// A live worker session a previous task finished in, offered to the next
@@ -71,6 +72,43 @@ pub struct RunReport {
     pub session: Option<String>,
     /// Whether this run continued a previous task's session.
     pub chained: bool,
+}
+
+fn run_event_lang(ws: &Workspace) -> Lang {
+    let config_lang = ws
+        .load_config()
+        .map(|c| c.language)
+        .unwrap_or_else(|_| "auto".to_string());
+    let sample = ws
+        .load_intent()
+        .ok()
+        .flatten()
+        .map(|i| {
+            if i.raw_request.trim().is_empty() {
+                i.summary
+            } else {
+                i.raw_request
+            }
+        })
+        .or_else(|| {
+            ws.load_queue().ok().map(|q| {
+                q.tasks
+                    .iter()
+                    .map(|t| t.title.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+        })
+        .unwrap_or_default();
+    i18n::detect(&config_lang, &sample)
+}
+
+fn task_state_progress_line(lang: Lang, task_id: &str, state: TaskState) -> String {
+    format!(
+        "{} \u{2192} {}",
+        task_id,
+        i18n::task_state_label(lang.l(), state)
+    )
 }
 
 // Every field defaults so a partial run.yaml (e.g. an older or hand-written one
@@ -855,6 +893,7 @@ pub fn run_auto<F: FnMut(&str)>(
         .or_else(|| ws.load_config().ok().map(|c| c.max_parallel))
         .unwrap_or(1)
         .max(1);
+    let event_lang = run_event_lang(ws);
     let mut parallel_warned = false;
     let mut out = Vec::new();
     let mut emit = |s: String| {
@@ -1182,7 +1221,7 @@ pub fn run_auto<F: FnMut(&str)>(
             },
         )?;
         let state = report.result_state.unwrap_or(TaskState::Failed);
-        emit(format!("{} \u{2192} {:?}", report.task_id, state));
+        emit(task_state_progress_line(event_lang, &report.task_id, state));
         chain = if state == TaskState::Done {
             report.session.as_ref().map(|sess| ChainHandle {
                 prev_task_id: report.task_id.clone(),
@@ -1653,6 +1692,7 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
     let Ok(mut q) = ws.load_queue() else {
         return msgs;
     };
+    let event_lang = run_event_lang(ws);
     let billing = ws.load_billing().unwrap_or_default();
     let mut requeued = Vec::new();
     let mut finished = Vec::new();
@@ -1758,7 +1798,7 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                                 msgs.push(line);
                             }
                         }
-                        finished.push(format!("{} \u{2192} {:?}", id, report.next_state));
+                        finished.push(task_state_progress_line(event_lang, &id, report.next_state));
                     }
                     Err(e) => msgs.push(format!("{id}: recovery finalize error: {e}")),
                 }
@@ -2355,9 +2395,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             }
         } else {
             lines.push(format!(
-                "{}: {:?} — worktree kept at {}",
+                "{}: {} — worktree kept at {}",
                 task.id,
-                next_state,
+                run_outcome_label(next_state),
                 m.wt_path.display()
             ));
         }
@@ -2399,7 +2439,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         &follow_ups,
         workers.as_ref(),
         TransitionCause::RunOutcome,
-        &format!("worker evaluated task as {next_state:?}"),
+        &format!("worker evaluated task as {}", run_outcome_label(next_state)),
         TransitionActor::Worker(run_id.to_string()),
     )?;
     if !ingested.is_empty() {
@@ -2473,7 +2513,11 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     }
 
     lines.push(format!("evaluation status: {}", eval.status));
-    lines.push(format!("next task state: {next_state:?}"));
+    lines.push(format!(
+        "next task state: {} {}",
+        next_state.glyph(),
+        run_outcome_label(next_state)
+    ));
 
     // Seal the run record. It was written "running" at spawn and never updated,
     // so without this every run.yaml looks in-flight forever — the Trust Report
@@ -2757,6 +2801,52 @@ mod tests {
         assert!(gate_msg::blocked("YARD-008").contains("YARD-008"));
         let def = gate_msg::drained_with_deferred(&["YARD-009", "YARD-010"]);
         assert!(def.contains("YARD-009") && def.contains("YARD-010"));
+    }
+
+    #[test]
+    fn korean_drain_progress_line_uses_localized_state_label() {
+        let leaked = [
+            "Running",
+            "Done",
+            "Failed",
+            "Blocked",
+            "NeedsUser",
+            "Partial",
+            "Deferred",
+            "Queued",
+            "running",
+            "done",
+            "failed",
+            "blocked",
+            "needs-you",
+            "partial",
+            "deferred",
+            "queued",
+        ];
+
+        for state in [
+            TaskState::Running,
+            TaskState::Done,
+            TaskState::Failed,
+            TaskState::Blocked,
+            TaskState::NeedsUser,
+            TaskState::Partial,
+            TaskState::Deferred,
+            TaskState::Queued,
+        ] {
+            let line = task_state_progress_line(Lang::Ko, "YARD-006", state);
+            assert!(line.starts_with("YARD-006 \u{2192} "), "{line}");
+            assert!(
+                line.contains(i18n::task_state_label(Lang::Ko.l(), state)),
+                "{line}"
+            );
+            for token in leaked {
+                assert!(
+                    !line.contains(token),
+                    "Korean progress line leaked English state token {token}: {line}"
+                );
+            }
+        }
     }
 
     #[test]

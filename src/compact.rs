@@ -8,8 +8,28 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::evaluator::Evaluation;
-use crate::schemas::{RunResult, Task};
+use crate::schemas::{RunResult, Task, TaskState};
 use crate::state::write_str;
+
+// Checkpoints and handoffs are durable worker-input artifacts, not localized UI
+// chrome. Keep their state marker language-neutral plus the stable internal
+// snake_case label used in run records, instead of leaking Rust Debug variants.
+fn task_state_marker(state: TaskState) -> String {
+    format!("{} {}", state.glyph(), task_state_internal_label(state))
+}
+
+fn task_state_internal_label(state: TaskState) -> &'static str {
+    match state {
+        TaskState::Queued => "queued",
+        TaskState::Running => "running",
+        TaskState::Done => "done",
+        TaskState::Blocked => "blocked",
+        TaskState::Failed => "failed",
+        TaskState::NeedsUser => "needs_user",
+        TaskState::Partial => "partial",
+        TaskState::Deferred => "deferred",
+    }
+}
 
 /// Write `checkpoint.md` for a run: short enough to feed into the next cycle.
 pub fn write_checkpoint(
@@ -28,7 +48,10 @@ pub fn write_checkpoint(
     md.push_str(&format!("- Task: {} {}\n", task.id, task.title));
     md.push_str(&format!("- Run: {}\n", eval.run_id));
     md.push_str(&format!("- Result status: {}\n", eval.status));
-    md.push_str(&format!("- Next task state: {:?}\n", eval.next_task_state));
+    md.push_str(&format!(
+        "- Next task state: {}\n",
+        task_state_marker(eval.next_task_state)
+    ));
 
     if let Some(r) = result {
         let changed = r.changes.files_modified.len()
@@ -107,8 +130,8 @@ pub fn write_handoff(
     }
 
     md.push_str(&format!(
-        "## Next task state\n\n{:?}\n",
-        eval.next_task_state
+        "## Next task state\n\n{}\n",
+        task_state_marker(eval.next_task_state)
     ));
 
     write_str(&run_dir.join("handoff.md"), &md)?;
@@ -120,5 +143,18 @@ fn non_empty<'a>(s: &'a str, fallback: &'a str) -> &'a str {
         fallback
     } else {
         s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_state_marker_uses_glyph_and_internal_label_not_debug_variant() {
+        let marker = task_state_marker(TaskState::NeedsUser);
+
+        assert_eq!(marker, "? needs_user");
+        assert!(!marker.contains("NeedsUser"));
     }
 }

@@ -5,7 +5,7 @@
 //! background thread so the UI stays responsive; the event loop polls a channel
 //! for completion and animates a spinner meanwhile.
 
-mod i18n;
+pub(crate) mod i18n;
 mod ime;
 mod view;
 
