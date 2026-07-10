@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`yardlet resolve <id>` finalizes a hand-merged Partial.** When a
+  parallel run's merge-back conflicts, the task drops to `Partial` with its
+  worktree kept. After you resolve and integrate the conflict by hand, a single
+  `yardlet resolve <id> [reason]` marks it `Done` through the sole state writer:
+  it appends a transition record to `.agents/transitions/` (so the Trust report
+  sees the Done-transition, actor=you), clears the `partial-reason` marker,
+  removes the merged worktree, and unblocks any dependents. No worker is
+  re-invoked, since the work is already integrated. It refuses a task that is not
+  `Partial`. Previously the only routes were a wasteful worker re-run or a raw
+  hand-edit of `work-queue.yaml` that bypassed the audit log.
+- **Defer and revive from the TUI.** On the Home queue, `d` defers the selected
+  task and `v` revives a deferred one, each recording the state transition, so
+  you no longer have to drop to the CLI to set a task aside or bring it back.
+- **Approve a pending task mid-drain.** `p` is now context-aware on Home: it
+  approves the selected approval-pending task even while an auto-drain is
+  running, and only falls back to pausing the drain when nothing is awaiting
+  approval. Previously `p` during a drain could only pause, so an approval-gated
+  task could not be cleared without stopping the loop first.
+
+### Fixed
+
+- **Korean status labels no longer leak English tokens.** The terminal UI task
+  state labels (running, done, failed, blocked, needs-you, partial, deferred,
+  queued) now render from the localized label table for the detected language
+  instead of hardcoded English, so a Korean session shows Korean state labels
+  end to end.
+- **`yardlet answer` shows the current plan's question, not a stale one.** The
+  pending-question lookup is now scoped to the live intent. A past plan can reuse
+  a task id (e.g. `YARD-001`) and its `result.json`/conversation stays on disk;
+  the lookup now compares each candidate run's `intent_id` to the current queue's
+  and ignores runs from a different intent, so a superseded question can no
+  longer resurface. When the intent is unknown (unattributed legacy run) it
+  falls back to the prior behavior rather than hide a real question.
+- **Documentation and other non-code tasks are not failed by whole-app
+  validation.** Configured validation commands now gate builder-role
+  (implementation) tasks only; a research, review, or safety task is no longer
+  flipped to `Failed` by an unrelated whole-app command that is not its
+  acceptance.
+- **An open question gates intent completion.** The completion judgment now
+  distinguishes a `NeedsUser` task (an open question) from a `Deferred` one (a
+  settled decision): the drain, the final report, and the intent wrap no longer
+  read as complete while a `NeedsUser` question is still pending.
+
 ## 0.8.1 - 2026-07-10
 
 ### Added
