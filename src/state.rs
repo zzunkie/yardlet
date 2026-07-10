@@ -470,10 +470,6 @@ impl Workspace {
 
         self.save_queue(&queue)?;
 
-        let has_open_decision = queue
-            .tasks
-            .iter()
-            .any(|t| t.state == TaskState::NeedsUser || t.state == TaskState::Running);
         let has_runnable = queue.tasks.iter().any(|t| {
             queue.is_runnable_now(
                 t,
@@ -481,7 +477,10 @@ impl Workspace {
                 &vocab,
             )
         });
-        if !queue.tasks.is_empty() && queue.drained() && !has_open_decision && !has_runnable {
+        // Wrap only when the intent is genuinely complete: drained AND no open
+        // NeedsUser question (finding 21) AND nothing still runnable. Running is
+        // covered by `drained()` (it is not terminal).
+        if ready_for_completion(&queue) && !has_runnable {
             if let Some(intent_id) = crate::report::archive_intent(self)? {
                 clear_intent_and_queue_with_wrap(self, &queue, &intent_id)?;
                 report.archived_intent = Some(intent_id);
@@ -1173,6 +1172,107 @@ fn with_transition_intent(ws: &Workspace, mut rec: TransitionRecord) -> Transiti
     rec
 }
 
+/// Is the intent ready to surface a completion report? The queue must be
+/// [`WorkQueue::drained`] AND carry no OPEN question. This is the completion
+/// judgment, distinct from `drained()` (holds-inclusive): a `Deferred` task is a
+/// settled human decision, so the intent may wrap with it recorded; a
+/// `NeedsUser` task is an OPEN question the user still owes an answer to, so the
+/// report must NOT fire `done/complete` while one is pending (finding 21 —
+/// NeedsUser is gated apart from Deferred in the completion judgment). A
+/// `Running` task is excluded implicitly: it is not terminal, so `drained()` is
+/// already false.
+pub fn ready_for_completion(queue: &WorkQueue) -> bool {
+    !queue.tasks.is_empty()
+        && queue.drained()
+        && !queue.tasks.iter().any(|t| t.state == TaskState::NeedsUser)
+}
+
+/// Outcome of finalizing a merge-conflict `Partial` to `Done`.
+pub struct ResolveOutcome {
+    /// The worktree that was removed, if one was still on disk.
+    pub removed_worktree: Option<PathBuf>,
+    /// Whether a `partial-reason` marker was cleared.
+    pub cleared_partial_reason: bool,
+    /// Queued dependents whose dependencies are now all met.
+    pub unblocked: Vec<String>,
+}
+
+/// Finalize a task left `Partial` by a merge conflict, once a human has manually
+/// integrated its worktree (finding 23). Marks it `Done` through the sole state
+/// writer — recording the transition to the audit log so Trust v2 sees the
+/// Done-transition — clears the `partial-reason` marker, and removes the merged
+/// worktree. No worker is re-invoked: the work is already integrated, so this is
+/// pure bookkeeping. Errors if the task is missing or not `Partial`.
+pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<ResolveOutcome> {
+    let mut queue = ws.load_queue()?;
+    let Some(idx) = queue.tasks.iter().position(|t| t.id == task_id) else {
+        anyhow::bail!("task '{task_id}' not found in the queue");
+    };
+    let from = queue.tasks[idx].state;
+    match from {
+        TaskState::Partial => {}
+        TaskState::Done => {
+            anyhow::bail!("{task_id} is already Done — nothing to resolve")
+        }
+        other => anyhow::bail!(
+            "{task_id} is {other:?}, not Partial — `resolve` only finalizes a Partial task whose \
+             worktree you merged by hand"
+        ),
+    }
+    queue.tasks[idx].state = TaskState::Done;
+    // Yardlet stays the sole queue writer: persist, then record the transition.
+    ws.save_queue(&queue)?;
+    append_transition(
+        ws,
+        transition(
+            task_id,
+            from,
+            TaskState::Done,
+            // Reuse the recovery cause: resolve reconciles stranded state after a
+            // manual integration, the same family as orphan recovery. Actor=User
+            // and the detail keep it audit-clear.
+            TransitionCause::Recover,
+            detail,
+            TransitionActor::User,
+        ),
+    )?;
+
+    // Clean up the run's Partial artifacts. The worktree's branch is already in
+    // HEAD (the human merged it), so removing it strands nothing.
+    let mut removed_worktree = None;
+    let mut cleared_partial_reason = false;
+    if let Some((_, run_dir)) = crate::run::latest_run_for(ws, task_id) {
+        let marker = run_dir.join("partial-reason");
+        if marker.exists() {
+            let _ = fs::remove_file(&marker);
+            cleared_partial_reason = true;
+        }
+        if let Some(wt) = crate::run::run_worktree(&run_dir).filter(|w| w.exists()) {
+            let branch = format!("yard/{}", task_id.to_lowercase());
+            crate::parallel::remove_worktree(&ws.root, &wt, &branch);
+            removed_worktree = Some(wt);
+        }
+    }
+
+    // Dependents that were only waiting on this task can now run.
+    let unblocked = queue
+        .tasks
+        .iter()
+        .filter(|t| {
+            t.state == TaskState::Queued
+                && t.depends_on.iter().any(|d| d == task_id)
+                && queue.deps_met(t)
+        })
+        .map(|t| t.id.clone())
+        .collect();
+
+    Ok(ResolveOutcome {
+        removed_worktree,
+        cleared_partial_reason,
+        unblocked,
+    })
+}
+
 fn clear_intent_and_queue_with_wrap(
     ws: &Workspace,
     queue: &WorkQueue,
@@ -1798,6 +1898,114 @@ records:
         let workers = ws.load_workers().unwrap();
         assert!(!save_workers_preserving_format(&ws.workers_path(), &workers).unwrap());
         assert_eq!(fs::read(ws.workers_path()).unwrap(), before);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn task_in(id: &str, state: &str) -> Task {
+        crate::yaml::from_str(&format!("id: {id}\ntitle: {id}\nstate: {state}\n")).unwrap()
+    }
+
+    fn queue_of(states: &[(&str, &str)]) -> WorkQueue {
+        let mut q = WorkQueue::empty();
+        q.tasks = states.iter().map(|(id, s)| task_in(id, s)).collect();
+        q
+    }
+
+    #[test]
+    fn ready_for_completion_gates_needs_user_apart_from_deferred() {
+        // finding 21: a Deferred task is a settled decision, so the intent may
+        // wrap; a NeedsUser task is an OPEN question — the completion report must
+        // not fire while one is pending. Both are `is_terminal`, so `drained()`
+        // cannot tell them apart; the completion judgment must.
+        assert!(queue_of(&[("A", "done"), ("B", "deferred")]).drained());
+        assert!(ready_for_completion(&queue_of(&[
+            ("A", "done"),
+            ("B", "deferred")
+        ])));
+
+        assert!(queue_of(&[("A", "done"), ("B", "needs_user")]).drained());
+        assert!(
+            !ready_for_completion(&queue_of(&[("A", "done"), ("B", "needs_user")])),
+            "an open NeedsUser question must gate completion"
+        );
+
+        // Not drained / empty are never complete.
+        assert!(!ready_for_completion(&queue_of(&[
+            ("A", "done"),
+            ("B", "queued")
+        ])));
+        assert!(!ready_for_completion(&queue_of(&[("A", "running")])));
+        assert!(!ready_for_completion(&WorkQueue::empty()));
+        // A fully-Done queue is complete.
+        assert!(ready_for_completion(&queue_of(&[
+            ("A", "done"),
+            ("B", "done")
+        ])));
+    }
+
+    #[test]
+    fn resolve_partial_finalizes_and_records_transition() {
+        // finding 23: a merge-conflict Partial is finalized to Done by a single
+        // command — state.rs is the sole writer, the transition lands in the
+        // audit log, the partial-reason marker is cleared, and a queued dependent
+        // is unblocked. No worker is re-invoked (resolve is pure bookkeeping).
+        let dir = temp_root("resolve-partial");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+
+        let mut queue = WorkQueue::empty();
+        queue.intent_id = "intent-live".to_string();
+        let mut dependent = task_in("YARD-002", "queued");
+        dependent.depends_on = vec!["YARD-001".to_string()];
+        queue.tasks = vec![task_in("YARD-001", "partial"), dependent];
+        ws.save_queue(&queue).unwrap();
+
+        // A run left behind by the conflicting merge: a partial-reason marker,
+        // no worktree line (so no git op is needed for the test).
+        let run_dir = ws.runs_dir().join("run-20260710-000000-yard-001");
+        fs::create_dir_all(&run_dir).unwrap();
+        write_str(&run_dir.join("run.yaml"), "task_id: YARD-001\n").unwrap();
+        write_str(&run_dir.join("partial-reason"), "merge_conflict").unwrap();
+
+        let outcome = resolve_partial(&ws, "YARD-001", "merged by hand").unwrap();
+        assert!(outcome.cleared_partial_reason);
+        assert!(outcome.removed_worktree.is_none());
+        assert_eq!(outcome.unblocked, vec!["YARD-002".to_string()]);
+
+        // Queue: the Partial is now Done (the dependent stays Queued, ready).
+        let q = ws.load_queue().unwrap();
+        assert_eq!(q.tasks[0].state, TaskState::Done);
+        assert_eq!(q.tasks[1].state, TaskState::Queued);
+        // The marker is gone.
+        assert!(!run_dir.join("partial-reason").exists());
+        // The transition is audited: Partial -> Done, actor User, cause Recover.
+        let last = ws.latest_transition("YARD-001").unwrap();
+        assert_eq!(last.from, TaskState::Partial);
+        assert_eq!(last.to, TaskState::Done);
+        assert_eq!(last.cause, TransitionCause::Recover);
+        assert_eq!(last.actor, TransitionActor::User);
+        assert_eq!(last.detail, "merged by hand");
+        assert_eq!(last.intent_id, "intent-live");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_partial_rejects_a_non_partial_task() {
+        let dir = temp_root("resolve-nonpartial");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+        let mut queue = WorkQueue::empty();
+        queue.tasks = vec![task_in("YARD-001", "queued")];
+        ws.save_queue(&queue).unwrap();
+
+        assert!(resolve_partial(&ws, "YARD-001", "x").is_err());
+        assert!(resolve_partial(&ws, "NOPE", "x").is_err());
+        // A queued task is untouched by a rejected resolve.
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Queued);
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -1449,6 +1449,17 @@ fn validation_required(task: &crate::schemas::Task) -> bool {
         .unwrap_or(false)
 }
 
+/// Does deterministic validation apply to this task? Configured validation
+/// (e.g. `cargo test`) gates CODE: it is the acceptance of an implementation
+/// task. A doc/research/review/safety task delivers findings as prose, so an
+/// unrelated whole-app command is NOT its acceptance and must never flip it to
+/// Failed (goal-1 c). Only builder-role (implementation) tasks are validated;
+/// the split reuses the same role mapping the packet builder uses so a task's
+/// kind decides validation and packet shape consistently.
+fn validation_applies(task: &crate::schemas::Task) -> bool {
+    crate::packet::role_for(&task.kind) == "builder"
+}
+
 /// Run `cmds` in `cwd` via `sh -c`, write the deterministic outcome to
 /// `run_dir/validation.json`, and return `(any_ran, all_passed)`. Yardlet (not
 /// the worker) decides whether validation passed.
@@ -1555,7 +1566,7 @@ fn run_validation_commands(
 }
 
 /// The worktree a run executed in, when it was a parallel worktree run.
-fn run_worktree(run_dir: &std::path::Path) -> Option<PathBuf> {
+pub(crate) fn run_worktree(run_dir: &std::path::Path) -> Option<PathBuf> {
     let yaml = std::fs::read_to_string(run_dir.join("run.yaml")).ok()?;
     let v = yaml
         .lines()
@@ -2206,8 +2217,10 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
 
     // Deterministic validation: Yardlet core runs the task's configured
     // validation commands itself. Any failure (or a `required` task with
-    // nothing to run) is fatal and blocks Done.
-    if flags.validation {
+    // nothing to run) is fatal and blocks Done. Scoped to code tasks: a
+    // doc/non-code task is not failed by an unrelated whole-app command
+    // (goal-1 c) — see `validation_applies`.
+    if flags.validation && validation_applies(task) {
         // A worktree run (parallel/recovery) validates its worktree — its edits
         // live there until merged — so a failing task is caught BEFORE the merge
         // and never reaches the workspace (it stays Partial, worktree kept). The
@@ -2635,12 +2648,35 @@ pub(crate) fn partial_is_conflict(ws: &Workspace, task_id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The intent a run belonged to, read from its `run.yaml` (empty if unknown).
+fn run_intent_id(run_dir: &std::path::Path) -> Option<String> {
+    state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
+        .ok()
+        .map(|r| r.intent_id)
+        .filter(|s| !s.is_empty())
+}
+
 /// The most recent unanswered question a worker left for a given task, if any.
+///
+/// Scoped to the CURRENT intent. Task ids repeat across intents (a fresh plan
+/// can reuse `YARD-001`), and a past plan's `result.json`/conversation stays on
+/// disk (new plans do not sweep `runs/`). Without intent scoping the newest
+/// on-disk run for that bare id wins — surfacing a stale question from a past
+/// intent (the dogfood-caught stale-question defect). We take the live intent
+/// from the queue and only consider runs/turns that belong to it. When the
+/// intent is unknown (no queue / unattributed legacy run) we fall back to the
+/// old bare-id behavior rather than hide a genuine question.
 pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
+    let current_intent = ws
+        .load_queue()
+        .ok()
+        .map(|q| q.intent_id)
+        .filter(|s| !s.is_empty());
     let mut best: Option<(SystemTime, String)> = None;
     if let Ok(entries) = std::fs::read_dir(ws.runs_dir()) {
         for entry in entries.flatten() {
-            let result_path = entry.path().join("result.json");
+            let dir = entry.path();
+            let result_path = dir.join("result.json");
             let Ok(text) = std::fs::read_to_string(&result_path) else {
                 continue;
             };
@@ -2649,6 +2685,12 @@ pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
             };
             if result.task_id != task_id {
                 continue;
+            }
+            // Reject a same-id result that belongs to a different (past) intent.
+            if let Some(cur) = &current_intent {
+                if run_intent_id(&dir).as_deref() != Some(cur.as_str()) {
+                    continue;
+                }
             }
             let Some(q) = result.question_for_user.filter(|q| !q.trim().is_empty()) else {
                 continue;
@@ -2668,10 +2710,24 @@ pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
     // Fallback: a question seeded straight into the conversation (a
     // worker-proposed DECISION follow-up ingested as NeedsUser) has no run
     // result.json. It is pending only while unanswered — i.e. the last turn is
-    // still the worker's; once the user replies, the last turn is theirs.
+    // still the worker's; once the user replies, the last turn is theirs. The
+    // conversation file is per-task and also survives replanning, so scope the
+    // last worker turn to the current intent when its run is attributable.
     let conv = ws.load_conversation(task_id);
     match conv.turns.last() {
-        Some(t) if t.role == TurnRole::Worker && !t.text.trim().is_empty() => Some(t.text.clone()),
+        Some(t) if t.role == TurnRole::Worker && !t.text.trim().is_empty() => {
+            if let Some(cur) = &current_intent {
+                if !t.run_id.is_empty() {
+                    let rd = ws.runs_dir().join(&t.run_id);
+                    if rd.join("run.yaml").exists()
+                        && run_intent_id(&rd).as_deref() != Some(cur.as_str())
+                    {
+                        return None;
+                    }
+                }
+            }
+            Some(t.text.clone())
+        }
         _ => None,
     }
 }
@@ -2720,6 +2776,115 @@ mod tests {
         let (ran, _) = run_validation_commands(&[], &dir, &dir, &billing);
         assert!(!ran);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validation_scoped_to_code_tasks_only() {
+        // goal-1 c: configured validation gates CODE. A doc/non-code task must
+        // not be run through (and failed by) an unrelated whole-app command.
+        let mut t = task("X", TaskState::Queued, 1, false);
+        for k in ["", "implementation", "IMPLEMENTATION", "feature"] {
+            t.kind = k.into();
+            assert!(validation_applies(&t), "code task {k:?} should validate");
+        }
+        for k in ["research", "review", "safety"] {
+            t.kind = k.into();
+            assert!(
+                !validation_applies(&t),
+                "non-code task {k:?} must not be gated by validation"
+            );
+        }
+    }
+
+    fn write_needs_user_run(ws: &Workspace, run_id: &str, intent: &str, question: &str) {
+        let rd = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&rd).unwrap();
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: "YARD-001".into(),
+            status: "needs_user".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: Some(question.into()),
+            compact_summary: String::new(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+        };
+        write_str(
+            &rd.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(
+            &rd.join("run.yaml"),
+            &format!("run_id: {run_id}\ntask_id: YARD-001\nintent_id: {intent}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn latest_question_is_scoped_to_the_current_intent() {
+        // stale-question (AC-006): a past plan's result.json for the SAME task id
+        // stays on disk. `answer` must surface the CURRENT intent's question, not
+        // the past one — even when the stale run is newer on disk.
+        let root = std::env::temp_dir().join(format!("yard-staleq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let ws = Workspace::at(&root);
+        let mut t = task("YARD-001", TaskState::NeedsUser, 10, false);
+        t.kind = "implementation".into();
+        let mut q = queue(vec![t]);
+        q.intent_id = "intent-current".into();
+        ws.save_queue(&q).unwrap();
+
+        // Current-intent run FIRST, then a NEWER stale run from a past intent
+        // that reused the same task id. Newest-by-mtime would pick the stale one.
+        write_needs_user_run(
+            &ws,
+            "run-20260710-100000",
+            "intent-current",
+            "current question",
+        );
+        write_needs_user_run(
+            &ws,
+            "run-20260710-120000",
+            "intent-old",
+            "STALE past question",
+        );
+
+        assert_eq!(
+            latest_question_for(&ws, "YARD-001").as_deref(),
+            Some("current question")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn latest_question_ignores_a_past_intent_when_current_has_none() {
+        // Only a past intent left a question: the current plan has none pending,
+        // so nothing is surfaced (the stale one is not resurrected).
+        let root = std::env::temp_dir().join(format!("yard-staleq2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let ws = Workspace::at(&root);
+        let mut t = task("YARD-001", TaskState::NeedsUser, 10, false);
+        t.kind = "implementation".into();
+        let mut q = queue(vec![t]);
+        q.intent_id = "intent-current".into();
+        ws.save_queue(&q).unwrap();
+
+        write_needs_user_run(
+            &ws,
+            "run-20260101-000000",
+            "intent-old",
+            "STALE past question",
+        );
+
+        assert_eq!(latest_question_for(&ws, "YARD-001"), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn task(id: &str, state: TaskState, priority: i64, needs_approval: bool) -> Task {

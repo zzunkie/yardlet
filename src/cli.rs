@@ -56,6 +56,8 @@ pub enum Command {
     Defer(DeferArgs),
     /// Bring a Deferred task back to Queued.
     Revive(ReviveArgs),
+    /// Finalize a merge-conflict Partial to Done after you integrated it by hand.
+    Resolve(ResolveArgs),
     /// Set the default worker permission: sandboxed | full.
     Access(AccessArgs),
     /// Print the latest run's handoff.
@@ -184,6 +186,14 @@ pub struct ReviveArgs {
     /// Revive every Deferred task recorded in the same cascade-defer group.
     #[arg(long)]
     group: bool,
+}
+
+#[derive(Args)]
+pub struct ResolveArgs {
+    /// The Partial task id to finalize to Done.
+    task: String,
+    /// How you resolved it (recorded on the transition; e.g. "merged by hand").
+    reason: Vec<String>,
 }
 
 #[derive(Args)]
@@ -399,6 +409,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Approve(a)) => cmd_approve(&cwd, a),
         Some(Command::Defer(a)) => cmd_defer(&cwd, a),
         Some(Command::Revive(a)) => cmd_revive(&cwd, a),
+        Some(Command::Resolve(a)) => cmd_resolve(&cwd, a),
         Some(Command::Access(a)) => cmd_access(&cwd, a),
         Some(Command::Handoff) => cmd_handoff(&cwd),
         Some(Command::Report) => cmd_report(&cwd),
@@ -1131,6 +1142,34 @@ fn cmd_revive(cwd: &std::path::Path, args: ReviveArgs) -> Result<()> {
             );
         }
         println!("  Resolve or revive those dependencies before the task can run.");
+    }
+    Ok(())
+}
+
+fn cmd_resolve(cwd: &std::path::Path, args: ResolveArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let id = args.task.clone();
+    let reason = args.reason.join(" ");
+    let detail = if reason.trim().is_empty() {
+        "merge conflict resolved by hand; task integrated".to_string()
+    } else {
+        reason.trim().to_string()
+    };
+    let outcome = crate::state::resolve_partial(&ws, &id, &detail)?;
+    println!(
+        "Resolved {id}: Partial \u{2192} Done. Recorded the transition (you integrated it); no worker re-run."
+    );
+    if outcome.cleared_partial_reason {
+        println!("  Cleared the merge-conflict marker.");
+    }
+    if let Some(wt) = &outcome.removed_worktree {
+        println!("  Removed the merged worktree at {}.", wt.display());
+    }
+    if !outcome.unblocked.is_empty() {
+        println!(
+            "  Unblocked {}: run the queue with `yardlet run --auto --execute`.",
+            outcome.unblocked.join(", ")
+        );
     }
     Ok(())
 }
