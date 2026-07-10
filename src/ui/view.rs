@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::i18n::L;
+use super::i18n::{self, L};
 use super::{App, Job, Screen, ScrollViewport};
 use crate::schemas::TaskState;
 use crate::snapshot::Snapshot;
@@ -156,15 +156,14 @@ fn render_monitor(frame: &mut Frame, app: &App) {
                     .map(|t| t.state)
             });
             let (state, state_color) = match qstate {
-                Some(TaskState::Running) => ("running".to_string(), Color::Yellow),
-                Some(TaskState::Done) => ("done".to_string(), Color::Green),
-                Some(TaskState::Failed) => ("failed".to_string(), Color::Red),
-                Some(TaskState::Blocked) => ("blocked".to_string(), Color::Red),
-                Some(TaskState::NeedsUser) => ("needs-you".to_string(), Color::Magenta),
-                Some(TaskState::Partial) => ("partial".to_string(), Color::LightYellow),
-                Some(TaskState::Deferred) => ("deferred".to_string(), Color::DarkGray),
-                Some(TaskState::Queued) => ("queued".to_string(), Color::Gray),
-                None => (h.recorded_state.clone(), Color::Gray),
+                Some(state) => (
+                    i18n::task_state_label(l, state).to_string(),
+                    state_color(state),
+                ),
+                None => (
+                    i18n::recorded_state_label(l, &h.recorded_state),
+                    Color::Gray,
+                ),
             };
             Line::from(vec![
                 Span::styled(h.run_name.clone(), Style::default().fg(Color::DarkGray)),
@@ -553,7 +552,7 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
     let status = Line::from(vec![
         Span::raw(l.status),
         Span::styled(
-            format!("{} ready", health.runnable),
+            format!("{} {}", health.runnable, l.c_ready),
             Style::default().fg(Color::Green),
         ),
         Span::raw(", "),
@@ -562,7 +561,10 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
             Style::default().fg(Color::Yellow),
         ),
         Span::raw(", "),
-        Span::raw(format!("{} deps", health.waiting_dependency)),
+        Span::raw(format!(
+            "{} {}",
+            health.waiting_dependency, l.c_waiting_dependency
+        )),
         Span::raw(", "),
         Span::styled(
             format!("{} {}", health.waiting_decision, l.s_needs),
@@ -570,12 +572,12 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
         ),
         Span::raw(", "),
         Span::styled(
-            format!("{} approval", health.waiting_approval),
+            format!("{} {}", health.waiting_approval, l.c_waiting_approval),
             Style::default().fg(Color::Cyan),
         ),
         Span::raw(", "),
         Span::styled(
-            format!("{} worker", health.waiting_capability),
+            format!("{} {}", health.waiting_capability, l.c_waiting_capability),
             Style::default().fg(Color::Red),
         ),
         Span::raw(", "),
@@ -585,7 +587,7 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
         ),
         Span::raw(", "),
         Span::styled(
-            format!("{} deferred", health.set_aside),
+            format!("{} {}", health.set_aside, l.s_deferred),
             Style::default().fg(Color::DarkGray),
         ),
         Span::raw(", "),
@@ -665,15 +667,7 @@ fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected:
         }
         let sel = selected.min(snap.tasks().len().saturating_sub(1));
         items.extend(snap.tasks().iter().enumerate().map(|(i, t)| {
-            let color = match t.state {
-                TaskState::Done => Color::Green,
-                TaskState::Running => Color::Yellow,
-                TaskState::Blocked | TaskState::Failed => Color::Red,
-                TaskState::NeedsUser => Color::Magenta,
-                TaskState::Partial => Color::LightYellow,
-                TaskState::Deferred => Color::DarkGray,
-                TaskState::Queued => Color::Gray,
-            };
+            let color = state_color(t.state);
             let is_sel = i == sel;
             let marker = if is_sel { "\u{25b8}" } else { " " };
             let id_style = if is_sel {
@@ -701,7 +695,7 @@ fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected:
             } else {
                 let class = snap.task_class(t);
                 spans.push(Span::styled(
-                    format!("  [{}]", class.label()),
+                    format!("  [{}]", i18n::runnable_class_label(l, class)),
                     Style::default().fg(Color::DarkGray),
                 ));
             }
@@ -717,6 +711,18 @@ fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected:
     };
     let block = Block::bordered().title(format!(" {} ({}) ", l.queue_word, snap.tasks().len()));
     frame.render_widget(List::new(items).block(block), area);
+}
+
+fn state_color(state: TaskState) -> Color {
+    match state {
+        TaskState::Done => Color::Green,
+        TaskState::Running => Color::Yellow,
+        TaskState::Blocked | TaskState::Failed => Color::Red,
+        TaskState::NeedsUser => Color::Magenta,
+        TaskState::Partial => Color::LightYellow,
+        TaskState::Deferred => Color::DarkGray,
+        TaskState::Queued => Color::Gray,
+    }
 }
 
 fn task_waiting_kind(snap: &Snapshot, id: &str, state: TaskState, l: &L) -> Option<String> {

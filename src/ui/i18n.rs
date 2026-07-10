@@ -5,6 +5,8 @@
 //! content and the OS locale when set to "auto". Yardlet's canonical state and
 //! worker-facing packets are unaffected by this.
 
+use crate::schemas::{RunnableClass, TaskState};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     En,
@@ -47,6 +49,47 @@ impl Lang {
     }
 }
 
+pub fn task_state_label(l: &L, state: TaskState) -> &'static str {
+    match state {
+        TaskState::Running => l.s_running,
+        TaskState::Done => l.s_done,
+        TaskState::Failed => l.s_failed,
+        TaskState::Blocked => l.s_blocked,
+        TaskState::NeedsUser => l.s_needs,
+        TaskState::Partial => l.s_partial,
+        TaskState::Deferred => l.s_deferred,
+        TaskState::Queued => l.s_queued,
+    }
+}
+
+pub fn recorded_state_label(l: &L, state: &str) -> String {
+    match state {
+        "running" => l.s_running.to_string(),
+        "done" => l.s_done.to_string(),
+        "failed" => l.s_failed.to_string(),
+        "blocked" => l.s_blocked.to_string(),
+        "needs-you" | "needs_user" => l.s_needs.to_string(),
+        "partial" => l.s_partial.to_string(),
+        "deferred" => l.s_deferred.to_string(),
+        "queued" => l.s_queued.to_string(),
+        _ => state.to_string(),
+    }
+}
+
+pub fn runnable_class_label(l: &L, class: RunnableClass) -> &'static str {
+    match class {
+        RunnableClass::Runnable => l.c_ready,
+        RunnableClass::WaitingDecision => l.c_waiting_decision,
+        RunnableClass::WaitingApproval => l.c_waiting_approval,
+        RunnableClass::WaitingDependency => l.c_waiting_dependency,
+        RunnableClass::WaitingCapability => l.c_waiting_capability,
+        RunnableClass::Held => l.c_held,
+        RunnableClass::SetAside => l.c_set_aside,
+        RunnableClass::Running => l.s_running,
+        RunnableClass::Done => l.s_done,
+    }
+}
+
 /// Label table. Every user-visible TUI string lives here.
 pub struct L {
     pub subtitle: &'static str,
@@ -64,6 +107,17 @@ pub struct L {
     pub s_needs: &'static str,
     pub s_blocked: &'static str,
     pub s_done: &'static str,
+    pub s_failed: &'static str,
+    pub s_partial: &'static str,
+    pub s_deferred: &'static str,
+    pub s_queued: &'static str,
+    pub c_ready: &'static str,
+    pub c_waiting_decision: &'static str,
+    pub c_waiting_approval: &'static str,
+    pub c_waiting_dependency: &'static str,
+    pub c_waiting_capability: &'static str,
+    pub c_held: &'static str,
+    pub c_set_aside: &'static str,
     pub queue_word: &'static str,
     pub queue_empty: &'static str,
     pub waiting_any_order: &'static str,
@@ -179,6 +233,17 @@ pub const EN: L = L {
     s_needs: "needs-you",
     s_blocked: "blocked",
     s_done: "done",
+    s_failed: "failed",
+    s_partial: "partial",
+    s_deferred: "deferred",
+    s_queued: "queued",
+    c_ready: "ready",
+    c_waiting_decision: "awaiting decision",
+    c_waiting_approval: "awaiting approval",
+    c_waiting_dependency: "blocked on deps",
+    c_waiting_capability: "needs worker",
+    c_held: "held",
+    c_set_aside: "set aside",
     queue_word: "Queue",
     queue_empty: "  (queue empty \u{2014} press n to describe new work)",
     waiting_any_order: "Waiting work is order-independent: select any marked row, then answer or approve in place.",
@@ -286,6 +351,17 @@ pub const KO: L = L {
     s_needs: "응답대기",
     s_blocked: "막힘",
     s_done: "완료",
+    s_failed: "실패",
+    s_partial: "부분완료",
+    s_deferred: "보류",
+    s_queued: "대기",
+    c_ready: "실행가능",
+    c_waiting_decision: "결정대기",
+    c_waiting_approval: "승인대기",
+    c_waiting_dependency: "의존대기",
+    c_waiting_capability: "워커대기",
+    c_held: "멈춤",
+    c_set_aside: "보류",
     queue_word: "큐",
     queue_empty: "  (큐 비어 있음 — n 눌러 새 작업 입력)",
     waiting_any_order: "대기 작업은 큐 순서와 무관합니다: 표시된 행을 골라 그 자리에서 답변/승인하세요.",
@@ -390,5 +466,39 @@ mod tests {
     #[test]
     fn auto_detects_hangul() {
         assert_eq!(detect("auto", "관리자 주문 검색 추가"), Lang::Ko);
+    }
+
+    #[test]
+    fn korean_status_labels_do_not_leak_english_state_tokens() {
+        let l = Lang::Ko.l();
+        let labels = [
+            task_state_label(l, TaskState::Running).to_string(),
+            task_state_label(l, TaskState::Done).to_string(),
+            task_state_label(l, TaskState::Failed).to_string(),
+            task_state_label(l, TaskState::Blocked).to_string(),
+            task_state_label(l, TaskState::NeedsUser).to_string(),
+            task_state_label(l, TaskState::Partial).to_string(),
+            task_state_label(l, TaskState::Deferred).to_string(),
+            task_state_label(l, TaskState::Queued).to_string(),
+            recorded_state_label(l, "needs-you"),
+        ];
+        let leaked = [
+            "running",
+            "done",
+            "failed",
+            "blocked",
+            "needs-you",
+            "partial",
+            "deferred",
+            "queued",
+        ];
+        for label in labels {
+            for token in leaked {
+                assert!(
+                    !label.contains(token),
+                    "Korean label leaked English token {token}: {label}"
+                );
+            }
+        }
     }
 }
