@@ -926,10 +926,14 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         KeyCode::Char('t') if !app.is_busy() => tidy_workspace(app),
         KeyCode::Char('d') if !app.is_busy() => defer_selected_task(app),
         KeyCode::Char('v') if !app.is_busy() => revive_selected_task(app),
-        KeyCode::Char('p') if !app.is_busy() => start_approve(app),
-        // While an auto-drain runs, p requests a graceful pause (finish current
-        // task, then stop). Esc stops immediately; A resumes.
-        KeyCode::Char('p') => request_pause(app),
+        // `p` is context-aware: a selected approval row wins even while an
+        // auto-drain is running; otherwise busy `p` stays graceful pause.
+        KeyCode::Char('p') => {
+            match home_approve_key_action(selected_awaits_approval(app), app.is_busy()) {
+                HomeApproveKeyAction::Approve => start_approve(app),
+                HomeApproveKeyAction::Pause => request_pause(app),
+            }
+        }
         KeyCode::Char('a') if !app.is_busy() => {
             // Answer a NeedsUser question — or give rerun instructions to a
             // Partial/Blocked task (threaded into its continuation packet).
@@ -1076,6 +1080,20 @@ enum HomeHoldAction {
     Noop,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HomeApproveKeyAction {
+    Approve,
+    Pause,
+}
+
+fn home_approve_key_action(selected_approval_pending: bool, busy: bool) -> HomeApproveKeyAction {
+    if selected_approval_pending || !busy {
+        HomeApproveKeyAction::Approve
+    } else {
+        HomeApproveKeyAction::Pause
+    }
+}
+
 fn home_hold_action(state: Option<TaskState>, busy: bool, revive_key: bool) -> HomeHoldAction {
     if busy {
         return HomeHoldAction::Busy;
@@ -1086,6 +1104,13 @@ fn home_hold_action(state: Option<TaskState>, busy: bool, revive_key: bool) -> H
         (Some(_), false) => HomeHoldAction::Defer,
         _ => HomeHoldAction::Noop,
     }
+}
+
+fn selected_awaits_approval(app: &App) -> bool {
+    app.snapshot
+        .as_ref()
+        .and_then(|s| s.queue.tasks.get(app.selected).map(|t| (&t.id, s)))
+        .is_some_and(|(id, s)| s.approvals_needed.iter().any(|approval| approval == id))
 }
 
 /// Enter on a selected queue task: run its state-appropriate next action.
@@ -2133,16 +2158,41 @@ fn start_approve(app: &mut App) {
         .as_ref()
         .map(|s| s.approvals_needed.clone())
         .unwrap_or_default();
-    if approvals_needed.len() >= 2 {
-        open_approval_batch(app, approvals_needed);
-        return;
-    }
     let selected = app.snapshot.as_ref().and_then(|s| {
         s.queue
             .tasks
             .get(app.selected)
             .map(|t| (t.id.clone(), t.state))
     });
+    if app.is_busy() {
+        let Some((id, state)) = selected
+            .as_ref()
+            .filter(|(id, _)| approvals_needed.iter().any(|approval| approval == id))
+            .cloned()
+        else {
+            app.toast = Some((true, app.lang.l().no_approval.into()));
+            return;
+        };
+        if let Err(e) = crate::approvals::grant(&app.ws, &id) {
+            app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+            return;
+        }
+        app.reload();
+        let suffix = if state == TaskState::NeedsUser {
+            format!("; {}", app.lang.l().key_answer)
+        } else {
+            String::new()
+        };
+        app.toast = Some((
+            true,
+            format!("{}: {id}{suffix}", app.lang.l().approval_batch_approved),
+        ));
+        return;
+    }
+    if approvals_needed.len() >= 2 {
+        open_approval_batch(app, approvals_needed);
+        return;
+    }
     let Some(id) = choose_approval_target(
         selected.as_ref().map(|(id, _)| id.as_str()),
         &approvals_needed,
@@ -2681,6 +2731,7 @@ routing:
         std::fs::create_dir_all(ws.agents_dir()).unwrap();
         std::fs::write(ws.config_path(), CONFIG_WITH_COMMENTS).unwrap();
         std::fs::write(ws.workers_path(), WORKERS_WITH_COMMENTS).unwrap();
+        std::fs::write(ws.billing_path(), crate::templates::BILLING_POLICY).unwrap();
         ws
     }
 
@@ -2830,6 +2881,69 @@ routing:
         );
         assert_eq!(home_hold_action(Some(TaskState::Queued), true, false), Busy);
         assert_eq!(home_hold_action(None, false, false), Noop);
+    }
+
+    #[test]
+    fn home_approve_key_action_prefers_selected_approval_over_busy_pause() {
+        use HomeApproveKeyAction::*;
+        assert_eq!(home_approve_key_action(true, true), Approve);
+        assert_eq!(home_approve_key_action(true, false), Approve);
+        assert_eq!(home_approve_key_action(false, false), Approve);
+        assert_eq!(home_approve_key_action(false, true), Pause);
+    }
+
+    #[test]
+    fn busy_home_p_grants_selected_approval_without_replacing_running_job() {
+        let ws = workspace_with_user_config("busy-approval");
+        let mut task: crate::schemas::Task =
+            crate::yaml::from_str("id: APV\ntitle: approve me\napproval:\n  required: true\n")
+                .unwrap();
+        task.state = TaskState::Queued;
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.tasks = vec![task];
+        ws.save_queue(&queue).unwrap();
+
+        let mut app = App::new(ws.clone());
+        let (_tx, rx) = mpsc::channel();
+        app.job = Job::Running {
+            label: "auto".to_string(),
+            started: Instant::now(),
+            rx,
+        };
+
+        assert!(!crate::approvals::is_granted(&ws, "APV"));
+        assert!(!handle_home_key(&mut app, KeyCode::Char('p')));
+
+        assert!(crate::approvals::is_granted(&ws, "APV"));
+        assert!(matches!(&app.job, Job::Running { label, .. } if label == "auto"));
+    }
+
+    #[test]
+    fn selected_task_defer_and_revive_change_queue_state() {
+        let ws = workspace_with_user_config("defer-revive");
+        let mut task: crate::schemas::Task =
+            crate::yaml::from_str("id: HOLD\ntitle: hold me\n").unwrap();
+        task.state = TaskState::Queued;
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.tasks = vec![task];
+        ws.save_queue(&queue).unwrap();
+
+        let mut app = App::new(ws.clone());
+        defer_selected_task(&mut app);
+        let queue = ws.load_queue().unwrap();
+        assert_eq!(queue.tasks[0].state, TaskState::Deferred);
+        assert_eq!(
+            ws.latest_transition("HOLD").unwrap().cause,
+            crate::schemas::TransitionCause::Defer
+        );
+
+        revive_selected_task(&mut app);
+        let queue = ws.load_queue().unwrap();
+        assert_eq!(queue.tasks[0].state, TaskState::Queued);
+        assert_eq!(
+            ws.latest_transition("HOLD").unwrap().cause,
+            crate::schemas::TransitionCause::Revive
+        );
     }
 
     #[test]
