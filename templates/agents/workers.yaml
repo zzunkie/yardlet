@@ -14,26 +14,32 @@ workers:
     # workers (one worker's not_for is roughly the other's best_for) so the
     # planner can tell them apart. Refine by hand or via `yardlet routing review`.
     best_for: >-
-      image and asset generation; issue-to-patch implementation; test-driven
-      bugfixes; shell-heavy build/test/debug loops; screenshot/mockup-to-code UI
-      implementation; visual UI bugfixes with concrete evidence; mechanical
-      transforms, boilerplate, schema/format constrained output, and routine
-      document/spreadsheet/code edits when acceptance criteria are clear
+      terminal-first execution with deterministic feedback; repository-grounded
+      implementation planning and decomposition; issue-to-patch implementation;
+      test-driven bugfixes; CI/build/debug loops; tool-heavy integration and
+      defensive code or security work; schema/format constrained and mechanical
+      changes; native image and asset generation
     not_for: >-
-      underspecified product strategy, high-stakes domain judgment, long-form
-      narrative synthesis, broad architecture decisions without a concrete
-      implementation target, or policy-bound conversation design
+      open-ended product or policy decisions whose quality is not mechanically
+      checkable; high-stakes legal, medical, or financial judgment; long-form or
+      multi-document synthesis; vision-heavy interpretation of screenshots,
+      diagrams, PDFs, charts, or tables; final review of Codex-authored work when
+      an independent worker is available
     cost_weight: low
     # Optional. Empty = the CLI's own default. codex: `-m <model>` +
-    # `-c model_reasoning_effort=<minimal|low|medium|high>`.
+    # `-c model_reasoning_effort=<model-supported effort>`.
     model: ""
     effort: ""
     role_strengths:
       - image_asset_generation
+      - planning_gate
+      - implementation_planning
+      - terminal_agentic_execution
+      - tool_orchestration
       - focused_implementation
       - test_driven_bugfix
       - shell_heavy_repo_changes
-      - visual_ui_implementation
+      - defensive_security
       - local_code_review
     billing:
       mode: subscription_backed_only
@@ -48,16 +54,18 @@ workers:
   - id: claude-code
     kind: cli_worker
     best_for: >-
-      ambiguity reduction and acceptance-criteria design; product strategy,
-      PRDs, roadmap and decision briefs; faithful long-document briefing,
-      evidence synthesis, and style-sensitive writing/editing; broad codebase
-      exploration; architecture and cross-cutting refactor planning; safety,
-      legal, finance, healthcare, HR, customer-support, tutoring, and other
-      policy-bound reasoning where tradeoffs and source-grounding matter
+      long-horizon implementation and large migrations with ambiguous or
+      cross-cutting scope; multi-repo architecture and refactor planning; deep
+      research and evidence synthesis; product strategy, PRDs, roadmaps, and
+      acceptance design; vision-heavy screenshot, diagram, PDF, chart, and table
+      interpretation including faithful UI reconstruction; style-sensitive
+      long-form work; high-stakes or policy-bound reasoning; independent review
+      of Codex-authored work
     not_for: >-
-      native image or asset generation, tightly-scoped mechanical edits with an
-      already-clear spec, simple boilerplate, shell-heavy tasks with clear
-      commands/tests, or cheap fast iteration
+      native image or asset generation; tightly-scoped terminal tasks with
+      executable acceptance; routine issue-to-patch work, mechanical transforms,
+      or simple boilerplate; shell-heavy fast iteration; final review of
+      Claude-authored work when an independent worker is available
     cost_weight: high
     # Optional. Empty = the CLI's own default. claude: `--model <alias|id>` +
     # `--effort <level>`.
@@ -67,10 +75,16 @@ workers:
       - planning_gate
       - ambiguity_reduction
       - acceptance_criteria
+      - long_horizon_implementation
+      - large_scale_migration
       - research_synthesis
+      - knowledge_work
+      - vision_reasoning
+      - faithful_ui_reconstruction
       - long_form_writing
       - policy_bound_reasoning
       - architecture_reasoning
+      - independent_review
       - review
       - handoff_quality
     billing:
@@ -92,5 +106,5 @@ routing:
   fallback_order: [codex, claude-code]
   # The planner itself runs on this worker (primary, then fallback if not ready).
   planning_gate:
-    primary: claude-code
-    fallback: codex
+    primary: codex
+    fallback: claude-code

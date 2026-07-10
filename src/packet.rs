@@ -1003,8 +1003,12 @@ pub fn compile_planning(
         p.push_str(worker_guidance);
         p.push_str(
             "\nFor each task, set `preferred_worker` to the best fit and give a one-line \
-             `worker_rationale`. Weigh the cost bias: prefer the cheaper worker for routine, \
-             well-scoped work; reserve the pricier one for hard, ambiguous, or broad tasks.\n\n",
+             `worker_rationale`. Follow the profiles' positive and negative boundaries. Use \
+             cost as a tie-breaker, not a proxy for task breadth: broad work with executable \
+             terminal feedback can still belong to an execution specialist, while bounded \
+             work dominated by synthesis, visual interpretation, or judgment can belong to \
+             a reasoning specialist. When a separate final verifier exists, prefer a different \
+             worker from the builder when one is available.\n\n",
         );
     }
 
@@ -1628,6 +1632,25 @@ mod tests {
         );
         assert!(plan.contains("## Workspace rules (always apply)"));
         assert!(plan.contains("## Skills (read on demand)"));
+    }
+
+    #[test]
+    fn planning_packet_routes_by_acceptance_surface_and_independent_review() {
+        let repo = crate::inspect::RepoSummary::default();
+        let plan = compile_planning(
+            "plan and build",
+            &repo,
+            ".agents/runs/plan-routing",
+            "en",
+            "- codex: terminal execution.\n- claude-code: synthesis.\n",
+            &[],
+            &Harness::default(),
+            "codex",
+        );
+
+        assert!(plan.contains("cost as a tie-breaker, not a proxy for task breadth"));
+        assert!(plan.contains("broad work with executable terminal feedback"));
+        assert!(plan.contains("prefer a different worker from the builder"));
     }
 
     #[test]

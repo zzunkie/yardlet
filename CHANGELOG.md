@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed
+
+- **Worker routing now follows the dominant acceptance surface, not task breadth
+  alone.** Terminal- and tool-heavy work with executable checks can stay on the
+  execution specialist even when broad, while synthesis-, vision-, or
+  judgment-heavy work routes to the reasoning specialist. When a separate final
+  verifier exists, planning prefers a different worker from the builder when
+  available. The default worker profiles and planning gate template reflect the
+  current Codex/Claude capability boundary without hard-coding model names into
+  the reusable rubric.
+
 ### Added
 
 - **`yardlet resolve <id>` finalizes a hand-merged Partial.** When a
