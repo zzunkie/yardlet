@@ -44,8 +44,9 @@
   acceptance.
 - **An open question gates intent completion.** The completion judgment now
   distinguishes a `NeedsUser` task (an open question) from a `Deferred` one (a
-  settled decision): the drain, the final report, and the intent wrap no longer
-  read as complete while a `NeedsUser` question is still pending.
+  settled decision): the drain, terminal UI final-report transition, final
+  report, and intent wrap no longer read as complete while a `NeedsUser`
+  question is still pending.
 
 ## 0.8.1 - 2026-07-10
 
