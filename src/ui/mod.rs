@@ -24,7 +24,7 @@ use ratatui::crossterm::terminal::{self, SetTitle};
 use crate::run::{self, RunOptions};
 use crate::schemas::TaskState;
 use crate::snapshot::Snapshot;
-use crate::state::Workspace;
+use crate::state::{self, Workspace};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Screen {
@@ -2260,7 +2260,7 @@ fn choose_approval_target(selected: Option<&str>, approvals_needed: &[String]) -
 }
 
 fn queue_ready_for_completion(queue: &crate::schemas::WorkQueue) -> bool {
-    !queue.tasks.is_empty() && queue.drained()
+    state::ready_for_completion(queue)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3019,6 +3019,31 @@ routing:
         queued.state = TaskState::Queued;
         queue.tasks = vec![done, queued];
         assert!(!queue_ready_for_completion(&queue));
+    }
+
+    #[test]
+    fn completion_ready_gates_needs_user_independent_of_language() {
+        let mut done: crate::schemas::Task =
+            crate::yaml::from_str("id: DONE\ntitle: done").unwrap();
+        done.state = TaskState::Done;
+        let mut needs_user: crate::schemas::Task =
+            crate::yaml::from_str("id: ASK\ntitle: ask").unwrap();
+        needs_user.state = TaskState::NeedsUser;
+
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.tasks = vec![done, needs_user];
+        assert!(queue.drained());
+
+        for lang in [i18n::Lang::En, i18n::Lang::Ko] {
+            let label = match lang {
+                i18n::Lang::En => "en",
+                i18n::Lang::Ko => "ko",
+            };
+            assert!(
+                !queue_ready_for_completion(&queue),
+                "{label}: completion must not auto-open while a NeedsUser question is open"
+            );
+        }
     }
 
     #[test]
