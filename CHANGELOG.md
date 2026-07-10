@@ -36,6 +36,11 @@
 
 ### Fixed
 
+- **Fast consecutive runs no longer overwrite one another's artifacts.** Every
+  task, planning, memory, skill, and parallel attempt now atomically claims its
+  run directory. When timestamp-based ids collide, Yardlet appends a numeric
+  suffix instead of reusing the existing directory, preserving one auditable
+  artifact set per attempt during fast auto-drains.
 - **Final verification no longer races worker-proposed follow-up work.** Review
   and safety tasks now run as an exclusive serial phase after other runnable
   queue work. A newly ingested implementation or research task therefore lands

@@ -302,12 +302,12 @@ pub fn run_batch<F: FnMut(&str)>(
         // "auto"/empty task model/effort keeps the profile pin (see
         // workers::effective_profile); only an explicit value overrides.
         let eff_profile = crate::workers::effective_profile(profile, &task.model, &task.effort);
-        let run_id = format!(
+        let base_run_id = format!(
             "run-{}-{}",
             Local::now().format("%Y%m%d-%H%M%S"),
             task.id.to_lowercase()
         );
-        let run_dir = ws.runs_dir().join(&run_id);
+        let (run_id, run_dir) = ws.claim_run_dir(&base_run_id)?;
         let session = (resolved.worker_id == "claude-code").then(|| run::gen_session_uuid(&run_id));
         preps.push(Prep {
             queue_idx: idx,

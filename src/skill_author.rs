@@ -50,8 +50,8 @@ fn draft(
 
     let (profile, bin, worker_id) = crate::planner::pick_ready_worker(&workers, &billing, None)?;
 
-    let run_id = format!("skill-{}", Local::now().format("%Y%m%d-%H%M%S"));
-    let run_dir = ws.runs_dir().join(&run_id);
+    let base_run_id = format!("skill-{}", Local::now().format("%Y%m%d-%H%M%S"));
+    let (run_id, run_dir) = ws.claim_run_dir(&base_run_id)?;
     std::fs::create_dir_all(run_dir.join("evidence"))?;
     let run_dir_rel = format!(".agents/runs/{run_id}");
 

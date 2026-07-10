@@ -126,6 +126,32 @@ impl Workspace {
     pub fn runs_dir(&self) -> PathBuf {
         self.agents_dir().join("runs")
     }
+    /// Atomically claim a run directory without reusing an existing attempt's
+    /// artifacts. Timestamp-based ids can collide during fast queue drains, so
+    /// later claims receive a stable numeric suffix.
+    pub fn claim_run_dir(&self, base_id: &str) -> Result<(String, PathBuf)> {
+        let runs_dir = self.runs_dir();
+        fs::create_dir_all(&runs_dir)
+            .with_context(|| format!("creating {}", runs_dir.display()))?;
+
+        for attempt in 1_u64.. {
+            let run_id = if attempt == 1 {
+                base_id.to_string()
+            } else {
+                format!("{base_id}-{attempt}")
+            };
+            let run_dir = runs_dir.join(&run_id);
+            match fs::create_dir(&run_dir) {
+                Ok(()) => return Ok((run_id, run_dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    return Err(e).with_context(|| format!("creating {}", run_dir.display()));
+                }
+            }
+        }
+
+        unreachable!("the run directory suffix space is unbounded")
+    }
     pub fn checkpoints_dir(&self) -> PathBuf {
         self.agents_dir().join("checkpoints")
     }
@@ -1367,6 +1393,27 @@ routing:
 
     fn temp_root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("yard-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn run_directory_claims_never_reuse_an_existing_id() {
+        let dir = temp_root("unique-run-dir");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+
+        let (first_id, first_dir) = ws.claim_run_dir("run-20990101-000000").unwrap();
+        fs::write(first_dir.join("result.json"), "first").unwrap();
+        let (second_id, second_dir) = ws.claim_run_dir("run-20990101-000000").unwrap();
+
+        assert_eq!(first_id, "run-20990101-000000");
+        assert_eq!(second_id, "run-20990101-000000-2");
+        assert_ne!(first_dir, second_dir);
+        assert_eq!(
+            fs::read_to_string(first_dir.join("result.json")).unwrap(),
+            "first"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -432,8 +432,8 @@ fn plan_core(
     let (base_profile, bin, worker_id) = pick_ready_worker(workers, billing, worker_override)?;
     let profile = planning_worker_profile(&base_profile, &planning_config);
 
-    let run_id = format!("plan-{}", Local::now().format("%Y%m%d-%H%M%S"));
-    let run_dir = ws.runs_dir().join(&run_id);
+    let base_run_id = format!("plan-{}", Local::now().format("%Y%m%d-%H%M%S"));
+    let (run_id, run_dir) = ws.claim_run_dir(&base_run_id)?;
     std::fs::create_dir_all(run_dir.join("evidence"))?;
     let run_dir_rel = format!(".agents/runs/{run_id}");
     state::save_yaml(
@@ -600,8 +600,8 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
     let images: Vec<String> = Vec::new();
     let (base_profile, bin, worker_id) = pick_ready_worker(&workers, &billing, None)?;
     let profile = planning_worker_profile(&base_profile, &planning_config);
-    let run_id = format!("plan-{}", Local::now().format("%Y%m%d-%H%M%S"));
-    let run_dir = ws.runs_dir().join(&run_id);
+    let base_run_id = format!("plan-{}", Local::now().format("%Y%m%d-%H%M%S"));
+    let (run_id, run_dir) = ws.claim_run_dir(&base_run_id)?;
     std::fs::create_dir_all(run_dir.join("evidence"))?;
     let run_dir_rel = format!(".agents/runs/{run_id}");
     state::save_yaml(
