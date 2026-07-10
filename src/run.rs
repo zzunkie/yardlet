@@ -1284,15 +1284,24 @@ pub fn select_next_ready(
     approved: impl Fn(&str) -> bool,
 ) -> Result<Option<usize>> {
     let pol = &queue.selection_policy;
+    let eligible = |t: &crate::schemas::Task| {
+        queue.is_runnable_now(t, approved(&t.id), cap_vocab)
+            && !(pol.skip_if_blocked && t.state == TaskState::Blocked)
+            && !(pol.skip_if_approval_required && t.approval_required() && !approved(&t.id))
+    };
+    // A final verifier must observe all runnable work that can change the
+    // workspace or propose an implementation follow-up. Keep this as a soft
+    // scheduling barrier: once other work is no longer runnable (failed,
+    // deferred, blocked, or gated), the review remains selectable and cannot
+    // deadlock behind a hard dependency.
+    let work_ready = queue.tasks.iter().any(|t| {
+        eligible(t) && !matches!(crate::packet::role_for(&t.kind), "reviewer" | "security")
+    });
     let mut best: Option<usize> = None;
     for (i, t) in queue.tasks.iter().enumerate() {
-        if !queue.is_runnable_now(t, approved(&t.id), cap_vocab) {
-            continue;
-        }
-        if pol.skip_if_blocked && t.state == TaskState::Blocked {
-            continue;
-        }
-        if pol.skip_if_approval_required && t.approval_required() && !approved(&t.id) {
+        if !eligible(t)
+            || (work_ready && matches!(crate::packet::role_for(&t.kind), "reviewer" | "security"))
+        {
             continue;
         }
         match best {
@@ -4555,5 +4564,28 @@ exit 1
         b.depends_on = vec!["GHOST".into()];
         let q = queue(vec![b]);
         assert_eq!(select_next(&q, &opts()).unwrap(), Some(0));
+    }
+
+    #[test]
+    fn sequential_selector_runs_builder_before_final_review() {
+        let mut review = task("REVIEW", TaskState::Queued, 10, false);
+        review.kind = "review".into();
+        let mut follow_up = task("FIX", TaskState::Queued, 20, false);
+        follow_up.kind = "implementation".into();
+        follow_up.provenance = "worker-proposed".into();
+        let mut q = queue(vec![review, follow_up]);
+
+        assert_eq!(select_next(&q, &opts()).unwrap(), Some(1));
+
+        q.tasks[1].state = TaskState::Deferred;
+        assert_eq!(select_next(&q, &opts()).unwrap(), Some(0));
+
+        q.tasks[1].state = TaskState::Queued;
+        q.tasks[1].approval = Some(crate::yaml::from_str("required: true").unwrap());
+        assert_eq!(select_next(&q, &opts()).unwrap(), Some(0));
+
+        q.tasks[1].approval = None;
+        q.tasks[1].kind = "research".into();
+        assert_eq!(select_next(&q, &opts()).unwrap(), Some(1));
     }
 }

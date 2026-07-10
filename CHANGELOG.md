@@ -36,6 +36,12 @@
 
 ### Fixed
 
+- **Final verification no longer races worker-proposed follow-up work.** Review
+  and safety tasks now run as an exclusive serial phase after other runnable
+  queue work. A newly ingested implementation or research task therefore lands
+  before final verification instead of sharing the verifier's stale worktree
+  snapshot. The barrier is scheduler-only rather than a hard dependency, so
+  failed, deferred, or gated work cannot strand the verifier indefinitely.
 - **Korean status labels no longer leak English tokens.** The terminal UI task
   state labels (running, done, failed, blocked, needs-you, partial, deferred,
   queued) now render from the localized label table for the detected language

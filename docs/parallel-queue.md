@@ -64,6 +64,19 @@ Three invariants keep this simple:
    does not get auto-resolved: the task drops to `Partial` with the conflict
    recorded in the handoff, and its worktree is kept for inspection.
 
+### Final-verifier barrier
+
+Review and safety tasks are an exclusive serial phase behind other runnable
+work. The scheduler does not put a verifier in a parallel batch with builders or
+research tasks, because either can ingest a follow-up implementation after the
+verifier's worktree snapshot was created. Multiple verifiers also run one at a
+time so each sees the queue and workspace settled by the previous verifier.
+
+This is a soft scheduling barrier, not a `depends_on` edge. A failed, deferred,
+approval-gated, capability-gated, or otherwise non-runnable task therefore does
+not strand the verifier: the serial selector uses the live gate/capability state
+and may run the verifier when no non-verifier work is actually runnable.
+
 Fallbacks: not a git repo, dirty tracked tree, or a parallelism of 1 → run
 sequentially exactly as today.
 

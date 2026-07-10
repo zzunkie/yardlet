@@ -29,15 +29,41 @@ use crate::schemas::{RunnableClass, Task, TaskState, WorkQueue, WorkerProfile};
 use crate::state::{self, append_str, write_str, Workspace};
 use crate::{evaluator, guard, inspect, routing, run, workers};
 
+fn is_verifier(task: &Task) -> bool {
+    matches!(packet::role_for(&task.kind), "reviewer" | "security")
+}
+
+fn has_queued_non_verifier(queue: &WorkQueue) -> bool {
+    queue
+        .tasks
+        .iter()
+        .any(|task| task.state == TaskState::Queued && !is_verifier(task))
+}
+
 /// Indices of tasks eligible to run together right now: queued, dependencies
 /// met, not approval-gated. Priority order, up to `max`.
+///
+/// Final verifiers form an exclusive, serial soft barrier behind other queued
+/// work. This keeps a review from sharing the snapshot with a builder or a
+/// research task that may ingest an implementation follow-up, without adding a
+/// hard dependency that could strand the review when work later fails, is
+/// deferred, or becomes gated.
 pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
     let caps = std::collections::BTreeSet::new();
+    // Parallel selection intentionally knows neither live approvals nor the
+    // real capability vocabulary. Holding verifiers behind any Queued
+    // non-verifier makes it fall through to the serial selector for those edge
+    // cases; that selector has the real inputs and can still choose the review
+    // when other work is gated, so this remains non-deadlocking.
+    let work_pending = has_queued_non_verifier(queue);
     let mut ready: Vec<usize> = queue
         .tasks
         .iter()
         .enumerate()
         .filter(|(_, t)| {
+            if work_pending && is_verifier(t) {
+                return false;
+            }
             // A required-validation task is excluded: parallel skips validation,
             // so it must run serially where validation actually gates Done.
             queue.runnable_class(t, false, &caps) == RunnableClass::Runnable
@@ -47,7 +73,15 @@ pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
         .map(|(i, _)| i)
         .collect();
     ready.sort_by_key(|&i| queue.tasks[i].priority);
-    ready.truncate(max);
+    // Never run two final verifiers from the same pre-integration snapshot. A
+    // verifier that proposes remediation must settle before the next verifier
+    // starts, so the latter can observe the new queue/workspace state.
+    let cap = if ready.first().is_some_and(|&i| is_verifier(&queue.tasks[i])) {
+        1
+    } else {
+        max
+    };
+    ready.truncate(cap);
     ready
 }
 
@@ -835,6 +869,71 @@ mod tests {
         let q = queue(vec![task("A", TaskState::Queued, 10, vec![]), needs_val]);
         // Only A is parallel-ready; V is excluded despite its lower priority.
         assert_eq!(ready_independent(&q, 10), vec![0]);
+    }
+
+    #[test]
+    fn final_review_waits_for_a_runnable_worker_follow_up() {
+        let mut review = task("REVIEW", TaskState::Queued, 40, vec![]);
+        review.kind = "review".into();
+        let mut follow_up = task("FIX", TaskState::Queued, 50, vec![]);
+        follow_up.kind = "implementation".into();
+        follow_up.provenance = "worker-proposed".into();
+        let mut q = queue(vec![review, follow_up]);
+
+        // The verifier must not share a batch with code it has not seen yet,
+        // even when its numeric priority would otherwise put it first.
+        assert_eq!(ready_independent(&q, 4), vec![1]);
+
+        q.tasks[1].state = TaskState::Done;
+        assert_eq!(ready_independent(&q, 4), vec![0]);
+    }
+
+    #[test]
+    fn review_barrier_is_soft_for_gated_or_terminal_builders() {
+        let mut review = task("REVIEW", TaskState::Queued, 10, vec![]);
+        review.kind = "review".into();
+        let mut serial_builder = task("SERIAL", TaskState::Queued, 20, vec![]);
+        serial_builder.kind = "implementation".into();
+        serial_builder.validation = Some(crate::yaml::from_str("required: true").unwrap());
+        let mut q = queue(vec![review, serial_builder]);
+
+        // The serial-only builder still holds the review out of a parallel
+        // batch; run_auto will fall through and select it sequentially.
+        assert!(ready_independent(&q, 4).is_empty());
+
+        q.tasks[1].validation = None;
+        q.tasks[1].approval = Some(crate::yaml::from_str("required: true").unwrap());
+        assert!(ready_independent(&q, 4).is_empty());
+
+        q.tasks[1].approval = None;
+        for terminal in [
+            TaskState::Failed,
+            TaskState::Blocked,
+            TaskState::Deferred,
+            TaskState::NeedsUser,
+        ] {
+            q.tasks[1].state = terminal;
+            assert_eq!(ready_independent(&q, 4), vec![0]);
+        }
+    }
+
+    #[test]
+    fn final_verifier_is_exclusive_behind_research_and_other_verifiers() {
+        let mut review = task("REVIEW", TaskState::Queued, 10, vec![]);
+        review.kind = "review".into();
+        let mut safety = task("SAFETY", TaskState::Queued, 20, vec![]);
+        safety.kind = "safety".into();
+        let mut research = task("RESEARCH", TaskState::Queued, 30, vec![]);
+        research.kind = "research".into();
+        let mut q = queue(vec![review, safety, research]);
+
+        assert_eq!(ready_independent(&q, 4), vec![2]);
+
+        q.tasks[2].state = TaskState::Done;
+        assert_eq!(ready_independent(&q, 4), vec![0]);
+
+        q.tasks[0].state = TaskState::Done;
+        assert_eq!(ready_independent(&q, 4), vec![1]);
     }
 
     #[test]
