@@ -929,11 +929,12 @@ fn render_new_work(frame: &mut Frame, app: &App) {
     render_footer(frame, chunks[2], l.footer_newwork);
 }
 
-fn render_answer(frame: &mut Frame, app: &App) {
+fn render_answer(frame: &mut Frame, app: &mut App) {
     let l = app.lang.l();
     let area = safe_area(frame);
     let chunks = Layout::vertical([
         Constraint::Min(4),
+        Constraint::Length(5),
         Constraint::Length(5),
         Constraint::Length(3),
     ])
@@ -949,25 +950,42 @@ fn render_answer(frame: &mut Frame, app: &App) {
     } else {
         question
     };
+    let viewport = scroll_viewport(chunks[0]);
+    app.scroll_viewport = Some(viewport);
+    app.scroll = app
+        .scroll
+        .min(max_scroll_offset(&app.answer_context, viewport));
+    frame.render_widget(
+        Paragraph::new(md_lines(&app.answer_context))
+            .wrap(Wrap { trim: false })
+            .scroll((app.scroll, 0))
+            .block(Block::bordered().title(l.answer_context_title)),
+        chunks[0],
+    );
+    let display_target = if task_id == super::INTERVIEW_TARGET {
+        l.planner
+    } else {
+        task_id.as_str()
+    };
     frame.render_widget(
         Paragraph::new(q_body)
             .wrap(Wrap { trim: true })
-            .block(Block::bordered().title(format!(" {task_id} {} ", l.asking_word))),
-        chunks[0],
+            .block(Block::bordered().title(format!(" {display_target} {} ", l.asking_word))),
+        chunks[1],
     );
     frame.render_widget(
         Paragraph::new(app.input.as_str())
             .wrap(Wrap { trim: false })
             .block(Block::bordered().title(l.your_answer_title)),
-        chunks[1],
+        chunks[2],
     );
-    place_input_cursor(frame, chunks[1], &app.input, app.input_caret);
+    place_input_cursor(frame, chunks[2], &app.input, app.input_caret);
     let footer = if app.answer_grants_approval {
         l.footer_answer_approve
     } else {
         l.footer_answer
     };
-    render_footer(frame, chunks[2], footer);
+    render_footer(frame, chunks[3], footer);
 }
 
 fn render_handoff(frame: &mut Frame, app: &mut App) {

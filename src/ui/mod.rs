@@ -91,6 +91,13 @@ pub struct JobResult {
     pub summary: String,
 }
 
+fn localized_run_outcome(lang: i18n::Lang, report: &crate::run::RunReport) -> String {
+    report
+        .result_state
+        .map(|state| i18n::task_state_label(lang.l(), state).to_string())
+        .unwrap_or_else(|| report.lines.last().cloned().unwrap_or_default())
+}
+
 #[derive(Clone)]
 pub struct ApprovalBatchRow {
     pub id: String,
@@ -190,6 +197,9 @@ pub struct App {
     /// Set when the screen opens — a NeedsUser question, or a Partial/Blocked
     /// task's remaining-work context (the answer becomes rerun instructions).
     pub answer_target: Option<(String, String)>,
+    /// Read-only context shown above the question on the Answer screen. Built
+    /// once from the current intent's latest matching run and conversation.
+    pub answer_context: String,
     /// The current Answer submission should grant the selected task's
     /// single-use approval before resuming it. This keeps input+approval work in
     /// one deliberate UI flow without weakening run_next's approval gate.
@@ -306,6 +316,7 @@ impl App {
             update_available: false,
             want_restart: false,
             answer_target: None,
+            answer_context: String::new(),
             answer_grants_approval: false,
             ime_saved: None,
             ime_checked: Instant::now(),
@@ -934,14 +945,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
                 HomeApproveKeyAction::Pause => request_pause(app),
             }
         }
-        KeyCode::Char('a') if !app.is_busy() => {
-            // Answer a NeedsUser question — or give rerun instructions to a
-            // Partial/Blocked task (threaded into its continuation packet).
-            match compute_answer_target(app) {
-                Some(t) => open_answer_target(app, t),
-                None => app.toast = Some((true, app.lang.l().no_pending.into())),
-            }
-        }
+        KeyCode::Char('a') => handle_home_answer(app),
         KeyCode::Char('i') => {
             app.intent_text = build_intent_view(app);
             app.scroll = 0;
@@ -1318,9 +1322,12 @@ fn open_answer_target(app: &mut App, target: (String, String)) {
         .map(|s| s.approvals_needed.as_slice())
         .unwrap_or(&[]);
     app.answer_grants_approval = answer_target_will_grant(&target.0, false, approvals_needed);
+    app.answer_context = build_answer_context(app, &target.0, &target.1);
     app.answer_target = Some(target);
     app.input_clear();
     app.toast = None;
+    app.scroll = 0;
+    app.scroll_viewport = None;
     app.screen = Screen::Answer;
 }
 
@@ -1330,6 +1337,7 @@ fn open_answer_target(app: &mut App, target: (String, String)) {
 /// so this path cannot bypass approval.
 fn start_run_target(app: &mut App, target_id: String) {
     let ws = app.ws.clone();
+    let lang = app.lang;
     let lbl = app.lang.l();
     let (via, failed) = (lbl.via_word, lbl.run_failed);
     let (tx, rx) = mpsc::channel();
@@ -1347,10 +1355,10 @@ fn start_run_target(app: &mut App, target_id: String) {
             },
         ) {
             Ok(r) => {
-                let tail = r.lines.last().cloned().unwrap_or_default();
+                let outcome = localized_run_outcome(lang, &r);
                 JobResult {
                     ok: true,
-                    summary: format!("{} {via} {}: {}", r.task_id, r.worker_id, tail),
+                    summary: format!("{} {via} {}: {outcome}", r.task_id, r.worker_id),
                 }
             }
             Err(e) => JobResult {
@@ -1692,6 +1700,7 @@ fn apply_scroll(app: &mut App, code: KeyCode) {
 
 fn scroll_text(app: &App) -> Option<&str> {
     match app.screen {
+        Screen::Answer => Some(&app.answer_context),
         Screen::Handoff => Some(&app.handoff_text),
         Screen::Intent => Some(&app.intent_text),
         Screen::Trust => Some(&app.trust_text),
@@ -2005,6 +2014,7 @@ fn handle_answer_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
                 app.screen = Screen::Home;
             }
         }
+        KeyCode::PageUp | KeyCode::PageDown => apply_scroll(app, code),
         KeyCode::Backspace => app.input_backspace(),
         KeyCode::Delete => app.input_delete(),
         KeyCode::Left => app.caret_left(),
@@ -2115,6 +2125,7 @@ fn start_run(app: &mut App) {
     }
 
     let ws = app.ws.clone();
+    let lang = app.lang;
     let lbl = app.lang.l();
     let (via, failed) = (lbl.via_word, lbl.run_failed);
     let (tx, rx) = mpsc::channel();
@@ -2132,10 +2143,10 @@ fn start_run(app: &mut App) {
             },
         ) {
             Ok(r) => {
-                let tail = r.lines.last().cloned().unwrap_or_default();
+                let outcome = localized_run_outcome(lang, &r);
                 JobResult {
                     ok: true,
-                    summary: format!("{} {via} {}: {}", r.task_id, r.worker_id, tail),
+                    summary: format!("{} {via} {}: {outcome}", r.task_id, r.worker_id),
                 }
             }
             Err(e) => JobResult {
@@ -2212,6 +2223,7 @@ fn start_approve(app: &mut App) {
         return;
     }
     let ws = app.ws.clone();
+    let lang = app.lang;
     let lbl = app.lang.l();
     let (via, failed) = (lbl.via_word, lbl.run_failed);
     let (tx, rx) = mpsc::channel();
@@ -2229,10 +2241,10 @@ fn start_approve(app: &mut App) {
             },
         ) {
             Ok(r) => {
-                let tail = r.lines.last().cloned().unwrap_or_default();
+                let outcome = localized_run_outcome(lang, &r);
                 JobResult {
                     ok: true,
-                    summary: format!("{} {via} {}: {}", r.task_id, r.worker_id, tail),
+                    summary: format!("{} {via} {}: {outcome}", r.task_id, r.worker_id),
                 }
             }
             Err(e) => JobResult {
@@ -2482,6 +2494,18 @@ fn start_auto(app: &mut App) {
 /// not instructions for a task.
 const INTERVIEW_TARGET: &str = "__intent__";
 
+/// What the Home `a` key resolves, independent of terminal or worker state.
+/// The global ambiguity gate must be answered before any task can resume. A
+/// selected NeedsUser row then wins over the default pending row so multiple
+/// open questions remain directly addressable from the cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HomeAnswerAction {
+    Task(String),
+    Interview,
+    Busy,
+    None,
+}
+
 /// Can `a` instruct this task? Anything not currently running and not done:
 /// queued (run with instructions), partial/blocked/failed (continue or retry
 /// with instructions), needs-user (answer the question).
@@ -2489,29 +2513,81 @@ fn answerable(state: TaskState) -> bool {
     !matches!(state, TaskState::Running | TaskState::Done)
 }
 
-/// What `a` would answer right now, in priority order: the pending NeedsUser
-/// question; the task selected in the queue list (if answerable); else the
-/// first answerable task. The reply rides into the task's next packet.
-fn compute_answer_target(app: &App) -> Option<(String, String)> {
-    let s = app.snapshot.as_ref()?;
-    if let Some(p) = &s.pending {
-        return Some(p.clone());
+fn home_answer_action(
+    ambiguity_gate: bool,
+    pending_task: Option<&str>,
+    selected_task: Option<(&str, TaskState)>,
+    first_answerable_task: Option<&str>,
+    busy: bool,
+) -> HomeAnswerAction {
+    if busy {
+        return HomeAnswerAction::Busy;
     }
-    // The ambiguity gate: a answers the PLANNER (interview turn), not a task.
-    if let Some((qs, _)) = &s.gate {
-        let mut text = String::new();
-        for (i, q) in qs.iter().enumerate() {
-            text.push_str(&format!("{}. {}\n", i + 1, q));
-        }
-        return Some((INTERVIEW_TARGET.to_string(), text.trim().to_string()));
+    if ambiguity_gate {
+        return HomeAnswerAction::Interview;
     }
-    let t = s
+    if let Some((id, TaskState::NeedsUser)) = selected_task {
+        return HomeAnswerAction::Task(id.to_string());
+    }
+    if let Some(id) = pending_task {
+        return HomeAnswerAction::Task(id.to_string());
+    }
+    if let Some((id, _)) = selected_task.filter(|(_, state)| answerable(*state)) {
+        return HomeAnswerAction::Task(id.to_string());
+    }
+    first_answerable_task
+        .map(|id| HomeAnswerAction::Task(id.to_string()))
+        .unwrap_or(HomeAnswerAction::None)
+}
+
+fn current_home_answer_action(app: &App) -> HomeAnswerAction {
+    let Some(s) = app.snapshot.as_ref() else {
+        return HomeAnswerAction::None;
+    };
+    let selected = s
         .queue
         .tasks
         .get(app.selected)
-        .filter(|t| answerable(t.state))
-        .or_else(|| s.queue.tasks.iter().find(|t| answerable(t.state)))?;
-    Some(task_answer_target(app, t))
+        .map(|t| (t.id.as_str(), t.state));
+    let first = s
+        .queue
+        .tasks
+        .iter()
+        .find(|t| answerable(t.state))
+        .map(|t| t.id.as_str());
+    home_answer_action(
+        s.gate.is_some(),
+        s.pending.as_ref().map(|(id, _)| id.as_str()),
+        selected,
+        first,
+        app.is_busy(),
+    )
+}
+
+fn handle_home_answer(app: &mut App) {
+    match current_home_answer_action(app) {
+        HomeAnswerAction::Task(id) => open_answer_for_task(app, &id),
+        HomeAnswerAction::Interview => {
+            let questions = app
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.gate.as_ref())
+                .map(|(questions, _)| questions)
+                .cloned()
+                .unwrap_or_default();
+            let text = questions
+                .iter()
+                .enumerate()
+                .map(|(i, q)| format!("{}. {q}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n");
+            open_answer_target(app, (INTERVIEW_TARGET.to_string(), text));
+        }
+        HomeAnswerAction::Busy => app.toast = Some((true, app.lang.l().busy.into())),
+        HomeAnswerAction::None => {
+            app.toast = Some((true, app.lang.l().no_pending.into()));
+        }
+    }
 }
 
 /// The (task id, context) the answer screen replies to: a NeedsUser task's
@@ -2522,8 +2598,8 @@ fn task_answer_target(app: &App, t: &crate::schemas::Task) -> (String, String) {
         let q = crate::run::latest_question_for(&app.ws, &t.id).unwrap_or_default();
         return (t.id.clone(), q);
     }
-    let context = crate::run::latest_run_for(&app.ws, &t.id)
-        .and_then(|(_, dir)| std::fs::read_to_string(dir.join("result.json")).ok())
+    let context = latest_answer_run(app, &t.id)
+        .and_then(|dir| std::fs::read_to_string(dir.join("result.json")).ok())
         .and_then(|raw| serde_json::from_str::<crate::schemas::RunResult>(&raw).ok())
         .map(|r| {
             let mut s = r.compact_summary.trim().to_string();
@@ -2535,6 +2611,158 @@ fn task_answer_target(app: &App, t: &crate::schemas::Task) -> (String, String) {
         })
         .unwrap_or_else(|| t.title.clone());
     (t.id.clone(), context)
+}
+
+fn current_intent_id(app: &App) -> Option<&str> {
+    app.snapshot
+        .as_ref()
+        .map(|s| s.queue.intent_id.as_str())
+        .filter(|id| !id.is_empty())
+}
+
+/// Latest run for this task that belongs to the live intent. Task ids repeat
+/// across plans, so a bare latest-by-task lookup can expose a past intent's
+/// worker output on the Answer screen.
+fn latest_answer_run(app: &App, task_id: &str) -> Option<std::path::PathBuf> {
+    let current_intent = current_intent_id(app);
+    let mut best: Option<(String, std::path::PathBuf)> = None;
+    for entry in std::fs::read_dir(app.ws.runs_dir()).ok()?.flatten() {
+        let dir = entry.path();
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("run-") {
+            continue;
+        }
+        let Ok(record) = state::load_yaml::<crate::run::RunRecord>(&dir.join("run.yaml")) else {
+            continue;
+        };
+        if record.task_id != task_id {
+            continue;
+        }
+        if current_intent.is_some_and(|intent| record.intent_id != intent) {
+            continue;
+        }
+        if best
+            .as_ref()
+            .map(|(best_name, _)| name > best_name.as_str())
+            .unwrap_or(true)
+        {
+            best = Some((name.to_string(), dir));
+        }
+    }
+    best.map(|(_, dir)| dir)
+}
+
+fn readable_worker_output(run_dir: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(run_dir.join("worker-output.log")).ok()?;
+    let text = raw
+        .lines()
+        .filter_map(view::pretty_event_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.trim().is_empty()).then(|| text.trim().to_string())
+}
+
+fn compact_run_summary(run_dir: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(run_dir.join("result.json")).ok()?;
+    let result = serde_json::from_str::<crate::schemas::RunResult>(&raw).ok()?;
+    (!result.compact_summary.trim().is_empty()).then(|| result.compact_summary.trim().to_string())
+}
+
+fn run_belongs_to_intent(ws: &Workspace, run_id: &str, intent_id: Option<&str>) -> bool {
+    let Ok(record) =
+        state::load_yaml::<crate::run::RunRecord>(&ws.runs_dir().join(run_id).join("run.yaml"))
+    else {
+        return false;
+    };
+    intent_id
+        .map(|intent| record.intent_id == intent)
+        .unwrap_or(true)
+}
+
+/// Render only the conversation segment attributable to the live intent.
+/// User turns inherit the attribution of the worker turn they answer. A
+/// run-less seeded decision is included only when it is the current question.
+fn answer_conversation(app: &App, task_id: &str, question: &str) -> Option<String> {
+    let conversation = app.ws.load_conversation(task_id);
+    let last_worker = conversation
+        .turns
+        .iter()
+        .rposition(|turn| turn.role == crate::schemas::TurnRole::Worker);
+    let mut include_segment = false;
+    let mut lines = Vec::new();
+    for (index, turn) in conversation.turns.iter().enumerate() {
+        if turn.role == crate::schemas::TurnRole::Worker {
+            include_segment = if turn.run_id.is_empty() {
+                Some(index) == last_worker && turn.text.trim() == question.trim()
+            } else {
+                run_belongs_to_intent(&app.ws, &turn.run_id, current_intent_id(app))
+            };
+        }
+        if !include_segment || turn.text.trim().is_empty() {
+            continue;
+        }
+        let role = match turn.role {
+            crate::schemas::TurnRole::Worker => app.lang.l().conversation_worker,
+            crate::schemas::TurnRole::User => app.lang.l().conversation_user,
+        };
+        lines.push(format!("**{role}:** {}", turn.text.trim()));
+    }
+    (!lines.is_empty()).then(|| lines.join("\n\n"))
+}
+
+fn build_answer_context(app: &App, target_id: &str, question: &str) -> String {
+    let l = app.lang.l();
+    if target_id == INTERVIEW_TARGET {
+        let summary = app
+            .snapshot
+            .as_ref()
+            .map(|s| s.intent_summary())
+            .unwrap_or(l.no_answer_context);
+        return format!("# {}\n\n{}", l.plan_needs, summary);
+    }
+
+    let task = app
+        .snapshot
+        .as_ref()
+        .and_then(|s| s.queue.tasks.iter().find(|task| task.id == target_id));
+    let mut context = String::new();
+    if let Some(task) = task {
+        context.push_str(&format!(
+            "# {} · {} · [{}]\n\n",
+            task.id,
+            task.title,
+            i18n::task_state_label(l, task.state)
+        ));
+    } else {
+        context.push_str(&format!("# {target_id}\n\n"));
+    }
+
+    let run_dir = latest_answer_run(app, target_id);
+    let mut has_detail = false;
+    if let Some(output) = run_dir.as_deref().and_then(readable_worker_output) {
+        context.push_str(&format!("## {}\n\n{output}\n\n", l.worker_output_title));
+        has_detail = true;
+    }
+    if let Some(conversation) = answer_conversation(app, target_id, question) {
+        context.push_str(&format!(
+            "## {}\n\n{conversation}\n\n",
+            l.conversation_title
+        ));
+        has_detail = true;
+    }
+    if !has_detail {
+        if let Some(summary) = run_dir.as_deref().and_then(compact_run_summary) {
+            context.push_str(&format!("## {}\n\n{summary}\n", l.compact_summary_title));
+        } else if !question.trim().is_empty() {
+            context.push_str(&format!("## {}\n\n{}\n", l.question_title, question.trim()));
+        } else {
+            context.push_str(l.no_answer_context);
+            context.push('\n');
+        }
+    }
+    context.trim_end().to_string()
 }
 
 /// One interview turn: send the user's answer to the planning worker and
@@ -2596,6 +2824,7 @@ fn start_answer(app: &mut App) {
         }
     }
     let ws = app.ws.clone();
+    let lang = app.lang;
     let answer = app.input.trim().to_string();
     let lbl = app.lang.l();
     let (resumed_via, failed) = (lbl.resumed_via, lbl.answer_failed);
@@ -2615,10 +2844,10 @@ fn start_answer(app: &mut App) {
             },
         ) {
             Ok(r) => {
-                let tail = r.lines.last().cloned().unwrap_or_default();
+                let outcome = localized_run_outcome(lang, &r);
                 JobResult {
                     ok: true,
-                    summary: format!("{} {resumed_via} {}: {}", r.task_id, r.worker_id, tail),
+                    summary: format!("{} {resumed_via} {}: {outcome}", r.task_id, r.worker_id),
                 }
             }
             Err(e) => JobResult {
@@ -2733,6 +2962,43 @@ routing:
         std::fs::write(ws.workers_path(), WORKERS_WITH_COMMENTS).unwrap();
         std::fs::write(ws.billing_path(), crate::templates::BILLING_POLICY).unwrap();
         ws
+    }
+
+    fn write_answer_run(
+        ws: &Workspace,
+        run_id: &str,
+        task_id: &str,
+        intent_id: &str,
+        output: Option<&[u8]>,
+        summary: &str,
+    ) {
+        let dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        state::save_yaml(
+            &dir.join("run.yaml"),
+            &crate::run::RunRecord {
+                run_id: run_id.to_string(),
+                task_id: task_id.to_string(),
+                intent_id: intent_id.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        if let Some(bytes) = output {
+            std::fs::write(dir.join("worker-output.log"), bytes).unwrap();
+        }
+        std::fs::write(
+            dir.join("result.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "run_id": run_id,
+                "task_id": task_id,
+                "status": "needs_user",
+                "compact_summary": summary
+            })
+            .to_string(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -2853,6 +3119,107 @@ routing:
             home_enter_action(TaskState::Deferred, false, true),
             DeferredHint
         );
+    }
+
+    #[test]
+    fn home_answer_action_maps_every_gate_and_task_state_to_one_target() {
+        assert_eq!(
+            home_answer_action(
+                true,
+                Some("PENDING"),
+                Some(("SELECTED", TaskState::NeedsUser)),
+                Some("FIRST"),
+                false
+            ),
+            HomeAnswerAction::Interview,
+            "the global ambiguity gate must resolve before a task can resume"
+        );
+        assert_eq!(
+            home_answer_action(
+                false,
+                Some("PENDING"),
+                Some(("SELECTED", TaskState::NeedsUser)),
+                Some("FIRST"),
+                false
+            ),
+            HomeAnswerAction::Task("SELECTED".into()),
+            "the cursor chooses among multiple open task questions"
+        );
+        assert_eq!(
+            home_answer_action(
+                false,
+                Some("PENDING"),
+                Some(("DONE", TaskState::Done)),
+                Some("FIRST"),
+                false
+            ),
+            HomeAnswerAction::Task("PENDING".into())
+        );
+
+        for state in [
+            TaskState::Queued,
+            TaskState::Blocked,
+            TaskState::Failed,
+            TaskState::Partial,
+            TaskState::Deferred,
+        ] {
+            assert_eq!(
+                home_answer_action(false, None, Some(("SELECTED", state)), Some("FIRST"), false),
+                HomeAnswerAction::Task("SELECTED".into()),
+                "an answerable selected state should target the selected task"
+            );
+        }
+        for state in [TaskState::Running, TaskState::Done] {
+            assert_eq!(
+                home_answer_action(false, None, Some(("SELECTED", state)), Some("FIRST"), false),
+                HomeAnswerAction::Task("FIRST".into()),
+                "a non-answerable selected state should fall back to the first answerable task"
+            );
+        }
+        assert_eq!(
+            home_answer_action(false, None, None, None, false),
+            HomeAnswerAction::None
+        );
+        assert_eq!(
+            home_answer_action(
+                true,
+                Some("PENDING"),
+                Some(("SELECTED", TaskState::NeedsUser)),
+                Some("FIRST"),
+                true
+            ),
+            HomeAnswerAction::Busy
+        );
+    }
+
+    #[test]
+    fn localized_run_outcome_never_uses_internal_english_state_tail_in_korean() {
+        for state in [
+            TaskState::Queued,
+            TaskState::Running,
+            TaskState::Done,
+            TaskState::Failed,
+            TaskState::Blocked,
+            TaskState::NeedsUser,
+            TaskState::Partial,
+            TaskState::Deferred,
+        ] {
+            let report = crate::run::RunReport {
+                run_id: "run-test".into(),
+                task_id: "TASK".into(),
+                worker_id: "worker".into(),
+                run_dir: std::path::PathBuf::new(),
+                prepared: true,
+                executed: true,
+                lines: vec!["next task state: internal english tail".into()],
+                result_state: Some(state),
+                session: None,
+                chained: false,
+            };
+            let outcome = localized_run_outcome(i18n::Lang::Ko, &report);
+            assert_eq!(outcome, i18n::task_state_label(i18n::Lang::Ko.l(), state));
+            assert!(!outcome.contains("internal english tail"));
+        }
     }
 
     #[test]
@@ -3156,6 +3523,165 @@ tasks:
             &approvals
         ));
         assert!(!answer_target_will_grant("YARD-005", false, &approvals));
+    }
+
+    #[test]
+    fn answer_context_uses_full_current_intent_output_and_scoped_conversation() {
+        let ws = workspace_with_user_config("answer-current-intent");
+        let mut task: crate::schemas::Task =
+            crate::yaml::from_str("id: ASK\ntitle: Pick the launch lane\n").unwrap();
+        task.state = TaskState::NeedsUser;
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.intent_id = "intent-current".into();
+        queue.tasks.push(task);
+        ws.save_queue(&queue).unwrap();
+
+        write_answer_run(
+            &ws,
+            "run-20260711-010000",
+            "ASK",
+            "intent-current",
+            Some(b"{\"type\":\"text\",\"text\":\"CURRENT OUTPUT ONE\"}\n{\"type\":\"text\",\"text\":\"CURRENT OUTPUT TWO\"}\n"),
+            "current summary",
+        );
+        // Newer by directory name, but from a past intent with the same task id.
+        write_answer_run(
+            &ws,
+            "run-20260711-020000",
+            "ASK",
+            "intent-old",
+            Some(b"STALE OUTPUT\n"),
+            "stale summary",
+        );
+        state::append_conversation_turn(
+            &ws,
+            "ASK",
+            crate::schemas::ConversationTurn {
+                role: crate::schemas::TurnRole::Worker,
+                text: "stale question".into(),
+                run_id: "run-20260711-020000".into(),
+                ts: String::new(),
+            },
+        )
+        .unwrap();
+        state::append_conversation_turn(
+            &ws,
+            "ASK",
+            crate::schemas::ConversationTurn {
+                role: crate::schemas::TurnRole::User,
+                text: "stale answer".into(),
+                run_id: String::new(),
+                ts: String::new(),
+            },
+        )
+        .unwrap();
+        state::append_conversation_turn(
+            &ws,
+            "ASK",
+            crate::schemas::ConversationTurn {
+                role: crate::schemas::TurnRole::Worker,
+                text: "current question".into(),
+                run_id: "run-20260711-010000".into(),
+                ts: String::new(),
+            },
+        )
+        .unwrap();
+        state::append_conversation_turn(
+            &ws,
+            "ASK",
+            crate::schemas::ConversationTurn {
+                role: crate::schemas::TurnRole::User,
+                text: "current answer".into(),
+                run_id: String::new(),
+                ts: String::new(),
+            },
+        )
+        .unwrap();
+
+        let app = App::new(ws.clone());
+        let context = build_answer_context(&app, "ASK", "current question");
+        assert!(context.contains("Pick the launch lane"));
+        assert!(context.contains("CURRENT OUTPUT ONE"));
+        assert!(context.contains("CURRENT OUTPUT TWO"));
+        assert!(context.contains("current question"));
+        assert!(context.contains("current answer"));
+        assert!(!context.contains("STALE OUTPUT"));
+        assert!(!context.contains("stale question"));
+        assert!(!context.contains("stale answer"));
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn answer_context_falls_back_from_corrupt_log_to_summary_then_question() {
+        let ws = workspace_with_user_config("answer-fallback");
+        let mut task: crate::schemas::Task =
+            crate::yaml::from_str("id: ASK\ntitle: 결정 필요\n").unwrap();
+        task.state = TaskState::NeedsUser;
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.intent_id = "intent-current".into();
+        queue.tasks.push(task);
+        ws.save_queue(&queue).unwrap();
+        write_answer_run(
+            &ws,
+            "run-20260711-030000",
+            "ASK",
+            "intent-current",
+            Some(&[0xff, 0xfe, 0xfd]),
+            "안전한 요약",
+        );
+
+        let mut app = App::new(ws.clone());
+        app.lang = i18n::Lang::Ko;
+        let summary_context = build_answer_context(&app, "ASK", "어느 안으로 진행할까요?");
+        assert!(summary_context.contains("안전한 요약"));
+        assert!(summary_context.contains("[응답대기]"));
+        for leaked in [
+            "NeedsUser",
+            "running",
+            "done",
+            "failed",
+            "blocked",
+            "needs-you",
+            "partial",
+            "deferred",
+            "queued",
+        ] {
+            assert!(!summary_context.contains(leaked), "leaked {leaked}");
+        }
+
+        std::fs::remove_file(
+            ws.runs_dir()
+                .join("run-20260711-030000")
+                .join("result.json"),
+        )
+        .unwrap();
+        let question_context = build_answer_context(&app, "ASK", "어느 안으로 진행할까요?");
+        assert!(question_context.contains("어느 안으로 진행할까요?"));
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn answer_page_keys_scroll_only_the_read_only_context() {
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-answer-scroll-test"));
+        let mut app = App::new(ws);
+        app.screen = Screen::Answer;
+        app.answer_context = (0..30)
+            .map(|index| format!("context line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.scroll_viewport = Some(ScrollViewport {
+            width: 40,
+            height: 5,
+        });
+        app.input = "draft answer".into();
+        app.input_caret = app.input.chars().count();
+
+        handle_answer_key(&mut app, KeyCode::PageDown, KeyModifiers::NONE);
+        assert_eq!(app.scroll, 10);
+        assert_eq!(app.input, "draft answer");
+        handle_answer_key(&mut app, KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(app.scroll, 0);
+        assert_eq!(app.input, "draft answer");
     }
 
     #[test]
