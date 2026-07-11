@@ -1200,6 +1200,17 @@ pub fn compile_memory(
     p
 }
 
+pub fn compile_memory_scout(
+    topic: &str,
+    brief: &str,
+    worker_id: &str,
+    run_dir_rel: &str,
+) -> String {
+    format!(
+        "# Yardlet read-only memory scout\n\nYou are a hidden Yardlet worker ({worker_id}) acting as the `{topic}` scout. Inspect the isolated workspace copy for {brief}. The copy is disposable and cannot mutate the live project or canonical `.agents` state. Do not attempt to edit project files. Write exactly one independent report to `{run_dir_rel}/scout-result.json`.\n\nReturn the same JSON shape as project memory drafting:\n\n{MEMORY_SCHEMA_HINT}\nOnly include durable, non-obvious facts. `look_at` paths must be normalized repo-relative paths. An empty `documents` array is valid when no candidate has durable value.\n"
+    )
+}
+
 const SKILL_SCHEMA_HINT: &str = r#"```json
 {
   "name": "kebab-case-skill-name",
