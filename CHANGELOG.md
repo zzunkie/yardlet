@@ -15,6 +15,33 @@
 
 ### Added
 
+- **Explicit goal feedback is bounded and durable.** Tasks can carry a goal
+  condition, feedback policy, and maximum feedback cycles. Failed deterministic
+  validation and acceptance evidence is recorded under the run, injected into
+  the next attempt, and counted in a persisted ledger. Exhausting the limit
+  stops at NeedsUser with the failure context instead of reporting Done.
+- **Read-only memory scout fanout.** `yardlet memory scout` runs topic scouts
+  against isolated workspace copies and merges their reports into unapplied
+  candidates. `yardlet memory apply --run <run-id>` is a separate core-owned
+  write step. `look_at` stale detection now also covers uncommitted and non-git
+  filesystem changes.
+- **Bounded foreground observation with `yardlet watch`.** A local command or
+  path can be observed until success, failure, matching output, path creation,
+  or path change, with interval, run-count, duration, and Ctrl-C bounds. Every
+  invocation writes a stable `watch-result.json` run artifact.
+- **Deterministic mechanism fixtures.** `yardlet eval fixtures` runs the seven
+  baseline evaluator and recovery fixtures plus bounded goal feedback,
+  read-only scout isolation, and watch-until behavior. Human and `--json`
+  output share one verdict report, and any fixture failure returns a non-zero
+  exit.
+- **Question context in the TUI Answer view.** A NeedsUser stop now opens with
+  the current intent's scrollable worker output and relevant conversation above
+  the question, with compact-summary fallback when output is unavailable.
+- **v0.9 mechanism documentation.** Comparison documents state the agent-CLI
+  boundary, task versus worker yielding, and the mechanism-only benchmark
+  posture. A durable ledger records every v0.9 disposition, deferral rationale,
+  and measurable restart condition. Launch copy remains an unpublished draft.
+
 - **`yardlet resolve <id>` finalizes a hand-merged Partial.** When a
   parallel run's merge-back conflicts, the task drops to `Partial` with its
   worktree kept. After you resolve and integrate the conflict by hand, a single
@@ -165,7 +192,7 @@
   instead of round-tripping the whole file through YAML serialization.
 - **Recover abandoned runs.** `yardlet recover` now salvages a task stranded by
   an abandoned run: a run left stuck `running` (no live worker, no result) whose
-  task is not itself flagged `Running` — e.g. a `NeedsUser` task whose
+  task is not itself flagged `Running`, e.g. a `NeedsUser` task whose
   `yardlet answer` run died before finalize. Previously recover keyed only off
   task state and reported "nothing to recover" while the task sat stuck. It now
   seals the stranded run record and requeues the task so it can re-run.
@@ -190,7 +217,7 @@
 - **Project memory.** Drop durable facts and decisions about a workspace as
   Markdown under `.agents/memory/` (git-tracked, one fact per file, optional
   `name`/`description` frontmatter). Yardlet discovers them and injects a short
-  **index** — title, one-line summary, anchor — into every worker packet and the
+  **index** (title, one-line summary, anchor) into every worker packet and the
   planner, with bodies read on demand, so the always-loaded cost stays tiny.
   `yardlet memory` lists the index; `yardlet init` scaffolds the folder with a
   convention README. A doc can declare `look_at:` landmark paths, and
@@ -200,17 +227,17 @@
   first-pass Done vs Done-after-retry vs never-Done, per-worker reliability
   (done-rate, partial/failed/no-result counts, wall time, user overrides), and
   the tasks that needed the most attempts. Scoped to the active intent so a task
-  id reused across intents does not fold its attempts together. Read-only — it
+  id reused across intents does not fold its attempts together. Read-only: it
   reports, it never changes policy.
 - **Outcome mining.** `yardlet harness review` now surfaces telemetry-mined,
   threshold-crossing observations next to learned rules and skills: a worker
   with a high no-result rate (an output-contract problem), and a task kind that
   averages many attempts to reach Done (wants a skill or sharper acceptance).
-  Suggestions only — you apply the rule/skill/scope change.
+  Suggestions only; you apply the rule/skill/scope change.
 - **Capability grounding.** The planner validates each task's
   `required_capabilities` against the workers that actually declare them at queue
   creation, and a run-time backstop parks an unmet task as blocked instead of
-  hard-erroring — so a capability gap is a clean human gate, never a crash.
+  hard-erroring, so a capability gap is a clean human gate, never a crash.
   `yardlet status` lists such tasks under "awaiting you (no worker can do these
   yet)" rather than as broken/retryable work.
 - **Defer a task.** `yardlet defer <id> [reason]` sets a task aside by decision
@@ -239,9 +266,9 @@
   recovered tasks, and recovery never mutates the queue graph (it only finalizes
   the stranded run).
 - **Review auto-remediation.** A review that fails its criteria and proposes a
-  fix re-queues to re-verify AFTER that fix — sequenced by priority, not a
+  fix re-queues to re-verify AFTER that fix, sequenced by priority, not a
   blocking `depends_on` edge, so a fix that fails, is deferred, or is title-
-  deduped can never deadlock the review — instead of blindly re-reviewing
+  deduped can never deadlock the review, instead of blindly re-reviewing
   unchanged code. The drain's per-task attempt cap bounds the fix+re-verify loop
   ("try hard, then ask"); a review with no runnable fix surfaces to you.
 

@@ -107,6 +107,12 @@ with explicit dependencies; each task runs through a hidden worker, is checked
 by a deterministic evaluator, and leaves a checkpoint and handoff under
 `.agents/runs/`.
 
+Tasks can carry an explicit goal condition and feedback-cycle limit. When a
+deterministic validation or acceptance check fails, Yardlet records the exact
+failure and injects it into the next attempt. If the persisted limit is
+exhausted, the task stops at NeedsUser with context instead of being reported
+as Done.
+
 ## Project Memory
 
 A loop that forgets is a wrapper. Yardlet keeps durable workspace knowledge in
@@ -133,6 +139,12 @@ the repo, then Yardlet's core writes the canonical `.agents/memory/*.md` (the
 worker drafts, Yardlet is the sole writer). `yardlet memory refresh` re-drafts
 existing docs the same way, and `yardlet memory refresh --stale-only` touches
 only the docs flagged possibly stale.
+
+For a wider read-only pass, `yardlet memory scout` fans topic scouts out over
+isolated workspace copies and merges their reports into unapplied candidates.
+Review the run artifacts, then use `yardlet memory apply --run <run-id>` to let
+the core write candidates into canonical memory. Scouts never receive the live
+workspace path and never write its canonical state.
 
 Mechanics: [docs/memory-trust-mining.md](docs/memory-trust-mining.md).
 
@@ -202,7 +214,7 @@ session. From the Home screen:
 | `A` | Auto-drain the queue. |
 | `t` | Tidy: self-heal workspace state (migrate stale gates, defer non-runnable work, wrap drained intents). |
 | `p` | Approve the next task; while a drain runs, request a graceful pause. |
-| `a` | Answer a task waiting on you (NeedsUser). |
+| `a` | Open Answer for a task waiting on you (NeedsUser), with its worker output and conversation. |
 | `d` | Defer the selected task by decision. |
 | `v` | Revive the selected Deferred task. |
 | `Esc` | Stop the running worker. |
@@ -251,6 +263,9 @@ are mapped to the same shortcuts.
 | `yardlet handoff` | Print the latest run's handoff. |
 | `yardlet report` | Print the intent's final report (aggregate of every task). |
 | `yardlet memory [init \| refresh [--stale-only]]` | List the project-memory index (flags possibly stale docs); `init`/`refresh` draft docs via a worker that Yardlet's core then writes. |
+| `yardlet memory scout` / `yardlet memory apply --run <run-id>` | Inspect isolated copies in parallel, produce unapplied memory candidates, then apply them through the core writer. |
+| `yardlet watch [--interval N] [--until CONDITION] [--max-runs N] [--max-seconds N] [-- <command>]` | Observe a local command or path in the foreground until a bounded condition is met. |
+| `yardlet eval fixtures [--json] [--fixture <id>]` | Run isolated deterministic mechanism fixtures; any failed fixture returns a non-zero exit. |
 | `yardlet trust [--json]` | Trust + autonomy report from run telemetry and the transition audit log (read-only); `--json` emits the metrics. |
 | `yardlet recover` | Recover state from an interrupted session (orphaned runs, unread plans). |
 | `yardlet skill list / suggest / equip <preset> / unequip / research / create / apply / review` | Classify, equip, author, and score skills. |
@@ -261,7 +276,9 @@ are mapped to the same shortcuts.
 
 When a worker needs input it leaves the task in **NeedsUser** with a question.
 `yardlet status` (and the TUI) shows the question; reply with `yardlet answer "..."`
-(or press `a` in the TUI) and Yardlet re-runs the task with your answer.
+(or press `a` in the TUI) and Yardlet re-runs the task with your answer. The TUI
+Answer view includes the current intent's worker output and relevant
+conversation, with scrolling and a compact fallback when the output is absent.
 
 ## Language
 
