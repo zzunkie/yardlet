@@ -1,0 +1,19 @@
+schema_version: 1
+routing:
+  default_worker: fixture
+  fallback_order: [fixture]
+workers:
+  - id: fixture
+    kind: cli_worker
+    best_for: local fixture
+    cost_weight: low
+    billing:
+      mode: subscription_backed_only
+    invocation:
+      command: bash
+      supports_noninteractive: true
+      output_contract: files
+      args: [__WORKER__, "{run_dir}"]
+    limits:
+      max_wall_minutes: 1
+      max_retries: 0

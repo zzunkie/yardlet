@@ -136,10 +136,18 @@ impl Workspace {
         run_dir: &Path,
         record: &crate::git_finish::GitFinishRecord,
     ) -> Result<()> {
-        write_str(
+        write_str_atomic(
             &run_dir.join("git-finish.json"),
             &serde_json::to_string_pretty(record)?,
         )
+    }
+
+    pub fn load_git_finish_record(
+        &self,
+        run_dir: &Path,
+    ) -> Result<crate::git_finish::GitFinishRecord> {
+        let raw = fs::read_to_string(run_dir.join("git-finish.json"))?;
+        Ok(serde_json::from_str(&raw)?)
     }
     /// Atomically claim a run directory without reusing an existing attempt's
     /// artifacts. Timestamp-based ids can collide during fast queue drains, so
@@ -1226,7 +1234,10 @@ fn with_transition_intent(ws: &Workspace, mut rec: TransitionRecord) -> Transiti
 pub fn ready_for_completion(queue: &WorkQueue) -> bool {
     !queue.tasks.is_empty()
         && queue.drained()
-        && !queue.tasks.iter().any(|t| t.state == TaskState::NeedsUser)
+        && !queue
+            .tasks
+            .iter()
+            .any(|t| matches!(t.state, TaskState::NeedsUser | TaskState::Partial))
 }
 
 /// Outcome of finalizing a merge-conflict `Partial` to `Done`.
@@ -1341,6 +1352,27 @@ pub fn write_str(path: &Path, contents: &str) -> Result<()> {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+/// Write a durable state snapshot through a same-directory temporary file so a
+/// crash cannot leave readers with a truncated JSON/YAML record.
+pub fn write_str_atomic(path: &Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state");
+    let tmp = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
+    let mut file = fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing {}", tmp.display()))?;
+    fs::rename(&tmp, path)
+        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
     Ok(())
 }
 
@@ -1995,6 +2027,11 @@ records:
         assert!(
             !ready_for_completion(&queue_of(&[("A", "done"), ("B", "needs_user")])),
             "an open NeedsUser question must gate completion"
+        );
+        assert!(queue_of(&[("A", "done"), ("B", "partial")]).drained());
+        assert!(
+            !ready_for_completion(&queue_of(&[("A", "done"), ("B", "partial")])),
+            "an unverified Git finish projected as Partial must gate completion"
         );
 
         // Not drained / empty are never complete.

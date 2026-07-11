@@ -157,6 +157,15 @@ pub fn build_final_report(ws: &Workspace) -> Result<String> {
     md.push_str(&format!("**Progress:** {done}/{total} tasks done"));
     if !live.is_empty() {
         md.push_str(&format!(" \u{2014} unfinished: {}\n\n", live.join(", ")));
+    } else if queue
+        .tasks
+        .iter()
+        .any(|task| task.state == TaskState::Partial)
+    {
+        md.push_str(&format!(
+            " \u{2014} unfinished (held: {})\n\n",
+            held.join(", ")
+        ));
     } else if queue.drained() && !held.is_empty() {
         md.push_str(&format!(
             " \u{2014} complete (held: {}) \u{2713}\n\n",
@@ -334,6 +343,22 @@ mod tests {
         ws.clear_intent_and_queue().unwrap();
         assert!(ws.load_intent().unwrap().is_none());
         assert!(ws.load_queue().unwrap().tasks.is_empty());
+    }
+
+    #[test]
+    fn partial_git_finish_never_renders_as_complete() {
+        let ws = temp_ws("git-finish-partial");
+        crate::state::save_yaml(&ws.intent_path(), &intent("intent-finish")).unwrap();
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue
+            .tasks
+            .push(seed_task("YARD-001", "finish", TaskState::Partial));
+        ws.save_queue(&queue).unwrap();
+
+        let report = build_final_report(&ws).unwrap();
+
+        assert!(report.contains("unfinished (held:"), "{report}");
+        assert!(!report.contains("complete (held:"), "{report}");
     }
 
     #[test]

@@ -139,6 +139,21 @@ pub(crate) struct RunRecord {
     pub completed_at: Option<String>,
     #[serde(default)]
     pub worktree: String,
+    /// Commit from which this run's isolated worktree was created.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub baseline_oid: String,
+    /// Run-unique branch used by an isolated worktree.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub worktree_branch: String,
+    /// Merge commit attributed to this run, persisted before finish/push.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub integration_oid: String,
+    /// First parent of integration_oid and required remote OID before push.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub integration_base_oid: String,
+    /// Exact commits newly reachable from baseline through integration_oid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owned_oids: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -389,6 +404,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         started_at: Local::now().to_rfc3339(),
         completed_at: None,
         worktree: ".".to_string(),
+        baseline_oid: String::new(),
+        worktree_branch: String::new(),
+        integration_oid: String::new(),
+        integration_base_oid: String::new(),
+        owned_oids: Vec::new(),
     };
     state::save_yaml(&run_dir.join("run.yaml"), &record)?;
 
@@ -1328,10 +1348,11 @@ fn migrate_stale_gate_to_decision(
     Ok(())
 }
 
-/// The newest run directory recorded for a task id, as (run_id, dir). Run dirs
-/// are named `run-<timestamp>` so a lexicographic max is the most recent.
+/// The newest run directory recorded for a task id, as (run_id, dir). Compare
+/// the typed start time and filesystem timestamp rather than the directory name:
+/// claim suffixes such as `-10` do not sort correctly against `-9`.
 pub(crate) fn latest_run_for(ws: &Workspace, task_id: &str) -> Option<(String, PathBuf)> {
-    let mut best: Option<(String, PathBuf)> = None;
+    let mut best: Option<(String, std::time::SystemTime, String, PathBuf)> = None;
     for entry in std::fs::read_dir(ws.runs_dir()).ok()?.flatten() {
         let dir = entry.path();
         let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(String::from) else {
@@ -1340,20 +1361,27 @@ pub(crate) fn latest_run_for(ws: &Workspace, task_id: &str) -> Option<(String, P
         if !name.starts_with("run-") {
             continue;
         }
-        let yaml = std::fs::read_to_string(dir.join("run.yaml")).unwrap_or_default();
-        let tid = yaml.lines().find_map(|l| {
-            l.trim()
-                .strip_prefix("task_id:")
-                .map(|v| v.trim().to_string())
-        });
-        if tid.as_deref() != Some(task_id) {
+        let Ok(record) = state::load_yaml::<RunRecord>(&dir.join("run.yaml")) else {
+            continue;
+        };
+        if record.task_id != task_id {
             continue;
         }
-        if best.as_ref().map(|(n, _)| name > *n).unwrap_or(true) {
-            best = Some((name, dir));
+        let modified = std::fs::metadata(dir.join("run.yaml"))
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let replace = best
+            .as_ref()
+            .map(|(started, prior_modified, prior_name, _)| {
+                (record.started_at.as_str(), modified, name.as_str())
+                    > (started.as_str(), *prior_modified, prior_name.as_str())
+            })
+            .unwrap_or(true);
+        if replace {
+            best = Some((record.started_at, modified, name, dir));
         }
     }
-    best
+    best.map(|(_, _, name, dir)| (name, dir))
 }
 
 /// A UUID-format string (8-4-4-4-12 hex) from a seed + pid, used to set a claude
@@ -1695,6 +1723,14 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 .as_ref()
                 .map(|(_, rd)| is_abandoned_run(rd))
                 .unwrap_or(false),
+            TaskState::Partial => latest
+                .as_ref()
+                .map(|(_, run_dir)| git_finish_recovery_needed(ws, run_dir))
+                .unwrap_or(false),
+            TaskState::Done => latest
+                .as_ref()
+                .map(|(_, run_dir)| git_finish_projection_recovery_needed(ws, run_dir))
+                .unwrap_or(false),
             _ => false,
         };
         if !recover_this {
@@ -1736,11 +1772,21 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 // result, merge a Done worktree back (conflict -> Partial,
                 // worktree kept), and commit the state. Recovery flags keep it
                 // to just that — no re-emitted artifacts/telemetry/hooks.
-                let branch = format!("yard/{}", id.to_lowercase());
+                let run_record = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")).ok();
+                let branch = run_record
+                    .as_ref()
+                    .map(|record| record.worktree_branch.clone())
+                    .filter(|branch| !branch.is_empty())
+                    .unwrap_or_else(|| format!("yard/{}", id.to_lowercase()));
+                let baseline_oid = run_record
+                    .as_ref()
+                    .map(|record| record.baseline_oid.clone())
+                    .unwrap_or_default();
                 let wt = run_worktree(&run_dir).filter(|w| w.exists());
                 let merge = wt.as_ref().map(|w| MergeBack {
                     wt_path: w.as_path(),
                     branch: branch.as_str(),
+                    baseline_oid: baseline_oid.as_str(),
                 });
                 // Attribute the salvaged telemetry to the worker that actually
                 // ran it (recorded in run.yaml), not an empty string.
@@ -1834,6 +1880,26 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
         }
     }
     msgs
+}
+
+fn git_finish_recovery_needed(ws: &Workspace, run_dir: &std::path::Path) -> bool {
+    if let Ok(record) = ws.load_git_finish_record(run_dir) {
+        return record.policy.auto_push && record.status.recoverable();
+    }
+    state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
+        .ok()
+        .is_some_and(|record| !record.integration_oid.is_empty())
+}
+
+fn git_finish_projection_recovery_needed(ws: &Workspace, run_dir: &std::path::Path) -> bool {
+    let unsealed = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
+        .ok()
+        .is_some_and(|record| record.completed_at.is_none());
+    unsealed
+        && ws
+            .load_git_finish_record(run_dir)
+            .ok()
+            .is_some_and(|record| record.policy.auto_push && record.status.verified_complete())
 }
 
 pub(crate) fn find_worker<'a>(workers: &'a [WorkerProfile], id: &str) -> Result<&'a WorkerProfile> {
@@ -2156,6 +2222,7 @@ impl FinalizeFlags {
 pub(crate) struct MergeBack<'a> {
     pub wt_path: &'a std::path::Path,
     pub branch: &'a str,
+    pub baseline_oid: &'a str,
 }
 
 /// Everything one finished worker run needs to turn its raw output into
@@ -2569,12 +2636,34 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // is kept for manual integration. The committed state below is this
     // post-merge state, so the queue and telemetry both record what really
     // happened.
-    let mut owned_oid = None;
+    let mut ownership = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
+        .ok()
+        .filter(|record| !record.integration_oid.is_empty())
+        .map(|record| crate::git_finish::GitFinishOwnership {
+            baseline_oid: record.integration_base_oid,
+            expected_oid: record.integration_oid,
+            owned_oids: record.owned_oids,
+        });
     if let Some(m) = &merge {
         if next_state == TaskState::Done {
-            match crate::parallel::integrate_worktree(&ws.root, m.wt_path, m.branch, &task.id) {
-                Ok(crate::parallel::Integration::Merged { oid }) => {
-                    owned_oid = Some(oid);
+            match crate::parallel::integrate_worktree(
+                &ws.root,
+                m.wt_path,
+                m.branch,
+                &task.id,
+                m.baseline_oid,
+            ) {
+                Ok(crate::parallel::Integration::Merged {
+                    oid,
+                    base_oid,
+                    owned_oids,
+                }) => {
+                    ownership = Some(crate::git_finish::GitFinishOwnership {
+                        baseline_oid: base_oid.clone(),
+                        expected_oid: oid.clone(),
+                        owned_oids: owned_oids.clone(),
+                    });
+                    persist_run_integration(run_dir, &base_oid, &oid, &owned_oids)?;
                     lines.push(format!(
                         "{}: merged {} into the workspace",
                         task.id, m.branch
@@ -2625,8 +2714,17 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // is supplied only by the successful merge branch above, so a serial run,
     // no-op, conflict, or unrelated existing commit cannot acquire ownership.
     let git_finish =
-        crate::git_finish::finish_owned_run(ws, run_dir, run_id, &task.id, next_state, owned_oid)?;
+        crate::git_finish::finish_owned_run(ws, run_dir, run_id, &task.id, next_state, ownership)?;
     lines.push(git_finish.user_line());
+    let projected_state = state_after_git_finish(next_state, &git_finish);
+    if projected_state != next_state {
+        next_state = projected_state;
+        let _ = state::write_str(&run_dir.join("partial-reason"), "git_finish_unverified");
+        lines.push(format!(
+            "{}: Git finish is not remotely verified; task remains partial",
+            task.id
+        ));
+    }
 
     // Update the queue: set state AND ingest any follow-up tasks the worker
     // proposed (propose -> ingest). Yardlet stays the sole queue writer — both
@@ -2737,6 +2835,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             ws,
             &telemetry::RunTelemetry {
                 ts: Local::now().to_rfc3339(),
+                run_id: run_id.to_string(),
                 task_id: task.id.clone(),
                 intent_id: intent_id.clone(),
                 kind: task.kind.clone(),
@@ -2791,6 +2890,17 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     Ok(FinalizeReport { next_state, lines })
 }
 
+fn state_after_git_finish(
+    state: TaskState,
+    record: &crate::git_finish::GitFinishRecord,
+) -> TaskState {
+    if state == TaskState::Done && record.policy.auto_push && !record.status.verified_complete() {
+        TaskState::Partial
+    } else {
+        state
+    }
+}
+
 /// Snake-case label for a run's terminal outcome, matching the queue's
 /// `TaskState` vocabulary so a sealed run.yaml reads the same as the queue.
 fn run_outcome_label(state: TaskState) -> &'static str {
@@ -2832,11 +2942,34 @@ fn seal_run_record(
         worktree: merge
             .map(|m| m.wt_path.display().to_string())
             .unwrap_or_else(|| ".".to_string()),
+        baseline_oid: merge
+            .map(|m| m.baseline_oid.to_string())
+            .unwrap_or_default(),
+        worktree_branch: merge.map(|m| m.branch.to_string()).unwrap_or_default(),
+        integration_oid: String::new(),
+        integration_base_oid: String::new(),
+        owned_oids: Vec::new(),
     });
     rec.state = run_outcome_label(next_state).to_string();
     rec.worker = worker_id.to_string();
     rec.completed_at = Some(Local::now().to_rfc3339());
-    let _ = state::save_yaml(&path, &rec);
+    if let Ok(text) = crate::yaml::to_string(&rec) {
+        let _ = state::write_str_atomic(&path, &text);
+    }
+}
+
+fn persist_run_integration(
+    run_dir: &std::path::Path,
+    base_oid: &str,
+    oid: &str,
+    owned_oids: &[String],
+) -> Result<()> {
+    let path = run_dir.join("run.yaml");
+    let mut record: RunRecord = state::load_yaml(&path)?;
+    record.integration_base_oid = base_oid.to_string();
+    record.integration_oid = oid.to_string();
+    record.owned_oids = owned_oids.to_vec();
+    state::write_str_atomic(&path, &crate::yaml::to_string(&record)?)
 }
 
 fn record_failover(run_dir: &std::path::Path, from: &str, to: &str, reason: &str) {
@@ -3049,6 +3182,55 @@ pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::schemas::{SelectionPolicy, Task, WorkQueue};
+
+    #[test]
+    fn auto_push_projects_only_remote_verified_finish_to_done() {
+        let make = |status| crate::git_finish::GitFinishRecord {
+            schema_version: 2,
+            run_id: "run-test".into(),
+            task_id: "YARD-001".into(),
+            attempted_at: String::new(),
+            status,
+            policy: crate::git_finish::GitFinishPolicySnapshot {
+                auto_push: true,
+                remote: "fixture".into(),
+                target_ref: "refs/heads/main".into(),
+                pre_push_checks: vec![],
+            },
+            expected_oid: None,
+            baseline_oid: String::new(),
+            owned_oids: vec![],
+            checks: vec![],
+            push_invoked: false,
+            push_succeeded: false,
+            remote_oid: None,
+            remote_before_oid: None,
+            reason: String::new(),
+        };
+        for status in [
+            crate::git_finish::GitFinishStatus::Prepared,
+            crate::git_finish::GitFinishStatus::CheckBlocked,
+            crate::git_finish::GitFinishStatus::SafetyBlocked,
+            crate::git_finish::GitFinishStatus::GitFailed,
+            crate::git_finish::GitFinishStatus::RemoteMismatch,
+        ] {
+            assert_eq!(
+                state_after_git_finish(TaskState::Done, &make(status)),
+                TaskState::Partial,
+                "{status:?}"
+            );
+        }
+        for status in [
+            crate::git_finish::GitFinishStatus::Pushed,
+            crate::git_finish::GitFinishStatus::AlreadyApplied,
+        ] {
+            assert_eq!(
+                state_after_git_finish(TaskState::Done, &make(status)),
+                TaskState::Done,
+                "{status:?}"
+            );
+        }
+    }
 
     #[test]
     fn gate_messages_are_surface_neutral_no_command_literals() {
@@ -4813,6 +4995,7 @@ exit 1
                 started_at: started.into(),
                 completed_at: None,
                 worktree: ".".into(),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -4861,6 +5044,7 @@ exit 1
         let _ = std::fs::remove_dir_all(&remote);
         sh(&["init", "-q", "--bare", remote.to_str().unwrap()]);
         sh(&["remote", "add", "fixture", remote.to_str().unwrap()]);
+        sh(&["push", "-q", "fixture", "HEAD:refs/heads/main"]);
         crate::init::init(&root, false).unwrap();
         let ws = Workspace::at(&root);
         let mut config = ws.load_config().unwrap();
@@ -4881,6 +5065,15 @@ exit 1
         let run_dir = ws.runs_dir().join(run_id);
         std::fs::create_dir_all(&run_dir).unwrap();
         let wt = ws.agents_dir().join("worktrees").join("yard-001");
+        let baseline_oid = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        let baseline_oid = String::from_utf8_lossy(&baseline_oid.stdout)
+            .trim()
+            .to_string();
         sh(&[
             "worktree",
             "add",
@@ -4938,6 +5131,7 @@ exit 1
             merge: Some(MergeBack {
                 wt_path: &wt,
                 branch: "yard/yard-001",
+                baseline_oid: &baseline_oid,
             }),
         })
         .unwrap();

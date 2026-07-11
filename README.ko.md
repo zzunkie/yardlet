@@ -380,37 +380,60 @@ git_finish:
 ```
 
 이 정책을 검토한 뒤 `auto_push: true`로 바꾸면 옵트인됩니다. 그렇다고 임의의 commit이
-push 가능한 것은 아닙니다. Yardlet 코어가 `Done` 상태인 격리 worktree를 성공적으로
-merge했을 때만 Yardlet이 OID를 소유합니다. 결과 branch는 `target_ref`와 일치해야 하고,
-`HEAD`는 여전히 그 소유 OID여야 하며, worktree에는 `.agents/` 밖의 변경이 없어야
-합니다. 설정된 모든 검사는 선언 순서대로 실행되고 첫 실패에서 push 전에 멈춥니다.
+push 가능한 것은 아닙니다. Yardlet은 worktree 기준점과 해당 run이 만든 정확한 commit
+집합을 기록하고, 기준점에서 새로 도달 가능한 commit이 그 소유 집합과 정확히 같을 때만
+통합 OID를 인정합니다. remote 대상도 여전히 기준점과 같아야 합니다. 따라서 hook,
+다른 세션 또는 로컬 자동화가 출처 불명 commit을 끼워 넣으면 push 전에 fail-closed로
+중단합니다.
+
+같은 Git common directory, remote, target ref를 마무리하는 실행은 제한 시간이 있는
+로컬 lock으로 직렬화됩니다. lock을 잡은 동안 현재 branch와 `HEAD`가 target 및 소유
+OID와 일치하고, push 목적지가 하나이며, `.agents/` 밖에 변경이 없어야 합니다. 그다음
+설정 검사를 순서대로 실행합니다. 검사 후에는 `HEAD`, worktree, fetch/push 목적지와
+remote target ref를 다시 확인하며, 동시 변경이 하나라도 있으면 push 0회로 멈춥니다.
 
 push는 항상 명시적인 `<expected_oid>:<target_ref>` refspec입니다. force,
 force-with-lease, ref 삭제, history rewrite 경로는 없습니다. 그 뒤 Yardlet은 별도의
 `git ls-remote --refs` 조회를 실행하고 remote OID가 고정된 예상 OID와 같을 때만 성공을
 보고합니다. 같은 마무리를 반복하면 추가 push 없이 `already_applied`로 수렴합니다.
 
+`auto_push: true`일 때는 `pushed`와 독립 검증된 `already_applied`만 작업을 완료합니다.
+그 밖의 모든 마무리 상태는 작업, 봉인된 `run.yaml`, telemetry, 최종 리포트와 Trust
+집계에서 미완료 `Partial`로 투영됩니다. 기본 비활성 정책에서는 `disabled`가 필수
+마무리가 아니므로 일반 작업 완료 방식은 달라지지 않습니다.
+
 | 기록 상태 | 사용자에게 보이는 의미 |
 |---|---|
 | `pushed` | 정확한 OID가 push되고 독립적으로 검증됐습니다. |
 | `already_applied` | remote에 이미 정확한 OID가 있어 push를 실행하지 않았습니다. |
-| `check_blocked` / `safety_blocked` | 설정 검사 또는 소유권/상태 게이트가 push 전에 차단했습니다. |
-| `git_failed` | Git 조회 또는 push 명령이 실패했습니다. |
-| `remote_mismatch` | push는 성공을 반환했지만 독립 검증 결과가 일치하지 않았습니다. |
-| `disabled` | 워크스페이스가 옵트인하지 않았습니다. |
+| `prepared` | 내구 pre-push 기록은 있지만 remote 결과가 아직 확정되지 않았으며 `recover`가 대조합니다. |
+| `check_blocked` / `safety_blocked` | 설정 검사, 소유권 증명, lock 또는 동시 상태 게이트가 차단했으며 명시적 해결 전까지 Partial입니다. |
+| `git_failed` | Git 조회 또는 push 명령이 실패했으며 Partial로 남고 remote 성공을 주장하지 않습니다. |
+| `remote_mismatch` | push는 성공을 반환했지만 독립 검증이 불일치하므로 Partial 해결 전에 remote를 확인해야 합니다. |
+| `disabled` | 워크스페이스가 옵트인하지 않아 Git 마무리가 일반 완료를 막지 않습니다. |
 
 모든 결과는 `.agents/runs/<run-id>/git-finish.json`에 기록되고 run telemetry와 최종
-리포트에 투영됩니다. 기록에는 remote 이름, target ref, 예상/관측 OID, 검사 이름/결과,
-push 플래그, 사유, 시각이 포함됩니다. remote URL, 검사 명령문이나 출력, credential,
-환경값은 저장하지 않습니다. 프로젝트 도그푸딩과 테스트에는 local bare remote를
-사용하세요. 이 계약은 Yardlet이 자신의 공개 `origin`에 push한다고 주장하지 않습니다.
+리포트에 투영됩니다. 기록에는 remote 이름, target ref, 기준점, run 소유 및 예상 OID,
+push 전후 remote OID, 검사 결과, push 플래그, 사유, 시각이 포함됩니다. remote URL,
+검사 명령문이나 출력, credential, 환경값은 저장하지 않습니다.
+
+Yardlet은 push를 호출하기 전에 `prepared`를 기록합니다. 중단 후 `yardlet recover`는
+같은 target lock 아래에서 소유권 기록을 다시 읽고 remote를 확인합니다. remote가 이미
+예상 OID라면 추가 push 없이 `already_applied`로 수렴합니다. 아직 기준점과 같다면 같은
+exact-OID push를 재시도할 수 있습니다. 그 밖의 remote 또는 로컬 상태는 fail-closed로
+중단합니다. remote 검증은 끝났지만 queue, `run.yaml` 또는 telemetry 봉인이 끊겼다면
+검증된 결과를 멱등하게 다시 투영합니다. 다른 차단·실패 상태는 조용히 재시도하거나
+완료로 승격하지 않고, 사용자가 명시적으로 해결할 때까지 Partial로 남습니다. 프로젝트
+도그푸딩과 테스트에는 local bare remote를 사용하세요. 이 계약은 Yardlet이 자신의 공개
+`origin`에 push한다고 주장하지 않습니다.
 
 ## 크래시 안전성
 
 Yardlet 상태는 재시작에도 살아남습니다. 시작 시(그리고 `yardlet recover`를 통해)
 중단된 세션을 복구합니다. 이전 세션이 비용을 치렀지만 읽지 않은 계획 결과는 큐로
 흡수되고, 완료된 고아 실행은 평가되어 머지되며(worktree 실행 포함), 끝나지 않은 것은
-다시 큐에 들어갑니다.
+다시 큐에 들어갑니다. 내구 `prepared` Git 마무리는 소유권 기록과 현재 remote OID로
+대조되고, 검증된 결과는 한 번만 투영되며, 모호한 상태는 Partial로 남습니다.
 
 ## 빌드
 

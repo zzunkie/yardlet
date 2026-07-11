@@ -424,6 +424,7 @@ fn recovery_finalizes_stranded_run() -> Result<Vec<String>> {
             started_at: chrono::Local::now().to_rfc3339(),
             completed_at: None,
             worktree: ".".to_string(),
+            ..Default::default()
         },
     )?;
     crate::state::write_str(&run_dir.join("worker.pid"), &u32::MAX.to_string())?;

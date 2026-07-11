@@ -11,6 +11,9 @@ use crate::state::Workspace;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunTelemetry {
     pub ts: String,
+    /// Stable idempotency key for finalize/recover projection.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub run_id: String,
     pub task_id: String,
     /// The intent this run served. Lets the trust report scope to one intent so
     /// a task id reused across intents does not fold its attempts together.
@@ -69,6 +72,13 @@ pub fn append_run(ws: &Workspace, rec: &RunTelemetry) -> Result<()> {
     let path = log_path(ws);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
+    }
+    if !rec.run_id.is_empty()
+        && read_runs(ws)
+            .iter()
+            .any(|existing| existing.run_id == rec.run_id)
+    {
+        return Ok(());
     }
     let line = format!("{}\n", serde_json::to_string(rec)?);
     let mut f = std::fs::OpenOptions::new()

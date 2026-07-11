@@ -396,11 +396,18 @@ git_finish:
 ```
 
 After reviewing this policy, set `auto_push: true` to opt in. This does not
-make arbitrary commits pushable. Yardlet only owns an OID when a `Done`
-isolated worktree was successfully merged by the core. The resulting branch
-must match `target_ref`, `HEAD` must still equal that owned OID, and the working
-tree must have no changes outside `.agents/`. Every configured check runs in
-declaration order; the first failure stops before push.
+make arbitrary commits pushable. Yardlet records the worktree baseline and the
+exact commits created by the run, then accepts the integrated OID only when the
+commits newly reachable from the baseline are exactly that owned set. The
+remote target must still equal the baseline. A hook, another session, or local
+automation that inserts an unowned commit therefore fails closed before push.
+
+Finishers for the same Git common directory, remote, and target ref are
+serialized with a bounded local lock. While holding it, Yardlet requires the
+current branch and `HEAD` to match the target and owned OID, one push
+destination, and no changes outside `.agents/`. Ordered checks run next. After
+the checks, Yardlet rechecks `HEAD`, the worktree, fetch and push destinations,
+and the remote target ref; any concurrent change stops with zero push.
 
 The push is always an explicit `<expected_oid>:<target_ref>` refspec. There is
 no force, force-with-lease, ref deletion, or history rewrite path. Yardlet then
@@ -408,29 +415,50 @@ uses a separate `git ls-remote --refs` lookup and reports success only when the
 remote OID equals the frozen expected OID. Repeating the same finish converges
 to `already_applied` without another push.
 
+When `auto_push: true`, only `pushed` and independently verified
+`already_applied` complete the task. Every other finish status projects the
+task, sealed `run.yaml`, telemetry, final report, and Trust accounting as
+unfinished `Partial`. With the default-off policy, `disabled` is not a required
+finish and normal task completion is unchanged.
+
 | Recorded status | User-visible meaning |
 |---|---|
 | `pushed` | The exact OID was pushed and independently verified. |
 | `already_applied` | The remote already had the exact OID; no push ran. |
-| `check_blocked` / `safety_blocked` | A configured check or ownership/state gate blocked before push. |
-| `git_failed` | A Git lookup or push command failed. |
-| `remote_mismatch` | Push returned success, but independent verification did not match. |
-| `disabled` | The workspace did not opt in. |
+| `prepared` | The durable pre-push record exists, but the remote result is not yet known; `recover` reconciles it. |
+| `check_blocked` / `safety_blocked` | A configured check, ownership proof, lock, or concurrent-state gate blocked; the task remains Partial for explicit resolution. |
+| `git_failed` | A Git lookup or push command failed; the task remains Partial and no remote success is claimed. |
+| `remote_mismatch` | Push returned success, but independent verification did not match; inspect the remote before resolving the Partial task. |
+| `disabled` | The workspace did not opt in, so Git finish does not gate normal completion. |
 
 Every outcome is written to
 `.agents/runs/<run-id>/git-finish.json` and projected into run telemetry and the
-final report. The record includes the remote name, target ref, expected and
-observed OIDs, check names/results, push flags, reason, and timestamp. It does
-not store a remote URL, check command text or output, credentials, or
-environment values. Use a local bare remote for project dogfooding and tests;
-this contract does not claim that Yardlet pushes its own public `origin`.
+final report. The record includes the remote name, target ref, baseline,
+run-owned and expected OIDs, before/after remote OIDs, check results, push
+flags, reason, and timestamp. It does not store a remote URL, check command
+text or output, credentials, or environment values.
+
+Yardlet writes `prepared` before invoking push. After an interruption,
+`yardlet recover` reloads that ownership record under the same target lock and
+checks the remote. If the remote already equals the expected OID, recovery
+converges to `already_applied` without another push. If it still equals the
+baseline, Yardlet can retry the same exact-OID push. Any other remote or local
+state fails closed. If remote verification finished but sealing the queue,
+`run.yaml`, or telemetry was interrupted, recovery reprojects the verified
+result idempotently. Other blocked or failed statuses are not silently retried
+or promoted; they remain Partial for explicit user resolution. Use a local bare
+remote for project dogfooding and tests; this contract does not claim that
+Yardlet pushes its own public `origin`.
 
 ## Crash safety
 
 Yardlet state survives restarts. On startup (and via `yardlet recover`) it recovers
 interrupted sessions: a planning result the previous session paid for but never
 read is consumed into the queue, finished orphaned runs are evaluated and
-merged (worktree runs included), and unfinished ones are requeued.
+merged (worktree runs included), and unfinished ones are requeued. A durable
+`prepared` Git finish is reconciled from its ownership record and current
+remote OID; verified results are projected once, while ambiguous state stays
+Partial.
 
 ## Build
 

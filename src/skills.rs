@@ -620,6 +620,7 @@ mod tests {
         // telemetry: weak-one declared in 3 runs, all failed; kept never bad
         let mut tel = |skill: &str, state: &str| RunTelemetry {
             ts: String::new(),
+            run_id: String::new(),
             task_id: "t".into(),
             intent_id: String::new(),
             kind: String::new(),

@@ -1,0 +1,51 @@
+#!/bin/sh
+set -eu
+
+real_git=/usr/bin/git
+is_push=0
+for arg in "$@"; do
+  if [ "$arg" = push ]; then
+    is_push=1
+    break
+  fi
+done
+
+if [ "$is_push" = 0 ] || [ -z "${YARD_FIXTURE_MODE:-}" ]; then
+  exec "$real_git" "$@"
+fi
+
+increment() {
+  file="$1"
+  count=0
+  if [ -f "$file" ]; then
+    count=$(sed -n '1p' "$file")
+  fi
+  printf '%s\n' $((count + 1)) > "$file"
+}
+
+increment "${YARD_FIXTURE_PUSH_INVOKED:?}"
+
+case "$YARD_FIXTURE_MODE" in
+  before)
+    printf '%s %s\n' "$$" "$(ps -o pgid= -p "$$" | tr -d ' ')" > "${YARD_FIXTURE_MARKER:?}"
+    sleep 300
+    increment "${YARD_FIXTURE_PUSH_EXECUTED:?}"
+    exec "$real_git" "$@"
+    ;;
+  after)
+    increment "${YARD_FIXTURE_PUSH_EXECUTED:?}"
+    set +e
+    "$real_git" "$@"
+    status=$?
+    set -e
+    if [ "$status" = 0 ]; then
+      printf '%s %s\n' "$$" "$(ps -o pgid= -p "$$" | tr -d ' ')" > "${YARD_FIXTURE_MARKER:?}"
+      sleep 300
+    fi
+    exit "$status"
+    ;;
+  *)
+    increment "${YARD_FIXTURE_PUSH_EXECUTED:?}"
+    exec "$real_git" "$@"
+    ;;
+esac

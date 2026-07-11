@@ -17,15 +17,19 @@
 
 - **User-owned, default-off Git finish policy.** `.agents/yardlet.yaml` can now
   name a remote, a full `refs/heads/...` target, and ordered pre-push checks
-  under `git_finish`. Only an OID produced by a successful `Done` worktree
-  merge is eligible. Yardlet pushes the explicit non-force
+  under `git_finish`. Yardlet proves the exact commit set owned by the run from
+  a recorded worktree baseline, requires the remote to remain at that baseline,
+  and serializes finishers for the same repository/remote/ref. It rechecks local
+  and remote state after ordered checks, pushes only the explicit non-force
   `<expected_oid>:<target_ref>` refspec, independently verifies it with
-  `git ls-remote --refs`, and converges repeated attempts to
-  `already_applied`. Every disabled, pushed, already-applied, check-blocked,
-  safety-blocked, Git-failed, or remote-mismatch outcome is recorded in the
-  run's `git-finish.json` without remote URLs, command output, credentials, or
-  environment values. This does not add force push or public-`origin`
-  dogfooding support.
+  `git ls-remote --refs`, and converges repeated attempts to `already_applied`.
+  With auto-push enabled, every status except verified `pushed` or
+  `already_applied` keeps the task Partial across queue, run, telemetry, report,
+  and Trust projections. A durable `prepared` record lets `yardlet recover`
+  reconcile interruptions before push, after push, or after verification
+  without duplicate remote mutation. Records omit remote URLs, command output,
+  credentials, and environment values. This does not add force push or
+  public-`origin` dogfooding support.
 
 - **Explicit goal feedback is bounded and durable.** Tasks can carry a goal
   condition, feedback policy, and maximum feedback cycles. Failed deterministic

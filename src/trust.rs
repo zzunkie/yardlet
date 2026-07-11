@@ -28,6 +28,14 @@ fn is_done(state: &str) -> bool {
     state.eq_ignore_ascii_case("done")
 }
 
+fn telemetry_done(run: &RunTelemetry) -> bool {
+    is_done(&run.eval_state)
+        && matches!(
+            run.git_finish_status.as_str(),
+            "" | "disabled" | "pushed" | "already_applied"
+        )
+}
+
 /// Per-worker reliability over its runs.
 #[derive(Default, Clone)]
 pub struct WorkerTrust {
@@ -111,7 +119,7 @@ pub fn summarize(runs: &[RunTelemetry]) -> TrustReport {
         if !r.worker.is_empty() && !t.workers.iter().any(|w| w == &r.worker) {
             t.workers.push(r.worker.clone());
         }
-        if is_done(&r.eval_state) {
+        if telemetry_done(r) {
             if first_attempt {
                 t.first_pass = true;
             }
@@ -122,7 +130,7 @@ pub fn summarize(runs: &[RunTelemetry]) -> TrustReport {
             let w = workers.entry(r.worker.clone()).or_default();
             w.runs += 1;
             w.wall_seconds += r.wall_seconds;
-            if is_done(&r.eval_state) {
+            if telemetry_done(r) {
                 w.done += 1;
             } else if r.eval_state.eq_ignore_ascii_case("partial") {
                 w.partial += 1;
@@ -631,7 +639,7 @@ pub fn autonomy(runs: &[RunTelemetry], logs: &[TransitionLog]) -> AutonomyReport
         if first {
             inst.first_ts = r.ts.clone();
         }
-        if is_done(&r.eval_state) {
+        if telemetry_done(r) {
             if first {
                 inst.first_pass = true;
             }
@@ -895,6 +903,7 @@ mod tests {
     fn rec(task: &str, worker: &str, status: &str, eval: &str, wall: u64) -> RunTelemetry {
         RunTelemetry {
             ts: String::new(),
+            run_id: String::new(),
             task_id: task.into(),
             intent_id: String::new(),
             kind: "implementation".into(),
@@ -956,6 +965,19 @@ mod tests {
         let scoped = render(&r, Some("intent-x"));
         assert!(scoped.contains("intent intent-x"));
         assert!(!scoped.contains("cumulative across intents"));
+    }
+
+    #[test]
+    fn unverified_git_finish_cannot_contribute_a_done() {
+        let mut pending = rec("A", "codex", "done", "Done", 1);
+        pending.git_finish_status = "prepared".into();
+        let mut verified = rec("B", "codex", "done", "Done", 1);
+        verified.git_finish_status = "already_applied".into();
+
+        let report = summarize(&[pending, verified]);
+
+        assert!(!report.tasks["A"].reached_done);
+        assert!(report.tasks["B"].reached_done);
     }
 
     #[test]

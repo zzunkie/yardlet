@@ -164,6 +164,7 @@ mod tests {
     fn run(kind: &str, worker: &str, done: bool, ovr: Option<&str>) -> RunTelemetry {
         RunTelemetry {
             ts: String::new(),
+            run_id: String::new(),
             task_id: "t".into(),
             intent_id: String::new(),
             kind: kind.into(),

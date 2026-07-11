@@ -227,6 +227,7 @@ struct Prep {
     run_dir: PathBuf,
     wt_path: PathBuf,
     branch: String,
+    baseline_oid: String,
     packet_text: String,
     session: Option<String>,
 }
@@ -309,13 +310,12 @@ pub fn run_batch<F: FnMut(&str)>(
         );
         let (run_id, run_dir) = ws.claim_run_dir(&base_run_id)?;
         let session = (resolved.worker_id == "claude-code").then(|| run::gen_session_uuid(&run_id));
+        let branch = format!("yard/{}/{}", task.id.to_lowercase(), run_id);
         preps.push(Prep {
             queue_idx: idx,
-            branch: format!("yard/{}", task.id.to_lowercase()),
-            wt_path: ws
-                .agents_dir()
-                .join("worktrees")
-                .join(task.id.to_lowercase()),
+            branch,
+            wt_path: ws.agents_dir().join("worktrees").join(&run_id),
+            baseline_oid: String::new(),
             task,
             worker_id: resolved.worker_id,
             reason: resolved.reason,
@@ -334,6 +334,9 @@ pub fn run_batch<F: FnMut(&str)>(
     // ---- worktrees + run dirs + packets ----------------------------------
     let mut ok: Vec<Prep> = Vec::new();
     for mut p in preps {
+        p.baseline_oid = git(&ws.root, &["rev-parse", "--verify", "HEAD^{commit}"])?
+            .trim()
+            .to_string();
         if let Err(e) = create_worktree(&ws.root, &p.wt_path, &p.branch) {
             on_event(&format!("{}: worktree failed ({e}); skipped", p.task.id));
             continue;
@@ -389,6 +392,11 @@ pub fn run_batch<F: FnMut(&str)>(
                 started_at: Local::now().to_rfc3339(),
                 completed_at: None,
                 worktree: p.wt_path.display().to_string(),
+                baseline_oid: p.baseline_oid.clone(),
+                worktree_branch: p.branch.clone(),
+                integration_oid: String::new(),
+                integration_base_oid: String::new(),
+                owned_oids: Vec::new(),
             },
         )?;
         ok.push(p);
@@ -594,6 +602,7 @@ pub fn run_batch<F: FnMut(&str)>(
             merge: Some(run::MergeBack {
                 wt_path: &p.wt_path,
                 branch: &p.branch,
+                baseline_oid: &p.baseline_oid,
             }),
         }) {
             Ok(r) => r,
@@ -651,7 +660,11 @@ fn append_failover_note(run_dir: &Path, note: &str) -> Result<()> {
 }
 
 pub(crate) enum Integration {
-    Merged { oid: String },
+    Merged {
+        oid: String,
+        base_oid: String,
+        owned_oids: Vec<String>,
+    },
     NoChanges,
     Conflict(String),
 }
@@ -673,7 +686,20 @@ pub(crate) fn integrate_worktree(
     wt: &Path,
     branch: &str,
     task_id: &str,
+    baseline_oid: &str,
 ) -> Result<Integration> {
+    // Legacy run records did not persist a baseline. Recovery can safely derive
+    // the worktree branch's merge-base, while new runs always pass the pinned
+    // spawn-time OID recorded in run.yaml.
+    let derived_baseline;
+    let baseline_oid = if baseline_oid.is_empty() {
+        derived_baseline = git(root, &["merge-base", "HEAD", branch])?
+            .trim()
+            .to_string();
+        derived_baseline.as_str()
+    } else {
+        baseline_oid
+    };
     // A previous session may have died in the middle of merging this very
     // branch, leaving the checkout mid-merge: abort OUR stale merge so the
     // retry below starts clean. A merge belonging to anyone else is left
@@ -697,6 +723,37 @@ pub(crate) fn integrate_worktree(
         let message = commit_message(root, task_id);
         git(wt, &["commit", "-m", &message])?;
     }
+    let worker_tip = git(
+        root,
+        &["rev-parse", "--verify", &format!("{branch}^{{commit}}")],
+    )?
+    .trim()
+    .to_string();
+    let ancestry = git(
+        root,
+        &["merge-base", "--is-ancestor", baseline_oid, &worker_tip],
+    );
+    if ancestry.is_err() {
+        return Ok(Integration::Conflict(
+            "worktree branch no longer descends from its recorded baseline".to_string(),
+        ));
+    }
+    let mut owned_oids = git(
+        root,
+        &[
+            "rev-list",
+            "--reverse",
+            &format!("{baseline_oid}..{worker_tip}"),
+        ],
+    )?
+    .lines()
+    .map(str::trim)
+    .filter(|oid| !oid.is_empty())
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    let base_oid = git(root, &["rev-parse", "--verify", "HEAD^{commit}"])?
+        .trim()
+        .to_string();
     let ahead = git(root, &["rev-list", "--count", &format!("HEAD..{branch}")])?;
     if ahead.trim() == "0" {
         return Ok(Integration::NoChanges);
@@ -706,7 +763,12 @@ pub(crate) fn integrate_worktree(
             let oid = git(root, &["rev-parse", "--verify", "HEAD^{commit}"])?
                 .trim()
                 .to_string();
-            Ok(Integration::Merged { oid })
+            owned_oids.push(oid.clone());
+            Ok(Integration::Merged {
+                oid,
+                base_oid,
+                owned_oids,
+            })
         }
         Err(e) => {
             // Abort only if the failed merge is OURS (a content conflict from
@@ -1196,14 +1258,15 @@ exit 0
         t.title = "병렬 worktree 정리".into();
         state::save_yaml(&root.join(".agents/work-queue.yaml"), &queue(vec![t])).unwrap();
         let wt = root.join(".agents/worktrees/yard-001");
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-001").unwrap();
         // Simulate a worker: edit a file in the worktree, plus .agents noise
         // that must NOT be committed.
         std::fs::write(wt.join("feature.txt"), "new\n").unwrap();
         std::fs::create_dir_all(wt.join(".agents")).unwrap();
         std::fs::write(wt.join(".agents/work-queue.yaml"), "copy").unwrap();
-        match integrate_worktree(&root, &wt, "yard/yard-001", "YARD-001").unwrap() {
-            Integration::Merged { oid } => {
+        match integrate_worktree(&root, &wt, "yard/yard-001", "YARD-001", &baseline).unwrap() {
+            Integration::Merged { oid, .. } => {
                 assert_eq!(oid, sh_git(&root, &["rev-parse", "HEAD"]).trim());
             }
             _ => panic!("expected a merge"),
@@ -1256,6 +1319,7 @@ exit 0
     fn merge_conflict_is_reported_and_main_stays_clean() {
         let root = temp_repo("conflict");
         let wt = root.join(".agents/worktrees/yard-002");
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-002").unwrap();
         // Diverge: both the worktree and the main checkout edit base.txt.
         std::fs::write(wt.join("base.txt"), "worker version\n").unwrap();
@@ -1274,7 +1338,7 @@ exit 0
                 "main edit",
             ],
         );
-        match integrate_worktree(&root, &wt, "yard/yard-002", "YARD-002").unwrap() {
+        match integrate_worktree(&root, &wt, "yard/yard-002", "YARD-002", &baseline).unwrap() {
             Integration::Conflict(_) => {}
             _ => panic!("expected a conflict"),
         }
@@ -1308,9 +1372,10 @@ exit 0
         // Yardlet tries to integrate a worktree meanwhile: it must report and
         // leave the user's merge state intact.
         let wt = root.join(".agents/worktrees/yard-009");
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-009").unwrap();
         std::fs::write(wt.join("other.txt"), "fine\n").unwrap();
-        match integrate_worktree(&root, &wt, "yard/yard-009", "YARD-009").unwrap() {
+        match integrate_worktree(&root, &wt, "yard/yard-009", "YARD-009", &baseline).unwrap() {
             Integration::Conflict(why) => assert!(why.contains("another merge"), "{why}"),
             _ => panic!("expected a conflict report"),
         }
@@ -1327,8 +1392,9 @@ exit 0
     fn no_changes_short_circuits() {
         let root = temp_repo("nochange");
         let wt = root.join(".agents/worktrees/yard-003");
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-003").unwrap();
-        match integrate_worktree(&root, &wt, "yard/yard-003", "YARD-003").unwrap() {
+        match integrate_worktree(&root, &wt, "yard/yard-003", "YARD-003", &baseline).unwrap() {
             Integration::NoChanges => {}
             _ => panic!("expected no changes"),
         }

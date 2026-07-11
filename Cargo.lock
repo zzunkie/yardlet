@@ -1109,6 +1109,7 @@ dependencies = [
  "chrono",
  "clap",
  "ctrlc",
+ "libc",
  "ratatui",
  "serde",
  "serde_json",
