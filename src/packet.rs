@@ -697,6 +697,14 @@ pub fn compile(inputs: &PacketInputs) -> String {
         }
         p.push('\n');
     }
+    if let Some(goal) = &inputs.task.goal {
+        p.push_str("Goal condition:\n");
+        p.push_str(&format!("- condition: {}\n", goal.condition));
+        p.push_str(&format!(
+            "- feedback cycles: at most {} ({})\n\n",
+            goal.max_feedback_cycles, goal.feedback_policy
+        ));
+    }
 
     // Attached images (also passed to the worker natively where supported).
     if !inputs.images.is_empty() {
@@ -1261,6 +1269,11 @@ const PLANNING_SCHEMA_HINT: &str = r#"```json
       "depends_on": ["YARD-001"],
       "skills": ["<skill name from the catalog, when one applies>"],
       "required_capabilities": ["<a worker capability this task hard-requires; omit if none>"],
+      "goal": {
+        "condition": "the explicit condition that proves this task complete",
+        "max_feedback_cycles": 2,
+        "feedback_policy": "inject_failed_checks"
+      },
       "worker_rationale": "one line: why this worker fits this task",
       "allowed_scope": ["..."],
       "acceptance": ["..."]
@@ -1587,6 +1600,7 @@ mod tests {
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,
@@ -1689,6 +1703,7 @@ mod tests {
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,
@@ -1729,6 +1744,7 @@ mod tests {
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,
@@ -1785,6 +1801,7 @@ mod tests {
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,
@@ -1829,6 +1846,11 @@ mod tests {
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: Some(crate::schemas::TaskGoal {
+                condition: "all parser checks pass".into(),
+                max_feedback_cycles: 2,
+                feedback_policy: "inject_failed_checks".into(),
+            }),
             validation: None,
             approval: None,
             interaction: None,
@@ -1854,6 +1876,9 @@ mod tests {
         assert!(p.contains("## Continuing a partial run"));
         assert!(p.contains("do not redo finished work"));
         assert!(p.contains("AC-004 unmet"));
+        assert!(p.contains("Goal condition:"));
+        assert!(p.contains("all parser checks pass"));
+        assert!(p.contains("at most 2 (inject_failed_checks)"));
     }
 
     #[test]
@@ -1873,6 +1898,7 @@ mod tests {
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,

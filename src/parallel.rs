@@ -64,11 +64,11 @@ pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
             if work_pending && is_verifier(t) {
                 return false;
             }
-            // A required-validation task is excluded: parallel skips validation,
-            // so it must run serially where validation actually gates Done.
+            // Any validation-bearing task is excluded: parallel skips validation,
+            // so it must run serially where failed checks can enter feedback.
             queue.runnable_class(t, false, &caps) == RunnableClass::Runnable
                 && !t.approval_required()
-                && !t.requires_validation()
+                && !t.has_validation()
         })
         .map(|(i, _)| i)
         .collect();
@@ -181,7 +181,7 @@ pub fn assess_parallelism(queue: &WorkQueue, max_parallel: usize) -> ParallelAss
     let validation_required = queue
         .tasks
         .iter()
-        .filter(|t| t.state == TaskState::Queued && t.requires_validation() && queue.deps_met(t))
+        .filter(|t| t.state == TaskState::Queued && t.has_validation() && queue.deps_met(t))
         .map(|t| t.id.clone())
         .collect::<Vec<_>>();
     if !validation_required.is_empty() {
@@ -511,7 +511,12 @@ pub fn run_batch<F: FnMut(&str)>(
                             repo: &repo_summary,
                             run_dir_rel: &run_dir_abs,
                             conversation: &[],
-                            continuation: None,
+                            continuation: Some(
+                                "Output-contract feedback: the previous worker exited without \
+                                 writing result.json. Complete the task, write every required \
+                                 artifact, and make sure result.json matches the packet schema \
+                                 exactly.",
+                            ),
                             chained_from: None,
                             language: &language,
                             images: &images,
@@ -829,6 +834,7 @@ mod tests {
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,
@@ -861,11 +867,11 @@ mod tests {
     }
 
     #[test]
-    fn ready_set_excludes_required_validation_tasks() {
-        // A required-validation task is held back from parallel batches (parallel
-        // skips validation), so it runs serially where validation gates Done.
+    fn ready_set_excludes_all_validation_tasks() {
+        // Validation-bearing tasks are held back from parallel batches (parallel
+        // skips validation), so they run serially where failure enters feedback.
         let mut needs_val = task("V", TaskState::Queued, 5, vec![]);
-        needs_val.validation = Some(crate::yaml::from_str("required: true").unwrap());
+        needs_val.validation = Some(crate::yaml::from_str("commands: [cargo test]").unwrap());
         let q = queue(vec![task("A", TaskState::Queued, 10, vec![]), needs_val]);
         // Only A is parallel-ready; V is excluded despite its lower priority.
         assert_eq!(ready_independent(&q, 10), vec![0]);

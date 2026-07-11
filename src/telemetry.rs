@@ -38,6 +38,22 @@ pub struct RunTelemetry {
     /// Structured review verdict, when this run produced one: (passed, total).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict_pass: Option<(usize, usize)>,
+    /// Persisted feedback-loop position for this task run. Zero means the run
+    /// did not enter deterministic feedback.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub feedback_cycle: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub max_feedback_cycles: u32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub feedback_retryable: bool,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 pub fn log_path(ws: &Workspace) -> std::path::PathBuf {

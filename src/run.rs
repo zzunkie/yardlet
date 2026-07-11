@@ -664,7 +664,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                     repo: &summary,
                     run_dir_rel: &run_dir_rel,
                     conversation: &conversation,
-                    continuation: continuation.as_deref(),
+                    continuation: Some(
+                        "Output-contract feedback: the previous worker exited without writing \
+                         result.json. Complete the task, write every required artifact, and make \
+                         sure result.json matches the packet schema exactly.",
+                    ),
                     chained_from: None,
                     language: &language,
                     images: &images,
@@ -876,8 +880,8 @@ pub(crate) mod gate_msg {
 /// independent tasks are ready in a clean git workspace, in concurrent
 /// worktree batches. Done (or partial->re-queued) advances; Blocked /
 /// NeedsUser / Failed stop the loop and hand back to the user (those need a
-/// human). A per-task attempt cap prevents looping on a task that keeps
-/// coming back partial. `bypass` drops the worker sandbox for the whole run
+/// human). The persisted feedback ledger prevents looping on a task that keeps
+/// coming back partial, including across restarts. `bypass` drops the worker sandbox for the whole run
 /// (workers still self-gate dangerous actions per the packet).
 #[allow(clippy::too_many_arguments)]
 pub fn run_auto<F: FnMut(&str)>(
@@ -900,7 +904,6 @@ pub fn run_auto<F: FnMut(&str)>(
         on_event(&s);
         out.push(s);
     };
-    let mut attempts: HashMap<String, u32> = HashMap::new();
     let mut waits: HashMap<String, u32> = HashMap::new();
     // P1: the previous Done task's live session, offered to a dependent
     // successor on the same worker. Cut on anything but a clean Done.
@@ -997,7 +1000,7 @@ pub fn run_auto<F: FnMut(&str)>(
         }
         // A Failed task may be transient (e.g. a dropped connection) and a
         // Partial one continues from its checkpoint: retry them first, bounded
-        // by the attempts cap below, instead of halting the drain.
+        // by the task's persisted feedback cap, instead of halting the drain.
         let retry_target = queue
             .tasks
             .iter()
@@ -1012,19 +1015,6 @@ pub fn run_auto<F: FnMut(&str)>(
             if ready.len() >= 2 {
                 match crate::parallel::git_preflight(&ws.root) {
                     Ok(()) => {
-                        let mut capped = false;
-                        for &i in &ready {
-                            let n = attempts.entry(queue.tasks[i].id.clone()).or_default();
-                            *n += 1;
-                            capped |= *n > 2;
-                        }
-                        if capped {
-                            emit(
-                                "stopped: a task did not complete after retries \u{2014} needs you"
-                                    .to_string(),
-                            );
-                            break;
-                        }
                         chain = None; // parallel fan-out: fresh contexts
                         crate::parallel::run_batch(ws, &ready, bypass, |s| {
                             emit(s.to_string());
@@ -1165,34 +1155,6 @@ pub fn run_auto<F: FnMut(&str)>(
             ));
             continue;
         }
-        let n = attempts.entry(task_id.clone()).or_default();
-        *n += 1;
-        if *n > 2 {
-            // Surface any task hard-gated behind this one (a `depends_on` edge,
-            // e.g. a runs_before-injected dependency) so it is not silently
-            // stranded. A 1c review re-queued behind its fix is NOT listed here:
-            // it is soft-sequenced by priority with no dep edge, so it stays
-            // Queued and simply re-runs on the next drain rather than being
-            // stranded by this stop.
-            let gated: Vec<&str> = queue
-                .tasks
-                .iter()
-                .filter(|t| {
-                    t.state == TaskState::Queued && t.depends_on.iter().any(|d| d == &task_id)
-                })
-                .map(|t| t.id.as_str())
-                .collect();
-            let gated_note = if gated.is_empty() {
-                String::new()
-            } else {
-                format!(" ({} depend on it and stay gated)", gated.join(", "))
-            };
-            emit(format!(
-                "stopped: {task_id} did not complete after retries \u{2014} needs you{gated_note}"
-            ));
-            break;
-        }
-
         // Offer the previous session only to a DEPENDENT successor (shared
         // context is the point) and under the rot cap; retries start cold.
         let offer = chain
@@ -1251,7 +1213,7 @@ pub fn run_auto<F: FnMut(&str)>(
             }
             TaskState::Partial => {
                 // Loop back: the conflict check halts, a self-report continues
-                // from its checkpoint, and the attempts cap bounds it all.
+                // from its checkpoint, and the feedback ledger bounds it all.
                 emit(format!(
                     "{} is partial \u{2014} continuing from its checkpoint",
                     report.task_id
@@ -1260,7 +1222,7 @@ pub fn run_auto<F: FnMut(&str)>(
             }
             TaskState::Failed => {
                 // Likely transient (e.g. a dropped connection); loop to retry it,
-                // bounded by the attempts cap above.
+                // bounded by the persisted feedback cap.
                 emit(format!("{} failed; retrying", report.task_id));
                 continue;
             }
@@ -1912,7 +1874,7 @@ fn save_task_state_on_latest_queue(
 /// so a fix that fails / is deferred / is title-deduped would strand the review
 /// forever. With soft ordering the fixes run first by priority; if one never
 /// reaches Done it simply leaves the Queued set and the review re-verifies anyway,
-/// and the drain's per-task attempt cap bounds the fix+re-verify loop ("try hard,
+/// and the task's persisted feedback cap bounds the fix+re-verify loop ("try hard,
 /// then ask"). Re-reads the latest queue first so a concurrent change is not
 /// clobbered.
 /// Of the just-ingested follow-up ids, those that can run RIGHT NOW: `Queued`
@@ -1933,6 +1895,15 @@ fn runnable_fix_ids(queue: &WorkQueue, ingested: &[String]) -> Vec<String> {
         })
         .cloned()
         .collect()
+}
+
+fn dedup_review_follow_ups(follow_ups: &mut Vec<crate::schemas::FollowUpTask>, queue: &WorkQueue) {
+    follow_ups.retain(|fu| {
+        !queue
+            .tasks
+            .iter()
+            .any(|t| t.title.trim().eq_ignore_ascii_case(fu.title.trim()))
+    });
 }
 
 fn requeue_review(
@@ -2215,6 +2186,216 @@ pub(crate) struct FinalizeReport {
     pub lines: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct FeedbackRecord {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub task_id: String,
+    pub intent_id: String,
+    pub cycle: u32,
+    pub max_cycles: u32,
+    pub retryable: bool,
+    pub failures: Vec<String>,
+    pub unmet_acceptance: Vec<String>,
+    pub terminal_reason: String,
+}
+
+fn prior_feedback_cycles(
+    ws: &Workspace,
+    task_id: &str,
+    intent_id: &str,
+    current_run_id: &str,
+) -> u32 {
+    let Ok(entries) = std::fs::read_dir(ws.runs_dir()) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let dir = entry.path();
+            let name = dir.file_name()?.to_str()?;
+            if name == current_run_id {
+                return None;
+            }
+            let raw = std::fs::read_to_string(dir.join("feedback.json")).ok()?;
+            serde_json::from_str::<FeedbackRecord>(&raw).ok()
+        })
+        .filter(|f| f.task_id == task_id && f.intent_id == intent_id && f.retryable)
+        .map(|f| f.cycle)
+        .max()
+        .unwrap_or(0)
+}
+
+fn validation_failure_details(run_dir: &std::path::Path) -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(run_dir.join("validation.json")) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    value
+        .get("commands")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|cmd| !cmd.get("passed").and_then(|v| v.as_bool()).unwrap_or(false))
+        .map(|cmd| {
+            let log = cmd.get("log").and_then(|v| v.as_str()).unwrap_or("");
+            let mut detail = format!(
+                "validation command `{}` failed (exit_code={}, timed_out={}, log={})",
+                cmd.get("command").and_then(|v| v.as_str()).unwrap_or(""),
+                cmd.get("exit_code")
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "null".to_string()),
+                cmd.get("timed_out")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                log
+            );
+            if let Ok(output) = std::fs::read_to_string(run_dir.join(log)) {
+                let output = output.trim();
+                if !output.is_empty() {
+                    let mut excerpt = output.to_string();
+                    if excerpt.len() > 2048 {
+                        let mut end = 2048;
+                        while !excerpt.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        excerpt.truncate(end);
+                    }
+                    detail.push_str(&format!("; output: {excerpt}"));
+                }
+            }
+            detail
+        })
+        .collect()
+}
+
+fn feedback_for_run(
+    ws: &Workspace,
+    run_dir: &std::path::Path,
+    run_id: &str,
+    intent_id: &str,
+    task: &crate::schemas::Task,
+    eval: &evaluator::Evaluation,
+    result: Option<&RunResult>,
+) -> Option<FeedbackRecord> {
+    if !matches!(eval.next_task_state, TaskState::Failed | TaskState::Partial) {
+        return None;
+    }
+
+    let failed_checks: Vec<&evaluator::Check> = eval
+        .checks
+        .iter()
+        .filter(|c| c.fatal && !c.passed)
+        .collect();
+    let retryable_check = |name: &str| {
+        matches!(
+            name,
+            "result_file_present"
+                | "result_schema_valid"
+                | "handoff_present"
+                | "ids_match"
+                | "validation"
+                | "reported_validation"
+                | "review_verdict_present"
+                | "review_criteria_pass"
+        )
+    };
+    let retryable = task.injects_failed_checks()
+        && (eval.next_task_state == TaskState::Partial
+            || (!failed_checks.is_empty()
+                && failed_checks.iter().all(|c| retryable_check(&c.name))));
+
+    let mut failures: Vec<String> = failed_checks
+        .iter()
+        .map(|c| format!("{}: {}", c.name, c.note))
+        .collect();
+    failures.extend(validation_failure_details(run_dir));
+    if failures.is_empty() {
+        failures.push(
+            result
+                .map(|r| format!("worker ended {}: {}", r.status, r.compact_summary.trim()))
+                .unwrap_or_else(|| "worker did not complete the output contract".to_string()),
+        );
+    }
+    failures.sort();
+    failures.dedup();
+
+    let mut unmet_acceptance = Vec::new();
+    if let Some(r) = result {
+        for verdict in r.verdict.iter().filter(|v| !v.pass) {
+            let mut text = format!("{}: {}", verdict.criterion_id, verdict.evidence.trim());
+            if let Some(index) = verdict
+                .criterion_id
+                .strip_prefix("AC-")
+                .and_then(|n| n.parse::<usize>().ok())
+                .and_then(|n| n.checked_sub(1))
+            {
+                if let Some(statement) = task.acceptance.get(index).and_then(|v| v.as_str()) {
+                    text.push_str(&format!(" | acceptance: {statement}"));
+                }
+            }
+            unmet_acceptance.push(text);
+        }
+    }
+    if unmet_acceptance.is_empty()
+        && failed_checks.iter().any(|c| {
+            matches!(
+                c.name.as_str(),
+                "review_verdict_present" | "review_criteria_pass"
+            )
+        })
+    {
+        unmet_acceptance.extend(
+            task.acceptance
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string)),
+        );
+    }
+    if let Some(condition) = task
+        .goal
+        .as_ref()
+        .map(|g| g.condition.trim())
+        .filter(|s| !s.is_empty())
+    {
+        unmet_acceptance.push(format!("goal condition: {condition}"));
+    }
+    unmet_acceptance.sort();
+    unmet_acceptance.dedup();
+
+    let prior = prior_feedback_cycles(ws, &task.id, intent_id, run_id);
+    let cycle = prior.saturating_add(1);
+    let max_cycles = task.max_feedback_cycles();
+    let terminal_reason = if !retryable {
+        "failure is not safe for automatic retry".to_string()
+    } else if cycle > max_cycles {
+        format!("feedback retry cap exceeded ({max_cycles})")
+    } else {
+        String::new()
+    };
+    Some(FeedbackRecord {
+        schema_version: 1,
+        run_id: run_id.to_string(),
+        task_id: task.id.clone(),
+        intent_id: intent_id.to_string(),
+        cycle,
+        max_cycles,
+        retryable,
+        failures,
+        unmet_acceptance,
+        terminal_reason,
+    })
+}
+
+fn feedback_next_state(feedback: &FeedbackRecord) -> TaskState {
+    if feedback.retryable && feedback.cycle <= feedback.max_cycles {
+        TaskState::Partial
+    } else {
+        TaskState::NeedsUser
+    }
+}
+
 /// The single finalization pipeline shared by the run paths (Slice 1: serial
 /// only). Evaluate -> gates -> artifacts -> conversation -> learned -> queue
 /// state + follow-up ingestion -> telemetry. Behavior is identical to the
@@ -2305,6 +2486,33 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok());
 
+    let feedback = feedback_for_run(
+        ws,
+        run_dir,
+        run_id,
+        &intent_id,
+        task,
+        &eval,
+        result.as_ref(),
+    );
+    let mut next_state = eval.next_task_state;
+    if let Some(f) = &feedback {
+        let _ = state::write_str(
+            &run_dir.join("feedback.json"),
+            &serde_json::to_string_pretty(f)?,
+        );
+        next_state = feedback_next_state(f);
+        if next_state == TaskState::Partial {
+            lines.push(format!(
+                "feedback cycle {}/{}: failed checks will be injected into the next attempt",
+                f.cycle, f.max_cycles
+            ));
+        } else {
+            next_state = TaskState::NeedsUser;
+            lines.push(format!("feedback stopped: {}", f.terminal_reason));
+        }
+    }
+
     // Record the worker's user-facing message into the conversation transcript
     // whenever a run pauses for the user, so the next resume threads the full
     // exchange back (deduped by run_id).
@@ -2361,7 +2569,6 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // is kept for manual integration. The committed state below is this
     // post-merge state, so the queue and telemetry both record what really
     // happened.
-    let mut next_state = eval.next_task_state;
     if let Some(m) = &merge {
         if next_state == TaskState::Done {
             match crate::parallel::integrate_worktree(&ws.root, m.wt_path, m.branch, &task.id) {
@@ -2418,7 +2625,8 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // Recovery (follow_ups off) only finalizes the stranded run's state — it must
     // not ingest new follow-ups or re-queue a review, which would rewrite the
     // queue graph during a crash-recovery pass.
-    let follow_ups = if flags.follow_ups {
+    let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
+    let mut follow_ups = if flags.follow_ups && next_state != TaskState::NeedsUser {
         result
             .as_ref()
             .map(|r| r.follow_up_tasks.clone())
@@ -2426,6 +2634,28 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     } else {
         Vec::new()
     };
+    if is_review {
+        // A repeated review failure must not create another copy of a fix that
+        // this same queue already ran. If that fix was insufficient, stop for a
+        // human instead of multiplying identical remediation tasks.
+        let latest = ws.load_queue().unwrap_or_else(|_| queue.clone());
+        dedup_review_follow_ups(&mut follow_ups, &latest);
+        if let Some(f) = &feedback {
+            for fu in &mut follow_ups {
+                for unmet in &f.unmet_acceptance {
+                    if !fu.acceptance.contains(unmet) {
+                        fu.acceptance.push(unmet.clone());
+                    }
+                }
+                for failure in &f.failures {
+                    let evidence = format!("failed check evidence: {failure}");
+                    if !fu.acceptance.contains(&evidence) {
+                        fu.acceptance.push(evidence);
+                    }
+                }
+            }
+        }
+    }
     // Workers (when loadable) let the queue commit ground a proposed follow-up's
     // capabilities; if workers.yaml can't be read we skip grounding rather than
     // false-park everything.
@@ -2468,9 +2698,8 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // Review auto-remediation (1c): a review that failed its criteria must not
     // blind-loop on the same unchanged code. Re-queue THIS review to run AFTER the
     // reviewer's proposed remediation (soft priority ordering, no hard dep) so the
-    // fix runs first and the review then re-verifies; the drain's per-task attempt
-    // cap bounds the cycles.
-    let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
+    // fix runs first and the review then re-verifies; the persisted feedback cap
+    // bounds the cycles across serial, parallel, and resumed drains.
     if flags.follow_ups && is_review && matches!(next_state, TaskState::Failed | TaskState::Partial)
     {
         // Sequence only behind fixes that can actually run NOW (Queued &&
@@ -2517,6 +2746,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     (!r.verdict.is_empty())
                         .then(|| (r.verdict.iter().filter(|v| v.pass).count(), r.verdict.len()))
                 }),
+                feedback_cycle: feedback.as_ref().map(|f| f.cycle).unwrap_or(0),
+                max_feedback_cycles: task.max_feedback_cycles(),
+                feedback_retryable: feedback.as_ref().is_some_and(|f| f.retryable),
             },
         );
     }
@@ -2676,6 +2908,24 @@ pub(crate) fn continuation_context(ws: &Workspace, task_id: &str) -> Option<Stri
                     s.push_str(f);
                     s.push('\n');
                 }
+            }
+        }
+    }
+    if let Ok(raw) = std::fs::read_to_string(run_dir.join("feedback.json")) {
+        if let Ok(f) = serde_json::from_str::<FeedbackRecord>(&raw) {
+            s.push_str(&format!(
+                "Feedback cycle {}/{} (retryable={}):\n",
+                f.cycle, f.max_cycles, f.retryable
+            ));
+            for failure in f.failures {
+                s.push_str("- Failed check: ");
+                s.push_str(&failure);
+                s.push('\n');
+            }
+            for unmet in f.unmet_acceptance {
+                s.push_str("- Unmet acceptance: ");
+                s.push_str(&unmet);
+                s.push('\n');
             }
         }
     }
@@ -3002,6 +3252,7 @@ mod tests {
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: if needs_approval {
                 Some(crate::yaml::from_str("required: true").unwrap())
@@ -3058,6 +3309,166 @@ mod tests {
         .unwrap();
         write_str(&ws.workers_path(), worker_yaml).unwrap();
         ws
+    }
+
+    #[test]
+    fn feedback_cycles_are_persisted_bounded_and_keep_exact_review_evidence() {
+        let ws = init_test_workspace(
+            "feedback-ledger",
+            "schema_version: 1\nrouting: {default_worker: codex}\nworkers: []\n",
+        );
+        let mut t = task("YARD-FB", TaskState::Running, 10, false);
+        t.kind = "review".into();
+        t.acceptance = vec![crate::yaml::Value::String("parser tests pass".into())];
+        t.goal = Some(crate::schemas::TaskGoal {
+            condition: "all acceptance passes".into(),
+            max_feedback_cycles: 1,
+            feedback_policy: "inject_failed_checks".into(),
+        });
+        let eval = evaluator::Evaluation {
+            run_id: "run-1".into(),
+            task_id: t.id.clone(),
+            status: "partial".into(),
+            checks: vec![evaluator::fatal_failure(
+                "review_criteria_pass",
+                "criteria failed: AC-001",
+            )],
+            next_task_state: TaskState::Partial,
+        };
+        let mut result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: "run-1".into(),
+            task_id: t.id.clone(),
+            status: "partial".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "review failed".into(),
+            verdict: vec![crate::schemas::Verdict {
+                criterion_id: "AC-001".into(),
+                pass: false,
+                evidence: "src/parser.rs:42 still accepts invalid input".into(),
+            }],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+        };
+
+        let run1 = ws.runs_dir().join("run-1");
+        std::fs::create_dir_all(&run1).unwrap();
+        let first =
+            feedback_for_run(&ws, &run1, "run-1", "intent-test", &t, &eval, Some(&result)).unwrap();
+        assert_eq!(first.cycle, 1);
+        assert_eq!(feedback_next_state(&first), TaskState::Partial);
+        assert!(first
+            .unmet_acceptance
+            .iter()
+            .any(|s| { s.contains("src/parser.rs:42") && s.contains("parser tests pass") }));
+        write_str(
+            &run1.join("feedback.json"),
+            &serde_json::to_string(&first).unwrap(),
+        )
+        .unwrap();
+
+        result.run_id = "run-2".into();
+        let run2 = ws.runs_dir().join("run-2");
+        std::fs::create_dir_all(&run2).unwrap();
+        let second =
+            feedback_for_run(&ws, &run2, "run-2", "intent-test", &t, &eval, Some(&result)).unwrap();
+        assert_eq!(second.cycle, 2);
+        assert_eq!(feedback_next_state(&second), TaskState::NeedsUser);
+        assert!(second.terminal_reason.contains("cap exceeded"));
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn auto_retry_injects_failed_validation_then_converges_to_done() {
+        let source =
+            std::env::temp_dir().join(format!("yard-feedback-worker-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        let worker = write_worker_script(
+            &source,
+            "worker.sh",
+            r##"#!/bin/sh
+run_dir="$1"
+attempts="$2"
+packet_dir="$3"
+if [ -f "$attempts" ]; then n=$(cat "$attempts"); else n=0; fi
+n=$((n + 1))
+printf "%s" "$n" > "$attempts"
+cat > "$packet_dir/packet-$n.txt"
+run_id=$(basename "$run_dir")
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-FB",
+  "status": "done",
+  "validation": {"commands_run": [], "passed": true, "failures": []},
+  "compact_summary": "attempt $n"
+}
+EOF
+printf "# handoff\nattempt %s\n" "$n" > "$run_dir/handoff.md"
+"##,
+        );
+        let root = std::env::temp_dir().join(format!("yard-feedback-auto-{}", std::process::id()));
+        let attempts = root.join("attempts");
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}, {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&worker),
+            shell_literal(&attempts),
+            shell_literal(&root)
+        );
+        let ws = init_test_workspace("feedback-auto", &worker_yaml);
+        let attempts = ws.root.join("attempts");
+        // Rebuild the profile with paths inside the actual workspace returned
+        // by init_test_workspace.
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}, {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&worker),
+            shell_literal(&attempts),
+            shell_literal(&ws.root)
+        );
+        write_str(&ws.workers_path(), &worker_yaml).unwrap();
+
+        let mut t = task("YARD-FB", TaskState::Queued, 10, false);
+        t.kind = "implementation".into();
+        t.goal = Some(crate::schemas::TaskGoal {
+            condition: "validation passes".into(),
+            max_feedback_cycles: 1,
+            feedback_policy: "inject_failed_checks".into(),
+        });
+        t.validation = Some(
+            crate::yaml::from_str(&format!(
+                "required: true\ncommands:\n  - 'test \"$(cat {})\" -ge 2'\n",
+                attempts.display()
+            ))
+            .unwrap(),
+        );
+        let mut q = queue(vec![t]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        let events = run_auto(&ws, false, None, Some(1), true, |_| {}).unwrap();
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+        assert_eq!(std::fs::read_to_string(&attempts).unwrap(), "2");
+        let second_packet = std::fs::read_to_string(ws.root.join("packet-2.txt")).unwrap();
+        assert!(second_packet.contains("Feedback cycle 1/1"));
+        assert!(second_packet.contains("validation command"));
+        assert!(second_packet.contains("validation passes"));
+        assert!(events
+            .iter()
+            .any(|e| e.contains("continuing from its checkpoint")));
+        let telemetry = crate::telemetry::read_runs(&ws);
+        assert_eq!(telemetry.len(), 2);
+        assert_eq!(telemetry[0].feedback_cycle, 1);
+        assert_eq!(telemetry[0].max_feedback_cycles, 1);
+        assert!(telemetry[0].feedback_retryable);
+        assert_eq!(telemetry[1].eval_state, "Done");
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     fn shell_literal(path: &std::path::Path) -> String {
@@ -3137,6 +3548,10 @@ exit 0
         let handoff = std::fs::read_to_string(report.run_dir.join("handoff.md")).unwrap();
         assert!(handoff.contains("Worker failover"));
         assert!(handoff.contains("dead -> builder"));
+        let failover_packet =
+            std::fs::read_to_string(workers::packet_path(&report.run_dir)).unwrap();
+        assert!(failover_packet.contains("previous worker exited without writing result.json"));
+        assert!(failover_packet.contains("result.json matches the packet schema exactly"));
         let rec: RunRecord = state::load_yaml(&report.run_dir.join("run.yaml")).unwrap();
         assert_eq!(rec.worker, "builder");
         let failover: RunFailover = serde_json::from_str(
@@ -3444,7 +3859,7 @@ exit 0
         .unwrap();
 
         assert_eq!(report.worker_id, "bad-result");
-        assert_eq!(report.result_state, Some(TaskState::Failed));
+        assert_eq!(report.result_state, Some(TaskState::Partial));
         assert!(
             !marker.exists(),
             "fallback worker must not run when result.json exists"
@@ -3454,8 +3869,8 @@ exit 0
         assert!(!handoff.contains("Worker failover"));
         assert_eq!(
             ws.load_queue().unwrap().tasks[0].state,
-            TaskState::Failed,
-            "existing evaluation-failure retry semantics stay unchanged"
+            TaskState::Partial,
+            "output-contract failure becomes bounded feedback, without failover"
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -3506,7 +3921,7 @@ exit 1
         .unwrap();
 
         assert_eq!(report.worker_id, "dead");
-        assert_eq!(report.result_state, Some(TaskState::Failed));
+        assert_eq!(report.result_state, Some(TaskState::Partial));
         assert_eq!(
             std::fs::read_to_string(&attempts).unwrap(),
             "1",
@@ -3518,7 +3933,7 @@ exit 1
                 && l.contains("missing")
                 && !l.contains("\"dead\"")
         }));
-        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Failed);
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Partial);
         assert!(!report.run_dir.join("failover.json").exists());
 
         let eval: serde_json::Value = serde_json::from_str(
@@ -3720,6 +4135,29 @@ exit 1
             "FIXD".to_string(),
         ];
         assert_eq!(runnable_fix_ids(&q, &ingested), vec!["FIXA".to_string()]);
+    }
+
+    #[test]
+    fn repeated_review_fix_title_is_not_enqueued_twice() {
+        let mut prior = task("FIX", TaskState::Done, 10, false);
+        prior.title = "Repair parser acceptance".into();
+        let q = queue(vec![prior]);
+        let mut follow_ups = vec![
+            crate::schemas::FollowUpTask {
+                title: "repair parser acceptance".into(),
+                reason: "same failed review proposed it again".into(),
+                ..Default::default()
+            },
+            crate::schemas::FollowUpTask {
+                title: "Repair a distinct serializer failure".into(),
+                reason: "new failed evidence".into(),
+                ..Default::default()
+            },
+        ];
+
+        dedup_review_follow_ups(&mut follow_ups, &q);
+        assert_eq!(follow_ups.len(), 1);
+        assert_eq!(follow_ups[0].title, "Repair a distinct serializer failure");
     }
 
     #[test]

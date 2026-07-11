@@ -181,6 +181,20 @@ pub fn evaluate(
                 )
             },
         ));
+        if !r.validation.passed {
+            checks.push(check(
+                "reported_validation",
+                false,
+                if r.validation.failures.is_empty() {
+                    "worker reported validation failure".to_string()
+                } else {
+                    format!(
+                        "worker reported validation failure: {}",
+                        r.validation.failures.join("; ")
+                    )
+                },
+            ));
+        }
         if r.status == "done"
             && r.question_for_user
                 .as_deref()
@@ -605,6 +619,7 @@ mod tests {
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,
@@ -675,6 +690,7 @@ mod tests {
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,
@@ -691,6 +707,32 @@ mod tests {
             .expect("done/question contradiction must be recorded");
         assert!(!c.fatal, "contradiction is advisory, not a Done gate");
         assert!(!c.passed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reported_validation_failure_blocks_done_and_preserves_exact_failure() {
+        let dir = temp_path("reported-validation");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("handoff.md"), "h").unwrap();
+        let mut r = dummy_result();
+        r.run_id = "run-validation".into();
+        r.task_id = "YARD-VAL".into();
+        r.status = "done".into();
+        r.validation.passed = false;
+        r.validation.failures = vec!["cargo test: test_parser failed".into()];
+        std::fs::write(dir.join("result.json"), serde_json::to_string(&r).unwrap()).unwrap();
+
+        let t = implementation_task("YARD-VAL");
+        let e = evaluate(&dir, "run-validation", &t, Some(&[]));
+        assert_eq!(e.next_task_state, TaskState::Failed);
+        let check = e
+            .checks
+            .iter()
+            .find(|c| c.name == "reported_validation")
+            .expect("reported validation must be a fatal check");
+        assert!(check.fatal && !check.passed);
+        assert!(check.note.contains("test_parser failed"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1023,6 +1065,7 @@ exit 89
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,
@@ -1074,6 +1117,7 @@ exit 89
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,
@@ -1116,6 +1160,7 @@ exit 89
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,
@@ -1231,6 +1276,7 @@ exit 89
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,
@@ -1290,6 +1336,7 @@ exit 89
             required_capabilities: vec![],
             allowed_scope: vec![],
             acceptance: vec![],
+            goal: None,
             validation: None,
             approval: None,
             interaction: None,

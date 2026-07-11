@@ -176,6 +176,9 @@ mod tests {
             user_override: ovr.map(|s| s.to_string()),
             skills: vec![],
             verdict_pass: None,
+            feedback_cycle: 0,
+            max_feedback_cycles: 0,
+            feedback_retryable: false,
         }
     }
 
