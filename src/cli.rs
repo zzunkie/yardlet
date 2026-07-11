@@ -70,6 +70,8 @@ pub enum Command {
     Memory(MemoryArgs),
     /// Observe a local command or path until a bounded condition is met.
     Watch(WatchArgs),
+    /// Run deterministic Yardlet mechanism fixtures.
+    Eval(EvalArgs),
     /// Review routing telemetry and apply suggested worker preferences.
     Routing(RoutingArgs),
     /// Show worker-rubric drift from the template and merge improvements in.
@@ -342,6 +344,25 @@ pub struct WatchArgs {
     command: Vec<String>,
 }
 
+#[derive(Args)]
+pub struct EvalArgs {
+    #[command(subcommand)]
+    cmd: EvalCmd,
+}
+
+#[derive(Subcommand)]
+enum EvalCmd {
+    /// Run the isolated deterministic mechanism fixture suite.
+    Fixtures {
+        /// Emit the same verdicts as machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+        /// Run only a named fixture. Repeat to select several.
+        #[arg(long = "fixture")]
+        fixtures: Vec<String>,
+    },
+}
+
 #[derive(Subcommand)]
 enum MemoryCmd {
     /// Ask a worker for memory drafts, then let Yardlet core write canonical docs.
@@ -444,11 +465,26 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Trust(a)) => cmd_trust(&cwd, a),
         Some(Command::Memory(a)) => cmd_memory(&cwd, a),
         Some(Command::Watch(a)) => cmd_watch(&cwd, a),
+        Some(Command::Eval(a)) => cmd_eval(a),
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
         Some(Command::Rubric(a)) => cmd_rubric(&cwd, a),
         Some(Command::Recover) => cmd_recover(&cwd),
         Some(Command::Skill(a)) => cmd_skill(&cwd, a),
         Some(Command::Harness(a)) => cmd_harness(&cwd, a),
+    }
+}
+
+fn cmd_eval(args: EvalArgs) -> Result<()> {
+    match args.cmd {
+        EvalCmd::Fixtures { json, fixtures } => {
+            let report = crate::eval_fixtures::run(&fixtures)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", crate::eval_fixtures::render_human(&report));
+            }
+            crate::eval_fixtures::ensure_passed(&report)
+        }
     }
 }
 

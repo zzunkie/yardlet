@@ -436,6 +436,10 @@ fn copy_scout_workspace(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn copy_scout_workspace_for_fixture(source: &Path, target: &Path) -> Result<()> {
+    copy_scout_workspace(source, target)
+}
+
 fn refresh_target(entry: &MemoryEntry) -> MemoryRefreshTarget {
     MemoryRefreshTarget {
         slug: entry

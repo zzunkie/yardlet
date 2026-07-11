@@ -2271,7 +2271,7 @@ fn validation_failure_details(run_dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
-fn feedback_for_run(
+pub(crate) fn feedback_for_run(
     ws: &Workspace,
     run_dir: &std::path::Path,
     run_id: &str,
@@ -2388,7 +2388,7 @@ fn feedback_for_run(
     })
 }
 
-fn feedback_next_state(feedback: &FeedbackRecord) -> TaskState {
+pub(crate) fn feedback_next_state(feedback: &FeedbackRecord) -> TaskState {
     if feedback.retryable && feedback.cycle <= feedback.max_cycles {
         TaskState::Partial
     } else {

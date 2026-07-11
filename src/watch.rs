@@ -324,6 +324,29 @@ fn run_loop(
     )
 }
 
+pub(crate) fn evaluate_path_exists_for_fixture(
+    root: &Path,
+    path: PathBuf,
+) -> (String, Vec<Observation>, String) {
+    let options = WatchOptions {
+        interval: Duration::ZERO,
+        max_runs: 1,
+        max_duration: Duration::from_secs(1),
+        until: Until::PathExists(path),
+        command: Vec::new(),
+    };
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let mut observer = LocalObserver::new(
+        root,
+        options.until.clone(),
+        Vec::new(),
+        Arc::clone(&cancelled),
+        options.max_duration,
+    );
+    let mut clock = RealClock(Instant::now());
+    run_loop(&options, &mut observer, &mut clock, &cancelled)
+}
+
 pub fn run(ws: &Workspace, options: WatchOptions) -> Result<(String, WatchResult)> {
     if options.max_runs == 0 {
         bail!("watch --max-runs must be at least 1");

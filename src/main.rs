@@ -8,6 +8,7 @@
 mod approvals;
 mod cli;
 mod compact;
+mod eval_fixtures;
 mod evaluator;
 mod guard;
 mod hooks;
