@@ -364,6 +364,11 @@ pub struct Task {
     pub allowed_scope: Vec<String>,
     #[serde(default)]
     pub acceptance: Vec<yaml::Value>,
+    /// First-class completion contract for the task. Older queues omit this
+    /// field and retain the legacy one-feedback-retry behavior through the
+    /// accessors below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<TaskGoal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation: Option<yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -380,6 +385,24 @@ pub struct Task {
     /// current task.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub provenance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskGoal {
+    #[serde(default)]
+    pub condition: String,
+    #[serde(default = "default_max_feedback_cycles")]
+    pub max_feedback_cycles: u32,
+    #[serde(default = "default_feedback_policy")]
+    pub feedback_policy: String,
+}
+
+fn default_max_feedback_cycles() -> u32 {
+    2
+}
+
+fn default_feedback_policy() -> String {
+    "inject_failed_checks".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -418,6 +441,23 @@ pub struct ReviveBlockedDependency {
 }
 
 impl Task {
+    /// Queues written before `goal` existed used a hard two-attempt cap, which
+    /// meant one feedback retry after the initial run. Keep that behavior for
+    /// old tasks while new goal contracts default to two feedback cycles.
+    pub fn max_feedback_cycles(&self) -> u32 {
+        self.goal
+            .as_ref()
+            .map(|g| g.max_feedback_cycles)
+            .unwrap_or(1)
+    }
+
+    pub fn injects_failed_checks(&self) -> bool {
+        self.goal
+            .as_ref()
+            .map(|g| g.feedback_policy == "inject_failed_checks")
+            .unwrap_or(true)
+    }
+
     /// Does this task require an explicit approval before it may run?
     pub fn approval_required(&self) -> bool {
         match &self.approval {
@@ -429,16 +469,11 @@ impl Task {
         }
     }
 
-    /// Does this task mark its validation as required? Such tasks must run on the
-    /// serial path: the parallel path validates nothing (its pre-merge worktree
-    /// lacks the build env), so a required-validation task there could merge
-    /// without ever being validated.
-    pub fn requires_validation(&self) -> bool {
-        self.validation
-            .as_ref()
-            .and_then(|v| v.get("required"))
-            .and_then(|r| r.as_bool())
-            .unwrap_or(false)
+    /// Validation-bearing tasks run on the serial path because parallel
+    /// worktrees intentionally skip workspace validation. This keeps a failed
+    /// check from bypassing the feedback contract merely due to scheduling.
+    pub fn has_validation(&self) -> bool {
+        self.validation.is_some()
     }
 
     pub fn deferred_by(&self) -> Option<DeferredBy> {
@@ -1142,7 +1177,7 @@ pub struct Changes {
     pub files_deleted: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationResult {
     #[serde(default)]
     pub commands_run: Vec<String>,
@@ -1150,6 +1185,19 @@ pub struct ValidationResult {
     pub passed: bool,
     #[serde(default)]
     pub failures: Vec<String>,
+}
+
+impl Default for ValidationResult {
+    fn default() -> Self {
+        Self {
+            commands_run: Vec::new(),
+            // An omitted validation block means "no worker-reported failure",
+            // not "validation failed". Explicit `passed: false` is the signal
+            // the evaluator turns into deterministic feedback.
+            passed: true,
+            failures: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1488,5 +1536,24 @@ tasks:
         )
         .unwrap();
         assert!(r.follow_up_tasks.is_empty());
+    }
+
+    #[test]
+    fn task_goal_is_optional_and_round_trips_when_present() {
+        let legacy: WorkQueue = yaml::from_str(
+            "schema_version: 1\nqueue_id: q\ntasks:\n  - id: A\n    title: legacy\n",
+        )
+        .unwrap();
+        assert!(legacy.tasks[0].goal.is_none());
+        assert_eq!(legacy.tasks[0].max_feedback_cycles(), 1);
+
+        let queue: WorkQueue = yaml::from_str(
+            "schema_version: 1\nqueue_id: q\ntasks:\n  - id: A\n    title: goal\n    goal:\n      condition: all checks pass\n      max_feedback_cycles: 3\n      feedback_policy: inject_failed_checks\n",
+        )
+        .unwrap();
+        assert_eq!(queue.tasks[0].max_feedback_cycles(), 3);
+        let encoded = yaml::to_string(&queue).unwrap();
+        assert!(encoded.contains("condition: all checks pass"));
+        assert!(encoded.contains("max_feedback_cycles: 3"));
     }
 }

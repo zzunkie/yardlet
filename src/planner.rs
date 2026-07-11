@@ -14,7 +14,8 @@ use serde::Deserialize;
 use crate::guard::{self, Readiness};
 use crate::inspect;
 use crate::schemas::{
-    IntentContract, SelectionPolicy, Task, TaskState, WorkQueue, WorkerProfile, WorkersFile,
+    IntentContract, SelectionPolicy, Task, TaskGoal, TaskState, WorkQueue, WorkerProfile,
+    WorkersFile,
 };
 use crate::state::{self, write_str, PlanningWorkerConfig, Workspace};
 use crate::{packet, workers, yaml};
@@ -79,6 +80,8 @@ struct PlanTask {
     allowed_scope: Vec<String>,
     #[serde(default)]
     acceptance: Vec<String>,
+    #[serde(default)]
+    goal: Option<TaskGoal>,
     #[serde(default)]
     worker_rationale: Option<String>,
 }
@@ -216,6 +219,11 @@ pub fn plan_goal(
         required_capabilities: required_capabilities.to_vec(),
         allowed_scope: vec![],
         acceptance: vec![yaml::Value::String(goal.to_string())],
+        goal: Some(TaskGoal {
+            condition: goal.to_string(),
+            max_feedback_cycles: 2,
+            feedback_policy: "inject_failed_checks".to_string(),
+        }),
         validation: None,
         approval: None,
         interaction: None,
@@ -247,6 +255,11 @@ pub fn plan_goal(
             acceptance: vec![yaml::Value::String(format!(
                 "Verify against the actual workspace, with evidence: {v}"
             ))],
+            goal: Some(TaskGoal {
+                condition: v.to_string(),
+                max_feedback_cycles: 2,
+                feedback_policy: "inject_failed_checks".to_string(),
+            }),
             validation: None,
             approval: None,
             interaction: None,
@@ -742,6 +755,13 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
                 .iter()
                 .map(|s| yaml::Value::String(s.clone()))
                 .collect(),
+            goal: pt.goal.clone().or_else(|| {
+                Some(TaskGoal {
+                    condition: pt.acceptance.join("; "),
+                    max_feedback_cycles: 2,
+                    feedback_policy: "inject_failed_checks".to_string(),
+                })
+            }),
             validation: None,
             approval: None,
             interaction: None,
@@ -911,6 +931,11 @@ pub(crate) fn ingest_follow_ups(
                 .iter()
                 .map(|s| yaml::Value::String(s.clone()))
                 .collect(),
+            goal: Some(TaskGoal {
+                condition: fu.acceptance.join("; "),
+                max_feedback_cycles: 2,
+                feedback_policy: "inject_failed_checks".to_string(),
+            }),
             validation: None,
             approval: follow_up_needs_approval(fu).then(risk_based_approval),
             interaction: None,
@@ -1278,6 +1303,13 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
                 .iter()
                 .map(|s| yaml::Value::String(s.clone()))
                 .collect(),
+            goal: t.goal.clone().or_else(|| {
+                Some(TaskGoal {
+                    condition: t.acceptance.join("; "),
+                    max_feedback_cycles: 2,
+                    feedback_policy: "inject_failed_checks".to_string(),
+                })
+            }),
             validation: None,
             approval: None,
             interaction: None,
@@ -1342,6 +1374,11 @@ fn ensure_review_task(tasks: &mut Vec<Task>) {
              with per-criterion pass/fail and evidence in report.md"
                 .to_string(),
         )],
+        goal: Some(TaskGoal {
+            condition: "Every intent acceptance criterion passes with evidence".to_string(),
+            max_feedback_cycles: 2,
+            feedback_policy: "inject_failed_checks".to_string(),
+        }),
         validation: None,
         approval: None,
         interaction: None,
@@ -1557,6 +1594,7 @@ invocation: { command: codex }
                 required_capabilities: caps.iter().map(|s| s.to_string()).collect(),
                 allowed_scope: vec![],
                 acceptance: vec![],
+                goal: None,
                 validation: None,
                 approval: None,
                 interaction: None,
@@ -1741,6 +1779,11 @@ routing:
         let q = ws.load_queue().unwrap();
         assert_eq!(q.tasks.len(), 1);
         assert_eq!(q.tasks[0].kind, "implementation");
+        assert_eq!(q.tasks[0].goal.as_ref().unwrap().max_feedback_cycles, 2);
+        assert_eq!(
+            q.tasks[0].goal.as_ref().unwrap().condition,
+            "fix the login redirect"
+        );
         let intent = ws.load_intent().unwrap().unwrap();
         assert_eq!(intent.ambiguity, "low");
         assert!(!intent_gated(&intent, true));
@@ -1758,6 +1801,10 @@ routing:
         let q = ws.load_queue().unwrap();
         assert_eq!(q.tasks[1].kind, "review");
         assert_eq!(q.tasks[1].depends_on, vec!["YARD-001"]);
+        assert_eq!(
+            q.tasks[1].goal.as_ref().unwrap().condition,
+            "no clipped text and the theme is consistent"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

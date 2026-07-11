@@ -632,6 +632,9 @@ mod tests {
             user_override: None,
             skills: vec![skill.into()],
             verdict_pass: None,
+            feedback_cycle: 0,
+            max_feedback_cycles: 0,
+            feedback_retryable: false,
         };
         for _ in 0..3 {
             crate::telemetry::append_run(&ws, &tel("weak-one", "Failed")).unwrap();
