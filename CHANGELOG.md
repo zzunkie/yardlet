@@ -15,6 +15,18 @@
 
 ### Added
 
+- **User-owned, default-off Git finish policy.** `.agents/yardlet.yaml` can now
+  name a remote, a full `refs/heads/...` target, and ordered pre-push checks
+  under `git_finish`. Only an OID produced by a successful `Done` worktree
+  merge is eligible. Yardlet pushes the explicit non-force
+  `<expected_oid>:<target_ref>` refspec, independently verifies it with
+  `git ls-remote --refs`, and converges repeated attempts to
+  `already_applied`. Every disabled, pushed, already-applied, check-blocked,
+  safety-blocked, Git-failed, or remote-mismatch outcome is recorded in the
+  run's `git-finish.json` without remote URLs, command output, credentials, or
+  environment values. This does not add force push or public-`origin`
+  dogfooding support.
+
 - **Explicit goal feedback is bounded and durable.** Tasks can carry a goal
   condition, feedback policy, and maximum feedback cycles. Failed deterministic
   validation and acceptance evidence is recorded under the run, injected into

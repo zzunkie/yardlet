@@ -910,6 +910,7 @@ mod tests {
             feedback_cycle: 0,
             max_feedback_cycles: 0,
             feedback_retryable: false,
+            git_finish_status: String::new(),
         }
     }
 

@@ -46,6 +46,9 @@ pub struct RunTelemetry {
     pub max_feedback_cycles: u32,
     #[serde(default, skip_serializing_if = "is_false")]
     pub feedback_retryable: bool,
+    /// Outcome from the run's canonical `git-finish.json` projection.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub git_finish_status: String,
 }
 
 fn is_zero(value: &u32) -> bool {

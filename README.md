@@ -376,6 +376,55 @@ Inside a task, workers are free to use their own subagents. Yardlet's queue
 parallelism is for work that must survive sessions, cross workers, or pass
 human gates. Design: [docs/parallel-queue.md](docs/parallel-queue.md).
 
+## Git finish
+
+Automatic push is a separate, user-owned completion policy and is off by
+default. `yardlet init` writes an explicit disabled block; older workspaces
+without the block also stay disabled. Configure a named remote, a fully
+qualified branch ref, and checks in the order they must pass:
+
+```yaml
+git_finish:
+  auto_push: false
+  remote: safe-remote
+  target_ref: refs/heads/main
+  pre_push_checks:
+    - name: format
+      command: cargo fmt --check
+    - name: tests
+      command: cargo test
+```
+
+After reviewing this policy, set `auto_push: true` to opt in. This does not
+make arbitrary commits pushable. Yardlet only owns an OID when a `Done`
+isolated worktree was successfully merged by the core. The resulting branch
+must match `target_ref`, `HEAD` must still equal that owned OID, and the working
+tree must have no changes outside `.agents/`. Every configured check runs in
+declaration order; the first failure stops before push.
+
+The push is always an explicit `<expected_oid>:<target_ref>` refspec. There is
+no force, force-with-lease, ref deletion, or history rewrite path. Yardlet then
+uses a separate `git ls-remote --refs` lookup and reports success only when the
+remote OID equals the frozen expected OID. Repeating the same finish converges
+to `already_applied` without another push.
+
+| Recorded status | User-visible meaning |
+|---|---|
+| `pushed` | The exact OID was pushed and independently verified. |
+| `already_applied` | The remote already had the exact OID; no push ran. |
+| `check_blocked` / `safety_blocked` | A configured check or ownership/state gate blocked before push. |
+| `git_failed` | A Git lookup or push command failed. |
+| `remote_mismatch` | Push returned success, but independent verification did not match. |
+| `disabled` | The workspace did not opt in. |
+
+Every outcome is written to
+`.agents/runs/<run-id>/git-finish.json` and projected into run telemetry and the
+final report. The record includes the remote name, target ref, expected and
+observed OIDs, check names/results, push flags, reason, and timestamp. It does
+not store a remote URL, check command text or output, credentials, or
+environment values. Use a local bare remote for project dogfooding and tests;
+this contract does not claim that Yardlet pushes its own public `origin`.
+
 ## Crash safety
 
 Yardlet state survives restarts. On startup (and via `yardlet recover`) it recovers
@@ -408,7 +457,7 @@ Yardlet owns state; workers do not. Canonical state lives under `.agents/` in th
   workers.yaml              worker profiles + routing
   memory/                   durable workspace facts (one fact per .md, git-tracked)
   rules/ skills/ agents/    harness assets (rules, skill catalog, role notes)
-  runs/<run-id>/            per-run artifacts (result, validation, checkpoint, handoff)
+  runs/<run-id>/            per-run artifacts (result, validation, checkpoint, handoff, git-finish)
   conversations/<id>.yaml   needs-user transcripts threaded back to the worker
   checkpoints/              latest compact resume points
   handoffs/                 teammate-readable summaries

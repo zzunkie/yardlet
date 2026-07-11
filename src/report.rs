@@ -230,6 +230,12 @@ pub fn build_final_report(ws: &Workspace) -> Result<String> {
                     md.push_str(&format!("{}\n\n", rep.trim()));
                 }
             }
+            if let Ok(raw) = std::fs::read_to_string(dir.join("git-finish.json")) {
+                if let Ok(finish) = serde_json::from_str::<crate::git_finish::GitFinishRecord>(&raw)
+                {
+                    md.push_str(&format!("{}\n\n", finish.user_line()));
+                }
+            }
         }
     }
 

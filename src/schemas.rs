@@ -101,11 +101,38 @@ pub struct YardConfig {
     /// auto-commit lands next). The parallel path is unaffected by this flag: it
     /// always commits each task in its isolated worktree and merges it back
     /// (everything except `.agents/`), since merge-back intrinsically needs a
-    /// commit and the worktree is provably the worker's. Never pushes to a remote
-    /// (pushing stays manual and gated by approval-policy `deploy_publish_send`).
+    /// commit and the worktree is provably the worker's. Remote push is a
+    /// separate, default-off `git_finish` policy below.
     /// OFF by default, since it writes to the user's git history.
     #[serde(default)]
     pub auto_commit: bool,
+    /// User-owned, default-off policy for finishing an owned Yardlet merge by
+    /// pushing its exact OID to one explicit branch ref. Legacy configs omit
+    /// this block and therefore deserialize to a disabled policy.
+    #[serde(default)]
+    pub git_finish: GitFinishPolicy,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitFinishPolicy {
+    /// No remote command is run unless this is explicitly true.
+    #[serde(default)]
+    pub auto_push: bool,
+    /// Git remote name only. URLs are never copied into run records.
+    #[serde(default)]
+    pub remote: String,
+    /// Fully qualified branch ref, for example `refs/heads/main`.
+    #[serde(default)]
+    pub target_ref: String,
+    /// Workspace-owned checks, executed in this exact order before push.
+    #[serde(default)]
+    pub pre_push_checks: Vec<GitFinishCheck>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitFinishCheck {
+    pub name: String,
+    pub command: String,
 }
 
 fn default_access() -> String {

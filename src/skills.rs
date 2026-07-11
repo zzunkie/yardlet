@@ -635,6 +635,7 @@ mod tests {
             feedback_cycle: 0,
             max_feedback_cycles: 0,
             feedback_retryable: false,
+            git_finish_status: String::new(),
         };
         for _ in 0..3 {
             crate::telemetry::append_run(&ws, &tel("weak-one", "Failed")).unwrap();

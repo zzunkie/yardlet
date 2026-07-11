@@ -2569,10 +2569,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // is kept for manual integration. The committed state below is this
     // post-merge state, so the queue and telemetry both record what really
     // happened.
+    let mut owned_oid = None;
     if let Some(m) = &merge {
         if next_state == TaskState::Done {
             match crate::parallel::integrate_worktree(&ws.root, m.wt_path, m.branch, &task.id) {
-                Ok(crate::parallel::Integration::Merged) => {
+                Ok(crate::parallel::Integration::Merged { oid }) => {
+                    owned_oid = Some(oid);
                     lines.push(format!(
                         "{}: merged {} into the workspace",
                         task.id, m.branch
@@ -2618,6 +2620,13 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             ));
         }
     }
+
+    // Git finish runs only after evaluation and worktree integration. The OID
+    // is supplied only by the successful merge branch above, so a serial run,
+    // no-op, conflict, or unrelated existing commit cannot acquire ownership.
+    let git_finish =
+        crate::git_finish::finish_owned_run(ws, run_dir, run_id, &task.id, next_state, owned_oid)?;
+    lines.push(git_finish.user_line());
 
     // Update the queue: set state AND ingest any follow-up tasks the worker
     // proposed (propose -> ingest). Yardlet stays the sole queue writer — both
@@ -2749,6 +2758,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                 feedback_cycle: feedback.as_ref().map(|f| f.cycle).unwrap_or(0),
                 max_feedback_cycles: task.max_feedback_cycles(),
                 feedback_retryable: feedback.as_ref().is_some_and(|f| f.retryable),
+                git_finish_status: git_finish.status.as_str().to_string(),
             },
         );
     }
@@ -4837,7 +4847,7 @@ exit 1
                 .unwrap();
             assert!(out.status.success(), "git {args:?}");
         };
-        sh(&["init", "-q"]);
+        sh(&["init", "-q", "-b", "main"]);
         // The worktree integration commit inherits the repository's identity;
         // configure one locally so the test passes on runners with no global
         // git config.
@@ -4847,7 +4857,23 @@ exit 1
         sh(&["add", "base.txt"]);
         sh(&["commit", "-q", "-m", "init"]);
 
+        let remote = root.with_extension("bare.git");
+        let _ = std::fs::remove_dir_all(&remote);
+        sh(&["init", "-q", "--bare", remote.to_str().unwrap()]);
+        sh(&["remote", "add", "fixture", remote.to_str().unwrap()]);
+        crate::init::init(&root, false).unwrap();
         let ws = Workspace::at(&root);
+        let mut config = ws.load_config().unwrap();
+        config.git_finish = crate::schemas::GitFinishPolicy {
+            auto_push: true,
+            remote: "fixture".into(),
+            target_ref: "refs/heads/main".into(),
+            pre_push_checks: vec![crate::schemas::GitFinishCheck {
+                name: "owned-change-present".into(),
+                command: "test -f feature.txt".into(),
+            }],
+        };
+        state::save_yaml(&ws.config_path(), &config).unwrap();
         let mut t = task("YARD-001", TaskState::Running, 10, false);
         t.kind = "implementation".into();
 
@@ -4922,7 +4948,23 @@ exit 1
             root.join("feature.txt").exists(),
             "worktree change should have merged into the workspace"
         );
+        let finish: crate::git_finish::GitFinishRecord = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join("git-finish.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(finish.status, crate::git_finish::GitFinishStatus::Pushed);
+        assert_eq!(finish.expected_oid, finish.remote_oid);
+        let remote_head = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["ls-remote", "--refs", "fixture", "refs/heads/main"])
+            .output()
+            .unwrap();
+        assert!(remote_head.status.success());
+        assert!(String::from_utf8_lossy(&remote_head.stdout)
+            .starts_with(finish.expected_oid.as_deref().unwrap()));
         let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&remote);
     }
 
     #[test]

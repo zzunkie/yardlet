@@ -651,7 +651,7 @@ fn append_failover_note(run_dir: &Path, note: &str) -> Result<()> {
 }
 
 pub(crate) enum Integration {
-    Merged,
+    Merged { oid: String },
     NoChanges,
     Conflict(String),
 }
@@ -702,7 +702,12 @@ pub(crate) fn integrate_worktree(
         return Ok(Integration::NoChanges);
     }
     match git(root, &["merge", "--no-ff", "--no-edit", branch]) {
-        Ok(_) => Ok(Integration::Merged),
+        Ok(_) => {
+            let oid = git(root, &["rev-parse", "--verify", "HEAD^{commit}"])?
+                .trim()
+                .to_string();
+            Ok(Integration::Merged { oid })
+        }
         Err(e) => {
             // Abort only if the failed merge is OURS (a content conflict from
             // the command above); never touch someone else's merge state.
@@ -1198,7 +1203,9 @@ exit 0
         std::fs::create_dir_all(wt.join(".agents")).unwrap();
         std::fs::write(wt.join(".agents/work-queue.yaml"), "copy").unwrap();
         match integrate_worktree(&root, &wt, "yard/yard-001", "YARD-001").unwrap() {
-            Integration::Merged => {}
+            Integration::Merged { oid } => {
+                assert_eq!(oid, sh_git(&root, &["rev-parse", "HEAD"]).trim());
+            }
             _ => panic!("expected a merge"),
         }
         assert!(root.join("feature.txt").is_file());

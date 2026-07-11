@@ -7,7 +7,7 @@ use std::path::Path;
 use anyhow::{bail, Result};
 use chrono::Utc;
 
-use crate::schemas::YardConfig;
+use crate::schemas::{GitFinishPolicy, YardConfig};
 use crate::state::{self, write_str, Workspace, STATE_DIR};
 use crate::templates;
 
@@ -50,6 +50,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
         auto_prune: true,
         hooks: true,
         auto_commit: false,
+        git_finish: GitFinishPolicy::default(),
     };
     state::save_yaml(&ws.config_path(), &config)?;
     written.push("yardlet.yaml".to_string());
@@ -121,4 +122,27 @@ fn workspace_id(root: &Path) -> String {
     let mut hasher = DefaultHasher::new();
     canonical.hash(&mut hasher);
     format!("ws-{:016x}", hasher.finish())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_writes_explicit_default_off_git_finish_policy() {
+        let root =
+            std::env::temp_dir().join(format!("yard-init-git-finish-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        init(&root, false).unwrap();
+
+        let text = std::fs::read_to_string(root.join(".agents/yardlet.yaml")).unwrap();
+        let cfg: YardConfig = crate::yaml::from_str(&text).unwrap();
+        assert!(!cfg.git_finish.auto_push);
+        assert!(text.contains("git_finish:"));
+        assert!(text.contains("auto_push: false"));
+        assert!(text.contains("pre_push_checks: []"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

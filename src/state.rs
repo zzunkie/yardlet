@@ -126,6 +126,21 @@ impl Workspace {
     pub fn runs_dir(&self) -> PathBuf {
         self.agents_dir().join("runs")
     }
+
+    /// Canonical writer for the secret-free Git finish attempt attached to a
+    /// run. Git URLs, user-provided check text/output, and environment values
+    /// are not fields in the record schema and therefore cannot be persisted
+    /// here. A failure from this writer is a hard pre-push gate.
+    pub fn save_git_finish_record(
+        &self,
+        run_dir: &Path,
+        record: &crate::git_finish::GitFinishRecord,
+    ) -> Result<()> {
+        write_str(
+            &run_dir.join("git-finish.json"),
+            &serde_json::to_string_pretty(record)?,
+        )
+    }
     /// Atomically claim a run directory without reusing an existing attempt's
     /// artifacts. Timestamp-based ids can collide during fast queue drains, so
     /// later claims receive a stable numeric suffix.
@@ -1843,6 +1858,9 @@ records:
         assert_eq!(ws.config_path(), legacy);
         let before = fs::read(&legacy).unwrap();
         let cfg = ws.load_config().unwrap();
+        assert!(!cfg.git_finish.auto_push);
+        assert!(cfg.git_finish.remote.is_empty());
+        assert!(cfg.git_finish.target_ref.is_empty());
         assert!(!save_config_preserving_format(&ws.config_path(), &cfg).unwrap());
         assert_eq!(fs::read(&legacy).unwrap(), before);
         assert!(!ws.agents_dir().join(CONFIG_FILE).exists());
