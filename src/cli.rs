@@ -68,6 +68,8 @@ pub enum Command {
     Trust(TrustArgs),
     /// List, initialize, or refresh project memory under .agents/memory/.
     Memory(MemoryArgs),
+    /// Observe a local command or path until a bounded condition is met.
+    Watch(WatchArgs),
     /// Review routing telemetry and apply suggested worker preferences.
     Routing(RoutingArgs),
     /// Show worker-rubric drift from the template and merge improvements in.
@@ -321,6 +323,25 @@ pub struct MemoryArgs {
     cmd: Option<MemoryCmd>,
 }
 
+#[derive(Args)]
+pub struct WatchArgs {
+    /// Seconds between observations.
+    #[arg(long, default_value_t = 5)]
+    interval: u64,
+    /// Condition: success, failure, output:<text>, exists:<path>, changed:<path>.
+    #[arg(long, default_value = "success")]
+    until: String,
+    /// Maximum number of observations.
+    #[arg(long, default_value_t = 12)]
+    max_runs: u32,
+    /// Maximum foreground lifetime in seconds.
+    #[arg(long, default_value_t = 3600)]
+    max_seconds: u64,
+    /// Local observer command and arguments, placed after `--`.
+    #[arg(last = true)]
+    command: Vec<String>,
+}
+
 #[derive(Subcommand)]
 enum MemoryCmd {
     /// Ask a worker for memory drafts, then let Yardlet core write canonical docs.
@@ -330,6 +351,13 @@ enum MemoryCmd {
         /// Refresh only docs whose look_at landmarks changed after the memory.
         #[arg(long)]
         stale_only: bool,
+    },
+    /// Fan out read-only scouts and merge their reports into unapplied candidates.
+    Scout,
+    /// Apply candidates from a completed scout run through the core memory writer.
+    Apply {
+        #[arg(long)]
+        run: String,
     },
 }
 
@@ -415,6 +443,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Report) => cmd_report(&cwd),
         Some(Command::Trust(a)) => cmd_trust(&cwd, a),
         Some(Command::Memory(a)) => cmd_memory(&cwd, a),
+        Some(Command::Watch(a)) => cmd_watch(&cwd, a),
         Some(Command::Routing(a)) => cmd_routing(&cwd, a),
         Some(Command::Rubric(a)) => cmd_rubric(&cwd, a),
         Some(Command::Recover) => cmd_recover(&cwd),
@@ -1230,6 +1259,49 @@ fn cmd_memory(cwd: &std::path::Path, args: MemoryArgs) -> Result<()> {
             print_memory_command_report(label, &report);
             Ok(())
         }
+        Some(MemoryCmd::Scout) => {
+            let report = crate::memory::scout(&ws)?;
+            println!("memory scout {} ({})", report.run_id, report.worker_id);
+            for path in report.reports {
+                println!("  report: {path}");
+            }
+            println!(
+                "  candidates: {} ({})",
+                report.candidates, report.candidate_path
+            );
+            println!(
+                "  canonical memory unchanged; apply with `yardlet memory apply --run {}`",
+                report.run_id
+            );
+            Ok(())
+        }
+        Some(MemoryCmd::Apply { run }) => {
+            let report = crate::memory::apply_scout(&ws, &run)?;
+            print_memory_command_report("applied memory scout candidates", &report);
+            Ok(())
+        }
+    }
+}
+
+fn cmd_watch(cwd: &std::path::Path, args: WatchArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let until = crate::watch::Until::parse(&args.until)?;
+    let (run_id, result) = crate::watch::run(
+        &ws,
+        crate::watch::WatchOptions {
+            interval: std::time::Duration::from_secs(args.interval),
+            max_runs: args.max_runs,
+            max_duration: std::time::Duration::from_secs(args.max_seconds),
+            until,
+            command: args.command,
+        },
+    )?;
+    println!("watch {}: {} ({})", run_id, result.status, result.reason);
+    println!("  artifact: .agents/runs/{run_id}/watch-result.json");
+    if result.status == "satisfied" {
+        Ok(())
+    } else {
+        anyhow::bail!("watch ended {}: {}", result.status, result.reason)
     }
 }
 
@@ -1261,6 +1333,9 @@ fn cmd_memory_list(ws: &crate::state::Workspace) -> Result<()> {
             println!("  \u{2022} {} \u{2014} {}{mark}", m.title, m.summary);
         }
         println!("    {}", m.path);
+        for path in &m.changed_look_at {
+            println!("      refresh candidate: {path}");
+        }
     }
     Ok(())
 }

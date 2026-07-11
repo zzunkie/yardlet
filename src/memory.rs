@@ -4,12 +4,13 @@
 //! is the sole writer of canonical `.agents/memory/*.md` files and the generated
 //! index through `Workspace::write_memory_documents`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Local;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::packet::{self, MemoryRefreshTarget};
 use crate::state::{MemoryDocumentDraft, MemoryWriteMode, MemoryWriteReport, Workspace};
@@ -22,6 +23,7 @@ pub struct MemoryEntry {
     pub path: String,
     pub look_at: Vec<String>,
     pub stale: bool,
+    pub changed_look_at: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -34,7 +36,7 @@ pub struct MemoryCommandReport {
     pub rationale: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct MemoryResult {
     #[serde(default)]
     documents: Vec<MemoryResultDocument>,
@@ -42,7 +44,7 @@ struct MemoryResult {
     rationale: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct MemoryResultDocument {
     #[serde(default)]
     slug: String,
@@ -87,32 +89,92 @@ pub fn indexed(ws: &Workspace) -> Result<Vec<MemoryEntry>> {
     let config = ws.load_config()?;
     let h = packet::discover_harness(&ws.root, config.harness_discovery);
     let uncommitted = git_uncommitted_paths(&ws.root);
-    let prefix = git_show_prefix(&ws.root);
     Ok(h.memory
         .into_iter()
         .map(|m| {
-            let stale = if m.look_at.is_empty() {
-                false
-            } else {
-                let doc_ct = git_commit_time(&ws.root, &m.path);
-                m.look_at.iter().any(|p| {
-                    let rel = p.trim_start_matches("./");
-                    uncommitted.contains(format!("{prefix}{rel}").as_str())
-                        || matches!(
-                            (doc_ct, git_commit_time(&ws.root, rel)),
-                            (Some(d), Some(t)) if t > d
-                        )
+            let doc_time = memory_updated_time(&ws.root.join(&m.path));
+            let changed_look_at: Vec<_> = m
+                .look_at
+                .iter()
+                .filter_map(|raw| {
+                    let rel = normalize_look_at(&ws.root, raw)?;
+                    let landmark = ws.root.join(&rel);
+                    let changed = uncommitted.contains(&rel)
+                        || (doc_time.is_some() && !landmark.exists())
+                        || is_newer_than_memory(
+                            doc_time,
+                            git_commit_time(&ws.root, &rel).or_else(|| modified_time(&landmark)),
+                        );
+                    changed.then_some(rel)
                 })
-            };
+                .collect();
             MemoryEntry {
                 title: m.title,
                 summary: m.summary,
                 path: m.path,
                 look_at: m.look_at,
-                stale,
+                stale: !changed_look_at.is_empty(),
+                changed_look_at,
             }
         })
         .collect())
+}
+
+fn is_newer_than_memory(memory_time: Option<i128>, landmark_time: Option<i128>) -> bool {
+    matches!((memory_time, landmark_time), (Some(memory), Some(landmark)) if landmark > memory)
+}
+
+fn memory_updated_time(path: &Path) -> Option<i128> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let from_frontmatter = text.lines().find_map(|line| {
+        let value = line
+            .trim()
+            .strip_prefix("updated_at:")?
+            .trim()
+            .trim_matches(['\'', '"']);
+        chrono::DateTime::parse_from_rfc3339(value)
+            .ok()
+            .and_then(|v| v.timestamp_nanos_opt())
+            .map(i128::from)
+    });
+    from_frontmatter.or_else(|| modified_time(path))
+}
+
+fn modified_time(path: &Path) -> Option<i128> {
+    path.metadata()
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|v| v.as_nanos().min(i128::MAX as u128) as i128)
+}
+
+fn normalize_look_at(root: &Path, raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let path = Path::new(raw);
+    let relative = if path.is_absolute() {
+        path.strip_prefix(root).ok()?
+    } else {
+        path
+    };
+    let mut clean = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => clean.push(part),
+            Component::ParentDir => {
+                if !clean.pop() {
+                    return None;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    (!clean.as_os_str().is_empty()).then(|| clean.to_string_lossy().replace('\\', "/"))
 }
 
 pub fn init(ws: &Workspace) -> Result<MemoryCommandReport> {
@@ -173,6 +235,205 @@ pub fn refresh(ws: &Workspace, stale_only: bool) -> Result<MemoryCommandReport> 
         write,
         result.rationale,
     ))
+}
+
+const SCOUT_TOPICS: [(&str, &str); 4] = [
+    (
+        "structure-build",
+        "repository structure, build, test, and validation commands",
+    ),
+    (
+        "architecture",
+        "architecture boundaries, core execution paths, and invariants",
+    ),
+    (
+        "interfaces-data",
+        "user interfaces, routes or commands, and durable data models",
+    ),
+    (
+        "conventions",
+        "non-obvious project conventions, decisions, and recurring gotchas",
+    ),
+];
+
+#[derive(Debug)]
+pub struct ScoutCommandReport {
+    pub run_id: String,
+    pub worker_id: String,
+    pub reports: Vec<String>,
+    pub candidate_path: String,
+    pub candidates: usize,
+}
+
+/// Run independent scouts against isolated copies. Scouts can write inside
+/// those disposable copies, but have no filesystem path to the live project or
+/// its canonical `.agents` state. Only their report directories are writable
+/// outputs in the live workspace.
+pub fn scout(ws: &Workspace) -> Result<ScoutCommandReport> {
+    let worker_profiles = ws.load_workers()?;
+    let billing = ws.load_billing()?;
+    let (profile, bin, worker_id) =
+        crate::planner::pick_ready_worker(&worker_profiles, &billing, None)?;
+    let env = guard::sanitized_worker_env_for(&billing, &profile.invocation.pass_env)
+        .map_err(|e| anyhow!(e))?;
+    let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
+    let base_run_id = format!("memory-scout-{}", Local::now().format("%Y%m%d-%H%M%S"));
+    let (run_id, run_dir) = ws.claim_run_dir(&base_run_id)?;
+    let results = std::sync::Mutex::new(Vec::<Result<(String, MemoryResult)>>::new());
+
+    std::thread::scope(|scope| {
+        for (topic, brief) in SCOUT_TOPICS {
+            let scout_run_id = run_id.clone();
+            let profile = profile.clone();
+            let bin = bin.clone();
+            let env = env.clone();
+            let worker_id = worker_id.clone();
+            let live_report_dir = run_dir.join("scouts").join(topic);
+            let sandbox = std::env::temp_dir().join(format!("yardlet-{scout_run_id}-{topic}"));
+            let results = &results;
+            scope.spawn(move || {
+                let result = (|| -> Result<(String, MemoryResult)> {
+                    if sandbox.exists() {
+                        std::fs::remove_dir_all(&sandbox)?;
+                    }
+                    copy_scout_workspace(&ws.root, &sandbox)?;
+                    let report_dir = sandbox.join(".yardlet-scout-output");
+                    std::fs::create_dir_all(&report_dir)?;
+                    let packet = packet::compile_memory_scout(
+                        topic,
+                        brief,
+                        &worker_id,
+                        ".yardlet-scout-output",
+                    );
+                    let outcome = workers::spawn(
+                        &profile,
+                        &bin,
+                        &packet,
+                        &sandbox,
+                        &env,
+                        &report_dir.join("worker-output.log"),
+                        timeout,
+                        false,
+                        &[],
+                        None,
+                        false,
+                    )?;
+                    let result_path = report_dir.join("scout-result.json");
+                    let raw = std::fs::read_to_string(&result_path).with_context(|| {
+                        format!(
+                            "scout '{topic}' did not write {} ({})",
+                            result_path.display(),
+                            outcome.note
+                        )
+                    })?;
+                    let parsed = serde_json::from_str(&raw)
+                        .with_context(|| format!("parsing {}", result_path.display()))?;
+                    std::fs::create_dir_all(&live_report_dir)?;
+                    crate::state::write_str(&live_report_dir.join("packet.md"), &packet)?;
+                    std::fs::copy(&result_path, live_report_dir.join("scout-result.json"))?;
+                    let log = report_dir.join("worker-output.log");
+                    if log.is_file() {
+                        std::fs::copy(log, live_report_dir.join("worker-output.log"))?;
+                    }
+                    Ok((topic.to_string(), parsed))
+                })();
+                let _ = std::fs::remove_dir_all(&sandbox);
+                results.lock().expect("scout result mutex").push(result);
+            });
+        }
+    });
+
+    let mut completed: Vec<_> = results
+        .into_inner()
+        .expect("scout result mutex")
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    completed.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut merged = BTreeMap::<String, MemoryResultDocument>::new();
+    let mut rationale = Vec::new();
+    let mut reports = Vec::new();
+    for (topic, result) in completed {
+        reports.push(format!(
+            ".agents/runs/{run_id}/scouts/{topic}/scout-result.json"
+        ));
+        if !result.rationale.trim().is_empty() {
+            rationale.push(format!("{topic}: {}", result.rationale.trim()));
+        }
+        for document in result.documents {
+            let slug = memory_slug(&document.slug);
+            if !slug.is_empty() {
+                merged.entry(slug).or_insert(document);
+            }
+        }
+    }
+    reports.sort();
+    let candidates = MemoryResult {
+        documents: merged.into_values().collect(),
+        rationale: rationale.join("\n"),
+    };
+    let candidate_path = run_dir.join("memory-candidates.json");
+    crate::state::write_str(
+        &candidate_path,
+        &format!("{}\n", serde_json::to_string_pretty(&candidates)?),
+    )?;
+    Ok(ScoutCommandReport {
+        run_id: run_id.clone(),
+        worker_id,
+        reports,
+        candidate_path: format!(".agents/runs/{run_id}/memory-candidates.json"),
+        candidates: candidates.documents.len(),
+    })
+}
+
+pub fn apply_scout(ws: &Workspace, run_id: &str) -> Result<MemoryCommandReport> {
+    if Path::new(run_id).file_name().and_then(|v| v.to_str()) != Some(run_id) {
+        bail!("invalid scout run id");
+    }
+    let path = ws.runs_dir().join(run_id).join("memory-candidates.json");
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let result: MemoryResult =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    let drafts: Vec<_> = result
+        .documents
+        .into_iter()
+        .map(MemoryResultDocument::into_draft)
+        .collect();
+    let write = ws.write_memory_documents(&drafts, MemoryWriteMode::Init)?;
+    Ok(command_report(
+        Some(run_id.to_string()),
+        None,
+        write,
+        result.rationale,
+    ))
+}
+
+fn copy_scout_workspace(source: &Path, target: &Path) -> Result<()> {
+    std::fs::create_dir_all(target)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let is_runtime_artifact = source.file_name().is_some_and(|v| v == ".agents")
+            && matches!(
+                name.to_str(),
+                Some("runs" | "checkpoints" | "handoffs" | "telemetry")
+            );
+        if name == ".git" || name == "target" || is_runtime_artifact {
+            continue;
+        }
+        let from = entry.path();
+        let to = target.join(&name);
+        let ty = entry.file_type()?;
+        if ty.is_symlink() {
+            continue;
+        }
+        if ty.is_dir() {
+            copy_scout_workspace(&from, &to)?;
+        } else if ty.is_file() {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 fn refresh_target(entry: &MemoryEntry) -> MemoryRefreshTarget {
@@ -300,28 +561,19 @@ fn git_uncommitted_paths(root: &std::path::Path) -> HashSet<String> {
             continue;
         }
         let xy = &entry[..2];
-        set.insert(entry[3..].to_string());
+        if let Some(path) = normalize_look_at(root, &entry[3..]) {
+            set.insert(path);
+        }
         if xy.starts_with('R') || xy.starts_with('C') {
-            chunks.next();
+            if let Some(next) = chunks.next().and_then(|p| normalize_look_at(root, p)) {
+                set.insert(next);
+            }
         }
     }
     set
 }
 
-fn git_show_prefix(root: &std::path::Path) -> String {
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "--show-prefix"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
-}
-
-fn git_commit_time(root: &std::path::Path, pathspec: &str) -> Option<i64> {
+fn git_commit_time(root: &std::path::Path, pathspec: &str) -> Option<i128> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(root)
@@ -334,8 +586,9 @@ fn git_commit_time(root: &std::path::Path, pathspec: &str) -> Option<i64> {
     std::str::from_utf8(&out.stdout)
         .ok()?
         .trim()
-        .parse::<i64>()
+        .parse::<i128>()
         .ok()
+        .map(|seconds| seconds.saturating_mul(1_000_000_000))
 }
 
 fn memory_slug(input: &str) -> String {
@@ -386,5 +639,110 @@ mod tests {
             .collect();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].slug, "stale-doc");
+    }
+
+    #[test]
+    fn stale_evidence_handles_change_no_change_and_path_normalization() {
+        let root = Path::new("/workspace/project");
+        assert_eq!(
+            normalize_look_at(root, "./src/../src/lib.rs").as_deref(),
+            Some("src/lib.rs")
+        );
+        assert_eq!(
+            normalize_look_at(root, "/workspace/project/docs/a.md").as_deref(),
+            Some("docs/a.md")
+        );
+        assert!(normalize_look_at(root, "../../secret").is_none());
+        assert!(is_newer_than_memory(Some(10), Some(11)));
+        assert!(!is_newer_than_memory(Some(10), Some(10)));
+        assert!(!is_newer_than_memory(None, Some(11)));
+    }
+
+    #[test]
+    fn non_git_workspace_uses_file_times_deterministically() {
+        assert!(is_newer_than_memory(Some(100), Some(101)));
+        assert!(!is_newer_than_memory(Some(101), Some(100)));
+    }
+
+    #[test]
+    fn indexed_marks_actual_non_git_landmark_change_and_keeps_unchanged_fresh() {
+        let root = std::env::temp_dir().join(format!("yard-memory-non-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        crate::init::init(&root, false).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/changed.rs"), "new").unwrap();
+        std::fs::write(root.join("src/fresh.rs"), "same").unwrap();
+        std::fs::write(
+            root.join(".agents/memory/old.md"),
+            "---\nname: Old\ndescription: old\nupdated_at: 2000-01-01T00:00:00Z\nlook_at:\n  - ./src/changed.rs\n---\n\n# Old\n\nbody\n",
+        ).unwrap();
+        std::fs::write(
+            root.join(".agents/memory/fresh.md"),
+            "---\nname: Fresh\ndescription: fresh\nupdated_at: 2999-01-01T00:00:00Z\nlook_at:\n  - src/fresh.rs\n---\n\n# Fresh\n\nbody\n",
+        ).unwrap();
+        std::fs::write(
+            root.join(".agents/memory/deleted.md"),
+            "---\nname: Deleted\ndescription: deleted\nupdated_at: 2000-01-01T00:00:00Z\nlook_at:\n  - src/deleted.rs\n---\n\n# Deleted\n\nbody\n",
+        ).unwrap();
+        let entries = indexed(&Workspace::at(&root)).unwrap();
+        let old = entries.iter().find(|e| e.title == "Old").unwrap();
+        let fresh = entries.iter().find(|e| e.title == "Fresh").unwrap();
+        let deleted = entries.iter().find(|e| e.title == "Deleted").unwrap();
+        assert!(old.stale);
+        assert_eq!(old.changed_look_at, vec!["src/changed.rs"]);
+        assert!(!fresh.stale);
+        assert!(deleted.stale);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scout_copy_excludes_runtime_artifacts_and_cannot_mutate_source() {
+        let base = std::env::temp_dir().join(format!("yard-scout-copy-{}", std::process::id()));
+        let source = base.join("source");
+        let target = base.join("target");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(source.join(".agents/memory")).unwrap();
+        std::fs::create_dir_all(source.join(".agents/runs/run-old")).unwrap();
+        std::fs::write(source.join("project.txt"), "live").unwrap();
+        std::fs::write(source.join(".agents/memory/fact.md"), "fact").unwrap();
+        std::fs::write(source.join(".agents/runs/run-old/result.json"), "{}").unwrap();
+        copy_scout_workspace(&source, &target).unwrap();
+        assert!(target.join(".agents/memory/fact.md").is_file());
+        assert!(!target.join(".agents/runs").exists());
+        std::fs::write(target.join("project.txt"), "scout edit").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(source.join("project.txt")).unwrap(),
+            "live"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scout_candidates_are_applied_only_by_core_action() {
+        let root = std::env::temp_dir().join(format!("yard-memory-scout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let run = ws.runs_dir().join("memory-scout-test");
+        std::fs::create_dir_all(&run).unwrap();
+        let candidates = MemoryResult {
+            documents: vec![MemoryResultDocument {
+                slug: "decision".into(),
+                title: "Decision".into(),
+                summary: "S".into(),
+                body: "Body".into(),
+                ..Default::default()
+            }],
+            rationale: "merged".into(),
+        };
+        std::fs::write(
+            run.join("memory-candidates.json"),
+            serde_json::to_string(&candidates).unwrap(),
+        )
+        .unwrap();
+        assert!(!ws.memory_dir().join("decision.md").exists());
+        let report = apply_scout(&ws, "memory-scout-test").unwrap();
+        assert_eq!(report.written, vec![".agents/memory/decision.md"]);
+        assert!(ws.memory_dir().join("decision.md").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

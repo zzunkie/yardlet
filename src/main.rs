@@ -31,6 +31,7 @@ mod telemetry;
 mod templates;
 mod trust;
 mod ui;
+mod watch;
 mod workers;
 mod yaml;
 
