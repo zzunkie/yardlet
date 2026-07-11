@@ -121,9 +121,13 @@ deprecation.
 > `record_run_suggestions`/`record_run_rules`, gated by `auto_skill`/
 > `auto_rule`). Learned skills are scored and auto-pruned (S4); learned rules
 > are always-on (no per-task attribution to score) so they are kept until
-> removed — reversible via git, visible via `yardlet harness review`. Still TODO
-> within H4: deterministic-observation candidate mining (turning repeated
-> validation failures / NeedsUser themes into candidates).
+> removed — reversible via git, visible via `yardlet harness review`.
+> `trust::mine` also mines two deterministic telemetry signals on demand:
+> a worker is a no-result hotspot after at least 6 runs when at least 10% have
+> no parseable result, and a task kind is high-retry after at least 3 tasks
+> reach Done with an average of at least 2.5 attempts. `yardlet harness review`
+> exposes both under **Mined observations**. They are suggestions only; Yardlet
+> does not auto-apply them.
 
 **Observe (mechanism, every run, no extra tokens).**
 - The result contract gains an optional field:
@@ -132,19 +136,25 @@ deprecation.
   reusable about this repo (a convention, a pitfall, a procedure), propose
   it here — short and imperative."* The worker that just did the work is the
   cheapest possible observer.
-- Yardlet adds deterministic observations from the evaluation itself: repeated
-  validation failures, drift notes, forbidden-path attempts, merge
-  conflicts, NeedsUser questions — each becomes a candidate with its
-  evidence run id.
+- `trust::mine` derives the no-result hotspot and high-retry kind observations
+  above from run telemetry without another worker call. The current result is
+  computed when `yardlet harness review` runs; it is not persisted as a
+  candidate.
+- Mining validation-failure themes, drift/forbidden-path/merge-conflict themes,
+  and NeedsUser question themes is **explicitly deferred**. Resume that work
+  only when telemetry carries a stable, typed identity for the relevant signal
+  (rather than free-form text alone), and a deterministic fixture can prove a
+  repeat threshold, deduplication, and traceability back to the evidence runs.
 
-**Collect + apply (mechanism, auto by default).** Candidates append to
-`.agents/telemetry/harness.jsonl`, deduplicated by normalized title, and
-Yardlet writes them automatically as `.agents/rules/learned-<slug>.md` or
-`.agents/skills/<slug>/SKILL.md` through `state.rs` (the worker proposed; the
-deterministic core writes — I1/I3). From the next packet on, every worker
-shares the asset. What keeps this from poisoning itself is **not** a human
-gate but the eval feedback loop (skill/rule scores) plus reversibility (git):
-an asset that doesn't earn its place is auto-pruned.
+**Collect + apply (mechanism, auto by default).** With `auto_rule` or
+`auto_skill` enabled, worker-proposed `harness_suggestions` are written directly
+as `.agents/rules/learned-<slug>.md` or `.agents/skills/<slug>/SKILL.md` through
+`state.rs` (the worker proposed; the deterministic core writes — I1/I3). From
+the next packet on, every worker shares the asset. Mined observations follow a
+separate review-only path and are not promoted automatically. What keeps
+auto-applied assets from poisoning the loop is the eval feedback loop for
+skills plus reversibility in git; learned rules have no per-task attribution
+and therefore remain until removed.
 
 **Self-correct (eval, the safety mechanism).** Each learned asset carries a
 `source: learned` marker and accrues a score from the runs that used it
@@ -153,10 +163,12 @@ A learned asset that scores poorly across N intents is auto-deprecated
 (unequipped, kept in git). The H1 inline cap bounds packet growth.
 
 **Human override (always available, never required).** `yardlet harness review`
-shows pending candidates, scores, and what was auto-applied/pruned; a human
-can promote, reject, or restore. With `auto_skill: false` / `auto_prune:
-false`, apply and prune become review actions instead of automatic — the
-opt-out for cautious workspaces (I4: minimize intervention, don't mandate it).
+shows learned rules, learned-skill scores, and the two classes of mined
+observation. Its mined suggestions must be applied separately as a
+rule/skill/scope change; the command does not promote or reject them. Learned
+assets remain removable or restorable through git. With `auto_skill: false`,
+`auto_rule: false`, or `auto_prune: false`, cautious workspaces can disable the
+corresponding automatic action (I4: minimize intervention, don't mandate it).
 
 ## Phase H5 (deferred) — central core & presets
 
