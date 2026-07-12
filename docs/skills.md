@@ -39,6 +39,15 @@ Missing — this plan:
 | Explicit over magic (I5) | `yardlet skill ...` are visible commands; the planner *suggests* `task.skills`, it doesn't silently inject hidden modes. |
 | Bring-your-own / reduce setup (I6) | Auto-classification means a fresh repo is equipped in one keystroke, not a manual hunt. |
 
+**Decision YARD-007 (2026-07-12): keep I4 unchanged.** Adopting external
+upstream skill content does not add a new per-candidate human approval gate.
+Deterministic provenance, license, bundled-file static-risk, and evaluation
+checks stay fail-closed. A vetted built-in follows the normal deterministic
+fresh-install equip policy; an on-demand external candidate is installed only
+through the explicit `yardlet skill apply` command. Neither path grants runtime
+authority. Existing approval gates still apply when actual use requires
+network, secrets, tools, push, deploy, or another outward-facing action.
+
 ## Who generates vs who records (Yardlet has no LLM)
 
 Yardlet's core has no model. "Yardlet writes the skill" never means Yardlet *authors*
