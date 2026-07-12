@@ -570,10 +570,17 @@ fn cmd_skill(cwd: &std::path::Path, args: SkillArgs) -> Result<()> {
     match args.cmd {
         SkillCmd::List => {
             let repo = inspect::summarize(&ws.root);
+            let classification = crate::skills::classify_repo(&repo, "");
             println!(
                 "Detected presets: {}",
                 crate::skills::detect_presets(&repo).join(", ")
             );
+            if classification.no_match {
+                println!("Classification: no-match (core only; gap candidate)");
+            }
+            for conflict in &classification.conflicts {
+                println!("Classification conflict: {conflict}");
+            }
             let inst = crate::skills::installed(&ws);
             println!("\nEquipped ({}):", inst.len());
             for s in &inst {
@@ -591,7 +598,7 @@ fn cmd_skill(cwd: &std::path::Path, args: SkillArgs) -> Result<()> {
                         println!("  \u{00b7} {s}");
                     }
                 }
-                None => println!("\n(no skill_library configured; set it in .agents/yardlet.yaml)"),
+                None => unreachable!("the managed built-in library is always available"),
             }
         }
         SkillCmd::Suggest => match &lib {
@@ -605,11 +612,11 @@ fn cmd_skill(cwd: &std::path::Path, args: SkillArgs) -> Result<()> {
                     println!("equip with: yardlet skill equip {}", s.join(" "));
                 }
             }
-            None => println!("no skill_library configured."),
+            None => unreachable!("the managed built-in library is always available"),
         },
         SkillCmd::Equip { names } => {
             let Some(library) = &lib else {
-                anyhow::bail!("no skill_library configured (set it in .agents/yardlet.yaml).");
+                anyhow::bail!("managed built-in library unavailable");
             };
             let expanded: Vec<String> = names.iter().flat_map(|n| library.resolve(n)).collect();
             for (name, out) in crate::skills::equip(&ws, library, &expanded) {
@@ -1711,6 +1718,13 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
     } else {
         None
     };
+    let builtin_task_skills: Vec<String> = task
+        .skills
+        .iter()
+        .filter(|name| crate::skills::builtin_layer(name).is_some())
+        .cloned()
+        .collect();
+    crate::skills::ensure_builtin_names(&ws, &builtin_task_skills)?;
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let approved = task.approval_required() && crate::approvals::is_granted(&ws, &task.id);
     let text = packet::compile(&packet::PacketInputs {

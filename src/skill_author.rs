@@ -60,6 +60,7 @@ fn draft(
         &run_dir.join("evidence").join("repo-summary.md"),
         &inspect::to_markdown(&summary),
     )?;
+    skills::ensure_builtin_names(ws, &["writing-skills".to_string()])?;
     let language = packet::resolve_language(&config.language, subject);
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let packet_text = packet::compile_skill(

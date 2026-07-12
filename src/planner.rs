@@ -288,13 +288,19 @@ pub fn plan_goal(
         interview_turns: 0,
         status: "accepted".to_string(),
     };
-    let queue = WorkQueue {
+    let mut queue = WorkQueue {
         schema_version: 1,
         queue_id: format!("queue-{intent_id}"),
         intent_id,
         selection_policy: SelectionPolicy::default(),
         tasks,
     };
+    crate::skills::project_task_skills_with_context(
+        ws,
+        &inspect::summarize(&ws.root),
+        &mut queue.tasks,
+        goal,
+    )?;
     let task_count = queue.tasks.len();
     let _ = crate::report::archive_intent(ws);
     state::save_yaml(&ws.intent_path(), &intent)?;
@@ -486,6 +492,16 @@ fn plan_core(
     if !equipped.is_empty() {
         lines.push(format!("equipped skills: {}", equipped.join(", ")));
     }
+    let request_classification = crate::skills::classify_repo(&summary, packet_request);
+    let request_overlays =
+        crate::skills::detect_overlay_skills(packet_request, &request_classification);
+    let activated = crate::skills::ensure_builtin_names(ws, &request_overlays)?;
+    if !activated.is_empty() {
+        lines.push(format!(
+            "activated built-in overlays: {}",
+            activated.join(", ")
+        ));
+    }
     let pruned = crate::skills::auto_prune(ws);
     if !pruned.is_empty() {
         lines.push(format!("pruned weak skills: {}", pruned.join(", ")));
@@ -563,6 +579,7 @@ fn plan_core(
     let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let intent = build_intent(&intent_id, store_request, &plan, images);
     let mut queue = build_queue(&intent_id, &plan);
+    crate::skills::project_task_skills_with_context(ws, &summary, &mut queue.tasks, store_request)?;
     // Ground capabilities against the real workers at creation: a task needing a
     // capability no worker has is parked now, not crashed into at run time.
     let parked = reconcile_queue_capabilities(&mut queue, workers);
@@ -648,6 +665,9 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         &inspect::to_markdown(&summary),
     )?;
     let worker_guidance = build_worker_guidance(&workers);
+    let request_classification = crate::skills::classify_repo(&summary, &ctx);
+    let request_overlays = crate::skills::detect_overlay_skills(&ctx, &request_classification);
+    crate::skills::ensure_builtin_names(ws, &request_overlays)?;
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let packet_text = packet::compile_planning(
         &ctx,
@@ -695,6 +715,7 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
     // Merge: append the new tasks to the existing queue (continue the numbering).
     let mut queue = existing_queue;
     let added = append_plan_tasks(&mut queue, &plan);
+    crate::skills::project_task_skills_with_context(ws, &summary, &mut queue.tasks, &ctx)?;
     // Ground capabilities against the real workers at creation (see run_planning).
     let parked = reconcile_queue_capabilities(&mut queue, &workers);
     if !parked.is_empty() {
@@ -983,6 +1004,20 @@ pub(crate) fn ingest_follow_ups(
         ingested.push(id);
         next_num += 1;
     }
+    if let Some(ws) = ws {
+        let context = ws
+            .load_intent()
+            .ok()
+            .flatten()
+            .map(|intent| intent.raw_request)
+            .unwrap_or_default();
+        let _ = crate::skills::project_task_skills_with_context(
+            ws,
+            &inspect::summarize(&ws.root),
+            &mut queue.tasks,
+            &context,
+        );
+    }
     ingested
 }
 
@@ -1207,6 +1242,13 @@ pub fn recover_unconsumed_plan(ws: &Workspace) -> Option<String> {
     if meta.mode == "amend" {
         let mut queue = ws.load_queue().ok()?;
         let added = append_plan_tasks(&mut queue, &plan);
+        crate::skills::project_task_skills_with_context(
+            ws,
+            &inspect::summarize(&ws.root),
+            &mut queue.tasks,
+            &meta.request,
+        )
+        .ok()?;
         ws.save_queue(&queue).ok()?;
         if let Ok(Some(mut intent)) = ws.load_intent() {
             if !plan.summary.trim().is_empty() {
@@ -1227,7 +1269,14 @@ pub fn recover_unconsumed_plan(ws: &Workspace) -> Option<String> {
     }
     let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let intent = build_intent(&intent_id, &meta.request, &plan, &[]);
-    let queue = build_queue(&intent_id, &plan);
+    let mut queue = build_queue(&intent_id, &plan);
+    crate::skills::project_task_skills_with_context(
+        ws,
+        &inspect::summarize(&ws.root),
+        &mut queue.tasks,
+        &meta.request,
+    )
+    .ok()?;
     let _ = crate::report::archive_intent(ws);
     state::save_yaml(&ws.intent_path(), &intent).ok()?;
     ws.save_queue(&queue).ok()?;

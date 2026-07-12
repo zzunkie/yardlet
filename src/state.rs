@@ -8,7 +8,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::Local;
 
 use serde::{Deserialize, Serialize};
@@ -1406,6 +1406,75 @@ pub fn append_str(path: &Path, contents: &str) -> Result<()> {
     file.write_all(contents.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+/// Place one complete skill directory under `.agents/skills/` without ever
+/// overwriting an existing entry. Callers provide the worker- or bundle-authored
+/// files; this deterministic core function is the only canonical writer used by
+/// both authored skills and managed built-ins.
+pub fn place_skill_files_no_clobber(
+    ws: &Workspace,
+    name: &str,
+    files: &[(String, String)],
+) -> Result<bool> {
+    use std::path::Component;
+
+    let valid_name = !name.is_empty()
+        && Path::new(name).components().count() == 1
+        && Path::new(name)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)));
+    if !valid_name || files.is_empty() {
+        bail!("invalid or empty skill placement for '{name}'");
+    }
+    for (relative, _) in files {
+        let path = Path::new(relative);
+        if path.as_os_str().is_empty()
+            || path.is_absolute()
+            || !path.components().all(|c| matches!(c, Component::Normal(_)))
+        {
+            bail!("invalid skill file path '{relative}'");
+        }
+    }
+
+    let skills = ws.agents_dir().join("skills");
+    fs::create_dir_all(&skills)?;
+    let dst = skills.join(name);
+    if fs::symlink_metadata(&dst).is_ok() {
+        return Ok(false);
+    }
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let staging = skills.join(format!(
+        ".yardlet-install-{name}-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir(&staging)?;
+    let staged = (|| -> Result<()> {
+        for (relative, contents) in files {
+            write_str(&staging.join(relative), contents)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = staged {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+
+    match fs::rename(&staging, &dst) {
+        Ok(()) => Ok(true),
+        Err(_error) if fs::symlink_metadata(&dst).is_ok() => {
+            let _ = fs::remove_dir_all(&staging);
+            Ok(false)
+        }
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            Err(error).with_context(|| format!("placing skill {}", dst.display()))
+        }
+    }
 }
 
 #[cfg(test)]

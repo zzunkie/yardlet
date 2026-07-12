@@ -224,6 +224,9 @@ pub struct HarnessSkill {
     /// Repo-relative SKILL.md path (".agents/skills/x/SKILL.md" or borrowed).
     pub path: String,
     pub native_to: Vec<String>,
+    /// `core` / `overlay` for Yardlet-managed built-ins. User-owned and
+    /// discovered skills are `None` and remain visible under legacy behavior.
+    pub managed_layer: Option<String>,
 }
 
 /// One project-memory doc: a durable fact or decision about this workspace,
@@ -524,6 +527,16 @@ fn collect_skills(h: &mut Harness, dir: &std::path::Path, prefix: &str, native_t
             description: frontmatter_field(&text, "description").unwrap_or_default(),
             path: format!("{prefix}/{dir_name}/SKILL.md"),
             native_to: native_to.iter().map(|s| s.to_string()).collect(),
+            managed_layer: std::fs::read_to_string(entry.path().join(".yardlet-managed.yaml"))
+                .ok()
+                .and_then(|marker| {
+                    marker.lines().find_map(|line| {
+                        line.strip_prefix("layer:")
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string)
+                    })
+                }),
         });
     }
 }
@@ -548,6 +561,7 @@ fn push_harness_sections(
     harness: &Harness,
     worker_id: &str,
     required_skills: &[String],
+    active_managed: &[String],
 ) {
     let native = |list: &[String]| list.iter().any(|w| w == worker_id);
 
@@ -582,6 +596,12 @@ fn push_harness_sections(
         .skills
         .iter()
         .filter(|s| !native(&s.native_to))
+        .filter(|s| match s.managed_layer.as_deref() {
+            Some("core") => true,
+            Some("overlay") => active_managed.iter().any(|name| name == &s.name),
+            Some(_) => false,
+            None => true,
+        })
         .collect();
     if !skills.is_empty() {
         p.push_str("## Skills (read on demand)\n\n");
@@ -672,6 +692,7 @@ pub fn compile(inputs: &PacketInputs) -> String {
         &mut p,
         inputs.harness,
         inputs.worker_id,
+        &inputs.task.skills,
         &inputs.task.skills,
     );
 
@@ -1009,9 +1030,28 @@ pub fn compile_planning(
     }
     p.push_str(&format!("- top level: {}\n\n", repo.top_level.join(", ")));
 
+    let classification = crate::skills::classify_repo(repo, request);
+    p.push_str("## Deterministic repository classification\n\n");
+    if classification.no_match {
+        p.push_str("- presets: no-match (core only; record as a gap candidate)\n");
+    } else {
+        p.push_str(&format!(
+            "- presets: {}\n",
+            classification.presets.join(", ")
+        ));
+    }
+    for evidence in &classification.evidence {
+        p.push_str(&format!("- evidence: {evidence}\n"));
+    }
+    for conflict in &classification.conflicts {
+        p.push_str(&format!("- conflict: {conflict}\n"));
+    }
+    p.push_str("- authority: classification grants no network, secret, browser, push, deploy, or external mutation permission\n\n");
+
     // The same shared harness execution packets carry: planning must respect
     // workspace rules, and seeing the skill catalog lets it assign task.skills.
-    push_harness_sections(&mut p, harness, planner_worker_id, &[]);
+    let active_overlays = crate::skills::detect_overlay_skills(request, &classification);
+    push_harness_sections(&mut p, harness, planner_worker_id, &[], &active_overlays);
 
     p.push_str("## Rules\n\n");
     p.push_str(
@@ -1127,7 +1167,13 @@ pub fn compile_skill(
     p.push_str(&format!("- top level: {}\n\n", repo.top_level.join(", ")));
 
     // Show the existing skill catalog so the worker doesn't duplicate one.
-    push_harness_sections(&mut p, harness, worker_id, &[]);
+    push_harness_sections(
+        &mut p,
+        harness,
+        worker_id,
+        &["writing-skills".to_string()],
+        &["writing-skills".to_string()],
+    );
 
     p.push_str("## How to write the skill\n\n");
     p.push_str(
@@ -1191,7 +1237,7 @@ pub fn compile_memory(
     }
     p.push_str(&format!("- top level: {}\n\n", repo.top_level.join(", ")));
 
-    push_harness_sections(&mut p, harness, worker_id, &[]);
+    push_harness_sections(&mut p, harness, worker_id, &[], &[]);
 
     if mode == "refresh" {
         p.push_str("## Refresh targets\n\n");
@@ -1521,7 +1567,7 @@ mod tests {
 
         // The packet projects the index but never the body.
         let mut p = String::new();
-        push_harness_sections(&mut p, &h, "codex", &[]);
+        push_harness_sections(&mut p, &h, "codex", &[], &[]);
         assert!(p.contains("## Project memory (read on demand)"));
         assert!(p.contains("v0.8 decisions"));
         assert!(p.contains(".agents/memory/decisions.md"));
@@ -1584,17 +1630,18 @@ mod tests {
                 description: "From claude dir.".into(),
                 path: ".claude/skills/borrowed-skill/SKILL.md".into(),
                 native_to: vec!["claude-code".into()],
+                managed_layer: None,
             }],
             memory: vec![],
         };
         let mut for_claude = String::new();
-        push_harness_sections(&mut for_claude, &harness, "claude-code", &[]);
+        push_harness_sections(&mut for_claude, &harness, "claude-code", &[], &[]);
         assert!(!for_claude.contains("Claude-native rule body."));
         assert!(for_claude.contains("Cursor rule body."));
         assert!(!for_claude.contains("borrowed-skill"));
 
         let mut for_codex = String::new();
-        push_harness_sections(&mut for_codex, &harness, "codex", &[]);
+        push_harness_sections(&mut for_codex, &harness, "codex", &[], &[]);
         assert!(for_codex.contains("Claude-native rule body."));
         assert!(for_codex.contains("borrowed-skill"));
         assert!(for_codex.contains(".claude/skills/borrowed-skill/SKILL.md"));
@@ -1619,7 +1666,7 @@ mod tests {
             memory: vec![],
         };
         let mut out = String::new();
-        push_harness_sections(&mut out, &harness, "codex", &[]);
+        push_harness_sections(&mut out, &harness, "codex", &[], &[]);
         assert!(out.contains("### small.md"));
         assert!(out.contains("also read and follow: `big.md`"));
         assert!(!out.contains("xxxxxxxxxx"));
@@ -1661,6 +1708,7 @@ mod tests {
                 description: "Verify a deploy end to end.".into(),
                 path: ".agents/skills/deploy-check/SKILL.md".into(),
                 native_to: vec![],
+                managed_layer: None,
             }],
             memory: vec![],
         };

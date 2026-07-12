@@ -100,6 +100,10 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
         written.push("memory/README.md".to_string());
     }
 
+    for name in crate::skills::ensure_builtin_core(&ws)? {
+        written.push(format!("skills/{name}/"));
+    }
+
     Ok(written)
 }
 
@@ -110,6 +114,7 @@ pub fn init(root: &Path, force: bool) -> Result<Vec<String>> {
 /// setup step: like the worker CLIs, it initializes on demand.
 pub fn ensure_initialized(cwd: &Path) -> Result<(Workspace, bool)> {
     if let Some(ws) = Workspace::discover(cwd) {
+        crate::skills::ensure_builtin_core(&ws)?;
         return Ok((ws, false));
     }
     init(cwd, false)?;
