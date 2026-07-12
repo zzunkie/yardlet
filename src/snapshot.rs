@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn live_projection_uses_only_the_queue_intent_transition() {
         let (ws, stale_only, historical) = reused_task_id_fixture("intent-scope");
-        assert!(stale_only.last_transitions.get("SHARED").is_none());
+        assert!(!stale_only.last_transitions.contains_key("SHARED"));
         assert_eq!(
             std::fs::read_to_string(ws.transition_path("SHARED")).unwrap(),
             historical
