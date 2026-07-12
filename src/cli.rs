@@ -969,6 +969,13 @@ fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
         println!("Queue is empty. Run `yardlet new \"...\"` to create work.");
         return Ok(());
     }
+    for line in queue_lines(&snap) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+fn queue_lines(snap: &Snapshot) -> Vec<String> {
     let next = snap
         .queue
         .tasks
@@ -977,26 +984,30 @@ fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
         .filter(|(_, t)| snap.task_class(t).is_runnable())
         .min_by_key(|(_, t)| t.priority)
         .map(|(i, _)| i);
-    for (i, t) in snap.queue.tasks.iter().enumerate() {
-        let class = snap.task_class(t);
-        let marker = if Some(i) == next { "\u{25b8}" } else { " " };
-        let reason = snap
-            .last_transitions
-            .get(&t.id)
-            .map(|r| format!(" - {}", r.detail))
-            .unwrap_or_default();
-        println!(
-            "{marker}{} {:<12} {:<42} {:>6}  {:<18} {}{}",
-            t.state.glyph(),
-            t.id,
-            truncate(&t.title, 42),
-            t.risk,
-            class.label(),
-            t.preferred_worker,
-            reason
-        );
-    }
-    Ok(())
+    snap.queue
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let class = snap.task_class(t);
+            let marker = if Some(i) == next { "\u{25b8}" } else { " " };
+            let reason = snap
+                .last_transitions
+                .get(&t.id)
+                .map(|r| format!(" - {}", r.detail))
+                .unwrap_or_default();
+            format!(
+                "{marker}{} {:<12} {:<42} {:>6}  {:<18} {}{}",
+                t.state.glyph(),
+                t.id,
+                truncate(&t.title, 42),
+                t.risk,
+                class.label(),
+                t.preferred_worker,
+                reason
+            )
+        })
+        .collect()
 }
 
 fn cmd_tidy(cwd: &std::path::Path) -> Result<()> {
@@ -1850,5 +1861,32 @@ auto_commit: false
         assert!(updated.contains("language: auto"));
         assert!(updated.contains("auto_commit: false"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn queue_lines_do_not_leak_a_reused_task_ids_previous_intent_reason() {
+        let (ws, stale_only, _) = crate::snapshot::reused_task_id_fixture("cli-queue");
+        let output = queue_lines(&stale_only).join("\n");
+        assert!(output.contains("SHARED"));
+        assert!(!output.contains("STALE INTENT REASON"));
+
+        crate::state::append_transition(
+            &ws,
+            crate::state::transition(
+                "SHARED",
+                crate::schemas::TaskState::Queued,
+                crate::schemas::TaskState::NeedsUser,
+                crate::schemas::TransitionCause::RunOutcome,
+                "CURRENT INTENT REASON",
+                crate::schemas::TransitionActor::System,
+            ),
+        )
+        .unwrap();
+        let current = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        let output = queue_lines(&current).join("\n");
+        assert!(output.contains("CURRENT INTENT REASON"));
+        assert!(!output.contains("STALE INTENT REASON"));
+
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 }

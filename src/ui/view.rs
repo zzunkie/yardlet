@@ -1258,6 +1258,61 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn rendered_queue(snapshot: &Snapshot) -> String {
+        let backend = TestBackend::new(160, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_queue(
+                    frame,
+                    Rect::new(0, 0, 160, 8),
+                    snapshot,
+                    i18n::Lang::En.l(),
+                    0,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn queue_view_does_not_leak_a_reused_task_ids_previous_intent_reason() {
+        let (ws, stale_only, _) = crate::snapshot::reused_task_id_fixture("tui-queue");
+        let output = rendered_queue(&stale_only);
+        assert!(output.contains("SHARED"));
+        assert!(!output.contains("STALE INTENT REASON"));
+
+        crate::state::append_transition(
+            &ws,
+            crate::state::transition(
+                "SHARED",
+                TaskState::Queued,
+                TaskState::NeedsUser,
+                crate::schemas::TransitionCause::RunOutcome,
+                "CURRENT INTENT REASON",
+                crate::schemas::TransitionActor::System,
+            ),
+        )
+        .unwrap();
+        let current = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        let output = rendered_queue(&current);
+        assert!(output.contains("CURRENT INTENT REASON"));
+        assert!(!output.contains("STALE INTENT REASON"));
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
     #[test]
     fn truncate_width_respects_hangul_columns() {
         assert_eq!(truncate_width("hello", 10), "hello");
