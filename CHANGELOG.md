@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.1 - 2026-07-12
+
+### Added
+
+- **Managed built-in skill library.** Yardlet now ships 11 pinned and
+  license-tracked skills: five core skills installed through the canonical
+  no-clobber writer and six task-scoped overlays exposed through the existing
+  `task.skills` and packet catalog path. Fresh workspaces need no external
+  `skill_library`; existing user-owned skills always win on name conflicts.
+  The bundle records immutable upstream commits, per-file blobs, included and
+  excluded inventory, adaptations, and redistributed license copies.
+
+### Fixed
+
+- **Repository classification remains bounded without letting generated output
+  hide source signals.** The deterministic scanner now ignores hidden and
+  common generated directories before applying its directory budget. This
+  keeps large web repositories with `.output`, build, coverage, or distribution
+  trees classifiable from their tracked manifest and source paths, while
+  preserving sorted traversal, depth, directory, and per-directory bounds.
+
 ## 0.9.0 - 2026-07-12
 
 ### Changed

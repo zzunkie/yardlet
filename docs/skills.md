@@ -71,7 +71,11 @@ and only to get *content*; placement and scoring stay deterministic.
 ## Asset model
 
 ```
-~/.yard/skills/            optional central library (config: skill_library)
+Yardlet binary             managed built-in library (11 pinned skills)
+  core                     5 skills, installed with no-clobber placement
+  overlays                 6 skills, activated for matching task intent
+
+~/.yard/skills/            optional additional library (config: skill_library)
   <name>/SKILL.md          source skills, shared across repos
   catalog.tsv              name · tier · presets · description · triggers
   presets/<kind>.skills    preset -> skill-name list (game, web-ui, ...)
@@ -103,8 +107,12 @@ Deterministic. Turns "what is this repo" into "these skills".
   cautious. `yardlet skill suggest` always shows detected − equipped on demand.
 - **`yardlet skill equip <preset|name>...`** — link/copy the named skills (or a
   whole preset) from the library into `.agents/skills/`. `unequip` removes.
-- **Config:** `skill_library: <path>` (empty = none; just the in-repo and A1
-  sources). Library is read-only.
+- **Managed default:** an empty `skill_library` uses the bundled catalog. Five
+  core skills are placed through the canonical no-clobber writer; six overlays
+  are materialized and exposed only for matching `task.skills`. Existing
+  user-owned skill directories always win on a name collision.
+- **Config:** `skill_library: <path>` adds a read-only external library to the
+  managed catalog. It is optional, not the source of the built-in bundle.
 
 Tests: classification table per fixture; preset expansion; equip idempotence;
 suggest = detected − equipped.

@@ -268,7 +268,7 @@ are mapped to the same shortcuts.
 | `yardlet eval fixtures [--json] [--fixture <id>]` | Run isolated deterministic mechanism fixtures; any failed fixture returns a non-zero exit. |
 | `yardlet trust [--json]` | Trust + autonomy report from run telemetry and the transition audit log (read-only); `--json` emits the metrics. |
 | `yardlet recover` | Recover state from an interrupted session (orphaned runs, unread plans). |
-| `yardlet skill list / suggest / equip <preset> / unequip / research / create / apply / review` | Classify, equip, author, and score skills. |
+| `yardlet skill list / suggest / equip <preset> / unequip / research / create / apply / review` | Classify repos; use the managed 11-skill catalog; equip, author, and score skills. Core skills install without an external library; overlays stay task-scoped. |
 | `yardlet harness review` | Show auto-learned rules and skills with their eval scores, plus mined improvement candidates. |
 | `yardlet rubric drift / sync [--adopt-text]` | Diagnose how the workspace rubric lags the template and merge improvements in (non-destructive). |
 | `yardlet routing review` | Per-kind worker success stats + suggested preferences. |
