@@ -288,6 +288,7 @@ impl Workspace {
         })
     }
 
+    #[cfg(test)]
     pub fn latest_transition(&self, task_id: &str) -> Option<TransitionRecord> {
         self.load_transition_log(task_id).records.pop()
     }
