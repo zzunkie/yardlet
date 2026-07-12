@@ -6,6 +6,7 @@
 //! *before* spawning, because spawning a subscription-backed worker consumes
 //! real usage. Pass `execute: true` to actually invoke the worker.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1677,6 +1678,180 @@ fn is_abandoned_run(run_dir: &std::path::Path) -> bool {
         && !run_dir.join("result.json").exists()
 }
 
+#[derive(Debug)]
+struct PendingGitFinish {
+    run_id: String,
+    task_id: String,
+    run_dir: PathBuf,
+    target: (String, String),
+    integration_order: usize,
+    started_at: String,
+}
+
+/// Find every unverified integration for the live intent and order each remote
+/// target by the workspace's first-parent integration history. This deliberately
+/// scans runs rather than tasks: multiple runs may own distinct accumulated
+/// commits even when they share a task id.
+fn pending_git_finishes(ws: &Workspace, queue: &WorkQueue) -> Vec<PendingGitFinish> {
+    let config_policy = ws.load_config().ok().map(|config| config.git_finish);
+    let positions = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&ws.root)
+        .args(["rev-list", "--first-parent", "--reverse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .enumerate()
+                .map(|(index, oid)| (oid.trim().to_string(), index))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let mut pending = Vec::new();
+    let Ok(entries) = std::fs::read_dir(ws.runs_dir()) else {
+        return pending;
+    };
+    for entry in entries.flatten() {
+        let run_dir = entry.path();
+        let Ok(run) = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")) else {
+            continue;
+        };
+        if run.intent_id != queue.intent_id
+            || !queue.tasks.iter().any(|task| task.id == run.task_id)
+            || !run_dir.join("result.json").exists()
+        {
+            continue;
+        }
+        let finish = ws.load_git_finish_record(&run_dir).ok();
+        let (auto_push, remote, target_ref, expected_oid) = match finish.as_ref() {
+            Some(record) => (
+                record.policy.auto_push,
+                record.policy.remote.clone(),
+                record.policy.target_ref.clone(),
+                record.expected_oid.clone().unwrap_or_default(),
+            ),
+            None => {
+                let Some(policy) = config_policy.as_ref() else {
+                    continue;
+                };
+                (
+                    policy.auto_push,
+                    policy.remote.clone(),
+                    policy.target_ref.clone(),
+                    run.integration_oid.clone(),
+                )
+            }
+        };
+        if !auto_push
+            || finish
+                .as_ref()
+                .is_some_and(|record| record.status.verified_complete())
+            || expected_oid.is_empty()
+        {
+            continue;
+        }
+        pending.push(PendingGitFinish {
+            run_id: run.run_id,
+            task_id: run.task_id,
+            run_dir,
+            target: (remote, target_ref),
+            integration_order: positions.get(&expected_oid).copied().unwrap_or(usize::MAX),
+            started_at: run.started_at,
+        });
+    }
+    pending.sort_by(|a, b| {
+        a.target
+            .cmp(&b.target)
+            .then(a.integration_order.cmp(&b.integration_order))
+            .then(a.started_at.cmp(&b.started_at))
+            .then(a.run_id.cmp(&b.run_id))
+    });
+    pending
+}
+
+fn recover_pending_git_finishes(
+    ws: &Workspace,
+    queue: &mut WorkQueue,
+    billing: &crate::schemas::BillingPolicy,
+    event_lang: Lang,
+    msgs: &mut Vec<String>,
+    finished: &mut Vec<String>,
+) -> HashSet<String> {
+    let candidates = pending_git_finishes(ws, queue);
+    let mut attempted = HashSet::new();
+    let mut halted_targets = BTreeMap::<(String, String), String>::new();
+    for candidate in candidates {
+        if halted_targets.contains_key(&candidate.target) {
+            continue;
+        }
+        let Some(task) = queue
+            .tasks
+            .iter()
+            .find(|task| task.id == candidate.task_id)
+            .cloned()
+        else {
+            continue;
+        };
+        attempted.insert(candidate.run_id.clone());
+        let evidence = evaluator::changed_paths(&ws.root).map(|paths| {
+            paths
+                .into_iter()
+                .filter(|path| !evaluator::is_canonical_state_path(path))
+                .collect()
+        });
+        let worker = run_worker(&candidate.run_dir).unwrap_or_default();
+        match finalize_run(FinalizeInput {
+            ws,
+            run_dir: &candidate.run_dir,
+            run_id: &candidate.run_id,
+            task: &task,
+            evidence,
+            worker_id: &worker,
+            reason: "git_finish_recovery",
+            wall_seconds: 0,
+            user_override: None,
+            intent_summary: "",
+            billing,
+            queue,
+            flags: FinalizeFlags::recovery(),
+            merge: None,
+        }) {
+            Ok(report) if report.next_state == TaskState::Done => {
+                for line in report.lines {
+                    if line.starts_with(&format!("{}: ", candidate.task_id))
+                        || line.starts_with("git finish:")
+                    {
+                        msgs.push(format!("{}: {line}", candidate.task_id));
+                    }
+                }
+                finished.push(task_state_progress_line(
+                    event_lang,
+                    &candidate.task_id,
+                    report.next_state,
+                ));
+            }
+            Ok(report) => {
+                halted_targets.insert(candidate.target, candidate.run_id);
+                msgs.push(format!(
+                    "{}: Git finish recovery stopped at {}",
+                    candidate.task_id,
+                    run_outcome_label(report.next_state)
+                ));
+            }
+            Err(error) => {
+                halted_targets.insert(candidate.target, candidate.run_id);
+                msgs.push(format!(
+                    "{}: Git finish recovery error: {error}",
+                    candidate.task_id
+                ));
+            }
+        }
+    }
+    attempted
+}
+
 /// Recover tasks left "running" by an interrupted/quit session: if the task's
 /// latest run produced a result, evaluate it (keep the finished work); if its
 /// worker is still alive (quitting Yardlet does not kill workers), ADOPT it —
@@ -1699,6 +1874,8 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
     let billing = ws.load_billing().unwrap_or_default();
     let mut requeued = Vec::new();
     let mut finished = Vec::new();
+    let git_finish_attempted =
+        recover_pending_git_finishes(ws, &mut q, &billing, event_lang, &mut msgs, &mut finished);
     // Snapshot (id, state): the finalize branch borrows the queue mutably
     // through finalize_run, so we cannot hold an iter_mut over it here. Each
     // task's recover decision keys off its state at recovery start.
@@ -1729,6 +1906,7 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 .unwrap_or(false),
             TaskState::Partial => latest
                 .as_ref()
+                .filter(|(run_id, _)| !git_finish_attempted.contains(run_id))
                 .map(|(_, run_dir)| git_finish_recovery_needed(ws, run_dir))
                 .unwrap_or(false),
             TaskState::Done => latest
@@ -2159,6 +2337,9 @@ pub(crate) struct FinalizeFlags {
     pub learned: bool,
     pub artifacts: bool,
     pub telemetry: bool,
+    /// Reconcile a previously integrated run whose exact OID may sit behind
+    /// later integrations. The run's durable ownership proof remains immutable.
+    pub git_finish_recovery: bool,
     /// Ingest worker-proposed follow-ups AND run review auto-remediation (both
     /// rewrite queue topology from the worker's proposals). Off for recovery,
     /// which must only finalize the stranded run, not mutate the queue graph.
@@ -2175,6 +2356,7 @@ impl FinalizeFlags {
             learned: true,
             artifacts: true,
             telemetry: true,
+            git_finish_recovery: false,
             follow_ups: true,
         }
     }
@@ -2195,6 +2377,7 @@ impl FinalizeFlags {
             learned: false,
             artifacts: true,
             telemetry: true,
+            git_finish_recovery: false,
             follow_ups: true,
         }
     }
@@ -2215,6 +2398,7 @@ impl FinalizeFlags {
             learned: false,
             artifacts: false,
             telemetry: true,
+            git_finish_recovery: true,
             follow_ups: false,
         }
     }
@@ -2718,8 +2902,11 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // Git finish runs only after evaluation and worktree integration. The OID
     // is supplied only by the successful merge branch above, so a serial run,
     // no-op, conflict, or unrelated existing commit cannot acquire ownership.
-    let git_finish =
-        crate::git_finish::finish_owned_run(ws, run_dir, run_id, &task.id, next_state, ownership)?;
+    let git_finish = if flags.git_finish_recovery {
+        crate::git_finish::recover_owned_run(ws, run_dir, run_id, &task.id, next_state, ownership)?
+    } else {
+        crate::git_finish::finish_owned_run(ws, run_dir, run_id, &task.id, next_state, ownership)?
+    };
     lines.push(git_finish.user_line());
     let projected_state = state_after_git_finish(next_state, &git_finish);
     if projected_state != next_state {
@@ -2729,6 +2916,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             "{}: Git finish is not remotely verified; task remains partial",
             task.id
         ));
+    } else if next_state == TaskState::Done
+        && std::fs::read_to_string(run_dir.join("partial-reason"))
+            .ok()
+            .is_some_and(|reason| reason.trim() == "git_finish_unverified")
+    {
+        let _ = std::fs::remove_file(run_dir.join("partial-reason"));
     }
 
     // Update the queue: set state AND ingest any follow-up tasks the worker
@@ -5173,6 +5366,230 @@ exit 1
         assert!(remote_head.status.success());
         assert!(String::from_utf8_lossy(&remote_head.stdout)
             .starts_with(finish.expected_oid.as_deref().unwrap()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn recovery_projects_accumulated_finishes_in_integration_order() {
+        let root =
+            std::env::temp_dir().join(format!("yard-accumulated-recovery-{}", std::process::id()));
+        let remote = root.with_extension("bare.git");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&remote);
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.name", "Yardlet Test"]);
+        git(&["config", "user.email", "yardlet@example.test"]);
+        std::fs::write(root.join("owned.txt"), "seed\n").unwrap();
+        git(&["add", "owned.txt"]);
+        git(&["commit", "-q", "-m", "seed"]);
+        let baseline = git(&["rev-parse", "HEAD"]);
+        git(&["init", "-q", "--bare", remote.to_str().unwrap()]);
+        git(&["remote", "add", "fixture", remote.to_str().unwrap()]);
+        git(&["push", "-q", "fixture", "HEAD:refs/heads/main"]);
+        crate::init::init(&root, false).unwrap();
+        let ws = Workspace::at(&root);
+        let mut config = ws.load_config().unwrap();
+        config.git_finish = crate::schemas::GitFinishPolicy {
+            auto_push: true,
+            remote: "fixture".into(),
+            target_ref: "refs/heads/main".into(),
+            pre_push_checks: vec![],
+        };
+        state::save_yaml(&ws.config_path(), &config).unwrap();
+
+        std::fs::write(root.join("owned.txt"), "first\n").unwrap();
+        git(&["add", "owned.txt"]);
+        git(&["commit", "-q", "-m", "first"]);
+        let first_oid = git(&["rev-parse", "HEAD"]);
+        std::fs::write(root.join("owned.txt"), "second\n").unwrap();
+        git(&["add", "owned.txt"]);
+        git(&["commit", "-q", "-m", "second"]);
+        let second_oid = git(&["rev-parse", "HEAD"]);
+
+        let mut first_task = task("YARD-001", TaskState::Partial, 10, false);
+        first_task.kind = "implementation".into();
+        let mut second_task = task("YARD-002", TaskState::Partial, 20, false);
+        second_task.kind = "implementation".into();
+        let mut q = queue(vec![first_task, second_task]);
+        q.intent_id = "intent-accumulated".into();
+        ws.save_queue(&q).unwrap();
+
+        let policy_snapshot = crate::git_finish::GitFinishPolicySnapshot {
+            auto_push: true,
+            remote: "fixture".into(),
+            target_ref: "refs/heads/main".into(),
+            pre_push_checks: vec![],
+        };
+        for (index, task_id, base_oid, expected_oid, status) in [
+            (
+                1,
+                "YARD-001",
+                baseline.as_str(),
+                first_oid.as_str(),
+                crate::git_finish::GitFinishStatus::CheckBlocked,
+            ),
+            (
+                2,
+                "YARD-002",
+                first_oid.as_str(),
+                second_oid.as_str(),
+                crate::git_finish::GitFinishStatus::SafetyBlocked,
+            ),
+        ] {
+            let run_id = format!("run-20990101-00000{index}-{task_id}");
+            let run_dir = ws.runs_dir().join(&run_id);
+            std::fs::create_dir_all(&run_dir).unwrap();
+            let mut result = crate::schemas::RunResult {
+                schema_version: 1,
+                run_id: run_id.clone(),
+                task_id: task_id.into(),
+                status: "done".into(),
+                intent_adherence: Default::default(),
+                changes: Default::default(),
+                validation: Default::default(),
+                question_for_user: None,
+                compact_summary: "integrated before Git finish".into(),
+                verdict: vec![],
+                harness_suggestions: vec![],
+                follow_up_tasks: vec![],
+            };
+            result.validation.passed = true;
+            write_str(
+                &run_dir.join("result.json"),
+                &serde_json::to_string(&result).unwrap(),
+            )
+            .unwrap();
+            write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+            state::save_yaml(
+                &run_dir.join("run.yaml"),
+                &RunRecord {
+                    schema_version: 1,
+                    run_id: run_id.clone(),
+                    task_id: task_id.into(),
+                    intent_id: "intent-accumulated".into(),
+                    worker: "codex".into(),
+                    state: "partial".into(),
+                    started_at: format!("2099-01-01T00:00:0{index}+00:00"),
+                    completed_at: Some(format!("2099-01-01T00:00:1{index}+00:00")),
+                    worktree: ".".into(),
+                    integration_oid: expected_oid.into(),
+                    integration_base_oid: base_oid.into(),
+                    owned_oids: vec![expected_oid.into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            ws.save_git_finish_record(
+                &run_dir,
+                &crate::git_finish::GitFinishRecord {
+                    schema_version: 2,
+                    run_id: run_id.clone(),
+                    task_id: task_id.into(),
+                    attempted_at: String::new(),
+                    status,
+                    policy: policy_snapshot.clone(),
+                    expected_oid: Some(expected_oid.into()),
+                    baseline_oid: base_oid.into(),
+                    owned_oids: vec![expected_oid.into()],
+                    checks: vec![],
+                    push_invoked: false,
+                    push_succeeded: false,
+                    remote_oid: None,
+                    remote_before_oid: Some(baseline.clone()),
+                    reason: "pre_recovery".into(),
+                },
+            )
+            .unwrap();
+            telemetry::append_run(
+                &ws,
+                &telemetry::RunTelemetry {
+                    ts: format!("2099-01-01T00:00:2{index}+00:00"),
+                    run_id,
+                    task_id: task_id.into(),
+                    intent_id: "intent-accumulated".into(),
+                    kind: "implementation".into(),
+                    risk: String::new(),
+                    worker: "codex".into(),
+                    chosen_reason: "parallel".into(),
+                    result_status: "done".into(),
+                    eval_state: "Partial".into(),
+                    wall_seconds: 0,
+                    user_override: None,
+                    skills: vec![],
+                    verdict_pass: None,
+                    feedback_cycle: 0,
+                    max_feedback_cycles: 0,
+                    feedback_retryable: false,
+                    git_finish_status: status.as_str().into(),
+                },
+            )
+            .unwrap();
+        }
+
+        let messages = recover_orphans(&ws);
+
+        assert!(
+            messages.iter().any(|line| line.contains("recovered")),
+            "{messages:?}"
+        );
+        assert!(ws
+            .load_queue()
+            .unwrap()
+            .tasks
+            .iter()
+            .all(|task| task.state == TaskState::Done));
+        let runs = telemetry::read_runs(&ws);
+        assert_eq!(
+            runs.len(),
+            2,
+            "recovery corrections must not double-count runs"
+        );
+        assert!(runs.iter().all(|run| {
+            run.eval_state == "Done"
+                && matches!(run.git_finish_status.as_str(), "pushed" | "already_applied")
+        }));
+        let first_finish = ws
+            .load_git_finish_record(&ws.runs_dir().join("run-20990101-000001-YARD-001"))
+            .unwrap();
+        let second_finish = ws
+            .load_git_finish_record(&ws.runs_dir().join("run-20990101-000002-YARD-002"))
+            .unwrap();
+        assert_eq!(
+            first_finish.remote_before_oid.as_deref(),
+            Some(baseline.as_str())
+        );
+        assert_eq!(
+            second_finish.remote_before_oid.as_deref(),
+            Some(first_oid.as_str())
+        );
+        assert_eq!(
+            second_finish.remote_oid.as_deref(),
+            Some(second_oid.as_str())
+        );
+        let final_report = crate::report::build_final_report(&ws).unwrap();
+        assert!(final_report.contains("2/2 tasks done"));
+        assert_eq!(final_report.matches("pushed and verified").count(), 2);
+        assert!(
+            recover_orphans(&ws).is_empty(),
+            "repeated recovery must be inert"
+        );
+
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&remote);
     }

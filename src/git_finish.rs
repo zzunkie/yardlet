@@ -139,6 +139,55 @@ pub fn finish_owned_run(
     task_state: TaskState,
     ownership: Option<GitFinishOwnership>,
 ) -> anyhow::Result<GitFinishRecord> {
+    finish_owned_run_with_mode(
+        ws,
+        run_dir,
+        run_id,
+        task_id,
+        task_state,
+        ownership,
+        FinishMode::CurrentHead,
+    )
+}
+
+/// Resume a run whose integration commit may now be behind later, independently
+/// attributed integration commits. The normal finish path still requires the
+/// run's exact OID at HEAD; recovery only accepts an OID that remains in the
+/// current HEAD history and still rechecks the run's own baseline and owned set.
+pub(crate) fn recover_owned_run(
+    ws: &Workspace,
+    run_dir: &Path,
+    run_id: &str,
+    task_id: &str,
+    task_state: TaskState,
+    ownership: Option<GitFinishOwnership>,
+) -> anyhow::Result<GitFinishRecord> {
+    finish_owned_run_with_mode(
+        ws,
+        run_dir,
+        run_id,
+        task_id,
+        task_state,
+        ownership,
+        FinishMode::AccumulatedHead,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum FinishMode {
+    CurrentHead,
+    AccumulatedHead,
+}
+
+fn finish_owned_run_with_mode(
+    ws: &Workspace,
+    run_dir: &Path,
+    run_id: &str,
+    task_id: &str,
+    task_state: TaskState,
+    ownership: Option<GitFinishOwnership>,
+    mode: FinishMode,
+) -> anyhow::Result<GitFinishRecord> {
     let policy = match ws.load_config() {
         Ok(config) => config.git_finish,
         Err(_) => {
@@ -149,8 +198,29 @@ pub fn finish_owned_run(
         }
     };
     let previous = ws.load_git_finish_record(run_dir).ok();
-    let ownership = ownership.or_else(|| previous.as_ref().and_then(record_ownership));
+    let target_changed = previous.as_ref().is_some_and(|record| {
+        record.policy.auto_push
+            && (record.policy.remote != policy.remote
+                || record.policy.target_ref != policy.target_ref)
+    });
+    let recorded_ownership = previous.as_ref().and_then(record_ownership);
+    let ownership_changed = recorded_ownership
+        .as_ref()
+        .zip(ownership.as_ref())
+        .is_some_and(|(recorded, supplied)| recorded != supplied);
+    // Once a run has durable ownership evidence, retries may consume it but
+    // must never replace or merge it with a later projection.
+    let ownership = recorded_ownership.or(ownership);
     let mut record = base_record(run_id, task_id, &policy, ownership.as_ref());
+
+    if ownership_changed {
+        block(&mut record, "run_ownership_evidence_changed");
+        return persist_and_return(ws, run_dir, record);
+    }
+    if target_changed {
+        block(&mut record, "git_finish_target_changed");
+        return persist_and_return(ws, run_dir, record);
+    }
 
     if !policy.auto_push {
         return persist_and_return(ws, run_dir, record);
@@ -185,6 +255,20 @@ pub fn finish_owned_run(
             return preserve_record_on_lock_failure(ws, run_dir, previous, record, reason);
         }
     };
+    // A concurrent recovery may have completed this exact durable run while we
+    // waited for the target lock, then advanced later runs on the same target.
+    // Preserve that already verified record instead of reinterpreting the later
+    // remote tip as a mismatch for this historical step.
+    if matches!(mode, FinishMode::AccumulatedHead) {
+        if let Ok(latest) = ws.load_git_finish_record(run_dir) {
+            if matches!(
+                latest.status,
+                GitFinishStatus::Pushed | GitFinishStatus::AlreadyApplied
+            ) {
+                return Ok(latest);
+            }
+        }
+    }
     let pins_before = match git_security_pins(&ws.root, &policy.remote) {
         Ok(pins) => pins,
         Err(()) => {
@@ -209,9 +293,21 @@ pub fn finish_owned_run(
         block(&mut record, "run_has_no_owned_commit");
         return persist_and_return(ws, run_dir, record);
     };
-    if pins_before.head != expected {
-        block(&mut record, "owned_oid_is_not_head");
-        return persist_and_return(ws, run_dir, record);
+    match mode {
+        FinishMode::CurrentHead if pins_before.head != expected => {
+            block(&mut record, "owned_oid_is_not_head");
+            return persist_and_return(ws, run_dir, record);
+        }
+        FinishMode::AccumulatedHead
+            if !git_ok(
+                &ws.root,
+                &["merge-base", "--is-ancestor", &expected, &pins_before.head],
+            ) =>
+        {
+            block(&mut record, "owned_oid_is_not_in_head_history");
+            return persist_and_return(ws, run_dir, record);
+        }
+        _ => {}
     }
     if !worktree_clean_except_agents(&ws.root) {
         block(&mut record, "worktree_not_clean");
@@ -783,6 +879,23 @@ mod tests {
             .unwrap()
         }
 
+        fn recover_at(
+            &self,
+            run_dir: &Path,
+            run_id: &str,
+            ownership: Option<GitFinishOwnership>,
+        ) -> GitFinishRecord {
+            recover_owned_run(
+                &self.ws,
+                run_dir,
+                run_id,
+                "YARD-001",
+                TaskState::Done,
+                ownership,
+            )
+            .unwrap()
+        }
+
         fn bare_remote(&self, name: &str) -> std::path::PathBuf {
             let path = self.root.parent().unwrap().join(format!("{name}.git"));
             cmd(
@@ -929,6 +1042,150 @@ mod tests {
         assert_eq!(
             remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),
             Some(f.initial_oid.clone())
+        );
+    }
+
+    #[test]
+    fn failed_leading_check_then_two_runs_recover_in_integration_order() {
+        let f = Fixture::new("accumulated-check-recovery");
+        f.configure(vec![check("blocked", "false")]);
+        let first_oid = f.commit("first");
+        let first_proof = f.ownership(first_oid.clone());
+        let run_first = f.run_dir.parent().unwrap().join("run-first");
+        let run_second = f.run_dir.parent().unwrap().join("run-second");
+        std::fs::create_dir_all(&run_first).unwrap();
+        std::fs::create_dir_all(&run_second).unwrap();
+
+        let blocked = f.finish_at(&run_first, Some(first_proof.clone()));
+        assert_eq!(blocked.status, GitFinishStatus::CheckBlocked);
+        let second_oid = f.commit("second");
+        let second_proof = f.ownership(second_oid.clone());
+        let blocked_later = f.finish_at(&run_second, Some(second_proof.clone()));
+        assert_eq!(blocked_later.status, GitFinishStatus::SafetyBlocked);
+        assert_eq!(blocked_later.reason, "reachable_commits_not_owned_by_run");
+
+        f.configure(vec![check("passes", "true")]);
+        let first = f.recover_at(&run_first, "run-first", None);
+        let second = f.recover_at(&run_second, "run-second", None);
+        let repeated_first = f.recover_at(&run_first, "run-first", None);
+        let repeated_second = f.recover_at(&run_second, "run-second", None);
+
+        assert_eq!(first.status, GitFinishStatus::Pushed);
+        assert_eq!(
+            first.remote_before_oid.as_deref(),
+            Some(f.initial_oid.as_str())
+        );
+        assert_eq!(second.status, GitFinishStatus::Pushed);
+        assert_eq!(
+            second.remote_before_oid.as_deref(),
+            Some(first_oid.as_str())
+        );
+        assert_eq!(repeated_first.status, GitFinishStatus::Pushed);
+        assert!(repeated_first.push_invoked);
+        assert!(repeated_first.push_succeeded);
+        assert_eq!(repeated_second.status, GitFinishStatus::Pushed);
+        assert!(repeated_second.push_invoked);
+        assert!(repeated_second.push_succeeded);
+        assert_eq!(
+            remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),
+            Some(second_oid)
+        );
+    }
+
+    #[test]
+    fn accumulated_recovery_stops_on_out_of_order_remote() {
+        let f = Fixture::new("accumulated-out-of-order");
+        f.configure(vec![]);
+        let first_oid = f.commit("first");
+        let first_proof = f.ownership(first_oid.clone());
+        let run_first = f.run_dir.parent().unwrap().join("run-first");
+        std::fs::create_dir_all(&run_first).unwrap();
+        let policy = f.ws.load_config().unwrap().git_finish;
+        let pending = base_record("run-first", "YARD-001", &policy, Some(&first_proof));
+        persist(&f.ws, &run_first, &pending).unwrap();
+        let _second_oid = f.commit("second");
+        let peer = cmd(
+            &f.root,
+            &[
+                "commit-tree",
+                "HEAD^{tree}",
+                "-p",
+                f.initial_oid.as_str(),
+                "-m",
+                "peer",
+            ],
+        )
+        .trim()
+        .to_string();
+        cmd(
+            &f.root,
+            &["push", "-q", "fixture", &format!("{peer}:refs/heads/main")],
+        );
+
+        let recovered = f.recover_at(&run_first, "run-first", None);
+
+        assert_eq!(recovered.status, GitFinishStatus::SafetyBlocked);
+        assert_eq!(recovered.reason, "reachable_commits_not_owned_by_run");
+        assert!(!recovered.push_invoked);
+        assert_eq!(
+            remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),
+            Some(peer)
+        );
+    }
+
+    #[test]
+    fn recorded_ownership_cannot_be_replaced_during_recovery() {
+        let f = Fixture::new("recovery-ownership-mismatch");
+        f.configure(vec![]);
+        let oid = f.commit("owned");
+        let proof = f.ownership(oid.clone());
+        let policy = f.ws.load_config().unwrap().git_finish;
+        let mut prepared = base_record("run-test", "YARD-001", &policy, Some(&proof));
+        prepared.status = GitFinishStatus::Prepared;
+        prepared.reason = "ready_to_push".to_string();
+        persist(&f.ws, &f.run_dir, &prepared).unwrap();
+        let mut changed = proof.clone();
+        changed.owned_oids.push(f.initial_oid.clone());
+
+        let recovered = f.recover_at(&f.run_dir, "run-test", Some(changed));
+        let durable = f.ws.load_git_finish_record(&f.run_dir).unwrap();
+
+        assert_eq!(recovered.status, GitFinishStatus::SafetyBlocked);
+        assert_eq!(recovered.reason, "run_ownership_evidence_changed");
+        assert_eq!(durable.baseline_oid, proof.baseline_oid);
+        assert_eq!(durable.expected_oid.as_deref(), Some(oid.as_str()));
+        assert_eq!(durable.owned_oids, proof.owned_oids);
+        assert!(!recovered.push_invoked);
+    }
+
+    #[test]
+    fn recovery_cannot_retarget_a_recorded_remote() {
+        let f = Fixture::new("recovery-retarget");
+        f.configure(vec![]);
+        let oid = f.commit("owned");
+        let proof = f.ownership(oid.clone());
+        let policy = f.ws.load_config().unwrap().git_finish;
+        let mut prepared = base_record("run-test", "YARD-001", &policy, Some(&proof));
+        prepared.status = GitFinishStatus::Prepared;
+        prepared.reason = "ready_to_push".to_string();
+        persist(&f.ws, &f.run_dir, &prepared).unwrap();
+        let other = f.bare_remote("recovery-retarget-other");
+        let mut config = f.ws.load_config().unwrap();
+        config.git_finish.remote = other.to_string_lossy().into_owned();
+        crate::state::save_yaml(&f.ws.config_path(), &config).unwrap();
+
+        let recovered = f.recover_at(&f.run_dir, "run-test", None);
+
+        assert_eq!(recovered.status, GitFinishStatus::SafetyBlocked);
+        assert_eq!(recovered.reason, "git_finish_target_changed");
+        assert!(!recovered.push_invoked);
+        assert_eq!(
+            remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),
+            Some(f.initial_oid.clone())
+        );
+        assert_eq!(
+            remote_oid(&f.root, other.to_str().unwrap(), "refs/heads/main").unwrap(),
+            None
         );
     }
 
@@ -1370,7 +1627,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_prepared_recovery_pushes_once_and_converges_record() {
+    fn concurrent_and_repeated_recovery_preserves_pushed_record() {
         let f = Fixture::new("concurrent-recover-prepared");
         f.configure(vec![]);
         let oid = f.commit("owned");
@@ -1386,22 +1643,29 @@ mod tests {
         let run_a = f.run_dir.clone();
         let run_b = f.run_dir.clone();
         let a = std::thread::spawn(move || {
-            finish_owned_run(&ws_a, &run_a, "run-test", "YARD-001", TaskState::Done, None).unwrap()
+            recover_owned_run(&ws_a, &run_a, "run-test", "YARD-001", TaskState::Done, None).unwrap()
         });
         let b = std::thread::spawn(move || {
-            finish_owned_run(&ws_b, &run_b, "run-test", "YARD-001", TaskState::Done, None).unwrap()
+            recover_owned_run(&ws_b, &run_b, "run-test", "YARD-001", TaskState::Done, None).unwrap()
         });
         let records = [a.join().unwrap(), b.join().unwrap()];
+        let repeated = f.recover_at(&f.run_dir, "run-test", None);
         let durable = f.ws.load_git_finish_record(&f.run_dir).unwrap();
 
         assert!(records
             .iter()
-            .all(|record| record.status.verified_complete()));
+            .all(|record| record.status == GitFinishStatus::Pushed));
+        assert!(records.iter().all(|record| record.push_invoked));
+        assert_eq!(repeated.status, GitFinishStatus::Pushed);
+        assert!(repeated.push_invoked);
+        assert!(repeated.push_succeeded);
+        assert_eq!(durable.status, GitFinishStatus::Pushed);
+        assert!(durable.push_invoked);
+        assert!(durable.push_succeeded);
         assert_eq!(
-            records.iter().filter(|record| record.push_invoked).count(),
-            1
+            durable.remote_before_oid.as_deref(),
+            Some(f.initial_oid.as_str())
         );
-        assert!(durable.status.verified_complete());
         assert_eq!(durable.remote_oid.as_deref(), Some(oid.as_str()));
         assert_eq!(
             remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),

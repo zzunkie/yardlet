@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::Workspace;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunTelemetry {
     pub ts: String,
     /// Stable idempotency key for finalize/recover projection.
@@ -73,12 +73,18 @@ pub fn append_run(ws: &Workspace, rec: &RunTelemetry) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    if !rec.run_id.is_empty()
-        && read_runs(ws)
+    if !rec.run_id.is_empty() {
+        if let Some(existing) = read_runs(ws)
             .iter()
-            .any(|existing| existing.run_id == rec.run_id)
-    {
-        return Ok(());
+            .find(|existing| existing.run_id == rec.run_id)
+        {
+            if existing == rec {
+                return Ok(());
+            }
+            // Recovery appends a correction for the same stable run id. Readers
+            // below project the last value, so retrying cannot double-count a
+            // run while the JSONL remains an append-only audit trail.
+        }
     }
     let line = format!("{}\n", serde_json::to_string(rec)?);
     let mut f = std::fs::OpenOptions::new()
@@ -94,8 +100,21 @@ pub fn read_runs(ws: &Workspace) -> Vec<RunTelemetry> {
     let Ok(text) = std::fs::read_to_string(log_path(ws)) else {
         return Vec::new();
     };
-    text.lines()
+    let mut projected = Vec::<RunTelemetry>::new();
+    let mut positions = std::collections::HashMap::<String, usize>::new();
+    for record in text
+        .lines()
         .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect()
+        .filter_map(|l| serde_json::from_str::<RunTelemetry>(l).ok())
+    {
+        if record.run_id.is_empty() {
+            projected.push(record);
+        } else if let Some(index) = positions.get(&record.run_id).copied() {
+            projected[index] = record;
+        } else {
+            positions.insert(record.run_id.clone(), projected.len());
+            projected.push(record);
+        }
+    }
+    projected
 }
