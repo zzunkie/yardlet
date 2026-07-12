@@ -340,6 +340,21 @@ pub fn run_planning(
 /// recorded assumptions).
 pub const INTERVIEW_CAP: u32 = 10;
 
+fn planning_repo_summary(ws: &Workspace) -> crate::inspect::RepoSummary {
+    inspect::summarize(&ws.root).for_planning()
+}
+
+fn planning_intent_context(
+    ws: &Workspace,
+    archive_previous: bool,
+) -> Result<Option<IntentContract>> {
+    if archive_previous {
+        Ok(None)
+    } else {
+        ws.load_intent()
+    }
+}
+
 /// Is this intent still gated on the planner's own ambiguity self-report?
 pub fn intent_gated(intent: &IntentContract, gate_enabled: bool) -> bool {
     gate_enabled
@@ -460,7 +475,7 @@ fn plan_core(
     let mut lines = Vec::new();
 
     // Evidence + packet.
-    let summary = inspect::summarize(&ws.root);
+    let summary = planning_repo_summary(ws);
     write_str(
         &run_dir.join("evidence").join("repo-summary.md"),
         &inspect::to_markdown(&summary),
@@ -477,8 +492,10 @@ fn plan_core(
     }
     let worker_guidance = build_worker_guidance(workers);
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
+    let current_intent = planning_intent_context(ws, archive)?;
     let packet_text = packet::compile_planning(
         packet_request,
+        current_intent.as_ref(),
         &summary,
         &run_dir_rel,
         &language,
@@ -625,7 +642,7 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         },
     )?;
     let mut lines = Vec::new();
-    let summary = inspect::summarize(&ws.root);
+    let summary = planning_repo_summary(ws);
     write_str(
         &run_dir.join("evidence").join("repo-summary.md"),
         &inspect::to_markdown(&summary),
@@ -634,6 +651,7 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let packet_text = packet::compile_planning(
         &ctx,
+        existing_intent.as_ref(),
         &summary,
         &run_dir_rel,
         &language,
@@ -1503,6 +1521,99 @@ fn planning_worker_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn planner_inputs_exclude_historical_worker_log_but_keep_harness_anchors() {
+        const SENTINEL: &str = "UNRELATED_OLD_INTENT_LARGE_WORKER_LOG_SENTINEL";
+        let root = std::env::temp_dir().join(format!(
+            "yard-planner-packet-boundary-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/rules")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/skills/current-skill")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/memory")).unwrap();
+        let old_run = root.join(".agents/runs/run-old-intent-yard-999");
+        std::fs::create_dir_all(&old_run).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='fixture'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".agents/rules/current-rule.md"),
+            "CURRENT_WORKSPACE_RULE_ANCHOR",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".agents/skills/current-skill/SKILL.md"),
+            "---\nname: current-skill\ndescription: Current skill anchor.\n---\nbody",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".agents/memory/current-history.md"),
+            "---\ntitle: Current history anchor\nsummary: Keep the durable decision.\n---\nMEMORY_BODY_NOT_INLINED",
+        )
+        .unwrap();
+        std::fs::write(
+            old_run.join("run.yaml"),
+            "intent_id: intent-old\ntask_id: YARD-999\n",
+        )
+        .unwrap();
+        let large_log = format!("{SENTINEL}\n{}", "old log payload\n".repeat(32_768));
+        let old_log = old_run.join("worker-output.log");
+        std::fs::write(&old_log, &large_log).unwrap();
+
+        let ws = Workspace::at(&root);
+        let summary = planning_repo_summary(&ws);
+        let harness = packet::discover_harness(&root, false);
+        let current_intent = IntentContract {
+            schema_version: 1,
+            id: "intent-current".into(),
+            source: "user".into(),
+            raw_request: "CURRENT_REQUEST_ANCHOR".into(),
+            summary: "CURRENT_INTENT_ANCHOR".into(),
+            allowed_scope: vec!["src/packet.rs".into()],
+            out_of_scope: vec!["release".into()],
+            acceptance: vec![yaml::Value::String("bounded packet".into())],
+            images: vec![],
+            ambiguity: "low".into(),
+            open_questions: vec![],
+            clarifications: vec![],
+            interview_turns: 0,
+            status: "accepted".into(),
+        };
+        state::save_yaml(&ws.intent_path(), &current_intent).unwrap();
+        let same_thread_intent = planning_intent_context(&ws, false).unwrap();
+        assert_eq!(same_thread_intent.as_ref().unwrap().id, "intent-current");
+        assert!(planning_intent_context(&ws, true).unwrap().is_none());
+        let packet = packet::compile_planning(
+            "CURRENT_REQUEST_ANCHOR",
+            same_thread_intent.as_ref(),
+            &summary,
+            ".agents/runs/plan-current",
+            "en",
+            "",
+            &[],
+            &harness,
+            "codex",
+        );
+
+        assert!(packet.contains("CURRENT_REQUEST_ANCHOR"));
+        assert!(packet.contains("CURRENT_INTENT_ANCHOR"));
+        assert!(packet.contains("CURRENT_WORKSPACE_RULE_ANCHOR"));
+        assert!(packet.contains("current-skill"));
+        assert!(packet.contains(".agents/skills/current-skill/SKILL.md"));
+        assert!(packet.contains("Current history anchor"));
+        assert!(packet.contains(".agents/memory/current-history.md"));
+        assert!(!packet.contains("MEMORY_BODY_NOT_INLINED"));
+        assert!(!packet.contains(SENTINEL));
+        assert!(!summary.top_level.iter().any(|entry| entry == ".agents"));
+        assert_eq!(std::fs::read_to_string(&old_log).unwrap(), large_log);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn worker_guidance_has_contrastive_positive_and_negative_lines() {

@@ -24,6 +24,18 @@ pub struct GitInfo {
     pub dirty_files: usize,
 }
 
+impl RepoSummary {
+    /// Keep planner evidence focused on the source workspace. `.agents/` is
+    /// operational history and canonical state, not repository structure for
+    /// a new plan; the packet projects its rules, skills, and memory through
+    /// the typed harness sections instead.
+    pub fn for_planning(&self) -> Self {
+        let mut projected = self.clone();
+        projected.top_level.retain(|entry| entry != ".agents");
+        projected
+    }
+}
+
 pub fn summarize(root: &Path) -> RepoSummary {
     RepoSummary {
         root: root.display().to_string(),
@@ -165,4 +177,22 @@ pub fn to_markdown(s: &RepoSummary) -> String {
 
 pub fn cwd() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn planning_projection_excludes_operational_state_root() {
+        let summary = RepoSummary {
+            top_level: vec![".agents".into(), "Cargo.toml".into(), "src".into()],
+            ..Default::default()
+        };
+
+        let planning = summary.for_planning();
+
+        assert_eq!(planning.top_level, vec!["Cargo.toml", "src"]);
+        assert_eq!(summary.top_level[0], ".agents");
+    }
 }

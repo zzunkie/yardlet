@@ -924,6 +924,7 @@ pub fn compile(inputs: &PacketInputs) -> String {
 #[allow(clippy::too_many_arguments)]
 pub fn compile_planning(
     request: &str,
+    current_intent: Option<&IntentContract>,
     repo: &RepoSummary,
     run_dir_rel: &str,
     language: &str,
@@ -942,6 +943,47 @@ pub fn compile_planning(
     p.push_str("## Request (verbatim)\n\n");
     p.push_str(request);
     p.push_str("\n\n");
+
+    if let Some(intent) = current_intent {
+        p.push_str("## Current intent (same planning thread)\n\n");
+        p.push_str(&format!("- id: `{}`\n", intent.id));
+        if !intent.summary.is_empty() {
+            p.push_str(&format!("- summary: {}\n", intent.summary));
+        }
+        if !intent.allowed_scope.is_empty() {
+            p.push_str("- allowed scope:\n");
+            for item in &intent.allowed_scope {
+                p.push_str(&format!("  - {item}\n"));
+            }
+        }
+        if !intent.out_of_scope.is_empty() {
+            p.push_str("- out of scope:\n");
+            for item in &intent.out_of_scope {
+                p.push_str(&format!("  - {item}\n"));
+            }
+        }
+        if !intent.acceptance.is_empty() {
+            p.push_str("- acceptance:\n");
+            for item in &intent.acceptance {
+                if let Some(item) = item.as_str() {
+                    p.push_str(&format!("  - {item}\n"));
+                }
+            }
+        }
+        p.push('\n');
+    }
+
+    p.push_str("## Planning input boundary\n\n");
+    p.push_str(
+        "- The request and, when present, the current intent above are the task context.\n\
+         - The local environment below is a bounded repository summary, not permission to mine \
+         operational history.\n\
+         - Do not inspect or inline `.agents/runs/**`, `worker-output.log`, checkpoints, handoffs, \
+         telemetry, or archived intents unless the request or current intent names a specific \
+         artifact as required evidence. Preserve all such history in place.\n\
+         - Workspace rules, skill entries, and project-memory entries are the harness inputs; \
+         follow their progressive read-on-demand instructions.\n\n",
+    );
 
     if !images.is_empty() {
         p.push_str("## Attached images\n\n");
@@ -1647,6 +1689,7 @@ mod tests {
         // Planning packets carry the same harness sections.
         let plan = compile_planning(
             "do a thing",
+            None,
             &repo,
             ".agents/runs/plan-x",
             "en",
@@ -1664,6 +1707,7 @@ mod tests {
         let repo = crate::inspect::RepoSummary::default();
         let plan = compile_planning(
             "plan and build",
+            None,
             &repo,
             ".agents/runs/plan-routing",
             "en",
@@ -1676,6 +1720,59 @@ mod tests {
         assert!(plan.contains("cost as a tie-breaker, not a proxy for task breadth"));
         assert!(plan.contains("broad work with executable terminal feedback"));
         assert!(plan.contains("prefer a different worker from the builder"));
+    }
+
+    #[test]
+    fn planning_packet_projects_only_the_supplied_current_intent() {
+        let intent = IntentContract {
+            schema_version: 1,
+            id: "intent-current".into(),
+            source: "user".into(),
+            raw_request: "original current request".into(),
+            summary: "current intent summary".into(),
+            allowed_scope: vec!["src/packet.rs".into()],
+            out_of_scope: vec!["release".into()],
+            acceptance: vec![crate::yaml::Value::String("packet stays bounded".into())],
+            images: vec![],
+            ambiguity: "low".into(),
+            open_questions: vec![],
+            clarifications: vec![],
+            interview_turns: 0,
+            status: "accepted".into(),
+        };
+        let plan = compile_planning(
+            "refine the current plan",
+            Some(&intent),
+            &crate::inspect::RepoSummary::default(),
+            ".agents/runs/plan-current",
+            "en",
+            "",
+            &[],
+            &Harness::default(),
+            "codex",
+        );
+
+        assert!(plan.contains("## Current intent (same planning thread)"));
+        assert!(plan.contains("`intent-current`"));
+        assert!(plan.contains("current intent summary"));
+        assert!(plan.contains("src/packet.rs"));
+        assert!(plan.contains("packet stays bounded"));
+        assert!(plan.contains("## Planning input boundary"));
+        assert!(plan.contains("Do not inspect or inline `.agents/runs/**`"));
+
+        let fresh = compile_planning(
+            "start unrelated work",
+            None,
+            &crate::inspect::RepoSummary::default(),
+            ".agents/runs/plan-fresh",
+            "en",
+            "",
+            &[],
+            &Harness::default(),
+            "codex",
+        );
+        assert!(!fresh.contains("intent-current"));
+        assert!(!fresh.contains("current intent summary"));
     }
 
     #[test]
