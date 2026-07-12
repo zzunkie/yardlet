@@ -177,7 +177,7 @@ impl Snapshot {
             .tasks
             .iter()
             .filter_map(|task| {
-                ws.latest_transition(&task.id)
+                ws.latest_transition_for_intent(&task.id, &queue.intent_id)
                     .map(|rec| (task.id.clone(), rec))
             })
             .collect();
@@ -274,5 +274,101 @@ impl Snapshot {
             }).collect::<Vec<_>>(),
             "workers": self.workers,
         })
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reused_task_id_fixture(name: &str) -> (Workspace, Snapshot, String) {
+    let root = std::env::temp_dir().join(format!("yard-snapshot-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let ws = Workspace::at(&root);
+    std::fs::create_dir_all(ws.agents_dir()).unwrap();
+    std::fs::write(
+        ws.config_path(),
+        r#"schema_version: 1
+product: yardlet
+workspace_id: snapshot-test
+created_at: "2026-07-12T00:00:00Z"
+state_dir: .agents
+default_interface: tui
+canonical_queue: work-queue.yaml
+current_intent: intent-current
+"#,
+    )
+    .unwrap();
+    std::fs::write(ws.billing_path(), crate::templates::BILLING_POLICY).unwrap();
+    std::fs::write(
+        ws.workers_path(),
+        "schema_version: 1\nworkers: []\nrouting: {}\n",
+    )
+    .unwrap();
+
+    let mut queue = WorkQueue::empty();
+    queue.queue_id = "queue-intent-current".into();
+    queue.intent_id = "intent-current".into();
+    queue.tasks.push(
+        crate::yaml::from_str(
+            "id: SHARED\ntitle: Reused task id\nstate: needs_user\npriority: 10\n",
+        )
+        .unwrap(),
+    );
+    ws.save_queue(&queue).unwrap();
+
+    std::fs::create_dir_all(ws.transitions_dir()).unwrap();
+    let historical = r#"task_id: SHARED
+records:
+  - task_id: SHARED
+    intent_id: intent-old
+    from: queued
+    to: needs_user
+    cause: run_outcome
+    detail: STALE INTENT REASON
+    actor:
+      kind: system
+    ts: "2026-07-11T00:00:00+09:00"
+"#
+    .to_string();
+    std::fs::write(ws.transition_path("SHARED"), &historical).unwrap();
+
+    let snapshot = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+    (ws, snapshot, historical)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schemas::{TaskState, TransitionActor, TransitionCause};
+
+    #[test]
+    fn live_projection_uses_only_the_queue_intent_transition() {
+        let (ws, stale_only, historical) = reused_task_id_fixture("intent-scope");
+        assert!(stale_only.last_transitions.get("SHARED").is_none());
+        assert_eq!(
+            std::fs::read_to_string(ws.transition_path("SHARED")).unwrap(),
+            historical
+        );
+
+        crate::state::append_transition(
+            &ws,
+            crate::state::transition(
+                "SHARED",
+                TaskState::Queued,
+                TaskState::NeedsUser,
+                TransitionCause::RunOutcome,
+                "CURRENT INTENT REASON",
+                TransitionActor::System,
+            ),
+        )
+        .unwrap();
+        let current = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        assert_eq!(
+            current.last_transitions.get("SHARED").unwrap().detail,
+            "CURRENT INTENT REASON"
+        );
+        let preserved = std::fs::read_to_string(ws.transition_path("SHARED")).unwrap();
+        assert!(preserved.contains("STALE INTENT REASON"));
+        assert!(preserved.contains("CURRENT INTENT REASON"));
+
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 }

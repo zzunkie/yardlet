@@ -292,6 +292,23 @@ impl Workspace {
         self.load_transition_log(task_id).records.pop()
     }
 
+    /// Latest transition for this task that belongs to one intent. Task ids may
+    /// be reused by later plans, so live queue projections must not use the
+    /// unscoped `latest_transition` lookup. An empty intent id deliberately
+    /// matches legacy records, preserving pre-intent workspaces without
+    /// rewriting their transition history.
+    pub fn latest_transition_for_intent(
+        &self,
+        task_id: &str,
+        intent_id: &str,
+    ) -> Option<TransitionRecord> {
+        self.load_transition_log(task_id)
+            .records
+            .into_iter()
+            .rev()
+            .find(|record| record.intent_id == intent_id)
+    }
+
     /// Read every task's transition log under `.agents/transitions/`. Read-only:
     /// the trust report (`src/trust.rs`) consumes these; nothing here writes.
     /// Malformed or empty logs are skipped, and the result is ordered by task id
@@ -1690,6 +1707,74 @@ records:
         assert_eq!(log.records.len(), 1);
         assert_eq!(log.records[0].intent_id, "");
         assert_eq!(log.records[0].to, TaskState::Done);
+        assert_eq!(
+            ws.latest_transition_for_intent("YARD-1", "")
+                .unwrap()
+                .detail,
+            "old record"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn latest_transition_for_intent_filters_reused_task_history_without_rewriting_it() {
+        let dir = temp_root("transition-intent-scope");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        fs::create_dir_all(ws.transitions_dir()).unwrap();
+        let historical = r#"task_id: SHARED
+records:
+  - task_id: SHARED
+    intent_id: intent-old
+    from: queued
+    to: failed
+    cause: run_outcome
+    detail: stale intent reason
+    actor:
+      kind: system
+    ts: "2026-07-08T00:00:00+09:00"
+  - task_id: SHARED
+    intent_id: intent-current
+    from: queued
+    to: needs_user
+    cause: run_outcome
+    detail: current intent reason
+    actor:
+      kind: system
+    ts: "2026-07-09T00:00:00+09:00"
+  - task_id: SHARED
+    intent_id: intent-old
+    from: failed
+    to: done
+    cause: recover
+    detail: later stale audit entry
+    actor:
+      kind: user
+    ts: "2026-07-10T00:00:00+09:00"
+"#;
+        fs::write(ws.transition_path("SHARED"), historical).unwrap();
+
+        assert_eq!(
+            ws.latest_transition_for_intent("SHARED", "intent-current")
+                .unwrap()
+                .detail,
+            "current intent reason"
+        );
+        assert_eq!(
+            ws.latest_transition_for_intent("SHARED", "intent-old")
+                .unwrap()
+                .detail,
+            "later stale audit entry"
+        );
+        assert!(ws
+            .latest_transition_for_intent("SHARED", "intent-missing")
+            .is_none());
+        assert_eq!(
+            fs::read_to_string(ws.transition_path("SHARED")).unwrap(),
+            historical,
+            "intent-scoped reads must not rewrite history"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
