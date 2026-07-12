@@ -70,6 +70,10 @@ const FIXTURES: &[FixtureDef] = &[
         run: goal_feedback_is_bounded,
     },
     FixtureDef {
+        id: "review-waits-for-remediation",
+        run: review_waits_for_remediation,
+    },
+    FixtureDef {
         id: "scout-copy-is-read-only",
         run: scout_copy_is_read_only,
     },
@@ -544,6 +548,69 @@ fn goal_feedback_is_bounded() -> Result<Vec<String>> {
     }
     Ok(vec![
         "cycle 1 retries; cycle 2 reaches needs_user with AC evidence".to_string(),
+    ])
+}
+
+fn review_waits_for_remediation() -> Result<Vec<String>> {
+    let fixture = FixtureWorkspace::new("review-remediation-order")?;
+    let mut review = task("FIX-REVIEW", TaskState::Failed, "review");
+    review.priority = 10;
+    let mut remediation = task("FIX-REMEDIATION", TaskState::Queued, "implementation");
+    remediation.priority = 20;
+    remediation.approval = Some(crate::yaml::from_str("required: true")?);
+    let mut unrelated = task("FIX-QUESTION", TaskState::NeedsUser, "implementation");
+    unrelated.priority = 1;
+    let mut queue = WorkQueue::empty();
+    queue.intent_id = "fixture-intent".to_string();
+    queue.tasks = vec![review, remediation, unrelated];
+    fixture.ws.save_queue(&queue)?;
+
+    crate::run::requeue_review(
+        &fixture.ws,
+        &mut queue,
+        "FIX-REVIEW",
+        TaskState::Queued,
+        &["FIX-REMEDIATION".to_string()],
+    )?;
+    let caps = std::collections::BTreeSet::new();
+    let queued = fixture.ws.load_queue()?;
+    if crate::run::select_next_ready(&queued, &caps, |_| false)?.is_some()
+        || !crate::parallel::ready_independent(&queued, 4).is_empty()
+    {
+        bail!("review escaped while linked remediation awaited approval")
+    }
+    let approved = crate::run::select_next_ready(&queued, &caps, |id| id == "FIX-REMEDIATION")?;
+    if approved != Some(1) {
+        bail!("approval did not select remediation first: {approved:?}")
+    }
+
+    let mut running = queued;
+    running.tasks[1].state = TaskState::Running;
+    fixture.ws.save_queue(&running)?;
+    if crate::run::select_next_ready(&running, &caps, |_| false)?.is_some()
+        || !crate::parallel::ready_independent(&running, 4).is_empty()
+    {
+        bail!("review escaped while remediation was running")
+    }
+
+    crate::state::write_str(
+        &fixture.root.join("remediation-observed.txt"),
+        "remediation complete\n",
+    )?;
+    running.tasks[1].state = TaskState::Done;
+    fixture.ws.save_queue(&running)?;
+    let serial = crate::run::select_next_ready(&running, &caps, |_| false)?;
+    let parallel = crate::parallel::ready_independent(&running, 4);
+    if serial != Some(0) || parallel != [0] || running.tasks[2].state != TaskState::NeedsUser {
+        bail!(
+            "terminal remediation or unrelated NeedsUser did not release review: serial={serial:?}, parallel={parallel:?}"
+        )
+    }
+
+    Ok(vec![
+        "approval-pending and running remediation held sequential review".to_string(),
+        "review and remediation never shared a parallel batch".to_string(),
+        "remediation completion released review despite unrelated needs_user".to_string(),
     ])
 }
 

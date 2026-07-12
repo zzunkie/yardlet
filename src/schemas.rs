@@ -503,6 +503,40 @@ impl Task {
         self.validation.is_some()
     }
 
+    /// Whether this task was created to remediate `review_id` before that
+    /// review runs again. The relation lives in the existing extensible
+    /// `interaction` map so old queue files remain fully compatible.
+    pub fn remediates_review(&self, review_id: &str) -> bool {
+        self.interaction
+            .as_ref()
+            .and_then(|value| value.get("remediation_for"))
+            .and_then(yaml::Value::as_sequence)
+            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(review_id)))
+    }
+
+    pub fn add_remediation_for(&mut self, review_id: &str) {
+        let key = yaml::Value::String("remediation_for".to_string());
+        let mut root = match self.interaction.take() {
+            Some(yaml::Value::Mapping(mapping)) => mapping,
+            _ => serde_yaml_ng::Mapping::new(),
+        };
+        let ids = root
+            .entry(key)
+            .or_insert_with(|| yaml::Value::Sequence(Vec::new()));
+        if !ids
+            .as_sequence()
+            .is_some_and(|values| values.iter().any(|id| id.as_str() == Some(review_id)))
+        {
+            if !matches!(ids, yaml::Value::Sequence(_)) {
+                *ids = yaml::Value::Sequence(Vec::new());
+            }
+            ids.as_sequence_mut()
+                .expect("remediation_for was normalized to a sequence")
+                .push(yaml::Value::String(review_id.to_string()));
+        }
+        self.interaction = Some(yaml::Value::Mapping(root));
+    }
+
     pub fn deferred_by(&self) -> Option<DeferredBy> {
         let deferred = self.interaction.as_ref()?.get("deferred_by")?;
         Some(DeferredBy {
@@ -631,6 +665,15 @@ impl WorkQueue {
         cap_vocab: &BTreeSet<String>,
     ) -> bool {
         self.runnable_class(task, approved, cap_vocab).is_runnable()
+    }
+
+    /// A review waits only while one of its explicitly linked remediation
+    /// tasks is live. Terminal remediation states release this soft barrier,
+    /// including human holds, so the review cannot be stranded forever.
+    pub fn has_active_remediation_for(&self, review_id: &str) -> bool {
+        self.tasks
+            .iter()
+            .any(|task| task.remediates_review(review_id) && !task.state.is_terminal())
     }
 
     /// Queued tasks stranded by setting `task_id` aside. This mirrors the
@@ -1276,6 +1319,23 @@ tasks:
         ] {
             assert!(s.is_terminal(), "{s:?} should read as terminal");
         }
+    }
+
+    #[test]
+    fn remediation_relation_round_trips_and_only_live_tasks_hold_review() {
+        let mut remediation: Task = yaml::from_str("id: FIX\ntitle: fix\n").unwrap();
+        remediation.add_remediation_for("REVIEW");
+        remediation.add_remediation_for("REVIEW");
+        let encoded = yaml::to_string(&remediation).unwrap();
+        let decoded: Task = yaml::from_str(&encoded).unwrap();
+        assert!(decoded.remediates_review("REVIEW"));
+        assert_eq!(encoded.matches("REVIEW").count(), 1);
+
+        let mut queue = WorkQueue::empty();
+        queue.tasks.push(decoded);
+        assert!(queue.has_active_remediation_for("REVIEW"));
+        queue.tasks[0].state = TaskState::NeedsUser;
+        assert!(!queue.has_active_remediation_for("REVIEW"));
     }
 
     #[test]

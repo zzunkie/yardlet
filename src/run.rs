@@ -1281,7 +1281,11 @@ pub fn select_next_ready(
     });
     let mut best: Option<usize> = None;
     for (i, t) in queue.tasks.iter().enumerate() {
+        let remediation_pending =
+            matches!(crate::packet::role_for(&t.kind), "reviewer" | "security")
+                && queue.has_active_remediation_for(&t.id);
         if !eligible(t)
+            || remediation_pending
             || (work_ready && matches!(crate::packet::role_for(&t.kind), "reviewer" | "security"))
         {
             continue;
@@ -1943,14 +1947,14 @@ fn save_task_state_on_latest_queue(
 /// and the task's persisted feedback cap bounds the fix+re-verify loop ("try hard,
 /// then ask"). Re-reads the latest queue first so a concurrent change is not
 /// clobbered.
-/// Of the just-ingested follow-up ids, those that can run RIGHT NOW: `Queued`
-/// AND dependency-satisfied. This mirrors `select_next` eligibility exactly so a
-/// failed review (1c) is soft-sequenced ONLY behind fixes that will actually run
-/// before it — an off-vocabulary fix parked `Blocked`, a `Deferred` one, or a
-/// `Queued` fix carrying its own unmet `depends_on` is excluded, so the dep-free
-/// review can never out-race a still-gated fix and re-verify unchanged code. When
-/// this is empty the review surfaces to the user instead.
-fn runnable_fix_ids(queue: &WorkQueue, ingested: &[String]) -> Vec<String> {
+/// Of the just-ingested follow-up ids, those that are schedulable remediation:
+/// `Queued` and dependency-satisfied. Approval is intentionally not part of
+/// this filter. An approval-gated fix must remain linked to the review so the
+/// review cannot re-run against unchanged code while approval is pending. An
+/// off-vocabulary fix parked `Blocked`, a `Deferred` one, or a `Queued` fix with
+/// unmet dependencies is excluded. When this is empty the review surfaces to
+/// the user instead.
+fn schedulable_remediation_ids(queue: &WorkQueue, ingested: &[String]) -> Vec<String> {
     ingested
         .iter()
         .filter(|id| {
@@ -1972,7 +1976,7 @@ fn dedup_review_follow_ups(follow_ups: &mut Vec<crate::schemas::FollowUpTask>, q
     });
 }
 
-fn requeue_review(
+pub(crate) fn requeue_review(
     ws: &Workspace,
     fallback_queue: &mut WorkQueue,
     review_id: &str,
@@ -1995,6 +1999,7 @@ fn requeue_review(
         for t in latest.tasks.iter_mut() {
             if fix_ids.iter().any(|f| f == &t.id) {
                 t.priority = front - 20;
+                t.add_remediation_for(review_id);
             }
         }
         if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == review_id) {
@@ -2809,10 +2814,11 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // bounds the cycles across serial, parallel, and resumed drains.
     if flags.follow_ups && is_review && matches!(next_state, TaskState::Failed | TaskState::Partial)
     {
-        // Sequence only behind fixes that can actually run NOW (Queued &&
-        // deps_met). With no runnable fix, surface to the user instead.
-        let runnable = runnable_fix_ids(queue, &ingested);
-        if runnable.is_empty() {
+        // Sequence behind fixes in the runnable graph (Queued && deps_met),
+        // including approval-gated fixes. With no such remediation, surface to
+        // the user instead.
+        let remediation = schedulable_remediation_ids(queue, &ingested);
+        if remediation.is_empty() {
             requeue_review(ws, queue, &task.id, TaskState::NeedsUser, &[])?;
             next_state = TaskState::NeedsUser;
             lines.push(format!(
@@ -2820,12 +2826,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                 task.id
             ));
         } else {
-            requeue_review(ws, queue, &task.id, TaskState::Queued, &runnable)?;
+            requeue_review(ws, queue, &task.id, TaskState::Queued, &remediation)?;
             next_state = TaskState::Queued;
             lines.push(format!(
                 "{}: review failed — re-queued behind remediation [{}] to re-verify",
                 task.id,
-                runnable.join(", ")
+                remediation.join(", ")
             ));
         }
     }
@@ -4286,6 +4292,10 @@ exit 1
         let f = find(&ws, "FIX");
         assert_eq!(r.state, TaskState::Queued);
         assert!(r.depends_on.is_empty(), "no hard dependency edge");
+        assert!(
+            f.remediates_review("REV"),
+            "the soft barrier relation must survive in the queue"
+        );
         // Lower priority runs first: the fix outranks the re-queued review.
         assert!(
             f.priority < r.priority,
@@ -4303,17 +4313,19 @@ exit 1
     }
 
     #[test]
-    fn runnable_fix_ids_excludes_blocked_deferred_and_dep_gated() {
-        // 1c: a failed review is soft-sequenced ONLY behind fixes that will run
-        // before it. A Blocked (off-vocab), Deferred, or dep-gated Queued fix is
-        // not yet runnable, so it must not count — else the dep-free review could
-        // out-race a still-gated fix and re-verify unchanged code.
+    fn schedulable_remediation_ids_excludes_blocked_deferred_and_dep_gated() {
+        // 1c: a failed review is soft-sequenced behind fixes that belong to the
+        // current runnable graph. Approval-gated Queued fixes count because the
+        // review must wait for their decision; Blocked, Deferred, or dep-gated
+        // fixes do not count because those terminal/unresolved branches would
+        // otherwise strand the review.
         let mut q = queue(vec![
             task("FIXA", TaskState::Queued, 10, false),   // runnable
             task("FIXB", TaskState::Blocked, 20, false),  // off-vocab parked
             task("FIXC", TaskState::Deferred, 30, false), // set aside
             task("FIXD", TaskState::Queued, 40, false),   // gated by an unmet dep
             task("DEP", TaskState::Queued, 50, false),    // not Done -> gates FIXD
+            task("FIXE", TaskState::Queued, 60, true),    // approval-gated but schedulable
         ]);
         q.tasks
             .iter_mut()
@@ -4325,8 +4337,12 @@ exit 1
             "FIXB".to_string(),
             "FIXC".to_string(),
             "FIXD".to_string(),
+            "FIXE".to_string(),
         ];
-        assert_eq!(runnable_fix_ids(&q, &ingested), vec!["FIXA".to_string()]);
+        assert_eq!(
+            schedulable_remediation_ids(&q, &ingested),
+            vec!["FIXA".to_string(), "FIXE".to_string()]
+        );
     }
 
     #[test]
@@ -5261,5 +5277,45 @@ exit 1
         q.tasks[1].approval = None;
         q.tasks[1].kind = "research".into();
         assert_eq!(select_next(&q, &opts()).unwrap(), Some(1));
+    }
+
+    #[test]
+    fn sequential_review_barrier_waits_for_linked_approval_then_releases() {
+        let mut review = task("REVIEW", TaskState::Queued, 10, false);
+        review.kind = "review".into();
+        let mut remediation = task("FIX", TaskState::Queued, 20, true);
+        remediation.kind = "implementation".into();
+        remediation.add_remediation_for("REVIEW");
+        let unrelated = task("QUESTION", TaskState::NeedsUser, 1, false);
+        let mut q = queue(vec![review, remediation, unrelated]);
+        let caps = std::collections::BTreeSet::new();
+
+        assert_eq!(
+            select_next_ready(&q, &caps, |_| false).unwrap(),
+            None,
+            "an unapproved linked remediation must hold the review"
+        );
+        assert_eq!(
+            select_next_ready(&q, &caps, |id| id == "FIX").unwrap(),
+            Some(1),
+            "approval makes the remediation, not the review, run next"
+        );
+
+        q.tasks[1].state = TaskState::Running;
+        assert_eq!(select_next_ready(&q, &caps, |_| false).unwrap(), None);
+
+        q.tasks[1].state = TaskState::Done;
+        assert_eq!(
+            select_next_ready(&q, &caps, |_| false).unwrap(),
+            Some(0),
+            "terminal remediation and unrelated NeedsUser release the review"
+        );
+
+        q.tasks[1].state = TaskState::NeedsUser;
+        assert_eq!(
+            select_next_ready(&q, &caps, |_| false).unwrap(),
+            Some(0),
+            "a terminal remediation human hold must not deadlock re-review"
+        );
     }
 }

@@ -61,7 +61,7 @@ pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter(|(_, t)| {
-            if work_pending && is_verifier(t) {
+            if is_verifier(t) && (work_pending || queue.has_active_remediation_for(&t.id)) {
                 return false;
             }
             // Any validation-bearing task is excluded: parallel skips validation,
@@ -988,6 +988,40 @@ mod tests {
             q.tasks[1].state = terminal;
             assert_eq!(ready_independent(&q, 4), vec![0]);
         }
+    }
+
+    #[test]
+    fn linked_remediation_and_review_never_share_a_parallel_batch() {
+        let mut review = task("REVIEW", TaskState::Queued, 10, vec![]);
+        review.kind = "review".into();
+        let mut remediation = task("FIX", TaskState::Queued, 20, vec![]);
+        remediation.kind = "implementation".into();
+        remediation.approval = Some(crate::yaml::from_str("required: true").unwrap());
+        remediation.add_remediation_for("REVIEW");
+        let unrelated = task("QUESTION", TaskState::NeedsUser, 1, vec![]);
+        let mut q = queue(vec![review, remediation, unrelated]);
+
+        assert!(
+            ready_independent(&q, 4).is_empty(),
+            "approval-pending remediation must hold review out of the batch"
+        );
+
+        q.tasks[1].approval = None;
+        assert_eq!(
+            ready_independent(&q, 4),
+            vec![1],
+            "only the linked remediation may enter the batch"
+        );
+
+        q.tasks[1].state = TaskState::Running;
+        assert!(ready_independent(&q, 4).is_empty());
+
+        q.tasks[1].state = TaskState::Done;
+        assert_eq!(
+            ready_independent(&q, 4),
+            vec![0],
+            "terminal remediation and unrelated NeedsUser release review"
+        );
     }
 
     #[test]
