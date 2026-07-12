@@ -1,0 +1,333 @@
+{
+  "schema_version": 1,
+  "session": {
+    "session_id": "ses_fixture",
+    "kind": "planning",
+    "lifecycle": "confirmed"
+  },
+  "drafts": [
+    {
+      "draft_revision_id": "drv_1",
+      "state": "superseded",
+      "content_digest": "draft-digest-1"
+    },
+    {
+      "draft_revision_id": "drv_2",
+      "parent_revision_id": "drv_1",
+      "state": "confirmed",
+      "content_digest": "draft-digest-2"
+    }
+  ],
+  "activation": {
+    "confirmation_id": "cnf_1",
+    "action_id": "act_confirm",
+    "draft_revision_id": "drv_2",
+    "intent_id": "int_1",
+    "queue_id": "que_1",
+    "intent_digest": "intent-digest-1",
+    "queue_digest": "queue-digest-1",
+    "status": "committed"
+  },
+  "intent": {
+    "id": "int_1",
+    "confirmation_id": "cnf_1",
+    "digest": "intent-digest-1"
+  },
+  "queue": {
+    "id": "que_1",
+    "intent_id": "int_1",
+    "confirmation_id": "cnf_1",
+    "digest": "queue-digest-1",
+    "tasks": [
+      {
+        "id": "tsk_1",
+        "state": "queued",
+        "materialized_by_confirmation_id": "cnf_1"
+      }
+    ]
+  },
+  "events": [
+    {
+      "schema_version": 1,
+      "event_id": "evt_01_session_opened",
+      "session_id": "ses_fixture",
+      "seq": 1,
+      "type": "session.opened",
+      "actor": { "kind": "user", "id": "user_fixture" },
+      "correlation_id": "cor_fixture",
+      "payload": { "kind": "planning" }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_02_draft_proposed",
+      "session_id": "ses_fixture",
+      "seq": 2,
+      "type": "draft.proposed",
+      "actor": { "kind": "worker", "id": "planner_fixture" },
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_01_session_opened",
+      "payload": { "draft_revision_id": "drv_1" }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_03_draft_revised",
+      "session_id": "ses_fixture",
+      "seq": 3,
+      "type": "draft.revised",
+      "actor": { "kind": "user", "id": "user_fixture" },
+      "action_id": "act_revise",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_02_draft_proposed",
+      "payload": {
+        "parent_revision_id": "drv_1",
+        "draft_revision_id": "drv_2"
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_04_confirm_requested",
+      "session_id": "ses_fixture",
+      "seq": 4,
+      "type": "action.requested",
+      "actor": { "kind": "user", "id": "user_fixture" },
+      "action_id": "act_confirm",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_03_draft_revised",
+      "payload": {
+        "action": "confirm",
+        "expected_draft_revision_id": "drv_2"
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_05_confirm_prepared",
+      "session_id": "ses_fixture",
+      "seq": 5,
+      "type": "draft.confirm.prepared",
+      "actor": { "kind": "system", "id": "yardlet_core" },
+      "action_id": "act_confirm",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_04_confirm_requested",
+      "payload": {
+        "confirmation_id": "cnf_1",
+        "draft_revision_id": "drv_2",
+        "intent_digest": "intent-digest-1",
+        "queue_digest": "queue-digest-1"
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_06_draft_confirmed",
+      "session_id": "ses_fixture",
+      "seq": 6,
+      "type": "draft.confirmed",
+      "actor": { "kind": "system", "id": "yardlet_core" },
+      "action_id": "act_confirm",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_05_confirm_prepared",
+      "payload": {
+        "confirmation_id": "cnf_1",
+        "draft_revision_id": "drv_2",
+        "intent_id": "int_1",
+        "queue_id": "que_1"
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_07_task_materialized",
+      "session_id": "ses_fixture",
+      "seq": 7,
+      "type": "task.materialized",
+      "actor": { "kind": "system", "id": "yardlet_core" },
+      "action_id": "act_confirm",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_06_draft_confirmed",
+      "task_id": "tsk_1",
+      "payload": { "confirmation_id": "cnf_1" }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_08_attempt_1_prepared",
+      "session_id": "ses_fixture",
+      "seq": 8,
+      "type": "attempt.prepared",
+      "actor": { "kind": "system", "id": "yardlet_core" },
+      "action_id": "act_run_1",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_07_task_materialized",
+      "task_id": "tsk_1",
+      "attempt_id": "att_1",
+      "payload": {
+        "worker_id": "codex",
+        "worker_session_ref": "worker-session-a"
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_09_attempt_1_started",
+      "session_id": "ses_fixture",
+      "seq": 9,
+      "type": "worker.started",
+      "actor": { "kind": "worker", "id": "codex" },
+      "action_id": "act_run_1",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_08_attempt_1_prepared",
+      "task_id": "tsk_1",
+      "attempt_id": "att_1",
+      "payload": {}
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_10_question_asked",
+      "session_id": "ses_fixture",
+      "seq": 10,
+      "type": "question.asked",
+      "actor": { "kind": "worker", "id": "codex" },
+      "action_id": "act_run_1",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_09_attempt_1_started",
+      "task_id": "tsk_1",
+      "attempt_id": "att_1",
+      "payload": {
+        "question_id": "qst_1",
+        "text": "어떤 호환성 경계를 선택할까요?"
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_11_attempt_1_completed",
+      "session_id": "ses_fixture",
+      "seq": 11,
+      "type": "worker.completed",
+      "actor": { "kind": "system", "id": "yardlet_core" },
+      "action_id": "act_run_1",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_10_question_asked",
+      "task_id": "tsk_1",
+      "attempt_id": "att_1",
+      "payload": { "result": "needs_user" }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_12_user_answered",
+      "session_id": "ses_fixture",
+      "seq": 12,
+      "type": "user.answered",
+      "actor": { "kind": "user", "id": "user_fixture" },
+      "action_id": "act_answer",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_10_question_asked",
+      "task_id": "tsk_1",
+      "payload": {
+        "answer_id": "ans_1",
+        "question_id": "qst_1",
+        "text": "읽기 전용 fallback으로 진행합니다."
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_13_attempt_2_prepared",
+      "session_id": "ses_fixture",
+      "seq": 13,
+      "type": "attempt.prepared",
+      "actor": { "kind": "system", "id": "yardlet_core" },
+      "action_id": "act_run_2",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_12_user_answered",
+      "task_id": "tsk_1",
+      "attempt_id": "att_2",
+      "payload": {
+        "worker_id": "claude-code",
+        "worker_session_ref": "worker-session-b",
+        "caused_by_answer_id": "ans_1"
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_14_attempt_2_started",
+      "session_id": "ses_fixture",
+      "seq": 14,
+      "type": "worker.started",
+      "actor": { "kind": "worker", "id": "claude-code" },
+      "action_id": "act_run_2",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_13_attempt_2_prepared",
+      "task_id": "tsk_1",
+      "attempt_id": "att_2",
+      "payload": {}
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_15_artifact_created",
+      "session_id": "ses_fixture",
+      "seq": 15,
+      "type": "artifact.created",
+      "actor": { "kind": "worker", "id": "claude-code" },
+      "action_id": "act_run_2",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_14_attempt_2_started",
+      "task_id": "tsk_1",
+      "attempt_id": "att_2",
+      "payload": {
+        "artifact_id": "art_1",
+        "path": "evidence/replay-summary.json",
+        "content_digest": "artifact-digest-1"
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_16_validation_completed",
+      "session_id": "ses_fixture",
+      "seq": 16,
+      "type": "validation.completed",
+      "actor": { "kind": "system", "id": "yardlet_core" },
+      "action_id": "act_run_2",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_15_artifact_created",
+      "task_id": "tsk_1",
+      "attempt_id": "att_2",
+      "payload": {
+        "evaluation_id": "eval_1",
+        "passed": true,
+        "artifact_id": "art_1"
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_17_attempt_2_completed",
+      "session_id": "ses_fixture",
+      "seq": 17,
+      "type": "worker.completed",
+      "actor": { "kind": "system", "id": "yardlet_core" },
+      "action_id": "act_run_2",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_16_validation_completed",
+      "task_id": "tsk_1",
+      "attempt_id": "att_2",
+      "payload": { "result": "succeeded" }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "evt_18_completion_recorded",
+      "session_id": "ses_fixture",
+      "seq": 18,
+      "type": "completion.recorded",
+      "actor": { "kind": "system", "id": "yardlet_core" },
+      "action_id": "act_run_2",
+      "correlation_id": "cor_fixture",
+      "causation_id": "evt_17_attempt_2_completed",
+      "task_id": "tsk_1",
+      "attempt_id": "att_2",
+      "payload": {
+        "completion_id": "cmp_1",
+        "outcome": "done",
+        "evaluation_id": "eval_1",
+        "artifact_ids": ["art_1"]
+      }
+    }
+  ],
+  "derived_index": {
+    "highest_applied_seq": 18,
+    "task_to_attempts": { "tsk_1": ["att_1", "att_2"] }
+  }
+}

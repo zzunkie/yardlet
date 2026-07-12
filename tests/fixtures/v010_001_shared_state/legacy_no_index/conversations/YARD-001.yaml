@@ -1,0 +1,9 @@
+task_id: YARD-001
+turns:
+  - role: worker
+    text: 어떤 fallback을 적용할까요?
+    run_id: run-legacy-1
+    ts: "2026-07-12T00:00:02Z"
+  - role: user
+    text: 읽기 전용 fallback을 적용합니다.
+    ts: "2026-07-12T00:00:03Z"

@@ -1,0 +1,8 @@
+schema_version: 1
+queue_id: legacy-queue
+intent_id: legacy-intent
+tasks:
+  - id: YARD-001
+    title: legacy replay task
+    state: queued
+    priority: 10

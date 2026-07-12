@@ -1,0 +1,9 @@
+schema_version: 1
+run_id: run-legacy-1
+task_id: YARD-001
+intent_id: legacy-intent
+worker: codex
+state: needs_user
+started_at: "2026-07-12T00:00:01Z"
+completed_at: "2026-07-12T00:00:02Z"
+worktree: .

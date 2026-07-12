@@ -1,0 +1,9 @@
+schema_version: 1
+run_id: run-legacy-2
+task_id: YARD-001
+intent_id: legacy-intent
+worker: claude-code
+state: done
+started_at: "2026-07-12T00:00:04Z"
+completed_at: "2026-07-12T00:00:05Z"
+worktree: .

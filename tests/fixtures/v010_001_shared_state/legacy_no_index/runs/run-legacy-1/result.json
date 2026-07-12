@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "run_id": "run-legacy-1",
+  "task_id": "YARD-001",
+  "status": "needs_user",
+  "question_for_user": "어떤 fallback을 적용할까요?"
+}

@@ -1,0 +1,12 @@
+task_id: YARD-001
+records:
+  - task_id: YARD-001
+    intent_id: legacy-intent
+    from: queued
+    to: needs_user
+    cause: run_outcome
+    detail: legacy worker asked a question
+    actor:
+      kind: worker
+      id: run-legacy-1
+    ts: "2026-07-12T00:00:02Z"
