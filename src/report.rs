@@ -204,7 +204,7 @@ pub fn build_final_report(ws: &Workspace) -> Result<String> {
             "### {} {} \u{2014} {:?}\n\n",
             t.id, t.title, t.state
         ));
-        if let Some(rec) = ws.latest_transition(&t.id) {
+        if let Some(rec) = ws.latest_transition_for_intent(&t.id, &queue.intent_id) {
             md.push_str(&format!("Last transition: {}\n\n", rec.detail.trim()));
         }
         if let Some((_, dir)) = latest_run_for(ws, &t.id) {
@@ -359,6 +359,42 @@ mod tests {
 
         assert!(report.contains("unfinished (held:"), "{report}");
         assert!(!report.contains("complete (held:"), "{report}");
+    }
+
+    #[test]
+    fn final_report_does_not_render_a_reused_task_ids_previous_intent_transition() {
+        let ws = temp_ws("intent-scoped-transition");
+        crate::state::save_yaml(&ws.intent_path(), &intent("intent-current")).unwrap();
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.intent_id = "intent-current".to_string();
+        queue
+            .tasks
+            .push(seed_task("SHARED", "reused task", TaskState::Done));
+        ws.save_queue(&queue).unwrap();
+
+        std::fs::create_dir_all(ws.transitions_dir()).unwrap();
+        std::fs::write(
+            ws.transition_path("SHARED"),
+            r#"task_id: SHARED
+records:
+  - task_id: SHARED
+    intent_id: intent-previous
+    from: queued
+    to: failed
+    cause: run_outcome
+    detail: stale previous-intent reason
+    actor:
+      kind: system
+    ts: "2026-07-11T00:00:00+09:00"
+"#,
+        )
+        .unwrap();
+
+        let report = build_final_report(&ws).unwrap();
+
+        assert!(report.contains("### SHARED reused task"), "{report}");
+        assert!(!report.contains("stale previous-intent reason"), "{report}");
+        assert!(!report.contains("Last transition:"), "{report}");
     }
 
     #[test]
