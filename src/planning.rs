@@ -12,8 +12,9 @@ use serde::Serialize;
 
 use crate::schemas::{
     ActivatedIntent, ActivatedQueue, ActivatedTask, ActivationReceipt, DraftRevision,
-    PlanningActionReceipt, PlanningDraftContent, PlanningEvent, PlanningLifecycle,
-    PlanningProposal, PlanningSession, SemanticDiffEntry, TaskState,
+    PlanningActionKind, PlanningActionReceipt, PlanningActionStatus, PlanningDraftContent,
+    PlanningEvent, PlanningEventType, PlanningLifecycle, PlanningProposal, PlanningSession,
+    SemanticDiffEntry, TaskState,
 };
 use crate::state::Workspace;
 
@@ -50,10 +51,17 @@ fn new_id(prefix: &str) -> String {
 #[derive(Default)]
 struct EventFields<'a> {
     action_id: &'a str,
+    action_request_digest: &'a str,
     message: &'a str,
     proposal_id: &'a str,
     draft_revision_id: &'a str,
     related_revision_id: &'a str,
+}
+
+fn maybe_crash(point: &str) {
+    if std::env::var("YARDLET_TEST_PLANNING_CRASH").as_deref() == Ok(point) {
+        std::process::exit(86);
+    }
 }
 
 pub fn digest<T: Serialize>(value: &T) -> Result<String> {
@@ -69,18 +77,20 @@ pub fn digest<T: Serialize>(value: &T) -> Result<String> {
 fn append_event(
     ws: &Workspace,
     session: &mut PlanningSession,
-    event_type: &str,
+    event_type: PlanningEventType,
     actor: &str,
     fields: EventFields<'_>,
 ) -> Result<PlanningEvent> {
+    reconcile_event_cursor(ws, session)?;
     let event = PlanningEvent {
-        schema_version: 1,
+        schema_version: 2,
         event_id: new_id("evt"),
         session_id: session.session_id.clone(),
         seq: session.next_seq,
-        event_type: event_type.to_string(),
+        event_type,
         actor: actor.to_string(),
         action_id: fields.action_id.to_string(),
+        action_request_digest: fields.action_request_digest.to_string(),
         message: fields.message.to_string(),
         proposal_id: fields.proposal_id.to_string(),
         draft_revision_id: fields.draft_revision_id.to_string(),
@@ -88,23 +98,46 @@ fn append_event(
         recorded_at: Utc::now().to_rfc3339(),
     };
     ws.save_planning_event(&event)?;
+    maybe_crash("after_event_write_before_next_seq");
+    let previous = session.clone();
     session.next_seq += 1;
-    ws.save_planning_session(session)?;
+    ws.save_planning_session_cas(&previous, session)?;
     Ok(event)
+}
+
+fn reconcile_event_cursor(ws: &Workspace, session: &mut PlanningSession) -> Result<()> {
+    let next = ws
+        .load_planning_events(&session.session_id)?
+        .iter()
+        .map(|event| event.seq)
+        .max()
+        .map_or(1, |seq| seq + 1);
+    if session.next_seq < next {
+        let previous = session.clone();
+        session.next_seq = next;
+        ws.save_planning_session_cas(&previous, session)?;
+    }
+    Ok(())
 }
 
 fn append_action_event_once(
     ws: &Workspace,
     session: &mut PlanningSession,
-    event_type: &str,
+    event_type: PlanningEventType,
     actor: &str,
     fields: EventFields<'_>,
 ) -> Result<Option<PlanningEvent>> {
+    reconcile_event_cursor(ws, session)?;
     if !fields.action_id.is_empty()
         && ws
             .load_planning_events(&session.session_id)?
             .iter()
-            .any(|event| event.event_type == event_type && event.action_id == fields.action_id)
+            .any(|event| {
+                event.event_type == event_type
+                    && event.action_id == fields.action_id
+                    && (fields.action_request_digest.is_empty()
+                        || event.action_request_digest == fields.action_request_digest)
+            })
     {
         return Ok(None);
     }
@@ -139,7 +172,7 @@ fn create_session_with_ids(
     append_event(
         ws,
         &mut session,
-        "session.opened",
+        PlanningEventType::SessionOpened,
         "system",
         EventFields::default(),
     )?;
@@ -147,7 +180,7 @@ fn create_session_with_ids(
         append_event(
             ws,
             &mut session,
-            "user.message",
+            PlanningEventType::UserMessage,
             "user",
             EventFields {
                 message: request.trim(),
@@ -168,6 +201,7 @@ pub fn begin_user_turn(ws: &Workspace, message: &str) -> Result<PlanningSession>
     if message.trim().is_empty() {
         bail!("planning message must not be empty");
     }
+    let _lock = ws.acquire_planning_lock()?;
     let mut session = match ws.load_latest_planning_session()? {
         Some(session) if session.lifecycle == PlanningLifecycle::Open => session,
         _ => return create_session(ws, message),
@@ -175,7 +209,7 @@ pub fn begin_user_turn(ws: &Workspace, message: &str) -> Result<PlanningSession>
     append_event(
         ws,
         &mut session,
-        "user.message",
+        PlanningEventType::UserMessage,
         "user",
         EventFields {
             message: message.trim(),
@@ -225,10 +259,12 @@ pub fn worker_turn_context(
         out.push_str("Current accepted visible draft: none\n");
     }
     out.push_str("Visible planning channel:\n");
-    for event in events
-        .iter()
-        .filter(|event| matches!(event.event_type.as_str(), "user.message" | "worker.message"))
-    {
+    for event in events.iter().filter(|event| {
+        matches!(
+            event.event_type,
+            PlanningEventType::UserMessage | PlanningEventType::WorkerMessage
+        )
+    }) {
         out.push_str(&format!("- {}: {}\n", event.actor, event.message));
     }
     out.push_str("Latest user message:\n");
@@ -382,6 +418,7 @@ pub fn record_worker_proposal(
     rationale: &str,
     content: PlanningDraftContent,
 ) -> Result<PlanningProposal> {
+    let _lock = ws.acquire_planning_lock()?;
     let mut session = ws.load_planning_session(session_id)?;
     if session.lifecycle != PlanningLifecycle::Open {
         bail!("confirmed planning session rejects worker proposals");
@@ -404,7 +441,7 @@ pub fn record_worker_proposal(
     append_event(
         ws,
         &mut session,
-        "worker.message",
+        PlanningEventType::WorkerMessage,
         worker_id,
         EventFields {
             message,
@@ -415,7 +452,7 @@ pub fn record_worker_proposal(
     append_event(
         ws,
         &mut session,
-        "draft.proposed",
+        PlanningEventType::DraftProposed,
         worker_id,
         EventFields {
             message: rationale,
@@ -427,7 +464,7 @@ pub fn record_worker_proposal(
 }
 
 fn action_request_digest(
-    action: &str,
+    action: PlanningActionKind,
     action_id: &str,
     expected_head: Option<&str>,
     target: &str,
@@ -440,10 +477,89 @@ fn action_request_digest(
     }))
 }
 
+fn action_name(action: PlanningActionKind) -> &'static str {
+    match action {
+        PlanningActionKind::Accept => "accept",
+        PlanningActionKind::Reject => "reject",
+        PlanningActionKind::Undo => "undo",
+        PlanningActionKind::Answer => "answer",
+        PlanningActionKind::Confirm => "confirm",
+    }
+}
+
+fn linked_action_event(
+    ws: &Workspace,
+    session_id: &str,
+    action_id: &str,
+    request_digest: &str,
+    event_type: PlanningEventType,
+) -> Result<Option<PlanningEvent>> {
+    Ok(ws
+        .load_planning_events(session_id)?
+        .into_iter()
+        .find(|event| {
+            event.event_type == event_type
+                && event.action_id == action_id
+                && event.action_request_digest == request_digest
+        }))
+}
+
+fn validate_terminal_action_effect(ws: &Workspace, receipt: &PlanningActionReceipt) -> Result<()> {
+    if receipt.schema_version < 2 {
+        return Ok(());
+    }
+    let event_type = receipt
+        .effect_event_type
+        .ok_or_else(|| anyhow!("terminal action receipt effect type is missing"))?;
+    let event = ws
+        .load_planning_events(&receipt.session_id)?
+        .into_iter()
+        .find(|event| event.event_id == receipt.effect_event_id)
+        .ok_or_else(|| anyhow!("terminal action receipt effect event is missing"))?;
+    if event.event_type != event_type
+        || event.action_id != receipt.action_id
+        || event.action_request_digest != receipt.request_digest
+    {
+        bail!("terminal action receipt effect linkage mismatch");
+    }
+    let valid_result = match receipt.status {
+        PlanningActionStatus::Prepared => false,
+        PlanningActionStatus::Rejected => event_type == PlanningEventType::ActionRejected,
+        PlanningActionStatus::Completed => match receipt.action {
+            PlanningActionKind::Accept => {
+                matches!(
+                    event_type,
+                    PlanningEventType::DraftAccepted | PlanningEventType::DraftRevised
+                ) && event.draft_revision_id == receipt.result_id
+            }
+            PlanningActionKind::Reject => {
+                event_type == PlanningEventType::DraftRejected
+                    && event.proposal_id == receipt.result_id
+            }
+            PlanningActionKind::Undo => {
+                event_type == PlanningEventType::DraftUndo
+                    && event.related_revision_id == receipt.result_id
+            }
+            PlanningActionKind::Answer => {
+                event_type == PlanningEventType::UserMessage
+                    && receipt.result_id == receipt.session_id
+            }
+            PlanningActionKind::Confirm => {
+                event_type == PlanningEventType::DraftConfirmed
+                    && event.related_revision_id == receipt.result_id
+            }
+        },
+    };
+    if !valid_result {
+        bail!("terminal action receipt effect result mismatch");
+    }
+    Ok(())
+}
+
 fn begin_action(
     ws: &Workspace,
     session: &mut PlanningSession,
-    action: &str,
+    action: PlanningActionKind,
     action_id: &str,
     expected_head: Option<&str>,
     target: &str,
@@ -456,29 +572,33 @@ fn begin_action(
         if existing.request_digest != request_digest {
             bail!("idempotency_conflict for action {action_id}");
         }
-        match existing.status.as_str() {
-            "completed" => {
+        match existing.status {
+            PlanningActionStatus::Completed => {
+                validate_terminal_action_effect(ws, &existing)?;
                 append_action_event_once(
                     ws,
                     session,
-                    "action.completed",
+                    PlanningEventType::ActionCompleted,
                     "system",
                     EventFields {
                         action_id,
+                        action_request_digest: &existing.request_digest,
                         draft_revision_id: &existing.result_id,
                         ..EventFields::default()
                     },
                 )?;
                 return Ok((existing, true));
             }
-            "rejected" => {
+            PlanningActionStatus::Rejected => {
+                validate_terminal_action_effect(ws, &existing)?;
                 append_action_event_once(
                     ws,
                     session,
-                    "action.rejected",
+                    PlanningEventType::ActionRejected,
                     "system",
                     EventFields {
                         action_id,
+                        action_request_digest: &existing.request_digest,
                         message: &existing.error,
                         ..EventFields::default()
                     },
@@ -492,42 +612,48 @@ fn begin_action(
                     }
                 );
             }
-            "prepared" => {
+            PlanningActionStatus::Prepared => {
                 append_action_event_once(
                     ws,
                     session,
-                    "action.requested",
+                    PlanningEventType::ActionRequested,
                     "user",
                     EventFields {
                         action_id,
-                        message: action,
+                        action_request_digest: &existing.request_digest,
+                        message: action_name(action),
                         ..EventFields::default()
                     },
                 )?;
                 return Ok((existing, false));
             }
-            status => bail!("unsupported action receipt status: {status}"),
         }
     }
+    let (prior_intent, prior_queue) = ws.load_active_snapshot_texts()?;
     let receipt = PlanningActionReceipt {
-        schema_version: 1,
+        schema_version: 2,
         action_id: action_id.to_string(),
         session_id: session.session_id.clone(),
-        action: action.to_string(),
+        action,
         request_digest,
-        status: "prepared".to_string(),
+        status: PlanningActionStatus::Prepared,
         result_id: String::new(),
         error: String::new(),
+        effect_event_id: String::new(),
+        effect_event_type: None,
+        prior_intent_digest: digest(&prior_intent)?,
+        prior_queue_digest: digest(&prior_queue)?,
     };
-    ws.save_planning_action(&receipt)?;
+    ws.create_planning_action(&receipt)?;
     append_action_event_once(
         ws,
         session,
-        "action.requested",
+        PlanningEventType::ActionRequested,
         "user",
         EventFields {
             action_id,
-            message: action,
+            action_request_digest: &receipt.request_digest,
+            message: action_name(action),
             ..EventFields::default()
         },
     )?;
@@ -540,20 +666,33 @@ fn reject_action(
     mut receipt: PlanningActionReceipt,
     reason: &str,
 ) -> Result<anyhow::Error> {
-    receipt.status = "rejected".to_string();
-    receipt.error = reason.to_string();
-    ws.save_planning_action(&receipt)?;
-    append_action_event_once(
+    let effect = append_action_event_once(
         ws,
         session,
-        "action.rejected",
+        PlanningEventType::ActionRejected,
         "system",
         EventFields {
             action_id: &receipt.action_id,
+            action_request_digest: &receipt.request_digest,
             message: reason,
             ..EventFields::default()
         },
-    )?;
+    )?
+    .or(linked_action_event(
+        ws,
+        &receipt.session_id,
+        &receipt.action_id,
+        &receipt.request_digest,
+        PlanningEventType::ActionRejected,
+    )?)
+    .ok_or_else(|| anyhow!("rejected action effect event is missing"))?;
+    maybe_crash("action_after_rejected_effect");
+    let previous = receipt.clone();
+    receipt.status = PlanningActionStatus::Rejected;
+    receipt.error = reason.to_string();
+    receipt.effect_event_id = effect.event_id;
+    receipt.effect_event_type = Some(effect.event_type);
+    ws.save_planning_action_cas(&previous, &receipt)?;
     Ok(anyhow!(reason.to_string()))
 }
 
@@ -562,18 +701,28 @@ fn complete_action(
     session: &mut PlanningSession,
     mut receipt: PlanningActionReceipt,
     result_id: &str,
+    effect: &PlanningEvent,
 ) -> Result<PlanningActionReceipt> {
-    receipt.status = "completed".to_string();
+    if effect.action_id != receipt.action_id
+        || effect.action_request_digest != receipt.request_digest
+    {
+        bail!("action effect linkage mismatch");
+    }
+    let previous = receipt.clone();
+    receipt.status = PlanningActionStatus::Completed;
     receipt.result_id = result_id.to_string();
     receipt.error.clear();
-    ws.save_planning_action(&receipt)?;
+    receipt.effect_event_id = effect.event_id.clone();
+    receipt.effect_event_type = Some(effect.event_type);
+    ws.save_planning_action_cas(&previous, &receipt)?;
     append_action_event_once(
         ws,
         session,
-        "action.completed",
+        PlanningEventType::ActionCompleted,
         "system",
         EventFields {
             action_id: &receipt.action_id,
+            action_request_digest: &receipt.request_digest,
             draft_revision_id: result_id,
             ..EventFields::default()
         },
@@ -597,9 +746,11 @@ fn proposal_disposition(
             if event.proposal_id != proposal_id {
                 return None;
             }
-            match event.event_type.as_str() {
-                "draft.accepted" | "draft.revised" => Some("accepted"),
-                "draft.rejected" => Some("rejected"),
+            match event.event_type {
+                PlanningEventType::DraftAccepted | PlanningEventType::DraftRevised => {
+                    Some("accepted")
+                }
+                PlanningEventType::DraftRejected => Some("rejected"),
                 _ => None,
             }
         }))
@@ -644,8 +795,8 @@ fn validate_undo_linkage(
         .iter()
         .any(|event| {
             matches!(
-                event.event_type.as_str(),
-                "draft.accepted" | "draft.revised"
+                event.event_type,
+                PlanningEventType::DraftAccepted | PlanningEventType::DraftRevised
             ) && event.draft_revision_id == revision.draft_revision_id
                 && event.proposal_id == revision.proposal_id
                 && event.related_revision_id == parent_id.as_deref().unwrap_or("")
@@ -662,17 +813,64 @@ pub fn accept_proposal(
     expected_head: Option<&str>,
     action_id: &str,
 ) -> Result<DraftRevision> {
+    let _lock = ws.acquire_planning_lock()?;
     let mut session = latest_open_session(ws)?;
     let (receipt, completed) = begin_action(
         ws,
         &mut session,
-        "accept",
+        PlanningActionKind::Accept,
         action_id,
         expected_head,
         proposal_id,
     )?;
     if completed {
         return ws.load_draft_revision(&session.session_id, &receipt.result_id);
+    }
+    let replayed_effect = linked_action_event(
+        ws,
+        &session.session_id,
+        action_id,
+        &receipt.request_digest,
+        PlanningEventType::DraftAccepted,
+    )?
+    .or(linked_action_event(
+        ws,
+        &session.session_id,
+        action_id,
+        &receipt.request_digest,
+        PlanningEventType::DraftRevised,
+    )?);
+    if let Some(effect) = replayed_effect {
+        if effect.proposal_id != proposal_id || effect.draft_revision_id.is_empty() {
+            return Err(reject_action(
+                ws,
+                &mut session,
+                receipt,
+                "prepared accept effect linkage mismatch",
+            )?);
+        }
+        let revision = ws.load_draft_revision(&session.session_id, &effect.draft_revision_id)?;
+        validate_revision_integrity(&session, &revision, &effect.draft_revision_id)?;
+        if session.current_head.as_deref() == revision.parent_revision_id.as_deref() {
+            let previous = session.clone();
+            session.current_head = Some(revision.draft_revision_id.clone());
+            ws.save_planning_session_cas(&previous, &session)?;
+        } else if session.current_head.as_deref() != Some(revision.draft_revision_id.as_str()) {
+            return Err(reject_action(
+                ws,
+                &mut session,
+                receipt,
+                "prepared accept effect conflicts with current head",
+            )?);
+        }
+        complete_action(
+            ws,
+            &mut session,
+            receipt,
+            &revision.draft_revision_id,
+            &effect,
+        )?;
+        return Ok(revision);
     }
     if !expected_head_matches(&session, expected_head) {
         return Err(reject_action(ws, &mut session, receipt, "stale_head")?);
@@ -713,26 +911,35 @@ pub fn accept_proposal(
         content: proposal.content,
     };
     ws.save_draft_revision(&revision)?;
-    append_event(
+    let effect = append_event(
         ws,
         &mut session,
         if revision.parent_revision_id.is_some() {
-            "draft.revised"
+            PlanningEventType::DraftRevised
         } else {
-            "draft.accepted"
+            PlanningEventType::DraftAccepted
         },
         "user",
         EventFields {
             action_id,
+            action_request_digest: &receipt.request_digest,
             proposal_id,
             draft_revision_id: &revision.draft_revision_id,
             related_revision_id: revision.parent_revision_id.as_deref().unwrap_or(""),
             ..EventFields::default()
         },
     )?;
+    maybe_crash("action_after_effect");
+    let previous = session.clone();
     session.current_head = Some(revision.draft_revision_id.clone());
-    ws.save_planning_session(&session)?;
-    complete_action(ws, &mut session, receipt, &revision.draft_revision_id)?;
+    ws.save_planning_session_cas(&previous, &session)?;
+    complete_action(
+        ws,
+        &mut session,
+        receipt,
+        &revision.draft_revision_id,
+        &effect,
+    )?;
     Ok(revision)
 }
 
@@ -742,16 +949,37 @@ pub fn reject_proposal(
     expected_head: Option<&str>,
     action_id: &str,
 ) -> Result<()> {
+    let _lock = ws.acquire_planning_lock()?;
     let mut session = latest_open_session(ws)?;
     let (receipt, completed) = begin_action(
         ws,
         &mut session,
-        "reject",
+        PlanningActionKind::Reject,
         action_id,
         expected_head,
         proposal_id,
     )?;
     if completed {
+        return Ok(());
+    }
+    if let Some(effect) = linked_action_event(
+        ws,
+        &session.session_id,
+        action_id,
+        &receipt.request_digest,
+        PlanningEventType::DraftRejected,
+    )? {
+        if effect.proposal_id != proposal_id
+            || effect.related_revision_id != expected_head.unwrap_or("")
+        {
+            return Err(reject_action(
+                ws,
+                &mut session,
+                receipt,
+                "prepared reject effect linkage mismatch",
+            )?);
+        }
+        complete_action(ws, &mut session, receipt, proposal_id, &effect)?;
         return Ok(());
     }
     if !expected_head_matches(&session, expected_head) {
@@ -774,34 +1002,75 @@ pub fn reject_proposal(
             "stale_head: proposal was authored against another head",
         )?);
     }
-    append_event(
+    let effect = append_event(
         ws,
         &mut session,
-        "draft.rejected",
+        PlanningEventType::DraftRejected,
         "user",
         EventFields {
             action_id,
+            action_request_digest: &receipt.request_digest,
             proposal_id,
             related_revision_id: expected_head.unwrap_or(""),
             ..EventFields::default()
         },
     )?;
-    complete_action(ws, &mut session, receipt, proposal_id)?;
+    maybe_crash("action_after_effect");
+    complete_action(ws, &mut session, receipt, proposal_id, &effect)?;
     Ok(())
 }
 
 pub fn undo(ws: &Workspace, expected_head: &str, action_id: &str) -> Result<Option<String>> {
+    let _lock = ws.acquire_planning_lock()?;
     let mut session = latest_open_session(ws)?;
     let (receipt, completed) = begin_action(
         ws,
         &mut session,
-        "undo",
+        PlanningActionKind::Undo,
         action_id,
         Some(expected_head),
         expected_head,
     )?;
     if completed {
         return Ok((!receipt.result_id.is_empty()).then_some(receipt.result_id));
+    }
+    if let Some(effect) = linked_action_event(
+        ws,
+        &session.session_id,
+        action_id,
+        &receipt.request_digest,
+        PlanningEventType::DraftUndo,
+    )? {
+        if effect.draft_revision_id != expected_head {
+            return Err(reject_action(
+                ws,
+                &mut session,
+                receipt,
+                "prepared undo effect linkage mismatch",
+            )?);
+        }
+        let parent =
+            (!effect.related_revision_id.is_empty()).then_some(effect.related_revision_id.clone());
+        if session.current_head.as_deref() == Some(expected_head) {
+            let previous = session.clone();
+            session.current_head = parent.clone();
+            ws.save_planning_session_cas(&previous, &session)?;
+        } else if session.current_head != parent {
+            return Err(reject_action(
+                ws,
+                &mut session,
+                receipt,
+                "prepared undo effect conflicts with current head",
+            )?);
+        }
+        complete_action(
+            ws,
+            &mut session,
+            receipt,
+            parent.as_deref().unwrap_or(""),
+            &effect,
+        )?;
+        return Ok(parent);
     }
     if !expected_head_matches(&session, Some(expected_head)) {
         return Err(reject_action(ws, &mut session, receipt, "stale_head")?);
@@ -828,21 +1097,30 @@ pub fn undo(ws: &Workspace, expected_head: &str, action_id: &str) -> Result<Opti
             )?)
         }
     };
-    append_event(
+    let effect = append_event(
         ws,
         &mut session,
-        "draft.undo",
+        PlanningEventType::DraftUndo,
         "user",
         EventFields {
             action_id,
+            action_request_digest: &receipt.request_digest,
             draft_revision_id: expected_head,
             related_revision_id: parent.as_deref().unwrap_or(""),
             ..EventFields::default()
         },
     )?;
+    maybe_crash("action_after_effect");
+    let previous = session.clone();
     session.current_head = parent.clone();
-    ws.save_planning_session(&session)?;
-    complete_action(ws, &mut session, receipt, parent.as_deref().unwrap_or(""))?;
+    ws.save_planning_session_cas(&previous, &session)?;
+    complete_action(
+        ws,
+        &mut session,
+        receipt,
+        parent.as_deref().unwrap_or(""),
+        &effect,
+    )?;
     Ok(parent)
 }
 
@@ -855,11 +1133,12 @@ pub fn record_answer(
     if message.trim().is_empty() {
         bail!("planning answer must not be empty");
     }
+    let _lock = ws.acquire_planning_lock()?;
     let mut session = latest_open_session(ws)?;
     let (receipt, completed) = begin_action(
         ws,
         &mut session,
-        "answer",
+        PlanningActionKind::Answer,
         action_id,
         expected_head,
         message.trim(),
@@ -867,23 +1146,46 @@ pub fn record_answer(
     if completed {
         return Ok(session);
     }
+    if let Some(effect) = linked_action_event(
+        ws,
+        &session.session_id,
+        action_id,
+        &receipt.request_digest,
+        PlanningEventType::UserMessage,
+    )? {
+        if effect.message != message.trim()
+            || effect.related_revision_id != expected_head.unwrap_or("")
+        {
+            return Err(reject_action(
+                ws,
+                &mut session,
+                receipt,
+                "prepared answer effect linkage mismatch",
+            )?);
+        }
+        let session_id = session.session_id.clone();
+        complete_action(ws, &mut session, receipt, &session_id, &effect)?;
+        return Ok(session);
+    }
     if !expected_head_matches(&session, expected_head) {
         return Err(reject_action(ws, &mut session, receipt, "stale_head")?);
     }
-    append_event(
+    let effect = append_event(
         ws,
         &mut session,
-        "user.message",
+        PlanningEventType::UserMessage,
         "user",
         EventFields {
             action_id,
+            action_request_digest: &receipt.request_digest,
             message: message.trim(),
             related_revision_id: expected_head.unwrap_or(""),
             ..EventFields::default()
         },
     )?;
+    maybe_crash("action_after_effect");
     let session_id = session.session_id.clone();
-    complete_action(ws, &mut session, receipt, &session_id)?;
+    complete_action(ws, &mut session, receipt, &session_id, &effect)?;
     Ok(session)
 }
 
@@ -926,13 +1228,49 @@ fn activated_records(
 }
 
 pub fn confirm(ws: &Workspace, expected_head: &str, action_id: &str) -> Result<ActivationReceipt> {
+    confirm_with_policy(ws, expected_head, action_id, true)
+}
+
+fn confirm_express(
+    ws: &Workspace,
+    expected_head: &str,
+    action_id: &str,
+) -> Result<ActivationReceipt> {
+    confirm_with_policy(ws, expected_head, action_id, false)
+}
+
+fn confirm_with_policy(
+    ws: &Workspace,
+    expected_head: &str,
+    action_id: &str,
+    protect_unfinished_active_queue: bool,
+) -> Result<ActivationReceipt> {
+    let _lock = ws.acquire_planning_lock()?;
     let mut session = ws
         .load_latest_planning_session()?
         .ok_or_else(|| anyhow!("no planning session; run `yardlet new \"...\"` first"))?;
+    let requested_digest = action_request_digest(
+        PlanningActionKind::Confirm,
+        action_id,
+        Some(expected_head),
+        expected_head,
+    )?;
+    let prepared_replay = ws
+        .load_planning_action(&session.session_id, action_id)?
+        .is_some_and(|receipt| {
+            receipt.action == PlanningActionKind::Confirm
+                && receipt.status == PlanningActionStatus::Prepared
+                && receipt.request_digest == requested_digest
+        });
+    if !prepared_replay {
+        // A new confirmation may only inspect a valid active snapshot. A
+        // corrupt guard is an error, never a reason to archive and overwrite.
+        validate_active_activation(ws)?;
+    }
     let (mut action, completed) = begin_action(
         ws,
         &mut session,
-        "confirm",
+        PlanningActionKind::Confirm,
         action_id,
         Some(expected_head),
         expected_head,
@@ -970,16 +1308,23 @@ pub fn confirm(ws: &Workspace, expected_head: &str, action_id: &str) -> Result<A
         return Err(reject_action(ws, &mut session, action, "stale_head")?);
     }
     let active_queue = ws.load_queue()?;
-    if active_queue
-        .tasks
-        .iter()
-        .any(|task| task.state == TaskState::Running)
+    if active_queue.tasks.iter().any(|task| {
+        task.state == TaskState::Running
+            || (protect_unfinished_active_queue
+                && matches!(
+                    task.state,
+                    TaskState::Queued
+                        | TaskState::NeedsUser
+                        | TaskState::Partial
+                        | TaskState::Blocked
+                ))
+    }) && !prepared_replay
     {
         return Err(reject_action(
             ws,
             &mut session,
             action,
-            "running_queue_isolated",
+            "active_queue_not_drained: running_queue_isolated",
         )?);
     }
     let revision = match ws.load_draft_revision(&session.session_id, expected_head) {
@@ -1004,8 +1349,9 @@ pub fn confirm(ws: &Workspace, expected_head: &str, action_id: &str) -> Result<A
     let first_attempt = action.result_id.is_empty();
     let confirmation_id = if first_attempt {
         let id = new_id("cnf");
+        let previous = action.clone();
         action.result_id = id.clone();
-        ws.save_planning_action(&action)?;
+        ws.save_planning_action_cas(&previous, &action)?;
         id
     } else {
         action.result_id.clone()
@@ -1013,14 +1359,16 @@ pub fn confirm(ws: &Workspace, expected_head: &str, action_id: &str) -> Result<A
     append_action_event_once(
         ws,
         &mut session,
-        "draft.confirm.prepared",
+        PlanningEventType::DraftConfirmPrepared,
         "user",
         EventFields {
             action_id,
+            action_request_digest: &action.request_digest,
             draft_revision_id: expected_head,
             ..EventFields::default()
         },
     )?;
+    maybe_crash("confirm_after_prepare");
     ws.require_confirmed_activation()?;
     let (intent, queue) = activated_records(&session, &revision, &confirmation_id)?;
     let activation = ActivationReceipt {
@@ -1037,30 +1385,37 @@ pub fn confirm(ws: &Workspace, expected_head: &str, action_id: &str) -> Result<A
         status: "committed".to_string(),
     };
 
-    if first_attempt && ws.load_intent()?.is_some() {
-        crate::report::archive_intent(ws)?;
+    let (current_intent_text, current_queue_text) = ws.load_active_snapshot_texts()?;
+    let current_intent_digest = digest(&current_intent_text)?;
+    let current_queue_digest = digest(&current_queue_text)?;
+    let expected_intent_digest = digest(&intent)?;
+    let expected_queue_digest = digest(&queue)?;
+    let current_intent_matches_output = match ws.load_activated_intent()? {
+        Some(existing) => digest(&existing)? == expected_intent_digest,
+        None => false,
+    };
+    let current_queue_matches_output = match ws.load_activated_queue()? {
+        Some(existing) => digest(&existing)? == expected_queue_digest,
+        None => false,
+    };
+    if current_intent_digest != action.prior_intent_digest && !current_intent_matches_output {
+        return Err(reject_action(
+            ws,
+            &mut session,
+            action,
+            "interrupted promotion intent snapshot conflicts with prepare",
+        )?);
     }
-    if !first_attempt {
-        if let Some(existing) = ws.load_activated_intent()? {
-            if digest(&existing)? != digest(&intent)? {
-                return Err(reject_action(
-                    ws,
-                    &mut session,
-                    action,
-                    "interrupted promotion intent snapshot conflicts with prepare",
-                )?);
-            }
-        }
-        if let Some(existing) = ws.load_activated_queue()? {
-            if digest(&existing)? != digest(&queue)? {
-                return Err(reject_action(
-                    ws,
-                    &mut session,
-                    action,
-                    "interrupted promotion queue snapshot conflicts with prepare",
-                )?);
-            }
-        }
+    if current_queue_digest != action.prior_queue_digest && !current_queue_matches_output {
+        return Err(reject_action(
+            ws,
+            &mut session,
+            action,
+            "interrupted promotion queue snapshot conflicts with prepare",
+        )?);
+    }
+    if current_intent_digest == action.prior_intent_digest && ws.load_intent()?.is_some() {
+        crate::report::archive_intent(ws)?;
     }
     if let Some(existing) = ws.load_activation(&confirmation_id)? {
         if digest(&existing)? != digest(&activation)? {
@@ -1072,26 +1427,40 @@ pub fn confirm(ws: &Workspace, expected_head: &str, action_id: &str) -> Result<A
             )?);
         }
     }
-    ws.save_active_promotion(&intent, &queue)?;
+    ws.save_activated_intent_snapshot(&intent)?;
+    maybe_crash("confirm_after_intent_write");
+    ws.save_activated_queue_snapshot(&queue)?;
     ws.save_activation(&activation)?;
+    maybe_crash("confirm_after_activation_write");
     if session.lifecycle == PlanningLifecycle::Open {
+        let previous = session.clone();
         session.lifecycle = PlanningLifecycle::Confirmed;
         session.confirmation_id = Some(confirmation_id.clone());
-        ws.save_planning_session(&session)?;
+        ws.save_planning_session_cas(&previous, &session)?;
     }
-    append_action_event_once(
+    let effect = append_action_event_once(
         ws,
         &mut session,
-        "draft.confirmed",
+        PlanningEventType::DraftConfirmed,
         "system",
         EventFields {
             action_id,
+            action_request_digest: &action.request_digest,
             draft_revision_id: expected_head,
             related_revision_id: &confirmation_id,
             ..EventFields::default()
         },
-    )?;
-    complete_action(ws, &mut session, action, &confirmation_id)?;
+    )?
+    .or(linked_action_event(
+        ws,
+        &session.session_id,
+        action_id,
+        &action.request_digest,
+        PlanningEventType::DraftConfirmed,
+    )?)
+    .ok_or_else(|| anyhow!("confirmed action effect event is missing"))?;
+    maybe_crash("confirm_after_effect_before_completion");
+    complete_action(ws, &mut session, action, &confirmation_id, &effect)?;
     validate_active_activation(ws)?;
     Ok(activation)
 }
@@ -1101,12 +1470,15 @@ pub fn activate_express_draft(
     goal: &str,
     content: PlanningDraftContent,
 ) -> Result<ActivationReceipt> {
-    let session = create_session_with_ids(
-        ws,
-        goal,
-        content.intent.id.clone(),
-        content.queue.queue_id.clone(),
-    )?;
+    let session = {
+        let _lock = ws.acquire_planning_lock()?;
+        create_session_with_ids(
+            ws,
+            goal,
+            content.intent.id.clone(),
+            content.queue.queue_id.clone(),
+        )?
+    };
     validate_draft(&session, &content)?;
     let proposal = record_worker_proposal(
         ws,
@@ -1123,7 +1495,7 @@ pub fn activate_express_draft(
         None,
         &new_id("act_express_accept"),
     )?;
-    confirm(
+    confirm_express(
         ws,
         &accepted.draft_revision_id,
         &new_id("act_express_confirm"),
@@ -1234,21 +1606,36 @@ pub fn validate_active_activation(ws: &Workspace) -> Result<ActivationGate> {
         .load_planning_action(&activation.session_id, &activation.action_id)?
         .ok_or_else(|| inconsistent("confirm action receipt is missing"))?;
     let expected_action_digest = action_request_digest(
-        "confirm",
+        PlanningActionKind::Confirm,
         &activation.action_id,
         Some(&activation.draft_revision_id),
         &activation.draft_revision_id,
     )?;
     if action.session_id != activation.session_id
         || action.action_id != activation.action_id
-        || action.action != "confirm"
-        || action.status != "completed"
+        || action.action != PlanningActionKind::Confirm
+        || action.status != PlanningActionStatus::Completed
         || action.result_id != activation.confirmation_id
         || action.request_digest != expected_action_digest
+        || action.effect_event_type != Some(PlanningEventType::DraftConfirmed)
+        || action.effect_event_id.is_empty()
     {
         return Err(inconsistent(
             "activation does not match a completed confirm action receipt",
         ));
+    }
+    let effect = ws
+        .load_planning_events(&activation.session_id)?
+        .into_iter()
+        .find(|event| event.event_id == action.effect_event_id)
+        .ok_or_else(|| inconsistent("confirm action effect event is missing"))?;
+    if effect.event_type != PlanningEventType::DraftConfirmed
+        || effect.action_id != action.action_id
+        || effect.action_request_digest != action.request_digest
+        || effect.draft_revision_id != activation.draft_revision_id
+        || effect.related_revision_id != activation.confirmation_id
+    {
+        return Err(inconsistent("confirm action effect event linkage mismatch"));
     }
     if activation.intent_digest != digest(&intent)? {
         return Err(inconsistent("active intent digest mismatch"));
@@ -1308,13 +1695,11 @@ pub fn active_is_confirmed_or_running(ws: &Workspace) -> Result<bool> {
     {
         return Ok(true);
     }
-    Ok(matches!(
-        validate_active_activation(ws),
-        Ok(ActivationGate::Confirmed)
-    ))
+    Ok(validate_active_activation(ws)? == ActivationGate::Confirmed)
 }
 
 pub fn projection(ws: &Workspace) -> Result<PlanningProjection> {
+    let _lock = ws.acquire_planning_lock()?;
     let session = ws
         .load_latest_planning_session()?
         .ok_or_else(|| anyhow!("no planning session; run `yardlet new \"...\"` first"))?;
@@ -1324,8 +1709,10 @@ pub fn projection(ws: &Workspace) -> Result<PlanningProjection> {
         .iter()
         .filter(|event| {
             matches!(
-                event.event_type.as_str(),
-                "draft.accepted" | "draft.revised" | "draft.rejected"
+                event.event_type,
+                PlanningEventType::DraftAccepted
+                    | PlanningEventType::DraftRevised
+                    | PlanningEventType::DraftRejected
             )
         })
         .map(|event| event.proposal_id.as_str())
@@ -1348,15 +1735,15 @@ pub fn projection(ws: &Workspace) -> Result<PlanningProjection> {
         );
     let channel_turn_count = events
         .iter()
-        .filter(|event| event.event_type == "user.message")
+        .filter(|event| event.event_type == PlanningEventType::UserMessage)
         .count();
     let rejected_proposal_count = events
         .iter()
-        .filter(|event| event.event_type == "draft.rejected")
+        .filter(|event| event.event_type == PlanningEventType::DraftRejected)
         .count();
     let undo_count = events
         .iter()
-        .filter(|event| event.event_type == "draft.undo")
+        .filter(|event| event.event_type == PlanningEventType::DraftUndo)
         .count();
     Ok(PlanningProjection {
         session,
@@ -1481,7 +1868,8 @@ queue:
                 }
                 _ => unreachable!(),
             }
-            ws.save_active_promotion(&intent, &queue).unwrap();
+            ws.save_activated_intent_snapshot(&intent).unwrap();
+            ws.save_activated_queue_snapshot(&queue).unwrap();
             crate::state::save_yaml(&ws.activation_path(&receipt.confirmation_id), &receipt)
                 .unwrap();
             let error = validate_active_activation(&ws).unwrap_err().to_string();

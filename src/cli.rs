@@ -1120,11 +1120,13 @@ fn show_planning(ws: &Workspace, json: bool) -> Result<()> {
         "Planning session {} [{:?}]",
         projection.session.session_id, projection.session.lifecycle
     );
-    for event in projection
-        .events
-        .iter()
-        .filter(|event| matches!(event.event_type.as_str(), "user.message" | "worker.message"))
-    {
+    for event in projection.events.iter().filter(|event| {
+        matches!(
+            event.event_type,
+            crate::schemas::PlanningEventType::UserMessage
+                | crate::schemas::PlanningEventType::WorkerMessage
+        )
+    }) {
         println!("  {:>6}  {}", event.actor, event.message);
     }
     println!(

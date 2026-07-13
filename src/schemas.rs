@@ -271,6 +271,36 @@ pub struct DraftRevision {
     pub content: PlanningDraftContent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlanningEventType {
+    #[serde(rename = "session.opened")]
+    SessionOpened,
+    #[serde(rename = "user.message")]
+    UserMessage,
+    #[serde(rename = "worker.message")]
+    WorkerMessage,
+    #[serde(rename = "draft.proposed")]
+    DraftProposed,
+    #[serde(rename = "draft.accepted")]
+    DraftAccepted,
+    #[serde(rename = "draft.revised")]
+    DraftRevised,
+    #[serde(rename = "draft.rejected")]
+    DraftRejected,
+    #[serde(rename = "draft.undo")]
+    DraftUndo,
+    #[serde(rename = "draft.confirm.prepared")]
+    DraftConfirmPrepared,
+    #[serde(rename = "draft.confirmed")]
+    DraftConfirmed,
+    #[serde(rename = "action.requested")]
+    ActionRequested,
+    #[serde(rename = "action.completed")]
+    ActionCompleted,
+    #[serde(rename = "action.rejected")]
+    ActionRejected,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanningEvent {
     pub schema_version: u32,
@@ -278,10 +308,12 @@ pub struct PlanningEvent {
     pub session_id: String,
     pub seq: u64,
     #[serde(rename = "type")]
-    pub event_type: String,
+    pub event_type: PlanningEventType,
     pub actor: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub action_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub action_request_digest: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub message: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -293,18 +325,44 @@ pub struct PlanningEvent {
     pub recorded_at: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningActionKind {
+    Accept,
+    Reject,
+    Undo,
+    Answer,
+    Confirm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningActionStatus {
+    Prepared,
+    Completed,
+    Rejected,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanningActionReceipt {
     pub schema_version: u32,
     pub action_id: String,
     pub session_id: String,
-    pub action: String,
+    pub action: PlanningActionKind,
     pub request_digest: String,
-    pub status: String,
+    pub status: PlanningActionStatus,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub result_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effect_event_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_event_type: Option<PlanningEventType>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prior_intent_digest: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prior_queue_digest: String,
 }
 
 /// Intent snapshot carrying the activation linkage. Flattening keeps the
