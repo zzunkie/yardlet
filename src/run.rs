@@ -25,6 +25,8 @@ use crate::state::{self, append_str, write_str, Workspace};
 use crate::ui::i18n::{self, Lang};
 use crate::{compact, evaluator, routing, telemetry, workers};
 
+pub(crate) use crate::state::IntegrationProvenance;
+
 /// A live worker session a previous task finished in, offered to the next
 /// task: same worker + dependency link = the worker keeps its hot context
 /// (P1 — the bounded-task model without the cold-boot tax).
@@ -168,14 +170,31 @@ fn prepare_serial_worktree(
         Ok(SerialWorktree {
             path: path.clone(),
             branch: branch.clone(),
-            baseline_oid,
+            baseline_oid: baseline_oid.clone(),
             worker_run_dir,
         })
     })();
-    if prepared.is_err() {
-        crate::parallel::remove_worktree(&ws.root, &path, &branch);
+    match prepared {
+        Ok(owned) => {
+            let receipt = state::SerialIntegrationReceipt {
+                schema_version: 1,
+                run_id: run_id.to_string(),
+                task_id: task_id.to_string(),
+                worktree: path.display().to_string(),
+                branch,
+                baseline_oid,
+            };
+            if let Err(error) = ws.save_serial_integration_receipt(&receipt) {
+                crate::parallel::remove_worktree(&ws.root, &path, &receipt.branch);
+                return Err(error);
+            }
+            Ok(owned)
+        }
+        Err(error) => {
+            crate::parallel::remove_worktree(&ws.root, &path, &branch);
+            Err(error)
+        }
     }
-    prepared
 }
 
 fn seeded_canonical_file_unchanged(seed: &std::path::Path, current: &std::path::Path) -> bool {
@@ -311,12 +330,13 @@ fn serial_worktree_evidence(
     })
 }
 
-const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 14] = [
+const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 15] = [
     "run.yaml",
     "task-packet.md",
     "worker.pid",
     "worker-output.log",
     "git-finish.json",
+    "git-integration.json",
     "feedback.json",
     "canonical-state-seed",
     "cancelled",
@@ -404,6 +424,18 @@ fn remove_unused_serial_worktree(ws: &Workspace, owned: Option<&SerialWorktree>)
     }
 }
 
+fn cleanup_cancelled_serial_worktree(ws: &Workspace, owned: Option<&SerialWorktree>) {
+    if let Some(owned) = owned {
+        let _ = crate::parallel::cleanup_integrated_worktree(
+            &ws.root,
+            &owned.path,
+            &owned.branch,
+            &owned.baseline_oid,
+            IntegrationProvenance::SerialCoreStaged,
+        );
+    }
+}
+
 fn run_event_lang(ws: &Workspace) -> Lang {
     let config_lang = ws
         .load_config()
@@ -486,9 +518,29 @@ pub(crate) struct RunRecord {
     /// First parent of integration_oid and required remote OID before push.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub integration_base_oid: String,
+    /// Exact isolated commit used as the merge's second parent. Cleanup may
+    /// delete only refs that still point to this OID.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub integration_worker_oid: String,
+    /// Identifies the core-controlled integration protocol. Unknown legacy
+    /// parallel runs are handled only through the marker-free parallel path.
+    #[serde(default, skip_serializing_if = "is_unknown_integration_provenance")]
+    pub integration_provenance: IntegrationProvenance,
+    /// Set only after the owned worktree and refs were reconciled. A false
+    /// value makes cleanup restartable after any process interruption.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub integration_cleanup_complete: bool,
     /// Exact commits newly reachable from baseline through integration_oid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned_oids: Vec<String>,
+}
+
+fn is_unknown_integration_provenance(value: &IntegrationProvenance) -> bool {
+    *value == IntegrationProvenance::Unknown
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -767,6 +819,13 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             .unwrap_or_default(),
         integration_oid: String::new(),
         integration_base_oid: String::new(),
+        integration_worker_oid: String::new(),
+        integration_provenance: if serial_worktree.is_some() {
+            IntegrationProvenance::SerialCoreStaged
+        } else {
+            IntegrationProvenance::Unknown
+        },
+        integration_cleanup_complete: false,
         owned_oids: Vec::new(),
     };
     state::save_yaml(&run_dir.join("run.yaml"), &record)?;
@@ -866,7 +925,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 TransitionActor::System,
             ),
         );
-        serial_cleanup.cleanup_now();
+        cleanup_cancelled_serial_worktree(ws, serial_worktree.as_ref());
         return Ok(RunReport {
             run_id: run_id.clone(),
             task_id: task.id.clone(),
@@ -949,6 +1008,10 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         session_id.as_deref(),
         chained,
     )?;
+    // From this point the worktree may contain completed or partially completed
+    // worker work. Any import/finalization error must retain it for recovery;
+    // the guard is only for failures before a worker actually ran.
+    serial_cleanup.disarm();
     import_worker_run_artifacts(worker_run_dir, &run_dir)?;
     if active_worker_id == "codex" && session_id.is_none() {
         session_id = outcome.session_id.clone();
@@ -1008,7 +1071,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             TransitionActor::System,
         )?;
         lines.push(format!("stopped by user; {} requeued", task.id));
-        serial_cleanup.cleanup_now();
+        cleanup_cancelled_serial_worktree(ws, serial_worktree.as_ref());
         return Ok(RunReport {
             run_id: run_id.clone(),
             task_id: task.id.clone(),
@@ -1124,7 +1187,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             TransitionActor::System,
         )?;
         lines.push(format!("stopped by user; {} requeued", task.id));
-        serial_cleanup.cleanup_now();
+        cleanup_cancelled_serial_worktree(ws, serial_worktree.as_ref());
         return Ok(RunReport {
             run_id: run_id.clone(),
             task_id: task.id.clone(),
@@ -1205,6 +1268,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             expected_tip_oid: serial_evidence
                 .as_ref()
                 .map(|evidence| evidence.merge_target_oid.as_str()),
+            provenance: IntegrationProvenance::SerialCoreStaged,
             auto_commit: config.auto_commit,
         }),
     })?;
@@ -2054,10 +2118,15 @@ fn pending_git_finishes(ws: &Workspace, queue: &WorkQueue) -> Vec<PendingGitFini
         let Ok(run) = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")) else {
             continue;
         };
-        if run.intent_id != queue.intent_id
-            || !queue.tasks.iter().any(|task| task.id == run.task_id)
-            || !run_dir.join("result.json").exists()
-        {
+        let Some(task_state) = queue
+            .tasks
+            .iter()
+            .find(|task| task.id == run.task_id)
+            .map(|task| task.state)
+        else {
+            continue;
+        };
+        if run.intent_id != queue.intent_id || !run_dir.join("result.json").exists() {
             continue;
         }
         let finish = ws.load_git_finish_record(&run_dir).ok();
@@ -2080,12 +2149,19 @@ fn pending_git_finishes(ws: &Workspace, queue: &WorkQueue) -> Vec<PendingGitFini
                 )
             }
         };
-        if !auto_push
-            || finish
-                .as_ref()
-                .is_some_and(|record| record.status.verified_complete())
-            || expected_oid.is_empty()
-        {
+        // A verified external finish is only globally terminal once the queue
+        // and worker-writable run projection agree. A crash can land after the
+        // authoritative Pushed/AlreadyApplied checkpoint but before sealing a
+        // previously Partial run; include that mismatch so recovery re-derives
+        // remote truth, repairs the projection, and converges without pushing
+        // again.
+        let verified_everywhere = finish
+            .as_ref()
+            .is_some_and(|record| record.status.verified_complete())
+            && task_state == TaskState::Done
+            && run.state == "done"
+            && run.completed_at.is_some();
+        if !auto_push || verified_everywhere || expected_oid.is_empty() {
             continue;
         }
         pending.push(PendingGitFinish {
@@ -2213,6 +2289,379 @@ fn import_completed_serial_staging(ws: &Workspace) {
     }
 }
 
+fn registered_recovery_worktree_matches(
+    ws: &Workspace,
+    worktree: &std::path::Path,
+    branch: &str,
+    run_id: &str,
+    task_id: &str,
+    allow_serial_transaction: bool,
+) -> bool {
+    let expected = ws.agents_dir().join("worktrees").join(run_id);
+    let expected_branch = format!("yard/{}/{}", task_id.to_lowercase(), run_id);
+    if worktree != expected || branch != expected_branch {
+        return false;
+    }
+    let Ok(metadata) = std::fs::symlink_metadata(worktree) else {
+        return false;
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    let Some(actual) = std::fs::canonicalize(worktree).ok() else {
+        return false;
+    };
+    let Some(owned_root) = std::fs::canonicalize(ws.agents_dir().join("worktrees")).ok() else {
+        return false;
+    };
+    if actual != owned_root.join(run_id) {
+        return false;
+    }
+    let Ok(listed) = git_stdout(&ws.root, &["worktree", "list", "--porcelain"]) else {
+        return false;
+    };
+    // Git reports canonical worktree paths (for example `/private/var` on
+    // macOS even when the caller used `/var`), so compare against the already
+    // validated canonical owned path rather than its lexical spelling.
+    let expected_path = actual.display().to_string();
+    let expected_ref = format!("refs/heads/{branch}");
+    let expected_transaction_ref = format!("refs/heads/yardlet-txn/{branch}");
+    listed.split("\n\n").any(|entry| {
+        let mut path_matches = false;
+        let mut branch_matches = false;
+        for line in entry.lines() {
+            path_matches |= line
+                .strip_prefix("worktree ")
+                .is_some_and(|path| path == expected_path);
+            branch_matches |= line.strip_prefix("branch ").is_some_and(|reference| {
+                reference == expected_ref
+                    || (allow_serial_transaction && reference == expected_transaction_ref)
+            });
+        }
+        path_matches && branch_matches
+    })
+}
+
+fn recovery_integration_provenance(
+    ws: &Workspace,
+    record: Option<&RunRecord>,
+    run_id: &str,
+    task_id: &str,
+    worktree: &std::path::Path,
+    branch: &str,
+) -> IntegrationProvenance {
+    if ws
+        .checkpoints_dir()
+        .join("no-change")
+        .join(format!("{run_id}.yaml"))
+        .exists()
+    {
+        return IntegrationProvenance::Unknown;
+    }
+    let Some(record) = record else {
+        return IntegrationProvenance::Unknown;
+    };
+    if record.run_id != run_id
+        || record.task_id != task_id
+        || record.worktree != worktree.display().to_string()
+        || (!record.worktree_branch.is_empty() && record.worktree_branch != branch)
+    {
+        return IntegrationProvenance::Unknown;
+    }
+    let receipt = ws.load_serial_integration_receipt(run_id).ok();
+    match (
+        record.serial_isolated,
+        record.integration_provenance,
+        receipt,
+    ) {
+        (true, IntegrationProvenance::SerialCoreStaged, Some(receipt))
+            if receipt.schema_version == 1
+                && receipt.run_id == run_id
+                && receipt.task_id == task_id
+                && receipt.worktree == worktree.display().to_string()
+                && receipt.branch == branch
+                && receipt.baseline_oid == record.baseline_oid
+                && worktree.file_name().and_then(|name| name.to_str()) == Some(run_id)
+                && registered_recovery_worktree_matches(
+                    ws, worktree, branch, run_id, task_id, true,
+                ) =>
+        {
+            IntegrationProvenance::SerialCoreStaged
+        }
+        (
+            false,
+            IntegrationProvenance::ParallelWorkerDirect | IntegrationProvenance::Unknown,
+            None,
+        ) if registered_recovery_worktree_matches(ws, worktree, branch, run_id, task_id, false) => {
+            IntegrationProvenance::ParallelWorkerDirect
+        }
+        _ => IntegrationProvenance::Unknown,
+    }
+}
+
+fn validate_integrated_cleanup_identity(
+    ws: &Workspace,
+    receipt: &state::IntegratedCleanupReceipt,
+) -> Result<(PathBuf, String, IntegrationProvenance)> {
+    if receipt.schema_version != 1
+        || receipt.run_id.is_empty()
+        || receipt.task_id.is_empty()
+        || receipt.intent_id.is_empty()
+        || receipt.worker.is_empty()
+        || receipt.integration_oid.is_empty()
+        || receipt.integration_base_oid.is_empty()
+        || receipt.integration_worker_oid.is_empty()
+        || receipt.branch != format!("yard/{}/{}", receipt.task_id.to_lowercase(), receipt.run_id)
+        || receipt.owned_oids.last() != Some(&receipt.integration_oid)
+        || receipt.provenance == IntegrationProvenance::Unknown
+    {
+        return Err(anyhow!("incomplete integrated-run ownership record"));
+    }
+    let worktree = PathBuf::from(&receipt.worktree);
+    if !worktree.starts_with(ws.agents_dir().join("worktrees"))
+        || worktree.file_name().and_then(|name| name.to_str()) != Some(receipt.run_id.as_str())
+    {
+        return Err(anyhow!(
+            "integrated worktree path is outside the owned run path"
+        ));
+    }
+    let parents = git_stdout(
+        &ws.root,
+        &["show", "-s", "--format=%P", &receipt.integration_oid],
+    )?;
+    let parents = parents.split_whitespace().collect::<Vec<_>>();
+    if parents.len() != 2
+        || parents[0] != receipt.integration_base_oid
+        || parents[1] != receipt.integration_worker_oid
+        || !receipt.owned_oids.contains(&receipt.integration_worker_oid)
+    {
+        return Err(anyhow!(
+            "integration commit parent projection does not match the run record"
+        ));
+    }
+    git_stdout(
+        &ws.root,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            &receipt.integration_oid,
+            "HEAD",
+        ],
+    )?;
+    if receipt.provenance == IntegrationProvenance::SerialCoreStaged {
+        let serial = ws.load_serial_integration_receipt(&receipt.run_id)?;
+        if serial.schema_version != 1
+            || serial.run_id != receipt.run_id
+            || serial.task_id != receipt.task_id
+            || serial.worktree != receipt.worktree
+            || serial.branch != receipt.branch
+            || serial.baseline_oid != receipt.baseline_oid
+        {
+            return Err(anyhow!("serial and integrated core receipts disagree"));
+        }
+    }
+    Ok((
+        worktree,
+        receipt.integration_worker_oid.clone(),
+        receipt.provenance,
+    ))
+}
+
+fn recovery_git_finish_ownership(
+    ws: &Workspace,
+    run_id: &str,
+    task_id: &str,
+) -> Option<crate::git_finish::GitFinishOwnership> {
+    let receipt = ws.load_integrated_cleanup_receipt(run_id).ok()?;
+    if receipt.run_id != run_id || receipt.task_id != task_id {
+        return None;
+    }
+    validate_integrated_cleanup_identity(ws, &receipt).ok()?;
+    Some(crate::git_finish::GitFinishOwnership {
+        baseline_oid: receipt.integration_base_oid,
+        expected_oid: receipt.integration_oid,
+        owned_oids: receipt.owned_oids,
+    })
+}
+
+fn validate_no_change_receipt(ws: &Workspace, receipt: &state::NoChangeReceipt) -> Result<PathBuf> {
+    if receipt.schema_version != 1
+        || receipt.run_id.is_empty()
+        || receipt.task_id.is_empty()
+        || receipt.intent_id.is_empty()
+        || receipt.worker.is_empty()
+        || receipt.baseline_oid.is_empty()
+        || receipt.worker_oid != receipt.baseline_oid
+        || receipt.branch != format!("yard/{}/{}", receipt.task_id.to_lowercase(), receipt.run_id)
+        || receipt.provenance == IntegrationProvenance::Unknown
+    {
+        return Err(anyhow!("incomplete no-change core receipt"));
+    }
+    let worktree = PathBuf::from(&receipt.worktree);
+    if worktree != ws.agents_dir().join("worktrees").join(&receipt.run_id) {
+        return Err(anyhow!("no-change worktree is outside the owned run path"));
+    }
+    git_stdout(
+        &ws.root,
+        &["merge-base", "--is-ancestor", &receipt.worker_oid, "HEAD"],
+    )?;
+    if receipt.provenance == IntegrationProvenance::SerialCoreStaged {
+        let serial = ws.load_serial_integration_receipt(&receipt.run_id)?;
+        if serial.schema_version != 1
+            || serial.run_id != receipt.run_id
+            || serial.task_id != receipt.task_id
+            || serial.worktree != receipt.worktree
+            || serial.branch != receipt.branch
+            || serial.baseline_oid != receipt.baseline_oid
+        {
+            return Err(anyhow!("serial and no-change core receipts disagree"));
+        }
+    }
+    Ok(worktree)
+}
+
+fn recovery_no_change_complete(ws: &Workspace, run_id: &str, task_id: &str) -> bool {
+    let Ok(receipt) = ws.load_no_change_receipt(run_id) else {
+        return false;
+    };
+    if receipt.run_id != run_id || receipt.task_id != task_id {
+        return false;
+    }
+    let Ok(worktree) = validate_no_change_receipt(ws, &receipt) else {
+        return false;
+    };
+    crate::parallel::cleanup_integrated_worktree(
+        &ws.root,
+        &worktree,
+        &receipt.branch,
+        &receipt.worker_oid,
+        receipt.provenance,
+    )
+    .complete
+}
+
+fn reconcile_no_change_outcomes(ws: &Workspace, msgs: &mut Vec<String>) {
+    let receipts = match ws.load_no_change_receipts() {
+        Ok(receipts) => receipts,
+        Err(error) => {
+            msgs.push(format!("retained incomplete no-change receipts: {error}"));
+            return;
+        }
+    };
+    for receipt in receipts {
+        let run_dir = ws.runs_dir().join(&receipt.run_id);
+        let worktree = match validate_no_change_receipt(ws, &receipt) {
+            Ok(worktree) => worktree,
+            Err(error) => {
+                msgs.push(format!(
+                    "{}: retained incomplete no-change cleanup: {error}",
+                    receipt.task_id
+                ));
+                continue;
+            }
+        };
+        // The run directory is worker-writable. Rebuild its identity from the
+        // core receipt before `latest_run_for` scans it below; otherwise a
+        // malformed or retargeted projection can make a completed no-op look
+        // abandoned and cause the worker to run again.
+        if let Err(error) = persist_no_change_projection(&run_dir, &receipt, false) {
+            msgs.push(format!(
+                "{}: could not repair no-change run projection: {error}",
+                receipt.task_id
+            ));
+            continue;
+        }
+        let cleanup = crate::parallel::cleanup_integrated_worktree(
+            &ws.root,
+            &worktree,
+            &receipt.branch,
+            &receipt.worker_oid,
+            receipt.provenance,
+        );
+        for warning in cleanup.warnings {
+            msgs.push(format!("{}: {warning}", receipt.task_id));
+        }
+        if let Err(error) = persist_no_change_projection(&run_dir, &receipt, cleanup.complete) {
+            msgs.push(format!(
+                "{}: could not persist no-change cleanup projection: {error}",
+                receipt.task_id
+            ));
+            continue;
+        }
+        if !cleanup.complete {
+            continue;
+        }
+        match crate::git_finish::finish_no_change_run(
+            ws,
+            &run_dir,
+            &receipt.run_id,
+            &receipt.task_id,
+            TaskState::Done,
+        ) {
+            Ok(record) if record.status.verified_complete() => {}
+            Ok(record) => msgs.push(format!(
+                "{}: no-change Git finish remains {}",
+                receipt.task_id,
+                record.status.as_str()
+            )),
+            Err(error) => msgs.push(format!(
+                "{}: could not persist no-change Git finish: {error}",
+                receipt.task_id
+            )),
+        }
+    }
+}
+
+fn reconcile_integrated_cleanups(ws: &Workspace, msgs: &mut Vec<String>) {
+    let receipts = match ws.load_integrated_cleanup_receipts() {
+        Ok(receipts) => receipts,
+        Err(error) => {
+            msgs.push(format!("retained incomplete Git cleanup receipts: {error}"));
+            return;
+        }
+    };
+    for receipt in receipts {
+        let run_dir = ws.runs_dir().join(&receipt.run_id);
+        let was_complete = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
+            .ok()
+            .is_some_and(|record| {
+                record.run_id == receipt.run_id
+                    && record.task_id == receipt.task_id
+                    && record.integration_oid == receipt.integration_oid
+                    && record.integration_worker_oid == receipt.integration_worker_oid
+                    && record.integration_cleanup_complete
+            });
+        let (worktree, worker_oid, provenance) =
+            match validate_integrated_cleanup_identity(ws, &receipt) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    msgs.push(format!(
+                        "{}: retained incomplete Git cleanup: {error}",
+                        receipt.task_id
+                    ));
+                    continue;
+                }
+            };
+        let cleanup = crate::parallel::cleanup_integrated_worktree(
+            &ws.root,
+            &worktree,
+            &receipt.branch,
+            &worker_oid,
+            provenance,
+        );
+        for warning in cleanup.warnings {
+            msgs.push(format!("{}: {warning}", receipt.task_id));
+        }
+        let _ = persist_integrated_cleanup_projection(&run_dir, &receipt, cleanup.complete);
+        if cleanup.complete && !was_complete {
+            msgs.push(format!(
+                "{}: reconciled integrated worktree cleanup",
+                receipt.task_id
+            ));
+        }
+    }
+}
+
 /// Recover tasks left "running" by an interrupted/quit session: if the task's
 /// latest run produced a result, evaluate it (keep the finished work); if its
 /// worker is still alive (quitting Yardlet does not kill workers), ADOPT it —
@@ -2235,6 +2684,10 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
     // crashed before importing those files, recover them before classifying the
     // run as abandoned, otherwise a completed worker would be invoked twice.
     import_completed_serial_staging(ws);
+    // Integration ownership is persisted before cleanup. Reconcile it even if
+    // the worktree path already vanished in the crash window before ref deletion.
+    reconcile_no_change_outcomes(ws, &mut msgs);
+    reconcile_integrated_cleanups(ws, &mut msgs);
     let event_lang = run_event_lang(ws);
     let billing = ws.load_billing().unwrap_or_default();
     let mut requeued = Vec::new();
@@ -2345,6 +2798,14 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                     expected_tip_oid: serial_evidence
                         .as_ref()
                         .map(|evidence| evidence.merge_target_oid.as_str()),
+                    provenance: recovery_integration_provenance(
+                        ws,
+                        run_record.as_ref(),
+                        &run_id,
+                        &id,
+                        w,
+                        &branch,
+                    ),
                     auto_commit: integration_enabled,
                 });
                 // Attribute the salvaged telemetry to the worker that actually
@@ -2443,7 +2904,9 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
 
 fn git_finish_recovery_needed(ws: &Workspace, run_dir: &std::path::Path) -> bool {
     if let Ok(record) = ws.load_git_finish_record(run_dir) {
-        return record.policy.auto_push && record.status.recoverable();
+        return record.policy.auto_push
+            && (record.status.recoverable()
+                || record.status == crate::git_finish::GitFinishStatus::NotNeeded);
     }
     state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
         .ok()
@@ -2791,6 +3254,9 @@ pub(crate) struct MergeBack<'a> {
     /// present, integration fails closed if the branch moved after evidence
     /// collection. Parallel and legacy runs without this binding pass None.
     pub expected_tip_oid: Option<&'a str>,
+    /// Selects the integration protocol. Serial core-staged runs may use their
+    /// trusted transaction record; parallel worker-direct runs never load it.
+    pub provenance: IntegrationProvenance,
     /// Serial runs obey the default-off auto_commit gate. Parallel batches
     /// already require integration and therefore pass true.
     pub auto_commit: bool,
@@ -3207,14 +3673,16 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // is kept for manual integration. The committed state below is this
     // post-merge state, so the queue and telemetry both record what really
     // happened.
-    let mut ownership = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
-        .ok()
-        .filter(|record| !record.integration_oid.is_empty())
-        .map(|record| crate::git_finish::GitFinishOwnership {
-            baseline_oid: record.integration_base_oid,
-            expected_oid: record.integration_oid,
-            owned_oids: record.owned_oids,
-        });
+    // Normal finalization starts with no ownership and receives it only from a
+    // successful integration below. Recovery may reconstruct it from the
+    // core-owned receipt outside the worker-writable run directory. The Git
+    // finish module independently prefers any earlier durable finish record.
+    let mut git_finish_not_needed =
+        flags.git_finish_recovery && recovery_no_change_complete(ws, run_id, &task.id);
+    let mut ownership = flags
+        .git_finish_recovery
+        .then(|| recovery_git_finish_ownership(ws, run_id, &task.id))
+        .flatten();
     if let Some(m) = &merge {
         if !m.auto_commit {
             let has_changes = evidence
@@ -3238,7 +3706,53 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     m.wt_path.display()
                 ));
             } else if next_state == TaskState::Done {
-                crate::parallel::remove_worktree(&ws.root, m.wt_path, m.branch);
+                let expected_tip = m
+                    .expected_tip_oid
+                    .filter(|oid| !oid.is_empty())
+                    .unwrap_or(m.baseline_oid);
+                if expected_tip != m.baseline_oid {
+                    next_state = TaskState::Partial;
+                    let _ = state::write_str(
+                        &run_dir.join("partial-reason"),
+                        "unintegrated_commit_retained",
+                    );
+                    lines.push(format!(
+                        "{}: unintegrated commit retained at {}",
+                        task.id,
+                        m.wt_path.display()
+                    ));
+                } else {
+                    let no_change_receipt = persist_no_change_receipt(
+                        ws,
+                        run_dir,
+                        run_id,
+                        &task.id,
+                        &intent_id,
+                        worker_id,
+                        m,
+                        expected_tip,
+                    )?;
+                    let cleanup = crate::parallel::cleanup_integrated_worktree(
+                        &ws.root,
+                        m.wt_path,
+                        m.branch,
+                        expected_tip,
+                        m.provenance,
+                    );
+                    for warning in cleanup.warnings {
+                        lines.push(format!("{}: {warning}", task.id));
+                    }
+                    persist_no_change_projection(run_dir, &no_change_receipt, cleanup.complete)?;
+                    if !cleanup.complete {
+                        next_state = TaskState::Partial;
+                        let _ = state::write_str(
+                            &run_dir.join("partial-reason"),
+                            "worktree_cleanup_changed",
+                        );
+                    } else {
+                        git_finish_not_needed = true;
+                    }
+                }
             } else {
                 lines.push(format!(
                     "{}: {} — worktree kept at {}",
@@ -3248,17 +3762,38 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                 ));
             }
         } else if next_state == TaskState::Done {
-            match crate::parallel::integrate_worktree(
-                &ws.root,
-                m.wt_path,
-                m.branch,
-                &task.id,
-                m.baseline_oid,
-                m.expected_tip_oid,
-            ) {
+            let integration = match m.provenance {
+                IntegrationProvenance::SerialCoreStaged => {
+                    crate::parallel::integrate_serial_worktree(
+                        &ws.root,
+                        m.wt_path,
+                        run_dir,
+                        run_id,
+                        m.branch,
+                        &task.id,
+                        m.baseline_oid,
+                        m.expected_tip_oid,
+                    )
+                }
+                IntegrationProvenance::ParallelWorkerDirect => {
+                    crate::parallel::integrate_parallel_worktree(
+                        &ws.root,
+                        m.wt_path,
+                        m.branch,
+                        &task.id,
+                        m.baseline_oid,
+                        m.expected_tip_oid,
+                    )
+                }
+                IntegrationProvenance::Unknown => Ok(crate::parallel::Integration::Conflict(
+                    "worktree integration provenance is missing or inconsistent".to_string(),
+                )),
+            };
+            match integration {
                 Ok(crate::parallel::Integration::Merged {
                     oid,
                     base_oid,
+                    worker_oid,
                     owned_oids,
                 }) => {
                     ownership = Some(crate::git_finish::GitFinishOwnership {
@@ -3266,16 +3801,69 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         expected_oid: oid.clone(),
                         owned_oids: owned_oids.clone(),
                     });
-                    persist_run_integration(run_dir, &base_oid, &oid, &owned_oids)?;
+                    let cleanup_receipt = persist_run_integration(
+                        ws,
+                        run_dir,
+                        run_id,
+                        &task.id,
+                        &intent_id,
+                        worker_id,
+                        m,
+                        &base_oid,
+                        &worker_oid,
+                        &oid,
+                        &owned_oids,
+                    )?;
                     lines.push(format!(
                         "{}: merged {} into the workspace",
                         task.id, m.branch
                     ));
-                    crate::parallel::remove_worktree(&ws.root, m.wt_path, m.branch);
+                    let cleanup = crate::parallel::cleanup_integrated_worktree(
+                        &ws.root,
+                        m.wt_path,
+                        m.branch,
+                        &worker_oid,
+                        m.provenance,
+                    );
+                    for warning in cleanup.warnings {
+                        lines.push(format!("{}: {warning}", task.id));
+                    }
+                    if cleanup.complete {
+                        persist_integrated_cleanup_projection(run_dir, &cleanup_receipt, true)?;
+                    }
                 }
-                Ok(crate::parallel::Integration::NoChanges) => {
-                    lines.push(format!("{}: no file changes to merge", task.id));
-                    crate::parallel::remove_worktree(&ws.root, m.wt_path, m.branch);
+                Ok(crate::parallel::Integration::NoChanges { worker_oid }) => {
+                    let no_change_receipt = persist_no_change_receipt(
+                        ws,
+                        run_dir,
+                        run_id,
+                        &task.id,
+                        &intent_id,
+                        worker_id,
+                        m,
+                        &worker_oid,
+                    )?;
+                    let cleanup = crate::parallel::cleanup_integrated_worktree(
+                        &ws.root,
+                        m.wt_path,
+                        m.branch,
+                        &worker_oid,
+                        m.provenance,
+                    );
+                    for warning in cleanup.warnings {
+                        lines.push(format!("{}: {warning}", task.id));
+                    }
+                    persist_no_change_projection(run_dir, &no_change_receipt, cleanup.complete)?;
+                    if cleanup.complete {
+                        lines.push(format!("{}: no file changes to merge", task.id));
+                        git_finish_not_needed = true;
+                    } else {
+                        next_state = TaskState::Partial;
+                        let _ = state::write_str(
+                            &run_dir.join("partial-reason"),
+                            "worktree_cleanup_changed",
+                        );
+                    }
                 }
                 Ok(crate::parallel::Integration::Conflict(why)) => {
                     next_state = TaskState::Partial;
@@ -3316,7 +3904,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // Git finish runs only after evaluation and worktree integration. The OID
     // is supplied only by the successful merge branch above, so a serial run,
     // no-op, conflict, or unrelated existing commit cannot acquire ownership.
-    let git_finish = if flags.git_finish_recovery {
+    let git_finish = if git_finish_not_needed {
+        crate::git_finish::finish_no_change_run(ws, run_dir, run_id, &task.id, next_state)?
+    } else if flags.git_finish_recovery {
         crate::git_finish::recover_owned_run(ws, run_dir, run_id, &task.id, next_state, ownership)?
     } else {
         crate::git_finish::finish_owned_run(ws, run_dir, run_id, &task.id, next_state, ownership)?
@@ -3562,27 +4152,206 @@ fn seal_run_record(
         worktree_branch: merge.map(|m| m.branch.to_string()).unwrap_or_default(),
         integration_oid: String::new(),
         integration_base_oid: String::new(),
+        integration_worker_oid: String::new(),
+        integration_provenance: merge
+            .map(|m| m.provenance)
+            .unwrap_or(IntegrationProvenance::Unknown),
+        integration_cleanup_complete: false,
         owned_oids: Vec::new(),
     });
-    rec.state = run_outcome_label(next_state).to_string();
+    // Never preserve identity or worktree-location fields from the
+    // worker-writable projection. These values are all known by the core at
+    // finalization time, and recovery uses them to select and clean up runs.
+    rec.schema_version = 1;
+    rec.run_id = run_id.to_string();
+    rec.task_id = task.id.clone();
+    rec.intent_id = intent_id.to_string();
     rec.worker = worker_id.to_string();
+    if let Some(merge) = merge {
+        apply_core_run_projection(
+            &mut rec,
+            CoreRunProjection {
+                run_id,
+                task_id: &task.id,
+                intent_id,
+                worker: worker_id,
+                worktree: merge.wt_path,
+                branch: merge.branch,
+                baseline_oid: merge.baseline_oid,
+                provenance: merge.provenance,
+            },
+        );
+    }
+    rec.state = run_outcome_label(next_state).to_string();
     rec.completed_at = Some(Local::now().to_rfc3339());
     if let Ok(text) = crate::yaml::to_string(&rec) {
         let _ = state::write_str_atomic(&path, &text);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn persist_run_integration(
+    ws: &Workspace,
     run_dir: &std::path::Path,
+    run_id: &str,
+    task_id: &str,
+    intent_id: &str,
+    worker_id: &str,
+    merge: &MergeBack<'_>,
     base_oid: &str,
+    worker_oid: &str,
     oid: &str,
     owned_oids: &[String],
+) -> Result<state::IntegratedCleanupReceipt> {
+    if run_dir != ws.runs_dir().join(run_id) {
+        return Err(anyhow!(
+            "integration run directory does not match its core identity"
+        ));
+    }
+    let receipt = state::IntegratedCleanupReceipt {
+        schema_version: 1,
+        run_id: run_id.to_string(),
+        task_id: task_id.to_string(),
+        intent_id: intent_id.to_string(),
+        worker: worker_id.to_string(),
+        worktree: merge.wt_path.display().to_string(),
+        branch: merge.branch.to_string(),
+        baseline_oid: merge.baseline_oid.to_string(),
+        integration_base_oid: base_oid.to_string(),
+        integration_worker_oid: worker_oid.to_string(),
+        integration_oid: oid.to_string(),
+        provenance: merge.provenance,
+        owned_oids: owned_oids.to_vec(),
+    };
+    // The external receipt is the cleanup trust root and must become durable
+    // before the worker-writable run record is projected.
+    ws.save_integrated_cleanup_receipt(&receipt)?;
+    persist_integrated_cleanup_projection(run_dir, &receipt, false)?;
+    Ok(receipt)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persist_no_change_receipt(
+    ws: &Workspace,
+    run_dir: &std::path::Path,
+    run_id: &str,
+    task_id: &str,
+    intent_id: &str,
+    worker_id: &str,
+    merge: &MergeBack<'_>,
+    worker_oid: &str,
+) -> Result<state::NoChangeReceipt> {
+    if run_dir != ws.runs_dir().join(run_id) || worker_oid != merge.baseline_oid {
+        return Err(anyhow!(
+            "no-change run identity is incomplete or inconsistent"
+        ));
+    }
+    let receipt = state::NoChangeReceipt {
+        schema_version: 1,
+        run_id: run_id.to_string(),
+        task_id: task_id.to_string(),
+        intent_id: intent_id.to_string(),
+        worker: worker_id.to_string(),
+        worktree: merge.wt_path.display().to_string(),
+        branch: merge.branch.to_string(),
+        baseline_oid: merge.baseline_oid.to_string(),
+        worker_oid: worker_oid.to_string(),
+        provenance: merge.provenance,
+    };
+    ws.save_no_change_receipt(&receipt)?;
+    persist_no_change_projection(run_dir, &receipt, false)?;
+    Ok(receipt)
+}
+
+#[derive(Clone, Copy)]
+struct CoreRunProjection<'a> {
+    run_id: &'a str,
+    task_id: &'a str,
+    intent_id: &'a str,
+    worker: &'a str,
+    worktree: &'a std::path::Path,
+    branch: &'a str,
+    baseline_oid: &'a str,
+    provenance: IntegrationProvenance,
+}
+
+fn apply_core_run_projection(record: &mut RunRecord, projection: CoreRunProjection<'_>) {
+    record.schema_version = 1;
+    record.run_id = projection.run_id.to_string();
+    record.task_id = projection.task_id.to_string();
+    record.intent_id = projection.intent_id.to_string();
+    record.worker = projection.worker.to_string();
+    if record.state.is_empty() {
+        record.state = "running".to_string();
+    }
+    record.worktree = projection.worktree.display().to_string();
+    record.worktree_branch = projection.branch.to_string();
+    record.serial_isolated = projection.provenance == IntegrationProvenance::SerialCoreStaged;
+    record.baseline_oid = projection.baseline_oid.to_string();
+    record.integration_provenance = projection.provenance;
+}
+
+fn persist_no_change_projection(
+    run_dir: &std::path::Path,
+    receipt: &state::NoChangeReceipt,
+    cleanup_complete: bool,
+) -> Result<()> {
+    if run_dir.file_name().and_then(|name| name.to_str()) != Some(receipt.run_id.as_str()) {
+        return Err(anyhow!(
+            "no-change run directory does not match its core identity"
+        ));
+    }
+    let path = run_dir.join("run.yaml");
+    let mut record: RunRecord = state::load_yaml(&path).unwrap_or_default();
+    let worktree = PathBuf::from(&receipt.worktree);
+    apply_core_run_projection(
+        &mut record,
+        CoreRunProjection {
+            run_id: &receipt.run_id,
+            task_id: &receipt.task_id,
+            intent_id: &receipt.intent_id,
+            worker: &receipt.worker,
+            worktree: &worktree,
+            branch: &receipt.branch,
+            baseline_oid: &receipt.baseline_oid,
+            provenance: receipt.provenance,
+        },
+    );
+    record.integration_oid.clear();
+    record.integration_base_oid.clear();
+    record.integration_worker_oid.clear();
+    record.owned_oids.clear();
+    record.integration_cleanup_complete = cleanup_complete;
+    state::write_str_atomic(&path, &crate::yaml::to_string(&record)?)
+}
+
+fn persist_integrated_cleanup_projection(
+    run_dir: &std::path::Path,
+    receipt: &state::IntegratedCleanupReceipt,
+    cleanup_complete: bool,
 ) -> Result<()> {
     let path = run_dir.join("run.yaml");
-    let mut record: RunRecord = state::load_yaml(&path)?;
-    record.integration_base_oid = base_oid.to_string();
-    record.integration_oid = oid.to_string();
-    record.owned_oids = owned_oids.to_vec();
+    let mut record: RunRecord = state::load_yaml(&path).unwrap_or_default();
+    let worktree = PathBuf::from(&receipt.worktree);
+    apply_core_run_projection(
+        &mut record,
+        CoreRunProjection {
+            run_id: &receipt.run_id,
+            task_id: &receipt.task_id,
+            intent_id: &receipt.intent_id,
+            worker: &receipt.worker,
+            worktree: &worktree,
+            branch: &receipt.branch,
+            baseline_oid: &receipt.baseline_oid,
+            provenance: receipt.provenance,
+        },
+    );
+    record.integration_base_oid = receipt.integration_base_oid.clone();
+    record.integration_worker_oid = receipt.integration_worker_oid.clone();
+    record.integration_oid = receipt.integration_oid.clone();
+    record.integration_provenance = receipt.provenance;
+    record.integration_cleanup_complete = cleanup_complete;
+    record.owned_oids = receipt.owned_oids.clone();
     state::write_str_atomic(&path, &crate::yaml::to_string(&record)?)
 }
 
@@ -3835,6 +4604,7 @@ mod tests {
             );
         }
         for status in [
+            crate::git_finish::GitFinishStatus::NotNeeded,
             crate::git_finish::GitFinishStatus::Pushed,
             crate::git_finish::GitFinishStatus::AlreadyApplied,
         ] {
@@ -4186,6 +4956,7 @@ mod tests {
             "WORKER-OUTPUT.LOG",
             "GIT-FINISH.JSON",
             "Git-Finish.Json",
+            "GIT-INTEGRATION.JSON",
             "FEEDBACK.JSON",
             "CANONICAL-STATE-SEED",
             "Canonical-State-Seed",
@@ -4246,6 +5017,8 @@ mod tests {
         for path in [
             staged.join("git-finish.json"),
             staged.join("nested/deep/git-finish.json"),
+            staged.join("git-integration.json"),
+            staged.join("nested/deep/git-integration.json"),
             staged.join("feedback.json"),
             staged.join("nested/deep/feedback.json"),
         ] {
@@ -4263,6 +5036,11 @@ mod tests {
         .unwrap();
 
         write_str(&canonical.join("git-finish.json"), "main finish\n").unwrap();
+        write_str(
+            &canonical.join("git-integration.json"),
+            "main transaction\n",
+        )
+        .unwrap();
         write_str(&canonical.join("feedback.json"), "main feedback\n").unwrap();
         write_str(
             &canonical.join("evidence/canonical-state-seed/intent-contract.yaml"),
@@ -4277,6 +5055,10 @@ mod tests {
             "main finish\n"
         );
         assert_eq!(
+            std::fs::read_to_string(canonical.join("git-integration.json")).unwrap(),
+            "main transaction\n"
+        );
+        assert_eq!(
             std::fs::read_to_string(canonical.join("feedback.json")).unwrap(),
             "main feedback\n"
         );
@@ -4288,6 +5070,7 @@ mod tests {
             "main seed\n"
         );
         assert!(!canonical.join("nested/deep/git-finish.json").exists());
+        assert!(!canonical.join("nested/deep/git-integration.json").exists());
         assert!(!canonical.join("nested/deep/feedback.json").exists());
         assert!(!canonical
             .join("nested/evidence/canonical-state-seed")
@@ -5265,7 +6048,7 @@ exit 0
     }
 
     #[test]
-    fn import_error_removes_owned_serial_worktree_and_branch() {
+    fn import_error_after_worker_run_retains_owned_serial_worktree() {
         let source = std::env::temp_dir().join(format!(
             "yard-serial-import-error-source-{}",
             std::process::id()
@@ -5306,7 +6089,109 @@ exit 0
         .err()
         .expect("removing the staging run directory must fail artifact import");
 
-        assert_serial_worktree_and_branch_removed(&ws, &only_run_dir(&ws));
+        let record: RunRecord = state::load_yaml(&only_run_dir(&ws).join("run.yaml")).unwrap();
+        assert!(std::path::Path::new(&record.worktree).exists());
+        assert!(
+            !git_stdout(&ws.root, &["branch", "--list", &record.worktree_branch])
+                .unwrap()
+                .trim()
+                .is_empty()
+        );
+        crate::parallel::remove_worktree(
+            &ws.root,
+            std::path::Path::new(&record.worktree),
+            &record.worktree_branch,
+        );
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn receipt_persist_error_after_merge_retains_worktree_and_refs() {
+        let source = std::env::temp_dir().join(format!(
+            "yard-receipt-persist-worker-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        let worker = write_worker_script(
+            &source,
+            "worker.sh",
+            r#"#!/bin/sh
+run_dir="$1"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+printf 'worker change\n' > receipt-owned.txt
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-RECEIPT-ERR",
+  "status": "done",
+  "validation": {"commands_run": [], "passed": true, "failures": []},
+  "compact_summary": "worker completed before receipt failure"
+}
+EOF
+printf '# handoff\n' > "$run_dir/handoff.md"
+"#,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&worker)
+        );
+        let ws = init_test_workspace("receipt-persist-error", &worker_yaml);
+        let mut config = ws.load_config().unwrap();
+        config.auto_commit = true;
+        state::save_yaml(&ws.config_path(), &config).unwrap();
+        let blocker = ws.checkpoints_dir().join("integrated-cleanup");
+        write_str(&blocker, "blocks receipt directory creation\n").unwrap();
+        let mut queued = task("YARD-RECEIPT-ERR", TaskState::Queued, 10, false);
+        queued.kind = "implementation".into();
+        ws.save_queue(&queue(vec![queued])).unwrap();
+
+        let error = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-RECEIPT-ERR".into()),
+                ..opts()
+            },
+        )
+        .err()
+        .expect("the blocked core receipt path must fail finalization");
+
+        assert!(
+            error.to_string().contains("integrated-cleanup"),
+            "{error:#}"
+        );
+        let run_dir = only_run_dir(&ws);
+        let record: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).unwrap();
+        assert!(std::path::Path::new(&record.worktree).exists());
+        let target = git_stdout(
+            &ws.root,
+            &[
+                "show-ref",
+                "--verify",
+                &format!("refs/heads/{}", record.worktree_branch),
+            ],
+        );
+        let transaction = git_stdout(
+            &ws.root,
+            &[
+                "show-ref",
+                "--verify",
+                &format!("refs/heads/yardlet-txn/{}", record.worktree_branch),
+            ],
+        );
+        assert!(target.is_ok() || transaction.is_ok());
+        assert!(ws.root.join("receipt-owned.txt").exists());
+        assert!(ws.load_git_finish_record(&run_dir).is_err());
+
+        crate::parallel::remove_worktree(
+            &ws.root,
+            std::path::Path::new(&record.worktree),
+            &record.worktree_branch,
+        );
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
     }
@@ -6974,6 +7859,422 @@ exit 1
     }
 
     #[test]
+    fn recovery_reconciles_refs_after_worktree_removal_crash() {
+        let ws = init_test_workspace(
+            "integrated-cleanup-recovery",
+            "schema_version: 1\nrouting: {default_worker: builder}\nworkers: []\n",
+        );
+        let run_id = "run-20990101-000000-cleanup";
+        let task_id = "YARD-CLEANUP";
+        let branch = format!("yard/{}/{}", task_id.to_lowercase(), run_id);
+        let wt = ws.agents_dir().join("worktrees").join(run_id);
+        let baseline = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        crate::parallel::create_worktree(&ws.root, &wt, &branch).unwrap();
+        write_str(&wt.join("owned.txt"), "owned\n").unwrap();
+        git_stdout(&wt, &["add", "owned.txt"]).unwrap();
+        git_stdout(&wt, &["commit", "-q", "-m", "owned worker commit"]).unwrap();
+        let worker_oid = git_stdout(&wt, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        git_stdout(
+            &ws.root,
+            &[
+                "merge",
+                "--no-ff",
+                "--no-edit",
+                "-m",
+                "owned integration",
+                &worker_oid,
+            ],
+        )
+        .unwrap();
+        let integration_oid = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        git_stdout(
+            &ws.root,
+            &[
+                "update-ref",
+                &format!("refs/heads/yardlet-txn/{branch}"),
+                &worker_oid,
+                "",
+            ],
+        )
+        .unwrap();
+
+        let mut q = queue(vec![task(task_id, TaskState::Done, 10, false)]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        ws.save_serial_integration_receipt(&state::SerialIntegrationReceipt {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            worktree: wt.display().to_string(),
+            branch: branch.clone(),
+            baseline_oid: baseline.clone(),
+        })
+        .unwrap();
+        ws.save_integrated_cleanup_receipt(&state::IntegratedCleanupReceipt {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            intent_id: "intent-test".into(),
+            worker: "builder".into(),
+            worktree: wt.display().to_string(),
+            branch: branch.clone(),
+            baseline_oid: baseline.clone(),
+            integration_base_oid: baseline.clone(),
+            integration_worker_oid: worker_oid.clone(),
+            integration_oid: integration_oid.clone(),
+            provenance: IntegrationProvenance::SerialCoreStaged,
+            owned_oids: vec![worker_oid.clone(), integration_oid.clone()],
+        })
+        .unwrap();
+        state::save_yaml(
+            &run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 1,
+                run_id: run_id.into(),
+                task_id: task_id.into(),
+                intent_id: "intent-test".into(),
+                worker: "builder".into(),
+                state: "done".into(),
+                started_at: Local::now().to_rfc3339(),
+                completed_at: Some(Local::now().to_rfc3339()),
+                worktree: wt.display().to_string(),
+                serial_isolated: true,
+                baseline_oid: baseline.clone(),
+                worktree_branch: branch.clone(),
+                integration_oid: integration_oid.clone(),
+                integration_base_oid: baseline,
+                integration_worker_oid: worker_oid.clone(),
+                integration_provenance: IntegrationProvenance::SerialCoreStaged,
+                integration_cleanup_complete: false,
+                owned_oids: vec![worker_oid.clone(), integration_oid.clone()],
+            },
+        )
+        .unwrap();
+
+        // Exact crash window: Git removed the worktree, but Yardlet had not yet
+        // deleted the owned target/transaction refs or marked cleanup complete.
+        git_stdout(
+            &ws.root,
+            &["worktree", "remove", "--force", &wt.display().to_string()],
+        )
+        .unwrap();
+        assert!(!wt.exists());
+        write_str(&run_dir.join("run.yaml"), "not: [valid yaml").unwrap();
+        assert!(!git_stdout(&ws.root, &["branch", "--list", &branch])
+            .unwrap()
+            .trim()
+            .is_empty());
+
+        let messages = recover_orphans(&ws);
+
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("reconciled integrated worktree cleanup")));
+        assert!(git_stdout(&ws.root, &["branch", "--list", &branch])
+            .unwrap()
+            .trim()
+            .is_empty());
+        assert!(git_stdout(
+            &ws.root,
+            &[
+                "show-ref",
+                "--verify",
+                &format!("refs/heads/yardlet-txn/{branch}")
+            ]
+        )
+        .is_err());
+        assert_eq!(
+            git_stdout(&ws.root, &["rev-parse", "HEAD"]).unwrap().trim(),
+            integration_oid
+        );
+        let record: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).unwrap();
+        assert!(record.integration_cleanup_complete);
+        assert!(!recover_orphans(&ws)
+            .iter()
+            .any(|message| message.contains("reconciled integrated worktree cleanup")));
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn recovery_never_cleans_a_forged_run_projection_without_core_receipt() {
+        let ws = init_test_workspace(
+            "forged-cleanup-projection",
+            "schema_version: 1\nrouting: {default_worker: builder}\nworkers: []\n",
+        );
+        let run_id = "run-20990101-000000-forged-cleanup";
+        let task_id = "YARD-FORGED-CLEANUP";
+        let branch = format!("yard/{}/{run_id}", task_id.to_lowercase());
+        let worktree = ws.agents_dir().join("worktrees").join(run_id);
+        let baseline = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        crate::parallel::create_worktree(&ws.root, &worktree, &branch).unwrap();
+        write_str(&worktree.join("owned.txt"), "worker commit\n").unwrap();
+        git_stdout(&worktree, &["add", "owned.txt"]).unwrap();
+        git_stdout(&worktree, &["commit", "-q", "-m", "worker commit"]).unwrap();
+        let worker_oid = git_stdout(&worktree, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let mut q = queue(vec![task(task_id, TaskState::Done, 10, false)]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        state::save_yaml(
+            &run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 1,
+                run_id: run_id.into(),
+                task_id: task_id.into(),
+                intent_id: "intent-test".into(),
+                worker: "codex".into(),
+                state: "done".into(),
+                started_at: Local::now().to_rfc3339(),
+                completed_at: Some(Local::now().to_rfc3339()),
+                worktree: worktree.display().to_string(),
+                baseline_oid: baseline.clone(),
+                worktree_branch: branch.clone(),
+                integration_oid: baseline.clone(),
+                integration_base_oid: baseline,
+                integration_worker_oid: worker_oid.clone(),
+                integration_provenance: IntegrationProvenance::SerialCoreStaged,
+                owned_oids: vec![worker_oid.clone()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let messages = recover_orphans(&ws);
+
+        assert!(worktree.exists());
+        assert_eq!(
+            git_stdout(&ws.root, &["rev-parse", &format!("refs/heads/{branch}")])
+                .unwrap()
+                .trim(),
+            worker_oid
+        );
+        assert!(!messages
+            .iter()
+            .any(|message| message.contains("reconciled integrated worktree cleanup")));
+
+        crate::parallel::remove_worktree(&ws.root, &worktree, &branch);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn no_change_core_receipt_recovers_before_and_after_cleanup() {
+        for cleanup_before_recovery in [false, true] {
+            let name = if cleanup_before_recovery {
+                "nochange-after-cleanup"
+            } else {
+                "nochange-before-cleanup"
+            };
+            let ws = init_test_workspace(
+                name,
+                "schema_version: 1\nrouting: {default_worker: builder}\nworkers: []\n",
+            );
+            let mut config = ws.load_config().unwrap();
+            config.git_finish.auto_push = true;
+            state::save_yaml(&ws.config_path(), &config).unwrap();
+            let run_id = format!("run-20990101-000000-{name}");
+            let task_id = "YARD-NOCHANGE-RECOVERY";
+            let mut queued = task(task_id, TaskState::Running, 10, false);
+            queued.kind = "implementation".into();
+            let mut q = queue(vec![queued]);
+            q.intent_id = "intent-test".into();
+            ws.save_queue(&q).unwrap();
+            let branch = format!("yard/{}/{run_id}", task_id.to_lowercase());
+            let worktree = ws.agents_dir().join("worktrees").join(&run_id);
+            let baseline = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+                .unwrap()
+                .trim()
+                .to_string();
+            crate::parallel::create_worktree(&ws.root, &worktree, &branch).unwrap();
+            let run_dir = ws.runs_dir().join(&run_id);
+            std::fs::create_dir_all(&run_dir).unwrap();
+            let result = crate::schemas::RunResult {
+                schema_version: 1,
+                run_id: run_id.clone(),
+                task_id: task_id.into(),
+                status: "done".into(),
+                intent_adherence: Default::default(),
+                changes: Default::default(),
+                validation: Default::default(),
+                question_for_user: None,
+                compact_summary: "no changes".into(),
+                verdict: vec![],
+                harness_suggestions: vec![],
+                follow_up_tasks: vec![],
+            };
+            write_str(
+                &run_dir.join("result.json"),
+                &serde_json::to_string(&result).unwrap(),
+            )
+            .unwrap();
+            write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+            if cleanup_before_recovery {
+                state::save_yaml(
+                    &run_dir.join("run.yaml"),
+                    &RunRecord {
+                        schema_version: 999,
+                        run_id: "run-worker-retargeted".into(),
+                        task_id: "WORKER-RETARGETED".into(),
+                        intent_id: "worker-retargeted".into(),
+                        worker: "worker-retargeted".into(),
+                        state: "running".into(),
+                        started_at: "2099-01-01T00:00:00+00:00".into(),
+                        worktree: "/tmp/worker-retargeted".into(),
+                        worktree_branch: "worker/retargeted".into(),
+                        baseline_oid: "worker-retargeted".into(),
+                        integration_oid: "worker-retargeted".into(),
+                        owned_oids: vec!["worker-retargeted".into()],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            } else {
+                write_str(&run_dir.join("run.yaml"), ": malformed\n").unwrap();
+            }
+            ws.save_no_change_receipt(&state::NoChangeReceipt {
+                schema_version: 1,
+                run_id: run_id.clone(),
+                task_id: task_id.into(),
+                intent_id: "intent-test".into(),
+                worker: "codex".into(),
+                worktree: worktree.display().to_string(),
+                branch: branch.clone(),
+                baseline_oid: baseline.clone(),
+                worker_oid: baseline.clone(),
+                provenance: IntegrationProvenance::ParallelWorkerDirect,
+            })
+            .unwrap();
+            if cleanup_before_recovery {
+                let cleanup = crate::parallel::cleanup_integrated_worktree(
+                    &ws.root,
+                    &worktree,
+                    &branch,
+                    &baseline,
+                    IntegrationProvenance::ParallelWorkerDirect,
+                );
+                assert!(cleanup.complete, "{:?}", cleanup.warnings);
+            }
+
+            let messages = recover_orphans(&ws);
+
+            assert!(!worktree.exists(), "{messages:?}");
+            assert!(git_stdout(&ws.root, &["branch", "--list", &branch])
+                .unwrap()
+                .trim()
+                .is_empty());
+            let finish = ws.load_git_finish_record(&run_dir).unwrap();
+            assert_eq!(finish.status, crate::git_finish::GitFinishStatus::NotNeeded);
+            assert!(!finish.push_invoked);
+            assert_eq!(
+                ws.load_queue().unwrap().tasks[0].state,
+                TaskState::Done,
+                "{messages:?}"
+            );
+            let projected: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).unwrap();
+            assert_eq!(projected.schema_version, 1);
+            assert_eq!(projected.run_id, run_id);
+            assert_eq!(projected.task_id, task_id);
+            assert_eq!(projected.intent_id, "intent-test");
+            assert_eq!(projected.worker, "codex");
+            assert_eq!(projected.worktree, worktree.display().to_string());
+            assert_eq!(projected.worktree_branch, branch);
+            assert_eq!(projected.baseline_oid, baseline);
+            assert!(projected.integration_oid.is_empty());
+            assert!(projected.owned_oids.is_empty());
+            assert!(projected.integration_cleanup_complete);
+            assert!(projected.completed_at.is_some());
+
+            let second = recover_orphans(&ws);
+            assert!(
+                second.is_empty(),
+                "second recovery was not inert: {second:?}"
+            );
+
+            let _ = std::fs::remove_dir_all(ws.root);
+        }
+    }
+
+    #[test]
+    fn seal_run_record_overwrites_worker_forged_identity_and_merge_location() {
+        let root = std::env::temp_dir().join(format!("yard-seal-forged-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let run_dir = root.join("run-trusted");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        state::save_yaml(
+            &run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 999,
+                run_id: "run-forged".into(),
+                task_id: "TASK-FORGED".into(),
+                intent_id: "intent-forged".into(),
+                worker: "worker-forged".into(),
+                state: "running".into(),
+                started_at: "2099-01-01T00:00:00+00:00".into(),
+                worktree: "/tmp/forged".into(),
+                serial_isolated: false,
+                baseline_oid: "forged-baseline".into(),
+                worktree_branch: "forged/branch".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let trusted_worktree = root.join("trusted-worktree");
+        let trusted_task = task("YARD-TRUSTED", TaskState::Running, 10, false);
+        seal_run_record(
+            &run_dir,
+            "run-trusted",
+            &trusted_task,
+            "intent-trusted",
+            "codex",
+            TaskState::Partial,
+            Some(&MergeBack {
+                wt_path: &trusted_worktree,
+                branch: "yard/yard-trusted/run-trusted",
+                baseline_oid: "trusted-baseline",
+                expected_tip_oid: None,
+                provenance: IntegrationProvenance::SerialCoreStaged,
+                auto_commit: true,
+            }),
+        );
+
+        let projected: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).unwrap();
+        assert_eq!(projected.schema_version, 1);
+        assert_eq!(projected.run_id, "run-trusted");
+        assert_eq!(projected.task_id, "YARD-TRUSTED");
+        assert_eq!(projected.intent_id, "intent-trusted");
+        assert_eq!(projected.worker, "codex");
+        assert_eq!(projected.state, "partial");
+        assert_eq!(projected.worktree, trusted_worktree.display().to_string());
+        assert_eq!(projected.worktree_branch, "yard/yard-trusted/run-trusted");
+        assert_eq!(projected.baseline_oid, "trusted-baseline");
+        assert!(projected.serial_isolated);
+        assert_eq!(
+            projected.integration_provenance,
+            IntegrationProvenance::SerialCoreStaged
+        );
+        assert!(projected.completed_at.is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn recovery_merges_a_finished_orphaned_worktree_run() {
         // A parallel worktree run finished (result.json written) but Yardlet died
         // before integrating. Recovery must merge the work back, not just mark
@@ -7010,14 +8311,13 @@ exit 1
         let run_id = "run-20990101-000000-yard-001";
         let run_dir = ws.runs_dir().join(run_id);
         std::fs::create_dir_all(&run_dir).unwrap();
-        let wt = ws.agents_dir().join("worktrees").join("yard-001");
-        sh(&[
-            "worktree",
-            "add",
-            &wt.display().to_string(),
-            "-b",
-            "yard/yard-001",
-        ]);
+        let branch = format!("yard/yard-001/{run_id}");
+        let wt = ws.agents_dir().join("worktrees").join(run_id);
+        let baseline = git_stdout(&root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        crate::parallel::create_worktree(&root, &wt, &branch).unwrap();
         std::fs::write(wt.join("feature.txt"), "from worker\n").unwrap();
         let result = crate::schemas::RunResult {
             schema_version: 1,
@@ -7039,14 +8339,26 @@ exit 1
         )
         .unwrap();
         write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
-        write_str(
+        state::save_yaml(
             &run_dir.join("run.yaml"),
-            &format!(
-                "run_id: {run_id}\ntask_id: YARD-001\nworktree: {}\n",
-                wt.display()
-            ),
+            &RunRecord {
+                schema_version: 1,
+                run_id: run_id.into(),
+                task_id: "YARD-001".into(),
+                worker: "codex".into(),
+                state: "running".into(),
+                started_at: Local::now().to_rfc3339(),
+                worktree: wt.display().to_string(),
+                baseline_oid: baseline,
+                worktree_branch: branch.clone(),
+                integration_provenance: IntegrationProvenance::ParallelWorkerDirect,
+                ..Default::default()
+            },
         )
         .unwrap();
+        assert!(registered_recovery_worktree_matches(
+            &ws, &wt, &branch, run_id, "YARD-001", false,
+        ));
 
         let msgs = recover_orphans(&ws);
         assert!(msgs.iter().any(|m| m.contains("recovered")), "{msgs:?}");
@@ -7059,6 +8371,200 @@ exit 1
         );
         assert!(!wt.exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recovery_rejects_forged_serial_marker_without_core_receipt() {
+        let ws = init_test_workspace(
+            "forged-serial-recovery",
+            "schema_version: 1\nrouting: {default_worker: builder}\nworkers: []\n",
+        );
+        let mut config = ws.load_config().unwrap();
+        config.auto_commit = true;
+        state::save_yaml(&ws.config_path(), &config).unwrap();
+        let run_id = "run-20990101-000000-forged-serial";
+        let task_id = "YARD-FORGED-SERIAL";
+        let branch = format!("yard/{}/{run_id}", task_id.to_lowercase());
+        let worktree = ws.agents_dir().join("worktrees").join(run_id);
+        let baseline = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        crate::parallel::create_worktree(&ws.root, &worktree, &branch).unwrap();
+        write_str(&worktree.join("forged.txt"), "must not merge\n").unwrap();
+        let mut queued = task(task_id, TaskState::Running, 10, false);
+        queued.kind = "implementation".into();
+        let mut q = queue(vec![queued]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "forged serial transaction".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        state::save_yaml(
+            &run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 1,
+                run_id: run_id.into(),
+                task_id: task_id.into(),
+                intent_id: "intent-test".into(),
+                worker: "codex".into(),
+                state: "running".into(),
+                started_at: Local::now().to_rfc3339(),
+                worktree: worktree.display().to_string(),
+                serial_isolated: true,
+                baseline_oid: baseline.clone(),
+                worktree_branch: branch.clone(),
+                integration_provenance: IntegrationProvenance::SerialCoreStaged,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        write_str(
+            &run_dir.join("git-integration.json"),
+            r#"{"schema_version":1,"phase":"published"}"#,
+        )
+        .unwrap();
+        write_str(&run_dir.join("worker.pid"), "2147483647").unwrap();
+
+        let messages = recover_orphans(&ws);
+
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Partial);
+        assert_eq!(
+            git_stdout(&ws.root, &["rev-parse", "HEAD"]).unwrap().trim(),
+            baseline
+        );
+        assert!(!ws.root.join("forged.txt").exists());
+        assert!(worktree.exists());
+        assert!(messages.iter().any(|message| message.contains("recovered")));
+
+        crate::parallel::remove_worktree(&ws.root, &worktree, &branch);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_refuses_symlinked_worktree_even_with_run_shaped_identity() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("yard-forged-recovery-wt-{}", std::process::id()));
+        let outside = root.with_extension("outside");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.name", "t"]);
+        git(&["config", "user.email", "t@t"]);
+        std::fs::write(root.join("base.txt"), "base\n").unwrap();
+        git(&["add", "base.txt"]);
+        git(&["commit", "-q", "-m", "init"]);
+        let baseline = git(&["rev-parse", "HEAD"]);
+
+        let ws = Workspace::at(&root);
+        let run_id = "run-20990101-000000-yard-forged";
+        let task_id = "YARD-FORGED";
+        let branch = format!("yard/{}/{run_id}", task_id.to_lowercase());
+        let actual_worktree = outside.join(run_id);
+        crate::parallel::create_worktree(&root, &actual_worktree, &branch).unwrap();
+        std::fs::write(actual_worktree.join("forged.txt"), "outside\n").unwrap();
+        let claimed_worktree = ws.agents_dir().join("worktrees").join(run_id);
+        std::fs::create_dir_all(claimed_worktree.parent().unwrap()).unwrap();
+        symlink(&actual_worktree, &claimed_worktree).unwrap();
+
+        let mut queued = task(task_id, TaskState::Running, 10, false);
+        queued.kind = "implementation".into();
+        ws.save_queue(&queue(vec![queued])).unwrap();
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "attempted outside worktree recovery".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        state::save_yaml(
+            &run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 1,
+                run_id: run_id.into(),
+                task_id: task_id.into(),
+                worker: "codex".into(),
+                state: "running".into(),
+                started_at: Local::now().to_rfc3339(),
+                worktree: claimed_worktree.display().to_string(),
+                baseline_oid: baseline.clone(),
+                worktree_branch: branch.clone(),
+                integration_provenance: IntegrationProvenance::ParallelWorkerDirect,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        write_str(&run_dir.join("worker.pid"), "2147483647").unwrap();
+
+        let messages = recover_orphans(&ws);
+
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Partial);
+        assert_eq!(git(&["rev-parse", "HEAD"]), baseline);
+        assert!(!root.join("forged.txt").exists());
+        assert!(claimed_worktree.exists(), "the symlink must be retained");
+        assert!(
+            actual_worktree.exists(),
+            "the outside worktree must be retained"
+        );
+        assert!(git(&["branch", "--list", &branch]).contains(&branch));
+        assert!(messages.iter().any(|message| message.contains("recovered")));
+
+        std::fs::remove_file(&claimed_worktree).unwrap();
+        crate::parallel::remove_worktree(&root, &actual_worktree, &branch);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]
@@ -7084,6 +8590,15 @@ exit 1
         let branch = "yard/yard-staged/run-20990101-000000-yard-staged";
         let wt = ws.agents_dir().join("worktrees").join(run_id);
         crate::parallel::create_worktree(&ws.root, &wt, branch).unwrap();
+        ws.save_serial_integration_receipt(&state::SerialIntegrationReceipt {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: "YARD-STAGED".into(),
+            worktree: wt.display().to_string(),
+            branch: branch.into(),
+            baseline_oid: baseline.clone(),
+        })
+        .unwrap();
         std::fs::write(wt.join("staged.txt"), "worker completed\n").unwrap();
         let staged_run_dir = wt.join(".agents/runs").join(run_id);
         for directory in [
@@ -7179,6 +8694,9 @@ exit 1
                 worktree_branch: branch.into(),
                 integration_oid: String::new(),
                 integration_base_oid: String::new(),
+                integration_worker_oid: String::new(),
+                integration_provenance: IntegrationProvenance::SerialCoreStaged,
+                integration_cleanup_complete: false,
                 owned_oids: vec![],
             },
         )
@@ -7295,6 +8813,15 @@ exit 1
         )
         .unwrap();
         write_str(&run_dir.join("handoff.md"), "# orphan handoff\n").unwrap();
+        ws.save_serial_integration_receipt(&state::SerialIntegrationReceipt {
+            schema_version: 1,
+            run_id: run_id.clone(),
+            task_id: task_id.into(),
+            worktree: wt.display().to_string(),
+            branch: branch.clone(),
+            baseline_oid: baseline.clone(),
+        })
+        .unwrap();
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
@@ -7312,6 +8839,9 @@ exit 1
                 worktree_branch: branch.clone(),
                 integration_oid: String::new(),
                 integration_base_oid: String::new(),
+                integration_worker_oid: String::new(),
+                integration_provenance: IntegrationProvenance::SerialCoreStaged,
+                integration_cleanup_complete: false,
                 owned_oids: vec![],
             },
         )
@@ -8036,6 +9566,7 @@ exit 1
                 branch: "yard/yard-001",
                 baseline_oid: &baseline_oid,
                 expected_tip_oid: None,
+                provenance: IntegrationProvenance::ParallelWorkerDirect,
                 auto_commit: true,
             }),
         })
@@ -8062,6 +9593,390 @@ exit 1
         assert!(remote_head.status.success());
         assert!(String::from_utf8_lossy(&remote_head.stdout)
             .starts_with(finish.expected_oid.as_deref().unwrap()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn no_change_finalize_ignores_forged_finish_and_never_pushes_unrelated_head() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-nochange-forged-finish-{}",
+            std::process::id()
+        ));
+        let remote = root.with_extension("bare.git");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&remote);
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.name", "t"]);
+        git(&["config", "user.email", "t@t"]);
+        std::fs::write(root.join("base.txt"), "base\n").unwrap();
+        git(&["add", "base.txt"]);
+        git(&["commit", "-q", "-m", "base"]);
+        let remote_baseline = git(&["rev-parse", "HEAD"]);
+        git(&["init", "-q", "--bare", remote.to_str().unwrap()]);
+        git(&["remote", "add", "fixture", remote.to_str().unwrap()]);
+        git(&["push", "-q", "fixture", "HEAD:refs/heads/main"]);
+        std::fs::write(root.join("unrelated.txt"), "pre-existing local work\n").unwrap();
+        git(&["add", "unrelated.txt"]);
+        git(&["commit", "-q", "-m", "unrelated local commit"]);
+        let unrelated_oid = git(&["rev-parse", "HEAD"]);
+
+        crate::init::init(&root, false).unwrap();
+        let ws = Workspace::at(&root);
+        let mut config = ws.load_config().unwrap();
+        config.git_finish = crate::schemas::GitFinishPolicy {
+            auto_push: true,
+            remote: "fixture".into(),
+            target_ref: "refs/heads/main".into(),
+            pre_push_checks: vec![],
+        };
+        state::save_yaml(&ws.config_path(), &config).unwrap();
+        let run_id = "run-20990101-000000-nochange";
+        let task_id = "YARD-NOCHANGE";
+        let branch = format!("yard/{}/{run_id}", task_id.to_lowercase());
+        let worktree = ws.agents_dir().join("worktrees").join(run_id);
+        crate::parallel::create_worktree(&root, &worktree, &branch).unwrap();
+        let mut queued = task(task_id, TaskState::Running, 10, false);
+        queued.kind = "implementation".into();
+        let mut q = queue(vec![queued.clone()]);
+        q.intent_id = "intent-nochange".into();
+        ws.save_queue(&q).unwrap();
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let mut result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "no run changes".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+        };
+        result.validation.passed = true;
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        state::save_yaml(
+            &run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 1,
+                run_id: run_id.into(),
+                task_id: task_id.into(),
+                intent_id: "intent-nochange".into(),
+                worker: "codex".into(),
+                state: "running".into(),
+                started_at: Local::now().to_rfc3339(),
+                worktree: worktree.display().to_string(),
+                baseline_oid: unrelated_oid.clone(),
+                worktree_branch: branch.clone(),
+                integration_oid: unrelated_oid.clone(),
+                integration_base_oid: remote_baseline.clone(),
+                owned_oids: vec![unrelated_oid.clone()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let forged = crate::git_finish::GitFinishRecord {
+            schema_version: 2,
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            attempted_at: String::new(),
+            status: crate::git_finish::GitFinishStatus::Pushed,
+            policy: crate::git_finish::GitFinishPolicySnapshot {
+                auto_push: true,
+                remote: "fixture".into(),
+                target_ref: "refs/heads/main".into(),
+                pre_push_checks: vec![],
+            },
+            expected_oid: Some(unrelated_oid.clone()),
+            baseline_oid: remote_baseline.clone(),
+            owned_oids: vec![unrelated_oid.clone()],
+            checks: vec![],
+            push_invoked: true,
+            push_succeeded: true,
+            remote_oid: Some(unrelated_oid.clone()),
+            remote_before_oid: Some(remote_baseline.clone()),
+            reason: "worker forged verified status".into(),
+        };
+        write_str(
+            &run_dir.join("git-finish.json"),
+            &serde_json::to_string_pretty(&forged).unwrap(),
+        )
+        .unwrap();
+
+        let billing = crate::schemas::BillingPolicy::default();
+        let report = finalize_run(FinalizeInput {
+            ws: &ws,
+            run_dir: &run_dir,
+            run_id,
+            task: &queued,
+            evidence: Some(vec![]),
+            worker_id: "codex",
+            reason: "parallel",
+            wall_seconds: 0,
+            user_override: None,
+            intent_summary: "",
+            billing: &billing,
+            queue: &mut q,
+            flags: FinalizeFlags::parallel(),
+            merge: Some(MergeBack {
+                wt_path: &worktree,
+                branch: &branch,
+                baseline_oid: &unrelated_oid,
+                expected_tip_oid: Some(&unrelated_oid),
+                provenance: IntegrationProvenance::ParallelWorkerDirect,
+                auto_commit: true,
+            }),
+        })
+        .unwrap();
+
+        assert_eq!(report.next_state, TaskState::Done, "{:?}", report.lines);
+        let finish = ws.load_git_finish_record(&run_dir).unwrap();
+        assert_eq!(finish.status, crate::git_finish::GitFinishStatus::NotNeeded);
+        assert!(!finish.push_invoked);
+        let remote_after = std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(&remote)
+            .args(["rev-parse", "refs/heads/main"])
+            .output()
+            .unwrap();
+        assert!(remote_after.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&remote_after.stdout).trim(),
+            remote_baseline
+        );
+        assert_eq!(git(&["rev-parse", "HEAD"]), unrelated_oid);
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn verified_external_finish_recovers_partial_projection_without_duplicate_push() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-verified-finish-projection-{}",
+            std::process::id()
+        ));
+        let remote = root.with_extension("bare.git");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&remote);
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.name", "t"]);
+        git(&["config", "user.email", "t@t"]);
+        std::fs::write(root.join("base.txt"), "base\n").unwrap();
+        git(&["add", "base.txt"]);
+        git(&["commit", "-q", "-m", "base"]);
+        let baseline_oid = git(&["rev-parse", "HEAD"]);
+        git(&["init", "-q", "--bare", remote.to_str().unwrap()]);
+        git(&["remote", "add", "fixture", remote.to_str().unwrap()]);
+        git(&["push", "-q", "fixture", "HEAD:refs/heads/main"]);
+
+        git(&["checkout", "-q", "-b", "fixture-worker"]);
+        std::fs::write(root.join("owned.txt"), "owned\n").unwrap();
+        git(&["add", "owned.txt"]);
+        git(&["commit", "-q", "-m", "owned worker commit"]);
+        let worker_oid = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-q", "main"]);
+        git(&[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "owned integration",
+            "fixture-worker",
+        ]);
+        let integration_oid = git(&["rev-parse", "HEAD"]);
+        git(&[
+            "push",
+            "-q",
+            "fixture",
+            &format!("{integration_oid}:refs/heads/main"),
+        ]);
+
+        crate::init::init(&root, false).unwrap();
+        let ws = Workspace::at(&root);
+        let mut config = ws.load_config().unwrap();
+        config.git_finish = crate::schemas::GitFinishPolicy {
+            auto_push: true,
+            remote: "fixture".into(),
+            target_ref: "refs/heads/main".into(),
+            pre_push_checks: vec![],
+        };
+        state::save_yaml(&ws.config_path(), &config).unwrap();
+
+        let run_id = "run-20990101-000000-verified-projection";
+        let task_id = "YARD-VERIFIED-PROJECTION";
+        let branch = format!("yard/{}/{run_id}", task_id.to_lowercase());
+        let worktree = ws.agents_dir().join("worktrees").join(run_id);
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let mut queued = task(task_id, TaskState::Partial, 10, false);
+        queued.kind = "implementation".into();
+        let mut q = queue(vec![queued]);
+        q.intent_id = "intent-verified-projection".into();
+        ws.save_queue(&q).unwrap();
+
+        let mut result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "already integrated".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+        };
+        result.validation.passed = true;
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        state::save_yaml(
+            &run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 1,
+                run_id: run_id.into(),
+                task_id: task_id.into(),
+                intent_id: "intent-verified-projection".into(),
+                worker: "codex".into(),
+                state: "partial".into(),
+                started_at: "2099-01-01T00:00:00+00:00".into(),
+                completed_at: Some("2099-01-01T00:00:01+00:00".into()),
+                worktree: worktree.display().to_string(),
+                worktree_branch: branch.clone(),
+                baseline_oid: baseline_oid.clone(),
+                integration_oid: integration_oid.clone(),
+                integration_base_oid: baseline_oid.clone(),
+                integration_worker_oid: worker_oid.clone(),
+                integration_provenance: IntegrationProvenance::ParallelWorkerDirect,
+                integration_cleanup_complete: true,
+                owned_oids: vec![worker_oid.clone(), integration_oid.clone()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        ws.save_integrated_cleanup_receipt(&state::IntegratedCleanupReceipt {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            intent_id: "intent-verified-projection".into(),
+            worker: "codex".into(),
+            worktree: worktree.display().to_string(),
+            branch,
+            baseline_oid: baseline_oid.clone(),
+            integration_base_oid: baseline_oid.clone(),
+            integration_worker_oid: worker_oid.clone(),
+            integration_oid: integration_oid.clone(),
+            provenance: IntegrationProvenance::ParallelWorkerDirect,
+            owned_oids: vec![worker_oid.clone(), integration_oid.clone()],
+        })
+        .unwrap();
+
+        // Reproduce the post-push crash boundary: the authoritative checkpoint
+        // is durable, but the worker-writable projection cannot be replaced and
+        // the queue is still Partial.
+        std::fs::create_dir_all(run_dir.join("git-finish.json")).unwrap();
+        let projection_error = ws
+            .save_git_finish_record(
+                &run_dir,
+                &crate::git_finish::GitFinishRecord {
+                    schema_version: 2,
+                    run_id: run_id.into(),
+                    task_id: task_id.into(),
+                    attempted_at: "2099-01-01T00:00:01+00:00".into(),
+                    status: crate::git_finish::GitFinishStatus::Pushed,
+                    policy: crate::git_finish::GitFinishPolicySnapshot {
+                        auto_push: true,
+                        remote: "fixture".into(),
+                        target_ref: "refs/heads/main".into(),
+                        pre_push_checks: vec![],
+                    },
+                    expected_oid: Some(integration_oid.clone()),
+                    baseline_oid: baseline_oid.clone(),
+                    owned_oids: vec![worker_oid, integration_oid.clone()],
+                    checks: vec![],
+                    push_invoked: true,
+                    push_succeeded: true,
+                    remote_oid: Some(integration_oid.clone()),
+                    remote_before_oid: Some(baseline_oid),
+                    reason: "remote_verified".into(),
+                },
+            )
+            .unwrap_err();
+        assert!(projection_error.to_string().contains("git-finish.json"));
+        assert_eq!(
+            ws.load_git_finish_record(&run_dir).unwrap().status,
+            crate::git_finish::GitFinishStatus::Pushed
+        );
+        std::fs::remove_dir_all(run_dir.join("git-finish.json")).unwrap();
+
+        let messages = recover_orphans(&ws);
+        assert_eq!(
+            ws.load_queue().unwrap().tasks[0].state,
+            TaskState::Done,
+            "{messages:?}"
+        );
+        let finish = ws.load_git_finish_record(&run_dir).unwrap();
+        assert_eq!(
+            finish.status,
+            crate::git_finish::GitFinishStatus::AlreadyApplied
+        );
+        assert!(!finish.push_invoked, "recovery must not repeat the push");
+        assert_eq!(finish.remote_oid.as_deref(), Some(integration_oid.as_str()));
+        assert_eq!(
+            git(&["ls-remote", "--refs", "fixture", "refs/heads/main"]),
+            format!("{integration_oid}\trefs/heads/main")
+        );
+
+        let second = recover_orphans(&ws);
+        assert!(
+            second.is_empty(),
+            "second recovery was not inert: {second:?}"
+        );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&remote);
     }
@@ -8109,13 +10024,35 @@ exit 1
         };
         state::save_yaml(&ws.config_path(), &config).unwrap();
 
+        git(&["checkout", "-q", "-b", "fixture-worker-1"]);
         std::fs::write(root.join("owned.txt"), "first\n").unwrap();
         git(&["add", "owned.txt"]);
         git(&["commit", "-q", "-m", "first"]);
+        let first_worker_oid = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-q", "main"]);
+        git(&[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "first integration",
+            "fixture-worker-1",
+        ]);
         let first_oid = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-q", "-b", "fixture-worker-2"]);
         std::fs::write(root.join("owned.txt"), "second\n").unwrap();
         git(&["add", "owned.txt"]);
         git(&["commit", "-q", "-m", "second"]);
+        let second_worker_oid = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-q", "main"]);
+        git(&[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "second integration",
+            "fixture-worker-2",
+        ]);
         let second_oid = git(&["rev-parse", "HEAD"]);
 
         let mut first_task = task("YARD-001", TaskState::Partial, 10, false);
@@ -8132,11 +10069,12 @@ exit 1
             target_ref: "refs/heads/main".into(),
             pre_push_checks: vec![],
         };
-        for (index, task_id, base_oid, expected_oid, status) in [
+        for (index, task_id, base_oid, worker_oid, expected_oid, status) in [
             (
                 1,
                 "YARD-001",
                 baseline.as_str(),
+                first_worker_oid.as_str(),
                 first_oid.as_str(),
                 crate::git_finish::GitFinishStatus::CheckBlocked,
             ),
@@ -8144,12 +10082,15 @@ exit 1
                 2,
                 "YARD-002",
                 first_oid.as_str(),
+                second_worker_oid.as_str(),
                 second_oid.as_str(),
                 crate::git_finish::GitFinishStatus::SafetyBlocked,
             ),
         ] {
             let run_id = format!("run-20990101-00000{index}-{task_id}");
             let run_dir = ws.runs_dir().join(&run_id);
+            let worktree = ws.agents_dir().join("worktrees").join(&run_id);
+            let branch = format!("yard/{}/{run_id}", task_id.to_lowercase());
             std::fs::create_dir_all(&run_dir).unwrap();
             let mut result = crate::schemas::RunResult {
                 schema_version: 1,
@@ -8183,13 +10124,33 @@ exit 1
                     state: "partial".into(),
                     started_at: format!("2099-01-01T00:00:0{index}+00:00"),
                     completed_at: Some(format!("2099-01-01T00:00:1{index}+00:00")),
-                    worktree: ".".into(),
+                    worktree: worktree.display().to_string(),
+                    baseline_oid: base_oid.into(),
+                    worktree_branch: branch.clone(),
                     integration_oid: expected_oid.into(),
                     integration_base_oid: base_oid.into(),
-                    owned_oids: vec![expected_oid.into()],
+                    integration_worker_oid: worker_oid.into(),
+                    integration_provenance: IntegrationProvenance::ParallelWorkerDirect,
+                    owned_oids: vec![worker_oid.into(), expected_oid.into()],
                     ..Default::default()
                 },
             )
+            .unwrap();
+            ws.save_integrated_cleanup_receipt(&state::IntegratedCleanupReceipt {
+                schema_version: 1,
+                run_id: run_id.clone(),
+                task_id: task_id.into(),
+                intent_id: "intent-accumulated".into(),
+                worker: "codex".into(),
+                worktree: worktree.display().to_string(),
+                branch,
+                baseline_oid: base_oid.into(),
+                integration_base_oid: base_oid.into(),
+                integration_worker_oid: worker_oid.into(),
+                integration_oid: expected_oid.into(),
+                provenance: IntegrationProvenance::ParallelWorkerDirect,
+                owned_oids: vec![worker_oid.into(), expected_oid.into()],
+            })
             .unwrap();
             ws.save_git_finish_record(
                 &run_dir,
@@ -8202,7 +10163,7 @@ exit 1
                     policy: policy_snapshot.clone(),
                     expected_oid: Some(expected_oid.into()),
                     baseline_oid: base_oid.into(),
-                    owned_oids: vec![expected_oid.into()],
+                    owned_oids: vec![worker_oid.into(), expected_oid.into()],
                     checks: vec![],
                     push_invoked: false,
                     push_succeeded: false,

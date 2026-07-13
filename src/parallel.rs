@@ -397,6 +397,9 @@ pub fn run_batch<F: FnMut(&str)>(
                 worktree_branch: p.branch.clone(),
                 integration_oid: String::new(),
                 integration_base_oid: String::new(),
+                integration_worker_oid: String::new(),
+                integration_provenance: run::IntegrationProvenance::ParallelWorkerDirect,
+                integration_cleanup_complete: false,
                 owned_oids: Vec::new(),
             },
         )?;
@@ -608,6 +611,7 @@ pub fn run_batch<F: FnMut(&str)>(
                 branch: &p.branch,
                 baseline_oid: &p.baseline_oid,
                 expected_tip_oid: None,
+                provenance: run::IntegrationProvenance::ParallelWorkerDirect,
                 auto_commit: true,
             }),
         }) {
@@ -669,10 +673,358 @@ pub(crate) enum Integration {
     Merged {
         oid: String,
         base_oid: String,
+        worker_oid: String,
         owned_oids: Vec<String>,
     },
-    NoChanges,
+    NoChanges {
+        worker_oid: String,
+    },
     Conflict(String),
+}
+
+const GIT_INTEGRATION_RECORD: &str = "git-integration.json";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum GitIntegrationProvenance {
+    SerialCoreStaged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum GitIntegrationPhase {
+    Prepared,
+    CommitReady,
+    Candidate,
+    Published,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GitIntegrationTransaction {
+    schema_version: u32,
+    provenance: GitIntegrationProvenance,
+    run_id: String,
+    task_id: String,
+    target_ref: String,
+    transaction_ref: String,
+    expected_tip_oid: String,
+    staged_tree_oid: String,
+    phase: GitIntegrationPhase,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    candidate_oid: String,
+}
+
+enum TransactionPublish {
+    Published(String),
+    Conflict(String),
+}
+
+fn transaction_ref(branch: &str) -> String {
+    format!("refs/heads/yardlet-txn/{branch}")
+}
+
+fn transaction_path(run_dir: &Path) -> PathBuf {
+    run_dir.join(GIT_INTEGRATION_RECORD)
+}
+
+fn load_transaction(run_dir: &Path) -> Result<Option<GitIntegrationTransaction>> {
+    let path = transaction_path(run_dir);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|error| anyhow!("reading {}: {error}", path.display()))?;
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|error| anyhow!("parsing {}: {error}", path.display()))
+}
+
+fn persist_transaction(run_dir: &Path, record: &GitIntegrationTransaction) -> Result<()> {
+    let path = transaction_path(run_dir);
+    let text = serde_json::to_string_pretty(record)?;
+    state::write_str_atomic(&path, &text)
+}
+
+fn ref_tip(root: &Path, reference: &str) -> Option<String> {
+    git(
+        root,
+        &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
+    )
+    .ok()
+    .map(|oid| oid.trim().to_string())
+    .filter(|oid| !oid.is_empty())
+}
+
+fn transaction_candidate_conflict(
+    root: &Path,
+    candidate: &str,
+    expected_parent: &str,
+    expected_tree: &str,
+) -> Result<Option<String>> {
+    let parents = git(root, &["show", "-s", "--format=%P", candidate])?;
+    let parents = parents.split_whitespace().collect::<Vec<_>>();
+    if parents != [expected_parent] {
+        return Ok(Some(format!(
+            "transaction commit {candidate} is not a single-parent child of evaluated tip {expected_parent}"
+        )));
+    }
+    let tree = git(
+        root,
+        &["rev-parse", "--verify", &format!("{candidate}^{{tree}}")],
+    )?;
+    if tree.trim() != expected_tree {
+        return Ok(Some(format!(
+            "transaction commit {candidate} does not contain the evaluated staged tree"
+        )));
+    }
+    Ok(None)
+}
+
+/// Create the worker commit through native `git commit` on a durable internal
+/// branch, then publish only that exact commit to the run-owned target with a
+/// compare-and-swap. Native commit preserves repository hooks and signing;
+/// the transaction record makes pre/post-CAS crashes recoverable without
+/// rerunning a completed worker.
+fn publish_transaction_commit(
+    root: &Path,
+    wt: &Path,
+    run_dir: &Path,
+    run_id: &str,
+    branch: &str,
+    task_id: &str,
+    observed_tip: &str,
+) -> Result<TransactionPublish> {
+    let target_ref = format!("refs/heads/{branch}");
+    let expected_transaction_ref = transaction_ref(branch);
+    git(root, &["check-ref-format", &expected_transaction_ref])?;
+
+    let mut record = match load_transaction(run_dir)? {
+        Some(record) => record,
+        None => {
+            let current_tip = ref_tip(root, &target_ref).unwrap_or_else(|| "<missing>".into());
+            if current_tip != observed_tip {
+                return Ok(TransactionPublish::Conflict(format!(
+                    "worktree branch tip changed after evidence collection: expected {observed_tip}, found {current_tip}"
+                )));
+            }
+            let record = GitIntegrationTransaction {
+                schema_version: 1,
+                provenance: GitIntegrationProvenance::SerialCoreStaged,
+                run_id: run_id.to_string(),
+                task_id: task_id.to_string(),
+                target_ref: target_ref.clone(),
+                transaction_ref: expected_transaction_ref.clone(),
+                expected_tip_oid: observed_tip.to_string(),
+                staged_tree_oid: git(wt, &["write-tree"])?.trim().to_string(),
+                phase: GitIntegrationPhase::Prepared,
+                candidate_oid: String::new(),
+            };
+            persist_transaction(run_dir, &record)?;
+            record
+        }
+    };
+
+    if record.schema_version != 1
+        || record.provenance != GitIntegrationProvenance::SerialCoreStaged
+        || record.run_id != run_id
+        || record.task_id != task_id
+        || record.target_ref != target_ref
+        || record.transaction_ref != expected_transaction_ref
+        || record.expected_tip_oid.is_empty()
+        || record.staged_tree_oid.is_empty()
+    {
+        return Ok(TransactionPublish::Conflict(
+            "Git integration transaction record does not match this run-owned branch".to_string(),
+        ));
+    }
+    if record.phase == GitIntegrationPhase::Failed {
+        return Ok(TransactionPublish::Conflict(
+            "the prior native Git commit attempt failed; worktree retained".to_string(),
+        ));
+    }
+
+    let expected = record.expected_tip_oid.clone();
+    let transaction = record.transaction_ref.clone();
+    let mut target_tip = ref_tip(root, &target_ref).unwrap_or_else(|| "<missing>".into());
+    let mut transaction_tip = ref_tip(root, &transaction);
+
+    if record.phase == GitIntegrationPhase::Prepared {
+        if target_tip != expected {
+            return Ok(TransactionPublish::Conflict(format!(
+                "worktree branch tip changed after evidence collection: expected {expected}, found {target_tip}"
+            )));
+        }
+        match transaction_tip.as_deref() {
+            None => {
+                if git(root, &["update-ref", &transaction, &expected, ""]).is_err() {
+                    let found = ref_tip(root, &transaction).unwrap_or_else(|| "<missing>".into());
+                    return Ok(TransactionPublish::Conflict(format!(
+                        "could not claim the run-owned Git transaction ref: expected absent, found {found}"
+                    )));
+                }
+            }
+            Some(found) if found == expected => {}
+            Some(found) => {
+                return Ok(TransactionPublish::Conflict(format!(
+                    "run-owned Git transaction ref was already changed: expected {expected}, found {found}"
+                )));
+            }
+        }
+        record.phase = GitIntegrationPhase::CommitReady;
+        persist_transaction(run_dir, &record)?;
+    }
+
+    transaction_tip = ref_tip(root, &transaction);
+    let mut candidate = transaction_tip.unwrap_or_default();
+    if record.phase == GitIntegrationPhase::CommitReady && candidate == expected {
+        if target_tip != expected {
+            return Ok(TransactionPublish::Conflict(format!(
+                "worktree branch tip changed after evidence collection: expected {expected}, found {target_tip}"
+            )));
+        }
+        let index_tree = git(wt, &["write-tree"])?.trim().to_string();
+        if index_tree != record.staged_tree_oid {
+            return Ok(TransactionPublish::Conflict(
+                "staged tree changed after the Git integration transaction was prepared"
+                    .to_string(),
+            ));
+        }
+        git(
+            wt,
+            &[
+                "symbolic-ref",
+                "-m",
+                "yardlet integration prepare",
+                "HEAD",
+                &transaction,
+            ],
+        )?;
+        let message = commit_message(root, task_id);
+        if let Err(error) = git(wt, &["commit", "-m", &message]) {
+            let after = ref_tip(root, &transaction);
+            if after.as_deref() == Some(expected.as_str()) {
+                let _ = git(
+                    wt,
+                    &[
+                        "symbolic-ref",
+                        "-m",
+                        "yardlet integration commit failed",
+                        "HEAD",
+                        &target_ref,
+                    ],
+                );
+                let _ = git(root, &["update-ref", "-d", &transaction, &expected]);
+                record.phase = GitIntegrationPhase::Failed;
+                let _ = persist_transaction(run_dir, &record);
+            }
+            return Err(error);
+        }
+        candidate = ref_tip(root, &transaction).unwrap_or_else(|| "<missing>".into());
+    } else if record.phase == GitIntegrationPhase::Prepared {
+        return Ok(TransactionPublish::Conflict(
+            "untrusted transaction commit appeared before native Git commit was authorized"
+                .to_string(),
+        ));
+    } else if matches!(
+        record.phase,
+        GitIntegrationPhase::Candidate | GitIntegrationPhase::Published
+    ) && (record.candidate_oid.is_empty() || record.candidate_oid != candidate)
+    {
+        return Ok(TransactionPublish::Conflict(format!(
+            "Git transaction candidate changed: expected {}, found {candidate}",
+            record.candidate_oid
+        )));
+    }
+
+    if candidate == "<missing>" || candidate.is_empty() {
+        return Ok(TransactionPublish::Conflict(
+            "native Git commit did not leave a reachable transaction commit".to_string(),
+        ));
+    }
+    if let Some(reason) =
+        transaction_candidate_conflict(root, &candidate, &expected, &record.staged_tree_oid)?
+    {
+        return Ok(TransactionPublish::Conflict(reason));
+    }
+    if !record.candidate_oid.is_empty() && record.candidate_oid != candidate {
+        return Ok(TransactionPublish::Conflict(format!(
+            "Git transaction candidate changed: expected {}, found {candidate}",
+            record.candidate_oid
+        )));
+    }
+    record.candidate_oid = candidate.clone();
+    if record.phase != GitIntegrationPhase::Published {
+        record.phase = GitIntegrationPhase::Candidate;
+        persist_transaction(run_dir, &record)?;
+    }
+
+    target_tip = ref_tip(root, &target_ref).unwrap_or_else(|| "<missing>".into());
+    match record.phase {
+        GitIntegrationPhase::Candidate if target_tip == expected => {
+            if git(root, &["update-ref", &target_ref, &candidate, &expected]).is_err() {
+                let found = ref_tip(root, &target_ref).unwrap_or_else(|| "<missing>".into());
+                return Ok(TransactionPublish::Conflict(format!(
+                    "worktree branch tip changed after evidence collection: expected {expected}, found {found}"
+                )));
+            }
+        }
+        GitIntegrationPhase::Candidate if target_tip == candidate => {}
+        GitIntegrationPhase::Candidate => {
+            return Ok(TransactionPublish::Conflict(format!(
+                "worktree branch tip changed after evidence collection: expected {expected} or {candidate}, found {target_tip}"
+            )));
+        }
+        GitIntegrationPhase::Published if target_tip == candidate => {}
+        GitIntegrationPhase::Published => {
+            return Ok(TransactionPublish::Conflict(format!(
+                "published Git transaction target moved: expected {candidate}, found {target_tip}"
+            )));
+        }
+        _ => {
+            return Ok(TransactionPublish::Conflict(
+                "Git integration transaction reached an invalid publish phase".to_string(),
+            ));
+        }
+    }
+
+    record.phase = GitIntegrationPhase::Published;
+    persist_transaction(run_dir, &record)?;
+    git(
+        wt,
+        &[
+            "symbolic-ref",
+            "-m",
+            "yardlet integration published",
+            "HEAD",
+            &target_ref,
+        ],
+    )?;
+    Ok(TransactionPublish::Published(candidate))
+}
+
+fn publish_parallel_commit(
+    root: &Path,
+    wt: &Path,
+    branch_ref: &str,
+    task_id: &str,
+    observed_tip: &str,
+) -> Result<TransactionPublish> {
+    let message = commit_message(root, task_id);
+    let tree_oid = git(wt, &["write-tree"])?.trim().to_string();
+    let commit_oid = git(
+        wt,
+        &["commit-tree", &tree_oid, "-p", observed_tip, "-m", &message],
+    )?
+    .trim()
+    .to_string();
+    if git(root, &["update-ref", branch_ref, &commit_oid, observed_tip]).is_err() {
+        let found = ref_tip(root, branch_ref).unwrap_or_else(|| "<missing>".to_string());
+        return Ok(TransactionPublish::Conflict(format!(
+            "worktree branch tip changed after evidence collection: expected {observed_tip}, found {found}"
+        )));
+    }
+    Ok(TransactionPublish::Published(commit_oid))
 }
 
 /// Is a merge in progress in `root`, and if so, is it OUR merge of `branch`?
@@ -685,9 +1037,109 @@ fn merge_in_progress_is_ours(root: &Path, branch: &str) -> Option<bool> {
     Some(msg.contains(branch))
 }
 
-/// Commit whatever the worker left in the worktree (excluding Yardlet's `.agents/`
-/// state copies) and merge the branch back into the main workspace.
-pub(crate) fn integrate_worktree(
+/// Locate exactly one attributable two-parent merge on current first-parent
+/// history. This freezes the merge identity even if HEAD advances before the
+/// merge command starts or immediately after it returns.
+fn attributable_merge_after(
+    root: &Path,
+    since_oid: &str,
+    worker_oid: &str,
+) -> Result<Option<(String, String)>> {
+    let history = git(
+        root,
+        &[
+            "rev-list",
+            "--first-parent",
+            "--reverse",
+            &format!("{since_oid}..HEAD"),
+        ],
+    )?;
+    let mut found = Vec::new();
+    for candidate in history.lines().map(str::trim).filter(|oid| !oid.is_empty()) {
+        let parents = git(root, &["show", "-s", "--format=%P", candidate])?;
+        let parents = parents.split_whitespace().collect::<Vec<_>>();
+        if parents.len() == 2 && parents[1] == worker_oid {
+            found.push((candidate.to_string(), parents[0].to_string()));
+        }
+    }
+    match found.len() {
+        0 => Ok(None),
+        1 => Ok(found.pop()),
+        _ => Err(anyhow!(
+            "multiple attributable merges found for worker commit {worker_oid}"
+        )),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum IntegrationCommitMode<'a> {
+    SerialCoreStaged { run_dir: &'a Path, run_id: &'a str },
+    ParallelWorkerDirect,
+}
+
+fn serial_receipt_conflict(
+    root: &Path,
+    wt: &Path,
+    run_dir: &Path,
+    run_id: &str,
+    branch: &str,
+    task_id: &str,
+    baseline_oid: &str,
+) -> Option<String> {
+    let workspace = Workspace::at(root);
+    let receipt = workspace.load_serial_integration_receipt(run_id).ok()?;
+    let expected_run_dir = workspace.runs_dir().join(run_id);
+    (receipt.schema_version != 1
+        || receipt.run_id != run_id
+        || receipt.task_id != task_id
+        || receipt.worktree != wt.display().to_string()
+        || receipt.branch != branch
+        || receipt.baseline_oid != baseline_oid
+        || run_dir != expected_run_dir)
+        .then(|| "serial integration receipt does not match this run-owned worktree".to_string())
+}
+
+/// Integrate a serial worker whose result artifacts were staged outside the
+/// canonical run directory and imported by the core. Only this entry point can
+/// load the durable native-commit transaction record.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn integrate_serial_worktree(
+    root: &Path,
+    wt: &Path,
+    run_dir: &Path,
+    run_id: &str,
+    branch: &str,
+    task_id: &str,
+    baseline_oid: &str,
+    expected_tip_oid: Option<&str>,
+) -> Result<Integration> {
+    let workspace = Workspace::at(root);
+    if workspace.load_serial_integration_receipt(run_id).is_err() {
+        return Ok(Integration::Conflict(
+            "core-owned serial integration receipt is missing or invalid".to_string(),
+        ));
+    }
+    if let Some(reason) =
+        serial_receipt_conflict(root, wt, run_dir, run_id, branch, task_id, baseline_oid)
+    {
+        return Ok(Integration::Conflict(reason));
+    }
+    integrate_worktree_after_staged(
+        root,
+        wt,
+        branch,
+        task_id,
+        baseline_oid,
+        expected_tip_oid,
+        IntegrationCommitMode::SerialCoreStaged { run_dir, run_id },
+        |_, _, _| Ok(()),
+    )
+}
+
+/// Integrate a parallel worker without accepting any run-directory transaction
+/// input. Its evaluated staged tree is committed with immutable Git plumbing
+/// and published to the run-owned branch by exact-tip CAS.
+pub(crate) fn integrate_parallel_worktree(
     root: &Path,
     wt: &Path,
     branch: &str,
@@ -702,10 +1154,15 @@ pub(crate) fn integrate_worktree(
         task_id,
         baseline_oid,
         expected_tip_oid,
+        IntegrationCommitMode::ParallelWorkerDirect,
         |_, _, _| Ok(()),
     )
 }
 
+// The final callback is a deterministic race-injection seam used by the unit
+// test; keeping the production arguments explicit makes ownership boundaries
+// visible at each call site.
+#[allow(clippy::too_many_arguments)]
 fn integrate_worktree_after_staged<F>(
     root: &Path,
     wt: &Path,
@@ -713,6 +1170,7 @@ fn integrate_worktree_after_staged<F>(
     task_id: &str,
     baseline_oid: &str,
     expected_tip_oid: Option<&str>,
+    commit_mode: IntegrationCommitMode<'_>,
     after_staged: F,
 ) -> Result<Integration>
 where
@@ -764,39 +1222,35 @@ where
     git(wt, &["add", "-A", "--", ".", ":(exclude).agents"])?;
     let staged = git(wt, &["diff", "--cached", "--name-only"])?;
     after_staged(root, wt, branch)?;
-    let worker_tip = if !staged.trim().is_empty() {
-        let message = commit_message(root, task_id);
-        let tree_oid = git(wt, &["write-tree"])?.trim().to_string();
-        let commit_oid = git(
-            wt,
-            &[
-                "commit-tree",
-                &tree_oid,
-                "-p",
-                &observed_tip,
-                "-m",
-                &message,
-            ],
-        )?
-        .trim()
-        .to_string();
-        if git(
-            root,
-            &["update-ref", &branch_ref, &commit_oid, &observed_tip],
-        )
-        .is_err()
-        {
-            let found = git(
-                root,
-                &["rev-parse", "--verify", &format!("{branch_ref}^{{commit}}")],
-            )
-            .map(|oid| oid.trim().to_string())
-            .unwrap_or_else(|_| "<missing>".to_string());
-            return Ok(Integration::Conflict(format!(
-                "worktree branch tip changed after evidence collection: expected {observed_tip}, found {found}"
-            )));
+    let transaction_exists = match commit_mode {
+        IntegrationCommitMode::SerialCoreStaged { run_dir, .. } => {
+            transaction_path(run_dir).is_file()
         }
-        commit_oid
+        IntegrationCommitMode::ParallelWorkerDirect => false,
+    };
+    let worker_tip = if !staged.trim().is_empty() || transaction_exists {
+        let publish = match commit_mode {
+            IntegrationCommitMode::SerialCoreStaged { run_dir, run_id } => {
+                publish_transaction_commit(
+                    root,
+                    wt,
+                    run_dir,
+                    run_id,
+                    branch,
+                    task_id,
+                    &observed_tip,
+                )?
+            }
+            IntegrationCommitMode::ParallelWorkerDirect => {
+                publish_parallel_commit(root, wt, &branch_ref, task_id, &observed_tip)?
+            }
+        };
+        match publish {
+            TransactionPublish::Published(oid) => oid,
+            TransactionPublish::Conflict(reason) => {
+                return Ok(Integration::Conflict(reason));
+            }
+        }
     } else {
         let current_tip = git(
             root,
@@ -847,30 +1301,16 @@ where
             // existing merge from first-parent history instead of returning
             // NoChanges and losing ownership evidence. The second parent must
             // be this run's immutable worktree tip.
-            let history = git(
-                root,
-                &[
-                    "rev-list",
-                    "--first-parent",
-                    "--reverse",
-                    &format!("{baseline_oid}..HEAD"),
-                ],
-            )?;
-            for candidate in history.lines().map(str::trim).filter(|oid| !oid.is_empty()) {
-                let parents = git(root, &["show", "-s", "--format=%P", candidate])?;
-                let parents = parents.split_whitespace().collect::<Vec<_>>();
-                if parents
-                    .get(1..)
-                    .is_some_and(|rest| rest.contains(&worker_tip.as_str()))
-                {
-                    let base_oid = parents[0].to_string();
-                    owned_oids.push(candidate.to_string());
-                    return Ok(Integration::Merged {
-                        oid: candidate.to_string(),
-                        base_oid,
-                        owned_oids,
-                    });
-                }
+            if let Some((oid, base_oid)) =
+                attributable_merge_after(root, baseline_oid, &worker_tip)?
+            {
+                owned_oids.push(oid.clone());
+                return Ok(Integration::Merged {
+                    oid,
+                    base_oid,
+                    worker_oid: worker_tip,
+                    owned_oids,
+                });
             }
             return Ok(Integration::Conflict(
                 "worktree commit is already reachable but its attributable merge commit \
@@ -878,7 +1318,9 @@ where
                     .to_string(),
             ));
         }
-        return Ok(Integration::NoChanges);
+        return Ok(Integration::NoChanges {
+            worker_oid: worker_tip,
+        });
     }
     let merge_message = format!("Merge run-owned branch {branch}");
     match git(
@@ -893,13 +1335,18 @@ where
         ],
     ) {
         Ok(_) => {
-            let oid = git(root, &["rev-parse", "--verify", "HEAD^{commit}"])?
-                .trim()
-                .to_string();
+            let Some((oid, base_oid)) = attributable_merge_after(root, &base_oid, &worker_tip)?
+            else {
+                return Ok(Integration::Conflict(
+                    "Git merge returned success but its exact two-parent integration commit could not be attributed"
+                        .to_string(),
+                ));
+            };
             owned_oids.push(oid.clone());
             Ok(Integration::Merged {
                 oid,
                 base_oid,
+                worker_oid: worker_tip,
                 owned_oids,
             })
         }
@@ -949,11 +1396,207 @@ pub(crate) fn create_worktree(root: &Path, wt: &Path, branch: &str) -> Result<()
 }
 
 pub(crate) fn remove_worktree(root: &Path, wt: &Path, branch: &str) {
-    let _ = git(
+    let branch_ref = format!("refs/heads/{branch}");
+    let branch_tip = ref_tip(root, &branch_ref);
+    let transaction = transaction_ref(branch);
+    let transaction_tip = ref_tip(root, &transaction);
+    let removed = git(
         root,
         &["worktree", "remove", "--force", &wt.display().to_string()],
+    )
+    .is_ok();
+    let _ = git(root, &["worktree", "prune"]);
+    if removed || (!wt.exists() && !worktree_registered(root, wt)) {
+        if let Some(branch_tip) = branch_tip {
+            let _ = git(root, &["update-ref", "-d", &branch_ref, &branch_tip]);
+        }
+        if let Some(transaction_tip) = transaction_tip {
+            let _ = git(root, &["update-ref", "-d", &transaction, &transaction_tip]);
+        }
+    }
+}
+
+pub(crate) struct IntegratedCleanup {
+    pub complete: bool,
+    pub warnings: Vec<String>,
+}
+
+fn worktree_registered(root: &Path, wt: &Path) -> bool {
+    let expected = wt.display().to_string();
+    git(root, &["worktree", "list", "--porcelain"])
+        .ok()
+        .is_some_and(|listed| {
+            listed
+                .lines()
+                .filter_map(|line| line.strip_prefix("worktree "))
+                .any(|path| path == expected)
+        })
+}
+
+fn cleanup_owned_ref(
+    root: &Path,
+    reference: &str,
+    expected_oid: &str,
+    label: &str,
+    warnings: &mut Vec<String>,
+) -> bool {
+    let Some(found) = ref_tip(root, reference) else {
+        return true;
+    };
+    if found != expected_oid {
+        warnings.push(format!(
+            "retained moved {label} {reference}: expected {expected_oid}, found {found}"
+        ));
+        return false;
+    }
+    if git(root, &["update-ref", "-d", reference, expected_oid]).is_err() {
+        let after = ref_tip(root, reference).unwrap_or_else(|| "<missing>".to_string());
+        warnings.push(format!(
+            "could not delete owned {label} {reference} at {expected_oid}; found {after}"
+        ));
+        return false;
+    }
+    true
+}
+
+/// Idempotently clean a successfully integrated worktree. Ref deletion is
+/// compare-and-swap against the exact merge second parent, so a concurrently
+/// moved or reused branch is retained rather than mistaken for this run's.
+pub(crate) fn cleanup_integrated_worktree(
+    root: &Path,
+    wt: &Path,
+    branch: &str,
+    worker_oid: &str,
+    provenance: run::IntegrationProvenance,
+) -> IntegratedCleanup {
+    let mut warnings = Vec::new();
+    let branch_ref = format!("refs/heads/{branch}");
+    let transaction = transaction_ref(branch);
+    if !branch.starts_with("yard/")
+        || git(root, &["check-ref-format", &branch_ref]).is_err()
+        || worker_oid.is_empty()
+    {
+        warnings.push("refused integrated cleanup with invalid ownership identity".to_string());
+        return IntegratedCleanup {
+            complete: false,
+            warnings,
+        };
+    }
+
+    // Inspect ownership before removing anything. A later session may have
+    // advanced either ref after integration; retaining both the ref and its
+    // checkout is safer than force-removing a worktree that no longer belongs
+    // exclusively to this run.
+    for (reference, label) in [
+        (branch_ref.as_str(), "worktree branch"),
+        (transaction.as_str(), "transaction ref"),
+    ] {
+        if label == "transaction ref" && provenance != run::IntegrationProvenance::SerialCoreStaged
+        {
+            continue;
+        }
+        if let Some(found) = ref_tip(root, reference) {
+            if found != worker_oid {
+                warnings.push(format!(
+                    "retained moved {label} {reference}: expected {worker_oid}, found {found}"
+                ));
+                return IntegratedCleanup {
+                    complete: false,
+                    warnings,
+                };
+            }
+        }
+    }
+
+    if wt.exists() {
+        let expected_symbolic = format!("refs/heads/{branch}");
+        let symbolic_head = git(wt, &["symbolic-ref", "--quiet", "HEAD"])
+            .ok()
+            .map(|value| value.trim().to_string());
+        let worktree_head = git(wt, &["rev-parse", "--verify", "HEAD^{commit}"])
+            .ok()
+            .map(|value| value.trim().to_string());
+        if symbolic_head.as_deref() != Some(expected_symbolic.as_str())
+            || worktree_head.as_deref() != Some(worker_oid)
+        {
+            warnings.push(format!(
+                "retained worktree {} whose HEAD no longer matches the owned branch at {worker_oid}",
+                wt.display()
+            ));
+            return IntegratedCleanup {
+                complete: false,
+                warnings,
+            };
+        }
+        let Some(changed) = evaluator::changed_paths(wt) else {
+            warnings.push(format!(
+                "could not verify owned worktree {}; worktree and refs retained",
+                wt.display()
+            ));
+            return IntegratedCleanup {
+                complete: false,
+                warnings,
+            };
+        };
+        let retained = changed
+            .into_iter()
+            .filter(|path| path != ".agents" && !path.starts_with(".agents/"))
+            .collect::<Vec<_>>();
+        if !retained.is_empty() {
+            warnings.push(format!(
+                "retained worktree {} with post-integration changes: {}",
+                wt.display(),
+                retained.join(", ")
+            ));
+            return IntegratedCleanup {
+                complete: false,
+                warnings,
+            };
+        }
+    }
+
+    if (wt.exists() || worktree_registered(root, wt))
+        && git(
+            root,
+            &["worktree", "remove", "--force", &wt.display().to_string()],
+        )
+        .is_err()
+    {
+        warnings.push(format!(
+            "could not remove owned worktree {}; refs retained",
+            wt.display()
+        ));
+    }
+    let _ = git(root, &["worktree", "prune"]);
+    if wt.exists() || worktree_registered(root, wt) {
+        return IntegratedCleanup {
+            complete: false,
+            warnings,
+        };
+    }
+
+    let target_clean = cleanup_owned_ref(
+        root,
+        &branch_ref,
+        worker_oid,
+        "worktree branch",
+        &mut warnings,
     );
-    let _ = git(root, &["branch", "-D", branch]);
+    let transaction_clean = if provenance == run::IntegrationProvenance::SerialCoreStaged {
+        cleanup_owned_ref(
+            root,
+            &transaction_ref(branch),
+            worker_oid,
+            "transaction ref",
+            &mut warnings,
+        )
+    } else {
+        true
+    };
+    IntegratedCleanup {
+        complete: target_clean && transaction_clean,
+        warnings,
+    }
 }
 
 /// Keep `.agents/worktrees/` out of `git status` in any repo Yardlet runs in,
@@ -1249,6 +1892,38 @@ mod tests {
         git(dir, args).unwrap_or_else(|e| panic!("git {args:?} in {dir:?}: {e}"))
     }
 
+    fn integration_run_dir(root: &Path, branch: &str) -> PathBuf {
+        let path = root
+            .join(".agents/runs")
+            .join(format!("test-{}", branch.replace('/', "-")));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn serial_integration_run_dir(
+        root: &Path,
+        wt: &Path,
+        run_id: &str,
+        branch: &str,
+        task_id: &str,
+        baseline_oid: &str,
+    ) -> PathBuf {
+        let workspace = Workspace::at(root);
+        let path = workspace.runs_dir().join(run_id);
+        std::fs::create_dir_all(&path).unwrap();
+        workspace
+            .save_serial_integration_receipt(&state::SerialIntegrationReceipt {
+                schema_version: 1,
+                run_id: run_id.to_string(),
+                task_id: task_id.to_string(),
+                worktree: wt.display().to_string(),
+                branch: branch.to_string(),
+                baseline_oid: baseline_oid.to_string(),
+            })
+            .unwrap();
+        path
+    }
+
     fn temp_repo(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("yard-par-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -1432,7 +2107,8 @@ exit 0
         std::fs::write(wt.join("feature.txt"), "new\n").unwrap();
         std::fs::create_dir_all(wt.join(".agents")).unwrap();
         std::fs::write(wt.join(".agents/work-queue.yaml"), "copy").unwrap();
-        match integrate_worktree(&root, &wt, "yard/yard-001", "YARD-001", &baseline, None).unwrap()
+        match integrate_parallel_worktree(&root, &wt, "yard/yard-001", "YARD-001", &baseline, None)
+            .unwrap()
         {
             Integration::Merged { oid, .. } => {
                 assert_eq!(oid, sh_git(&root, &["rev-parse", "HEAD"]).trim());
@@ -1474,11 +2150,13 @@ exit 0
         let worker_commit = sh_git(&wt, &["rev-parse", "HEAD"]).trim().to_string();
 
         let first =
-            integrate_worktree(&root, &wt, branch, "YARD-RECOVER", &baseline, None).unwrap();
+            integrate_parallel_worktree(&root, &wt, branch, "YARD-RECOVER", &baseline, None)
+                .unwrap();
         let Integration::Merged {
             oid: first_oid,
             base_oid: first_base,
             owned_oids: first_owned,
+            ..
         } = first
         else {
             panic!("expected first integration to merge")
@@ -1486,11 +2164,13 @@ exit 0
         let commit_count = sh_git(&root, &["rev-list", "--count", "HEAD"]);
 
         let repeated =
-            integrate_worktree(&root, &wt, branch, "YARD-RECOVER", &baseline, None).unwrap();
+            integrate_parallel_worktree(&root, &wt, branch, "YARD-RECOVER", &baseline, None)
+                .unwrap();
         let Integration::Merged {
             oid,
             base_oid,
             owned_oids,
+            ..
         } = repeated
         else {
             panic!("expected recovery to reconstruct the existing integration")
@@ -1503,6 +2183,49 @@ exit 0
             sh_git(&root, &["rev-list", "--count", "HEAD"]),
             commit_count
         );
+
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn attributable_merge_uses_exact_parents_when_main_moves_around_it() {
+        let root = temp_repo("merge-attribution-race");
+        let wt = root.join(".agents/worktrees/yard-attribution-race");
+        let branch = "yard/yard-attribution-race";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("worker.txt"), "worker\n").unwrap();
+        sh_git(&wt, &["add", "worker.txt"]);
+        sh_git(&wt, &["commit", "-q", "-m", "worker commit"]);
+        let worker_oid = sh_git(&wt, &["rev-parse", "HEAD"]).trim().to_string();
+
+        std::fs::write(root.join("concurrent-before.txt"), "before\n").unwrap();
+        sh_git(&root, &["add", "concurrent-before.txt"]);
+        sh_git(&root, &["commit", "-q", "-m", "concurrent before merge"]);
+        let actual_base = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        sh_git(
+            &root,
+            &[
+                "merge",
+                "--no-ff",
+                "--no-edit",
+                "-m",
+                "owned merge",
+                &worker_oid,
+            ],
+        );
+        let merge_oid = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        std::fs::write(root.join("concurrent-after.txt"), "after\n").unwrap();
+        sh_git(&root, &["add", "concurrent-after.txt"]);
+        sh_git(&root, &["commit", "-q", "-m", "concurrent after merge"]);
+        let advanced_head = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let attributed = attributable_merge_after(&root, &baseline, &worker_oid)
+            .unwrap()
+            .expect("exact worker merge must remain attributable");
+        assert_eq!(attributed, (merge_oid, actual_base));
+        assert_ne!(attributed.0, advanced_head);
 
         remove_worktree(&root, &wt, branch);
         let _ = std::fs::remove_dir_all(&root);
@@ -1532,7 +2255,7 @@ exit 0
         assert_ne!(evidence_oid, drifted_oid);
         let main_before = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
 
-        let result = integrate_worktree(
+        let result = integrate_parallel_worktree(
             &root,
             &wt,
             branch,
@@ -1581,7 +2304,8 @@ exit 0
             branch,
             "YARD-STAGED-RACE",
             &baseline,
-            Some(&evidence_oid),
+            Some(evidence_oid.as_str()),
+            IntegrationCommitMode::ParallelWorkerDirect,
             |root, _, branch| {
                 let old_oid = sh_git(
                     root,
@@ -1639,6 +2363,399 @@ exit 0
     }
 
     #[test]
+    fn integration_honors_required_commit_signing_before_publishing() {
+        let root = temp_repo("commit-signing-policy");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let wt = root.join(".agents/worktrees/yard-signing-policy");
+        let branch = "yard/yard-signing-policy";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        sh_git(&root, &["config", "commit.gpgSign", "true"]);
+        std::fs::write(wt.join("feature.txt"), "must be signed\n").unwrap();
+        let run_dir =
+            serial_integration_run_dir(&root, &wt, "run-sign", branch, "YARD-SIGN", &baseline);
+
+        let result = integrate_serial_worktree(
+            &root,
+            &wt,
+            &run_dir,
+            "run-sign",
+            branch,
+            "YARD-SIGN",
+            &baseline,
+            Some(&baseline),
+        );
+
+        assert!(
+            result.is_err(),
+            "missing signing key must fail native commit"
+        );
+        assert_eq!(
+            sh_git(&root, &["rev-parse", &format!("refs/heads/{branch}")]).trim(),
+            baseline
+        );
+        assert!(wt.join("feature.txt").exists());
+
+        sh_git(&root, &["config", "--unset", "commit.gpgSign"]);
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integration_runs_configured_commit_hook_before_publishing() {
+        let root = temp_repo("commit-hook-policy");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let wt = root.join(".agents/worktrees/yard-hook-policy");
+        let branch = "yard/yard-hook-policy";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        sh_git(&root, &["config", "core.hooksPath", ".githooks"]);
+        std::fs::create_dir_all(wt.join(".githooks")).unwrap();
+        let hook = wt.join(".githooks/commit-msg");
+        let marker = root.join(".git/commit-msg-ran");
+        std::fs::write(
+            &hook,
+            format!("#!/bin/sh\nprintf 'ran\\n' > '{}'\n", marker.display()),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(wt.join("feature.txt"), "hook-governed\n").unwrap();
+        let run_dir =
+            serial_integration_run_dir(&root, &wt, "run-hook", branch, "YARD-HOOK", &baseline);
+
+        let result = integrate_serial_worktree(
+            &root,
+            &wt,
+            &run_dir,
+            "run-hook",
+            branch,
+            "YARD-HOOK",
+            &baseline,
+            Some(&baseline),
+        )
+        .unwrap();
+
+        assert!(matches!(result, Integration::Merged { .. }));
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "ran\n");
+
+        sh_git(&root, &["config", "--unset", "core.hooksPath"]);
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integration_keeps_target_unchanged_when_commit_hook_rejects() {
+        let root = temp_repo("commit-hook-reject");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let wt = root.join(".agents/worktrees/yard-hook-reject");
+        let branch = "yard/yard-hook-reject";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        let run_dir = serial_integration_run_dir(
+            &root,
+            &wt,
+            "run-hook-reject",
+            branch,
+            "YARD-HOOK-REJECT",
+            &baseline,
+        );
+        sh_git(&root, &["config", "core.hooksPath", ".githooks"]);
+        std::fs::create_dir_all(wt.join(".githooks")).unwrap();
+        let hook = wt.join(".githooks/pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\nexit 23\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(wt.join("feature.txt"), "must stay staged\n").unwrap();
+
+        let result = integrate_serial_worktree(
+            &root,
+            &wt,
+            &run_dir,
+            "run-hook-reject",
+            branch,
+            "YARD-HOOK-REJECT",
+            &baseline,
+            Some(&baseline),
+        );
+
+        assert!(result.is_err(), "rejecting hook must fail native commit");
+        assert_eq!(
+            sh_git(&root, &["rev-parse", &format!("refs/heads/{branch}")]).trim(),
+            baseline
+        );
+        assert!(ref_tip(&root, &transaction_ref(branch)).is_none());
+        assert_eq!(
+            sh_git(&wt, &["symbolic-ref", "HEAD"]).trim(),
+            format!("refs/heads/{branch}")
+        );
+        let record: GitIntegrationTransaction = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join(GIT_INTEGRATION_RECORD)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.phase, GitIntegrationPhase::Failed);
+        assert!(wt.join("feature.txt").exists());
+
+        sh_git(&root, &["config", "--unset", "core.hooksPath"]);
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integration_rejects_preexisting_transaction_candidate() {
+        let root = temp_repo("preexisting-transaction");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let wt = root.join(".agents/worktrees/yard-preexisting-transaction");
+        let branch = "yard/yard-preexisting-transaction";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        let run_dir = serial_integration_run_dir(
+            &root,
+            &wt,
+            "run-txn-forge",
+            branch,
+            "YARD-TXN-FORGE",
+            &baseline,
+        );
+        std::fs::write(wt.join("feature.txt"), "evaluated worker change\n").unwrap();
+
+        let base_tree = sh_git(&root, &["rev-parse", &format!("{baseline}^{{tree}}")])
+            .trim()
+            .to_string();
+        let forged = sh_git(
+            &root,
+            &[
+                "commit-tree",
+                &base_tree,
+                "-p",
+                &baseline,
+                "-m",
+                "preexisting transaction",
+            ],
+        )
+        .trim()
+        .to_string();
+        sh_git(&root, &["update-ref", &transaction_ref(branch), &forged]);
+
+        let result = integrate_serial_worktree(
+            &root,
+            &wt,
+            &run_dir,
+            "run-txn-forge",
+            branch,
+            "YARD-TXN-FORGE",
+            &baseline,
+            Some(&baseline),
+        )
+        .unwrap();
+
+        let Integration::Conflict(why) = result else {
+            panic!("preexisting transaction candidate must fail closed")
+        };
+        assert!(why.contains("already changed"), "{why}");
+        assert_eq!(
+            sh_git(&root, &["rev-parse", &format!("refs/heads/{branch}")]).trim(),
+            baseline
+        );
+        assert_eq!(ref_tip(&root, &transaction_ref(branch)).unwrap(), forged);
+        assert!(wt.exists());
+
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parallel_integration_never_loads_a_worker_forged_transaction_record() {
+        let root = temp_repo("parallel-forged-transaction");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let wt = root.join(".agents/worktrees/yard-parallel-forge");
+        let branch = "yard/yard-parallel-forge";
+        let run_dir = integration_run_dir(&root, branch);
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("feature.txt"), "evaluated parallel change\n").unwrap();
+        std::fs::write(run_dir.join(GIT_INTEGRATION_RECORD), "{forged worker json").unwrap();
+
+        let base_tree = sh_git(&root, &["rev-parse", &format!("{baseline}^{{tree}}")])
+            .trim()
+            .to_string();
+        let forged = sh_git(
+            &root,
+            &[
+                "commit-tree",
+                &base_tree,
+                "-p",
+                &baseline,
+                "-m",
+                "forged parallel transaction",
+            ],
+        )
+        .trim()
+        .to_string();
+        sh_git(&root, &["update-ref", &transaction_ref(branch), &forged]);
+
+        let result = integrate_parallel_worktree(
+            &root,
+            &wt,
+            branch,
+            "YARD-PARALLEL-FORGE",
+            &baseline,
+            Some(&baseline),
+        )
+        .unwrap();
+
+        let Integration::Merged { worker_oid, .. } = result else {
+            panic!("parallel integration must use its evaluated staged tree")
+        };
+        assert_ne!(worker_oid, forged);
+        assert_eq!(
+            sh_git(&root, &["show", &format!("{worker_oid}:feature.txt")]).trim(),
+            "evaluated parallel change"
+        );
+        assert_eq!(ref_tip(&root, &transaction_ref(branch)).unwrap(), forged);
+
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn serial_recovery_rejects_a_hook_mutated_tree_after_native_commit() {
+        let root = temp_repo("serial-hook-mutated-tree");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let wt = root.join(".agents/worktrees/yard-hook-mutated-tree");
+        let branch = "yard/yard-hook-mutated-tree";
+        let run_id = "run-hook-mutated-tree";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        let run_dir =
+            serial_integration_run_dir(&root, &wt, run_id, branch, "YARD-HOOK-TREE", &baseline);
+        sh_git(&root, &["config", "core.hooksPath", ".githooks"]);
+        std::fs::create_dir_all(wt.join(".githooks")).unwrap();
+        let hook = wt.join(".githooks/pre-commit");
+        std::fs::write(
+            &hook,
+            "#!/bin/sh\nprintf 'hook-only\\n' > hook-added.txt\ngit add hook-added.txt\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(wt.join("feature.txt"), "evaluated before hook\n").unwrap();
+
+        for attempt in 0..2 {
+            let result = integrate_serial_worktree(
+                &root,
+                &wt,
+                &run_dir,
+                run_id,
+                branch,
+                "YARD-HOOK-TREE",
+                &baseline,
+                Some(&baseline),
+            )
+            .unwrap();
+            let Integration::Conflict(why) = result else {
+                panic!("hook-mutated candidate must fail closed on attempt {attempt}")
+            };
+            assert!(why.contains("evaluated staged tree"), "{why}");
+            assert_eq!(sh_git(&root, &["rev-parse", "HEAD"]).trim(), baseline);
+            assert_eq!(
+                ref_tip(&root, &format!("refs/heads/{branch}")).unwrap(),
+                baseline
+            );
+        }
+        let record: GitIntegrationTransaction = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join(GIT_INTEGRATION_RECORD)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.phase, GitIntegrationPhase::CommitReady);
+        assert_ne!(ref_tip(&root, &transaction_ref(branch)).unwrap(), baseline);
+
+        sh_git(&root, &["config", "--unset", "core.hooksPath"]);
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn published_serial_transaction_never_reclaims_a_rolled_back_target() {
+        let root = temp_repo("published-transaction-rollback");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let wt = root.join(".agents/worktrees/yard-published-rollback");
+        let branch = "yard/yard-published-rollback";
+        let run_id = "run-published-rollback";
+        let task_id = "YARD-PUBLISHED-ROLLBACK";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("feature.txt"), "owned\n").unwrap();
+        let run_dir = serial_integration_run_dir(&root, &wt, run_id, branch, task_id, &baseline);
+
+        let first = integrate_serial_worktree(
+            &root,
+            &wt,
+            &run_dir,
+            run_id,
+            branch,
+            task_id,
+            &baseline,
+            Some(&baseline),
+        )
+        .unwrap();
+        let Integration::Merged {
+            oid: merge_oid,
+            worker_oid,
+            ..
+        } = first
+        else {
+            panic!("first integration must merge")
+        };
+        sh_git(
+            &root,
+            &[
+                "update-ref",
+                &format!("refs/heads/{branch}"),
+                &baseline,
+                &worker_oid,
+            ],
+        );
+
+        let repeated = integrate_serial_worktree(
+            &root,
+            &wt,
+            &run_dir,
+            run_id,
+            branch,
+            task_id,
+            &baseline,
+            Some(&baseline),
+        )
+        .unwrap();
+
+        let Integration::Conflict(why) = repeated else {
+            panic!("published target rollback must fail closed")
+        };
+        assert!(
+            why.contains("published Git transaction target moved"),
+            "{why}"
+        );
+        assert_eq!(
+            ref_tip(&root, &format!("refs/heads/{branch}")).unwrap(),
+            baseline
+        );
+        assert_eq!(sh_git(&root, &["rev-parse", "HEAD"]).trim(), merge_oid);
+
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn create_worktree_prunes_stale_checkout_before_recreate() {
         let root = temp_repo("stale");
         let wt = root.join(".agents/worktrees/yard-004");
@@ -1660,6 +2777,172 @@ exit 0
         let listed = sh_git(&root, &["worktree", "list", "--porcelain"]);
         assert_eq!(listed.matches("branch refs/heads/yard/yard-004").count(), 1);
         remove_worktree(&root, &wt, "yard/yard-004");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integrated_cleanup_removes_only_exact_owned_refs() {
+        let root = temp_repo("integrated-cleanup-owned");
+        let wt = root.join(".agents/worktrees/run-cleanup-owned");
+        let branch = "yard/yard-cleanup/run-cleanup-owned";
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("owned.txt"), "owned\n").unwrap();
+        sh_git(&wt, &["add", "owned.txt"]);
+        sh_git(&wt, &["commit", "-q", "-m", "owned worker commit"]);
+        let worker_oid = sh_git(&wt, &["rev-parse", "HEAD"]).trim().to_string();
+        sh_git(
+            &root,
+            &["update-ref", &transaction_ref(branch), &worker_oid, ""],
+        );
+
+        let cleanup = cleanup_integrated_worktree(
+            &root,
+            &wt,
+            branch,
+            &worker_oid,
+            run::IntegrationProvenance::SerialCoreStaged,
+        );
+
+        assert!(cleanup.complete, "{:?}", cleanup.warnings);
+        assert!(!wt.exists());
+        assert!(ref_tip(&root, &format!("refs/heads/{branch}")).is_none());
+        assert!(ref_tip(&root, &transaction_ref(branch)).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integrated_cleanup_preserves_a_concurrently_moved_branch() {
+        let root = temp_repo("integrated-cleanup-moved");
+        let wt = root.join(".agents/worktrees/run-cleanup-moved");
+        let branch = "yard/yard-cleanup/run-cleanup-moved";
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("owned.txt"), "owned\n").unwrap();
+        sh_git(&wt, &["add", "owned.txt"]);
+        sh_git(&wt, &["commit", "-q", "-m", "owned worker commit"]);
+        let worker_oid = sh_git(&wt, &["rev-parse", "HEAD"]).trim().to_string();
+        let tree = sh_git(&root, &["rev-parse", &format!("{worker_oid}^{{tree}}")])
+            .trim()
+            .to_string();
+        let moved_oid = sh_git(
+            &root,
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                &worker_oid,
+                "-m",
+                "concurrent branch move",
+            ],
+        )
+        .trim()
+        .to_string();
+        sh_git(
+            &root,
+            &[
+                "update-ref",
+                &format!("refs/heads/{branch}"),
+                &moved_oid,
+                &worker_oid,
+            ],
+        );
+
+        let cleanup = cleanup_integrated_worktree(
+            &root,
+            &wt,
+            branch,
+            &worker_oid,
+            run::IntegrationProvenance::ParallelWorkerDirect,
+        );
+
+        assert!(!cleanup.complete);
+        assert!(wt.exists());
+        assert_eq!(
+            ref_tip(&root, &format!("refs/heads/{branch}")).unwrap(),
+            moved_oid
+        );
+        assert!(cleanup
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("retained moved worktree branch")));
+
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integrated_cleanup_retains_post_integration_worktree_changes() {
+        let root = temp_repo("integrated-cleanup-dirty");
+        let wt = root.join(".agents/worktrees/run-cleanup-dirty");
+        let branch = "yard/yard-cleanup/run-cleanup-dirty";
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("owned.txt"), "owned\n").unwrap();
+        sh_git(&wt, &["add", "owned.txt"]);
+        sh_git(&wt, &["commit", "-q", "-m", "owned worker commit"]);
+        let worker_oid = sh_git(&wt, &["rev-parse", "HEAD"]).trim().to_string();
+        std::fs::write(wt.join("later.txt"), "belongs to a later session\n").unwrap();
+
+        let cleanup = cleanup_integrated_worktree(
+            &root,
+            &wt,
+            branch,
+            &worker_oid,
+            run::IntegrationProvenance::ParallelWorkerDirect,
+        );
+
+        assert!(!cleanup.complete);
+        assert!(wt.exists());
+        assert_eq!(
+            ref_tip(&root, &format!("refs/heads/{branch}")).unwrap(),
+            worker_oid
+        );
+        assert!(cleanup
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("post-integration changes")));
+
+        std::fs::remove_file(wt.join("later.txt")).unwrap();
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integrated_cleanup_retains_a_detached_clean_commit() {
+        let root = temp_repo("integrated-cleanup-detached");
+        let wt = root.join(".agents/worktrees/run-cleanup-detached");
+        let branch = "yard/yard-cleanup/run-cleanup-detached";
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("owned.txt"), "owned\n").unwrap();
+        sh_git(&wt, &["add", "owned.txt"]);
+        sh_git(&wt, &["commit", "-q", "-m", "owned worker commit"]);
+        let worker_oid = sh_git(&wt, &["rev-parse", "HEAD"]).trim().to_string();
+        sh_git(&wt, &["checkout", "-q", "--detach"]);
+        std::fs::write(wt.join("detached.txt"), "clean detached commit\n").unwrap();
+        sh_git(&wt, &["add", "detached.txt"]);
+        sh_git(&wt, &["commit", "-q", "-m", "detached later commit"]);
+        let detached_oid = sh_git(&wt, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let cleanup = cleanup_integrated_worktree(
+            &root,
+            &wt,
+            branch,
+            &worker_oid,
+            run::IntegrationProvenance::ParallelWorkerDirect,
+        );
+
+        assert!(!cleanup.complete);
+        assert!(wt.exists());
+        assert_eq!(sh_git(&wt, &["rev-parse", "HEAD"]).trim(), detached_oid);
+        assert_eq!(
+            ref_tip(&root, &format!("refs/heads/{branch}")).unwrap(),
+            worker_oid
+        );
+        assert!(cleanup
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("HEAD no longer matches")));
+
+        sh_git(&wt, &["checkout", "-q", branch]);
+        remove_worktree(&root, &wt, branch);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1686,7 +2969,8 @@ exit 0
                 "main edit",
             ],
         );
-        match integrate_worktree(&root, &wt, "yard/yard-002", "YARD-002", &baseline, None).unwrap()
+        match integrate_parallel_worktree(&root, &wt, "yard/yard-002", "YARD-002", &baseline, None)
+            .unwrap()
         {
             Integration::Conflict(_) => {}
             _ => panic!("expected a conflict"),
@@ -1724,7 +3008,8 @@ exit 0
         let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-009").unwrap();
         std::fs::write(wt.join("other.txt"), "fine\n").unwrap();
-        match integrate_worktree(&root, &wt, "yard/yard-009", "YARD-009", &baseline, None).unwrap()
+        match integrate_parallel_worktree(&root, &wt, "yard/yard-009", "YARD-009", &baseline, None)
+            .unwrap()
         {
             Integration::Conflict(why) => assert!(why.contains("another merge"), "{why}"),
             _ => panic!("expected a conflict report"),
@@ -1744,11 +3029,54 @@ exit 0
         let wt = root.join(".agents/worktrees/yard-003");
         let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-003").unwrap();
-        match integrate_worktree(&root, &wt, "yard/yard-003", "YARD-003", &baseline, None).unwrap()
+        match integrate_parallel_worktree(&root, &wt, "yard/yard-003", "YARD-003", &baseline, None)
+            .unwrap()
         {
-            Integration::NoChanges => {}
+            Integration::NoChanges { .. } => {}
             _ => panic!("expected no changes"),
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn no_change_cleanup_retains_a_later_clean_commit() {
+        let root = temp_repo("nochange-later-commit");
+        let wt = root.join(".agents/worktrees/run-nochange-later");
+        let branch = "yard/yard-nochange/run-nochange-later";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        let worker_oid =
+            match integrate_parallel_worktree(&root, &wt, branch, "YARD-NOCHANGE", &baseline, None)
+                .unwrap()
+            {
+                Integration::NoChanges { worker_oid } => worker_oid,
+                _ => panic!("expected no changes"),
+            };
+
+        sh_git(&wt, &["checkout", "-q", "--detach"]);
+        std::fs::write(wt.join("later.txt"), "later clean commit\n").unwrap();
+        sh_git(&wt, &["add", "later.txt"]);
+        sh_git(&wt, &["commit", "-q", "-m", "later detached commit"]);
+        let later_oid = sh_git(&wt, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let cleanup = cleanup_integrated_worktree(
+            &root,
+            &wt,
+            branch,
+            &worker_oid,
+            run::IntegrationProvenance::ParallelWorkerDirect,
+        );
+
+        assert!(!cleanup.complete);
+        assert!(wt.exists());
+        assert_eq!(sh_git(&wt, &["rev-parse", "HEAD"]).trim(), later_oid);
+        assert_eq!(
+            ref_tip(&root, &format!("refs/heads/{branch}")),
+            Some(worker_oid)
+        );
+
+        sh_git(&wt, &["checkout", "-q", branch]);
+        remove_worktree(&root, &wt, branch);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -184,8 +184,8 @@ fn yardlet_serial_chain_and_crash_recovery_converge_without_manual_git_finish() 
     let summary = std::fs::read_to_string(evidence.join("summary.json"))
         .expect("fixture must leave structured summary evidence");
     assert!(summary.contains("\"status\": \"passed\""), "{summary}");
-    assert!(summary.contains("\"scenarios_passed\": 6"), "{summary}");
-    assert!(summary.contains("\"crash_windows_passed\": 5"), "{summary}");
+    assert!(summary.contains("\"scenarios_passed\": 8"), "{summary}");
+    assert!(summary.contains("\"crash_windows_passed\": 7"), "{summary}");
     assert!(
         summary.contains("\"public_remote_commands\": 0"),
         "{summary}"

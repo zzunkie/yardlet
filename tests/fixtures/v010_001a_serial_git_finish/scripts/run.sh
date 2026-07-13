@@ -442,13 +442,23 @@ done_run_for() {
   done
 }
 
+latest_run_for() {
+  local ws="$1"
+  local task_id="$2"
+  local path
+  for path in "$ws"/.agents/runs/*/run.yaml; do
+    [[ "$(yaml_value "$path" task_id)" == "$task_id" ]] || continue
+    printf '%s\n' "$(dirname "$path")"
+  done | sort | tail -1
+}
+
 assert_run_projection() {
   local scenario="$1"
   local ws="$2"
   local remote="$3"
   local baseline="$4"
   local previous="$baseline"
-  local task_id run_dir run_yaml finish expected base parents parent1 parent2 owned worker_oid
+  local task_id run_dir run_yaml finish expected base parents parent1 parent2 owned worker_oid branch
 
   for task_id in YARD-001 YARD-004 YARD-002 YARD-003; do
     run_dir="$(done_run_for "$ws" "$task_id")"
@@ -481,9 +491,16 @@ assert_run_projection() {
     owned="$(yaml_list "$run_yaml" owned_oids)"
     worker_oid="$(printf '%s\n' "$owned" | head -1)"
     assert_eq "$parent2" "$worker_oid" "$task_id merge second parent is isolated commit"
+    assert_eq "$(yaml_value "$run_yaml" integration_worker_oid)" "$worker_oid" "$task_id cleanup worker OID"
     assert_eq "$(printf '%s\n' "$owned" | tail -1)" "$expected" "$task_id merge OID ownership"
     assert_eq "$(grep -c "PUSH_SUCCESS.*${expected}:refs/heads/main" "$scenario/wrapper.log" || true)" 1 "$task_id exact refspec once"
     [[ ! -e "$(yaml_value "$run_yaml" worktree)" ]] || fail "$task_id successful worktree was retained"
+    assert_eq "$(yaml_value "$run_yaml" integration_cleanup_complete)" true "$task_id cleanup completion"
+    branch="$(yaml_value "$run_yaml" worktree_branch)"
+    ! "$REAL_GIT" -C "$ws" show-ref --verify --quiet "refs/heads/$branch" \
+      || fail "$task_id successful target branch was retained"
+    ! "$REAL_GIT" -C "$ws" show-ref --verify --quiet "refs/heads/yardlet-txn/$branch" \
+      || fail "$task_id successful transaction ref was retained"
     previous="$expected"
   done
 
@@ -551,7 +568,7 @@ assert_no_unsafe_finish() {
 run_scenario() {
   local name="$1"
   local crash_mode="$2"
-  local scenario ws remote baseline event pgid worker_before
+  local scenario ws remote baseline event pgid worker_before published_oid run_dir branch transaction_oid worktree integration_oid
   # Crash-window-specific expectations. A crash between the Prepared record
   # and the push is recovered by re-running the pre-push checks before the
   # retried push (one extra check line); a crash after the push subprocess
@@ -581,6 +598,41 @@ run_scenario() {
     wait_for_file "$event" "$crash_mode stop"
     assert_eq "$(cat "$event")" "$crash_mode" "$crash_mode event"
     assert_eq "$(ps -o pgid= -p "$(cat "$event.pid")" | tr -d ' ')" "$pgid" "$crash_mode wrapper process group"
+    if [[ "$crash_mode" == "after_commit" ]]; then
+      run_dir="$(latest_run_for "$ws" YARD-001)"
+      [[ -n "$run_dir" ]] || fail "after_commit missing YARD-001 run record"
+      branch="$(yaml_value "$run_dir/run.yaml" worktree_branch)"
+      published_oid="$("$REAL_GIT" -C "$ws" rev-parse --verify "refs/heads/$branch")"
+      [[ "$published_oid" != "$baseline" ]] \
+        || fail "after_commit stopped before the owned commit was published"
+      assert_eq "$(head_oid "$ws")" "$baseline" \
+        "after_commit must stop after branch publication but before main merge"
+    elif [[ "$crash_mode" == "after_transaction_commit" ]]; then
+      run_dir="$(latest_run_for "$ws" YARD-001)"
+      [[ -n "$run_dir" ]] || fail "after_transaction_commit missing YARD-001 run record"
+      branch="$(yaml_value "$run_dir/run.yaml" worktree_branch)"
+      assert_eq "$("$REAL_GIT" -C "$ws" rev-parse --verify "refs/heads/$branch")" "$baseline" \
+        "transaction commit must not publish the target branch before CAS"
+      transaction_oid="$("$REAL_GIT" -C "$ws" rev-parse --verify "refs/heads/yardlet-txn/$branch")"
+      [[ "$transaction_oid" != "$baseline" ]] \
+        || fail "after_transaction_commit stopped before native commit completed"
+      assert_eq "$(head_oid "$ws")" "$baseline" \
+        "transaction commit must stop before main merge"
+    elif [[ "$crash_mode" == "after_worktree_remove" ]]; then
+      run_dir="$(latest_run_for "$ws" YARD-001)"
+      [[ -n "$run_dir" ]] || fail "after_worktree_remove missing YARD-001 run record"
+      branch="$(yaml_value "$run_dir/run.yaml" worktree_branch)"
+      worktree="$(yaml_value "$run_dir/run.yaml" worktree)"
+      integration_oid="$(yaml_value "$run_dir/run.yaml" integration_oid)"
+      [[ -n "$integration_oid" ]] || fail "after_worktree_remove missing persisted integration OID"
+      [[ ! -e "$worktree" ]] || fail "after_worktree_remove stopped before path removal"
+      assert_eq "$(head_oid "$ws")" "$integration_oid" \
+        "after_worktree_remove must preserve the integrated main OID"
+      "$REAL_GIT" -C "$ws" show-ref --verify --quiet "refs/heads/$branch" \
+        || fail "after_worktree_remove stopped after target ref deletion"
+      "$REAL_GIT" -C "$ws" show-ref --verify --quiet "refs/heads/yardlet-txn/$branch" \
+        || fail "after_worktree_remove stopped after transaction ref deletion"
+    fi
     worker_before="$(cat "$scenario/attempts/YARD-001")"
     kill_process_group "$pgid"
     run_env "$scenario" "$ws" normal "$scenario/no-event" recover >"$scenario/recover.log" 2>&1
@@ -608,8 +660,10 @@ EOF
 
 run_scenario serial-chain normal
 run_scenario crash-before-commit before_commit
+run_scenario crash-after-transaction-commit after_transaction_commit
 run_scenario crash-after-commit after_commit
 run_scenario crash-after-merge after_merge
+run_scenario crash-after-worktree-remove after_worktree_remove
 run_scenario crash-before-push before_push
 run_scenario crash-after-push after_push
 
@@ -646,8 +700,8 @@ cat >"$EVIDENCE_DIR/summary.json" <<EOF
 {
   "status": "passed",
   "fixture_root": "$ROOT",
-  "scenarios_passed": 6,
-  "crash_windows_passed": 5,
+  "scenarios_passed": 8,
+  "crash_windows_passed": 7,
   "public_remote_commands": $public_remote_commands,
   "manual_finish_commands": $manual_finish_commands,
   "ambient_git_config_ignored": true,

@@ -32,6 +32,65 @@ pub struct Workspace {
     pub root: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationProvenance {
+    #[default]
+    Unknown,
+    SerialCoreStaged,
+    ParallelWorkerDirect,
+}
+
+/// Core-owned receipt proving that a run used the serial staging boundary.
+/// It lives outside the worker-writable canonical run directory so recovery
+/// never has to trust a worker-authored `run.yaml` when selecting the native
+/// Git transaction protocol.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerialIntegrationReceipt {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub task_id: String,
+    pub worktree: String,
+    pub branch: String,
+    pub baseline_oid: String,
+}
+
+/// Core-owned receipt for one successful merge. Cleanup recovery trusts this
+/// record rather than the worker-writable run directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntegratedCleanupReceipt {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub task_id: String,
+    pub intent_id: String,
+    pub worker: String,
+    pub worktree: String,
+    pub branch: String,
+    pub baseline_oid: String,
+    pub integration_base_oid: String,
+    pub integration_worker_oid: String,
+    pub integration_oid: String,
+    pub provenance: IntegrationProvenance,
+    pub owned_oids: Vec<String>,
+}
+
+/// Core-owned proof that a run produced no Git changes and therefore needs no
+/// push. It is persisted before deleting the isolated worktree so recovery can
+/// reconstruct the `not_needed` finish outcome across either cleanup window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoChangeReceipt {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub task_id: String,
+    pub intent_id: String,
+    pub worker: String,
+    pub worktree: String,
+    pub branch: String,
+    pub baseline_oid: String,
+    pub worker_oid: String,
+    pub provenance: IntegrationProvenance,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PlanningWorkerConfig {
     #[serde(default = "default_auto")]
@@ -128,26 +187,52 @@ impl Workspace {
     }
 
     /// Canonical writer for the secret-free Git finish attempt attached to a
-    /// run. Git URLs, user-provided check text/output, and environment values
-    /// are not fields in the record schema and therefore cannot be persisted
-    /// here. A failure from this writer is a hard pre-push gate.
+    /// run. The authoritative copy lives outside the worker-writable run
+    /// directory; `run_dir/git-finish.json` is a user-facing projection only.
+    /// Git URLs, user-provided check text/output, and environment values are not
+    /// fields in the record schema. A failure from either write is a hard gate.
     pub fn save_git_finish_record(
         &self,
         run_dir: &Path,
         record: &crate::git_finish::GitFinishRecord,
     ) -> Result<()> {
+        self.validate_receipt_run_id(&record.run_id)?;
+        if run_dir != self.runs_dir().join(&record.run_id) {
+            bail!("Git finish run directory does not match its core identity");
+        }
+        let text = serde_json::to_string_pretty(record)?;
         write_str_atomic(
-            &run_dir.join("git-finish.json"),
-            &serde_json::to_string_pretty(record)?,
-        )
+            &self
+                .checkpoints_dir()
+                .join("git-finish")
+                .join(format!("{}.json", record.run_id)),
+            &text,
+        )?;
+        write_str_atomic(&run_dir.join("git-finish.json"), &text)
     }
 
     pub fn load_git_finish_record(
         &self,
         run_dir: &Path,
     ) -> Result<crate::git_finish::GitFinishRecord> {
-        let raw = fs::read_to_string(run_dir.join("git-finish.json"))?;
-        Ok(serde_json::from_str(&raw)?)
+        let run_id = run_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Git finish run directory has no valid run id"))?;
+        self.validate_receipt_run_id(run_id)?;
+        if run_dir != self.runs_dir().join(run_id) {
+            bail!("Git finish run directory is outside the canonical runs directory");
+        }
+        let raw = fs::read_to_string(
+            self.checkpoints_dir()
+                .join("git-finish")
+                .join(format!("{run_id}.json")),
+        )?;
+        let record: crate::git_finish::GitFinishRecord = serde_json::from_str(&raw)?;
+        if record.run_id != run_id {
+            bail!("Git finish core record does not match its run id");
+        }
+        Ok(record)
     }
     /// Atomically claim a run directory without reusing an existing attempt's
     /// artifacts. Timestamp-based ids can collide during fast queue drains, so
@@ -180,6 +265,113 @@ impl Workspace {
     }
     pub fn handoffs_dir(&self) -> PathBuf {
         self.agents_dir().join("handoffs")
+    }
+    fn serial_integration_receipts_dir(&self) -> PathBuf {
+        self.checkpoints_dir().join("serial-integration")
+    }
+    fn integrated_cleanup_receipts_dir(&self) -> PathBuf {
+        self.checkpoints_dir().join("integrated-cleanup")
+    }
+    fn no_change_receipts_dir(&self) -> PathBuf {
+        self.checkpoints_dir().join("no-change")
+    }
+    fn no_change_receipt_path(&self, run_id: &str) -> Result<PathBuf> {
+        self.validate_receipt_run_id(run_id)?;
+        Ok(self.no_change_receipts_dir().join(format!("{run_id}.yaml")))
+    }
+    fn validate_receipt_run_id(&self, run_id: &str) -> Result<()> {
+        use std::path::Component;
+
+        if run_id.is_empty()
+            || Path::new(run_id).components().count() != 1
+            || !Path::new(run_id)
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+        {
+            bail!("invalid integration receipt run id '{run_id}'");
+        }
+        Ok(())
+    }
+    fn serial_integration_receipt_path(&self, run_id: &str) -> Result<PathBuf> {
+        self.validate_receipt_run_id(run_id)?;
+        Ok(self
+            .serial_integration_receipts_dir()
+            .join(format!("{run_id}.yaml")))
+    }
+    fn integrated_cleanup_receipt_path(&self, run_id: &str) -> Result<PathBuf> {
+        self.validate_receipt_run_id(run_id)?;
+        Ok(self
+            .integrated_cleanup_receipts_dir()
+            .join(format!("{run_id}.yaml")))
+    }
+    pub fn save_serial_integration_receipt(
+        &self,
+        receipt: &SerialIntegrationReceipt,
+    ) -> Result<()> {
+        let path = self.serial_integration_receipt_path(&receipt.run_id)?;
+        let text = yaml::to_string(receipt)?;
+        write_str_atomic(&path, &text)
+    }
+    pub fn load_serial_integration_receipt(
+        &self,
+        run_id: &str,
+    ) -> Result<SerialIntegrationReceipt> {
+        load_yaml(&self.serial_integration_receipt_path(run_id)?)
+    }
+    pub fn save_integrated_cleanup_receipt(
+        &self,
+        receipt: &IntegratedCleanupReceipt,
+    ) -> Result<()> {
+        let path = self.integrated_cleanup_receipt_path(&receipt.run_id)?;
+        let text = yaml::to_string(receipt)?;
+        write_str_atomic(&path, &text)
+    }
+    pub fn load_integrated_cleanup_receipt(
+        &self,
+        run_id: &str,
+    ) -> Result<IntegratedCleanupReceipt> {
+        load_yaml(&self.integrated_cleanup_receipt_path(run_id)?)
+    }
+    pub fn load_integrated_cleanup_receipts(&self) -> Result<Vec<IntegratedCleanupReceipt>> {
+        let directory = self.integrated_cleanup_receipts_dir();
+        let Ok(entries) = fs::read_dir(&directory) else {
+            return Ok(Vec::new());
+        };
+        let mut paths = entries
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "yaml")
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.into_iter().map(|path| load_yaml(&path)).collect()
+    }
+    pub fn save_no_change_receipt(&self, receipt: &NoChangeReceipt) -> Result<()> {
+        let path = self.no_change_receipt_path(&receipt.run_id)?;
+        write_str_atomic(&path, &yaml::to_string(receipt)?)
+    }
+    pub fn load_no_change_receipt(&self, run_id: &str) -> Result<NoChangeReceipt> {
+        load_yaml(&self.no_change_receipt_path(run_id)?)
+    }
+    pub fn load_no_change_receipts(&self) -> Result<Vec<NoChangeReceipt>> {
+        let directory = self.no_change_receipts_dir();
+        let Ok(entries) = fs::read_dir(&directory) else {
+            return Ok(Vec::new());
+        };
+        let mut paths = entries
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "yaml")
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.into_iter().map(|path| load_yaml(&path)).collect()
     }
     pub fn memory_dir(&self) -> PathBuf {
         self.agents_dir().join("memory")

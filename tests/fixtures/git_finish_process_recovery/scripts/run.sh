@@ -175,6 +175,11 @@ write_run() {
   local expected="$5"
   local run_id="run-20990101-00000${index}-${task_id}"
   local run_dir="$ws/.agents/runs/$run_id"
+  local worker_oid branch worktree task_slug
+  worker_oid="$("$REAL_GIT" -C "$ws" rev-parse "$expected^2")"
+  task_slug="$(printf '%s' "$task_id" | tr '[:upper:]' '[:lower:]')"
+  branch="yard/$task_slug/$run_id"
+  worktree="$(cd "$ws" && pwd -P)/.agents/worktrees/$run_id"
   write_result "$run_dir" "$run_id" "$task_id"
   cat >"$run_dir/run.yaml" <<EOF
 schema_version: 1
@@ -188,7 +193,28 @@ completed_at: 2099-01-01T00:00:1${index}Z
 worktree: .
 integration_oid: $expected
 integration_base_oid: $baseline
+integration_worker_oid: $worker_oid
+integration_provenance: parallel_worker_direct
 owned_oids:
+  - $worker_oid
+  - $expected
+EOF
+  mkdir -p "$ws/.agents/checkpoints/integrated-cleanup"
+  cat >"$ws/.agents/checkpoints/integrated-cleanup/$run_id.yaml" <<EOF
+schema_version: 1
+run_id: $run_id
+task_id: $task_id
+intent_id: intent-fixture
+worker: fixture-worker
+worktree: $worktree
+branch: $branch
+baseline_oid: $baseline
+integration_base_oid: $baseline
+integration_worker_oid: $worker_oid
+integration_oid: $expected
+provenance: parallel_worker_direct
+owned_oids:
+  - $worker_oid
   - $expected
 EOF
 }
@@ -231,10 +257,16 @@ new_workspace() {
 commit_owned() {
   local ws="$1"
   local text="$2"
+  local baseline tree worker_oid merge_oid
+  baseline="$(head_oid "$ws")"
   printf '%s\n' "$text" >"$ws/owned.txt"
   "$REAL_GIT" -C "$ws" add owned.txt
-  "$REAL_GIT" -C "$ws" commit -q -m "$text"
-  head_oid "$ws"
+  tree="$("$REAL_GIT" -C "$ws" write-tree)"
+  worker_oid="$(printf '%s worker\n' "$text" | "$REAL_GIT" -C "$ws" commit-tree "$tree" -p "$baseline")"
+  merge_oid="$(printf '%s integration\n' "$text" | "$REAL_GIT" -C "$ws" commit-tree "$tree" -p "$baseline" -p "$worker_oid")"
+  "$REAL_GIT" -C "$ws" update-ref refs/heads/main "$merge_oid" "$baseline"
+  "$REAL_GIT" -C "$ws" reset -q --hard "$merge_oid"
+  printf '%s\n' "$merge_oid"
 }
 
 run_yardlet() {
@@ -329,6 +361,28 @@ print(" ".join(states))
 PY
 }
 
+rebind_core_receipt_worktrees() {
+  local ws="$1"
+  local canonical
+  canonical="$(cd "$ws" && pwd -P)"
+  "$PYTHON" - "$ws/.agents/checkpoints/integrated-cleanup" "$canonical" <<'PY'
+import pathlib
+import sys
+
+directory = pathlib.Path(sys.argv[1])
+root = sys.argv[2]
+for path in directory.glob("*.yaml"):
+    run_id = path.stem
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = [
+        f"worktree: {root}/.agents/worktrees/{run_id}"
+        if line.startswith("worktree: ") else line
+        for line in lines
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+}
+
 assert_terminal_projection() {
   local scenario="$1"
   local ws="$2"
@@ -420,6 +474,7 @@ run_crash_scenario() {
 
   snapshot="$scenario/snapshot"
   cp -R "$ws" "$snapshot"
+  rebind_core_receipt_worktrees "$snapshot"
   local worker_before push_before push_after
   worker_before="$(wc -l <"$scenario/worker.log" | tr -d ' ')"
   run_concurrent_recovery "$scenario" "$snapshot"

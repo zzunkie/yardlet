@@ -7,9 +7,14 @@ set -u
 : "${YARDLET_FIXTURE_PYTHON:?missing python path}"
 
 mode="${YARDLET_FIXTURE_CRASH_MODE:-normal}"
-is_commit=0
+is_commit_start=0
+is_commit_publish=0
+is_native_commit=0
 is_merge=0
 is_push=0
+is_worktree_remove=0
+awaiting_update_ref_target=0
+awaiting_worktree_subcommand=0
 refspec=""
 push_destination=""
 saw_push=0
@@ -22,7 +27,23 @@ for arg in "$@"; do
       saw_push=1
     else
       git_prefix+=("$arg")
-      [[ "$arg" == "commit" || "$arg" == "commit-tree" ]] && is_commit=1
+      if [[ "$arg" == "commit" ]]; then
+        is_commit_start=1
+        is_native_commit=1
+      elif [[ "$arg" == "commit-tree" ]]; then
+        is_commit_start=1
+      elif [[ "$arg" == "update-ref" ]]; then
+        awaiting_update_ref_target=1
+      elif [[ "$awaiting_update_ref_target" -eq 1 ]]; then
+        [[ "$arg" == refs/heads/yard/* ]] && is_commit_publish=1
+        awaiting_update_ref_target=0
+      fi
+      if [[ "$arg" == "worktree" ]]; then
+        awaiting_worktree_subcommand=1
+      elif [[ "$awaiting_worktree_subcommand" -eq 1 ]]; then
+        [[ "$arg" == "remove" ]] && is_worktree_remove=1
+        awaiting_worktree_subcommand=0
+      fi
       [[ "$arg" == "merge" ]] && is_merge=1
     fi
   fi
@@ -152,7 +173,7 @@ stop_here() {
   while :; do sleep 1; done
 }
 
-if [[ "$is_commit" -eq 1 && "$mode" == "before_commit" ]]; then
+if [[ "$is_commit_start" -eq 1 && "$mode" == "before_commit" ]]; then
   stop_here before_commit
 fi
 if [[ "$is_push" -eq 1 && "$mode" == "before_push" ]]; then
@@ -162,13 +183,21 @@ fi
 "$YARDLET_FIXTURE_REAL_GIT" "$@"
 status=$?
 
-if [[ "$status" -eq 0 && "$is_commit" -eq 1 ]]; then
+if [[ "$status" -eq 0 && "$is_native_commit" -eq 1 ]]; then
+  printf 'TRANSACTION_COMMIT_SUCCESS\n' >>"$YARDLET_FIXTURE_GIT_LOG"
+  [[ "$mode" == "after_transaction_commit" ]] && stop_here after_transaction_commit
+fi
+if [[ "$status" -eq 0 && "$is_commit_publish" -eq 1 ]]; then
   printf 'COMMIT_SUCCESS\n' >>"$YARDLET_FIXTURE_GIT_LOG"
   [[ "$mode" == "after_commit" ]] && stop_here after_commit
 fi
 if [[ "$status" -eq 0 && "$is_merge" -eq 1 ]]; then
   printf 'MERGE_SUCCESS\n' >>"$YARDLET_FIXTURE_GIT_LOG"
   [[ "$mode" == "after_merge" ]] && stop_here after_merge
+fi
+if [[ "$status" -eq 0 && "$is_worktree_remove" -eq 1 ]]; then
+  printf 'WORKTREE_REMOVE_SUCCESS\n' >>"$YARDLET_FIXTURE_GIT_LOG"
+  [[ "$mode" == "after_worktree_remove" ]] && stop_here after_worktree_remove
 fi
 if [[ "$status" -eq 0 && "$is_push" -eq 1 ]]; then
   printf 'PUSH_SUCCESS\t%s\n' "$refspec" >>"$YARDLET_FIXTURE_GIT_LOG"
