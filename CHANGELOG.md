@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.2 - 2026-07-13
+
+### Fixed
+
+- **Codex worker sessions stay bound to the child that created them.** Fresh
+  Codex runs now capture `thread.started.thread_id` directly from that child's
+  JSONL stdout and use that exact ID for transient resume and dependent-task
+  hot chaining. Yardlet no longer guesses from the most recently modified file
+  under the global `~/.codex/sessions` directory, which could attach a
+  concurrently active Codex Desktop conversation to an unrelated Yardlet run.
+  Missing or malformed child session events now fail closed by disabling retry
+  and hot chaining for that run instead of selecting another session.
+
 ## 0.9.1 - 2026-07-12
 
 ### Added
