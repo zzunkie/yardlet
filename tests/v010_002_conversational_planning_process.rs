@@ -198,4 +198,24 @@ mod unix {
     fn concurrent_express_goals_are_one_transaction_each() {
         run_scenario("express_concurrency");
     }
+
+    #[test]
+    fn same_request_sessions_never_steal_an_unconsumed_planner_result() {
+        run_scenario("same_request_multi_session_recovery");
+    }
+
+    #[test]
+    fn stale_planner_completion_is_rejected_without_rebase() {
+        run_scenario("stale_planner_completion");
+    }
+
+    #[test]
+    fn corrupt_planner_recovery_fails_closed_without_consuming_the_result() {
+        run_scenario("corrupt_recovery");
+    }
+
+    #[test]
+    fn restart_recovery_creates_only_the_exact_session_proposal() {
+        run_scenario("restart_unconsumed_planner_recovery");
+    }
 }

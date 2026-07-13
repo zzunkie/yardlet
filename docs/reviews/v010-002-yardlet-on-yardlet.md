@@ -5,7 +5,7 @@
 - 실행 루트: `.agents/runs/run-20260714-011920/dogfood-v010-002/workspace`
 - 실행 주체: 이 worktree에서 빌드한 실제 `yardlet`과 로컬 `codex` planning worker
 - 원래 dogfood 판정: 세 content turn, accept, reject, undo, fresh-process 복원, explicit confirm을 거친 뒤 visible draft와 active intent/queue가 field와 digest 양쪽에서 일치했다.
-- 보수 판정: terminal proposal, undo linkage, stripped provenance, stable prepared effect, immutable journal 검증, completed-active 일치, bounded process lock, runtime queue 경쟁, receipt/session/runtime envelope P0를 포함한 결정적 process test 31개가 통과했다. YARD-008 독립 재검토도 blocker 없이 통과했으며, V010-002 최종 완료 표시는 남은 queue task와 최종 review가 끝난 뒤에만 갱신한다.
+- 보수 판정: terminal proposal, undo linkage, stripped provenance, stable prepared effect, immutable journal 검증, completed-active 일치, bounded process lock, runtime queue 경쟁, receipt/session/runtime envelope, exact planner turn CAS를 포함한 결정적 process test 35개가 통과했다. YARD-008 독립 재검토와 YARD-006 recovery 보수가 blocker 없이 통과했으며, V010-002 최종 완료 표시는 남은 queue task와 최종 review가 끝난 뒤에만 갱신한다.
 
 ## 1. 증거 경계
 
@@ -502,3 +502,69 @@ row 34개, 같은 canonical state tree entry를 가지며 `README.md`와 `README
 em dash가 0개다. 필수 read anchor로 지정된
 `.agents/runs/run-20260714-035949/evidence/repo-summary.md`는 이 worker가 시작할 때 존재하지
 않았으며, source와 test 검증에는 이를 정상 증거로 가정하지 않았다.
+
+## 9. YARD-006 exact session 및 turn CAS recovery 보수
+
+YARD-006은 planner worker가 시작된 시점과 결과가 적용되는 시점 사이의 session ownership을
+PlanMeta schema version 2로 고정했다. metadata는 `session_id`, `expected_head`,
+`request_event_id`, canonical request-event `request_digest`를 기록한다. live completion과
+restart recovery는 같은 `record_worker_proposal_exact_locked` 경로를 사용하며 planning lock
+아래 exact open session, head, latest user request event, digest를 모두 확인한다. proposal도
+같은 request event와 digest를 provenance로 보존한다.
+
+일반 session CAS는 session 파일만 바꾸고 `latest` pointer를 다시 선택하지 않는다. 따라서
+오래된 exact session에 성공적으로 proposal을 기록해도 더 최신 session pointer를 탈취하지
+않는다. stale head 또는 superseding user event 결과는 현재 head로 rebase하지 않는다.
+같은 initial request를 가진 다른 session도 문자열 비교 fallback 대상이 아니다.
+
+`recover_unconsumed_plan`은 `Result<Option<String>>`을 반환한다. malformed result, validation,
+active activation, proposal/journal write 오류를 호출자에게 전파하며 direct active intent/queue
+fallback과 amend direct mutation을 제거했다. recovery 성공 결과는 proposal뿐이다. active
+intent와 queue는 별도 accept 뒤에도 그대로이며 explicit confirm 뒤에만 바뀐다. consumed
+marker는 canonical proposal과 journal 적용이 성공한 뒤 atomic write가 성공해야 기록된다.
+
+구현 전 실제 process RED는 다음과 같았다.
+
+```text
+cargo test --test v010_002_conversational_planning_process \
+  unix::stale_planner_completion_is_rejected_without_rebase -- --exact --nocapture
+  FAILED: stale planner completion was automatically rebased
+```
+
+보수 후 추가된 결정적 process matrix는 다음 네 항목이다.
+
+- `same_request_multi_session_recovery`: 같은 initial request의 다른 session으로 stale result가
+  이동하지 않고 active intent/queue byte와 latest pointer가 유지된다.
+- `stale_planner_completion`: worker 실행 중 head를 전진시키면 proposal과 consumed marker 없이
+  `stale_planner_output`으로 거절된다.
+- `corrupt_recovery`: malformed result와 corrupt activation 모두 오류가 전파되고 canonical
+  state digest와 consumed 부재가 유지된다.
+- `restart_unconsumed_planner_recovery`: fresh process recovery가 PlanMeta의 exact session/head
+  proposal만 만들고, accept는 active state를 바꾸지 않으며 confirm 뒤 exact parity가 true다.
+
+planner unit test는 exact latest request event 검증, older exact session apply의 latest pointer
+불변, proposal-only restart recovery, corrupt result fail-closed를 직접 확인한다. 이 worker에
+지정된 `.agents/runs/run-20260714-055441/evidence/repo-summary.md` read anchor는 시작 시점과
+완료 검증 시점 모두 존재하지 않아 정상 증거로 가정하지 않았다.
+
+```text
+cargo fmt --check
+  exit 0
+cargo clippy --all-targets --all-features -- -D warnings
+  exit 0
+cargo build
+  exit 0
+cargo test
+  exit 0
+  unit 396 passed
+  builtin bundle 3 passed
+  git-finish process 1 passed
+  state architecture 2 passed
+  V010-001 replay 8 passed
+  serial Git finish process 1 passed
+  V010-002 process 35 passed
+```
+
+README parity도 다시 확인했다. 두 파일은 같은 순서의 section 19개와 `yardlet` command row
+34개를 유지하고 em dash가 없다. 구현 독립 판정은 기존 queue의 `YARD-002` review task가
+criterion별 실제 workspace 검증으로 소유한다.

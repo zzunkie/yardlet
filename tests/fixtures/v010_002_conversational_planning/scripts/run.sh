@@ -114,9 +114,26 @@ wait_for_file() {
   return 1
 }
 
+wait_for_worker_exit() {
+  local run_dir="$1"
+  local pid
+  pid="$(cat "$run_dir/worker.pid" 2>/dev/null || true)"
+  [[ -n "$pid" ]] || return 0
+  for _ in $(seq 1 250); do
+    ! kill -0 "$pid" 2>/dev/null && return 0
+    sleep 0.02
+  done
+  return 1
+}
+
 state_digest() {
   local root="$1"
   (cd "$root" && find .agents -type f ! -name planning.lock -print0 | sort -z | xargs -0 shasum | shasum | awk '{print $1}')
+}
+
+state_manifest() {
+  local root="$1"
+  (cd "$root" && find .agents -type f ! -name planning.lock -print0 | sort -z | xargs -0 shasum)
 }
 
 run_yardlet init >/dev/null
@@ -1562,6 +1579,171 @@ PY
     session_count="$(find "$express_root/.agents/planning-sessions" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
     [[ "$session_count" == "2" ]] || fail "concurrent express did not leave two complete sessions"
     write_summary "two-process stable barrier에서 각 express goal의 create/propose/accept/confirm이 outer transaction으로 직렬화됨"
+    ;;
+  same_request_multi_session_recovery)
+    barrier="$EVIDENCE_DIR/same-request-barrier"
+    mkdir -p "$barrier"
+    (cd "$ROOT" && exec env YARDLET_TEST_PLANNER_RESULT_BARRIER="$barrier" \
+      "$YARDLET_BIN" planning answer "delayed same-request turn" --expected-head none \
+      --action-id act-same-request-delayed --worker fixture-planner \
+      >"$EVIDENCE_DIR/same-request-delayed.out" 2>"$EVIDENCE_DIR/same-request-delayed.err") &
+    delayed_pid=$!
+    wait_for_file "$barrier/result-ready" "$delayed_pid" || { kill "$delayed_pid" 2>/dev/null || true; fail "same-request planner did not reach result barrier"; }
+    delayed_run="$(find "$ROOT/.agents/runs" -mindepth 1 -maxdepth 1 -type d -name 'plan-*' ! -exec test -e '{}/consumed' \; -print | sort | tail -n 1)"
+    [[ -n "$delayed_run" && -f "$delayed_run/planning-result.json" ]] || fail "same-request unconsumed result missing"
+    delayed_session="$(sed -n 's/^session_id: //p' "$delayed_run/plan-meta.yaml")"
+    [[ -n "$delayed_session" ]] || fail "PlanMeta v2 session_id missing"
+    kill -9 "$delayed_pid" 2>/dev/null || true
+    wait "$delayed_pid" 2>/dev/null || true
+    touch "$barrier/release"
+    wait_for_worker_exit "$delayed_run" || fail "same-request orphan worker did not exit"
+
+    accept_proposal "$p1" none act-same-request-accept >/dev/null
+    old_head="$(visible_head)"
+    run_yardlet planning confirm --expected-head "$old_head" --action-id act-same-request-confirm >/dev/null
+    run_yardlet defer YARD-001 "finish baseline" >/dev/null
+    run_yardlet new "initial planning request" --worker fixture-planner >/dev/null
+    show
+    current_session="$(json_get "$EVIDENCE_DIR/show.json" session.session_id)"
+    [[ "$current_session" != "$delayed_session" ]] || fail "same-request fixture did not create a second session"
+    current_proposals_before="$(find "$ROOT/.agents/planning-sessions/$current_session/proposals" -type f -name '*.yaml' | wc -l | tr -d ' ')"
+    cp "$ROOT/.agents/intent-contract.yaml" "$EVIDENCE_DIR/same-request.intent.before"
+    cp "$ROOT/.agents/work-queue.yaml" "$EVIDENCE_DIR/same-request.queue.before"
+    if run_yardlet recover >"$EVIDENCE_DIR/same-request-recover.out" 2>"$EVIDENCE_DIR/same-request-recover.err"; then
+      fail "stale exact-session result was recovered into another same-request session"
+    fi
+    grep -Eq 'stale_planner_output|stale_head|exact planning session' "$EVIDENCE_DIR/same-request-recover.err" || fail "same-request recovery error missing"
+    [[ ! -e "$delayed_run/consumed" ]] || fail "rejected same-request result was marked consumed"
+    current_proposals_after="$(find "$ROOT/.agents/planning-sessions/$current_session/proposals" -type f -name '*.yaml' | wc -l | tr -d ' ')"
+    [[ "$current_proposals_before" == "$current_proposals_after" ]] || fail "same-request recovery attached proposal to current session"
+    [[ "$(cat "$ROOT/.agents/planning-sessions/latest")" == "$current_session" ]] || fail "exact older-session recovery stole latest pointer"
+    cmp "$EVIDENCE_DIR/same-request.intent.before" "$ROOT/.agents/intent-contract.yaml" || fail "same-request recovery changed active intent bytes"
+    cmp "$EVIDENCE_DIR/same-request.queue.before" "$ROOT/.agents/work-queue.yaml" || fail "same-request recovery changed active queue bytes"
+    write_summary "same initial request를 가진 다른 session으로 stale result가 이동하지 않고 active bytes와 latest pointer가 보존됨"
+    ;;
+  stale_planner_completion)
+    accept_proposal "$p1" none act-stale-planner-accept-1 >/dev/null
+    h1="$(visible_head)"
+    answer_turn "scope correction" "$h1" act-stale-planner-fast >/dev/null
+    p2="$(proposal)"
+    barrier="$EVIDENCE_DIR/stale-planner-barrier"
+    mkdir -p "$barrier"
+    (cd "$ROOT" && exec env YARDLET_TEST_PLANNER_RESULT_BARRIER="$barrier" \
+      "$YARDLET_BIN" planning answer "slow correction" --expected-head "$h1" \
+      --action-id act-stale-planner-slow --worker fixture-planner \
+      >"$EVIDENCE_DIR/stale-planner.out" 2>"$EVIDENCE_DIR/stale-planner.err") &
+    slow_pid=$!
+    wait_for_file "$barrier/result-ready" "$slow_pid" || { kill "$slow_pid" 2>/dev/null || true; fail "slow planner did not reach result barrier"; }
+    slow_run="$(find "$ROOT/.agents/runs" -mindepth 1 -maxdepth 1 -type d -name 'plan-*' ! -exec test -e '{}/consumed' \; -print | sort | tail -n 1)"
+    accept_proposal "$p2" "$h1" act-stale-planner-accept-2 >/dev/null
+    h2="$(visible_head)"
+    proposal_count_before="$(find "$ROOT/.agents/planning-sessions" -path '*/proposals/*.yaml' -type f | wc -l | tr -d ' ')"
+    cp "$ROOT/.agents/work-queue.yaml" "$EVIDENCE_DIR/stale-planner.queue.before"
+    touch "$barrier/release"
+    set +e
+    wait "$slow_pid"; slow_status=$?
+    set -e
+    [[ "$slow_status" -ne 0 ]] || fail "stale planner completion was automatically rebased"
+    grep -q '^schema_version: 2$' "$slow_run/plan-meta.yaml" || fail "PlanMeta v2 schema missing"
+    grep -q "^expected_head: $h1$" "$slow_run/plan-meta.yaml" || fail "PlanMeta expected_head mismatch"
+    grep -q '^request_event_id: ' "$slow_run/plan-meta.yaml" || fail "PlanMeta request_event_id missing"
+    grep -q '^request_digest: ' "$slow_run/plan-meta.yaml" || fail "PlanMeta request_digest missing"
+    grep -Eq 'stale_planner_output|stale_head' "$EVIDENCE_DIR/stale-planner.err" || fail "stale planner completion reason missing"
+    [[ "$(visible_head)" == "$h2" ]] || fail "stale planner completion changed visible head"
+    proposal_count_after="$(find "$ROOT/.agents/planning-sessions" -path '*/proposals/*.yaml' -type f | wc -l | tr -d ' ')"
+    [[ "$proposal_count_before" == "$proposal_count_after" ]] || fail "stale planner completion created a proposal"
+    [[ ! -e "$slow_run/consumed" ]] || fail "stale planner completion was marked consumed"
+    [[ ! -e "$ROOT/.agents/intent-contract.yaml" ]] || fail "stale planner completion activated intent state"
+    cmp "$EVIDENCE_DIR/stale-planner.queue.before" "$ROOT/.agents/work-queue.yaml" || fail "stale planner completion changed active queue bytes"
+    write_summary "worker completion 시 exact head CAS가 stale output을 rebase 없이 거절하고 canonical state를 보존함"
+    ;;
+  corrupt_recovery)
+    accept_proposal "$p1" none act-corrupt-recovery-accept >/dev/null
+    h1="$(visible_head)"
+    barrier="$EVIDENCE_DIR/corrupt-recovery-barrier"
+    mkdir -p "$barrier"
+    (cd "$ROOT" && exec env YARDLET_TEST_PLANNER_RESULT_BARRIER="$barrier" \
+      "$YARDLET_BIN" planning answer "restart recovery candidate" --expected-head "$h1" \
+      --action-id act-corrupt-recovery-answer --worker fixture-planner \
+      >"$EVIDENCE_DIR/corrupt-recovery-worker.out" 2>"$EVIDENCE_DIR/corrupt-recovery-worker.err") &
+    interrupted_pid=$!
+    wait_for_file "$barrier/result-ready" "$interrupted_pid" || { kill "$interrupted_pid" 2>/dev/null || true; fail "corrupt recovery planner did not reach result barrier"; }
+    corrupt_run="$(find "$ROOT/.agents/runs" -mindepth 1 -maxdepth 1 -type d -name 'plan-*' ! -exec test -e '{}/consumed' \; -print | sort | tail -n 1)"
+    kill -9 "$interrupted_pid" 2>/dev/null || true
+    wait "$interrupted_pid" 2>/dev/null || true
+    touch "$barrier/release"
+    wait_for_worker_exit "$corrupt_run" || fail "corrupt recovery orphan worker did not exit"
+    cp "$corrupt_run/planning-result.json" "$EVIDENCE_DIR/corrupt-recovery.valid-result.json"
+    printf '{invalid-json\n' >"$corrupt_run/planning-result.json"
+    state_manifest "$ROOT" >"$EVIDENCE_DIR/corrupt-recovery.before.manifest"
+    state_before="$(state_digest "$ROOT")"
+    if run_yardlet recover >"$EVIDENCE_DIR/corrupt-recovery.out" 2>"$EVIDENCE_DIR/corrupt-recovery.err"; then
+      fail "corrupt planning result recovery succeeded"
+    fi
+    grep -Eq 'parsing|planning-result.json|expected ident' "$EVIDENCE_DIR/corrupt-recovery.err" || fail "corrupt recovery parse error was swallowed"
+    state_manifest "$ROOT" >"$EVIDENCE_DIR/corrupt-recovery.after.manifest"
+    if [[ "$state_before" != "$(state_digest "$ROOT")" ]]; then
+      diff -u "$EVIDENCE_DIR/corrupt-recovery.before.manifest" "$EVIDENCE_DIR/corrupt-recovery.after.manifest" >&2 || true
+      fail "corrupt recovery changed canonical bytes"
+    fi
+    [[ ! -e "$corrupt_run/consumed" ]] || fail "corrupt recovery was marked consumed"
+    cp "$EVIDENCE_DIR/corrupt-recovery.valid-result.json" "$corrupt_run/planning-result.json"
+    run_yardlet planning confirm --expected-head "$h1" --action-id act-corrupt-recovery-confirm >/dev/null
+    activation_path="$(find "$ROOT/.agents/activations" -type f -name '*.yaml' -print -quit)"
+    python3 - "$activation_path" <<'PY'
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace("queue_digest: ", "queue_digest: tampered-", 1)
+path.write_text(text, encoding="utf-8")
+PY
+    corrupt_active_before="$(state_digest "$ROOT")"
+    if run_yardlet recover >"$EVIDENCE_DIR/corrupt-activation-recovery.out" 2>"$EVIDENCE_DIR/corrupt-activation-recovery.err"; then
+      fail "corrupt activation recovery succeeded"
+    fi
+    grep -q 'unconfirmed_or_inconsistent' "$EVIDENCE_DIR/corrupt-activation-recovery.err" || fail "corrupt activation recovery error was swallowed"
+    [[ "$corrupt_active_before" == "$(state_digest "$ROOT")" ]] || fail "corrupt activation recovery changed canonical bytes"
+    [[ ! -e "$corrupt_run/consumed" ]] || fail "corrupt activation recovery was marked consumed"
+    write_summary "corrupt planning result와 corrupt activation 오류가 전파되고 active, session, proposal bytes와 consumed 상태가 보존됨"
+    ;;
+  restart_unconsumed_planner_recovery)
+    accept_proposal "$p1" none act-restart-recovery-accept-1 >/dev/null
+    h1="$(visible_head)"
+    barrier="$EVIDENCE_DIR/restart-recovery-barrier"
+    mkdir -p "$barrier"
+    (cd "$ROOT" && exec env YARDLET_TEST_PLANNER_RESULT_BARRIER="$barrier" \
+      "$YARDLET_BIN" planning answer "recovered scope correction" --expected-head "$h1" \
+      --action-id act-restart-recovery-answer --worker fixture-planner \
+      >"$EVIDENCE_DIR/restart-recovery-worker.out" 2>"$EVIDENCE_DIR/restart-recovery-worker.err") &
+    interrupted_pid=$!
+    wait_for_file "$barrier/result-ready" "$interrupted_pid" || { kill "$interrupted_pid" 2>/dev/null || true; fail "restart recovery planner did not reach result barrier"; }
+    recovered_run="$(find "$ROOT/.agents/runs" -mindepth 1 -maxdepth 1 -type d -name 'plan-*' ! -exec test -e '{}/consumed' \; -print | sort | tail -n 1)"
+    exact_session="$(sed -n 's/^session_id: //p' "$recovered_run/plan-meta.yaml")"
+    exact_head="$(sed -n 's/^expected_head: //p' "$recovered_run/plan-meta.yaml")"
+    kill -9 "$interrupted_pid" 2>/dev/null || true
+    wait "$interrupted_pid" 2>/dev/null || true
+    touch "$barrier/release"
+    wait_for_worker_exit "$recovered_run" || fail "restart recovery orphan worker did not exit"
+    [[ ! -e "$ROOT/.agents/intent-contract.yaml" ]] || fail "restart fixture unexpectedly has active intent"
+    cp "$ROOT/.agents/work-queue.yaml" "$EVIDENCE_DIR/restart-recovery.queue.before"
+    run_yardlet recover >"$EVIDENCE_DIR/restart-recovery.out"
+    [[ -e "$recovered_run/consumed" ]] || fail "successful canonical proposal apply was not marked consumed"
+    recovered_proposal="$(find "$ROOT/.agents/planning-sessions/$exact_session/proposals" -type f -name '*.yaml' | sort | tail -n 1)"
+    [[ -f "$recovered_proposal" ]] || fail "restart recovery did not create exact-session proposal"
+    grep -q "^session_id: $exact_session$" "$recovered_proposal" || fail "recovered proposal owner mismatch"
+    grep -q "^expected_head: $exact_head$" "$recovered_proposal" || fail "recovered proposal head mismatch"
+    [[ ! -e "$ROOT/.agents/intent-contract.yaml" ]] || fail "recovery directly activated intent"
+    cmp "$EVIDENCE_DIR/restart-recovery.queue.before" "$ROOT/.agents/work-queue.yaml" || fail "recovery directly activated queue"
+    recovered_proposal_id="$(sed -n 's/^proposal_id: //p' "$recovered_proposal")"
+    accept_proposal "$recovered_proposal_id" "$h1" act-restart-recovery-accept-2 >/dev/null
+    h2="$(visible_head)"
+    [[ ! -e "$ROOT/.agents/intent-contract.yaml" ]] || fail "proposal accept activated intent"
+    cmp "$EVIDENCE_DIR/restart-recovery.queue.before" "$ROOT/.agents/work-queue.yaml" || fail "proposal accept activated queue"
+    run_yardlet planning confirm --expected-head "$h2" --action-id act-restart-recovery-confirm >/dev/null
+    show
+    [[ "$(json_get "$EVIDENCE_DIR/show.json" exact_active_parity)" == "true" ]] || fail "explicit confirm after recovery lost exact parity"
+    write_summary "restart recovery가 exact session/head proposal만 만들고 consumed는 성공 후, active state는 explicit confirm 후에만 기록함"
     ;;
   release_hook_disabled)
     (cd "$ROOT" && YARDLET_TEST_PLANNING_CRASH=accept_after_revision_write \

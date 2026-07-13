@@ -14,7 +14,7 @@ use crate::schemas::{
     ActivatedIntent, ActivatedQueue, ActivatedTask, ActivationReceipt, DraftRevision,
     PlanningActionKind, PlanningActionReceipt, PlanningActionStatus, PlanningDraftContent,
     PlanningEvent, PlanningEventType, PlanningLifecycle, PlanningProposal, PlanningSession,
-    SemanticDiffEntry, TaskState,
+    PlanningTurnCas, SemanticDiffEntry, TaskState,
 };
 use crate::state::{PlanningLock, Workspace};
 
@@ -238,7 +238,25 @@ fn create_session(ws: &Workspace, request: &str) -> Result<PlanningSession> {
     create_session_with_ids(ws, request, intent_id, queue_id)
 }
 
-pub fn begin_user_turn(ws: &Workspace, message: &str) -> Result<PlanningSession> {
+fn turn_cas(event: &PlanningEvent, expected_head: Option<String>) -> Result<PlanningTurnCas> {
+    if event.event_type != PlanningEventType::UserMessage
+        || event.actor != "user"
+        || event.message.trim().is_empty()
+    {
+        bail!("planning request event is not an exact user message");
+    }
+    Ok(PlanningTurnCas {
+        session_id: event.session_id.clone(),
+        expected_head,
+        request_event_id: event.event_id.clone(),
+        request_digest: digest(event)?,
+    })
+}
+
+pub fn begin_user_turn_exact(
+    ws: &Workspace,
+    message: &str,
+) -> Result<(PlanningSession, PlanningTurnCas)> {
     if message.trim().is_empty() {
         bail!("planning message must not be empty");
     }
@@ -248,19 +266,37 @@ pub fn begin_user_turn(ws: &Workspace, message: &str) -> Result<PlanningSession>
     }
     let mut session = match ws.load_latest_planning_session()? {
         Some(session) if session.lifecycle == PlanningLifecycle::Open => session,
-        _ => return create_session(ws, message),
+        _ => {
+            let session = create_session(ws, message)?;
+            let event = ws
+                .load_planning_events(&session.session_id)?
+                .into_iter()
+                .rev()
+                .find(|event| event.event_type == PlanningEventType::UserMessage)
+                .ok_or_else(|| anyhow!("new planning session has no request event"))?;
+            let request = turn_cas(&event, None)?;
+            return Ok((session, request));
+        }
     };
-    append_event(
+    let expected_head = session.current_head.clone();
+    let event = append_event(
         ws,
         &mut session,
         PlanningEventType::UserMessage,
         "user",
         EventFields {
             message: message.trim(),
+            related_revision_id: expected_head.as_deref().unwrap_or(""),
             ..EventFields::default()
         },
     )?;
-    Ok(session)
+    let request = turn_cas(&event, expected_head)?;
+    Ok((session, request))
+}
+
+#[cfg(test)]
+pub fn begin_user_turn(ws: &Workspace, message: &str) -> Result<PlanningSession> {
+    begin_user_turn_exact(ws, message).map(|(session, _)| session)
 }
 
 pub fn latest_open_session(ws: &Workspace) -> Result<PlanningSession> {
@@ -455,7 +491,7 @@ fn validate_draft(session: &PlanningSession, content: &PlanningDraftContent) -> 
 
 pub fn record_worker_proposal(
     ws: &Workspace,
-    session_id: &str,
+    turn: &PlanningTurnCas,
     worker_id: &str,
     attempt_id: &str,
     message: &str,
@@ -463,65 +499,151 @@ pub fn record_worker_proposal(
     content: PlanningDraftContent,
 ) -> Result<PlanningProposal> {
     let lock = ws.acquire_planning_lock()?;
-    record_worker_proposal_locked(
-        ws, &lock, session_id, worker_id, attempt_id, message, rationale, content,
+    record_worker_proposal_exact_locked(
+        ws, &lock, turn, worker_id, attempt_id, message, rationale, content,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn record_worker_proposal_locked(
+pub(crate) fn record_worker_proposal_exact_locked(
     ws: &Workspace,
     _lock: &PlanningLock,
-    session_id: &str,
+    turn: &PlanningTurnCas,
     worker_id: &str,
     attempt_id: &str,
     message: &str,
     rationale: &str,
     content: PlanningDraftContent,
 ) -> Result<PlanningProposal> {
-    let mut session = ws.load_planning_session(session_id)?;
+    let mut session = ws.load_planning_session(&turn.session_id)?;
     ensure_no_unresolved_action(ws, &session.session_id, None)?;
+    let existing = ws
+        .load_planning_proposals(&session.session_id)?
+        .into_iter()
+        .filter(|proposal| proposal.attempt_id == attempt_id)
+        .collect::<Vec<_>>();
+    if existing.len() > 1 {
+        bail!("planning proposal attempt identity is ambiguous");
+    }
+    if let Some(proposal) = existing.into_iter().next() {
+        if proposal.schema_version != 2
+            || proposal.session_id != turn.session_id
+            || proposal.expected_head != turn.expected_head
+            || proposal.request_event_id != turn.request_event_id
+            || proposal.request_digest != turn.request_digest
+            || proposal.content_digest != digest(&content)?
+        {
+            bail!("planning proposal attempt identity conflicts with PlanMeta v2");
+        }
+        ensure_proposal_events(
+            ws,
+            &mut session,
+            &proposal,
+            &proposal.producer_worker_id,
+            message,
+            rationale,
+        )?;
+        return Ok(proposal);
+    }
     if session.lifecycle != PlanningLifecycle::Open {
-        bail!("confirmed planning session rejects worker proposals");
+        bail!("stale_planner_output: exact planning session is not open");
+    }
+    if session.current_head != turn.expected_head {
+        bail!("stale_planner_output: exact planning session head changed");
+    }
+    let events = ws.load_planning_events(&session.session_id)?;
+    let request = events
+        .iter()
+        .find(|event| event.event_id == turn.request_event_id)
+        .ok_or_else(|| anyhow!("stale_planner_output: exact request event is missing"))?;
+    let latest_request = events
+        .iter()
+        .rev()
+        .find(|event| event.event_type == PlanningEventType::UserMessage)
+        .ok_or_else(|| anyhow!("stale_planner_output: planning session has no user request"))?;
+    if request.event_type != PlanningEventType::UserMessage
+        || request.actor != "user"
+        || request.session_id != turn.session_id
+        || request.related_revision_id != turn.expected_head.as_deref().unwrap_or("")
+        || digest(request)? != turn.request_digest
+        || latest_request.event_id != turn.request_event_id
+    {
+        bail!("stale_planner_output: exact request event changed or was superseded");
     }
     validate_draft(&session, &content)?;
     let before = current_draft(ws, &session)?;
     let proposal = PlanningProposal {
-        schema_version: 1,
+        schema_version: 2,
         proposal_id: new_id("prp"),
         session_id: session.session_id.clone(),
-        expected_head: session.current_head.clone(),
+        expected_head: turn.expected_head.clone(),
         producer_worker_id: worker_id.to_string(),
         attempt_id: attempt_id.to_string(),
+        request_event_id: turn.request_event_id.clone(),
+        request_digest: turn.request_digest.clone(),
         rationale: rationale.to_string(),
         content_digest: digest(&content)?,
         semantic_diff: semantic_diff(before.as_ref().map(|draft| &draft.content), &content),
         content,
     };
     ws.save_planning_proposal(&proposal)?;
-    append_event(
-        ws,
-        &mut session,
-        PlanningEventType::WorkerMessage,
-        worker_id,
-        EventFields {
-            message,
-            proposal_id: &proposal.proposal_id,
-            ..EventFields::default()
-        },
-    )?;
-    append_event(
-        ws,
-        &mut session,
-        PlanningEventType::DraftProposed,
-        worker_id,
-        EventFields {
-            message: rationale,
-            proposal_id: &proposal.proposal_id,
-            ..EventFields::default()
-        },
-    )?;
+    ensure_proposal_events(ws, &mut session, &proposal, worker_id, message, rationale)?;
     Ok(proposal)
+}
+
+fn ensure_proposal_events(
+    ws: &Workspace,
+    session: &mut PlanningSession,
+    proposal: &PlanningProposal,
+    worker_id: &str,
+    message: &str,
+    rationale: &str,
+) -> Result<()> {
+    let events = ws.load_planning_events(&session.session_id)?;
+    let worker_event = events.iter().find(|event| {
+        event.event_type == PlanningEventType::WorkerMessage
+            && event.proposal_id == proposal.proposal_id
+    });
+    if let Some(event) = worker_event {
+        if event.actor != worker_id || event.message != message {
+            bail!("planning proposal worker event conflicts with immutable proposal");
+        }
+    } else {
+        append_event(
+            ws,
+            session,
+            PlanningEventType::WorkerMessage,
+            worker_id,
+            EventFields {
+                message,
+                proposal_id: &proposal.proposal_id,
+                ..EventFields::default()
+            },
+        )?;
+    }
+    let events = ws.load_planning_events(&session.session_id)?;
+    let draft_event = events.iter().find(|event| {
+        event.event_type == PlanningEventType::DraftProposed
+            && event.proposal_id == proposal.proposal_id
+    });
+    if let Some(event) = draft_event {
+        if event.actor != worker_id || event.message != rationale {
+            bail!("planning proposal draft event conflicts with immutable proposal");
+        }
+    } else {
+        append_event(
+            ws,
+            session,
+            PlanningEventType::DraftProposed,
+            worker_id,
+            EventFields {
+                message: rationale,
+                proposal_id: &proposal.proposal_id,
+                ..EventFields::default()
+            },
+        )?;
+    }
+    Ok(())
 }
 
 fn action_request_digest(
@@ -1519,6 +1641,28 @@ pub fn record_answer(
     Ok(session)
 }
 
+pub fn record_answer_exact(
+    ws: &Workspace,
+    message: &str,
+    expected_head: Option<&str>,
+    action_id: &str,
+) -> Result<(PlanningSession, PlanningTurnCas)> {
+    let session = record_answer(ws, message, expected_head, action_id)?;
+    let matches = ws
+        .load_planning_events(&session.session_id)?
+        .into_iter()
+        .filter(|event| {
+            event.event_type == PlanningEventType::UserMessage && event.action_id == action_id
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        bail!("planning answer must own exactly one request event");
+    }
+    let event = matches.into_iter().next().expect("checked one event");
+    let request = turn_cas(&event, expected_head.map(str::to_string))?;
+    Ok((session, request))
+}
+
 fn activated_records(
     session: &PlanningSession,
     revision: &DraftRevision,
@@ -1855,10 +1999,17 @@ pub fn activate_express_draft(
         content.queue.queue_id.clone(),
     )?;
     validate_draft(&session, &content)?;
-    let proposal = record_worker_proposal_locked(
+    let request_event = ws
+        .load_planning_events(&session.session_id)?
+        .into_iter()
+        .rev()
+        .find(|event| event.event_type == PlanningEventType::UserMessage)
+        .ok_or_else(|| anyhow!("express planning session has no request event"))?;
+    let turn = turn_cas(&request_event, None)?;
+    let proposal = record_worker_proposal_exact_locked(
         ws,
         &lock,
-        &session.session_id,
+        &turn,
         "yardlet-core",
         "express-goal",
         "Express goal draft generated deterministically without a planning worker.",
@@ -2277,6 +2428,102 @@ queue:
                 "validation",
             ]
         );
+    }
+
+    #[test]
+    fn planner_result_requires_the_exact_latest_request_event() {
+        let ws = temp_workspace("exact-request-event");
+        let session = create_session_with_ids(
+            &ws,
+            "initial request",
+            "intent-planning-test".to_string(),
+            "queue-intent-planning-test".to_string(),
+        )
+        .unwrap();
+        let first_event = ws
+            .load_planning_events(&session.session_id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.event_type == PlanningEventType::UserMessage)
+            .unwrap();
+        let first_turn = turn_cas(&first_event, None).unwrap();
+        let (_same_session, second_turn) =
+            begin_user_turn_exact(&ws, "newer request on the same head").unwrap();
+        assert_eq!(first_turn.expected_head, second_turn.expected_head);
+        assert_ne!(first_turn.request_event_id, second_turn.request_event_id);
+
+        let error = record_worker_proposal(
+            &ws,
+            &first_turn,
+            "fixture-planner",
+            "stale-attempt",
+            "stale worker message",
+            "stale rationale",
+            draft(),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("stale_planner_output"));
+        assert!(ws
+            .load_planning_proposals(&session.session_id)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            ws.load_latest_planning_session()
+                .unwrap()
+                .unwrap()
+                .session_id,
+            session.session_id
+        );
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn exact_older_session_apply_does_not_steal_the_latest_pointer() {
+        let ws = temp_workspace("exact-older-session");
+        let older = create_session_with_ids(
+            &ws,
+            "same request",
+            "intent-planning-test".to_string(),
+            "queue-intent-planning-test".to_string(),
+        )
+        .unwrap();
+        let request_event = ws
+            .load_planning_events(&older.session_id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.event_type == PlanningEventType::UserMessage)
+            .unwrap();
+        let older_turn = turn_cas(&request_event, None).unwrap();
+        let newer = create_session_with_ids(
+            &ws,
+            "same request",
+            "intent-newer".to_string(),
+            "queue-intent-newer".to_string(),
+        )
+        .unwrap();
+
+        let proposal = record_worker_proposal(
+            &ws,
+            &older_turn,
+            "fixture-planner",
+            "older-attempt",
+            "older worker message",
+            "older rationale",
+            draft(),
+        )
+        .unwrap();
+
+        assert_eq!(proposal.session_id, older.session_id);
+        assert_eq!(proposal.request_event_id, older_turn.request_event_id);
+        assert_eq!(
+            ws.load_latest_planning_session()
+                .unwrap()
+                .unwrap()
+                .session_id,
+            newer.session_id
+        );
+        let _ = std::fs::remove_dir_all(&ws.root);
     }
 
     #[test]

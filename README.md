@@ -512,11 +512,20 @@ Yardlet pushes its own public `origin`.
 
 Yardlet state survives restarts. On startup (and via `yardlet recover`) it recovers
 interrupted sessions: a planning result the previous session paid for but never
-read is consumed into the queue, finished orphaned runs are evaluated and
-merged (worktree runs included), and unfinished ones are requeued. A durable
+read becomes a proposal in its exact planning session, finished orphaned runs are
+evaluated and merged (worktree runs included), and unfinished ones are requeued. A durable
 `prepared` Git finish is reconciled from its ownership record and current
 remote OID; verified results are projected once, while ambiguous state stays
-Partial. An interrupted planning confirmation replays the same stable action,
+Partial. PlanMeta schema version 2 binds every conversational planner run to its
+session id, expected draft head, request event id, and canonical request-event
+digest. Result application rechecks all four under the planning lock. A stale
+head, a superseding user event, a closed or missing exact session, malformed
+result, or corrupt activation is returned as an error without changing active
+bytes or writing the consumed marker. Recovery never finds a session by matching
+request text and never writes active intent or queue as a fallback. It creates
+only the exact proposal, and accept plus confirm remain explicit user actions.
+The consumed marker is written atomically only after canonical proposal and
+journal writes succeed. An interrupted planning confirmation replays the same stable action,
 deduplicates its effect events, and remains non-runnable if any snapshot,
 activation, or completed action receipt does not match the current active
 confirmation exactly. Before an accepted revision is stored, its prepared

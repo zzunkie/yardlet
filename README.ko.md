@@ -484,11 +484,18 @@ exact-OID push를 재시도할 수 있습니다. 그 밖의 remote 또는 로컬
 ## 크래시 안전성
 
 Yardlet 상태는 재시작에도 살아남습니다. 시작 시(그리고 `yardlet recover`를 통해)
-중단된 세션을 복구합니다. 이전 세션이 비용을 치렀지만 읽지 않은 계획 결과는 큐로
-흡수되고, 완료된 고아 실행은 평가되어 머지되며(worktree 실행 포함), 끝나지 않은 것은
-다시 큐에 들어갑니다. 내구 `prepared` Git 마무리는 소유권 기록과 현재 remote OID로
+중단된 세션을 복구합니다. 이전 세션이 비용을 치렀지만 읽지 않은 계획 결과는 exact
+planning session의 proposal이 되고, 완료된 고아 실행은 평가되어 머지되며(worktree 실행
+포함), 끝나지 않은 것은 다시 큐에 들어갑니다. 내구 `prepared` Git 마무리는 소유권 기록과 현재 remote OID로
 대조되고, 검증된 결과는 한 번만 투영되며, 모호한 상태는 Partial로 남습니다.
-중단된 planning confirm은 같은 stable action으로 replay하고 effect event를 중복 기록하지
+PlanMeta schema version 2는 각 conversational planner run을 session id, expected draft head,
+request event id, canonical request-event digest에 연결합니다. 결과 적용은 planning lock 아래
+네 값을 모두 다시 확인합니다. stale head, 이를 뒤따른 user event, 닫혔거나 누락된 exact
+session, malformed result, corrupt activation은 active byte를 바꾸거나 consumed marker를 쓰지
+않고 오류로 반환됩니다. recovery는 request text 일치로 session을 찾지 않고 active intent나
+queue를 fallback으로 직접 쓰지 않습니다. exact proposal만 만들며 accept와 confirm은 계속
+명시적 user action입니다. consumed marker는 canonical proposal과 journal write가 성공한
+뒤에만 atomic하게 기록됩니다. 중단된 planning confirm은 같은 stable action으로 replay하고 effect event를 중복 기록하지
 않습니다. snapshot, activation, completed action receipt 중 하나라도 현재 active
 confirmation과 정확히 맞지 않으면 실행 불가로 남습니다. accepted revision을 저장하기 전에
 prepared receipt가 stable result id와 정확한 typed effect event id, payload, digest를

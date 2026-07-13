@@ -14,8 +14,8 @@ use serde::Deserialize;
 use crate::guard::{self, Readiness};
 use crate::inspect;
 use crate::schemas::{
-    IntentContract, PlanningDraftContent, PlanningSession, SelectionPolicy, Task, TaskGoal,
-    TaskState, WorkQueue, WorkerProfile, WorkersFile,
+    IntentContract, PlanningDraftContent, PlanningSession, PlanningTurnCas, SelectionPolicy, Task,
+    TaskGoal, TaskState, WorkQueue, WorkerProfile, WorkersFile,
 };
 use crate::state::{self, write_str, PlanningWorkerConfig, Workspace};
 use crate::{packet, workers, yaml};
@@ -139,17 +139,27 @@ impl PlanQuestion {
 /// the worker's result on the next startup.
 #[derive(Debug, Default, serde::Serialize, Deserialize)]
 struct PlanMeta {
+    #[serde(default)]
+    schema_version: u32,
     mode: String, // "new" | "amend"
     #[serde(default)]
     request: String,
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    expected_head: Option<String>,
+    #[serde(default)]
+    request_event_id: String,
+    #[serde(default)]
+    request_digest: String,
 }
 
 /// Marker file written into a plan run dir once Yardlet has derived the canonical
 /// intent/queue from its result. Absent + result present = unconsumed.
 const CONSUMED_MARKER: &str = "consumed";
 
-fn mark_consumed(run_dir: &std::path::Path) {
-    let _ = write_str(&run_dir.join(CONSUMED_MARKER), "");
+fn mark_consumed(run_dir: &std::path::Path) -> Result<()> {
+    state::write_str_atomic(&run_dir.join(CONSUMED_MARKER), "")
 }
 
 /// Reconstruct plan metadata for run dirs created before plan-meta.yaml
@@ -171,8 +181,13 @@ fn legacy_plan_meta(run_dir: &std::path::Path) -> Option<PlanMeta> {
         "new"
     };
     Some(PlanMeta {
+        schema_version: 1,
         mode: mode.to_string(),
         request,
+        session_id: String::new(),
+        expected_head: None,
+        request_event_id: String::new(),
+        request_digest: String::new(),
     })
 }
 
@@ -319,7 +334,8 @@ pub fn run_planning(
     worker_override: Option<&str>,
     explicit_images: &[String],
 ) -> Result<PlanningReport> {
-    run_planning_turn(ws, request, worker_override, explicit_images, true)
+    let (session, turn) = crate::planning::begin_user_turn_exact(ws, request)?;
+    run_planning_turn(ws, request, worker_override, explicit_images, session, turn)
 }
 
 pub fn run_planning_recorded_turn(
@@ -327,8 +343,10 @@ pub fn run_planning_recorded_turn(
     request: &str,
     worker_override: Option<&str>,
     explicit_images: &[String],
+    session: PlanningSession,
+    turn: PlanningTurnCas,
 ) -> Result<PlanningReport> {
-    run_planning_turn(ws, request, worker_override, explicit_images, false)
+    run_planning_turn(ws, request, worker_override, explicit_images, session, turn)
 }
 
 fn run_planning_turn(
@@ -336,16 +354,12 @@ fn run_planning_turn(
     request: &str,
     worker_override: Option<&str>,
     explicit_images: &[String],
-    record_user_turn: bool,
+    session: PlanningSession,
+    turn: PlanningTurnCas,
 ) -> Result<PlanningReport> {
     let workers = ws.load_workers()?;
     let billing = ws.load_billing()?;
     let config = ws.load_config()?;
-    let session = if record_user_turn {
-        crate::planning::begin_user_turn(ws, request)?
-    } else {
-        crate::planning::latest_open_session(ws)?
-    };
     let packet_request = crate::planning::worker_turn_context(ws, &session, request)?;
 
     // Images: explicit --image plus any path detected in the request.
@@ -368,6 +382,7 @@ fn run_planning_turn(
         "new",
         false,
         Some(&session),
+        Some(&turn),
     )
 }
 
@@ -458,6 +473,7 @@ pub fn run_planning_interview(ws: &Workspace, answer: &str) -> Result<PlanningRe
         "interview",
         false,
         None,
+        None,
     )?;
 
     // plan_core derived a fresh intent; restore identity + interview bookkeeping.
@@ -492,6 +508,7 @@ fn plan_core(
     mode: &str,
     archive: bool,
     planning_session: Option<&PlanningSession>,
+    planning_turn: Option<&PlanningTurnCas>,
 ) -> Result<PlanningReport> {
     let language = packet::resolve_language(&config.language, store_request);
     let planning_config = ws.load_planning_worker_config()?;
@@ -507,8 +524,19 @@ fn plan_core(
     state::save_yaml(
         &run_dir.join("plan-meta.yaml"),
         &PlanMeta {
+            schema_version: planning_turn.map_or(1, |_| 2),
             mode: mode.to_string(),
             request: store_request.to_string(),
+            session_id: planning_turn
+                .map(|turn| turn.session_id.clone())
+                .unwrap_or_default(),
+            expected_head: planning_turn.and_then(|turn| turn.expected_head.clone()),
+            request_event_id: planning_turn
+                .map(|turn| turn.request_event_id.clone())
+                .unwrap_or_default(),
+            request_digest: planning_turn
+                .map(|turn| turn.request_digest.clone())
+                .unwrap_or_default(),
         },
     )?;
 
@@ -631,13 +659,16 @@ fn plan_core(
         ));
     }
 
-    let proposal = if let Some(session) = planning_session {
+    let proposal = if let (Some(session), Some(turn)) = (planning_session, planning_turn) {
+        if session.session_id != turn.session_id {
+            bail!("planning session and turn CAS identity mismatch");
+        }
         Some(crate::planning::record_worker_proposal(
             ws,
-            &session.session_id,
+            turn,
             &worker_id,
             &run_id,
-            &format!("{} ({})", plan.summary, outcome.note),
+            &plan.summary,
             if plan.rationale.trim().is_empty() {
                 "planning worker proposed a complete replacement draft"
             } else {
@@ -653,7 +684,7 @@ fn plan_core(
         ws.save_queue(&queue)?;
         None
     };
-    mark_consumed(&run_dir);
+    mark_consumed(&run_dir)?;
 
     Ok(PlanningReport {
         run_id,
@@ -733,8 +764,13 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
     state::save_yaml(
         &run_dir.join("plan-meta.yaml"),
         &PlanMeta {
+            schema_version: 1,
             mode: "amend".to_string(),
             request: request.to_string(),
+            session_id: String::new(),
+            expected_head: None,
+            request_event_id: String::new(),
+            request_digest: String::new(),
         },
     )?;
     let mut lines = Vec::new();
@@ -813,7 +849,7 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
             state::save_yaml(&ws.intent_path(), &intent)?;
         }
     }
-    mark_consumed(&run_dir);
+    mark_consumed(&run_dir)?;
 
     Ok(PlanningReport {
         run_id,
@@ -1290,14 +1326,22 @@ fn depends_transitively(queue: &WorkQueue, from: &str, target: &str) -> bool {
 /// and its result file must be newer than the current queue file. Also
 /// surfaces a still-alive planning worker from a previous session, so the
 /// user knows a plan is on its way before paying for a duplicate one.
-pub fn recover_unconsumed_plan(ws: &Workspace) -> Option<String> {
+pub fn recover_unconsumed_plan(ws: &Workspace) -> Result<Option<String>> {
+    crate::planning::validate_active_activation(ws)?;
     let mut best: Option<(String, std::path::PathBuf)> = None;
-    // The newest plan run with a result, consumed or not (supersession check).
-    let mut newest_finished: Option<String> = None;
     // A previous session's planning worker that is still running.
     let mut live_planner: Option<(String, u32)> = None;
-    for entry in std::fs::read_dir(ws.runs_dir()).ok()?.flatten() {
-        let dir = entry.path();
+    let entries = match std::fs::read_dir(ws.runs_dir()) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", ws.runs_dir().display()))
+        }
+    };
+    for entry in entries {
+        let dir = entry
+            .with_context(|| format!("reading {}", ws.runs_dir().display()))?
+            .path();
         let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(String::from) else {
             continue;
         };
@@ -1317,9 +1361,6 @@ pub fn recover_unconsumed_plan(ws: &Workspace) -> Option<String> {
             }
             continue;
         }
-        if newest_finished.as_ref().map(|n| name > *n).unwrap_or(true) {
-            newest_finished = Some(name.clone());
-        }
         let has_meta = dir.join("plan-meta.yaml").is_file() || workers::packet_path(&dir).is_file();
         if !has_meta || dir.join(CONSUMED_MARKER).exists() {
             continue;
@@ -1330,134 +1371,76 @@ pub fn recover_unconsumed_plan(ws: &Workspace) -> Option<String> {
     }
     let Some((run_id, run_dir)) = best else {
         // Nothing to consume — but report a planning worker still at work.
-        return live_planner.map(|(name, pid)| {
+        return Ok(live_planner.map(|(name, pid)| {
             format!(
                 "a planning worker from a previous session is still running \
                  ({name}, pid {pid}); its plan will be picked up when it finishes"
             )
-        });
+        }));
     };
 
-    // Superseded: a newer plan run exists (consumed or not). Consuming this
-    // older one would overwrite the user's current intent/queue with a stale
-    // plan — retire it instead.
-    if newest_finished
-        .as_deref()
-        .is_some_and(|n| n > run_id.as_str())
-    {
-        mark_consumed(&run_dir);
-        return None;
-    }
-
-    // Freshness guard: the result must be newer than the canonical queue.
     let result_path = run_dir.join("planning-result.json");
-    let result_mtime = std::fs::metadata(&result_path)
-        .and_then(|m| m.modified())
-        .ok()?;
-    if let Ok(queue_mtime) = std::fs::metadata(ws.queue_path()).and_then(|m| m.modified()) {
-        if result_mtime <= queue_mtime {
-            // Already applied (or superseded by newer work): retire it quietly.
-            mark_consumed(&run_dir);
-            return None;
-        }
+    let raw = std::fs::read_to_string(&result_path)
+        .with_context(|| format!("reading {}", result_path.display()))?;
+    let plan: PlanningResult =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", result_path.display()))?;
+    if plan.summary.trim().is_empty() || plan.tasks.is_empty() {
+        bail!(
+            "unconsumed planning result has an empty summary or task list: {}",
+            result_path.display()
+        );
     }
-
-    let raw = std::fs::read_to_string(&result_path).ok()?;
-    let plan: PlanningResult = serde_json::from_str(&raw).ok()?;
-    if plan.tasks.is_empty() {
-        mark_consumed(&run_dir); // unusable; don't retry forever
-        return None;
+    let meta_path = run_dir.join("plan-meta.yaml");
+    let meta: PlanMeta = if meta_path.is_file() {
+        state::load_yaml(&meta_path)?
+    } else {
+        legacy_plan_meta(&run_dir).unwrap_or_default()
+    };
+    if meta.schema_version != 2
+        || meta.mode != "new"
+        || meta.session_id.trim().is_empty()
+        || meta.request_event_id.trim().is_empty()
+        || meta.request_digest.trim().is_empty()
+    {
+        bail!("PlanMeta v2 exact session/turn binding is required for recovery");
     }
-    let meta: PlanMeta = state::load_yaml(&run_dir.join("plan-meta.yaml"))
-        .ok()
-        .or_else(|| legacy_plan_meta(&run_dir))
-        .unwrap_or_default();
-
-    if meta.mode == "amend" {
-        if crate::planning::active_is_confirmed_or_running(ws).ok()? {
-            mark_consumed(&run_dir);
-            return Some(format!(
-                "rejected interrupted follow-up plan ({run_id}): confirmed or running queue is isolated"
-            ));
-        }
-        let mut queue = ws.load_queue().ok()?;
-        let added = append_plan_tasks(&mut queue, &plan);
-        crate::skills::project_task_skills_with_context(
-            ws,
-            &inspect::summarize(&ws.root),
-            &mut queue.tasks,
-            &meta.request,
-        )
-        .ok()?;
-        ws.save_queue(&queue).ok()?;
-        if let Ok(Some(mut intent)) = ws.load_intent() {
-            if !plan.summary.trim().is_empty() {
-                intent.summary =
-                    format!("{}\n\n[follow-up] {}", intent.summary, plan.summary.trim());
-                let _ = state::save_yaml(&ws.intent_path(), &intent);
-            }
-        }
-        mark_consumed(&run_dir);
-        return Some(format!(
-            "recovered interrupted follow-up plan ({run_id}): +{added} task(s)"
-        ));
-    }
-
-    if plan.summary.trim().is_empty() {
-        mark_consumed(&run_dir);
-        return None;
-    }
-    if let Ok(session) = crate::planning::latest_open_session(ws) {
-        if session.initial_request == meta.request {
-            let intent = build_intent(&session.intent_id, &meta.request, &plan, &[]);
-            let mut queue = build_queue(&session.intent_id, &plan);
-            crate::skills::project_task_skills_with_context(
-                ws,
-                &inspect::summarize(&ws.root),
-                &mut queue.tasks,
-                &meta.request,
-            )
-            .ok()?;
-            let proposal = crate::planning::record_worker_proposal(
-                ws,
-                &session.session_id,
-                "recovered-planner",
-                &run_id,
-                &plan.summary,
-                if plan.rationale.trim().is_empty() {
-                    "recovered completed planning worker proposal after restart"
-                } else {
-                    plan.rationale.trim()
-                },
-                PlanningDraftContent { intent, queue },
-            )
-            .ok()?;
-            mark_consumed(&run_dir);
-            return Some(format!(
-                "recovered interrupted planning proposal ({run_id}): {}",
-                proposal.proposal_id
-            ));
-        }
-    }
-    let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
-    let intent = build_intent(&intent_id, &meta.request, &plan, &[]);
-    let mut queue = build_queue(&intent_id, &plan);
+    let turn = PlanningTurnCas {
+        session_id: meta.session_id.clone(),
+        expected_head: meta.expected_head.clone(),
+        request_event_id: meta.request_event_id.clone(),
+        request_digest: meta.request_digest.clone(),
+    };
+    let lock = ws.acquire_planning_lock()?;
+    let session = ws
+        .load_planning_session(&turn.session_id)
+        .with_context(|| format!("loading exact planning session {}", turn.session_id))?;
+    let intent = build_intent(&session.intent_id, &meta.request, &plan, &[]);
+    let mut queue = build_queue(&session.intent_id, &plan);
     crate::skills::project_task_skills_with_context(
         ws,
         &inspect::summarize(&ws.root),
         &mut queue.tasks,
         &meta.request,
-    )
-    .ok()?;
-    let _ = crate::report::archive_intent(ws);
-    state::save_yaml(&ws.intent_path(), &intent).ok()?;
-    ws.save_queue(&queue).ok()?;
-    mark_consumed(&run_dir);
-    Some(format!(
-        "recovered interrupted plan ({run_id}): {} ({} tasks)",
-        intent.summary,
-        queue.tasks.len()
-    ))
+    )?;
+    let proposal = crate::planning::record_worker_proposal_exact_locked(
+        ws,
+        &lock,
+        &turn,
+        "recovered-planner",
+        &run_id,
+        &plan.summary,
+        if plan.rationale.trim().is_empty() {
+            "planning worker proposed a complete replacement draft"
+        } else {
+            plan.rationale.trim()
+        },
+        PlanningDraftContent { intent, queue },
+    )?;
+    mark_consumed(&run_dir)?;
+    Ok(Some(format!(
+        "recovered interrupted planning proposal ({run_id}): {}",
+        proposal.proposal_id
+    )))
 }
 
 fn build_intent(
@@ -2023,11 +2006,18 @@ routing:
         let ws = Workspace::at(&root);
         let run_dir = ws.runs_dir().join("plan-20990101-000000");
         std::fs::create_dir_all(&run_dir).unwrap();
+        let (session, turn) =
+            crate::planning::begin_user_turn_exact(&ws, "add admin search").unwrap();
         state::save_yaml(
             &run_dir.join("plan-meta.yaml"),
             &PlanMeta {
+                schema_version: 2,
                 mode: "new".into(),
                 request: "add admin search".into(),
+                session_id: turn.session_id.clone(),
+                expected_head: turn.expected_head.clone(),
+                request_event_id: turn.request_event_id.clone(),
+                request_digest: turn.request_digest.clone(),
             },
         )
         .unwrap();
@@ -2038,16 +2028,99 @@ routing:
         )
         .unwrap();
 
-        // First startup after the crash: the plan is consumed into canonical state.
-        let msg = recover_unconsumed_plan(&ws).expect("plan should be recovered");
-        assert!(msg.contains("admin search"));
-        let queue = ws.load_queue().unwrap();
-        assert_eq!(queue.tasks.len(), 1);
-        let intent = ws.load_intent().unwrap().unwrap();
-        assert_eq!(intent.raw_request, "add admin search");
+        // First startup after the crash: only an exact-session proposal is recovered.
+        let msg = recover_unconsumed_plan(&ws)
+            .expect("recovery should return a result")
+            .expect("plan should be recovered");
+        assert!(msg.contains("proposal"));
+        assert!(ws.load_intent().unwrap().is_none());
+        assert!(ws.load_queue().unwrap().tasks.is_empty());
+        let proposals = ws.load_planning_proposals(&session.session_id).unwrap();
+        assert_eq!(proposals.len(), 1);
+        assert_eq!(proposals[0].session_id, turn.session_id);
+        assert_eq!(proposals[0].expected_head, turn.expected_head);
+        assert_eq!(proposals[0].request_event_id, turn.request_event_id);
+        assert_eq!(proposals[0].request_digest, turn.request_digest);
 
         // Second startup: marked consumed, nothing to do.
-        assert!(recover_unconsumed_plan(&ws).is_none());
+        assert!(recover_unconsumed_plan(&ws).unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn corrupt_unconsumed_plan_is_an_error_and_is_not_consumed() {
+        let root =
+            std::env::temp_dir().join(format!("yard-planrec-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let (_session, turn) =
+            crate::planning::begin_user_turn_exact(&ws, "bounded request").unwrap();
+        let run_dir = ws.runs_dir().join("plan-20990101-000001");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        state::save_yaml(
+            &run_dir.join("plan-meta.yaml"),
+            &PlanMeta {
+                schema_version: 2,
+                mode: "new".into(),
+                request: "bounded request".into(),
+                session_id: turn.session_id,
+                expected_head: turn.expected_head,
+                request_event_id: turn.request_event_id,
+                request_digest: turn.request_digest,
+            },
+        )
+        .unwrap();
+        write_str(&run_dir.join("planning-result.json"), "{not-json\n").unwrap();
+
+        let error = recover_unconsumed_plan(&ws).unwrap_err();
+        assert!(error.to_string().contains("planning-result.json"));
+        assert!(!run_dir.join(CONSUMED_MARKER).exists());
+        assert!(ws.load_intent().unwrap().is_none());
+        assert!(ws.load_queue().unwrap().tasks.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn proposal_write_error_is_propagated_and_not_consumed() {
+        let root =
+            std::env::temp_dir().join(format!("yard-planrec-write-error-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let (session, turn) =
+            crate::planning::begin_user_turn_exact(&ws, "bounded request").unwrap();
+        let run_dir = ws.runs_dir().join("plan-20990101-000002");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        state::save_yaml(
+            &run_dir.join("plan-meta.yaml"),
+            &PlanMeta {
+                schema_version: 2,
+                mode: "new".into(),
+                request: "bounded request".into(),
+                session_id: turn.session_id,
+                expected_head: turn.expected_head,
+                request_event_id: turn.request_event_id,
+                request_digest: turn.request_digest,
+            },
+        )
+        .unwrap();
+        write_str(
+            &run_dir.join("planning-result.json"),
+            r#"{ "summary": "bounded plan",
+                 "tasks": [{ "id": "YARD-001", "title": "t" }] }"#,
+        )
+        .unwrap();
+        write_str(
+            &ws.planning_session_dir(&session.session_id)
+                .join("proposals"),
+            "not a directory",
+        )
+        .unwrap();
+
+        let error = recover_unconsumed_plan(&ws).unwrap_err();
+        assert!(error.to_string().contains("creating"), "{error:#}");
+        assert!(!run_dir.join(CONSUMED_MARKER).exists());
+        assert!(ws.load_intent().unwrap().is_none());
+        assert!(ws.load_queue().unwrap().tasks.is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2265,6 +2338,7 @@ routing:
             &PlanMeta {
                 mode: "new".into(),
                 request: "old request".into(),
+                ..PlanMeta::default()
             },
         )
         .unwrap();
@@ -2275,10 +2349,10 @@ routing:
         )
         .unwrap();
 
-        assert!(recover_unconsumed_plan(&ws).is_none());
-        // The live queue was not replaced, and the stale plan is retired.
+        assert!(recover_unconsumed_plan(&ws).is_err());
+        // The live queue was not replaced, and a rejected result is not consumed.
         assert_eq!(ws.load_queue().unwrap().intent_id, "live");
-        assert!(stale.join(CONSUMED_MARKER).exists());
+        assert!(!stale.join(CONSUMED_MARKER).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2291,7 +2365,9 @@ routing:
         std::fs::create_dir_all(&dir).unwrap();
         // No result yet, but the worker (our own pid) is alive.
         write_str(&dir.join("worker.pid"), &std::process::id().to_string()).unwrap();
-        let msg = recover_unconsumed_plan(&ws).expect("live planner should be reported");
+        let msg = recover_unconsumed_plan(&ws)
+            .expect("live planner scan should succeed")
+            .expect("live planner should be reported");
         assert!(msg.contains("still running"), "{msg}");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -2318,11 +2394,10 @@ routing:
         )
         .unwrap();
 
-        let msg = recover_unconsumed_plan(&ws).expect("legacy plan should be recovered");
-        assert!(msg.contains("game feel"));
-        let intent = ws.load_intent().unwrap().unwrap();
-        assert_eq!(intent.raw_request, "make the game feel like a game");
-        assert!(recover_unconsumed_plan(&ws).is_none());
+        let error = recover_unconsumed_plan(&ws).unwrap_err();
+        assert!(error.to_string().contains("PlanMeta v2"));
+        assert!(ws.load_intent().unwrap().is_none());
+        assert!(!run_dir.join(CONSUMED_MARKER).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -427,10 +427,6 @@ impl Workspace {
             &path,
             Some(&yaml::to_string(expected)?),
             &yaml::to_string(session)?,
-        )?;
-        write_str_atomic(
-            &self.latest_planning_session_path(),
-            &format!("{}\n", session.session_id),
         )
     }
 
