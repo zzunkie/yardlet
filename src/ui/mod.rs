@@ -275,6 +275,20 @@ fn newest_run_dir(runs: &std::path::Path) -> Option<std::path::PathBuf> {
     newest.map(|(_, p)| p)
 }
 
+fn recover_startup_state(ws: &Workspace) -> Result<Vec<String>> {
+    // This must precede both recovery paths: consuming an unhandled planning
+    // result can archive and replace intent/queue state, while orphan recovery
+    // can rewrite task state. Corrupt activated state is therefore a hard
+    // startup error, not a recoverable input.
+    crate::planning::validate_active_activation(ws)?;
+    let mut recovered = Vec::new();
+    if let Some(message) = crate::planner::recover_unconsumed_plan(ws)? {
+        recovered.push(message);
+    }
+    recovered.extend(crate::run::recover_orphans(ws));
+    Ok(recovered)
+}
+
 fn lang_of(snapshot: &Option<Snapshot>) -> i18n::Lang {
     snapshot
         .as_ref()
@@ -577,16 +591,13 @@ impl App {
 }
 
 pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
+    // Preflight before terminal setup, Snapshot construction, or any recovery
+    // side effect. `Snapshot::load` validates too, for later reloads.
+    let recovered = recover_startup_state(ws)?;
     let mut terminal = ratatui::init();
     let mut app = App::new(ws.clone());
-    // On startup, recover any tasks left "running" by an interrupted/quit session
-    // (evaluate finished runs, requeue the rest) so a restart isn't left stale.
-    // Also consume a planning result the previous session paid for but never read.
-    let mut recovered = Vec::new();
-    if let Some(m) = crate::planner::recover_unconsumed_plan(ws) {
-        recovered.push(m);
-    }
-    recovered.extend(crate::run::recover_orphans(ws));
+    // The validated preflight recovered tasks left "running" by an interrupted
+    // session and consumed any planning result paid for but not yet read.
     if !recovered.is_empty() {
         app.reload();
         app.toast = Some((true, recovered.join("; ")));
@@ -1193,6 +1204,13 @@ fn defer_selected_task(app: &mut App) {
             return;
         }
     }
+    let lock = match app.ws.acquire_planning_lock() {
+        Ok(lock) => lock,
+        Err(e) => {
+            app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+            return;
+        }
+    };
     let before = app.ws.load_queue().ok();
     let mut queue = match before.clone() {
         Some(q) => q,
@@ -1200,7 +1218,7 @@ fn defer_selected_task(app: &mut App) {
     };
     match queue.defer_task(&id, false, "deferred from the TUI") {
         Ok(outcome) => {
-            if let Err(e) = app.ws.save_queue(&queue) {
+            if let Err(e) = app.ws.save_queue_locked(&lock, &queue) {
                 app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
                 return;
             }
@@ -1240,6 +1258,13 @@ fn revive_selected_task(app: &mut App) {
             return;
         }
     }
+    let lock = match app.ws.acquire_planning_lock() {
+        Ok(lock) => lock,
+        Err(e) => {
+            app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+            return;
+        }
+    };
     let before = app.ws.load_queue().ok();
     let mut queue = match before.clone() {
         Some(q) => q,
@@ -1247,7 +1272,7 @@ fn revive_selected_task(app: &mut App) {
     };
     match queue.revive_task(&id, false) {
         Ok(outcome) => {
-            if let Err(e) = app.ws.save_queue(&queue) {
+            if let Err(e) = app.ws.save_queue_locked(&lock, &queue) {
                 app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
                 return;
             }
@@ -1724,16 +1749,22 @@ fn clamp_scroll(app: &mut App) {
 }
 
 fn redo_all(app: &mut App) {
-    if let Ok(mut q) = app.ws.load_queue() {
-        let mut n = 0;
-        for t in q.tasks.iter_mut() {
-            if t.state == TaskState::Done {
-                t.state = TaskState::Queued;
-                n += 1;
+    if let Ok(lock) = app.ws.acquire_planning_lock() {
+        if let Ok(mut q) = app.ws.load_queue() {
+            let mut n = 0;
+            for t in q.tasks.iter_mut() {
+                if t.state == TaskState::Done {
+                    t.state = TaskState::Queued;
+                    n += 1;
+                }
+            }
+            match app.ws.save_queue_locked(&lock, &q) {
+                Ok(()) => app.toast = Some((true, format!("{}: {n}", app.lang.l().redo_done))),
+                Err(error) => {
+                    app.toast = Some((false, format!("{} {error}", app.lang.l().run_failed)))
+                }
             }
         }
-        let _ = app.ws.save_queue(&q);
-        app.toast = Some((true, format!("{}: {n}", app.lang.l().redo_done)));
     }
     app.reload();
     app.screen = Screen::Home;
@@ -2164,6 +2195,10 @@ fn start_run(app: &mut App) {
 }
 
 fn start_approve(app: &mut App) {
+    if let Err(e) = crate::planning::validate_active_activation(&app.ws) {
+        app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+        return;
+    }
     let approvals_needed = app
         .snapshot
         .as_ref()
@@ -2392,6 +2427,7 @@ fn approve_batch_and_run(app: &mut App, ids: Vec<String>) {
 }
 
 fn grant_approval_batch(ws: &Workspace, ids: &[String]) -> anyhow::Result<()> {
+    crate::planning::validate_active_activation(ws)?;
     for id in ids {
         crate::approvals::grant(ws, id)?;
     }
@@ -2399,6 +2435,14 @@ fn grant_approval_batch(ws: &Workspace, ids: &[String]) -> anyhow::Result<()> {
 }
 
 fn hold_batch(app: &mut App, ids: Vec<String>) {
+    let lock = match app.ws.acquire_planning_lock() {
+        Ok(lock) => lock,
+        Err(e) => {
+            app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+            app.screen = Screen::Home;
+            return;
+        }
+    };
     let mut queue = match app.ws.load_queue() {
         Ok(q) => q,
         Err(e) => {
@@ -2414,7 +2458,7 @@ fn hold_batch(app: &mut App, ids: Vec<String>) {
             Err(e) => app.toast = Some((false, e)),
         }
     }
-    if let Err(e) = app.ws.save_queue(&queue) {
+    if let Err(e) = app.ws.save_queue_locked(&lock, &queue) {
         app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
         app.screen = Screen::Home;
         return;
@@ -2818,6 +2862,10 @@ fn start_answer(app: &mut App) {
         .map(|s| s.approvals_needed.as_slice())
         .unwrap_or(&[]);
     if answer_target_will_grant(&task_id, grant_after_answer, approvals_needed) {
+        if let Err(e) = crate::planning::validate_active_activation(&app.ws) {
+            app.toast = Some((false, format!("{} {e}", app.lang.l().answer_failed)));
+            return;
+        }
         if let Err(e) = crate::approvals::grant(&app.ws, &task_id) {
             app.toast = Some((false, format!("{} {e}", app.lang.l().answer_failed)));
             return;
@@ -3283,6 +3331,50 @@ routing:
 
         assert!(crate::approvals::is_granted(&ws, "APV"));
         assert!(matches!(&app.job, Job::Running { label, .. } if label == "auto"));
+    }
+
+    #[test]
+    fn corrupt_state_blocks_tui_startup_recovery_and_approval_side_effects() {
+        let ws = crate::snapshot::corrupt_activated_state_fixture("tui-entrypoints");
+        // Reproduce the dangerous startup path: without a preflight gate this
+        // newer, unconsumed result archives and replaces the live intent/queue.
+        std::thread::sleep(Duration::from_millis(10));
+        let plan_run = ws.runs_dir().join("plan-20990714-000000");
+        std::fs::create_dir_all(&plan_run).unwrap();
+        std::fs::write(
+            plan_run.join("plan-meta.yaml"),
+            "mode: new\nrequest: replacement plan\n",
+        )
+        .unwrap();
+        std::fs::write(
+            plan_run.join("planning-result.json"),
+            r#"{"summary":"replacement","tasks":[{"id":"YARD-999","title":"replace live state"}]}"#,
+        )
+        .unwrap();
+        let intent_before = std::fs::read(ws.intent_path()).unwrap();
+        let queue_before = std::fs::read(ws.queue_path()).unwrap();
+        let approval_path = ws.agents_dir().join("approvals.yaml");
+        let archive_path = ws.agents_dir().join("intents");
+
+        let recovery_error = recover_startup_state(&ws).unwrap_err().to_string();
+        assert!(
+            recovery_error.contains("unconfirmed_or_inconsistent"),
+            "{recovery_error}"
+        );
+        let approval_error = grant_approval_batch(&ws, &["YARD-001".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            approval_error.contains("unconfirmed_or_inconsistent"),
+            "{approval_error}"
+        );
+
+        assert_eq!(std::fs::read(ws.intent_path()).unwrap(), intent_before);
+        assert_eq!(std::fs::read(ws.queue_path()).unwrap(), queue_before);
+        assert!(!approval_path.exists());
+        assert!(!archive_path.exists());
+        assert!(!plan_run.join("consumed").exists());
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     #[test]

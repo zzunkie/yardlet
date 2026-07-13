@@ -92,7 +92,10 @@ a worker opts a specific var back in only via `pass_env`.
 ```bash
 cd your-project
 yardlet new "add admin order search with status, email, and date filters"
-yardlet queue                      # review the planned tasks
+yardlet planning show              # review the proposal and semantic diff
+yardlet planning accept <proposal> --expected-head none
+yardlet planning confirm --expected-head <draft-revision>
+yardlet queue                      # review the confirmed tasks
 yardlet run --auto                 # drain the queue, stopping only at human gates
 yardlet handoff                    # read the teammate-readable summary
 yardlet                            # or do it all from the terminal UI
@@ -102,9 +105,16 @@ Like the worker CLIs, `yardlet` just works in any directory: the first command
 creates `.agents/` state on demand. `yardlet init` exists for scripting or to
 re-scaffold, but you do not need to run it first.
 
-A one-sentence request becomes an intent contract plus a bounded task queue
-with explicit dependencies; each task runs through a hidden worker, is checked
-by a deterministic evaluator, and leaves a checkpoint and handoff under
+A one-sentence request opens a planning channel. Each worker proposal is an
+immutable draft revision with an inspectable semantic diff. `accept`, `reject`,
+`undo`, and `answer` require the expected visible head, and only explicit
+`confirm` promotes that exact draft to the active intent and bounded queue. No
+active state changes before confirmation, and confirmation does not call the
+worker or hide a re-plan. `yardlet goal` remains the express path: it skips the
+planning worker but records the generated draft and confirmation provenance.
+
+After confirmation, each task runs through a hidden worker, is checked by a
+deterministic evaluator, and leaves a checkpoint and handoff under
 `.agents/runs/`.
 
 Tasks can carry an explicit goal condition and feedback-cycle limit. When a
@@ -242,8 +252,9 @@ are mapped to the same shortcuts.
 | --- | --- |
 | `yardlet` | Open the terminal UI (auto-inits on first use). |
 | `yardlet init [--force]` | Explicitly scaffold `.agents/` state (optional). |
-| `yardlet new "<request>" [--worker <id>]` | Plan a request into an intent contract + queue. |
-| `yardlet goal "<goal>" [--verify "..."]` | Express lane: skip planning, run one goal to a verify condition. |
+| `yardlet new "<request>" [--worker <id>]` | Start or resume conversational planning and record a replacement proposal without changing active state. |
+| `yardlet planning show [--json]` / `accept` / `reject` / `undo` / `answer` / `confirm` | Review the channel and semantic diff, then act against an expected draft head; only `confirm` promotes the visible draft. |
+| `yardlet goal "<goal>" [--verify "..."]` | Express lane: skip the planning worker, record an exact draft and confirmation, then run one goal to a verify condition. |
 | `yardlet new "..." --image <path>` | Attach a local image to the goal (also auto-detected from the request). |
 | `yardlet add "<title>" [--depends-on <id>]` | Append a user-authored task to the current queue without replanning. |
 | `yardlet queue` | List the work queue. |
@@ -501,11 +512,63 @@ Yardlet pushes its own public `origin`.
 
 Yardlet state survives restarts. On startup (and via `yardlet recover`) it recovers
 interrupted sessions: a planning result the previous session paid for but never
-read is consumed into the queue, finished orphaned runs are evaluated and
-merged (worktree runs included), and unfinished ones are requeued. A durable
+read becomes a proposal in its exact planning session, finished orphaned runs are
+evaluated and merged (worktree runs included), and unfinished ones are requeued. A durable
 `prepared` Git finish is reconciled from its ownership record and current
 remote OID; verified results are projected once, while ambiguous state stays
-Partial.
+Partial. PlanMeta schema version 2 binds every conversational planner run to its
+session id, expected draft head, request event id, and canonical request-event
+digest. Result application rechecks all four under the planning lock. A stale
+head, a superseding user event, a closed or missing exact session, malformed
+result, or corrupt activation is returned as an error without changing active
+bytes or writing the consumed marker. Recovery never finds a session by matching
+request text and never writes active intent or queue as a fallback. It creates
+only the exact proposal, and accept plus confirm remain explicit user actions.
+The consumed marker is written atomically only after canonical proposal and
+journal writes succeed. An interrupted planning confirmation replays the same stable action,
+deduplicates its effect events, and remains non-runnable if any snapshot,
+activation, or completed action receipt does not match the current active
+confirmation exactly. Before an accepted revision is stored, its prepared
+receipt reserves the stable result id and exact typed effect event id, payload,
+and digest. A schema-version 2 terminal receipt requires all four effect fields,
+and its canonical payload bytes and digest must equal the one immutable journal
+event. Schema version 1 compatibility is an explicit separate branch: realistic
+legacy events may omit the request digest, and replay never appends a synthetic
+duplicate or mutates the old journal. The event
+journal fails closed unless sequence numbers are contiguous from 1, filename and
+embedded identities match, event ids and payloads are unique, action/type
+cardinality is valid, and `next_seq` is not ahead. A persisted session also
+rejects a missing journal directory or a session/latest-pointer identity
+mismatch; only an empty, artifact-free `next_seq: 1` initial journal is valid.
+
+Planning confirmation and runtime queue mutations (`add`, run transitions,
+finalization, and orphan recovery) share one permanent workspace kernel lock and
+compare-and-swap boundary. Lock acquisition is non-blocking with a bounded
+timeout, retrying interrupt and contention errors, and the descriptor is closed
+across worker execution. Immutable revisions and events use atomic no-clobber
+create, while session and action transitions use compare-and-swap. The activated
+queue retains an immutable materialized base plan for confirmation parity.
+Confirmed task identity, relative order, worker, scope, dependencies, and
+acceptance stay exact while typed scheduler metadata evolves. Explicit user
+adds and ingested worker follow-ups are append-only runtime tasks with an empty
+confirmation-materialization marker and a separate core-owned immutable origin
+receipt; their execution contract must keep matching that receipt. A committed
+ordinal marker makes their presence and order append-only. Hard `runs_before`
+edges and stale decision-capability clears are accepted only when their exact
+typed runtime receipt replays onto the immutable base. Receipt preparation is
+provisional until that marker exists: if queue CAS never exposes the effect, a
+well-formed uncommitted receipt can be safely superseded by a later retry. Once
+the effect is in the queue, only its exact after-queue digest may repair the
+missing commit marker. Skill projection after confirmation touches only newly
+ingested tasks. Snapshot,
+status, TUI startup, packet, approval, queue, run, add, finalization, and
+recovery reject an altered envelope or missing receipt before exposing trusted
+work or changing canonical bytes. Each express goal holds the same outer
+workspace transaction across session creation, proposal, accept, and confirm,
+so concurrent express processes cannot interleave planning sessions. A new confirmation refuses to replace an active
+queue that still contains Queued, Running, NeedsUser, Partial, or Blocked work,
+and a corrupt activation guard is returned as an error instead of being treated
+as an inactive workspace.
 
 ## Build
 
@@ -528,6 +591,12 @@ Yardlet owns state; workers do not. Canonical state lives under `.agents/` in th
   yardlet.yaml              workspace config
   intent-contract.yaml      current goal / scope / acceptance
   work-queue.yaml           tasks
+  planning.lock             kernel-held workspace mutation transaction lock
+  planning-sessions/        sessions, immutable proposals/drafts, ordered events, action receipts
+  activations/              committed exact-promotion receipts
+  runtime-task-receipts/    immutable origins for post-confirm user/follow-up tasks
+  runtime-capability-receipts/ typed stale-decision capability migrations
+  activation-required.yaml durable V010-origin discriminator for fail-closed scheduling
   *-policy.yaml             tool / approval / interaction / research / billing policy
   workers.yaml              worker profiles + routing
   memory/                   durable workspace facts (one fact per .md, git-tracked)

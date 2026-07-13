@@ -197,6 +197,432 @@ pub struct WorkQueue {
     pub tasks: Vec<Task>,
 }
 
+// ---------------------------------------------------------------------------
+// V010-002 conversational planning and exact activation
+// ---------------------------------------------------------------------------
+
+/// Immutable plan content shown to the user before confirmation. The active
+/// records add activation provenance around this exact payload; they never
+/// re-plan or rewrite it during promotion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningDraftContent {
+    pub intent: IntentContract,
+    pub queue: WorkQueue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningLifecycle {
+    Open,
+    Confirmed,
+    Closed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningSession {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub workspace_id: String,
+    pub lifecycle: PlanningLifecycle,
+    pub intent_id: String,
+    pub queue_id: String,
+    pub initial_request: String,
+    #[serde(default)]
+    pub current_head: Option<String>,
+    #[serde(default)]
+    pub confirmation_id: Option<String>,
+    pub next_seq: u64,
+    pub created_at: String,
+}
+
+/// Immutable identity of the exact user turn sent to a planning worker. A
+/// worker result may become a proposal only while all four fields still match
+/// the persisted open session and its journal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningTurnCas {
+    pub session_id: String,
+    #[serde(default)]
+    pub expected_head: Option<String>,
+    pub request_event_id: String,
+    pub request_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticDiffEntry {
+    pub field: String,
+    pub before: serde_json::Value,
+    pub after: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningProposal {
+    pub schema_version: u32,
+    pub proposal_id: String,
+    pub session_id: String,
+    #[serde(default)]
+    pub expected_head: Option<String>,
+    pub producer_worker_id: String,
+    pub attempt_id: String,
+    #[serde(default)]
+    pub request_event_id: String,
+    #[serde(default)]
+    pub request_digest: String,
+    pub rationale: String,
+    pub content_digest: String,
+    pub content: PlanningDraftContent,
+    #[serde(default)]
+    pub semantic_diff: Vec<SemanticDiffEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DraftRevision {
+    pub schema_version: u32,
+    pub draft_revision_id: String,
+    pub session_id: String,
+    pub proposal_id: String,
+    #[serde(default)]
+    pub parent_revision_id: Option<String>,
+    pub content_digest: String,
+    pub content: PlanningDraftContent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlanningEventType {
+    #[serde(rename = "session.opened")]
+    SessionOpened,
+    #[serde(rename = "user.message")]
+    UserMessage,
+    #[serde(rename = "worker.message")]
+    WorkerMessage,
+    #[serde(rename = "draft.proposed")]
+    DraftProposed,
+    #[serde(rename = "draft.accepted")]
+    DraftAccepted,
+    #[serde(rename = "draft.revised")]
+    DraftRevised,
+    #[serde(rename = "draft.rejected")]
+    DraftRejected,
+    #[serde(rename = "draft.undo")]
+    DraftUndo,
+    #[serde(rename = "draft.confirm.prepared")]
+    DraftConfirmPrepared,
+    #[serde(rename = "draft.confirmed")]
+    DraftConfirmed,
+    #[serde(rename = "action.requested")]
+    ActionRequested,
+    #[serde(rename = "action.completed")]
+    ActionCompleted,
+    #[serde(rename = "action.rejected")]
+    ActionRejected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningEvent {
+    pub schema_version: u32,
+    pub event_id: String,
+    pub session_id: String,
+    pub seq: u64,
+    #[serde(rename = "type")]
+    pub event_type: PlanningEventType,
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub action_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub action_request_digest: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub message: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub proposal_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub draft_revision_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub related_revision_id: String,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningActionKind {
+    Accept,
+    Reject,
+    Undo,
+    Answer,
+    Confirm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningActionStatus {
+    Prepared,
+    Completed,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningActionReceipt {
+    pub schema_version: u32,
+    pub action_id: String,
+    pub session_id: String,
+    pub action: PlanningActionKind,
+    pub request_digest: String,
+    pub status: PlanningActionStatus,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub result_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effect_event_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_event_type: Option<PlanningEventType>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effect_event_digest: String,
+    /// Exact effect payload reserved while the receipt is still Prepared. The
+    /// immutable effect file is materialized from this value after every crash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_event: Option<PlanningEvent>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prior_intent_digest: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prior_queue_digest: String,
+}
+
+/// Intent snapshot carrying the activation linkage. Flattening keeps the
+/// legacy `intent-contract.yaml` shape readable by older tolerant readers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivatedIntent {
+    #[serde(flatten)]
+    pub intent: IntentContract,
+    /// Durable origin marker for V010-created state. Legacy records default to
+    /// false; removing the surrounding linkage from a modern record must not
+    /// make it eligible for the legacy scheduler path.
+    #[serde(default)]
+    pub activation_required: bool,
+    #[serde(default)]
+    pub planning_session_id: String,
+    #[serde(default)]
+    pub confirmation_id: String,
+    #[serde(default)]
+    pub draft_revision_id: String,
+    #[serde(default)]
+    pub draft_content_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivatedTask {
+    #[serde(flatten)]
+    pub task: Task,
+    #[serde(default)]
+    pub materialized_by_confirmation_id: String,
+}
+
+/// Queue snapshot carrying activation and per-task materialization linkage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivatedQueue {
+    pub schema_version: u32,
+    pub queue_id: String,
+    #[serde(default)]
+    pub intent_id: String,
+    /// See [`ActivatedIntent::activation_required`]. Both active snapshots
+    /// carry the marker so either half of an interrupted promotion fails closed.
+    #[serde(default)]
+    pub activation_required: bool,
+    #[serde(default)]
+    pub selection_policy: SelectionPolicy,
+    #[serde(default)]
+    pub tasks: Vec<ActivatedTask>,
+    #[serde(default)]
+    pub planning_session_id: String,
+    #[serde(default)]
+    pub confirmation_id: String,
+    #[serde(default)]
+    pub draft_revision_id: String,
+    #[serde(default)]
+    pub draft_content_digest: String,
+    /// Canonical digest of `materialized_queue`. This value and the snapshot
+    /// are immutable activation provenance; runtime writers may only project
+    /// mutable task state into `tasks`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub materialized_queue_digest: String,
+    /// Immutable queue exactly materialized from the confirmed draft. `tasks`
+    /// carries mutable runtime state; this snapshot never changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialized_queue: Option<WorkQueue>,
+}
+
+impl ActivatedQueue {
+    pub fn as_work_queue(&self) -> WorkQueue {
+        WorkQueue {
+            schema_version: self.schema_version,
+            queue_id: self.queue_id.clone(),
+            intent_id: self.intent_id.clone(),
+            selection_policy: self.selection_policy.clone(),
+            tasks: self.tasks.iter().map(|task| task.task.clone()).collect(),
+        }
+    }
+
+    /// The confirmed draft is an immutable base execution contract. Runtime
+    /// may advance scheduler-owned fields on those tasks and append separately
+    /// receipted user/follow-up tasks, but it may never rewrite, delete, or
+    /// reorder the confirmed contracts.
+    pub fn runtime_envelope_matches_materialized_with_overlays(
+        &self,
+        authorized_runs_before: &std::collections::BTreeMap<String, Vec<String>>,
+        authorized_capability_clears: &std::collections::BTreeSet<String>,
+    ) -> bool {
+        let Some(materialized) = self.materialized_queue.as_ref() else {
+            return false;
+        };
+        if self.schema_version != materialized.schema_version
+            || self.queue_id != materialized.queue_id
+            || self.intent_id != materialized.intent_id
+            || serde_json::to_vec(&self.selection_policy).ok()
+                != serde_json::to_vec(&materialized.selection_policy).ok()
+        {
+            return false;
+        }
+
+        let mut ids = std::collections::BTreeSet::new();
+        let mut confirmed = Vec::new();
+        let mut saw_runtime_addition = false;
+        for activated in &self.tasks {
+            if !ids.insert(activated.task.id.as_str()) {
+                return false;
+            }
+            if activated.materialized_by_confirmation_id == self.confirmation_id {
+                if saw_runtime_addition {
+                    return false;
+                }
+                confirmed.push(&activated.task);
+            } else if activated.materialized_by_confirmation_id.is_empty()
+                && matches!(
+                    activated.task.provenance.as_str(),
+                    "user-added" | "worker-proposed"
+                )
+            {
+                saw_runtime_addition = true;
+            } else {
+                return false;
+            }
+        }
+        confirmed.len() == materialized.tasks.len()
+            && confirmed
+                .iter()
+                .zip(&materialized.tasks)
+                .all(|(runtime, planned)| {
+                    if runtime.id != planned.id {
+                        return false;
+                    }
+                    let mut runtime = (*runtime).clone();
+                    if let Some(additions) = authorized_runs_before.get(&runtime.id) {
+                        let mut expected = planned.depends_on.clone();
+                        expected.extend(additions.iter().cloned());
+                        if runtime.depends_on != expected {
+                            return false;
+                        }
+                        runtime.depends_on = planned.depends_on.clone();
+                    }
+                    if authorized_capability_clears.contains(&runtime.id) {
+                        if planned.required_capabilities.is_empty()
+                            || !runtime.required_capabilities.is_empty()
+                        {
+                            return false;
+                        }
+                        runtime.required_capabilities = planned.required_capabilities.clone();
+                    }
+                    matches!(
+                        (
+                            runtime.runtime_contract_digest(),
+                            planned.runtime_contract_digest()
+                        ),
+                        (Ok(runtime), Ok(planned)) if runtime == planned
+                    )
+                })
+    }
+}
+
+/// Core-owned proof that a task appended after confirmation entered through an
+/// allowed runtime action rather than by editing `work-queue.yaml` directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeTaskReceipt {
+    pub schema_version: u32,
+    pub confirmation_id: String,
+    pub intent_id: String,
+    pub queue_id: String,
+    pub task_id: String,
+    pub origin: String,
+    pub origin_action_id: String,
+    #[serde(default)]
+    pub ordinal: usize,
+    #[serde(default)]
+    pub runs_before: Vec<String>,
+    pub task_contract_digest: String,
+    pub task: Task,
+    #[serde(default)]
+    pub queue_digest_after: String,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeTaskCommit {
+    pub schema_version: u32,
+    pub confirmation_id: String,
+    pub task_id: String,
+    pub ordinal: usize,
+    pub receipt_digest: String,
+    pub committed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeCapabilityReceipt {
+    pub schema_version: u32,
+    pub confirmation_id: String,
+    pub intent_id: String,
+    pub queue_id: String,
+    pub task_id: String,
+    pub action: String,
+    pub action_id: String,
+    pub target_state: TaskState,
+    pub decision_question: String,
+    pub original_required_capabilities: Vec<String>,
+    pub replacement_required_capabilities: Vec<String>,
+    pub queue_digest_after: String,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeCapabilityCommit {
+    pub schema_version: u32,
+    pub confirmation_id: String,
+    pub task_id: String,
+    pub receipt_digest: String,
+    pub committed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivationReceipt {
+    pub schema_version: u32,
+    pub confirmation_id: String,
+    pub action_id: String,
+    pub session_id: String,
+    pub draft_revision_id: String,
+    pub draft_content_digest: String,
+    pub intent_id: String,
+    pub queue_id: String,
+    pub intent_digest: String,
+    pub queue_digest: String,
+    pub status: String,
+}
+
+/// Workspace-level discriminator for state created by the V010 activation
+/// path. It remains after an active snapshot is archived or tampered so a
+/// stripped modern record can never become indistinguishable from legacy data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivationRequirement {
+    pub schema_version: u32,
+    pub required: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectionPolicy {
     #[serde(default = "default_order")]
@@ -465,6 +891,37 @@ pub struct ReviveBlockedDependency {
 }
 
 impl Task {
+    /// Canonical task contract used by activation/runtime-origin receipts.
+    /// Scheduler-owned lifecycle metadata is deliberately excluded; everything
+    /// that controls worker identity, scope, dependencies, or acceptance stays
+    /// exact.
+    pub fn runtime_contract_snapshot(&self) -> Self {
+        let mut contract = self.clone();
+        contract.state = TaskState::Queued;
+        contract.priority = 0;
+        contract.worker_rationale = None;
+        match contract.interaction.take() {
+            Some(yaml::Value::Mapping(mut interaction)) => {
+                interaction.remove(yaml::Value::String("deferred_by".to_string()));
+                interaction.remove(yaml::Value::String("remediation_for".to_string()));
+                contract.interaction =
+                    (!interaction.is_empty()).then_some(yaml::Value::Mapping(interaction));
+            }
+            other => contract.interaction = other,
+        }
+        contract
+    }
+
+    pub fn runtime_contract_digest(&self) -> Result<String, serde_json::Error> {
+        let bytes = serde_json::to_vec(&self.runtime_contract_snapshot())?;
+        let mut hash = 0xcbf29ce484222325_u64;
+        for byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        Ok(format!("fnv1a64:{hash:016x}"))
+    }
+
     /// Queues written before `goal` existed used a hard two-attempt cap, which
     /// meant one feedback retry after the initial run. Keep that behavior for
     /// old tasks while new goal contracts default to two feedback cycles.
@@ -1333,6 +1790,41 @@ tasks:
         assert!(queue.has_active_remediation_for("REVIEW"));
         queue.tasks[0].state = TaskState::NeedsUser;
         assert!(!queue.has_active_remediation_for("REVIEW"));
+    }
+
+    #[test]
+    fn runtime_contract_digest_ignores_only_typed_scheduler_metadata() {
+        let planned: Task = yaml::from_str(
+            r#"
+id: YARD-001
+title: immutable work
+priority: 10
+preferred_worker: codex
+allowed_scope: [src/state.rs]
+interaction:
+  planner_note: keep exact
+"#,
+        )
+        .unwrap();
+        let planned_digest = planned.runtime_contract_digest().unwrap();
+
+        let mut runtime = planned.clone();
+        runtime.state = TaskState::Deferred;
+        runtime.priority = -20;
+        runtime.worker_rationale = Some("runtime observation".to_string());
+        runtime.set_deferred_by(Some(DeferredBy::new("YARD-001")));
+        runtime.add_remediation_for("REVIEW");
+        assert_eq!(runtime.runtime_contract_digest().unwrap(), planned_digest);
+
+        runtime.allowed_scope = vec!["forged/scope".to_string()];
+        assert_ne!(runtime.runtime_contract_digest().unwrap(), planned_digest);
+
+        let mut non_mapping = planned.clone();
+        non_mapping.interaction = Some(yaml::Value::String("different".to_string()));
+        assert_ne!(
+            non_mapping.runtime_contract_digest().unwrap(),
+            planned_digest
+        );
     }
 
     #[test]

@@ -80,14 +80,18 @@ pub fn collect_proposed_follow_ups(ws: &Workspace, queue: &WorkQueue) -> Vec<Fol
 /// the new intent id. Archive + clear the current intent first if one is live.
 pub fn promote_follow_up(ws: &Workspace, fu: &FollowUpTask) -> Result<String> {
     let intent_id = format!("intent-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"));
-    ws.seed_intent_from_follow_up(fu, &intent_id, |queue| {
-        crate::planner::ingest_follow_ups(
+    let mut ingested = Vec::new();
+    let intent_id = ws.seed_intent_from_follow_up(fu, &intent_id, |queue| {
+        ingested = crate::planner::ingest_follow_ups(
             queue,
             &fu.allowed_scope,
             std::slice::from_ref(fu),
             Some(ws),
         );
-    })
+    })?;
+    let queue = ws.load_queue()?;
+    crate::planner::persist_ingested_decision_questions(ws, &queue, &ingested)?;
+    Ok(intent_id)
 }
 
 /// Yardlet's own run bookkeeping (under `.agents/`) — not a deliverable, so it is

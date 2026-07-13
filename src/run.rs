@@ -21,7 +21,7 @@ use crate::schemas::{
     ConversationTurn, RunResult, TaskState, TransitionActor, TransitionCause, TurnRole, WorkQueue,
     WorkerProfile, WorkersFile,
 };
-use crate::state::{self, append_str, write_str, Workspace};
+use crate::state::{self, append_str, write_str, PlanningLock, Workspace};
 use crate::ui::i18n::{self, Lang};
 use crate::{compact, evaluator, routing, telemetry, workers};
 
@@ -552,11 +552,20 @@ pub(crate) struct RunFailover {
 }
 
 pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
+    // Serialize queue selection and the first runtime transition against a
+    // planning confirmation. Once Running is canonical, confirm observes it
+    // and fails closed; the worker itself never holds this lock.
+    let planning_lock = ws.acquire_planning_lock()?;
     let mut queue = ws.load_queue()?;
     let workers = ws.load_workers()?;
     let billing = ws.load_billing()?;
     let intent = ws.load_intent()?;
     let config = ws.load_config()?;
+
+    // V010-002 activation gate. Legacy queues remain compatible, but once any
+    // confirmation provenance is present every contract predicate is required.
+    // Missing or contradictory linkage is visible state, never runnable work.
+    crate::planning::validate_active_activation(ws)?;
 
     // Ambiguity gate (absorption.md A2): while the planner's own self-report
     // says it is still guessing, queue-selected runs refuse to start. A named
@@ -603,7 +612,13 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         if !unsatisfiable.is_empty() {
             match routing::classify_stale_gate(&unsatisfiable) {
                 routing::GateShape::Decision => {
-                    migrate_stale_gate_to_decision(ws, &mut queue, &task, &unsatisfiable)?;
+                    migrate_stale_gate_to_decision(
+                        ws,
+                        &planning_lock,
+                        &mut queue,
+                        &task,
+                        &unsatisfiable,
+                    )?;
                     return Ok(RunReport {
                         run_id: String::new(),
                         task_id: task.id.clone(),
@@ -621,8 +636,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                     });
                 }
                 routing::GateShape::ToolGap => {
-                    save_task_state_on_latest_queue(
+                    save_task_state_on_latest_queue_locked(
                         ws,
+                        &planning_lock,
                         &mut queue,
                         &task.id,
                         TaskState::Deferred,
@@ -913,7 +929,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         }
         let from = queue.tasks[idx].state;
         queue.tasks[idx].state = TaskState::Failed;
-        ws.save_queue(&queue)?;
+        ws.save_queue_locked(&planning_lock, &queue)?;
         let _ = state::append_transition(
             ws,
             state::transition(
@@ -943,7 +959,8 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // mark running
     let from = queue.tasks[idx].state;
     queue.tasks[idx].state = TaskState::Running;
-    ws.save_queue(&queue)?;
+    ws.save_queue_locked(&planning_lock, &queue)?;
+    drop(planning_lock);
     let _ = state::append_transition(
         ws,
         state::transition(
@@ -1377,7 +1394,8 @@ pub fn run_auto<F: FnMut(&str)>(
     let mut chain: Option<ChainHandle> = None;
     // Recover orphans (interrupted runs left "running") and any unconsumed
     // planning result from an interrupted session before draining.
-    if let Some(m) = crate::planner::recover_unconsumed_plan(ws) {
+    crate::planning::validate_active_activation(ws)?;
+    if let Some(m) = crate::planner::recover_unconsumed_plan(ws)? {
         emit(m);
     }
     for m in recover_orphans(ws) {
@@ -1751,6 +1769,7 @@ pub fn select_next_ready(
 
 fn migrate_stale_gate_to_decision(
     ws: &Workspace,
+    lock: &PlanningLock,
     queue: &mut WorkQueue,
     task: &crate::schemas::Task,
     unsatisfiable: &[String],
@@ -1772,9 +1791,12 @@ fn migrate_stale_gate_to_decision(
             "This task needs your decision before Yardlet can run it: {}. Reply with the decision or instructions to proceed.",
             t.title
         );
+        let task_id = t.id.clone();
+        let to = t.state;
+        ws.save_queue_locked(lock, &latest)?;
         state::append_conversation_turn(
             ws,
-            &t.id,
+            &task_id,
             ConversationTurn {
                 role: TurnRole::Worker,
                 text: question,
@@ -1785,15 +1807,14 @@ fn migrate_stale_gate_to_decision(
         state::append_transition(
             ws,
             state::transition(
-                &t.id,
+                &task_id,
                 from,
-                t.state,
+                to,
                 TransitionCause::StaleMigration,
                 &detail,
                 TransitionActor::System,
             ),
         )?;
-        ws.save_queue(&latest)?;
         *queue = latest;
     }
     Ok(())
@@ -2676,6 +2697,9 @@ fn reconcile_integrated_cleanups(ws: &Workspace, msgs: &mut Vec<String>) {
 /// genuinely-bad result stays failed). Returns messages describing what
 /// changed. Safe to call on startup and periodically.
 pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
+    if let Err(error) = crate::planning::validate_active_activation(ws) {
+        return vec![format!("recovery rejected: {error}")];
+    }
     let mut msgs = Vec::new();
     let Ok(mut q) = ws.load_queue() else {
         return msgs;
@@ -2874,18 +2898,23 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                     }
                     let _ = std::fs::remove_file(run_dir.join("worker.pid"));
                 }
-                if let Some(t) = q.tasks.iter_mut().find(|t| t.id == id) {
-                    t.state = TaskState::Queued;
-                }
-                // Persist now: a later sibling's finalize_run re-reads the queue
-                // from disk, which would otherwise clobber this in-memory requeue.
-                let _ = ws.save_queue(&q);
+                // Re-read and mutate under the permanent workspace lock. A
+                // concurrent add or planning confirm can never be overwritten by
+                // this recovery pass's start-of-loop snapshot.
+                let _ = save_task_state_on_latest_queue(
+                    ws,
+                    &mut q,
+                    &id,
+                    TaskState::Queued,
+                    TransitionCause::Recover,
+                    "dead orphan worker had no result; task requeued",
+                    TransitionActor::System,
+                );
                 requeued.push(id.clone());
             }
         }
     }
     if !finished.is_empty() || !requeued.is_empty() {
-        let _ = ws.save_queue(&q);
         if !finished.is_empty() {
             msgs.push(format!(
                 "recovered completed run(s): {}",
@@ -2940,8 +2969,36 @@ fn save_task_state_on_latest_queue(
     detail: &str,
     actor: TransitionActor,
 ) -> Result<()> {
-    finalize_on_latest_queue(
+    let lock = ws.acquire_planning_lock()?;
+    save_task_state_on_latest_queue_locked(
         ws,
+        &lock,
+        fallback_queue,
+        task_id,
+        state,
+        cause,
+        detail,
+        actor,
+    )
+}
+
+// Mirrors the unlocked wrapper while accepting its already-held transaction
+// guard. Keeping the transition fields explicit avoids constructing a second
+// transaction input that could accidentally be reused outside this lock.
+#[allow(clippy::too_many_arguments)]
+fn save_task_state_on_latest_queue_locked(
+    ws: &Workspace,
+    lock: &PlanningLock,
+    fallback_queue: &mut WorkQueue,
+    task_id: &str,
+    state: TaskState,
+    cause: TransitionCause,
+    detail: &str,
+    actor: TransitionActor,
+) -> Result<()> {
+    finalize_on_latest_queue_locked(
+        ws,
+        lock,
         fallback_queue,
         task_id,
         state,
@@ -3001,7 +3058,20 @@ pub(crate) fn requeue_review(
     state: TaskState,
     fix_ids: &[String],
 ) -> Result<()> {
+    let lock = ws.acquire_planning_lock()?;
+    requeue_review_locked(ws, &lock, fallback_queue, review_id, state, fix_ids)
+}
+
+fn requeue_review_locked(
+    ws: &Workspace,
+    lock: &PlanningLock,
+    fallback_queue: &mut WorkQueue,
+    review_id: &str,
+    state: TaskState,
+    fix_ids: &[String],
+) -> Result<()> {
     let mut latest = ws.load_queue().unwrap_or_else(|_| fallback_queue.clone());
+    let mut pending_transition = None;
     if state == TaskState::Queued && !fix_ids.is_empty() {
         // Lowest priority among the other queued tasks: pull the fixes just below
         // it (run first) and slot the review between the fixes and the rest, so
@@ -3025,37 +3095,34 @@ pub(crate) fn requeue_review(
             t.state = state;
             t.priority = front - 10;
             if from != state {
-                state::append_transition(
-                    ws,
-                    state::transition(
-                        review_id,
-                        from,
-                        state,
-                        TransitionCause::RunOutcome,
-                        "review failed; requeued behind runnable remediation",
-                        TransitionActor::System,
-                    ),
-                )?;
+                pending_transition = Some(state::transition(
+                    review_id,
+                    from,
+                    state,
+                    TransitionCause::RunOutcome,
+                    "review failed; requeued behind runnable remediation",
+                    TransitionActor::System,
+                ));
             }
         }
     } else if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == review_id) {
         let from = t.state;
         t.state = state;
         if from != state {
-            state::append_transition(
-                ws,
-                state::transition(
-                    review_id,
-                    from,
-                    state,
-                    TransitionCause::RunOutcome,
-                    "review failed with no runnable fix; paused for user",
-                    TransitionActor::System,
-                ),
-            )?;
+            pending_transition = Some(state::transition(
+                review_id,
+                from,
+                state,
+                TransitionCause::RunOutcome,
+                "review failed with no runnable fix; paused for user",
+                TransitionActor::System,
+            ));
         }
     }
-    ws.save_queue(&latest)?;
+    ws.save_queue_locked(lock, &latest)?;
+    if let Some(transition) = pending_transition {
+        state::append_transition(ws, transition)?;
+    }
     *fallback_queue = latest;
     Ok(())
 }
@@ -3071,8 +3138,9 @@ pub(crate) fn requeue_review(
 // transition record (cause/detail/actor). Bundling would just scatter one
 // cohesive call, so keep the args explicit.
 #[allow(clippy::too_many_arguments)]
-fn finalize_on_latest_queue(
+fn finalize_on_latest_queue_locked(
     ws: &Workspace,
+    lock: &PlanningLock,
     fallback_queue: &mut WorkQueue,
     task_id: &str,
     state: TaskState,
@@ -3086,9 +3154,9 @@ fn finalize_on_latest_queue(
     // Ground any just-ingested follow-up's capabilities against the real
     // workers before saving: a follow-up requiring a capability no worker has is
     // parked Blocked at ingest, not crashed into when the drain later picks it.
-    let reconcile = |q: &mut WorkQueue| {
+    let reconcile = |q: &mut WorkQueue, ingested: &[String]| {
         if let Some(w) = workers {
-            let _ = crate::planner::reconcile_queue_capabilities(q, w);
+            let _ = crate::planner::reconcile_queue_capabilities_for_ids(q, w, ingested);
         }
     };
     let mut latest = ws.load_queue().unwrap_or_else(|_| fallback_queue.clone());
@@ -3101,8 +3169,9 @@ fn finalize_on_latest_queue(
             follow_ups,
             Some(ws),
         );
-        reconcile(&mut latest);
-        ws.save_queue(&latest)?;
+        reconcile(&mut latest, &ingested);
+        ws.save_queue_locked(lock, &latest)?;
+        crate::planner::persist_ingested_decision_questions(ws, &latest, &ingested)?;
         if from != state {
             state::append_transition(
                 ws,
@@ -3114,28 +3183,37 @@ fn finalize_on_latest_queue(
         return Ok(ingested);
     }
 
-    // The task vanished from the on-disk queue (rare): fall back to the
-    // in-memory copy so the state update is not lost.
-    if let Some(t) = fallback_queue.tasks.iter_mut().find(|t| t.id == task_id) {
-        let from = t.state;
-        t.state = state;
+    if latest.tasks.is_empty() && latest.intent_id.is_empty() {
+        let mut bootstrapped = fallback_queue.clone();
+        let task = bootstrapped
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+            .ok_or_else(|| anyhow!("task {task_id} is missing from fallback queue"))?;
+        let from = task.state;
+        task.state = state;
+        let ingested = crate::planner::ingest_follow_ups(
+            &mut bootstrapped,
+            intent_allowed_scope,
+            follow_ups,
+            Some(ws),
+        );
+        reconcile(&mut bootstrapped, &ingested);
+        ws.save_queue_locked(lock, &bootstrapped)?;
+        crate::planner::persist_ingested_decision_questions(ws, &bootstrapped, &ingested)?;
         if from != state {
             state::append_transition(
                 ws,
                 state::transition(task_id, from, state, cause, detail, actor),
             )?;
         }
+        append_ingested_decision_transitions(ws, &bootstrapped, &ingested)?;
+        *fallback_queue = bootstrapped;
+        return Ok(ingested);
     }
-    let ingested = crate::planner::ingest_follow_ups(
-        fallback_queue,
-        intent_allowed_scope,
-        follow_ups,
-        Some(ws),
-    );
-    reconcile(fallback_queue);
-    ws.save_queue(fallback_queue)?;
-    append_ingested_decision_transitions(ws, fallback_queue, &ingested)?;
-    Ok(ingested)
+    anyhow::bail!(
+        "queue_transaction_conflict: task {task_id} vanished from the latest queue during finalization"
+    )
 }
 
 fn append_ingested_decision_transitions(
@@ -3934,6 +4012,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // Recovery (follow_ups off) only finalizes the stranded run's state — it must
     // not ingest new follow-ups or re-queue a review, which would rewrite the
     // queue graph during a crash-recovery pass.
+    let queue_lock = ws.acquire_planning_lock()?;
     let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
     let mut follow_ups = if flags.follow_ups && next_state != TaskState::NeedsUser {
         result
@@ -3978,8 +4057,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     } else {
         Vec::new()
     };
-    let ingested = finalize_on_latest_queue(
+    let ingested = finalize_on_latest_queue_locked(
         ws,
+        &queue_lock,
         queue,
         &task.id,
         next_state,
@@ -4016,14 +4096,21 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         // the user instead.
         let remediation = schedulable_remediation_ids(queue, &ingested);
         if remediation.is_empty() {
-            requeue_review(ws, queue, &task.id, TaskState::NeedsUser, &[])?;
+            requeue_review_locked(ws, &queue_lock, queue, &task.id, TaskState::NeedsUser, &[])?;
             next_state = TaskState::NeedsUser;
             lines.push(format!(
                 "{}: review failed with no runnable fix — needs you",
                 task.id
             ));
         } else {
-            requeue_review(ws, queue, &task.id, TaskState::Queued, &remediation)?;
+            requeue_review_locked(
+                ws,
+                &queue_lock,
+                queue,
+                &task.id,
+                TaskState::Queued,
+                &remediation,
+            )?;
             next_state = TaskState::Queued;
             lines.push(format!(
                 "{}: review failed — re-queued behind remediation [{}] to re-verify",
@@ -4032,6 +4119,8 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             ));
         }
     }
+
+    drop(queue_lock);
 
     if flags.telemetry {
         let _ = telemetry::append_run(
@@ -4496,10 +4585,10 @@ fn run_intent_id(run_dir: &std::path::Path) -> Option<String> {
 /// intent is unknown (no queue / unattributed legacy run) we fall back to the
 /// old bare-id behavior rather than hide a genuine question.
 pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
-    let current_intent = ws
-        .load_queue()
-        .ok()
-        .map(|q| q.intent_id)
+    let current_queue = ws.load_queue().ok();
+    let current_intent = current_queue
+        .as_ref()
+        .map(|q| q.intent_id.clone())
         .filter(|s| !s.is_empty());
     let mut best: Option<(SystemTime, String)> = None;
     if let Ok(entries) = std::fs::read_dir(ws.runs_dir()) {
@@ -4536,12 +4625,39 @@ pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
     if let Some((_, q)) = best {
         return Some(q);
     }
-    // Fallback: a question seeded straight into the conversation (a
-    // worker-proposed DECISION follow-up ingested as NeedsUser) has no run
-    // result.json. It is pending only while unanswered — i.e. the last turn is
-    // still the worker's; once the user replies, the last turn is theirs. The
-    // conversation file is per-task and also survives replanning, so scope the
-    // last worker turn to the current intent when its run is attributable.
+    // Canonical typed questions outrank the legacy conversation fallback. A
+    // queue-CAS -> conversation crash may leave an older unattributed worker
+    // turn on disk; returning it first would mask the current interaction or
+    // receipt-backed capability question.
+    if let Some(task) = current_queue.as_ref().and_then(|queue| {
+        queue
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id && task.state == TaskState::NeedsUser)
+    }) {
+        if let Some(crate::yaml::Value::Mapping(interaction)) = task.interaction.as_ref() {
+            if let Some(question) = interaction
+                .get(crate::yaml::Value::String("decision_question".to_string()))
+                .and_then(crate::yaml::Value::as_str)
+                .map(str::trim)
+                .filter(|question| !question.is_empty())
+            {
+                return Some(question.to_string());
+            }
+        }
+        if let Some(question) = ws
+            .runtime_capability_decision_question(task_id)
+            .ok()
+            .flatten()
+        {
+            return Some(question);
+        }
+    }
+    // Legacy fallback: a question seeded straight into the conversation has
+    // no result.json. It is pending only while unanswered — i.e. the last turn
+    // is still the worker's; once the user replies, the last turn is theirs.
+    // Conversation files survive replanning, so scope attributable turns to
+    // the current intent.
     let conv = ws.load_conversation(task_id);
     match conv.turns.last() {
         Some(t) if t.role == TurnRole::Worker && !t.text.trim().is_empty() => {
@@ -7555,6 +7671,7 @@ exit 1
             Some(&ws),
         );
         let id = ingested.first().expect("one follow-up ingested").clone();
+        crate::planner::persist_ingested_decision_questions(&ws, &q, &ingested).unwrap();
 
         let t = q.tasks.iter().find(|t| t.id == id).unwrap();
         assert_eq!(t.state, TaskState::NeedsUser);
@@ -7693,6 +7810,37 @@ exit 1
         assert_eq!(r.state, TaskState::NeedsUser);
         assert!(r.depends_on.is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rejected_review_requeue_writes_no_phantom_transition() {
+        let ws = crate::snapshot::corrupt_activated_state_fixture(
+            "review-requeue-no-phantom-transition",
+        );
+        let lock = ws.acquire_planning_lock().unwrap();
+        let mut fallback = ws.load_queue().unwrap();
+
+        let error = requeue_review_locked(
+            &ws,
+            &lock,
+            &mut fallback,
+            "YARD-001",
+            TaskState::NeedsUser,
+            &[],
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("active_runtime_envelope_mismatch"),
+            "{error}"
+        );
+        assert!(
+            !ws.transition_path("YARD-001").exists(),
+            "a rejected queue CAS must not leave a phantom transition"
+        );
+        drop(lock);
+        let _ = std::fs::remove_dir_all(&ws.root);
     }
 
     #[test]

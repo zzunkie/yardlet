@@ -4,9 +4,12 @@
 //! is the only place that reads and writes those files. Everything is durable
 //! and readable without any previous chat context.
 
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use chrono::Local;
@@ -14,9 +17,12 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 
 use crate::schemas::{
-    BillingPolicy, Conversation, ConversationTurn, FollowUpTask, IntentContract,
-    PreservedFollowUps, SelectionPolicy, Task, TaskState, TransitionActor, TransitionCause,
-    TransitionLog, TransitionRecord, TurnRole, WorkQueue, WorkersFile, YardConfig,
+    ActivatedIntent, ActivatedQueue, ActivatedTask, ActivationReceipt, ActivationRequirement,
+    BillingPolicy, Conversation, ConversationTurn, DraftRevision, FollowUpTask, IntentContract,
+    PlanningActionReceipt, PlanningEvent, PlanningProposal, PlanningSession, PreservedFollowUps,
+    RuntimeCapabilityCommit, RuntimeCapabilityReceipt, RuntimeTaskCommit, RuntimeTaskReceipt,
+    SelectionPolicy, Task, TaskState, TransitionActor, TransitionCause, TransitionLog,
+    TransitionRecord, TurnRole, WorkQueue, WorkersFile, YardConfig,
 };
 use crate::yaml;
 
@@ -30,6 +36,58 @@ pub const LEGACY_CONFIG_FILE: &str = "yard.yaml";
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub root: PathBuf,
+}
+
+/// Kernel-owned workspace lock for every conversational-planning mutation.
+/// The descriptor lifetime is the transaction lifetime, and process exit
+/// releases the lock without a stale PID cleanup protocol.
+pub struct PlanningLock {
+    #[cfg(unix)]
+    file: fs::File,
+    queue_snapshot: RefCell<Option<String>>,
+}
+
+struct RuntimeTaskPlacement {
+    ordinal: usize,
+    runs_before: Vec<String>,
+}
+
+#[cfg(unix)]
+impl Drop for PlanningLock {
+    fn drop(&mut self) {
+        // SAFETY: `self.file` owns this descriptor until Drop finishes.
+        let _ = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN) };
+    }
+}
+
+fn mutation_lock_timeout() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Ok(value) = std::env::var("YARDLET_TEST_LOCK_TIMEOUT_MS") {
+        if let Ok(milliseconds) = value.parse::<u64>() {
+            return Duration::from_millis(milliseconds.max(1));
+        }
+    }
+    Duration::from_secs(5)
+}
+
+fn wait_at_test_mutation_barrier() -> Result<()> {
+    #[cfg(debug_assertions)]
+    if let Ok(directory) = std::env::var("YARDLET_TEST_MUTATION_BARRIER") {
+        let directory = PathBuf::from(directory);
+        fs::create_dir_all(&directory)
+            .with_context(|| format!("creating mutation barrier {}", directory.display()))?;
+        let entered = directory.join("entered");
+        write_str_atomic(&entered, &format!("{}\n", std::process::id()))?;
+        let release = directory.join("release");
+        let started = Instant::now();
+        while !release.is_file() {
+            if started.elapsed() >= Duration::from_secs(10) {
+                bail!("test mutation barrier timed out at {}", directory.display());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,6 +242,1392 @@ impl Workspace {
     }
     pub fn runs_dir(&self) -> PathBuf {
         self.agents_dir().join("runs")
+    }
+
+    pub fn planning_sessions_dir(&self) -> PathBuf {
+        self.agents_dir().join("planning-sessions")
+    }
+
+    pub fn planning_session_dir(&self, session_id: &str) -> PathBuf {
+        self.planning_sessions_dir().join(session_id)
+    }
+
+    pub fn planning_session_path(&self, session_id: &str) -> PathBuf {
+        self.planning_session_dir(session_id).join("session.yaml")
+    }
+
+    pub fn latest_planning_session_path(&self) -> PathBuf {
+        self.planning_sessions_dir().join("latest")
+    }
+
+    pub fn planning_proposal_path(&self, session_id: &str, proposal_id: &str) -> PathBuf {
+        self.planning_session_dir(session_id)
+            .join("proposals")
+            .join(format!("{proposal_id}.yaml"))
+    }
+
+    pub fn draft_revision_path(&self, session_id: &str, revision_id: &str) -> PathBuf {
+        self.planning_session_dir(session_id)
+            .join("drafts")
+            .join(format!("{revision_id}.yaml"))
+    }
+
+    pub fn planning_event_path(&self, session_id: &str, seq: u64) -> PathBuf {
+        self.planning_session_dir(session_id)
+            .join("events")
+            .join(format!("{seq:020}.yaml"))
+    }
+
+    pub fn planning_action_path(&self, session_id: &str, action_id: &str) -> PathBuf {
+        self.planning_session_dir(session_id)
+            .join("actions")
+            .join(format!("{action_id}.yaml"))
+    }
+
+    pub fn activation_path(&self, confirmation_id: &str) -> PathBuf {
+        self.agents_dir()
+            .join("activations")
+            .join(format!("{confirmation_id}.yaml"))
+    }
+
+    pub fn runtime_task_receipts_dir(&self) -> PathBuf {
+        self.agents_dir().join("runtime-task-receipts")
+    }
+
+    pub fn runtime_task_receipt_path(&self, confirmation_id: &str, task_id: &str) -> PathBuf {
+        self.runtime_task_receipts_dir()
+            .join(format!("{task_id}--{confirmation_id}.yaml"))
+    }
+
+    pub fn runtime_task_commit_path(&self, confirmation_id: &str, task_id: &str) -> PathBuf {
+        self.runtime_task_receipts_dir()
+            .join(format!("{task_id}--{confirmation_id}.committed.yaml"))
+    }
+
+    pub fn runtime_capability_receipts_dir(&self) -> PathBuf {
+        self.agents_dir().join("runtime-capability-receipts")
+    }
+
+    pub fn runtime_capability_receipt_path(&self, confirmation_id: &str, task_id: &str) -> PathBuf {
+        self.runtime_capability_receipts_dir()
+            .join(format!("{task_id}--{confirmation_id}.yaml"))
+    }
+
+    pub fn runtime_capability_commit_path(&self, confirmation_id: &str, task_id: &str) -> PathBuf {
+        self.runtime_capability_receipts_dir()
+            .join(format!("{task_id}--{confirmation_id}.committed.yaml"))
+    }
+
+    pub fn activation_requirement_path(&self) -> PathBuf {
+        self.agents_dir().join("activation-required.yaml")
+    }
+
+    pub fn acquire_planning_lock(&self) -> Result<PlanningLock> {
+        let path = self.agents_dir().join("planning.lock");
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .custom_flags(libc::O_CLOEXEC)
+                .open(&path)
+                .with_context(|| format!("opening planning lock {}", path.display()))?;
+            let timeout = mutation_lock_timeout();
+            let started = Instant::now();
+            loop {
+                // SAFETY: `file` stays alive in PlanningLock and flock only
+                // reads its valid descriptor. LOCK_NB prevents an unbounded
+                // wait; a crash releases the kernel-owned lock.
+                if unsafe {
+                    libc::flock(
+                        std::os::fd::AsRawFd::as_raw_fd(&file),
+                        libc::LOCK_EX | libc::LOCK_NB,
+                    )
+                } == 0
+                {
+                    break;
+                }
+                let error = std::io::Error::last_os_error();
+                let retryable = error.raw_os_error().is_some_and(|code| {
+                    code == libc::EINTR || code == libc::EAGAIN || code == libc::EWOULDBLOCK
+                });
+                if !retryable {
+                    return Err(error)
+                        .with_context(|| format!("locking planning workspace {}", path.display()));
+                }
+                if started.elapsed() >= timeout {
+                    bail!(
+                        "workspace_mutation_lock_timeout after {}ms at {}",
+                        timeout.as_millis(),
+                        path.display()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let queue_snapshot = if self.queue_path().is_file() {
+                Some(
+                    fs::read_to_string(self.queue_path())
+                        .with_context(|| format!("reading {}", self.queue_path().display()))?,
+                )
+            } else {
+                None
+            };
+            let guard = PlanningLock {
+                file,
+                queue_snapshot: RefCell::new(queue_snapshot),
+            };
+            wait_at_test_mutation_barrier()?;
+            Ok(guard)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            let queue_snapshot = if self.queue_path().is_file() {
+                Some(fs::read_to_string(self.queue_path())?)
+            } else {
+                None
+            };
+            Ok(PlanningLock {
+                queue_snapshot: RefCell::new(queue_snapshot),
+            })
+        }
+    }
+
+    pub fn save_planning_session(&self, session: &PlanningSession) -> Result<()> {
+        let path = self.planning_session_path(&session.session_id);
+        fs::create_dir_all(
+            self.planning_session_dir(&session.session_id)
+                .join("events"),
+        )
+        .with_context(|| format!("creating initial event journal for {}", session.session_id))?;
+        write_str_atomic(&path, &yaml::to_string(session)?)?;
+        write_str_atomic(
+            &self.latest_planning_session_path(),
+            &format!("{}\n", session.session_id),
+        )
+    }
+
+    pub fn save_planning_session_cas(
+        &self,
+        expected: &PlanningSession,
+        session: &PlanningSession,
+    ) -> Result<()> {
+        let path = self.planning_session_path(&session.session_id);
+        if expected.session_id != session.session_id {
+            bail!("planning session CAS identity mismatch");
+        }
+        write_str_atomic_cas(
+            &path,
+            Some(&yaml::to_string(expected)?),
+            &yaml::to_string(session)?,
+        )
+    }
+
+    pub fn load_planning_session(&self, session_id: &str) -> Result<PlanningSession> {
+        let session: PlanningSession = load_yaml(&self.planning_session_path(session_id))?;
+        if session.session_id != session_id {
+            bail!(
+                "planning_session_corrupt: path session {session_id} contains identity {}",
+                session.session_id
+            );
+        }
+        Ok(session)
+    }
+
+    pub fn load_latest_planning_session(&self) -> Result<Option<PlanningSession>> {
+        let pointer = self.latest_planning_session_path();
+        if pointer.is_file() {
+            let session_id = fs::read_to_string(&pointer)
+                .with_context(|| format!("reading {}", pointer.display()))?;
+            let session_id = session_id.trim();
+            if !session_id.is_empty() {
+                return self.load_planning_session(session_id).map(Some);
+            }
+            bail!("planning_session_corrupt: latest pointer is empty");
+        }
+        let sessions = self.planning_sessions_dir();
+        if sessions.is_dir()
+            && fs::read_dir(&sessions)
+                .with_context(|| format!("reading {}", sessions.display()))?
+                .filter_map(std::result::Result::ok)
+                .any(|entry| entry.path().is_dir())
+        {
+            bail!("planning_session_corrupt: persisted sessions have no latest pointer");
+        }
+        Ok(None)
+    }
+
+    pub fn save_planning_proposal(&self, proposal: &PlanningProposal) -> Result<()> {
+        save_immutable_yaml(
+            &self.planning_proposal_path(&proposal.session_id, &proposal.proposal_id),
+            proposal,
+        )
+    }
+
+    pub fn load_planning_proposal(
+        &self,
+        session_id: &str,
+        proposal_id: &str,
+    ) -> Result<PlanningProposal> {
+        load_yaml(&self.planning_proposal_path(session_id, proposal_id))
+    }
+
+    pub fn load_planning_proposals(&self, session_id: &str) -> Result<Vec<PlanningProposal>> {
+        load_yaml_dir(&self.planning_session_dir(session_id).join("proposals"))
+    }
+
+    pub fn save_draft_revision(&self, revision: &DraftRevision) -> Result<()> {
+        save_immutable_yaml(
+            &self.draft_revision_path(&revision.session_id, &revision.draft_revision_id),
+            revision,
+        )
+    }
+
+    pub fn load_draft_revision(
+        &self,
+        session_id: &str,
+        revision_id: &str,
+    ) -> Result<DraftRevision> {
+        load_yaml(&self.draft_revision_path(session_id, revision_id))
+    }
+
+    pub fn save_planning_event(&self, event: &PlanningEvent) -> Result<()> {
+        save_immutable_yaml(
+            &self.planning_event_path(&event.session_id, event.seq),
+            event,
+        )
+    }
+
+    pub fn load_planning_events(&self, session_id: &str) -> Result<Vec<PlanningEvent>> {
+        let dir = self.planning_session_dir(session_id).join("events");
+        if !dir.is_dir() {
+            bail!("planning_session_corrupt: event journal directory is missing");
+        }
+        let mut events = Vec::new();
+        for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                bail!("planning_event_journal: non-UTF8 event filename");
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            let Some(stem) = name.strip_suffix(".yaml") else {
+                bail!("planning_event_journal: unexpected event file {name}");
+            };
+            let seq = stem.parse::<u64>().map_err(|_| {
+                anyhow::anyhow!("planning_event_journal: invalid event filename {name}")
+            })?;
+            if name != format!("{seq:020}.yaml") {
+                bail!("planning_event_journal: non-canonical event filename {name}");
+            }
+            let event: PlanningEvent = load_yaml(&path)?;
+            if event.seq != seq || event.session_id != session_id || event.event_id.is_empty() {
+                bail!("planning_event_journal: filename/seq/session/event id identity mismatch");
+            }
+            events.push(event);
+        }
+        events.sort_by_key(|event| event.seq);
+        let mut event_ids = BTreeSet::new();
+        let mut exact_payloads = BTreeSet::new();
+        let mut action_types = BTreeMap::new();
+        for (index, event) in events.iter().enumerate() {
+            let expected_seq = index as u64 + 1;
+            if event.seq != expected_seq {
+                bail!(
+                    "planning_event_journal: expected contiguous seq {expected_seq}, found {}",
+                    event.seq
+                );
+            }
+            if !event_ids.insert(event.event_id.clone()) {
+                bail!(
+                    "planning_event_journal: duplicate event id {}",
+                    event.event_id
+                );
+            }
+            let payload = serde_json::to_string(event)?;
+            if !exact_payloads.insert(payload) {
+                bail!("planning_event_journal: duplicate exact event payload");
+            }
+            if !event.action_id.is_empty() {
+                let key = (event.action_id.clone(), format!("{:?}", event.event_type));
+                if action_types.insert(key, event.event_id.clone()).is_some() {
+                    bail!("planning_event_journal: action/type cardinality violation");
+                }
+            }
+        }
+        let session = self.load_planning_session(session_id)?;
+        let journal_next = events.last().map_or(1, |event| event.seq + 1);
+        if session.next_seq == 0 || session.next_seq > journal_next {
+            bail!(
+                "planning_event_journal: next_seq {} is ahead of journal next {journal_next}",
+                session.next_seq
+            );
+        }
+        if events.is_empty() {
+            let has_artifacts = ["actions", "drafts", "proposals"].iter().try_fold(
+                false,
+                |found, child| -> Result<bool> {
+                    if found {
+                        return Ok(true);
+                    }
+                    let child = self.planning_session_dir(session_id).join(child);
+                    if !child.is_dir() {
+                        return Ok(false);
+                    }
+                    Ok(fs::read_dir(&child)
+                        .with_context(|| format!("reading {}", child.display()))?
+                        .filter_map(std::result::Result::ok)
+                        .any(|entry| entry.path().extension().is_some_and(|ext| ext == "yaml")))
+                },
+            )?;
+            if session.next_seq != 1
+                || session.lifecycle != crate::schemas::PlanningLifecycle::Open
+                || session.current_head.is_some()
+                || session.confirmation_id.is_some()
+                || has_artifacts
+            {
+                bail!("planning_session_corrupt: empty journal is not a fresh initial state");
+            }
+        }
+        Ok(events)
+    }
+
+    pub fn load_planning_actions(&self, session_id: &str) -> Result<Vec<PlanningActionReceipt>> {
+        let dir = self.planning_session_dir(session_id).join("actions");
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut actions = Vec::new();
+        for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                bail!("planning action filename is not UTF-8");
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            let Some(action_id) = name.strip_suffix(".yaml") else {
+                bail!("unexpected planning action file {name}");
+            };
+            let receipt: PlanningActionReceipt = load_yaml(&path)?;
+            if receipt.session_id != session_id || receipt.action_id != action_id {
+                bail!("planning action path identity mismatch");
+            }
+            actions.push(receipt);
+        }
+        actions.sort_by(|left, right| left.action_id.cmp(&right.action_id));
+        Ok(actions)
+    }
+
+    pub fn create_planning_action(&self, receipt: &PlanningActionReceipt) -> Result<()> {
+        let path = self.planning_action_path(&receipt.session_id, &receipt.action_id);
+        save_immutable_yaml(&path, receipt)
+    }
+
+    pub fn save_planning_action_cas(
+        &self,
+        expected: &PlanningActionReceipt,
+        receipt: &PlanningActionReceipt,
+    ) -> Result<()> {
+        if expected.session_id != receipt.session_id || expected.action_id != receipt.action_id {
+            bail!("planning action CAS identity mismatch");
+        }
+        let path = self.planning_action_path(&receipt.session_id, &receipt.action_id);
+        write_str_atomic_cas(
+            &path,
+            Some(&yaml::to_string(expected)?),
+            &yaml::to_string(receipt)?,
+        )
+    }
+
+    pub fn load_planning_action(
+        &self,
+        session_id: &str,
+        action_id: &str,
+    ) -> Result<Option<PlanningActionReceipt>> {
+        let path = self.planning_action_path(session_id, action_id);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_yaml(&path).map(Some)
+    }
+
+    pub fn save_activated_intent_snapshot(&self, intent: &ActivatedIntent) -> Result<()> {
+        write_str_atomic(&self.intent_path(), &yaml::to_string(intent)?)
+    }
+
+    pub fn save_activated_queue_snapshot_locked(
+        &self,
+        lock: &PlanningLock,
+        queue: &ActivatedQueue,
+    ) -> Result<()> {
+        let expected = lock.queue_snapshot.borrow().clone();
+        let text = yaml::to_string(queue)?;
+        write_str_atomic_cas(&self.queue_path(), expected.as_deref(), &text)?;
+        *lock.queue_snapshot.borrow_mut() = Some(text);
+        Ok(())
+    }
+
+    pub fn load_active_snapshot_texts(&self) -> Result<(Option<String>, Option<String>)> {
+        fn read_optional(path: &Path) -> Result<Option<String>> {
+            if !path.is_file() {
+                return Ok(None);
+            }
+            fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))
+                .map(Some)
+        }
+        Ok((
+            read_optional(&self.intent_path())?,
+            read_optional(&self.queue_path())?,
+        ))
+    }
+
+    pub fn load_activated_intent(&self) -> Result<Option<ActivatedIntent>> {
+        let path = self.intent_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_yaml(&path).map(Some)
+    }
+
+    pub fn load_activated_queue(&self) -> Result<Option<ActivatedQueue>> {
+        let path = self.queue_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_yaml(&path).map(Some)
+    }
+
+    /// Detect durable V010 planning evidence that belongs to the active ids.
+    /// This discriminator is independent of the mutable active snapshots, so
+    /// deleting every provenance field from those snapshots cannot make a
+    /// confirmed plan look like a legacy v1 intent/queue pair.
+    pub fn has_matching_modern_planning_evidence(
+        &self,
+        intent_id: &str,
+        queue_id: &str,
+    ) -> Result<bool> {
+        if intent_id.is_empty() && queue_id.is_empty() {
+            return Ok(false);
+        }
+
+        let activations = self.agents_dir().join("activations");
+        if activations.is_dir() {
+            for entry in fs::read_dir(&activations)
+                .with_context(|| format!("reading {}", activations.display()))?
+            {
+                let path = entry?.path();
+                if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
+                    continue;
+                }
+                let activation: ActivationReceipt = load_yaml(&path)?;
+                if (intent_id.is_empty() || activation.intent_id == intent_id)
+                    && (queue_id.is_empty() || activation.queue_id == queue_id)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+
+        let sessions = self.planning_sessions_dir();
+        if !sessions.is_dir() {
+            return Ok(false);
+        }
+        for entry in
+            fs::read_dir(&sessions).with_context(|| format!("reading {}", sessions.display()))?
+        {
+            let session_dir = entry?.path();
+            if !session_dir.is_dir() {
+                continue;
+            }
+            let session_path = session_dir.join("session.yaml");
+            if session_path.is_file() {
+                let session: PlanningSession = load_yaml(&session_path)?;
+                if (intent_id.is_empty() || session.intent_id == intent_id)
+                    && (queue_id.is_empty() || session.queue_id == queue_id)
+                {
+                    return Ok(true);
+                }
+            }
+            let drafts = session_dir.join("drafts");
+            if !drafts.is_dir() {
+                continue;
+            }
+            for draft in
+                fs::read_dir(&drafts).with_context(|| format!("reading {}", drafts.display()))?
+            {
+                let path = draft?.path();
+                if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
+                    continue;
+                }
+                let revision: DraftRevision = load_yaml(&path)?;
+                if (intent_id.is_empty() || revision.content.intent.id == intent_id)
+                    && (queue_id.is_empty() || revision.content.queue.queue_id == queue_id)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    pub fn save_activation(&self, activation: &ActivationReceipt) -> Result<()> {
+        save_immutable_yaml(
+            &self.activation_path(&activation.confirmation_id),
+            activation,
+        )
+    }
+
+    pub fn load_activation(&self, confirmation_id: &str) -> Result<Option<ActivationReceipt>> {
+        let path = self.activation_path(confirmation_id);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_yaml(&path).map(Some)
+    }
+
+    pub fn load_runtime_task_receipt(
+        &self,
+        confirmation_id: &str,
+        task_id: &str,
+    ) -> Result<Option<RuntimeTaskReceipt>> {
+        if !Self::runtime_receipt_id_is_safe(confirmation_id)
+            || !Self::runtime_receipt_id_is_safe(task_id)
+        {
+            bail!("active_runtime_origin_mismatch: unsafe receipt path identity");
+        }
+        let path = self.runtime_task_receipt_path(confirmation_id, task_id);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let receipt: RuntimeTaskReceipt = load_yaml(&path)?;
+        if receipt.confirmation_id != confirmation_id || receipt.task_id != task_id {
+            bail!("active_runtime_origin_mismatch: receipt path identity mismatch");
+        }
+        Ok(Some(receipt))
+    }
+
+    fn runtime_receipt_id_is_safe(value: &str) -> bool {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    }
+
+    fn runtime_record_digest<T: serde::Serialize>(value: &T) -> Result<String> {
+        let bytes = serde_json::to_vec(value)?;
+        let mut hash = 0xcbf29ce484222325_u64;
+        for byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        Ok(format!("fnv1a64:{hash:016x}"))
+    }
+
+    fn runtime_queue_digest(queue: &ActivatedQueue) -> Result<String> {
+        Self::runtime_record_digest(queue)
+    }
+
+    fn load_runtime_task_commit(
+        &self,
+        confirmation_id: &str,
+        task_id: &str,
+    ) -> Result<Option<RuntimeTaskCommit>> {
+        if !Self::runtime_receipt_id_is_safe(confirmation_id)
+            || !Self::runtime_receipt_id_is_safe(task_id)
+        {
+            bail!("active_runtime_origin_mismatch: unsafe commit path identity");
+        }
+        let path = self.runtime_task_commit_path(confirmation_id, task_id);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let commit: RuntimeTaskCommit = load_yaml(&path)?;
+        if commit.confirmation_id != confirmation_id || commit.task_id != task_id {
+            bail!("active_runtime_origin_mismatch: commit path identity mismatch");
+        }
+        Ok(Some(commit))
+    }
+
+    fn validate_runtime_task_receipt_record(
+        &self,
+        queue: &ActivatedQueue,
+        receipt: &RuntimeTaskReceipt,
+    ) -> Result<()> {
+        let receipt_digest = receipt.task.runtime_contract_digest()?;
+        let expected_action_id = format!("runtime-task:{}:{}", receipt.origin, receipt.task_id);
+        let mut targets = BTreeSet::new();
+        if receipt.schema_version != 1
+            || receipt.confirmation_id != queue.confirmation_id
+            || receipt.intent_id != queue.intent_id
+            || receipt.queue_id != queue.queue_id
+            || !Self::runtime_receipt_id_is_safe(&receipt.task_id)
+            || !matches!(receipt.origin.as_str(), "user-added" | "worker-proposed")
+            || receipt.origin_action_id != expected_action_id
+            || receipt.task_contract_digest != receipt_digest
+            || receipt.task.id != receipt.task_id
+            || receipt.task.provenance != receipt.origin
+            || receipt.queue_digest_after.is_empty()
+            || receipt.recorded_at.is_empty()
+            || receipt.runs_before.iter().any(|target| {
+                !Self::runtime_receipt_id_is_safe(target)
+                    || target == &receipt.task_id
+                    || !targets.insert(target)
+            })
+        {
+            bail!(
+                "active_runtime_origin_mismatch: task {} does not match its immutable origin receipt",
+                receipt.task_id
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_runtime_task_receipt_identity(
+        &self,
+        queue: &ActivatedQueue,
+        task: &ActivatedTask,
+        receipt: &RuntimeTaskReceipt,
+    ) -> Result<()> {
+        self.validate_runtime_task_receipt_record(queue, receipt)?;
+        if receipt.task_id != task.task.id || receipt.origin != task.task.provenance {
+            bail!(
+                "active_runtime_origin_mismatch: task {} does not match its immutable origin receipt",
+                task.task.id
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_runtime_task_receipt(
+        &self,
+        queue: &ActivatedQueue,
+        task: &ActivatedTask,
+        receipt: &RuntimeTaskReceipt,
+        dependency_additions: &[String],
+        capability_clear: bool,
+    ) -> Result<()> {
+        self.validate_runtime_task_receipt_identity(queue, task, receipt)?;
+        let mut expected_dependencies = receipt.task.depends_on.clone();
+        expected_dependencies.extend(dependency_additions.iter().cloned());
+        let mut normalized = task.task.clone();
+        normalized.depends_on = receipt.task.depends_on.clone();
+        if capability_clear {
+            if receipt.task.required_capabilities.is_empty()
+                || !task.task.required_capabilities.is_empty()
+            {
+                bail!(
+                    "active_runtime_capability_mismatch: task {} does not match its capability receipt",
+                    task.task.id
+                );
+            }
+            normalized.required_capabilities = receipt.task.required_capabilities.clone();
+        }
+        if task.task.depends_on != expected_dependencies
+            || normalized.runtime_contract_digest()? != receipt.task_contract_digest
+        {
+            bail!(
+                "active_runtime_origin_mismatch: task {} does not match its immutable origin receipt",
+                task.task.id
+            );
+        }
+        Ok(())
+    }
+
+    fn ensure_runtime_task_receipt(
+        &self,
+        queue: &ActivatedQueue,
+        active_before: &ActivatedQueue,
+        task: &ActivatedTask,
+        baseline_task: &Task,
+        placement: RuntimeTaskPlacement,
+        queue_digest_after: &str,
+    ) -> Result<()> {
+        let RuntimeTaskPlacement {
+            ordinal,
+            runs_before,
+        } = placement;
+        if let Some(receipt) =
+            self.load_runtime_task_receipt(&queue.confirmation_id, &task.task.id)?
+        {
+            self.validate_runtime_task_receipt_record(queue, &receipt)?;
+            let exact = receipt.ordinal == ordinal
+                && receipt.runs_before == runs_before
+                && receipt.queue_digest_after == queue_digest_after
+                && receipt.origin == task.task.provenance
+                && receipt.task.runtime_contract_digest()?
+                    == baseline_task.runtime_contract_digest()?;
+            if exact {
+                self.validate_runtime_task_receipt_identity(queue, task, &receipt)?;
+                return Ok(());
+            }
+            let effect_absent = active_before.confirmation_id == queue.confirmation_id
+                && !active_before
+                    .tasks
+                    .iter()
+                    .any(|active| active.task.id == task.task.id);
+            if self
+                .load_runtime_task_commit(&queue.confirmation_id, &task.task.id)?
+                .is_some()
+                || !effect_absent
+            {
+                bail!(
+                    "active_runtime_origin_mismatch: task {} conflicts with its prepared origin receipt",
+                    task.task.id
+                );
+            }
+            fs::remove_file(self.runtime_task_receipt_path(&queue.confirmation_id, &task.task.id))
+                .with_context(|| {
+                    format!(
+                        "superseding uncommitted runtime task receipt for {}",
+                        task.task.id
+                    )
+                })?;
+        }
+        let digest = baseline_task.runtime_contract_digest()?;
+        let receipt = RuntimeTaskReceipt {
+            schema_version: 1,
+            confirmation_id: queue.confirmation_id.clone(),
+            intent_id: queue.intent_id.clone(),
+            queue_id: queue.queue_id.clone(),
+            task_id: task.task.id.clone(),
+            origin: task.task.provenance.clone(),
+            origin_action_id: format!("runtime-task:{}:{}", task.task.provenance, task.task.id),
+            ordinal,
+            runs_before,
+            task_contract_digest: digest,
+            task: baseline_task.clone(),
+            queue_digest_after: queue_digest_after.to_string(),
+            recorded_at: Local::now().to_rfc3339(),
+        };
+        self.validate_runtime_task_receipt_identity(queue, task, &receipt)?;
+        save_immutable_yaml(
+            &self.runtime_task_receipt_path(&queue.confirmation_id, &task.task.id),
+            &receipt,
+        )
+    }
+
+    fn commit_runtime_task_receipt(&self, confirmation_id: &str, task_id: &str) -> Result<()> {
+        let receipt = self
+            .load_runtime_task_receipt(confirmation_id, task_id)?
+            .ok_or_else(|| {
+                anyhow::anyhow!("active_runtime_origin_mismatch: missing prepared receipt")
+            })?;
+        save_immutable_yaml(
+            &self.runtime_task_commit_path(confirmation_id, task_id),
+            &RuntimeTaskCommit {
+                schema_version: 1,
+                confirmation_id: confirmation_id.to_string(),
+                task_id: task_id.to_string(),
+                ordinal: receipt.ordinal,
+                receipt_digest: Self::runtime_record_digest(&receipt)?,
+                committed_at: receipt.recorded_at.clone(),
+            },
+        )
+    }
+
+    fn repair_runtime_task_commits(&self, queue: &ActivatedQueue) -> Result<()> {
+        let queue_digest = Self::runtime_queue_digest(queue)?;
+        for task in queue
+            .tasks
+            .iter()
+            .filter(|task| task.materialized_by_confirmation_id.is_empty())
+        {
+            if self
+                .load_runtime_task_commit(&queue.confirmation_id, &task.task.id)?
+                .is_some()
+            {
+                continue;
+            }
+            let receipt = self
+                .load_runtime_task_receipt(&queue.confirmation_id, &task.task.id)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "active_runtime_origin_mismatch: task {} has no immutable origin receipt",
+                        task.task.id
+                    )
+                })?;
+            self.validate_runtime_task_receipt_identity(queue, task, &receipt)?;
+            if receipt.queue_digest_after != queue_digest {
+                bail!(
+                    "active_runtime_origin_mismatch: task {} has an uncommitted origin receipt",
+                    task.task.id
+                );
+            }
+            self.commit_runtime_task_receipt(&queue.confirmation_id, &task.task.id)?;
+        }
+        Ok(())
+    }
+
+    fn committed_runtime_tasks(
+        &self,
+        queue: &ActivatedQueue,
+    ) -> Result<Vec<(RuntimeTaskCommit, RuntimeTaskReceipt)>> {
+        let Ok(entries) = fs::read_dir(self.runtime_task_receipts_dir()) else {
+            return Ok(Vec::new());
+        };
+        let mut records = Vec::new();
+        let current_suffix = format!("--{}.committed.yaml", queue.confirmation_id);
+        for entry in entries {
+            let path = entry?.path();
+            if !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(&current_suffix))
+            {
+                continue;
+            }
+            let commit: RuntimeTaskCommit = load_yaml(&path)?;
+            if commit.confirmation_id != queue.confirmation_id {
+                continue;
+            }
+            if path != self.runtime_task_commit_path(&commit.confirmation_id, &commit.task_id) {
+                bail!("active_runtime_origin_mismatch: commit path identity mismatch");
+            }
+            let receipt = self
+                .load_runtime_task_receipt(&commit.confirmation_id, &commit.task_id)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "active_runtime_origin_mismatch: committed task {} has no receipt",
+                        commit.task_id
+                    )
+                })?;
+            if commit.schema_version != 1
+                || commit.ordinal != receipt.ordinal
+                || commit.receipt_digest != Self::runtime_record_digest(&receipt)?
+                || commit.committed_at.is_empty()
+            {
+                bail!(
+                    "active_runtime_origin_mismatch: committed task {} has an invalid commit marker",
+                    commit.task_id
+                );
+            }
+            records.push((commit, receipt));
+        }
+        records.sort_by_key(|(commit, _)| commit.ordinal);
+        Ok(records)
+    }
+
+    fn load_runtime_capability_receipt(
+        &self,
+        confirmation_id: &str,
+        task_id: &str,
+    ) -> Result<Option<RuntimeCapabilityReceipt>> {
+        if !Self::runtime_receipt_id_is_safe(confirmation_id)
+            || !Self::runtime_receipt_id_is_safe(task_id)
+        {
+            bail!("active_runtime_capability_mismatch: unsafe receipt path identity");
+        }
+        let path = self.runtime_capability_receipt_path(confirmation_id, task_id);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let receipt: RuntimeCapabilityReceipt = load_yaml(&path)?;
+        if receipt.confirmation_id != confirmation_id || receipt.task_id != task_id {
+            bail!("active_runtime_capability_mismatch: receipt path identity mismatch");
+        }
+        Ok(Some(receipt))
+    }
+
+    fn load_runtime_capability_commit(
+        &self,
+        confirmation_id: &str,
+        task_id: &str,
+    ) -> Result<Option<RuntimeCapabilityCommit>> {
+        if !Self::runtime_receipt_id_is_safe(confirmation_id)
+            || !Self::runtime_receipt_id_is_safe(task_id)
+        {
+            bail!("active_runtime_capability_mismatch: unsafe commit path identity");
+        }
+        let path = self.runtime_capability_commit_path(confirmation_id, task_id);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let commit: RuntimeCapabilityCommit = load_yaml(&path)?;
+        if commit.confirmation_id != confirmation_id || commit.task_id != task_id {
+            bail!("active_runtime_capability_mismatch: commit path identity mismatch");
+        }
+        Ok(Some(commit))
+    }
+
+    fn validate_runtime_capability_receipt_record(
+        &self,
+        queue: &ActivatedQueue,
+        receipt: &RuntimeCapabilityReceipt,
+    ) -> Result<()> {
+        let expected_action_id = format!("runtime-capability:stale-decision:{}", receipt.task_id);
+        const QUESTION_PREFIX: &str = "This task needs your decision before Yardlet can run it: ";
+        const QUESTION_SUFFIX: &str = ". Reply with the decision or instructions to proceed.";
+        let question_subject = receipt
+            .decision_question
+            .strip_prefix(QUESTION_PREFIX)
+            .and_then(|question| question.strip_suffix(QUESTION_SUFFIX))
+            .map(str::trim)
+            .filter(|question| !question.is_empty());
+        if receipt.schema_version != 1
+            || receipt.confirmation_id != queue.confirmation_id
+            || receipt.intent_id != queue.intent_id
+            || receipt.queue_id != queue.queue_id
+            || !Self::runtime_receipt_id_is_safe(&receipt.task_id)
+            || receipt.action != "stale-capability-decision"
+            || receipt.action_id != expected_action_id
+            || receipt.target_state != TaskState::NeedsUser
+            || question_subject.is_none()
+            || receipt.original_required_capabilities.is_empty()
+            || !receipt.replacement_required_capabilities.is_empty()
+            || receipt.queue_digest_after.is_empty()
+            || !matches!(
+                crate::routing::classify_stale_gate(&receipt.original_required_capabilities),
+                crate::routing::GateShape::Decision
+            )
+            || receipt.recorded_at.is_empty()
+        {
+            bail!(
+                "active_runtime_capability_mismatch: task {} has an invalid capability receipt",
+                receipt.task_id
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_runtime_capability_receipt(
+        &self,
+        queue: &ActivatedQueue,
+        planned: &Task,
+        receipt: &RuntimeCapabilityReceipt,
+    ) -> Result<()> {
+        self.validate_runtime_capability_receipt_record(queue, receipt)?;
+        let expected_question = format!(
+            "This task needs your decision before Yardlet can run it: {}. Reply with the decision or instructions to proceed.",
+            planned.title
+        );
+        if receipt.task_id != planned.id
+            || receipt.decision_question != expected_question
+            || receipt.original_required_capabilities != planned.required_capabilities
+        {
+            bail!(
+                "active_runtime_capability_mismatch: task {} has an invalid capability receipt",
+                planned.id
+            );
+        }
+        Ok(())
+    }
+
+    fn ensure_runtime_capability_receipt(
+        &self,
+        queue: &ActivatedQueue,
+        active_before: &ActivatedQueue,
+        planned: &Task,
+        current: &Task,
+        queue_digest_after: &str,
+    ) -> Result<()> {
+        if current.state != TaskState::NeedsUser
+            || !current.required_capabilities.is_empty()
+            || planned.required_capabilities.is_empty()
+        {
+            bail!(
+                "active_runtime_capability_mismatch: task {} is not a stale decision migration",
+                current.id
+            );
+        }
+        let receipt = RuntimeCapabilityReceipt {
+            schema_version: 1,
+            confirmation_id: queue.confirmation_id.clone(),
+            intent_id: queue.intent_id.clone(),
+            queue_id: queue.queue_id.clone(),
+            task_id: current.id.clone(),
+            action: "stale-capability-decision".to_string(),
+            action_id: format!("runtime-capability:stale-decision:{}", current.id),
+            target_state: TaskState::NeedsUser,
+            decision_question: format!(
+                "This task needs your decision before Yardlet can run it: {}. Reply with the decision or instructions to proceed.",
+                planned.title
+            ),
+            original_required_capabilities: planned.required_capabilities.clone(),
+            replacement_required_capabilities: Vec::new(),
+            queue_digest_after: queue_digest_after.to_string(),
+            recorded_at: Local::now().to_rfc3339(),
+        };
+        if let Some(existing) =
+            self.load_runtime_capability_receipt(&queue.confirmation_id, &current.id)?
+        {
+            self.validate_runtime_capability_receipt_record(queue, &existing)?;
+            // `recorded_at` is intentionally immutable. Compare the contract
+            // fields after preserving an existing valid timestamp.
+            let mut expected = receipt.clone();
+            expected.recorded_at = existing.recorded_at.clone();
+            if Self::runtime_record_digest(&existing)? == Self::runtime_record_digest(&expected)? {
+                self.validate_runtime_capability_receipt(queue, planned, &existing)?;
+                return Ok(());
+            }
+            let effect_absent = active_before.confirmation_id == queue.confirmation_id
+                && active_before
+                    .tasks
+                    .iter()
+                    .find(|active| active.task.id == current.id)
+                    .map(|active| {
+                        active.task.required_capabilities == planned.required_capabilities
+                    })
+                    .unwrap_or(true);
+            if self
+                .load_runtime_capability_commit(&queue.confirmation_id, &current.id)?
+                .is_some()
+                || !effect_absent
+            {
+                bail!(
+                    "active_runtime_capability_mismatch: task {} conflicts with its capability receipt",
+                    current.id
+                );
+            }
+            fs::remove_file(
+                self.runtime_capability_receipt_path(&queue.confirmation_id, &current.id),
+            )
+            .with_context(|| {
+                format!(
+                    "superseding uncommitted runtime capability receipt for {}",
+                    current.id
+                )
+            })?;
+        }
+        self.validate_runtime_capability_receipt(queue, planned, &receipt)?;
+        save_immutable_yaml(
+            &self.runtime_capability_receipt_path(&queue.confirmation_id, &current.id),
+            &receipt,
+        )
+    }
+
+    fn commit_runtime_capability_receipt(
+        &self,
+        confirmation_id: &str,
+        task_id: &str,
+    ) -> Result<()> {
+        let receipt = self
+            .load_runtime_capability_receipt(confirmation_id, task_id)?
+            .ok_or_else(|| {
+                anyhow::anyhow!("active_runtime_capability_mismatch: missing prepared receipt")
+            })?;
+        save_immutable_yaml(
+            &self.runtime_capability_commit_path(confirmation_id, task_id),
+            &RuntimeCapabilityCommit {
+                schema_version: 1,
+                confirmation_id: confirmation_id.to_string(),
+                task_id: task_id.to_string(),
+                receipt_digest: Self::runtime_record_digest(&receipt)?,
+                committed_at: receipt.recorded_at.clone(),
+            },
+        )
+    }
+
+    pub fn runtime_capability_decision_question(&self, task_id: &str) -> Result<Option<String>> {
+        let Some(queue) = self.load_activated_queue()? else {
+            return Ok(None);
+        };
+        if queue.confirmation_id.is_empty() {
+            return Ok(None);
+        }
+        self.validate_activated_queue_runtime(&queue)?;
+        let baselines = self.runtime_contract_baselines(&queue)?;
+        let Some(baseline) = baselines.get(task_id) else {
+            return Ok(None);
+        };
+        let Some(receipt) =
+            self.load_runtime_capability_receipt(&queue.confirmation_id, task_id)?
+        else {
+            return Ok(None);
+        };
+        self.validate_runtime_capability_receipt(&queue, baseline, &receipt)?;
+        let Some(commit) = self.load_runtime_capability_commit(&queue.confirmation_id, task_id)?
+        else {
+            return Ok(None);
+        };
+        if commit.schema_version != 1
+            || commit.receipt_digest != Self::runtime_record_digest(&receipt)?
+            || commit.committed_at.is_empty()
+        {
+            bail!(
+                "active_runtime_capability_mismatch: task {} has an invalid commit marker",
+                task_id
+            );
+        }
+        Ok(Some(receipt.decision_question))
+    }
+
+    fn runtime_contract_baselines(&self, queue: &ActivatedQueue) -> Result<BTreeMap<String, Task>> {
+        let mut baselines = queue
+            .materialized_queue
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow::anyhow!("active_runtime_envelope_mismatch: materialized queue is missing")
+            })?
+            .tasks
+            .iter()
+            .cloned()
+            .map(|task| (task.id.clone(), task))
+            .collect::<BTreeMap<_, _>>();
+        for task in queue
+            .tasks
+            .iter()
+            .filter(|task| task.materialized_by_confirmation_id.is_empty())
+        {
+            let receipt = self
+                .load_runtime_task_receipt(&queue.confirmation_id, &task.task.id)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "active_runtime_origin_mismatch: task {} has no immutable origin receipt",
+                        task.task.id
+                    )
+                })?;
+            self.validate_runtime_task_receipt_identity(queue, task, &receipt)?;
+            baselines.insert(task.task.id.clone(), receipt.task);
+        }
+        Ok(baselines)
+    }
+
+    fn repair_runtime_capability_commits(&self, queue: &ActivatedQueue) -> Result<()> {
+        let queue_digest = Self::runtime_queue_digest(queue)?;
+        let baselines = self.runtime_contract_baselines(queue)?;
+        for task in &queue.tasks {
+            let Some(baseline) = baselines.get(&task.task.id) else {
+                continue;
+            };
+            if task.task.required_capabilities == baseline.required_capabilities {
+                continue;
+            }
+            if self
+                .load_runtime_capability_commit(&queue.confirmation_id, &task.task.id)?
+                .is_some()
+            {
+                continue;
+            }
+            let receipt = self
+                .load_runtime_capability_receipt(&queue.confirmation_id, &task.task.id)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "active_runtime_capability_mismatch: task {} has no capability receipt",
+                        task.task.id
+                    )
+                })?;
+            self.validate_runtime_capability_receipt(queue, baseline, &receipt)?;
+            if receipt.queue_digest_after != queue_digest {
+                bail!(
+                    "active_runtime_capability_mismatch: task {} has an uncommitted capability receipt",
+                    task.task.id
+                );
+            }
+            self.commit_runtime_capability_receipt(&queue.confirmation_id, &task.task.id)?;
+        }
+        Ok(())
+    }
+
+    pub fn validate_activated_queue_runtime(&self, queue: &ActivatedQueue) -> Result<()> {
+        self.repair_runtime_task_commits(queue)?;
+        self.repair_runtime_capability_commits(queue)?;
+        self.validate_activated_queue_runtime_with_prepared(
+            queue,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+    }
+
+    fn validate_activated_queue_runtime_with_prepared(
+        &self,
+        queue: &ActivatedQueue,
+        prepared_task_ids: &BTreeSet<String>,
+        prepared_capability_ids: &BTreeSet<String>,
+    ) -> Result<()> {
+        let materialized = queue.materialized_queue.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("active_runtime_envelope_mismatch: materialized queue is missing")
+        })?;
+        let materialized_digest = Self::runtime_record_digest(materialized)?;
+        if queue.materialized_queue_digest.is_empty()
+            || queue.materialized_queue_digest != materialized_digest
+        {
+            bail!("active_runtime_envelope_mismatch: immutable materialized queue digest mismatch");
+        }
+        let mut committed = self.committed_runtime_tasks(queue)?;
+        for task_id in prepared_task_ids {
+            if committed
+                .iter()
+                .any(|(commit, _)| &commit.task_id == task_id)
+            {
+                continue;
+            }
+            let receipt = self
+                .load_runtime_task_receipt(&queue.confirmation_id, task_id)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "active_runtime_origin_mismatch: prepared task {} has no receipt",
+                        task_id
+                    )
+                })?;
+            committed.push((
+                RuntimeTaskCommit {
+                    schema_version: 1,
+                    confirmation_id: queue.confirmation_id.clone(),
+                    task_id: task_id.clone(),
+                    ordinal: receipt.ordinal,
+                    receipt_digest: Self::runtime_record_digest(&receipt)?,
+                    committed_at: receipt.recorded_at.clone(),
+                },
+                receipt,
+            ));
+        }
+        committed.sort_by_key(|(commit, _)| commit.ordinal);
+        let runtime_tasks = queue
+            .tasks
+            .iter()
+            .filter(|task| task.materialized_by_confirmation_id.is_empty())
+            .collect::<Vec<_>>();
+        if committed.len() != runtime_tasks.len() {
+            bail!("active_runtime_origin_mismatch: committed runtime task inventory mismatch");
+        }
+        for (ordinal, ((commit, receipt), task)) in committed.iter().zip(&runtime_tasks).enumerate()
+        {
+            if commit.ordinal != ordinal
+                || receipt.ordinal != ordinal
+                || commit.task_id != task.task.id
+            {
+                bail!("active_runtime_origin_mismatch: committed runtime task order mismatch");
+            }
+        }
+
+        let known_ids = queue
+            .tasks
+            .iter()
+            .map(|task| task.task.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let positions = queue
+            .tasks
+            .iter()
+            .enumerate()
+            .map(|(index, task)| (task.task.id.as_str(), index))
+            .collect::<BTreeMap<_, _>>();
+        let confirmed_ids = materialized
+            .tasks
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut runs_before = BTreeMap::<String, Vec<String>>::new();
+        for ((_, receipt), task) in committed.iter().zip(&runtime_tasks) {
+            self.validate_runtime_task_receipt_identity(queue, task, receipt)?;
+            for target in &receipt.runs_before {
+                if !known_ids.contains(target.as_str())
+                    || positions.get(target.as_str()) >= positions.get(task.task.id.as_str())
+                {
+                    bail!(
+                        "active_runtime_origin_mismatch: task {} has an invalid runtime dependency target {}",
+                        task.task.id,
+                        target
+                    );
+                }
+                runs_before
+                    .entry(target.clone())
+                    .or_default()
+                    .push(task.task.id.clone());
+            }
+        }
+        let mut capability_clears = BTreeSet::new();
+        let baselines = self.runtime_contract_baselines(queue)?;
+        for task in &queue.tasks {
+            let Some(planned) = baselines.get(&task.task.id) else {
+                continue;
+            };
+            if task.task.required_capabilities != planned.required_capabilities {
+                if !task.task.required_capabilities.is_empty() {
+                    bail!(
+                        "active_runtime_capability_mismatch: task {} changed required capabilities",
+                        task.task.id
+                    );
+                }
+                let receipt = self
+                    .load_runtime_capability_receipt(&queue.confirmation_id, &task.task.id)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "active_runtime_capability_mismatch: task {} has no capability receipt",
+                            task.task.id
+                        )
+                    })?;
+                self.validate_runtime_capability_receipt(queue, planned, &receipt)?;
+                if !prepared_capability_ids.contains(&task.task.id) {
+                    let commit = self
+                        .load_runtime_capability_commit(&queue.confirmation_id, &task.task.id)?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "active_runtime_capability_mismatch: task {} has no commit marker",
+                                task.task.id
+                            )
+                        })?;
+                    if commit.schema_version != 1
+                        || commit.confirmation_id != queue.confirmation_id
+                        || commit.task_id != task.task.id
+                        || commit.receipt_digest != Self::runtime_record_digest(&receipt)?
+                        || commit.committed_at.is_empty()
+                    {
+                        bail!(
+                            "active_runtime_capability_mismatch: task {} has an invalid commit marker",
+                            task.task.id
+                        );
+                    }
+                }
+                capability_clears.insert(task.task.id.clone());
+            }
+        }
+        for ((_, receipt), task) in committed.iter().zip(&runtime_tasks) {
+            self.validate_runtime_task_receipt(
+                queue,
+                task,
+                receipt,
+                runs_before
+                    .get(&task.task.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
+                capability_clears.contains(&task.task.id),
+            )?;
+        }
+        let confirmed_runs_before = runs_before
+            .into_iter()
+            .filter(|(target, _)| confirmed_ids.contains(target.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        if !queue.runtime_envelope_matches_materialized_with_overlays(
+            &confirmed_runs_before,
+            &capability_clears,
+        ) {
+            bail!(
+                "active_runtime_envelope_mismatch: current tasks differ from immutable confirmed contracts"
+            );
+        }
+        Ok(())
+    }
+
+    pub fn require_confirmed_activation(&self) -> Result<()> {
+        save_immutable_yaml(
+            &self.activation_requirement_path(),
+            &ActivationRequirement {
+                schema_version: 1,
+                required: true,
+            },
+        )
+    }
+
+    pub fn confirmed_activation_required(&self) -> Result<bool> {
+        let path = self.activation_requirement_path();
+        if !path.is_file() {
+            return Ok(false);
+        }
+        let marker: ActivationRequirement = load_yaml(&path)?;
+        if marker.schema_version != 1 || !marker.required {
+            bail!("invalid activation requirement marker");
+        }
+        Ok(true)
     }
 
     /// Canonical writer for the secret-free Git finish attempt attached to a
@@ -399,7 +1843,221 @@ impl Workspace {
     }
 
     pub fn save_queue(&self, queue: &WorkQueue) -> Result<()> {
-        save_yaml(&self.queue_path(), queue)
+        let lock = self.acquire_planning_lock()?;
+        self.save_queue_locked(&lock, queue)
+    }
+
+    fn queue_text_preserving_activation(
+        &self,
+        queue: &WorkQueue,
+        existing: Option<&str>,
+    ) -> Result<(String, Vec<String>, Vec<String>)> {
+        if let Some(mut activated) = existing.map(yaml::from_str::<ActivatedQueue>).transpose()? {
+            if activated.activation_required
+                || !activated.confirmation_id.is_empty()
+                || !activated.planning_session_id.is_empty()
+            {
+                self.validate_activated_queue_runtime(&activated)?;
+                if activated.queue_id != queue.queue_id || activated.intent_id != queue.intent_id {
+                    bail!("activated queue identity changed during runtime mutation");
+                }
+                let existing_materialization = activated
+                    .tasks
+                    .iter()
+                    .map(|task| {
+                        (
+                            task.task.id.clone(),
+                            task.materialized_by_confirmation_id.clone(),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let existing_ids = activated
+                    .tasks
+                    .iter()
+                    .map(|task| task.task.id.clone())
+                    .collect::<BTreeSet<_>>();
+                let mut candidate = activated.clone();
+                candidate.schema_version = queue.schema_version;
+                candidate.selection_policy = queue.selection_policy.clone();
+                candidate.tasks = queue
+                    .tasks
+                    .iter()
+                    .cloned()
+                    .map(|task| ActivatedTask {
+                        materialized_by_confirmation_id: existing_materialization
+                            .get(&task.id)
+                            .cloned()
+                            .unwrap_or_default(),
+                        task,
+                    })
+                    .collect();
+
+                let new_runtime_ids = candidate
+                    .tasks
+                    .iter()
+                    .filter(|task| {
+                        task.materialized_by_confirmation_id.is_empty()
+                            && !existing_ids.contains(&task.task.id)
+                    })
+                    .map(|task| task.task.id.clone())
+                    .collect::<BTreeSet<_>>();
+                let mut runs_before_by_source = BTreeMap::<String, Vec<String>>::new();
+                for (source_index, source) in candidate.tasks.iter().enumerate() {
+                    if !new_runtime_ids.contains(&source.task.id) {
+                        continue;
+                    }
+                    let targets = candidate.tasks[..source_index]
+                        .iter()
+                        .filter(|target| target.task.depends_on.contains(&source.task.id))
+                        .map(|target| target.task.id.clone())
+                        .collect::<Vec<_>>();
+                    runs_before_by_source.insert(source.task.id.clone(), targets);
+                }
+
+                let mut baselines = candidate
+                    .materialized_queue
+                    .as_ref()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "active_runtime_envelope_mismatch: materialized queue is missing"
+                        )
+                    })?
+                    .tasks
+                    .iter()
+                    .cloned()
+                    .map(|task| (task.id.clone(), task))
+                    .collect::<BTreeMap<_, _>>();
+                for task in activated
+                    .tasks
+                    .iter()
+                    .filter(|task| task.materialized_by_confirmation_id.is_empty())
+                {
+                    let receipt = self
+                        .load_runtime_task_receipt(&activated.confirmation_id, &task.task.id)?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "active_runtime_origin_mismatch: task {} has no immutable origin receipt",
+                                task.task.id
+                            )
+                        })?;
+                    baselines.insert(task.task.id.clone(), receipt.task);
+                }
+                for task in candidate.tasks.iter().filter(|task| {
+                    task.materialized_by_confirmation_id.is_empty()
+                        && new_runtime_ids.contains(&task.task.id)
+                }) {
+                    let mut baseline = task.task.clone();
+                    for (source, targets) in &runs_before_by_source {
+                        if targets.contains(&task.task.id) {
+                            baseline
+                                .depends_on
+                                .retain(|dependency| dependency != source);
+                        }
+                    }
+                    baselines.insert(task.task.id.clone(), baseline);
+                }
+
+                let queue_digest_after = Self::runtime_queue_digest(&candidate)?;
+                let existing_runtime_count = activated
+                    .tasks
+                    .iter()
+                    .filter(|task| task.materialized_by_confirmation_id.is_empty())
+                    .count();
+                let mut prepared_task_ids = BTreeSet::new();
+                for (next_ordinal, task) in
+                    (existing_runtime_count..).zip(candidate.tasks.iter().filter(|task| {
+                        task.materialized_by_confirmation_id.is_empty()
+                            && new_runtime_ids.contains(&task.task.id)
+                    }))
+                {
+                    let baseline = baselines.get(&task.task.id).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "active_runtime_origin_mismatch: task {} has no baseline",
+                            task.task.id
+                        )
+                    })?;
+                    self.ensure_runtime_task_receipt(
+                        &candidate,
+                        &activated,
+                        task,
+                        baseline,
+                        RuntimeTaskPlacement {
+                            ordinal: next_ordinal,
+                            runs_before: runs_before_by_source
+                                .get(&task.task.id)
+                                .cloned()
+                                .unwrap_or_default(),
+                        },
+                        &queue_digest_after,
+                    )?;
+                    prepared_task_ids.insert(task.task.id.clone());
+                }
+
+                let previous_tasks = activated
+                    .tasks
+                    .iter()
+                    .map(|task| (task.task.id.as_str(), &task.task))
+                    .collect::<BTreeMap<_, _>>();
+                let mut prepared_capability_ids = BTreeSet::new();
+                for task in &candidate.tasks {
+                    let Some(baseline) = baselines.get(&task.task.id) else {
+                        continue;
+                    };
+                    let previous_capabilities = previous_tasks
+                        .get(task.task.id.as_str())
+                        .map(|task| task.required_capabilities.as_slice())
+                        .unwrap_or(baseline.required_capabilities.as_slice());
+                    if previous_capabilities == baseline.required_capabilities.as_slice()
+                        && task.task.required_capabilities != baseline.required_capabilities
+                    {
+                        self.ensure_runtime_capability_receipt(
+                            &candidate,
+                            &activated,
+                            baseline,
+                            &task.task,
+                            &queue_digest_after,
+                        )?;
+                        prepared_capability_ids.insert(task.task.id.clone());
+                    }
+                }
+
+                self.validate_activated_queue_runtime_with_prepared(
+                    &candidate,
+                    &prepared_task_ids,
+                    &prepared_capability_ids,
+                )?;
+                activated = candidate;
+                return Ok((
+                    yaml::to_string(&activated)?,
+                    prepared_task_ids.into_iter().collect(),
+                    prepared_capability_ids.into_iter().collect(),
+                ));
+            }
+        }
+        Ok((yaml::to_string(queue)?, Vec::new(), Vec::new()))
+    }
+
+    /// Queue writer for callers that already own the permanent workspace
+    /// mutation lock. Requiring the guard at the call site prevents helpers
+    /// inside a transaction from trying to acquire the non-reentrant lock again.
+    pub fn save_queue_locked(&self, _lock: &PlanningLock, queue: &WorkQueue) -> Result<()> {
+        let expected = _lock.queue_snapshot.borrow().clone();
+        let (text, prepared_task_ids, prepared_capability_ids) =
+            self.queue_text_preserving_activation(queue, expected.as_deref())?;
+        write_str_atomic_cas(&self.queue_path(), expected.as_deref(), &text)?;
+        *_lock.queue_snapshot.borrow_mut() = Some(text);
+        if !prepared_task_ids.is_empty() || !prepared_capability_ids.is_empty() {
+            let activated = self.load_activated_queue()?.ok_or_else(|| {
+                anyhow::anyhow!("active_runtime_origin_mismatch: committed queue is missing")
+            })?;
+            for task_id in prepared_task_ids {
+                self.commit_runtime_task_receipt(&activated.confirmation_id, &task_id)?;
+            }
+            for task_id in prepared_capability_ids {
+                self.commit_runtime_capability_receipt(&activated.confirmation_id, &task_id)?;
+            }
+        }
+        Ok(())
     }
 
     /// Append a user-authored task to the latest queue without re-planning or
@@ -407,6 +2065,7 @@ impl Workspace {
     /// auto-drain may already be running; always load the current queue first so
     /// a stale caller cannot clobber runtime state.
     pub fn append_user_task(&self, input: UserTaskInput) -> Result<Task> {
+        let _lock = self.acquire_planning_lock()?;
         let mut queue = self.load_queue()?;
         let next_num = queue
             .tasks
@@ -442,7 +2101,7 @@ impl Workspace {
             provenance: "user-added".to_string(),
         };
         queue.tasks.push(task.clone());
-        self.save_queue(&queue)?;
+        self.save_queue_locked(&_lock, &queue)?;
         Ok(task)
     }
 
@@ -542,11 +2201,41 @@ impl Workspace {
     /// removes the live files, so `load_intent` then reads None and `load_queue`
     /// reads an empty queue. Missing files are not an error (already clear).
     pub fn clear_intent_and_queue(&self) -> Result<()> {
-        for p in [self.intent_path(), self.queue_path()] {
-            if p.is_file() {
-                fs::remove_file(&p).with_context(|| format!("removing {}", p.display()))?;
-            }
+        let lock = self.acquire_planning_lock()?;
+        self.clear_intent_and_queue_locked(&lock)
+    }
+
+    fn clear_intent_and_queue_locked(&self, lock: &PlanningLock) -> Result<()> {
+        let expected = lock.queue_snapshot.borrow().clone();
+        let actual = if self.queue_path().is_file() {
+            Some(fs::read_to_string(self.queue_path())?)
+        } else {
+            None
+        };
+        if actual != expected {
+            bail!("queue_transaction_conflict: raw queue bytes changed before clear");
         }
+        if let Some(activated) = expected
+            .as_deref()
+            .map(yaml::from_str::<ActivatedQueue>)
+            .transpose()?
+            .filter(|queue| {
+                queue.activation_required
+                    || !queue.confirmation_id.is_empty()
+                    || !queue.planning_session_id.is_empty()
+            })
+        {
+            self.validate_activated_queue_runtime(&activated)?;
+        }
+        if self.intent_path().is_file() {
+            fs::remove_file(self.intent_path())
+                .with_context(|| format!("removing {}", self.intent_path().display()))?;
+        }
+        if self.queue_path().is_file() {
+            fs::remove_file(self.queue_path())
+                .with_context(|| format!("removing {}", self.queue_path().display()))?;
+        }
+        *lock.queue_snapshot.borrow_mut() = None;
         Ok(())
     }
 
@@ -577,6 +2266,7 @@ impl Workspace {
         intent_id: &str,
         seed_fn: impl FnOnce(&mut WorkQueue),
     ) -> Result<String> {
+        let lock = self.acquire_planning_lock()?;
         let summary = {
             let title = fu.title.trim();
             let reason = fu.reason.trim();
@@ -615,11 +2305,12 @@ impl Workspace {
             tasks: Vec::new(),
         };
         seed_fn(&mut queue);
-        self.save_queue(&queue)?;
+        self.save_queue_locked(&lock, &queue)?;
         Ok(intent_id.to_string())
     }
 
     pub fn tidy(&self) -> Result<TidyReport> {
+        let lock = self.acquire_planning_lock()?;
         let workers = self.load_workers().ok();
         let vocab = workers
             .as_ref()
@@ -628,6 +2319,8 @@ impl Workspace {
         let mut queue = self.load_queue()?;
         let snapshot = queue.clone();
         let mut report = TidyReport::default();
+        let mut pending_conversations = Vec::new();
+        let mut pending_transitions = Vec::new();
 
         for task in &mut queue.tasks {
             let from = task.state;
@@ -650,27 +2343,23 @@ impl Workspace {
                             "This task needs your decision before Yardlet can run it: {}. Reply with the decision or instructions to proceed.",
                             task.title
                         );
-                        append_conversation_turn(
-                            self,
-                            &task.id,
+                        pending_conversations.push((
+                            task.id.clone(),
                             ConversationTurn {
                                 role: TurnRole::Worker,
                                 text: question,
                                 run_id: String::new(),
                                 ts: Local::now().to_rfc3339(),
                             },
-                        )?;
-                        append_transition(
-                            self,
-                            transition(
-                                &task.id,
-                                from,
-                                task.state,
-                                TransitionCause::StaleMigration,
-                                &detail,
-                                TransitionActor::System,
-                            ),
-                        )?;
+                        ));
+                        pending_transitions.push(transition(
+                            &task.id,
+                            from,
+                            task.state,
+                            TransitionCause::StaleMigration,
+                            &detail,
+                            TransitionActor::System,
+                        ));
                         report.migrated_decisions.push(task.id.clone());
                     }
                     crate::routing::GateShape::ToolGap => {
@@ -681,17 +2370,14 @@ impl Workspace {
                             missing.join(", ")
                         );
                         append_rationale(task, &detail);
-                        append_transition(
-                            self,
-                            transition(
-                                &task.id,
-                                from,
-                                task.state,
-                                TransitionCause::TidyDefer,
-                                &detail,
-                                TransitionActor::System,
-                            ),
-                        )?;
+                        pending_transitions.push(transition(
+                            &task.id,
+                            from,
+                            task.state,
+                            TransitionCause::TidyDefer,
+                            &detail,
+                            TransitionActor::System,
+                        ));
                         report.deferred.push(task.id.clone());
                     }
                 }
@@ -712,23 +2398,26 @@ impl Workspace {
                     task.set_deferred_by(Some(crate::schemas::DeferredBy::new(&task.id)));
                     let detail = format!("tidy set aside non-runnable task: {}", class.label());
                     append_rationale(task, &detail);
-                    append_transition(
-                        self,
-                        transition(
-                            &task.id,
-                            from,
-                            task.state,
-                            TransitionCause::TidyDefer,
-                            &detail,
-                            TransitionActor::System,
-                        ),
-                    )?;
+                    pending_transitions.push(transition(
+                        &task.id,
+                        from,
+                        task.state,
+                        TransitionCause::TidyDefer,
+                        &detail,
+                        TransitionActor::System,
+                    ));
                     report.deferred.push(task.id.clone());
                 }
             }
         }
 
-        self.save_queue(&queue)?;
+        self.save_queue_locked(&lock, &queue)?;
+        for (task_id, turn) in pending_conversations {
+            append_conversation_turn(self, &task_id, turn)?;
+        }
+        for transition in pending_transitions {
+            append_transition(self, transition)?;
+        }
 
         let has_runnable = queue.tasks.iter().any(|t| {
             queue.is_runnable_now(
@@ -742,7 +2431,7 @@ impl Workspace {
         // covered by `drained()` (it is not terminal).
         if ready_for_completion(&queue) && !has_runnable {
             if let Some(intent_id) = crate::report::archive_intent(self)? {
-                clear_intent_and_queue_with_wrap(self, &queue, &intent_id)?;
+                clear_intent_and_queue_with_wrap(self, &lock, &queue, &intent_id)?;
                 report.archived_intent = Some(intent_id);
             }
         }
@@ -1007,6 +2696,36 @@ fn memory_slug(input: &str) -> String {
 pub fn load_yaml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     yaml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn load_yaml_dir<T: serde::de::DeserializeOwned>(dir: &Path) -> Result<Vec<T>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut paths = fs::read_dir(dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "yaml")
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.iter().map(|path| load_yaml(path)).collect()
+}
+
+fn save_immutable_yaml<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
+    let text = yaml::to_string(value)?;
+    if write_str_atomic_create(path, &text)? {
+        return Ok(());
+    }
+    let existing = fs::read_to_string(path)
+        .with_context(|| format!("reading immutable record {}", path.display()))?;
+    if existing == text {
+        Ok(())
+    } else {
+        bail!("immutable record conflict at {}", path.display())
+    }
 }
 
 pub fn save_yaml<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -1467,6 +3186,7 @@ pub struct ResolveOutcome {
 /// worktree. No worker is re-invoked: the work is already integrated, so this is
 /// pure bookkeeping. Errors if the task is missing or not `Partial`.
 pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<ResolveOutcome> {
+    let lock = ws.acquire_planning_lock()?;
     let mut queue = ws.load_queue()?;
     let Some(idx) = queue.tasks.iter().position(|t| t.id == task_id) else {
         anyhow::bail!("task '{task_id}' not found in the queue");
@@ -1484,7 +3204,7 @@ pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<Re
     }
     queue.tasks[idx].state = TaskState::Done;
     // Yardlet stays the sole queue writer: persist, then record the transition.
-    ws.save_queue(&queue)?;
+    ws.save_queue_locked(&lock, &queue)?;
     append_transition(
         ws,
         transition(
@@ -1538,6 +3258,7 @@ pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<Re
 
 fn clear_intent_and_queue_with_wrap(
     ws: &Workspace,
+    lock: &PlanningLock,
     queue: &WorkQueue,
     intent_id: &str,
 ) -> Result<()> {
@@ -1554,7 +3275,7 @@ fn clear_intent_and_queue_with_wrap(
             ),
         )?;
     }
-    ws.clear_intent_and_queue()
+    ws.clear_intent_and_queue_locked(lock)
 }
 
 pub fn write_str(path: &Path, contents: &str) -> Result<()> {
@@ -1584,6 +3305,77 @@ pub fn write_str_atomic(path: &Path, contents: &str) -> Result<()> {
     fs::rename(&tmp, path)
         .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
     Ok(())
+}
+
+/// Atomically create an immutable file without a check-then-replace race.
+/// A fully synced temporary inode is linked into the final name with
+/// no-clobber semantics. `Ok(false)` means another writer won the name.
+fn write_str_atomic_create(path: &Path, contents: &str) -> Result<bool> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("immutable path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state");
+    let mut created = None;
+    for suffix in 0..1_000_u32 {
+        let tmp = parent.join(format!(
+            ".{file_name}.create-{}-{suffix}",
+            std::process::id()
+        ));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => {
+                created = Some((tmp, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error).with_context(|| format!("creating {}", tmp.display())),
+        }
+    }
+    let (tmp, mut file) = created.ok_or_else(|| {
+        anyhow::anyhow!("exhausted immutable temporary names for {}", path.display())
+    })?;
+    let written = (|| -> Result<()> {
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("syncing {}", tmp.display()))?;
+        Ok(())
+    })();
+    if let Err(error) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+    let linked = match fs::hard_link(&tmp, path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(error) => {
+            let _ = fs::remove_file(&tmp);
+            return Err(error).with_context(|| {
+                format!("atomically creating immutable record {}", path.display())
+            });
+        }
+    };
+    fs::remove_file(&tmp).with_context(|| format!("removing {}", tmp.display()))?;
+    Ok(linked)
+}
+
+fn write_str_atomic_cas(path: &Path, expected: Option<&str>, contents: &str) -> Result<()> {
+    let current = if path.is_file() {
+        Some(fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?)
+    } else {
+        None
+    };
+    if current.as_deref() != expected {
+        bail!("compare_and_swap_conflict at {}", path.display());
+    }
+    write_str_atomic(path, contents)
 }
 
 pub fn append_str(path: &Path, contents: &str) -> Result<()> {

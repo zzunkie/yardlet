@@ -19,6 +19,7 @@ mod memory;
 mod packet;
 mod parallel;
 mod planner;
+mod planning;
 mod report;
 mod review;
 mod routing;
