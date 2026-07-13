@@ -787,10 +787,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             ));
         }
     }
-    let resolved = match resolved {
-        Ok(resolved) => resolved,
-        Err(error) => return Err(error),
-    }; // hard stop if no ready worker
+    let resolved = resolved?; // hard stop if no ready worker
     let mut active_worker_id = worker_id.clone();
     let mut active_reason = resolved.reason;
     let mut active_bin = resolved.bin;
@@ -883,7 +880,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     }
 
     // Session id for resume-on-transient: claude lets us set one up front; codex
-    // generates its own, captured from its rollout file after the run starts.
+    // generates its own, captured from that child's JSONL stdout.
     let log_path = run_dir.join("worker-output.log");
     let mut effective_chained = chained;
     let mut session_id: Option<String> = if chained {
@@ -904,7 +901,6 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         .as_ref()
         .map(|owned| owned.path.as_path())
         .unwrap_or(ws.root.as_path());
-    let started_sys = std::time::SystemTime::now();
     let run_started = std::time::Instant::now();
     let mut outcome = workers::spawn(
         &eff_profile,
@@ -922,7 +918,13 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     )?;
     import_worker_run_artifacts(worker_run_dir, &run_dir)?;
     if active_worker_id == "codex" && session_id.is_none() {
-        session_id = find_codex_session(started_sys);
+        session_id = outcome.session_id.clone();
+        if session_id.is_none() {
+            lines.push(
+                "codex session id missing from child stdout; retry and hot-chain disabled"
+                    .to_string(),
+            );
+        }
     }
     // Resume on a transient failure (e.g. a dropped connection) instead of redoing
     // the task from scratch — unless the user stopped it (Esc writes a marker).
@@ -1040,7 +1042,6 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                     approved,
                 });
                 write_str(&workers::packet_path(&run_dir), &failover_packet)?;
-                let failover_started = SystemTime::now();
                 outcome = workers::spawn(
                     &eff_profile,
                     &active_bin,
@@ -1057,7 +1058,13 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 )?;
                 import_worker_run_artifacts(worker_run_dir, &run_dir)?;
                 if active_worker_id == "codex" && session_id.is_none() {
-                    session_id = find_codex_session(failover_started);
+                    session_id = outcome.session_id.clone();
+                    if session_id.is_none() {
+                        lines.push(
+                            "codex session id missing from child stdout; retry and hot-chain disabled"
+                                .to_string(),
+                        );
+                    }
                 }
                 failover_note = Some(note);
             }
@@ -1751,52 +1758,6 @@ pub(crate) fn gen_session_uuid(seed: &str) -> String {
         &hex[16..20],
         &hex[20..32]
     )
-}
-
-/// Find the codex session id (UUID) for a run started at/after `after`, from its
-/// rollout file under ~/.codex/sessions (named `rollout-<ts>-<uuid>.jsonl`, so
-/// the trailing 36 chars are the id).
-fn find_codex_session(after: std::time::SystemTime) -> Option<String> {
-    fn walk(
-        dir: &std::path::Path,
-        after: std::time::SystemTime,
-        best: &mut Option<(std::time::SystemTime, String)>,
-    ) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, after, best);
-                continue;
-            }
-            let Some(stem) = p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .and_then(|n| n.strip_suffix(".jsonl"))
-            else {
-                continue;
-            };
-            if !stem.starts_with("rollout-") || stem.len() < 36 {
-                continue;
-            }
-            let Ok(mt) = e.metadata().and_then(|m| m.modified()) else {
-                continue;
-            };
-            if mt + std::time::Duration::from_secs(3) < after {
-                continue;
-            }
-            if best.as_ref().map(|(t, _)| mt > *t).unwrap_or(true) {
-                *best = Some((mt, stem[stem.len() - 36..].to_string()));
-            }
-        }
-    }
-    let home = std::env::var_os("HOME")?;
-    let base = std::path::Path::new(&home).join(".codex/sessions");
-    let mut best = None;
-    walk(&base, after, &mut best);
-    best.map(|(_, id)| id)
 }
 
 /// A transient (likely network/infra) failure: the worker did not exit cleanly,
@@ -5871,6 +5832,102 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         );
         let _ = std::fs::remove_dir_all(mutated_ws.root);
         let _ = std::fs::remove_dir_all(source);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_report_session_comes_from_exact_fresh_codex_child() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const EXPECTED_SESSION: &str = "11111111-2222-4333-8444-555555555555";
+        let source = std::env::temp_dir().join(format!(
+            "yard-codex-session-report-src-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        let fake_codex = write_worker_script(
+            &source,
+            "codex",
+            r#"#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+  printf '%s\n' 'codex-test 0.0.0'
+  exit 0
+fi
+run_dir=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--add-dir" ]; then
+    shift
+    run_dir=$1
+  fi
+  shift
+done
+if [ -z "$run_dir" ]; then
+  printf '%s\n' 'missing --add-dir' >&2
+  exit 2
+fi
+run_id=${run_dir##*/}
+printf '%s\n' '{"type":"thread.started","thread_id":"11111111-2222-4333-8444-555555555555"}'
+/bin/cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-SESSION",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": [], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "session captured",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+/bin/cat > "$run_dir/handoff.md" <<EOF
+# Worker handoff
+session captured
+EOF
+exit 0
+"#,
+        );
+        let mut permissions = std::fs::metadata(&fake_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_codex, permissions).unwrap();
+
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: codex\n  fallback_order: [codex]\nworkers:\n  - id: codex\n    invocation:\n      command: {}\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&fake_codex)
+        );
+        let ws = init_test_workspace("codex-session-report", &worker_yaml);
+        ws.save_queue(&queue(vec![task(
+            "YARD-SESSION",
+            TaskState::Queued,
+            10,
+            false,
+        )]))
+        .unwrap();
+
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-SESSION".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.worker_id, "codex");
+        assert_eq!(report.result_state, Some(TaskState::Done));
+        assert_eq!(
+            report.session.as_deref(),
+            Some(EXPECTED_SESSION),
+            "RunReport must expose only the exact fresh child's stdout thread id"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     #[test]

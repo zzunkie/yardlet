@@ -244,6 +244,55 @@ pub struct WorkerOutcome {
     pub exit_ok: bool,
     pub timed_out: bool,
     pub note: String,
+    /// Exact Codex thread created by this child process. Captured only from
+    /// that child's JSONL stdout; never inferred from global session files.
+    pub session_id: Option<String>,
+}
+
+fn valid_codex_thread_id(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        })
+}
+
+fn codex_thread_id_from_json_line(line: &[u8]) -> Option<String> {
+    let event: serde_json::Value = serde_json::from_slice(line).ok()?;
+    if event.get("type").and_then(|value| value.as_str()) != Some("thread.started") {
+        return None;
+    }
+    event
+        .get("thread_id")
+        .and_then(|value| value.as_str())
+        .filter(|id| valid_codex_thread_id(id))
+        .map(str::to_string)
+}
+
+fn capture_codex_thread_id(
+    pending: &mut Vec<u8>,
+    chunk: &[u8],
+    captured: &std::sync::Arc<std::sync::Mutex<Option<String>>>,
+) {
+    if captured.lock().is_ok_and(|guard| guard.is_some()) {
+        return;
+    }
+    pending.extend_from_slice(chunk);
+    while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+        let line: Vec<u8> = pending.drain(..=newline).collect();
+        if let Some(id) = codex_thread_id_from_json_line(&line) {
+            if let Ok(mut guard) = captured.lock() {
+                *guard = Some(id);
+            }
+            pending.clear();
+            return;
+        }
+    }
+    // `thread.started` is a small leading event. Fail closed instead of
+    // retaining unbounded non-JSON output while waiting for it.
+    if pending.len() > 64 * 1024 {
+        pending.clear();
+    }
 }
 
 /// Spawn a worker with a sanitized environment, feeding the packet on stdin and
@@ -344,23 +393,38 @@ pub fn spawn(
     let log_file = std::sync::Arc::new(std::sync::Mutex::new(
         std::fs::File::create(output_log).ok(),
     ));
-    let mut sources: Vec<Box<dyn Read + Send>> = Vec::new();
+    let captured_session = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let mut sources: Vec<(Box<dyn Read + Send>, bool)> = Vec::new();
     if let Some(o) = child.stdout.take() {
-        sources.push(Box::new(o));
+        sources.push((Box::new(o), profile.id == "codex" && !resume));
     }
     if let Some(e) = child.stderr.take() {
-        sources.push(Box::new(e));
+        sources.push((Box::new(e), false));
     }
     let readers: Vec<_> = sources
         .into_iter()
-        .map(|mut src| {
+        .map(|(mut src, capture_session)| {
             let log = std::sync::Arc::clone(&log_file);
+            let captured = std::sync::Arc::clone(&captured_session);
             thread::spawn(move || {
                 let mut buf = [0u8; 4096];
+                let mut pending = Vec::new();
                 loop {
                     match src.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
+                        Ok(0) | Err(_) => {
+                            if capture_session && !pending.is_empty() {
+                                if let Some(id) = codex_thread_id_from_json_line(&pending) {
+                                    if let Ok(mut guard) = captured.lock() {
+                                        *guard = Some(id);
+                                    }
+                                }
+                            }
+                            break;
+                        }
                         Ok(n) => {
+                            if capture_session {
+                                capture_codex_thread_id(&mut pending, &buf[..n], &captured);
+                            }
                             if let Ok(mut guard) = log.lock() {
                                 if let Some(f) = guard.as_mut() {
                                     let _ = f.write_all(&buf[..n]);
@@ -391,10 +455,15 @@ pub fn spawn(
         let _ = r.join();
     }
     let _ = std::fs::remove_file(&pid_path);
+    let session_id = captured_session
+        .lock()
+        .ok()
+        .and_then(|captured| captured.clone());
 
     Ok(WorkerOutcome {
         exit_ok: status.success() && !timed_out,
         timed_out,
+        session_id,
         note: if timed_out {
             "worker exceeded wall-clock limit and was stopped".to_string()
         } else {
@@ -766,6 +835,106 @@ image_args: ["-i", "{image}"]
         ));
         assert!(cl.windows(2).any(|w| w[0] == "--resume" && w[1] == "SID"));
         assert!(cl.windows(2).any(|w| w[0] == "--model" && w[1] == "opus"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_codex_session_id_comes_from_that_childs_stdout() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("yard-codex-session-capture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let fake_codex = root.join("codex");
+        std::fs::write(
+            &fake_codex,
+            r#"#!/bin/sh
+printf '%s\n' '{"type":"thread.started","thread_id":"11111111-2222-4333-8444-555555555555"}'
+printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}' >&2
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&fake_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_codex, permissions).unwrap();
+
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+        )
+        .unwrap();
+        let log = root.join("worker-output.log");
+        let outcome = spawn(
+            &profile,
+            &fake_codex,
+            "packet",
+            &root,
+            &root,
+            &[],
+            &log,
+            Duration::from_secs(5),
+            false,
+            &[],
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert!(outcome.exit_ok);
+        assert_eq!(
+            outcome.session_id.as_deref(),
+            Some("11111111-2222-4333-8444-555555555555"),
+            "only the exact fresh child's stdout may identify its session"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_codex_without_stdout_thread_event_has_no_session_to_resume() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "yard-codex-session-fail-closed-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let fake_codex = root.join("codex");
+        std::fs::write(
+            &fake_codex,
+            r#"#!/bin/sh
+printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}' >&2
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&fake_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_codex, permissions).unwrap();
+
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+        )
+        .unwrap();
+        let outcome = spawn(
+            &profile,
+            &fake_codex,
+            "packet",
+            &root,
+            &root,
+            &[],
+            &root.join("worker-output.log"),
+            Duration::from_secs(5),
+            false,
+            &[],
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert!(outcome.exit_ok);
+        assert_eq!(outcome.session_id, None);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
