@@ -24,6 +24,12 @@ run_yardlet() {
   (cd "$ROOT" && "$YARDLET_BIN" "$@")
 }
 
+run_in() {
+  local root="$1"
+  shift
+  (cd "$root" && "$YARDLET_BIN" "$@")
+}
+
 json_get() {
   python3 - "$1" "$2" <<'PY'
 import json
@@ -63,6 +69,10 @@ proposal() {
 visible_head() {
   show
   json_get "$EVIDENCE_DIR/show.json" session.current_head
+}
+
+revision_count() {
+  find "$ROOT/.agents/planning-sessions" -path '*/drafts/*.yaml' -type f | wc -l | tr -d ' '
 }
 
 accept_proposal() {
@@ -321,6 +331,292 @@ PY
     [[ "$(json_get "$EVIDENCE_DIR/show.json" undo_count)" -ge 1 ]] || fail "dogfood undo provenance missing"
     cp "$EVIDENCE_DIR/show.json" "$EVIDENCE_DIR/dogfood-final.json"
     write_summary "four content turns, accept, reject, undo, restart, confirm, exact parity"
+    ;;
+  terminal_proposal)
+    accept_proposal "$p1" none act-accept-1 >/dev/null
+    h1="$(visible_head)"
+    answer_turn "proposal to reject" "$h1" act-answer-2 >/dev/null
+    p2="$(proposal)"
+    run_yardlet planning reject "$p2" --expected-head "$h1" --action-id act-reject-2 >/dev/null
+    before_count="$(revision_count)"
+    if accept_proposal "$p2" "$h1" act-reaccept-rejected >"$EVIDENCE_DIR/reaccept-rejected.out" 2>"$EVIDENCE_DIR/reaccept-rejected.err"; then
+      fail "rejected proposal was accepted"
+    fi
+    [[ "$(visible_head)" == "$h1" ]] || fail "rejected proposal reaccept changed head"
+    [[ "$(revision_count)" == "$before_count" ]] || fail "rejected proposal reaccept created revision"
+    if run_yardlet planning reject "$p2" --expected-head "$h1" --action-id act-rereject >"$EVIDENCE_DIR/rereject.out" 2>"$EVIDENCE_DIR/rereject.err"; then
+      fail "rejected proposal was rejected twice with a new action"
+    fi
+    [[ "$(visible_head)" == "$h1" ]] || fail "duplicate reject changed head"
+    [[ "$(revision_count)" == "$before_count" ]] || fail "duplicate reject created revision"
+    run_yardlet planning reject "$p2" --expected-head "$h1" --action-id act-reject-2 >/dev/null
+    answer_turn "proposal to accept once" "$h1" act-answer-3 >/dev/null
+    p3="$(proposal)"
+    accept_proposal "$p3" "$h1" act-accept-3 >/dev/null
+    h3="$(visible_head)"
+    run_yardlet planning undo --expected-head "$h3" --action-id act-undo-3 >/dev/null
+    [[ "$(visible_head)" == "$h1" ]] || fail "setup undo did not restore head"
+    before_count="$(revision_count)"
+    if accept_proposal "$p3" "$h1" act-reaccept-accepted >"$EVIDENCE_DIR/reaccept-accepted.out" 2>"$EVIDENCE_DIR/reaccept-accepted.err"; then
+      fail "accepted proposal was accepted twice"
+    fi
+    if run_yardlet planning reject "$p3" --expected-head "$h1" --action-id act-reject-accepted >"$EVIDENCE_DIR/reject-accepted.out" 2>"$EVIDENCE_DIR/reject-accepted.err"; then
+      fail "accepted proposal was later rejected"
+    fi
+    [[ "$(visible_head)" == "$h1" ]] || fail "disposed proposal mutation changed head"
+    [[ "$(revision_count)" == "$before_count" ]] || fail "disposed proposal mutation created revision"
+    write_summary "rejected and accepted proposals are terminal and idempotent replay is stable"
+    ;;
+  undo_integrity)
+    accept_proposal "$p1" none act-accept-1 >/dev/null
+    h1="$(visible_head)"
+    answer_turn "second revision" "$h1" act-answer-2 >/dev/null
+    p2="$(proposal)"
+    accept_proposal "$p2" "$h1" act-accept-2 >/dev/null
+    h2="$(visible_head)"
+    session_dir="$(dirname "$(dirname "$(find "$ROOT/.agents/planning-sessions" -path "*/drafts/$h2.yaml" -print -quit)")")"
+    current_path="$session_dir/drafts/$h2.yaml"
+    parent_path="$session_dir/drafts/$h1.yaml"
+    cp "$current_path" "$EVIDENCE_DIR/current.yaml"
+    cp "$parent_path" "$EVIDENCE_DIR/parent.yaml"
+    before_count="$(revision_count)"
+
+    python3 - "$current_path" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = re.sub(r"^content_digest: .*?$", "content_digest: forged", text, count=1, flags=re.M)
+open(path, "w", encoding="utf-8").write(text)
+PY
+    if run_yardlet planning undo --expected-head "$h2" --action-id act-undo-bad-digest >"$EVIDENCE_DIR/undo-digest.out" 2>"$EVIDENCE_DIR/undo-digest.err"; then
+      fail "undo accepted corrupt current digest"
+    fi
+    [[ "$(visible_head)" == "$h2" ]] || fail "corrupt digest undo changed head"
+    cp "$EVIDENCE_DIR/current.yaml" "$current_path"
+
+    python3 - "$current_path" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = re.sub(r"^parent_revision_id: .*?$", "parent_revision_id: missing-parent", text, count=1, flags=re.M)
+open(path, "w", encoding="utf-8").write(text)
+PY
+    if run_yardlet planning undo --expected-head "$h2" --action-id act-undo-missing-parent >"$EVIDENCE_DIR/undo-missing.out" 2>"$EVIDENCE_DIR/undo-missing.err"; then
+      fail "undo accepted missing parent"
+    fi
+    [[ "$(visible_head)" == "$h2" ]] || fail "missing parent undo changed head"
+    cp "$EVIDENCE_DIR/current.yaml" "$current_path"
+
+    python3 - "$parent_path" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = re.sub(r"^session_id: .*?$", "session_id: forged-session", text, count=1, flags=re.M)
+open(path, "w", encoding="utf-8").write(text)
+PY
+    if run_yardlet planning undo --expected-head "$h2" --action-id act-undo-foreign-parent >"$EVIDENCE_DIR/undo-parent.out" 2>"$EVIDENCE_DIR/undo-parent.err"; then
+      fail "undo accepted cross-session parent"
+    fi
+    [[ "$(visible_head)" == "$h2" ]] || fail "cross-session parent undo changed head"
+    [[ "$(revision_count)" == "$before_count" ]] || fail "invalid undo changed revision count"
+    cp "$EVIDENCE_DIR/parent.yaml" "$parent_path"
+    show
+    [[ "$(json_get "$EVIDENCE_DIR/show.json" current_draft.draft_revision_id)" == "$h2" ]] || fail "projection did not recover after rejected undo"
+    write_summary "undo rejects current digest and parent referential-integrity corruption"
+    ;;
+  stripped_modern)
+    accept_proposal "$p1" none act-accept-1 >/dev/null
+    h1="$(visible_head)"
+    run_yardlet planning confirm --expected-head "$h1" --action-id act-confirm-strip >/dev/null
+    rm -rf "$ROOT/.agents/activations" "$ROOT/.agents/planning-sessions"
+    python3 - "$ROOT/.agents/intent-contract.yaml" "$ROOT/.agents/work-queue.yaml" <<'PY'
+import sys
+for path in sys.argv[1:]:
+    lines = open(path, encoding="utf-8").readlines()
+    stripped = []
+    for line in lines:
+        key = line.strip().split(":", 1)[0]
+        if key in {
+            "planning_session_id",
+            "confirmation_id",
+            "draft_revision_id",
+            "draft_content_digest",
+            "materialized_by_confirmation_id",
+            "activation_required",
+        }:
+            continue
+        stripped.append(line)
+    open(path, "w", encoding="utf-8").writelines(stripped)
+PY
+    if run_yardlet run --next >"$EVIDENCE_DIR/stripped.out" 2>"$EVIDENCE_DIR/stripped.err"; then
+      fail "stripped modern activation fell back to Legacy"
+    fi
+    grep -q "unconfirmed_or_inconsistent" "$EVIDENCE_DIR/stripped.err" || fail "stripped modern failure reason missing"
+    write_summary "modern activation marker survives stripped linkage and fails closed"
+    ;;
+  activation_action_linkage)
+    accept_proposal "$p1" none act-accept-1 >/dev/null
+    h1="$(visible_head)"
+    run_yardlet planning confirm --expected-head "$h1" --action-id act-confirm-linkage >/dev/null
+    activation_path="$(find "$ROOT/.agents/activations" -type f -name '*.yaml' -print -quit)"
+    action_path="$(find "$ROOT/.agents/planning-sessions" -path '*/actions/act-confirm-linkage.yaml' -print -quit)"
+    cp "$activation_path" "$EVIDENCE_DIR/linkage-activation.yaml"
+    cp "$action_path" "$EVIDENCE_DIR/linkage-action.yaml"
+
+    rm "$action_path"
+    if run_yardlet run --next >/dev/null 2>"$EVIDENCE_DIR/action-missing.err"; then
+      fail "activation with missing action receipt became runnable"
+    fi
+    cp "$EVIDENCE_DIR/linkage-action.yaml" "$action_path"
+    python3 - "$action_path" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = re.sub(r"^status: completed$", "status: rejected", text, count=1, flags=re.M)
+open(path, "w", encoding="utf-8").write(text)
+PY
+    if run_yardlet run --next >/dev/null 2>"$EVIDENCE_DIR/action-rejected.err"; then
+      fail "activation with rejected action receipt became runnable"
+    fi
+    cp "$EVIDENCE_DIR/linkage-action.yaml" "$action_path"
+    python3 - "$action_path" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = re.sub(r"^request_digest: .*?$", "request_digest: forged", text, count=1, flags=re.M)
+open(path, "w", encoding="utf-8").write(text)
+PY
+    if run_yardlet run --next >/dev/null 2>"$EVIDENCE_DIR/action-digest.err"; then
+      fail "activation with digest-conflicting action receipt became runnable"
+    fi
+    cp "$EVIDENCE_DIR/linkage-action.yaml" "$action_path"
+    python3 - "$activation_path" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = re.sub(r"^action_id: .*?$", "action_id: missing-action", text, count=1, flags=re.M)
+open(path, "w", encoding="utf-8").write(text)
+PY
+    if run_yardlet run --next >/dev/null 2>"$EVIDENCE_DIR/activation-action.err"; then
+      fail "activation pointing to another action became runnable"
+    fi
+    cp "$EVIDENCE_DIR/linkage-activation.yaml" "$activation_path"
+    draft_path="$(find "$ROOT/.agents/planning-sessions" -path "*/drafts/$h1.yaml" -print -quit)"
+    cp "$draft_path" "$EVIDENCE_DIR/linkage-draft.yaml"
+    python3 - "$draft_path" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = re.sub(r"^session_id: .*?$", "session_id: forged-session", text, count=1, flags=re.M)
+open(path, "w", encoding="utf-8").write(text)
+PY
+    if run_yardlet run --next >/dev/null 2>"$EVIDENCE_DIR/draft-session.err"; then
+      fail "confirmed draft with cross-session identity became runnable"
+    fi
+    cp "$EVIDENCE_DIR/linkage-draft.yaml" "$draft_path"
+    for error in "$EVIDENCE_DIR"/action-*.err "$EVIDENCE_DIR/activation-action.err" "$EVIDENCE_DIR/draft-session.err"; do
+      grep -q "unconfirmed_or_inconsistent" "$error" || fail "action linkage reason missing in $error"
+    done
+    write_summary "activation requires a same-session completed matching confirm action"
+    ;;
+  confirm_crash_replay)
+    accept_proposal "$p1" none act-accept-1 >/dev/null
+    h1="$(visible_head)"
+    run_yardlet planning confirm --expected-head "$h1" --action-id act-confirm-crash >/dev/null
+    baseline="$EVIDENCE_DIR/confirm-baseline"
+    cp -R "$ROOT" "$baseline"
+    for window in prepare intent_only snapshots activation; do
+      crash_root="$EVIDENCE_DIR/crash-$window"
+      cp -R "$baseline" "$crash_root"
+      python3 - "$crash_root" "$window" <<'PY'
+import os
+import re
+import shutil
+import sys
+
+root, window = sys.argv[1:]
+agents = os.path.join(root, ".agents")
+sessions = os.path.join(agents, "planning-sessions")
+session_dir = next(
+    os.path.join(sessions, name)
+    for name in os.listdir(sessions)
+    if os.path.isdir(os.path.join(sessions, name))
+)
+action_path = os.path.join(session_dir, "actions", "act-confirm-crash.yaml")
+text = open(action_path, encoding="utf-8").read()
+text = re.sub(r"^status: completed$", "status: prepared", text, count=1, flags=re.M)
+open(action_path, "w", encoding="utf-8").write(text)
+
+events_dir = os.path.join(session_dir, "events")
+for name in os.listdir(events_dir):
+    path = os.path.join(events_dir, name)
+    event = open(path, encoding="utf-8").read()
+    if "action_id: act-confirm-crash" not in event:
+        continue
+    if "type: action.completed" in event:
+        os.remove(path)
+    elif window != "activation" and "type: draft.confirmed" in event:
+        os.remove(path)
+
+session_path = os.path.join(session_dir, "session.yaml")
+session = open(session_path, encoding="utf-8").read()
+if window != "activation":
+    session = re.sub(r"^lifecycle: confirmed$", "lifecycle: open", session, count=1, flags=re.M)
+    session = re.sub(r"^confirmation_id: .*?$", "confirmation_id: null", session, count=1, flags=re.M)
+event_seqs = [int(name.split(".")[0]) for name in os.listdir(events_dir) if name.endswith(".yaml")]
+session = re.sub(r"^next_seq: .*?$", f"next_seq: {max(event_seqs) + 1}", session, count=1, flags=re.M)
+open(session_path, "w", encoding="utf-8").write(session)
+
+activation_dir = os.path.join(agents, "activations")
+if window != "activation" and os.path.isdir(activation_dir):
+    shutil.rmtree(activation_dir)
+if window == "prepare":
+    for name in ("intent-contract.yaml", "work-queue.yaml"):
+        path = os.path.join(agents, name)
+        if os.path.exists(path):
+            os.remove(path)
+elif window == "intent_only":
+    queue = os.path.join(agents, "work-queue.yaml")
+    if os.path.exists(queue):
+        os.remove(queue)
+PY
+      run_in "$crash_root" planning confirm --expected-head "$h1" --action-id act-confirm-crash >/dev/null
+      run_in "$crash_root" planning show --json >"$EVIDENCE_DIR/crash-$window.json"
+      [[ "$(json_get "$EVIDENCE_DIR/crash-$window.json" session.lifecycle)" == "confirmed" ]] || fail "$window replay did not confirm session"
+      [[ "$(json_get "$EVIDENCE_DIR/crash-$window.json" activation.status)" == "committed" ]] || fail "$window replay activation missing"
+      [[ "$(json_get "$EVIDENCE_DIR/crash-$window.json" exact_active_parity)" == "true" ]] || fail "$window replay parity false"
+      python3 - "$crash_root" <<'PY'
+import os
+import sys
+root = sys.argv[1]
+session_dir = next(
+    os.path.join(root, ".agents", "planning-sessions", name)
+    for name in os.listdir(os.path.join(root, ".agents", "planning-sessions"))
+    if os.path.isdir(os.path.join(root, ".agents", "planning-sessions", name))
+)
+action = open(os.path.join(session_dir, "actions", "act-confirm-crash.yaml"), encoding="utf-8").read()
+if "status: completed" not in action:
+    raise SystemExit("confirm action did not converge to completed")
+counts = {kind: 0 for kind in ("action.requested", "draft.confirm.prepared", "draft.confirmed", "action.completed")}
+for name in os.listdir(os.path.join(session_dir, "events")):
+    event = open(os.path.join(session_dir, "events", name), encoding="utf-8").read()
+    if "action_id: act-confirm-crash" not in event:
+        continue
+    for kind in counts:
+        if f"type: {kind}" in event:
+            counts[kind] += 1
+if any(count != 1 for count in counts.values()):
+    raise SystemExit(f"duplicate or missing confirm effects: {counts}")
+PY
+    done
+    write_summary "four confirm crash windows replay to one completed action and valid activation"
     ;;
   *)
     fail "unknown scenario $SCENARIO"

@@ -313,6 +313,11 @@ pub struct PlanningActionReceipt {
 pub struct ActivatedIntent {
     #[serde(flatten)]
     pub intent: IntentContract,
+    /// Durable origin marker for V010-created state. Legacy records default to
+    /// false; removing the surrounding linkage from a modern record must not
+    /// make it eligible for the legacy scheduler path.
+    #[serde(default)]
+    pub activation_required: bool,
     #[serde(default)]
     pub planning_session_id: String,
     #[serde(default)]
@@ -338,6 +343,10 @@ pub struct ActivatedQueue {
     pub queue_id: String,
     #[serde(default)]
     pub intent_id: String,
+    /// See [`ActivatedIntent::activation_required`]. Both active snapshots
+    /// carry the marker so either half of an interrupted promotion fails closed.
+    #[serde(default)]
+    pub activation_required: bool,
     #[serde(default)]
     pub selection_policy: SelectionPolicy,
     #[serde(default)]
@@ -377,6 +386,15 @@ pub struct ActivationReceipt {
     pub intent_digest: String,
     pub queue_digest: String,
     pub status: String,
+}
+
+/// Workspace-level discriminator for state created by the V010 activation
+/// path. It remains after an active snapshot is archived or tampered so a
+/// stripped modern record can never become indistinguishable from legacy data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivationRequirement {
+    pub schema_version: u32,
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

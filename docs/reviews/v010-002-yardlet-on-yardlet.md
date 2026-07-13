@@ -4,7 +4,8 @@
 - 실행일: 2026-07-14 (Asia/Seoul)
 - 실행 루트: `.agents/runs/run-20260714-011920/dogfood-v010-002/workspace`
 - 실행 주체: 이 worktree에서 빌드한 실제 `yardlet`과 로컬 `codex` planning worker
-- 판정: 세 content turn, accept, reject, undo, fresh-process 복원, explicit confirm을 거친 뒤 visible draft와 active intent/queue가 field와 digest 양쪽에서 일치했다.
+- 원래 dogfood 판정: 세 content turn, accept, reject, undo, fresh-process 복원, explicit confirm을 거친 뒤 visible draft와 active intent/queue가 field와 digest 양쪽에서 일치했다.
+- 보수 판정: terminal proposal, undo linkage, stripped provenance, confirm action linkage, 네 crash window의 결정적 process test가 통과했다. V010-002 최종 완료 표시는 독립 재검토 뒤에만 갱신한다.
 
 ## 1. 증거 경계
 
@@ -29,6 +30,60 @@ core가 `.agents/`에 기록했다. 이 문서를 만들기 위해 기존 운영
 가 담당한다. 실제 worker 응답의 문구는 달라질 수 있으므로 live dogfood와
 결정적 process fixture를 분리해 증거로 남겼다.
 
+### 1.1 roadmap task anchor projection
+
+`docs/yardlet-roadmap.md`는 `.gitignore` 대상이라 run-owned review worktree에
+자동 투영되지 않는다. reviewer가 parent checkout의 ignored 파일에 의존하지 않도록,
+이 문서가 2026-07-14 parent SOT의 V010-002 task anchor를 다음과 같이 투영한다.
+parent 파일 SHA-256은
+`14be3c7bb787548cb598910019daacc6d64b83f7a15809ad877a1d22e6f96156`이다.
+
+```text
+### V010-002: Multi-turn conversational planning
+
+**Intent:** Let a user and planner jointly produce a bounded intent and plan
+without leaving Yardlet or rewriting the request from scratch.
+
+In scope:
+
+- `yardlet new` starts or resumes a planning session.
+- The planning worker streams its investigation and messages into a planning
+  channel.
+- Each turn may propose a patch to summary, scope, out-of-scope, acceptance,
+  ambiguity, tasks, dependencies, routing, and validation.
+- Yardlet validates and records the patch, then shows a semantic before/after
+  diff beside the conversation.
+- The user can revise, undo/reject a proposal, answer a planning question, and
+  explicitly confirm the final contract and queue.
+- Planning history and confirmed provenance survive restart.
+
+Out of scope:
+
+- Letting free-form chat silently mutate an active running queue.
+- Auto-confirming a plan merely because ambiguity is low.
+- Replacing `yardlet goal` as the express path.
+
+Acceptance:
+
+- A user can exclude an adjacent surface, change acceptance, split/merge a task,
+  and reorder dependencies through separate natural-language turns.
+- Every accepted turn produces an inspectable structured diff and reason.
+- Rejected proposals leave the draft unchanged.
+- Confirmation promotes exactly the visible draft; no hidden re-plan occurs on
+  the transition to execution.
+- A fresh process can reopen the planning channel and continue it.
+
+Dogfood proof:
+
+- Plan one real Yardlet slice through at least three turns: initial request,
+  scope correction, and acceptance correction. Confirm that the active intent
+  and queue match the visible final draft exactly.
+```
+
+이 projection은 task anchor이며 completion claim이 아니다. parent SOT의
+V010-002 완료 상태와 evidence link는 AC-001부터 AC-007까지의 독립 재검토가
+모두 pass한 뒤에만 기록한다.
+
 ## 2. RED에서 GREEN까지
 
 production code를 추가하기 전에 아래 process test 9개를 먼저 만들었다.
@@ -41,6 +96,27 @@ cargo test --test v010_002_conversational_planning_process
 exit 101이었다. 구현 뒤 같은 명령은 9/9 pass, exit 0이 되었다. 시나리오는
 accept, reject, undo, stale head, restart-confirm, partial promotion,
 running isolation, goal regression, multi-turn dogfood다.
+
+### 2.1 promotion hardening RED에서 GREEN까지
+
+독립 검토가 찾은 실패를 수정하기 전에 process scenario 5개를 추가했다.
+
+```text
+running 14 tests
+9 passed; 5 failed; exit 101
+
+failed:
+- disposed_proposals_cannot_be_accepted_or_rejected_again
+- undo_rejects_corrupt_current_or_parent_revisions
+- stripped_modern_provenance_does_not_fall_back_to_legacy
+- confirmation_requires_its_completed_matching_action_receipt
+- interrupted_confirmation_replay_converges_without_duplicate_effects
+```
+
+실패 관찰은 rejected proposal 재수락, 손상 digest undo, modern-to-Legacy
+우회, action receipt 누락 activation 실행, confirm prepare event 중복과 각각
+일치했다. 구현 뒤 같은 명령은 기존 9개 journey를 포함해 14/14 pass,
+exit 0이었다.
 
 ## 3. 실제 세 turn
 
@@ -115,6 +191,11 @@ cargo build
 cargo test --test v010_002_conversational_planning_process
 evidence="$(mktemp -d)"
 tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" dogfood
+tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" terminal_proposal
+tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" undo_integrity
+tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" stripped_modern
+tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" activation_action_linkage
+tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" confirm_crash_replay
 ```
 
 live planning은 격리 workspace에서 로컬 subscription CLI worker를 사용해
@@ -139,6 +220,16 @@ yardlet planning show --json
 - reject와 stale-head action은 visible head를 바꾸지 않는다.
 - incomplete activation 또는 confirmation/session/revision/digest/task linkage
   변조는 `unconfirmed_or_inconsistent`로 실행을 닫는다.
+- accepted 또는 rejected proposal은 terminal이며 새 action으로 재사용할 수 없다.
+- undo는 current revision digest와 parent의 same-session identity, digest,
+  accepted event linkage를 검증한 뒤에만 head를 바꾼다.
+- modern activation의 linkage를 전부 제거해도 durable origin marker가 Legacy
+  fallback을 막는다.
+- activation은 같은 session의 matching completed confirm action receipt와
+  request digest가 모두 맞아야 runnable이다.
+- confirm prepare 뒤 snapshot 전, intent-only, intent/queue 뒤 activation 전,
+  activation 뒤 action completion 전의 replay는 각 effect event 하나와 completed
+  receipt 하나로 수렴한다.
 - confirmed 또는 running queue에 대한 free-form planning mutation은 거절된다.
 - `yardlet goal` 기본 및 verifier 포함 express path는 planning worker 없이
   동작하면서 draft와 confirmation provenance를 기록한다.

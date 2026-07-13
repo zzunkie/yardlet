@@ -516,7 +516,9 @@ read is consumed into the queue, finished orphaned runs are evaluated and
 merged (worktree runs included), and unfinished ones are requeued. A durable
 `prepared` Git finish is reconciled from its ownership record and current
 remote OID; verified results are projected once, while ambiguous state stays
-Partial.
+Partial. An interrupted planning confirmation replays the same stable action,
+deduplicates its effect events, and remains non-runnable if any snapshot,
+activation, or completed action receipt does not match.
 
 ## Build
 
@@ -541,6 +543,7 @@ Yardlet owns state; workers do not. Canonical state lives under `.agents/` in th
   work-queue.yaml           tasks
   planning-sessions/        sessions, immutable proposals/drafts, ordered events, action receipts
   activations/              committed exact-promotion receipts
+  activation-required.yaml durable V010-origin discriminator for fail-closed scheduling
   *-policy.yaml             tool / approval / interaction / research / billing policy
   workers.yaml              worker profiles + routing
   memory/                   durable workspace facts (one fact per .md, git-tracked)
