@@ -88,4 +88,29 @@ mod unix {
     fn three_turn_dogfood_promotes_the_exact_visible_draft() {
         run_scenario("dogfood");
     }
+
+    #[test]
+    fn disposed_proposals_cannot_be_accepted_or_rejected_again() {
+        run_scenario("terminal_proposal");
+    }
+
+    #[test]
+    fn undo_rejects_corrupt_current_or_parent_revisions() {
+        run_scenario("undo_integrity");
+    }
+
+    #[test]
+    fn stripped_modern_provenance_does_not_fall_back_to_legacy() {
+        run_scenario("stripped_modern");
+    }
+
+    #[test]
+    fn confirmation_requires_its_completed_matching_action_receipt() {
+        run_scenario("activation_action_linkage");
+    }
+
+    #[test]
+    fn interrupted_confirmation_replay_converges_without_duplicate_effects() {
+        run_scenario("confirm_crash_replay");
+    }
 }

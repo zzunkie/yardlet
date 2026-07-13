@@ -14,11 +14,11 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 
 use crate::schemas::{
-    ActivatedIntent, ActivatedQueue, ActivationReceipt, BillingPolicy, Conversation,
-    ConversationTurn, DraftRevision, FollowUpTask, IntentContract, PlanningActionReceipt,
-    PlanningEvent, PlanningProposal, PlanningSession, PreservedFollowUps, SelectionPolicy, Task,
-    TaskState, TransitionActor, TransitionCause, TransitionLog, TransitionRecord, TurnRole,
-    WorkQueue, WorkersFile, YardConfig,
+    ActivatedIntent, ActivatedQueue, ActivationReceipt, ActivationRequirement, BillingPolicy,
+    Conversation, ConversationTurn, DraftRevision, FollowUpTask, IntentContract,
+    PlanningActionReceipt, PlanningEvent, PlanningProposal, PlanningSession, PreservedFollowUps,
+    SelectionPolicy, Task, TaskState, TransitionActor, TransitionCause, TransitionLog,
+    TransitionRecord, TurnRole, WorkQueue, WorkersFile, YardConfig,
 };
 use crate::yaml;
 
@@ -234,6 +234,10 @@ impl Workspace {
             .join(format!("{confirmation_id}.yaml"))
     }
 
+    pub fn activation_requirement_path(&self) -> PathBuf {
+        self.agents_dir().join("activation-required.yaml")
+    }
+
     pub fn save_planning_session(&self, session: &PlanningSession) -> Result<()> {
         let path = self.planning_session_path(&session.session_id);
         write_str_atomic(&path, &yaml::to_string(session)?)?;
@@ -363,6 +367,28 @@ impl Workspace {
             return Ok(None);
         }
         load_yaml(&path).map(Some)
+    }
+
+    pub fn require_confirmed_activation(&self) -> Result<()> {
+        save_immutable_yaml(
+            &self.activation_requirement_path(),
+            &ActivationRequirement {
+                schema_version: 1,
+                required: true,
+            },
+        )
+    }
+
+    pub fn confirmed_activation_required(&self) -> Result<bool> {
+        let path = self.activation_requirement_path();
+        if !path.is_file() {
+            return Ok(false);
+        }
+        let marker: ActivationRequirement = load_yaml(&path)?;
+        if marker.schema_version != 1 || !marker.required {
+            bail!("invalid activation requirement marker");
+        }
+        Ok(true)
     }
 
     /// Canonical writer for the secret-free Git finish attempt attached to a
