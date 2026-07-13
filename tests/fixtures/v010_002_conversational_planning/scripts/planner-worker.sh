@@ -9,6 +9,31 @@ fi
 run_dir="$1"
 packet="$(cat)"
 workspace="$(pwd)"
+if grep -Eq 'Yardlet task packet|You are a hidden Yardlet worker' <<<"$packet"; then
+  barrier="${YARDLET_TEST_MUTATION_BARRIER:?runtime fixture requires mutation barrier}"
+  touch "$barrier/worker-entered"
+  while [[ ! -f "$barrier/worker-release" ]]; do
+    sleep 0.02
+  done
+  mkdir -p "$run_dir"
+  cat >"$run_dir/result.json" <<'EOF'
+{
+  "schema_version": 1,
+  "run_id": "fixture-runtime",
+  "task_id": "YARD-001",
+  "status": "partial",
+  "intent_adherence": {"drift_detected": false, "notes": ""},
+  "changes": {"files_modified": [], "files_created": [], "files_deleted": []},
+  "validation": {"commands_run": [], "passed": true, "failures": []},
+  "question_for_user": null,
+  "compact_summary": "runtime queue race fixture",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+  exit 0
+fi
 counter="$workspace/.fixture-planning-turn"
 turn=0
 [[ -f "$counter" ]] && turn="$(cat "$counter")"

@@ -100,6 +100,19 @@ write_summary() {
 EOF
 }
 
+wait_for_file() {
+  local path="$1"
+  local pid="${2:-}"
+  for _ in $(seq 1 250); do
+    [[ -f "$path" ]] && return 0
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+      return 1
+    fi
+    sleep 0.02
+  done
+  return 1
+}
+
 run_yardlet init >/dev/null
 cat >"$ROOT/.agents/workers.yaml" <<EOF
 schema_version: 1
@@ -661,17 +674,6 @@ PY
   confirm_write_order_crash)
     accept_proposal "$p1" none act-accept-before-confirm-crash >/dev/null
     h1="$(visible_head)"
-    cat >"$ROOT/.agents/work-queue.yaml" <<'EOF'
-schema_version: 1
-queue_id: queue-existing-fresh
-intent_id: ''
-selection_policy:
-  default_order: priority_then_created_at
-  require_planning_gate: true
-  skip_if_blocked: true
-  skip_if_approval_required: true
-tasks: []
-EOF
     baseline="$EVIDENCE_DIR/confirm-write-order-baseline"
     cp -R "$ROOT" "$baseline"
     for window in confirm_after_prepare confirm_after_intent_write confirm_after_activation_write confirm_after_effect_before_completion; do
@@ -874,6 +876,242 @@ for kind in ("action.requested", "draft.accepted", "action.completed"):
         raise SystemExit(f"{kind} count was {count}")
 PY
     write_summary "동시 CLI action이 하나의 revision receipt와 무충돌 journal로 수렴함"
+    ;;
+  accept_revision_crash)
+    if (cd "$ROOT" && YARDLET_TEST_PLANNING_CRASH=accept_after_revision_write \
+      "$YARDLET_BIN" planning accept "$p1" --expected-head none --action-id act-revision-crash \
+      >"$EVIDENCE_DIR/accept-revision.out" 2>"$EVIDENCE_DIR/accept-revision.err"); then
+      fail "accept revision-write crash injection did not terminate"
+    fi
+    action_path="$(find "$ROOT/.agents/planning-sessions" -path '*/actions/act-revision-crash.yaml' -print -quit)"
+    [[ -n "$action_path" ]] || fail "prepared accept receipt missing"
+    grep -q '^status: prepared$' "$action_path" || fail "accept receipt was not prepared"
+    grep -Eq '^result_id: drv_' "$action_path" || fail "stable revision id was not prepared"
+    grep -Eq '^effect_event_id: evt_' "$action_path" || fail "stable effect event id was not prepared"
+    grep -Eq '^effect_event_type: draft\.(accepted|revised)$' "$action_path" || fail "stable effect type was not prepared"
+    grep -q '^effect_event_digest: fnv1a64:' "$action_path" || fail "exact effect payload digest was not prepared"
+    grep -q '^effect_event:' "$action_path" || fail "exact effect payload was not prepared"
+    [[ "$(revision_count)" == "1" ]] || fail "revision crash did not leave exactly one immutable draft"
+    prepared_result="$(sed -n 's/^result_id: //p' "$action_path")"
+    accept_proposal "$p1" none act-revision-crash >/dev/null
+    [[ "$(revision_count)" == "1" ]] || fail "accept replay duplicated the immutable draft"
+    grep -q '^status: completed$' "$action_path" || fail "accept replay did not complete receipt"
+    [[ "$(sed -n 's/^result_id: //p' "$action_path")" == "$prepared_result" ]] || fail "accept replay changed stable result id"
+    cp "$action_path" "$EVIDENCE_DIR/accept-revision.completed.yaml"
+    accept_proposal "$p1" none act-revision-crash >/dev/null
+    cmp "$EVIDENCE_DIR/accept-revision.completed.yaml" "$action_path" || fail "completed accept replay changed its receipt"
+    python3 - "$ROOT" <<'PY'
+import os
+import sys
+session_root = os.path.join(sys.argv[1], ".agents", "planning-sessions")
+session_dir = next(os.path.join(session_root, name) for name in os.listdir(session_root) if os.path.isdir(os.path.join(session_root, name)))
+events = [open(os.path.join(session_dir, "events", name), encoding="utf-8").read() for name in os.listdir(os.path.join(session_dir, "events")) if name.endswith(".yaml")]
+effects = [event for event in events if "action_id: act-revision-crash" in event and ("type: draft.accepted" in event or "type: draft.revised" in event)]
+if len(effects) != 1:
+    raise SystemExit(f"accept effect count was {len(effects)}")
+PY
+    write_summary "accept revision 저장 직후 crash가 prepared stable result/effect로 단일 draft와 completed receipt에 수렴함"
+    ;;
+  prepared_action_interlock)
+    if (cd "$ROOT" && YARDLET_TEST_PLANNING_CRASH=accept_after_revision_write \
+      "$YARDLET_BIN" planning accept "$p1" --expected-head none --action-id act-prepared-owner >/dev/null 2>&1); then
+      fail "prepared interlock setup did not crash"
+    fi
+    for command in \
+      "planning accept $p1 --expected-head none --action-id act-other-accept" \
+      "planning reject $p1 --expected-head none --action-id act-other-reject" \
+      "planning answer blocked --expected-head none --action-id act-other-answer --worker fixture-planner" \
+      "planning undo --expected-head forged --action-id act-other-undo" \
+      "planning confirm --expected-head forged --action-id act-other-confirm" \
+      "new blocked-new-session --worker fixture-planner"; do
+      set +e
+      run_yardlet $command >"$EVIDENCE_DIR/interlock.out" 2>"$EVIDENCE_DIR/interlock.err"
+      status=$?
+      set -e
+      [[ "$status" -ne 0 ]] || fail "prepared action allowed another mutation: $command"
+      grep -q 'planning_action_in_progress' "$EVIDENCE_DIR/interlock.err" || fail "interlock reason missing for $command"
+    done
+    session_dir="$(dirname "$(dirname "$(find "$ROOT/.agents/planning-sessions" -path '*/actions/act-prepared-owner.yaml' -print -quit)")")"
+    [[ "$(find "$session_dir/actions" -type f -name '*.yaml' | wc -l | tr -d ' ')" == "1" ]] || fail "blocked mutations created terminal receipts"
+    accept_proposal "$p1" none act-prepared-owner >/dev/null
+    grep -q '^status: completed$' "$session_dir/actions/act-prepared-owner.yaml" || fail "owner action did not recover"
+    if find "$session_dir/actions" -type f -name '*.yaml' -exec grep -l '^status: rejected$' {} + | grep -q .; then
+      fail "accepted effect coexists with a rejected terminal receipt"
+    fi
+    write_summary "unresolved prepared action이 다른 모든 session mutation을 차단하고 owner replay만 completed로 수렴함"
+    ;;
+  journal_corruption)
+    accept_proposal "$p1" none act-journal >/dev/null
+    journal_base="$EVIDENCE_DIR/journal-base"
+    cp -R "$ROOT" "$journal_base"
+    for mode in gap duplicate_event_id multi_match payload_mismatch next_seq_ahead filename_seq_mismatch session_identity_mismatch empty_event_id; do
+      corrupt_root="$EVIDENCE_DIR/journal-$mode"
+      cp -R "$journal_base" "$corrupt_root"
+      python3 - "$corrupt_root" "$mode" <<'PY'
+import os
+import re
+import shutil
+import sys
+root, mode = sys.argv[1:]
+sessions = os.path.join(root, ".agents", "planning-sessions")
+session_dir = next(os.path.join(sessions, name) for name in os.listdir(sessions) if os.path.isdir(os.path.join(sessions, name)))
+events_dir = os.path.join(session_dir, "events")
+names = sorted(name for name in os.listdir(events_dir) if name.endswith(".yaml"))
+paths = [os.path.join(events_dir, name) for name in names]
+if mode == "gap":
+    os.remove(paths[1])
+elif mode == "duplicate_event_id":
+    first_id = re.search(r"^event_id: (.+)$", open(paths[0], encoding="utf-8").read(), re.M).group(1)
+    text = open(paths[-1], encoding="utf-8").read()
+    text = re.sub(r"^event_id: .+$", f"event_id: {first_id}", text, count=1, flags=re.M)
+    open(paths[-1], "w", encoding="utf-8").write(text)
+elif mode == "multi_match":
+    source = next(path for path in paths if "type: draft.accepted" in open(path, encoding="utf-8").read())
+    seq = len(paths) + 1
+    text = open(source, encoding="utf-8").read()
+    text = re.sub(r"^event_id: .+$", "event_id: evt-forged-multi", text, count=1, flags=re.M)
+    text = re.sub(r"^seq: .+$", f"seq: {seq}", text, count=1, flags=re.M)
+    open(os.path.join(events_dir, f"{seq:020}.yaml"), "w", encoding="utf-8").write(text)
+    session_path = os.path.join(session_dir, "session.yaml")
+    session = open(session_path, encoding="utf-8").read()
+    session = re.sub(r"^next_seq: .+$", f"next_seq: {seq + 1}", session, count=1, flags=re.M)
+    open(session_path, "w", encoding="utf-8").write(session)
+elif mode == "payload_mismatch":
+    source = next(path for path in paths if "type: draft.accepted" in open(path, encoding="utf-8").read())
+    text = open(source, encoding="utf-8").read()
+    text = re.sub(r"^proposal_id: .+$", "proposal_id: forged-proposal", text, count=1, flags=re.M)
+    open(source, "w", encoding="utf-8").write(text)
+elif mode == "next_seq_ahead":
+    session_path = os.path.join(session_dir, "session.yaml")
+    session = open(session_path, encoding="utf-8").read()
+    session = re.sub(r"^next_seq: .+$", f"next_seq: {len(paths) + 2}", session, count=1, flags=re.M)
+    open(session_path, "w", encoding="utf-8").write(session)
+elif mode == "filename_seq_mismatch":
+    os.rename(paths[-1], os.path.join(events_dir, "00000000000000000999.yaml"))
+elif mode == "session_identity_mismatch":
+    text = open(paths[-1], encoding="utf-8").read()
+    text = re.sub(r"^session_id: .+$", "session_id: ses-forged", text, count=1, flags=re.M)
+    open(paths[-1], "w", encoding="utf-8").write(text)
+elif mode == "empty_event_id":
+    text = open(paths[-1], encoding="utf-8").read()
+    text = re.sub(r"^event_id: .+$", "event_id: ''", text, count=1, flags=re.M)
+    open(paths[-1], "w", encoding="utf-8").write(text)
+PY
+      if run_in "$corrupt_root" planning accept "$p1" --expected-head none --action-id act-journal >"$EVIDENCE_DIR/$mode.out" 2>"$EVIDENCE_DIR/$mode.err"; then
+        fail "journal corruption $mode failed open"
+      fi
+      grep -Eq 'planning_event_journal|terminal action receipt effect' "$EVIDENCE_DIR/$mode.err" || fail "journal corruption reason missing for $mode"
+    done
+    write_summary "journal gap duplicate multi-match payload mismatch next_seq ahead filename/seq/session/event id identity 변조가 모두 fail-closed됨"
+    ;;
+  completed_active_mismatch)
+    accept_proposal "$p1" none act-first-accept >/dev/null
+    first_head="$(visible_head)"
+    run_yardlet planning confirm --expected-head "$first_head" --action-id act-first-confirm >/dev/null
+    first_session="$(json_get "$EVIDENCE_DIR/show.json" session.session_id)"
+    run_yardlet goal "second express activation" --plan-only >/dev/null
+    run_yardlet planning show --json >"$EVIDENCE_DIR/second-active.json"
+    second_confirmation="$(json_get "$EVIDENCE_DIR/second-active.json" activation.confirmation_id)"
+    printf '%s\n' "$first_session" >"$ROOT/.agents/planning-sessions/latest"
+    if run_yardlet planning confirm --expected-head "$first_head" --action-id act-first-confirm >"$EVIDENCE_DIR/completed-mismatch.out" 2>"$EVIDENCE_DIR/completed-mismatch.err"; then
+      fail "completed confirm replay returned an activation that is no longer current"
+    fi
+    grep -q 'completed_confirmation_active_mismatch' "$EVIDENCE_DIR/completed-mismatch.err" || fail "completed active mismatch reason missing"
+    active_confirmation="$(sed -n 's/^confirmation_id: //p' "$ROOT/.agents/intent-contract.yaml" | head -n 1)"
+    [[ "$active_confirmation" == "$second_confirmation" ]] || fail "failed replay changed current activation"
+    write_summary "completed confirm replay가 receipt activation과 현재 active confirmation/session/head/digest 불일치를 거절함"
+    ;;
+  lock_timeout)
+    barrier="$EVIDENCE_DIR/lock-barrier"
+    mkdir -p "$barrier"
+    (cd "$ROOT" && YARDLET_TEST_MUTATION_BARRIER="$barrier" \
+      "$YARDLET_BIN" planning accept "$p1" --expected-head none --action-id act-lock-owner \
+      >"$EVIDENCE_DIR/lock-owner.out" 2>"$EVIDENCE_DIR/lock-owner.err") &
+    owner_pid=$!
+    wait_for_file "$barrier/entered" "$owner_pid" || { kill "$owner_pid" 2>/dev/null || true; fail "stable mutation-lock barrier was not reached"; }
+    set +e
+    (cd "$ROOT" && YARDLET_TEST_LOCK_TIMEOUT_MS=100 \
+      "$YARDLET_BIN" planning reject "$p1" --expected-head none --action-id act-lock-contender \
+      >"$EVIDENCE_DIR/lock-contender.out" 2>"$EVIDENCE_DIR/lock-contender.err") &
+    contender_pid=$!
+    for _ in $(seq 1 100); do
+      kill -0 "$contender_pid" 2>/dev/null || break
+      sleep 0.02
+    done
+    if kill -0 "$contender_pid" 2>/dev/null; then
+      kill "$contender_pid" 2>/dev/null || true
+      touch "$barrier/release"
+      wait "$owner_pid" || true
+      fail "mutation lock wait was not bounded"
+    fi
+    wait "$contender_pid"; contender_status=$?
+    set -e
+    [[ "$contender_status" -ne 0 ]] || fail "lock contender unexpectedly succeeded"
+    grep -q 'workspace_mutation_lock_timeout' "$EVIDENCE_DIR/lock-contender.err" || fail "bounded lock timeout reason missing"
+    touch "$barrier/release"
+    wait "$owner_pid"
+    accept_proposal "$p1" none act-lock-owner >/dev/null
+    [[ "$(revision_count)" == "1" ]] || fail "lock owner replay was not idempotent"
+    write_summary "stable barrier에서 LOCK_NB contender가 bounded timeout으로 실패하고 owner가 단일 결과로 완료됨"
+    ;;
+  runtime_queue_confirm_race)
+    accept_proposal "$p1" none act-race-first-accept >/dev/null
+    first_head="$(visible_head)"
+    run_yardlet planning confirm --expected-head "$first_head" --action-id act-race-first-confirm >/dev/null
+    run_yardlet new "replacement plan" --worker fixture-planner >/dev/null
+    replacement="$(proposal)"
+    accept_proposal "$replacement" none act-race-replacement-accept >/dev/null
+    replacement_head="$(visible_head)"
+    (cd "$ROOT" && git init -q && git config user.name fixture && git config user.email fixture@example.invalid && \
+      git add .agents/yardlet.yaml && git commit -qm baseline)
+    barrier="$EVIDENCE_DIR/runtime-race-barrier"
+    mkdir -p "$barrier"
+    (cd "$ROOT" && YARDLET_TEST_MUTATION_BARRIER="$barrier" \
+      "$YARDLET_BIN" run --next --execute >"$EVIDENCE_DIR/runtime-race-run.out" 2>"$EVIDENCE_DIR/runtime-race-run.err") &
+    run_pid=$!
+    wait_for_file "$barrier/entered" "$run_pid" || { kill "$run_pid" 2>/dev/null || true; fail "runtime mutation barrier was not reached"; }
+    (run_yardlet planning confirm --expected-head "$replacement_head" --action-id act-race-confirm \
+      >"$EVIDENCE_DIR/runtime-race-confirm.out" 2>"$EVIDENCE_DIR/runtime-race-confirm.err") &
+    confirm_pid=$!
+    (run_yardlet add "added during runtime transition" \
+      >"$EVIDENCE_DIR/runtime-race-add.out" 2>"$EVIDENCE_DIR/runtime-race-add.err") &
+    add_pid=$!
+    touch "$barrier/release"
+    set +e
+    wait "$confirm_pid"; confirm_status=$?
+    wait "$add_pid"; add_status=$?
+    set -e
+    [[ "$add_status" -eq 0 ]] || fail "concurrent add failed with $add_status"
+    wait_for_file "$barrier/worker-entered" "$run_pid"
+    rm -f "$barrier/entered" "$barrier/release"
+    touch "$barrier/worker-release"
+    wait_for_file "$barrier/entered" "$run_pid" || { kill "$run_pid" 2>/dev/null || true; fail "finalize mutation barrier was not reached"; }
+    (run_yardlet add "added during finalize" \
+      >"$EVIDENCE_DIR/finalize-race-add.out" 2>"$EVIDENCE_DIR/finalize-race-add.err") &
+    finalize_add_pid=$!
+    touch "$barrier/release"
+    set +e
+    wait "$run_pid"; run_status=$?
+    wait "$finalize_add_pid"; finalize_add_status=$?
+    set -e
+    [[ "$confirm_status" -ne 0 ]] || fail "concurrent confirm overwrote runtime queue transition"
+    grep -Eq 'active_queue_not_drained|running_queue_isolated' "$EVIDENCE_DIR/runtime-race-confirm.err" || fail "runtime race rejection reason missing"
+    [[ "$run_status" -eq 0 ]] || fail "runtime process failed with $run_status"
+    [[ "$finalize_add_status" -eq 0 ]] || fail "concurrent finalize add failed with $finalize_add_status"
+    run_yardlet queue >"$EVIDENCE_DIR/runtime-race-queue.out"
+    grep -Eq 'running|failed|partial|done' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "runtime queue state was lost"
+    grep -q 'added during runtime transition' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "runtime transition overwrote concurrent add"
+    grep -q 'added during finalize' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "finalize overwrote concurrent add"
+    write_summary "run/add/finalize queue transaction과 confirm 경쟁이 동일 lock/CAS 경계에서 직렬화되어 stale overwrite가 없음"
+    ;;
+  release_hook_disabled)
+    (cd "$ROOT" && YARDLET_TEST_PLANNING_CRASH=accept_after_revision_write \
+      "$YARDLET_BIN" planning accept "$p1" --expected-head none --action-id act-release-hook \
+      >"$EVIDENCE_DIR/release-hook.out" 2>"$EVIDENCE_DIR/release-hook.err")
+    action_path="$(find "$ROOT/.agents/planning-sessions" -path '*/actions/act-release-hook.yaml' -print -quit)"
+    grep -q '^status: completed$' "$action_path" || fail "release binary exposed planning crash hook"
+    [[ "$(revision_count)" == "1" ]] || fail "release crash-hook probe duplicated revision"
+    write_summary "release binary가 test-only planning crash environment를 무시함"
     ;;
   *)
     fail "unknown scenario $SCENARIO"

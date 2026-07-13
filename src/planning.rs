@@ -59,9 +59,14 @@ struct EventFields<'a> {
 }
 
 fn maybe_crash(point: &str) {
-    if std::env::var("YARDLET_TEST_PLANNING_CRASH").as_deref() == Ok(point) {
-        std::process::exit(86);
+    #[cfg(debug_assertions)]
+    {
+        if std::env::var("YARDLET_TEST_PLANNING_CRASH").as_deref() == Ok(point) {
+            std::process::exit(86);
+        }
     }
+    #[cfg(not(debug_assertions))]
+    let _ = point;
 }
 
 pub fn digest<T: Serialize>(value: &T) -> Result<String> {
@@ -82,7 +87,18 @@ fn append_event(
     fields: EventFields<'_>,
 ) -> Result<PlanningEvent> {
     reconcile_event_cursor(ws, session)?;
-    let event = PlanningEvent {
+    let event = build_event(session, event_type, actor, fields);
+    append_exact_event(ws, session, &event)?;
+    Ok(event)
+}
+
+fn build_event(
+    session: &PlanningSession,
+    event_type: PlanningEventType,
+    actor: &str,
+    fields: EventFields<'_>,
+) -> PlanningEvent {
+    PlanningEvent {
         schema_version: 2,
         event_id: new_id("evt"),
         session_id: session.session_id.clone(),
@@ -96,13 +112,35 @@ fn append_event(
         draft_revision_id: fields.draft_revision_id.to_string(),
         related_revision_id: fields.related_revision_id.to_string(),
         recorded_at: Utc::now().to_rfc3339(),
-    };
-    ws.save_planning_event(&event)?;
+    }
+}
+
+fn append_exact_event(
+    ws: &Workspace,
+    session: &mut PlanningSession,
+    event: &PlanningEvent,
+) -> Result<()> {
+    let existing = ws
+        .load_planning_events(&session.session_id)?
+        .into_iter()
+        .find(|candidate| candidate.event_id == event.event_id);
+    if let Some(existing) = existing {
+        if digest(&existing)? != digest(event)? {
+            bail!("planning_event_journal: prepared exact event payload mismatch");
+        }
+        reconcile_event_cursor(ws, session)?;
+        return Ok(());
+    }
+    reconcile_event_cursor(ws, session)?;
+    if event.session_id != session.session_id || event.seq != session.next_seq {
+        bail!("planning_event_journal: prepared event identity or sequence mismatch");
+    }
+    ws.save_planning_event(event)?;
     maybe_crash("after_event_write_before_next_seq");
     let previous = session.clone();
     session.next_seq += 1;
     ws.save_planning_session_cas(&previous, session)?;
-    Ok(event)
+    Ok(())
 }
 
 fn reconcile_event_cursor(ws: &Workspace, session: &mut PlanningSession) -> Result<()> {
@@ -150,6 +188,9 @@ fn create_session_with_ids(
     intent_id: String,
     queue_id: String,
 ) -> Result<PlanningSession> {
+    if let Some(latest) = ws.load_latest_planning_session()? {
+        ensure_no_unresolved_action(ws, &latest.session_id, None)?;
+    }
     let workspace_id = ws
         .load_config()
         .map(|config| config.workspace_id)
@@ -202,6 +243,9 @@ pub fn begin_user_turn(ws: &Workspace, message: &str) -> Result<PlanningSession>
         bail!("planning message must not be empty");
     }
     let _lock = ws.acquire_planning_lock()?;
+    if let Some(latest) = ws.load_latest_planning_session()? {
+        ensure_no_unresolved_action(ws, &latest.session_id, None)?;
+    }
     let mut session = match ws.load_latest_planning_session()? {
         Some(session) if session.lifecycle == PlanningLifecycle::Open => session,
         _ => return create_session(ws, message),
@@ -420,6 +464,7 @@ pub fn record_worker_proposal(
 ) -> Result<PlanningProposal> {
     let _lock = ws.acquire_planning_lock()?;
     let mut session = ws.load_planning_session(session_id)?;
+    ensure_no_unresolved_action(ws, &session.session_id, None)?;
     if session.lifecycle != PlanningLifecycle::Open {
         bail!("confirmed planning session rejects worker proposals");
     }
@@ -487,6 +532,28 @@ fn action_name(action: PlanningActionKind) -> &'static str {
     }
 }
 
+fn ensure_no_unresolved_action(
+    ws: &Workspace,
+    session_id: &str,
+    allowed_action_id: Option<&str>,
+) -> Result<()> {
+    if let Some(receipt) = ws
+        .load_planning_actions(session_id)?
+        .into_iter()
+        .find(|receipt| {
+            receipt.status == PlanningActionStatus::Prepared
+                && allowed_action_id != Some(receipt.action_id.as_str())
+        })
+    {
+        bail!(
+            "planning_action_in_progress: session {} action {} is still prepared",
+            session_id,
+            receipt.action_id
+        );
+    }
+    Ok(())
+}
+
 fn linked_action_event(
     ws: &Workspace,
     session_id: &str,
@@ -494,14 +561,19 @@ fn linked_action_event(
     request_digest: &str,
     event_type: PlanningEventType,
 ) -> Result<Option<PlanningEvent>> {
-    Ok(ws
+    let matches = ws
         .load_planning_events(session_id)?
         .into_iter()
-        .find(|event| {
+        .filter(|event| {
             event.event_type == event_type
                 && event.action_id == action_id
                 && event.action_request_digest == request_digest
-        }))
+        })
+        .collect::<Vec<_>>();
+    if matches.len() > 1 {
+        bail!("planning_event_journal: action/type cardinality violation");
+    }
+    Ok(matches.into_iter().next())
 }
 
 fn validate_terminal_action_effect(ws: &Workspace, receipt: &PlanningActionReceipt) -> Result<()> {
@@ -521,6 +593,14 @@ fn validate_terminal_action_effect(ws: &Workspace, receipt: &PlanningActionRecei
         || event.action_request_digest != receipt.request_digest
     {
         bail!("terminal action receipt effect linkage mismatch");
+    }
+    if !receipt.effect_event_digest.is_empty() && digest(&event)? != receipt.effect_event_digest {
+        bail!("terminal action receipt effect payload mismatch");
+    }
+    if let Some(expected) = &receipt.effect_event {
+        if digest(expected)? != digest(&event)? {
+            bail!("terminal action receipt exact effect payload mismatch");
+        }
     }
     let valid_result = match receipt.status {
         PlanningActionStatus::Prepared => false,
@@ -567,6 +647,7 @@ fn begin_action(
     if action_id.trim().is_empty() {
         bail!("action_id must not be empty");
     }
+    ensure_no_unresolved_action(ws, &session.session_id, Some(action_id))?;
     let request_digest = action_request_digest(action, action_id, expected_head, target)?;
     if let Some(existing) = ws.load_planning_action(&session.session_id, action_id)? {
         if existing.request_digest != request_digest {
@@ -641,6 +722,8 @@ fn begin_action(
         error: String::new(),
         effect_event_id: String::new(),
         effect_event_type: None,
+        effect_event_digest: String::new(),
+        effect_event: None,
         prior_intent_digest: digest(&prior_intent)?,
         prior_queue_digest: digest(&prior_queue)?,
     };
@@ -666,6 +749,19 @@ fn reject_action(
     mut receipt: PlanningActionReceipt,
     reason: &str,
 ) -> Result<anyhow::Error> {
+    let conflicting_effect = ws
+        .load_planning_events(&receipt.session_id)?
+        .into_iter()
+        .any(|event| {
+            event.action_id == receipt.action_id
+                && !matches!(
+                    event.event_type,
+                    PlanningEventType::ActionRequested | PlanningEventType::ActionRejected
+                )
+        });
+    if conflicting_effect {
+        bail!("planning_action_effect_conflict: prepared action already has an accepted effect");
+    }
     let effect = append_action_event_once(
         ws,
         session,
@@ -690,8 +786,10 @@ fn reject_action(
     let previous = receipt.clone();
     receipt.status = PlanningActionStatus::Rejected;
     receipt.error = reason.to_string();
-    receipt.effect_event_id = effect.event_id;
+    receipt.effect_event_id = effect.event_id.clone();
     receipt.effect_event_type = Some(effect.event_type);
+    receipt.effect_event_digest = digest(&effect)?;
+    receipt.effect_event = Some(effect);
     ws.save_planning_action_cas(&previous, &receipt)?;
     Ok(anyhow!(reason.to_string()))
 }
@@ -714,6 +812,8 @@ fn complete_action(
     receipt.error.clear();
     receipt.effect_event_id = effect.event_id.clone();
     receipt.effect_event_type = Some(effect.event_type);
+    receipt.effect_event_digest = digest(effect)?;
+    receipt.effect_event = Some(effect.clone());
     ws.save_planning_action_cas(&previous, &receipt)?;
     append_action_event_once(
         ws,
@@ -727,6 +827,42 @@ fn complete_action(
             ..EventFields::default()
         },
     )?;
+    Ok(receipt)
+}
+
+fn prepare_action_effect(
+    ws: &Workspace,
+    mut receipt: PlanningActionReceipt,
+    result_id: &str,
+    effect: &PlanningEvent,
+) -> Result<PlanningActionReceipt> {
+    let effect_digest = digest(effect)?;
+    if receipt.result_id.is_empty()
+        && receipt.effect_event_id.is_empty()
+        && receipt.effect_event_type.is_none()
+        && receipt.effect_event_digest.is_empty()
+        && receipt.effect_event.is_none()
+    {
+        let previous = receipt.clone();
+        receipt.result_id = result_id.to_string();
+        receipt.effect_event_id = effect.event_id.clone();
+        receipt.effect_event_type = Some(effect.event_type);
+        receipt.effect_event_digest = effect_digest;
+        receipt.effect_event = Some(effect.clone());
+        ws.save_planning_action_cas(&previous, &receipt)?;
+        return Ok(receipt);
+    }
+    if receipt.result_id != result_id
+        || receipt.effect_event_id != effect.event_id
+        || receipt.effect_event_type != Some(effect.event_type)
+        || receipt.effect_event_digest != effect_digest
+        || receipt
+            .effect_event
+            .as_ref()
+            .is_none_or(|expected| digest(expected).ok().as_ref() != Some(&effect_digest))
+    {
+        bail!("prepared action exact effect metadata mismatch");
+    }
     Ok(receipt)
 }
 
@@ -815,7 +951,7 @@ pub fn accept_proposal(
 ) -> Result<DraftRevision> {
     let _lock = ws.acquire_planning_lock()?;
     let mut session = latest_open_session(ws)?;
-    let (receipt, completed) = begin_action(
+    let (mut receipt, completed) = begin_action(
         ws,
         &mut session,
         PlanningActionKind::Accept,
@@ -826,42 +962,48 @@ pub fn accept_proposal(
     if completed {
         return ws.load_draft_revision(&session.session_id, &receipt.result_id);
     }
-    let replayed_effect = linked_action_event(
-        ws,
-        &session.session_id,
-        action_id,
-        &receipt.request_digest,
-        PlanningEventType::DraftAccepted,
-    )?
-    .or(linked_action_event(
-        ws,
-        &session.session_id,
-        action_id,
-        &receipt.request_digest,
-        PlanningEventType::DraftRevised,
-    )?);
-    if let Some(effect) = replayed_effect {
-        if effect.proposal_id != proposal_id || effect.draft_revision_id.is_empty() {
-            return Err(reject_action(
-                ws,
-                &mut session,
-                receipt,
-                "prepared accept effect linkage mismatch",
-            )?);
+    if !receipt.result_id.is_empty() {
+        let effect = receipt
+            .effect_event
+            .clone()
+            .ok_or_else(|| anyhow!("prepared accept exact effect payload is missing"))?;
+        if effect.event_id != receipt.effect_event_id
+            || effect.event_type != receipt.effect_event_type.unwrap_or(effect.event_type)
+            || effect.action_id != receipt.action_id
+            || effect.action_request_digest != receipt.request_digest
+            || effect.proposal_id != proposal_id
+            || effect.draft_revision_id != receipt.result_id
+            || effect.related_revision_id != expected_head.unwrap_or("")
+        {
+            bail!("prepared accept effect linkage mismatch");
         }
-        let revision = ws.load_draft_revision(&session.session_id, &effect.draft_revision_id)?;
-        validate_revision_integrity(&session, &revision, &effect.draft_revision_id)?;
-        if session.current_head.as_deref() == revision.parent_revision_id.as_deref() {
+        let revision = if ws
+            .draft_revision_path(&session.session_id, &receipt.result_id)
+            .is_file()
+        {
+            ws.load_draft_revision(&session.session_id, &receipt.result_id)?
+        } else {
+            let proposal = ws.load_planning_proposal(&session.session_id, proposal_id)?;
+            DraftRevision {
+                schema_version: 1,
+                draft_revision_id: receipt.result_id.clone(),
+                session_id: session.session_id.clone(),
+                proposal_id: proposal.proposal_id,
+                parent_revision_id: expected_head.map(str::to_string),
+                content_digest: proposal.content_digest,
+                content: proposal.content,
+            }
+        };
+        validate_revision_integrity(&session, &revision, &receipt.result_id)?;
+        ws.save_draft_revision(&revision)?;
+        maybe_crash("accept_after_revision_write");
+        append_exact_event(ws, &mut session, &effect)?;
+        if session.current_head.as_deref() == expected_head {
             let previous = session.clone();
             session.current_head = Some(revision.draft_revision_id.clone());
             ws.save_planning_session_cas(&previous, &session)?;
         } else if session.current_head.as_deref() != Some(revision.draft_revision_id.as_str()) {
-            return Err(reject_action(
-                ws,
-                &mut session,
-                receipt,
-                "prepared accept effect conflicts with current head",
-            )?);
+            bail!("prepared accept effect conflicts with current head");
         }
         complete_action(
             ws,
@@ -901,34 +1043,39 @@ pub fn accept_proposal(
             "proposal_digest_mismatch",
         )?);
     }
-    let revision = DraftRevision {
-        schema_version: 1,
-        draft_revision_id: new_id("drv"),
-        session_id: session.session_id.clone(),
-        proposal_id: proposal.proposal_id.clone(),
-        parent_revision_id: session.current_head.clone(),
-        content_digest: proposal.content_digest.clone(),
-        content: proposal.content,
+    let revision_id = new_id("drv");
+    reconcile_event_cursor(ws, &mut session)?;
+    let effect_type = if expected_head.is_some() {
+        PlanningEventType::DraftRevised
+    } else {
+        PlanningEventType::DraftAccepted
     };
-    ws.save_draft_revision(&revision)?;
-    let effect = append_event(
-        ws,
-        &mut session,
-        if revision.parent_revision_id.is_some() {
-            PlanningEventType::DraftRevised
-        } else {
-            PlanningEventType::DraftAccepted
-        },
+    let effect = build_event(
+        &session,
+        effect_type,
         "user",
         EventFields {
             action_id,
             action_request_digest: &receipt.request_digest,
             proposal_id,
-            draft_revision_id: &revision.draft_revision_id,
-            related_revision_id: revision.parent_revision_id.as_deref().unwrap_or(""),
+            draft_revision_id: &revision_id,
+            related_revision_id: expected_head.unwrap_or(""),
             ..EventFields::default()
         },
-    )?;
+    );
+    receipt = prepare_action_effect(ws, receipt, &revision_id, &effect)?;
+    let revision = DraftRevision {
+        schema_version: 1,
+        draft_revision_id: revision_id,
+        session_id: session.session_id.clone(),
+        proposal_id: proposal.proposal_id.clone(),
+        parent_revision_id: expected_head.map(str::to_string),
+        content_digest: proposal.content_digest.clone(),
+        content: proposal.content,
+    };
+    ws.save_draft_revision(&revision)?;
+    maybe_crash("accept_after_revision_write");
+    append_exact_event(ws, &mut session, &effect)?;
     maybe_crash("action_after_effect");
     let previous = session.clone();
     session.current_head = Some(revision.draft_revision_id.clone());
@@ -1223,8 +1370,26 @@ fn activated_records(
         confirmation_id: confirmation_id.to_string(),
         draft_revision_id: revision.draft_revision_id.clone(),
         draft_content_digest: revision.content_digest.clone(),
+        materialized_queue: Some(revision.content.queue.clone()),
     };
     Ok((intent, queue))
+}
+
+fn activated_queue_digest(queue: &ActivatedQueue) -> Result<String> {
+    if let Some(materialized_queue) = &queue.materialized_queue {
+        return digest(&serde_json::json!({
+            "schema_version": queue.schema_version,
+            "queue_id": queue.queue_id,
+            "intent_id": queue.intent_id,
+            "activation_required": queue.activation_required,
+            "planning_session_id": queue.planning_session_id,
+            "confirmation_id": queue.confirmation_id,
+            "draft_revision_id": queue.draft_revision_id,
+            "draft_content_digest": queue.draft_content_digest,
+            "materialized_queue": materialized_queue,
+        }));
+    }
+    digest(queue)
 }
 
 pub fn confirm(ws: &Workspace, expected_head: &str, action_id: &str) -> Result<ActivationReceipt> {
@@ -1280,6 +1445,27 @@ fn confirm_with_policy(
             .load_activation(&action.result_id)?
             .ok_or_else(|| anyhow!("completed confirmation is missing its activation"))?;
         validate_active_activation(ws)?;
+        let active_intent = ws.load_activated_intent()?.ok_or_else(|| {
+            anyhow!("completed_confirmation_active_mismatch: active intent missing")
+        })?;
+        let active_queue = ws.load_activated_queue()?.ok_or_else(|| {
+            anyhow!("completed_confirmation_active_mismatch: active queue missing")
+        })?;
+        if active_intent.confirmation_id != activation.confirmation_id
+            || active_queue.confirmation_id != activation.confirmation_id
+            || active_intent.planning_session_id != activation.session_id
+            || active_queue.planning_session_id != activation.session_id
+            || active_intent.draft_revision_id != activation.draft_revision_id
+            || active_queue.draft_revision_id != activation.draft_revision_id
+            || active_intent.draft_content_digest != activation.draft_content_digest
+            || active_queue.draft_content_digest != activation.draft_content_digest
+            || digest(&active_intent)? != activation.intent_digest
+            || activated_queue_digest(&active_queue)? != activation.queue_digest
+        {
+            bail!(
+                "completed_confirmation_active_mismatch: receipt activation is not the current active plan"
+            );
+        }
         return Ok(activation);
     }
     if !matches!(
@@ -1381,7 +1567,7 @@ fn confirm_with_policy(
         intent_id: intent.intent.id.clone(),
         queue_id: queue.queue_id.clone(),
         intent_digest: digest(&intent)?,
-        queue_digest: digest(&queue)?,
+        queue_digest: activated_queue_digest(&queue)?,
         status: "committed".to_string(),
     };
 
@@ -1389,13 +1575,13 @@ fn confirm_with_policy(
     let current_intent_digest = digest(&current_intent_text)?;
     let current_queue_digest = digest(&current_queue_text)?;
     let expected_intent_digest = digest(&intent)?;
-    let expected_queue_digest = digest(&queue)?;
+    let expected_queue_digest = activated_queue_digest(&queue)?;
     let current_intent_matches_output = match ws.load_activated_intent()? {
         Some(existing) => digest(&existing)? == expected_intent_digest,
         None => false,
     };
     let current_queue_matches_output = match ws.load_activated_queue()? {
-        Some(existing) => digest(&existing)? == expected_queue_digest,
+        Some(existing) => activated_queue_digest(&existing)? == expected_queue_digest,
         None => false,
     };
     if current_intent_digest != action.prior_intent_digest && !current_intent_matches_output {
@@ -1640,7 +1826,7 @@ pub fn validate_active_activation(ws: &Workspace) -> Result<ActivationGate> {
     if activation.intent_digest != digest(&intent)? {
         return Err(inconsistent("active intent digest mismatch"));
     }
-    if activation.queue_digest != digest(&queue)? {
+    if activation.queue_digest != activated_queue_digest(&queue)? {
         return Err(inconsistent("active queue digest mismatch"));
     }
     if queue
@@ -1678,7 +1864,10 @@ pub fn validate_active_activation(ws: &Workspace) -> Result<ActivationGate> {
     }
     let active_content = PlanningDraftContent {
         intent: intent.intent,
-        queue: queue.as_work_queue(),
+        queue: queue
+            .materialized_queue
+            .clone()
+            .unwrap_or_else(|| queue.as_work_queue()),
     };
     if digest(&active_content)? != revision.content_digest {
         return Err(inconsistent("active plan fields differ from visible draft"));
