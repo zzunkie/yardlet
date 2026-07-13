@@ -938,10 +938,10 @@ pub fn compile(inputs: &PacketInputs) -> String {
 /// Compile a planning-gate packet: turn a raw natural-language request into a
 /// structured plan written to `planning-result.json` in the run directory.
 ///
-/// The worker authors only the plan content; Yardlet owns the canonical
-/// `.agents/intent-contract.yaml` and `.agents/work-queue.yaml` files it
-/// derives from the result. The worker therefore only needs write access to
-/// the run directory.
+/// The worker authors only proposal content. Yardlet records an immutable
+/// draft revision after explicit acceptance, and active intent/queue snapshots
+/// only after explicit confirmation. The worker therefore only needs write
+/// access to the run directory.
 #[allow(clippy::too_many_arguments)]
 pub fn compile_planning(
     request: &str,
@@ -958,7 +958,8 @@ pub fn compile_planning(
     p.push_str("# Yardlet planning gate\n\n");
     p.push_str(
         "You are a hidden Yardlet planning worker. Turn the request below into a bounded, \
-         checkable work contract. Do NOT implement anything in this run.\n\n",
+         checkable replacement proposal. Do NOT implement anything in this run and do not \
+         write active intent or queue state.\n\n",
     );
 
     p.push_str("## Request (verbatim)\n\n");
@@ -1339,6 +1340,7 @@ const MEMORY_SCHEMA_HINT: &str = r#"```json
 const PLANNING_SCHEMA_HINT: &str = r#"```json
 {
   "summary": "One sentence describing the goal in product terms.",
+  "rationale": "Why this complete replacement proposal answers the latest user turn.",
   "allowed_scope": ["..."],
   "out_of_scope": ["..."],
   "acceptance": [

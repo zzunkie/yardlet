@@ -14,8 +14,8 @@ use serde::Deserialize;
 use crate::guard::{self, Readiness};
 use crate::inspect;
 use crate::schemas::{
-    IntentContract, SelectionPolicy, Task, TaskGoal, TaskState, WorkQueue, WorkerProfile,
-    WorkersFile,
+    IntentContract, PlanningDraftContent, PlanningSession, SelectionPolicy, Task, TaskGoal,
+    TaskState, WorkQueue, WorkerProfile, WorkersFile,
 };
 use crate::state::{self, write_str, PlanningWorkerConfig, Workspace};
 use crate::{packet, workers, yaml};
@@ -26,6 +26,8 @@ use crate::{packet, workers, yaml};
 struct PlanningResult {
     #[serde(default)]
     summary: String,
+    #[serde(default)]
+    rationale: String,
     #[serde(default)]
     allowed_scope: Vec<String>,
     #[serde(default)]
@@ -183,6 +185,9 @@ pub struct PlanningReport {
     pub task_count: usize,
     pub questions: Vec<String>,
     pub lines: Vec<String>,
+    pub session_id: String,
+    pub proposal_id: String,
+    pub semantic_diff_fields: Vec<String>,
 }
 
 /// Express lane (P2): skip the planning worker entirely and lay down a tiny
@@ -302,9 +307,7 @@ pub fn plan_goal(
         goal,
     )?;
     let task_count = queue.tasks.len();
-    let _ = crate::report::archive_intent(ws);
-    state::save_yaml(&ws.intent_path(), &intent)?;
-    ws.save_queue(&queue)?;
+    crate::planning::activate_express_draft(ws, goal, PlanningDraftContent { intent, queue })?;
     let _ = crate::skills::auto_equip(ws, &inspect::summarize(&ws.root));
     Ok(task_count)
 }
@@ -316,9 +319,34 @@ pub fn run_planning(
     worker_override: Option<&str>,
     explicit_images: &[String],
 ) -> Result<PlanningReport> {
+    run_planning_turn(ws, request, worker_override, explicit_images, true)
+}
+
+pub fn run_planning_recorded_turn(
+    ws: &Workspace,
+    request: &str,
+    worker_override: Option<&str>,
+    explicit_images: &[String],
+) -> Result<PlanningReport> {
+    run_planning_turn(ws, request, worker_override, explicit_images, false)
+}
+
+fn run_planning_turn(
+    ws: &Workspace,
+    request: &str,
+    worker_override: Option<&str>,
+    explicit_images: &[String],
+    record_user_turn: bool,
+) -> Result<PlanningReport> {
     let workers = ws.load_workers()?;
     let billing = ws.load_billing()?;
     let config = ws.load_config()?;
+    let session = if record_user_turn {
+        crate::planning::begin_user_turn(ws, request)?
+    } else {
+        crate::planning::latest_open_session(ws)?
+    };
+    let packet_request = crate::planning::worker_turn_context(ws, &session, request)?;
 
     // Images: explicit --image plus any path detected in the request.
     let mut images: Vec<String> = explicit_images.to_vec();
@@ -333,12 +361,13 @@ pub fn run_planning(
         &workers,
         &billing,
         &config,
-        request,
-        request,
+        &packet_request,
+        &session.initial_request,
         &images,
         worker_override,
         "new",
-        true,
+        false,
+        Some(&session),
     )
 }
 
@@ -375,6 +404,9 @@ pub fn intent_gated(intent: &IntentContract, gate_enabled: bool) -> bool {
 /// The new plan re-scores ambiguity; the gate opens when it drops below
 /// "high", the user overrides, or `INTERVIEW_CAP` turns have run.
 pub fn run_planning_interview(ws: &Workspace, answer: &str) -> Result<PlanningReport> {
+    if crate::planning::active_is_confirmed_or_running(ws)? {
+        bail!("confirmed or running queue rejects free-form planning mutation");
+    }
     let Some(prev) = ws.load_intent()? else {
         bail!("no intent to interview \u{2014} plan first (n)");
     };
@@ -425,6 +457,7 @@ pub fn run_planning_interview(ws: &Workspace, answer: &str) -> Result<PlanningRe
         None,
         "interview",
         false,
+        None,
     )?;
 
     // plan_core derived a fresh intent; restore identity + interview bookkeeping.
@@ -458,6 +491,7 @@ fn plan_core(
     worker_override: Option<&str>,
     mode: &str,
     archive: bool,
+    planning_session: Option<&PlanningSession>,
 ) -> Result<PlanningReport> {
     let language = packet::resolve_language(&config.language, store_request);
     let planning_config = ws.load_planning_worker_config()?;
@@ -508,7 +542,11 @@ fn plan_core(
     }
     let worker_guidance = build_worker_guidance(workers);
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
-    let current_intent = planning_intent_context(ws, archive)?;
+    let current_intent = if let Some(session) = planning_session {
+        crate::planning::current_draft(ws, session)?.map(|draft| draft.content.intent)
+    } else {
+        planning_intent_context(ws, archive)?
+    };
     let packet_text = packet::compile_planning(
         packet_request,
         current_intent.as_ref(),
@@ -526,7 +564,7 @@ fn plan_core(
     // before the worker runs — otherwise the Home screen shows the old queue
     // for the whole planning run, which reads as stale. (Interview/amend keep
     // the live queue; they refine it in place.)
-    if archive {
+    if archive && planning_session.is_none() {
         let _ = crate::report::archive_intent(ws);
         let _ = ws.save_queue(&WorkQueue {
             schema_version: 1,
@@ -577,7 +615,9 @@ fn plan_core(
     }
 
     // Derive canonical state. Yardlet owns these files.
-    let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
+    let intent_id = planning_session
+        .map(|session| session.intent_id.clone())
+        .unwrap_or_else(|| format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S")));
     let intent = build_intent(&intent_id, store_request, &plan, images);
     let mut queue = build_queue(&intent_id, &plan);
     crate::skills::project_task_skills_with_context(ws, &summary, &mut queue.tasks, store_request)?;
@@ -591,10 +631,28 @@ fn plan_core(
         ));
     }
 
-    // (Fresh plans already archived + cleared the prior queue before the
-    // worker ran; here we just write the new canonical state.)
-    state::save_yaml(&ws.intent_path(), &intent)?;
-    ws.save_queue(&queue)?;
+    let proposal = if let Some(session) = planning_session {
+        Some(crate::planning::record_worker_proposal(
+            ws,
+            &session.session_id,
+            &worker_id,
+            &run_id,
+            &format!("{} ({})", plan.summary, outcome.note),
+            if plan.rationale.trim().is_empty() {
+                "planning worker proposed a complete replacement draft"
+            } else {
+                plan.rationale.trim()
+            },
+            PlanningDraftContent {
+                intent: intent.clone(),
+                queue: queue.clone(),
+            },
+        )?)
+    } else {
+        state::save_yaml(&ws.intent_path(), &intent)?;
+        ws.save_queue(&queue)?;
+        None
+    };
     mark_consumed(&run_dir);
 
     Ok(PlanningReport {
@@ -609,6 +667,23 @@ fn plan_core(
             .filter(|q| !q.trim().is_empty())
             .collect(),
         lines,
+        session_id: planning_session
+            .map(|session| session.session_id.clone())
+            .unwrap_or_default(),
+        proposal_id: proposal
+            .as_ref()
+            .map(|proposal| proposal.proposal_id.clone())
+            .unwrap_or_default(),
+        semantic_diff_fields: proposal
+            .as_ref()
+            .map(|proposal| {
+                proposal
+                    .semantic_diff
+                    .iter()
+                    .map(|entry| entry.field.clone())
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -616,6 +691,9 @@ fn plan_core(
 /// and append new tasks derived from the user's continue request + the existing
 /// context. Does not overwrite or archive — it extends the live queue.
 pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningReport> {
+    if crate::planning::active_is_confirmed_or_running(ws)? {
+        bail!("confirmed or running queue rejects free-form planning mutation");
+    }
     let existing_intent = ws.load_intent()?;
     let existing_queue = ws.load_queue()?;
 
@@ -749,6 +827,9 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
             .filter(|q| !q.trim().is_empty())
             .collect(),
         lines,
+        session_id: String::new(),
+        proposal_id: String::new(),
+        semantic_diff_fields: Vec::new(),
     })
 }
 
@@ -1242,6 +1323,12 @@ pub fn recover_unconsumed_plan(ws: &Workspace) -> Option<String> {
         .unwrap_or_default();
 
     if meta.mode == "amend" {
+        if crate::planning::active_is_confirmed_or_running(ws).ok()? {
+            mark_consumed(&run_dir);
+            return Some(format!(
+                "rejected interrupted follow-up plan ({run_id}): confirmed or running queue is isolated"
+            ));
+        }
         let mut queue = ws.load_queue().ok()?;
         let added = append_plan_tasks(&mut queue, &plan);
         crate::skills::project_task_skills_with_context(
@@ -1268,6 +1355,38 @@ pub fn recover_unconsumed_plan(ws: &Workspace) -> Option<String> {
     if plan.summary.trim().is_empty() {
         mark_consumed(&run_dir);
         return None;
+    }
+    if let Ok(session) = crate::planning::latest_open_session(ws) {
+        if session.initial_request == meta.request {
+            let intent = build_intent(&session.intent_id, &meta.request, &plan, &[]);
+            let mut queue = build_queue(&session.intent_id, &plan);
+            crate::skills::project_task_skills_with_context(
+                ws,
+                &inspect::summarize(&ws.root),
+                &mut queue.tasks,
+                &meta.request,
+            )
+            .ok()?;
+            let proposal = crate::planning::record_worker_proposal(
+                ws,
+                &session.session_id,
+                "recovered-planner",
+                &run_id,
+                &plan.summary,
+                if plan.rationale.trim().is_empty() {
+                    "recovered completed planning worker proposal after restart"
+                } else {
+                    plan.rationale.trim()
+                },
+                PlanningDraftContent { intent, queue },
+            )
+            .ok()?;
+            mark_consumed(&run_dir);
+            return Some(format!(
+                "recovered interrupted planning proposal ({run_id}): {}",
+                proposal.proposal_id
+            ));
+        }
     }
     let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let intent = build_intent(&intent_id, &meta.request, &plan, &[]);

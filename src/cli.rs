@@ -28,8 +28,10 @@ pub struct Cli {
 pub enum Command {
     /// Scaffold canonical .agents/ state into this workspace.
     Init(InitArgs),
-    /// Turn a natural-language request into an intent contract + queue.
+    /// Start or resume a conversational planning session and propose a draft.
     New(NewArgs),
+    /// Review and act on the current conversational planning session.
+    Planning(PlanningArgs),
     /// Add a user-authored task to the current queue without rebuilding it.
     Add(AddArgs),
     /// Express lane: skip planning, run one goal (to a --verify condition).
@@ -252,12 +254,67 @@ pub struct NewArgs {
     /// Attach a local image (repeatable). Also auto-detected from the request.
     #[arg(long = "image")]
     images: Vec<String>,
-    /// After planning, drain the queue autonomously (plan + run in one go).
+    /// Legacy shortcut retained for compatibility; rejected until the draft is confirmed.
     #[arg(long)]
     run: bool,
-    /// With --run: drop the sandbox (workers still self-gate dangerous actions).
+    /// Legacy --run companion retained for argument compatibility.
     #[arg(long)]
     bypass: bool,
+}
+
+#[derive(Args)]
+pub struct PlanningArgs {
+    #[command(subcommand)]
+    cmd: PlanningCmd,
+}
+
+#[derive(Subcommand)]
+enum PlanningCmd {
+    /// Show the ordered planning channel, visible draft, and pending proposals.
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Accept one proposal as a new immutable visible draft revision.
+    Accept {
+        proposal: String,
+        #[arg(long)]
+        expected_head: String,
+        #[arg(long)]
+        action_id: Option<String>,
+    },
+    /// Reject one proposal without changing the visible draft head.
+    Reject {
+        proposal: String,
+        #[arg(long)]
+        expected_head: String,
+        #[arg(long)]
+        action_id: Option<String>,
+    },
+    /// Restore the current visible revision's parent.
+    Undo {
+        #[arg(long)]
+        expected_head: String,
+        #[arg(long)]
+        action_id: Option<String>,
+    },
+    /// Record a user turn and ask the planning worker for a replacement proposal.
+    Answer {
+        message: Vec<String>,
+        #[arg(long)]
+        expected_head: String,
+        #[arg(long)]
+        action_id: Option<String>,
+        #[arg(long)]
+        worker: Option<String>,
+    },
+    /// Promote the exact visible draft to active intent and queue.
+    Confirm {
+        #[arg(long)]
+        expected_head: String,
+        #[arg(long)]
+        action_id: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -445,6 +502,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         None => launch_tui(&cwd),
         Some(Command::Init(a)) => cmd_init(&cwd, a),
         Some(Command::New(a)) => cmd_new(&cwd, a),
+        Some(Command::Planning(a)) => cmd_planning(&cwd, a),
         Some(Command::Add(a)) => cmd_add(&cwd, a),
         Some(Command::Goal(a)) => cmd_goal(&cwd, a),
         Some(Command::Status(a)) => cmd_status(&cwd, a),
@@ -914,7 +972,12 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
     }
     let request = args.request.join(" ");
     if request.trim().is_empty() {
-        anyhow::bail!("provide a request, e.g. `yardlet new \"add admin order search\"`");
+        return show_planning(&ws, false);
+    }
+    if args.run {
+        anyhow::bail!(
+            "`yardlet new --run` cannot bypass draft review; accept and confirm the visible draft, then run it"
+        );
     }
     println!("Planning: {request}\n");
     let report = crate::planner::run_planning(&ws, &request, args.worker.as_deref(), &args.images)?;
@@ -925,20 +988,161 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
     for line in &report.lines {
         println!("{line}");
     }
-    println!("\nIntent: {}", report.intent_summary);
-    println!("Created {} task(s) in the queue.", report.task_count);
+    println!("\nSession: {}", report.session_id);
+    println!("Proposal: {}", report.proposal_id);
+    println!("Draft summary: {}", report.intent_summary);
+    println!(
+        "Proposed {} task(s); active intent and queue are unchanged.",
+        report.task_count
+    );
+    if !report.semantic_diff_fields.is_empty() {
+        println!("Semantic diff: {}", report.semantic_diff_fields.join(", "));
+    }
     if !report.questions.is_empty() {
         println!("\nQuestions (non-blocking, assumptions were made):");
         for q in &report.questions {
             println!("  - {q}");
         }
     }
-    if args.run && report.task_count > 0 {
-        println!("\nRunning autonomously \u{2014} stops only if it needs you:\n");
-        run::run_auto(&ws, args.bypass, None, None, false, |s| println!("{s}"))?;
+    println!(
+        "\nNext: `yardlet planning show`, then accept or reject the proposal. Only `yardlet planning confirm` activates it."
+    );
+    Ok(())
+}
+
+fn parse_expected_head(value: &str) -> Option<&str> {
+    (!value.eq_ignore_ascii_case("none")).then_some(value)
+}
+
+fn cli_action_id(prefix: &str, provided: Option<String>) -> String {
+    provided.unwrap_or_else(|| {
+        format!(
+            "act-{prefix}-{}-{}",
+            chrono::Utc::now().format("%Y%m%d%H%M%S%6f"),
+            std::process::id()
+        )
+    })
+}
+
+fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    match args.cmd {
+        PlanningCmd::Show { json } => show_planning(&ws, json),
+        PlanningCmd::Accept {
+            proposal,
+            expected_head,
+            action_id,
+        } => {
+            let action_id = cli_action_id("accept", action_id);
+            let revision = crate::planning::accept_proposal(
+                &ws,
+                &proposal,
+                parse_expected_head(&expected_head),
+                &action_id,
+            )?;
+            println!(
+                "Accepted proposal {proposal} as {}.",
+                revision.draft_revision_id
+            );
+            println!("Active intent and queue remain unchanged until explicit confirm.");
+            Ok(())
+        }
+        PlanningCmd::Reject {
+            proposal,
+            expected_head,
+            action_id,
+        } => {
+            let action_id = cli_action_id("reject", action_id);
+            crate::planning::reject_proposal(
+                &ws,
+                &proposal,
+                parse_expected_head(&expected_head),
+                &action_id,
+            )?;
+            println!("Rejected proposal {proposal}; visible draft head is unchanged.");
+            Ok(())
+        }
+        PlanningCmd::Undo {
+            expected_head,
+            action_id,
+        } => {
+            let action_id = cli_action_id("undo", action_id);
+            let restored = crate::planning::undo(&ws, &expected_head, &action_id)?;
+            println!(
+                "Undo complete. Visible head: {}",
+                restored.as_deref().unwrap_or("none")
+            );
+            Ok(())
+        }
+        PlanningCmd::Answer {
+            message,
+            expected_head,
+            action_id,
+            worker,
+        } => {
+            let message = message.join(" ");
+            let action_id = cli_action_id("answer", action_id);
+            crate::planning::record_answer(
+                &ws,
+                &message,
+                parse_expected_head(&expected_head),
+                &action_id,
+            )?;
+            let report =
+                crate::planner::run_planning_recorded_turn(&ws, &message, worker.as_deref(), &[])?;
+            println!("Planning worker: {}", report.worker_id);
+            println!("Proposal: {}", report.proposal_id);
+            println!("Semantic diff: {}", report.semantic_diff_fields.join(", "));
+            Ok(())
+        }
+        PlanningCmd::Confirm {
+            expected_head,
+            action_id,
+        } => {
+            let action_id = cli_action_id("confirm", action_id);
+            let activation = crate::planning::confirm(&ws, &expected_head, &action_id)?;
+            println!(
+                "Confirmed {} with activation {}. The exact visible draft is now active.",
+                expected_head, activation.confirmation_id
+            );
+            Ok(())
+        }
+    }
+}
+
+fn show_planning(ws: &Workspace, json: bool) -> Result<()> {
+    let projection = crate::planning::projection(ws)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&projection)?);
         return Ok(());
     }
-    println!("\nNext: `yardlet queue` to review, `yardlet run --next --execute` to run.");
+    println!(
+        "Planning session {} [{:?}]",
+        projection.session.session_id, projection.session.lifecycle
+    );
+    for event in projection
+        .events
+        .iter()
+        .filter(|event| matches!(event.event_type.as_str(), "user.message" | "worker.message"))
+    {
+        println!("  {:>6}  {}", event.actor, event.message);
+    }
+    println!(
+        "Visible head: {}",
+        projection.session.current_head.as_deref().unwrap_or("none")
+    );
+    for proposal in &projection.pending_proposals {
+        println!("Proposal {}", proposal.proposal_id);
+        for entry in &proposal.semantic_diff {
+            println!("  {}: {} -> {}", entry.field, entry.before, entry.after);
+        }
+    }
+    if let Some(activation) = &projection.activation {
+        println!(
+            "Activation {} [{}], exact parity: {}",
+            activation.confirmation_id, activation.status, projection.exact_active_parity
+        );
+    }
     Ok(())
 }
 
