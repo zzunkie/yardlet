@@ -10,6 +10,26 @@ run_dir="$1"
 packet="$(cat)"
 workspace="$(pwd)"
 if grep -Eq 'Yardlet task packet|You are a hidden Yardlet worker' <<<"$packet"; then
+  if grep -q 'first runtime task fails' <<<"$packet"; then
+    mkdir -p "$run_dir"
+    cat >"$run_dir/result.json" <<'EOF'
+{
+  "schema_version": 1,
+  "run_id": "fixture-runtime-failure",
+  "task_id": "YARD-001",
+  "status": "failed",
+  "intent_adherence": {"drift_detected": false, "notes": ""},
+  "changes": {"files_modified": [], "files_created": [], "files_deleted": []},
+  "validation": {"commands_run": [], "passed": false, "failures": ["deterministic fixture failure"]},
+  "question_for_user": null,
+  "compact_summary": "첫 task의 결정적 runtime failure",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+    exit 0
+  fi
   barrier="${YARDLET_TEST_MUTATION_BARRIER:?runtime fixture requires mutation barrier}"
   touch "$barrier/worker-entered"
   while [[ ! -f "$barrier/worker-release" ]]; do
@@ -71,6 +91,33 @@ case "$turn" in
     ;;
 esac
 
+second_task=""
+first_goal=""
+if [[ -f "$workspace/.fixture-two-task" ]]; then
+  title="first runtime task fails"
+  first_goal=',
+    "goal": {
+      "condition": "첫 runtime task는 결정적으로 실패한다",
+      "max_feedback_cycles": 0,
+      "feedback_policy": "inject_failed_checks"
+    }'
+  second_task=', {
+    "id": "YARD-002",
+    "title": "second runtime task remains runnable",
+    "kind": "implementation",
+    "risk": "low",
+    "preferred_worker": "fixture-planner",
+    "model": "auto",
+    "effort": "auto",
+    "depends_on": [],
+    "skills": [],
+    "required_capabilities": [],
+    "allowed_scope": ["src/state.rs"],
+    "acceptance": ["첫 task 실패 후 fresh process에서 runnable하다"],
+    "worker_rationale": "deterministic fixture"
+  }'
+fi
+
 mkdir -p "$run_dir"
 cat >"$run_dir/planning-result.json" <<EOF
 {
@@ -92,9 +139,9 @@ cat >"$run_dir/planning-result.json" <<EOF
     "skills": [],
     "required_capabilities": [],
     "allowed_scope": ["$scope"],
-    "acceptance": ["$acceptance"],
+    "acceptance": ["$acceptance"]$first_goal,
     "worker_rationale": "deterministic fixture"
-  }],
+  }$second_task],
   "questions_for_user": []
 }
 EOF

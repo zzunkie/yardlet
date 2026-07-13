@@ -439,6 +439,11 @@ pub struct ActivatedQueue {
     pub draft_revision_id: String,
     #[serde(default)]
     pub draft_content_digest: String,
+    /// Canonical digest of `materialized_queue`. This value and the snapshot
+    /// are immutable activation provenance; runtime writers may only project
+    /// mutable task state into `tasks`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub materialized_queue_digest: String,
     /// Immutable queue exactly materialized from the confirmed draft. `tasks`
     /// carries mutable runtime state; this snapshot never changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
