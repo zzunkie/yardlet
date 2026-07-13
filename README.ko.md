@@ -492,9 +492,13 @@ Yardlet 상태는 재시작에도 살아남습니다. 시작 시(그리고 `yard
 않습니다. snapshot, activation, completed action receipt 중 하나라도 현재 active
 confirmation과 정확히 맞지 않으면 실행 불가로 남습니다. accepted revision을 저장하기 전에
 prepared receipt가 stable result id와 정확한 typed effect event id, payload, digest를
-예약합니다. event journal은 seq가 1부터 연속이고, filename과 내부 identity가 일치하고,
-event id와 payload가 고유하고, action/type cardinality가 유효하고, `next_seq`가 앞서지
-않을 때만 열립니다.
+예약합니다. schema-version 2 terminal receipt는 네 effect field가 모두 필요하며 canonical
+payload byte와 digest가 immutable journal event 하나와 같아야 합니다. schema version 1
+호환은 명시적으로 분리된 branch입니다. event journal은 seq가 1부터 연속이고, filename과
+내부 identity가 일치하고, event id와 payload가 고유하고, action/type cardinality가
+유효하고, `next_seq`가 앞서지 않을 때만 열립니다. 저장된 session은 journal directory
+부재나 session/latest pointer identity 불일치도 거절합니다. artifact가 없고
+`next_seq: 1`인 빈 초기 journal만 유효합니다.
 
 planning confirmation과 runtime queue mutation(`add`, run transition, finalize, orphan
 recovery)은 하나의 permanent workspace kernel lock과 compare-and-swap 경계를 공유합니다.
@@ -502,7 +506,12 @@ lock 획득은 bounded timeout을 둔 non-blocking 방식이며 interrupt와 con
 재시도하고, worker 실행에는 descriptor가 상속되지 않습니다. immutable revision과 event는
 덮어쓰지 않는 atomic create로 만들고, session과 action 전이는 compare-and-swap으로
 저장합니다. activated queue는 runtime task state가 변하는 동안에도 confirmation parity용
-immutable materialized plan을 보존합니다. 새 confirm은 Queued, Running, NeedsUser, Partial,
+immutable materialized plan을 보존합니다. task id, 순서, 모든 실행 계약 field는 그
+materialized plan과 계속 같아야 하며 `Task.state`만 달라질 수 있습니다. queue, run, add,
+finalization, recovery 진입점은 active byte를 바꾸기 전에 변조된 runtime envelope를
+거절합니다. 각 express goal은 session create, proposal, accept, confirm 전체에서 같은 outer
+workspace transaction을 유지하므로 동시 express process가 planning session 사이에 끼어들 수
+없습니다. 새 confirm은 Queued, Running, NeedsUser, Partial,
 Blocked 작업이 남은 active queue를 교체하지 않으며, 손상된 activation guard를 inactive
 workspace로 취급하지 않고 오류로 반환합니다.
 

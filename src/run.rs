@@ -1394,6 +1394,7 @@ pub fn run_auto<F: FnMut(&str)>(
     let mut chain: Option<ChainHandle> = None;
     // Recover orphans (interrupted runs left "running") and any unconsumed
     // planning result from an interrupted session before draining.
+    crate::planning::validate_active_activation(ws)?;
     if let Some(m) = crate::planner::recover_unconsumed_plan(ws) {
         emit(m);
     }
@@ -2694,6 +2695,9 @@ fn reconcile_integrated_cleanups(ws: &Workspace, msgs: &mut Vec<String>) {
 /// genuinely-bad result stays failed). Returns messages describing what
 /// changed. Safe to call on startup and periodically.
 pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
+    if let Err(error) = crate::planning::validate_active_activation(ws) {
+        return vec![format!("recovery rejected: {error}")];
+    }
     let mut msgs = Vec::new();
     let Ok(mut q) = ws.load_queue() else {
         return msgs;

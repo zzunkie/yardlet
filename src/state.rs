@@ -368,6 +368,11 @@ impl Workspace {
 
     pub fn save_planning_session(&self, session: &PlanningSession) -> Result<()> {
         let path = self.planning_session_path(&session.session_id);
+        fs::create_dir_all(
+            self.planning_session_dir(&session.session_id)
+                .join("events"),
+        )
+        .with_context(|| format!("creating initial event journal for {}", session.session_id))?;
         write_str_atomic(&path, &yaml::to_string(session)?)?;
         write_str_atomic(
             &self.latest_planning_session_path(),
@@ -396,7 +401,14 @@ impl Workspace {
     }
 
     pub fn load_planning_session(&self, session_id: &str) -> Result<PlanningSession> {
-        load_yaml(&self.planning_session_path(session_id))
+        let session: PlanningSession = load_yaml(&self.planning_session_path(session_id))?;
+        if session.session_id != session_id {
+            bail!(
+                "planning_session_corrupt: path session {session_id} contains identity {}",
+                session.session_id
+            );
+        }
+        Ok(session)
     }
 
     pub fn load_latest_planning_session(&self) -> Result<Option<PlanningSession>> {
@@ -408,6 +420,16 @@ impl Workspace {
             if !session_id.is_empty() {
                 return self.load_planning_session(session_id).map(Some);
             }
+            bail!("planning_session_corrupt: latest pointer is empty");
+        }
+        let sessions = self.planning_sessions_dir();
+        if sessions.is_dir()
+            && fs::read_dir(&sessions)
+                .with_context(|| format!("reading {}", sessions.display()))?
+                .filter_map(std::result::Result::ok)
+                .any(|entry| entry.path().is_dir())
+        {
+            bail!("planning_session_corrupt: persisted sessions have no latest pointer");
         }
         Ok(None)
     }
@@ -456,7 +478,7 @@ impl Workspace {
     pub fn load_planning_events(&self, session_id: &str) -> Result<Vec<PlanningEvent>> {
         let dir = self.planning_session_dir(session_id).join("events");
         if !dir.is_dir() {
-            return Ok(Vec::new());
+            bail!("planning_session_corrupt: event journal directory is missing");
         }
         let mut events = Vec::new();
         for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
@@ -511,13 +533,39 @@ impl Workspace {
                 }
             }
         }
-        let session: PlanningSession = load_yaml(&self.planning_session_path(session_id))?;
+        let session = self.load_planning_session(session_id)?;
         let journal_next = events.last().map_or(1, |event| event.seq + 1);
         if session.next_seq == 0 || session.next_seq > journal_next {
             bail!(
                 "planning_event_journal: next_seq {} is ahead of journal next {journal_next}",
                 session.next_seq
             );
+        }
+        if events.is_empty() {
+            let has_artifacts = ["actions", "drafts", "proposals"].iter().try_fold(
+                false,
+                |found, child| -> Result<bool> {
+                    if found {
+                        return Ok(true);
+                    }
+                    let child = self.planning_session_dir(session_id).join(child);
+                    if !child.is_dir() {
+                        return Ok(false);
+                    }
+                    Ok(fs::read_dir(&child)
+                        .with_context(|| format!("reading {}", child.display()))?
+                        .filter_map(std::result::Result::ok)
+                        .any(|entry| entry.path().extension().is_some_and(|ext| ext == "yaml")))
+                },
+            )?;
+            if session.next_seq != 1
+                || session.lifecycle != crate::schemas::PlanningLifecycle::Open
+                || session.current_head.is_some()
+                || session.confirmation_id.is_some()
+                || has_artifacts
+            {
+                bail!("planning_session_corrupt: empty journal is not a fresh initial state");
+            }
         }
         Ok(events)
     }
@@ -586,8 +634,16 @@ impl Workspace {
         write_str_atomic(&self.intent_path(), &yaml::to_string(intent)?)
     }
 
-    pub fn save_activated_queue_snapshot(&self, queue: &ActivatedQueue) -> Result<()> {
-        write_str_atomic(&self.queue_path(), &yaml::to_string(queue)?)
+    pub fn save_activated_queue_snapshot_locked(
+        &self,
+        lock: &PlanningLock,
+        queue: &ActivatedQueue,
+    ) -> Result<()> {
+        let expected = lock.queue_snapshot.borrow().clone();
+        let text = yaml::to_string(queue)?;
+        write_str_atomic_cas(&self.queue_path(), expected.as_deref(), &text)?;
+        *lock.queue_snapshot.borrow_mut() = Some(text);
+        Ok(())
     }
 
     pub fn load_active_snapshot_texts(&self) -> Result<(Option<String>, Option<String>)> {
@@ -871,13 +927,8 @@ impl Workspace {
     }
 
     pub fn save_queue(&self, queue: &WorkQueue) -> Result<()> {
-        let existing = if self.queue_path().is_file() {
-            Some(fs::read_to_string(self.queue_path())?)
-        } else {
-            None
-        };
-        let text = self.queue_text_preserving_activation(queue, existing.as_deref())?;
-        write_str_atomic(&self.queue_path(), &text)
+        let lock = self.acquire_planning_lock()?;
+        self.save_queue_locked(&lock, queue)
     }
 
     fn queue_text_preserving_activation(
@@ -890,8 +941,18 @@ impl Workspace {
                 || !activated.confirmation_id.is_empty()
                 || !activated.planning_session_id.is_empty()
             {
+                if !activated.runtime_envelope_matches_materialized() {
+                    bail!(
+                        "active_runtime_envelope_mismatch: current tasks differ from materialized queue"
+                    );
+                }
                 if activated.queue_id != queue.queue_id || activated.intent_id != queue.intent_id {
                     bail!("activated queue identity changed during runtime mutation");
+                }
+                if !activated.runtime_update_matches_materialized(queue) {
+                    bail!(
+                        "active_runtime_envelope_mismatch: runtime update changes immutable task execution fields"
+                    );
                 }
                 let confirmation_id = activated.confirmation_id.clone();
                 let existing_materialization = activated
@@ -1077,11 +1138,45 @@ impl Workspace {
     /// removes the live files, so `load_intent` then reads None and `load_queue`
     /// reads an empty queue. Missing files are not an error (already clear).
     pub fn clear_intent_and_queue(&self) -> Result<()> {
-        for p in [self.intent_path(), self.queue_path()] {
-            if p.is_file() {
-                fs::remove_file(&p).with_context(|| format!("removing {}", p.display()))?;
+        let lock = self.acquire_planning_lock()?;
+        self.clear_intent_and_queue_locked(&lock)
+    }
+
+    fn clear_intent_and_queue_locked(&self, lock: &PlanningLock) -> Result<()> {
+        let expected = lock.queue_snapshot.borrow().clone();
+        let actual = if self.queue_path().is_file() {
+            Some(fs::read_to_string(self.queue_path())?)
+        } else {
+            None
+        };
+        if actual != expected {
+            bail!("queue_transaction_conflict: raw queue bytes changed before clear");
+        }
+        if let Some(activated) = expected
+            .as_deref()
+            .map(yaml::from_str::<ActivatedQueue>)
+            .transpose()?
+            .filter(|queue| {
+                queue.activation_required
+                    || !queue.confirmation_id.is_empty()
+                    || !queue.planning_session_id.is_empty()
+            })
+        {
+            if !activated.runtime_envelope_matches_materialized() {
+                bail!(
+                    "active_runtime_envelope_mismatch: current tasks differ from materialized queue"
+                );
             }
         }
+        if self.intent_path().is_file() {
+            fs::remove_file(self.intent_path())
+                .with_context(|| format!("removing {}", self.intent_path().display()))?;
+        }
+        if self.queue_path().is_file() {
+            fs::remove_file(self.queue_path())
+                .with_context(|| format!("removing {}", self.queue_path().display()))?;
+        }
+        *lock.queue_snapshot.borrow_mut() = None;
         Ok(())
     }
 
@@ -1279,7 +1374,7 @@ impl Workspace {
         // covered by `drained()` (it is not terminal).
         if ready_for_completion(&queue) && !has_runnable {
             if let Some(intent_id) = crate::report::archive_intent(self)? {
-                clear_intent_and_queue_with_wrap(self, &queue, &intent_id)?;
+                clear_intent_and_queue_with_wrap(self, &lock, &queue, &intent_id)?;
                 report.archived_intent = Some(intent_id);
             }
         }
@@ -2106,6 +2201,7 @@ pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<Re
 
 fn clear_intent_and_queue_with_wrap(
     ws: &Workspace,
+    lock: &PlanningLock,
     queue: &WorkQueue,
     intent_id: &str,
 ) -> Result<()> {
@@ -2122,7 +2218,7 @@ fn clear_intent_and_queue_with_wrap(
             ),
         )?;
     }
-    ws.clear_intent_and_queue()
+    ws.clear_intent_and_queue_locked(lock)
 }
 
 pub fn write_str(path: &Path, contents: &str) -> Result<()> {
