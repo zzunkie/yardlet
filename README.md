@@ -360,6 +360,50 @@ and doesn't rewrite code; a researcher makes no code changes; security audits
 adversarially and never prints secret values). Extend a role per workspace by
 writing `.agents/agents/<role>.md`; it is appended to that role's packets.
 
+## Serial isolation and owned integration
+
+Every eligible task selected through the serial execution path runs in a
+run-owned git worktree, including when dependency scheduling leaves only one
+eligible task. That serial worker writes its result files to a staging run
+directory inside the worktree. The main Yardlet process imports those artifacts
+and remains the only writer of the canonical queue, conversation, telemetry,
+and `.agents/runs/` state. This staging/import boundary is specific to the
+serial path; parallel workers use their canonical run directories directly, as
+described below.
+
+Automatic serial commit and merge remain off by default:
+
+```yaml
+auto_commit: false
+```
+
+With the default, a changed run creates no commit or merge; it stays Partial
+with the owned worktree retained for inspection. With `auto_commit: true`,
+Yardlet commits only the isolated non-`.agents/` diff and merges tasks back in
+dependency order. Dirty or concurrent main-checkout edits are never staged or
+attributed. An unsafe merge stays Partial and retains its worktree and ownership
+record. A no-change run needs no commit and its worktree is cleaned up.
+
+For core-staged serial runs only, Yardlet creates the isolated commit with
+native `git commit` on a durable internal `yardlet-txn/...` branch, so
+repository commit hooks and `commit.gpgSign` still apply. It validates the
+commit's exact parent and frozen evaluated tree, then publishes only that commit
+to the run-owned branch with a compare-and-swap. A hook or signing failure
+leaves the target branch unchanged and preserves the worktree; a concurrent ref
+change also fails closed. Parallel workers cannot supply or resume this
+transaction record and stay on the marker-free immutable-commit path. After a
+merge, restart cleanup removes the worktree and refs only while they still match
+the recorded worker commit. Commit hooks that inspect the current branch see
+the internal transaction branch during serial completion.
+
+Serial-path provenance plus integration, cleanup, no-change, and Git-finish
+authority is stored as core-owned receipts outside the worker-writable run
+directory. Recovery rebuilds a malformed or retargeted run projection from
+those receipts, and treats a remotely verified finish as terminal only after
+the queue and sealed run projection also agree. This closes each cleanup and
+push crash window without rerunning a completed worker or repeating an
+already-applied push.
+
 ## Parallel execution
 
 The planner marks which tasks genuinely depend on each other (`depends_on`);
@@ -415,28 +459,31 @@ uses a separate `git ls-remote --refs` lookup and reports success only when the
 remote OID equals the frozen expected OID. Repeating the same finish converges
 to `already_applied` without another push.
 
-When `auto_push: true`, only `pushed` and independently verified
-`already_applied` complete the task. Every other finish status projects the
-task, sealed `run.yaml`, telemetry, final report, and Trust accounting as
-unfinished `Partial`. With the default-off policy, `disabled` is not a required
-finish and normal task completion is unchanged.
+When `auto_push: true`, only `pushed`, independently verified
+`already_applied`, and core-verified no-change `not_needed` complete the task.
+Every other finish status projects the task, sealed `run.yaml`, telemetry,
+final report, and Trust accounting as unfinished `Partial`. With the
+default-off policy, `disabled` is not a required finish and normal task
+completion is unchanged.
 
 | Recorded status | User-visible meaning |
 |---|---|
 | `pushed` | The exact OID was pushed and independently verified. |
 | `already_applied` | The remote already had the exact OID; no push ran. |
+| `not_needed` | The core verified that this run produced no Git changes; no push ran. |
 | `prepared` | The durable pre-push record exists, but the remote result is not yet known; `recover` reconciles it. |
 | `check_blocked` / `safety_blocked` | A configured check, ownership proof, lock, or concurrent-state gate blocked; the task remains Partial for explicit resolution. |
 | `git_failed` | A Git lookup or push command failed; the task remains Partial and no remote success is claimed. |
 | `remote_mismatch` | Push returned success, but independent verification did not match; inspect the remote before resolving the Partial task. |
 | `disabled` | The workspace did not opt in, so Git finish does not gate normal completion. |
 
-Every outcome is written to
-`.agents/runs/<run-id>/git-finish.json` and projected into run telemetry and the
-final report. The record includes the remote name, target ref, baseline,
-run-owned and expected OIDs, before/after remote OIDs, check results, push
-flags, reason, and timestamp. It does not store a remote URL, check command
-text or output, credentials, or environment values.
+Every outcome is written authoritatively to
+`.agents/checkpoints/git-finish/<run-id>.json`; the matching
+`.agents/runs/<run-id>/git-finish.json` is a user-facing projection. The result
+is also projected into run telemetry and the final report. The record includes
+the remote name, target ref, baseline, run-owned and expected OIDs, before/after
+remote OIDs, check results, push flags, reason, and timestamp. It does not store
+a remote URL, check command text or output, credentials, or environment values.
 
 Yardlet writes `prepared` before invoking push. After an interruption,
 `yardlet recover` reloads that ownership record under the same target lock and
@@ -485,9 +532,9 @@ Yardlet owns state; workers do not. Canonical state lives under `.agents/` in th
   workers.yaml              worker profiles + routing
   memory/                   durable workspace facts (one fact per .md, git-tracked)
   rules/ skills/ agents/    harness assets (rules, skill catalog, role notes)
-  runs/<run-id>/            per-run artifacts (result, validation, checkpoint, handoff, git-finish)
+  runs/<run-id>/            per-run artifacts (result, validation, checkpoint, handoff, git-finish projection)
   conversations/<id>.yaml   needs-user transcripts threaded back to the worker
-  checkpoints/              latest compact resume points
+  checkpoints/              authoritative recovery receipts + compact resume points
   handoffs/                 teammate-readable summaries
   telemetry/                runs.jsonl: per-run outcomes (the trust + mining source)
   transitions/<task>.yaml   per-task state-change audit log (the autonomy source)

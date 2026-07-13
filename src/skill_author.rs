@@ -81,6 +81,7 @@ fn draft(
         &profile,
         &bin,
         &packet_text,
+        &run_dir,
         &ws.root,
         &env,
         &run_dir.join("worker-output.log"),

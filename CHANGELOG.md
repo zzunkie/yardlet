@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Crash-safe serial Git completion.** Opted-in serial runs execute in owned
+  worktrees, commit only their evaluated non-`.agents/` changes, merge in
+  dependency order, and can finish through the existing exact-OID push policy.
+  Durable ownership records recover interruptions across commit, merge, checks,
+  push, and verification without rerunning a completed worker.
+
+### Fixed
+
+- **Serial integration stays bound to trusted evidence.** Worker staging cannot
+  replace core-owned cancellation, failover, evaluation, validation, evidence,
+  hook, or Git transaction records. Core-staged serial runs use native
+  `git commit` on a durable internal transaction branch, validate its exact
+  parent and frozen tree, then atomically claim the run-owned ref. Parallel runs
+  cannot load that transaction state and retain the marker-free immutable
+  commit plus exact-tip CAS path. Concurrent ref changes fail closed, repository
+  commit hooks and configured signing remain enforced for serial completion,
+  and restart reconciliation deletes only refs that still match the integrated
+  worker OID. Core-owned receipts outside the worker-writable run directory
+  authenticate the serial transaction path, integration, no-change, cleanup,
+  and Git-finish recovery. The authoritative Git-finish record now lives under
+  `.agents/checkpoints/git-finish/`; queue and run projections are rebuilt and
+  must converge with remote truth before a finish is terminal, without
+  duplicate worker runs or pushes.
+
 ## 0.9.2 - 2026-07-13
 
 ### Fixed

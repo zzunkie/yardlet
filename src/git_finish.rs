@@ -24,6 +24,7 @@ use crate::state::Workspace;
 #[serde(rename_all = "snake_case")]
 pub enum GitFinishStatus {
     Disabled,
+    NotNeeded,
     Prepared,
     Pushed,
     AlreadyApplied,
@@ -35,7 +36,10 @@ pub enum GitFinishStatus {
 
 impl GitFinishStatus {
     pub fn verified_complete(self) -> bool {
-        matches!(self, Self::Pushed | Self::AlreadyApplied | Self::Disabled)
+        matches!(
+            self,
+            Self::Pushed | Self::AlreadyApplied | Self::Disabled | Self::NotNeeded
+        )
     }
 
     pub fn recoverable(self) -> bool {
@@ -95,6 +99,7 @@ impl GitFinishRecord {
     pub fn user_line(&self) -> String {
         match self.status {
             GitFinishStatus::Disabled => "git finish: disabled by workspace policy".to_string(),
+            GitFinishStatus::NotNeeded => "git finish: not needed (no changes)".to_string(),
             GitFinishStatus::Prepared => "git finish: prepared but push not started".to_string(),
             GitFinishStatus::Pushed => format!(
                 "git finish: pushed and verified {} {}",
@@ -120,6 +125,7 @@ impl GitFinishStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",
+            Self::NotNeeded => "not_needed",
             Self::Prepared => "prepared",
             Self::Pushed => "pushed",
             Self::AlreadyApplied => "already_applied",
@@ -148,6 +154,45 @@ pub fn finish_owned_run(
         ownership,
         FinishMode::CurrentHead,
     )
+}
+
+pub fn finish_no_change_run(
+    ws: &Workspace,
+    run_dir: &Path,
+    run_id: &str,
+    task_id: &str,
+    task_state: TaskState,
+) -> anyhow::Result<GitFinishRecord> {
+    let policy = match ws.load_config() {
+        Ok(config) => config.git_finish,
+        Err(_) => {
+            let policy = GitFinishPolicy::default();
+            let mut record = base_record(run_id, task_id, &policy, None);
+            block(&mut record, "config_unreadable");
+            return persist_and_return(ws, run_dir, record);
+        }
+    };
+    if ws
+        .load_git_finish_record(run_dir)
+        .ok()
+        .and_then(|record| record_ownership(&record))
+        .is_some()
+    {
+        let mut record = base_record(run_id, task_id, &policy, None);
+        block(&mut record, "run_ownership_evidence_changed");
+        return persist_and_return(ws, run_dir, record);
+    }
+    let mut record = base_record(run_id, task_id, &policy, None);
+    if !policy.auto_push {
+        return persist_and_return(ws, run_dir, record);
+    }
+    if task_state != TaskState::Done {
+        block(&mut record, "task_not_done");
+        return persist_and_return(ws, run_dir, record);
+    }
+    record.status = GitFinishStatus::NotNeeded;
+    record.reason = "no_changes".to_string();
+    persist_and_return(ws, run_dir, record)
 }
 
 /// Resume a run whose integration commit may now be behind later, independently
@@ -206,17 +251,17 @@ fn finish_owned_run_with_mode(
     let recorded_ownership = previous.as_ref().and_then(record_ownership);
     let ownership_changed = recorded_ownership
         .as_ref()
-        .zip(ownership.as_ref())
-        .is_some_and(|(recorded, supplied)| recorded != supplied);
-    // Once a run has durable ownership evidence, retries may consume it but
-    // must never replace or merge it with a later projection.
-    let ownership = recorded_ownership.or(ownership);
-    let mut record = base_record(run_id, task_id, &policy, ownership.as_ref());
-
+        .is_some_and(|recorded| ownership.as_ref() != Some(recorded));
+    // The caller must supply ownership from a core receipt on every push or
+    // recovery attempt. A previous record is comparison evidence only: the run
+    // directory is worker-writable, so adopting its ownership when the trusted
+    // caller supplied none would let a forged record claim unrelated commits.
     if ownership_changed {
-        block(&mut record, "run_ownership_evidence_changed");
-        return persist_and_return(ws, run_dir, record);
+        let mut blocked_record = base_record(run_id, task_id, &policy, recorded_ownership.as_ref());
+        block(&mut blocked_record, "run_ownership_evidence_changed");
+        return persist_and_return(ws, run_dir, blocked_record);
     }
+    let mut record = base_record(run_id, task_id, &policy, ownership.as_ref());
     if target_changed {
         block(&mut record, "git_finish_target_changed");
         return persist_and_return(ws, run_dir, record);
@@ -248,27 +293,13 @@ fn finish_owned_run_with_mode(
     let _lock = match FinishLock::acquire(&ws.root, &policy.remote, &policy.target_ref) {
         Ok(lock) => lock,
         Err(reason) => {
-            // Lock contention did not perform a new finish attempt. In
-            // particular, a crash-recoverable Prepared record is the durable
-            // resume point and must never be replaced by a timeout from a
-            // competing recovery process.
-            return preserve_record_on_lock_failure(ws, run_dir, previous, record, reason);
+            // Lock contention did not perform a finish attempt. Return a
+            // non-durable safety block for this caller; never project an older
+            // status as current truth, and never overwrite a concurrent
+            // finisher's durable record.
+            return Ok(lock_failure_record(record, reason));
         }
     };
-    // A concurrent recovery may have completed this exact durable run while we
-    // waited for the target lock, then advanced later runs on the same target.
-    // Preserve that already verified record instead of reinterpreting the later
-    // remote tip as a mismatch for this historical step.
-    if matches!(mode, FinishMode::AccumulatedHead) {
-        if let Ok(latest) = ws.load_git_finish_record(run_dir) {
-            if matches!(
-                latest.status,
-                GitFinishStatus::Pushed | GitFinishStatus::AlreadyApplied
-            ) {
-                return Ok(latest);
-            }
-        }
-    }
     let pins_before = match git_security_pins(&ws.root, &policy.remote) {
         Ok(pins) => pins,
         Err(()) => {
@@ -319,6 +350,15 @@ fn finish_owned_run_with_mode(
             record.status = GitFinishStatus::AlreadyApplied;
             record.remote_oid = Some(oid);
             record.reason = "remote_already_matches".to_string();
+            return persist_and_return(ws, run_dir, record);
+        }
+        Ok(Some(oid))
+            if matches!(mode, FinishMode::AccumulatedHead)
+                && git_ok(&ws.root, &["merge-base", "--is-ancestor", &expected, &oid]) =>
+        {
+            record.status = GitFinishStatus::AlreadyApplied;
+            record.remote_oid = Some(oid);
+            record.reason = "remote_contains_owned_commit".to_string();
             return persist_and_return(ws, run_dir, record);
         }
         Ok(oid) => oid,
@@ -503,18 +543,9 @@ fn ownership_proven(root: &Path, record: &GitFinishRecord, remote_before: Option
     !reachable.is_empty() && reachable == owned && owned.contains(expected)
 }
 
-fn preserve_record_on_lock_failure(
-    ws: &Workspace,
-    run_dir: &Path,
-    previous: Option<GitFinishRecord>,
-    mut fallback: GitFinishRecord,
-    reason: &str,
-) -> anyhow::Result<GitFinishRecord> {
-    if let Some(previous) = previous {
-        return Ok(previous);
-    }
+fn lock_failure_record(mut fallback: GitFinishRecord, reason: &str) -> GitFinishRecord {
     block(&mut fallback, reason);
-    persist_and_return(ws, run_dir, fallback)
+    fallback
 }
 
 struct FinishLock {
@@ -868,10 +899,11 @@ mod tests {
             run_dir: &Path,
             ownership: Option<GitFinishOwnership>,
         ) -> GitFinishRecord {
+            let run_id = run_dir.file_name().unwrap().to_str().unwrap();
             finish_owned_run(
                 &self.ws,
                 run_dir,
-                "run-test",
+                run_id,
                 "YARD-001",
                 TaskState::Done,
                 ownership,
@@ -976,11 +1008,30 @@ mod tests {
         }
         for status in [
             GitFinishStatus::Disabled,
+            GitFinishStatus::NotNeeded,
             GitFinishStatus::Pushed,
             GitFinishStatus::AlreadyApplied,
         ] {
             assert!(status.verified_complete(), "{status:?}");
         }
+    }
+
+    #[test]
+    fn verified_no_change_finish_never_pushes() {
+        let f = Fixture::new("no-change-finish");
+        f.configure(vec![]);
+
+        let record =
+            finish_no_change_run(&f.ws, &f.run_dir, "run-test", "YARD-001", TaskState::Done)
+                .unwrap();
+
+        assert_eq!(record.status, GitFinishStatus::NotNeeded);
+        assert!(record.status.verified_complete());
+        assert!(!record.push_invoked);
+        assert_eq!(
+            remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),
+            Some(f.initial_oid.clone())
+        );
     }
 
     #[test]
@@ -1065,10 +1116,10 @@ mod tests {
         assert_eq!(blocked_later.reason, "reachable_commits_not_owned_by_run");
 
         f.configure(vec![check("passes", "true")]);
-        let first = f.recover_at(&run_first, "run-first", None);
-        let second = f.recover_at(&run_second, "run-second", None);
-        let repeated_first = f.recover_at(&run_first, "run-first", None);
-        let repeated_second = f.recover_at(&run_second, "run-second", None);
+        let first = f.recover_at(&run_first, "run-first", Some(first_proof.clone()));
+        let second = f.recover_at(&run_second, "run-second", Some(second_proof.clone()));
+        let repeated_first = f.recover_at(&run_first, "run-first", Some(first_proof));
+        let repeated_second = f.recover_at(&run_second, "run-second", Some(second_proof));
 
         assert_eq!(first.status, GitFinishStatus::Pushed);
         assert_eq!(
@@ -1080,12 +1131,10 @@ mod tests {
             second.remote_before_oid.as_deref(),
             Some(first_oid.as_str())
         );
-        assert_eq!(repeated_first.status, GitFinishStatus::Pushed);
-        assert!(repeated_first.push_invoked);
-        assert!(repeated_first.push_succeeded);
-        assert_eq!(repeated_second.status, GitFinishStatus::Pushed);
-        assert!(repeated_second.push_invoked);
-        assert!(repeated_second.push_succeeded);
+        assert_eq!(repeated_first.status, GitFinishStatus::AlreadyApplied);
+        assert!(!repeated_first.push_invoked);
+        assert_eq!(repeated_second.status, GitFinishStatus::AlreadyApplied);
+        assert!(!repeated_second.push_invoked);
         assert_eq!(
             remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),
             Some(second_oid)
@@ -1122,7 +1171,7 @@ mod tests {
             &["push", "-q", "fixture", &format!("{peer}:refs/heads/main")],
         );
 
-        let recovered = f.recover_at(&run_first, "run-first", None);
+        let recovered = f.recover_at(&run_first, "run-first", Some(first_proof));
 
         assert_eq!(recovered.status, GitFinishStatus::SafetyBlocked);
         assert_eq!(recovered.reason, "reachable_commits_not_owned_by_run");
@@ -1159,6 +1208,57 @@ mod tests {
     }
 
     #[test]
+    fn recorded_ownership_is_never_adopted_without_core_evidence() {
+        let f = Fixture::new("recovery-forged-ownership");
+        f.configure(vec![]);
+        let oid = f.commit("unrelated local commit");
+        let forged = f.ownership(oid);
+        let policy = f.ws.load_config().unwrap().git_finish;
+        let mut prepared = base_record("run-test", "YARD-001", &policy, Some(&forged));
+        prepared.status = GitFinishStatus::Prepared;
+        prepared.reason = "forged worker record".to_string();
+        persist(&f.ws, &f.run_dir, &prepared).unwrap();
+
+        let recovered = f.recover_at(&f.run_dir, "run-test", None);
+
+        assert_eq!(recovered.status, GitFinishStatus::SafetyBlocked);
+        assert_eq!(recovered.reason, "run_ownership_evidence_changed");
+        assert!(!recovered.push_invoked);
+        assert_eq!(
+            remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),
+            Some(f.initial_oid.clone())
+        );
+    }
+
+    #[test]
+    fn worker_projected_verified_status_never_short_circuits_recovery() {
+        let f = Fixture::new("forged-verified-projection");
+        f.configure(vec![check("must fail", "false")]);
+        let oid = f.commit("trusted integrated commit");
+        let proof = f.ownership(oid);
+        let policy = f.ws.load_config().unwrap().git_finish;
+        let mut forged = base_record("run-test", "YARD-001", &policy, None);
+        forged.status = GitFinishStatus::Pushed;
+        forged.push_invoked = true;
+        forged.push_succeeded = true;
+        forged.reason = "worker forged verified status".into();
+        std::fs::write(
+            f.run_dir.join("git-finish.json"),
+            serde_json::to_string_pretty(&forged).unwrap(),
+        )
+        .unwrap();
+
+        let recovered = f.recover_at(&f.run_dir, "run-test", Some(proof));
+
+        assert_eq!(recovered.status, GitFinishStatus::CheckBlocked);
+        assert!(!recovered.push_invoked);
+        assert_eq!(
+            remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),
+            Some(f.initial_oid.clone())
+        );
+    }
+
+    #[test]
     fn recovery_cannot_retarget_a_recorded_remote() {
         let f = Fixture::new("recovery-retarget");
         f.configure(vec![]);
@@ -1174,7 +1274,7 @@ mod tests {
         config.git_finish.remote = other.to_string_lossy().into_owned();
         crate::state::save_yaml(&f.ws.config_path(), &config).unwrap();
 
-        let recovered = f.recover_at(&f.run_dir, "run-test", None);
+        let recovered = f.recover_at(&f.run_dir, "run-test", Some(proof));
 
         assert_eq!(recovered.status, GitFinishStatus::SafetyBlocked);
         assert_eq!(recovered.reason, "git_finish_target_changed");
@@ -1293,18 +1393,11 @@ mod tests {
         persist(&f.ws, &f.run_dir, &prepared).unwrap();
 
         let fallback = base_record("run-test", "YARD-001", &policy, Some(&proof));
-        let returned = preserve_record_on_lock_failure(
-            &f.ws,
-            &f.run_dir,
-            Some(prepared),
-            fallback,
-            "finish_lock_timeout",
-        )
-        .unwrap();
+        let returned = lock_failure_record(fallback, "finish_lock_timeout");
         let durable = f.ws.load_git_finish_record(&f.run_dir).unwrap();
 
-        assert_eq!(returned.status, GitFinishStatus::Prepared);
-        assert_eq!(returned.reason, "ready_to_push");
+        assert_eq!(returned.status, GitFinishStatus::SafetyBlocked);
+        assert_eq!(returned.reason, "finish_lock_timeout");
         assert_eq!(durable.status, GitFinishStatus::Prepared);
         assert_eq!(durable.reason, "ready_to_push");
     }
@@ -1616,8 +1709,8 @@ mod tests {
         prepared.reason = "ready_to_push".to_string();
         persist(&f.ws, &f.run_dir, &prepared).unwrap();
 
-        let recovered = f.finish_at(&f.run_dir, None);
-        let repeated = f.finish_at(&f.run_dir, None);
+        let recovered = f.finish_at(&f.run_dir, Some(proof.clone()));
+        let repeated = f.finish_at(&f.run_dir, Some(proof));
 
         assert_eq!(recovered.status, GitFinishStatus::Pushed);
         assert!(recovered.push_invoked);
@@ -1642,30 +1735,46 @@ mod tests {
         let ws_b = f.ws.clone();
         let run_a = f.run_dir.clone();
         let run_b = f.run_dir.clone();
+        let proof_a = proof.clone();
+        let proof_b = proof.clone();
         let a = std::thread::spawn(move || {
-            recover_owned_run(&ws_a, &run_a, "run-test", "YARD-001", TaskState::Done, None).unwrap()
+            recover_owned_run(
+                &ws_a,
+                &run_a,
+                "run-test",
+                "YARD-001",
+                TaskState::Done,
+                Some(proof_a),
+            )
+            .unwrap()
         });
         let b = std::thread::spawn(move || {
-            recover_owned_run(&ws_b, &run_b, "run-test", "YARD-001", TaskState::Done, None).unwrap()
+            recover_owned_run(
+                &ws_b,
+                &run_b,
+                "run-test",
+                "YARD-001",
+                TaskState::Done,
+                Some(proof_b),
+            )
+            .unwrap()
         });
         let records = [a.join().unwrap(), b.join().unwrap()];
-        let repeated = f.recover_at(&f.run_dir, "run-test", None);
+        let repeated = f.recover_at(&f.run_dir, "run-test", Some(proof));
         let durable = f.ws.load_git_finish_record(&f.run_dir).unwrap();
 
-        assert!(records
-            .iter()
-            .all(|record| record.status == GitFinishStatus::Pushed));
-        assert!(records.iter().all(|record| record.push_invoked));
-        assert_eq!(repeated.status, GitFinishStatus::Pushed);
-        assert!(repeated.push_invoked);
-        assert!(repeated.push_succeeded);
-        assert_eq!(durable.status, GitFinishStatus::Pushed);
-        assert!(durable.push_invoked);
-        assert!(durable.push_succeeded);
+        assert!(records.iter().all(|record| matches!(
+            record.status,
+            GitFinishStatus::Pushed | GitFinishStatus::AlreadyApplied
+        )));
         assert_eq!(
-            durable.remote_before_oid.as_deref(),
-            Some(f.initial_oid.as_str())
+            records.iter().filter(|record| record.push_invoked).count(),
+            1
         );
+        assert_eq!(repeated.status, GitFinishStatus::AlreadyApplied);
+        assert!(!repeated.push_invoked);
+        assert_eq!(durable.status, GitFinishStatus::AlreadyApplied);
+        assert!(!durable.push_invoked);
         assert_eq!(durable.remote_oid.as_deref(), Some(oid.as_str()));
         assert_eq!(
             remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),
@@ -1689,8 +1798,8 @@ mod tests {
             &["push", "-q", "fixture", &format!("{oid}:refs/heads/main")],
         );
 
-        let recovered = f.finish_at(&f.run_dir, None);
-        let repeated = f.finish_at(&f.run_dir, None);
+        let recovered = f.finish_at(&f.run_dir, Some(proof.clone()));
+        let repeated = f.finish_at(&f.run_dir, Some(proof));
 
         assert_eq!(recovered.status, GitFinishStatus::AlreadyApplied);
         assert!(!recovered.push_invoked);

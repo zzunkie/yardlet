@@ -94,15 +94,12 @@ pub struct YardConfig {
     /// Done. On by default; the dirs are empty until you add executables.
     #[serde(default = "default_true")]
     pub hooks: bool,
-    /// Opt in to autonomous git commits of completed work. A serial in-place run
-    /// is NOT auto-committed — its edits can't be told apart from a concurrent
-    /// user/other-session edit in the shared tree — so when this is ON such a run
-    /// reports that and leaves the commit to you (full serial-in-worktree
-    /// auto-commit lands next). The parallel path is unaffected by this flag: it
-    /// always commits each task in its isolated worktree and merges it back
-    /// (everything except `.agents/`), since merge-back intrinsically needs a
-    /// commit and the worktree is provably the worker's. Remote push is a
-    /// separate, default-off `git_finish` policy below.
+    /// Opt in to autonomous git commits of completed serial work. Serial workers
+    /// always run in a run-owned worktree. When this is OFF, a changed worktree
+    /// is retained as Partial with no commit or merge. When ON, Yardlet commits
+    /// only that isolated diff (excluding `.agents/`) and merges it sequentially.
+    /// The parallel path is unaffected: batch integration always commits its
+    /// isolated worktrees. Remote push is a separate default-off policy below.
     /// OFF by default, since it writes to the user's git history.
     #[serde(default)]
     pub auto_commit: bool,
