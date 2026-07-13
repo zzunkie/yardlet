@@ -98,5 +98,12 @@ cat >"$run_dir/planning-result.json" <<EOF
   "questions_for_user": []
 }
 EOF
+if [[ -n "${YARDLET_TEST_PLANNER_RESULT_BARRIER:-}" ]]; then
+  mkdir -p "$YARDLET_TEST_PLANNER_RESULT_BARRIER"
+  touch "$YARDLET_TEST_PLANNER_RESULT_BARRIER/result-ready"
+  while [[ ! -f "$YARDLET_TEST_PLANNER_RESULT_BARRIER/release" ]]; do
+    sleep 0.02
+  done
+fi
 printf 'fixture planning turn %s\n' "$turn"
 printf '%s\n' "$packet" >"$run_dir/fixture-packet.md"

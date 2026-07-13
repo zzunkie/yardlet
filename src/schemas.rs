@@ -236,6 +236,18 @@ pub struct PlanningSession {
     pub created_at: String,
 }
 
+/// Immutable identity of the exact user turn sent to a planning worker. A
+/// worker result may become a proposal only while all four fields still match
+/// the persisted open session and its journal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningTurnCas {
+    pub session_id: String,
+    #[serde(default)]
+    pub expected_head: Option<String>,
+    pub request_event_id: String,
+    pub request_digest: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticDiffEntry {
     pub field: String,
@@ -252,6 +264,10 @@ pub struct PlanningProposal {
     pub expected_head: Option<String>,
     pub producer_worker_id: String,
     pub attempt_id: String,
+    #[serde(default)]
+    pub request_event_id: String,
+    #[serde(default)]
+    pub request_digest: String,
     pub rationale: String,
     pub content_digest: String,
     pub content: PlanningDraftContent,

@@ -282,7 +282,7 @@ fn recover_startup_state(ws: &Workspace) -> Result<Vec<String>> {
     // startup error, not a recoverable input.
     crate::planning::validate_active_activation(ws)?;
     let mut recovered = Vec::new();
-    if let Some(message) = crate::planner::recover_unconsumed_plan(ws) {
+    if let Some(message) = crate::planner::recover_unconsumed_plan(ws)? {
         recovered.push(message);
     }
     recovered.extend(crate::run::recover_orphans(ws));

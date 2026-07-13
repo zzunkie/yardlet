@@ -608,7 +608,7 @@ fn cmd_recover(cwd: &std::path::Path) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     crate::planning::validate_active_activation(&ws)?;
     let mut msgs = Vec::new();
-    if let Some(m) = crate::planner::recover_unconsumed_plan(&ws) {
+    if let Some(m) = crate::planner::recover_unconsumed_plan(&ws)? {
         msgs.push(m);
     }
     msgs.extend(crate::run::recover_orphans(&ws));
@@ -1083,14 +1083,20 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
         } => {
             let message = message.join(" ");
             let action_id = cli_action_id("answer", action_id);
-            crate::planning::record_answer(
+            let (session, turn) = crate::planning::record_answer_exact(
                 &ws,
                 &message,
                 parse_expected_head(&expected_head),
                 &action_id,
             )?;
-            let report =
-                crate::planner::run_planning_recorded_turn(&ws, &message, worker.as_deref(), &[])?;
+            let report = crate::planner::run_planning_recorded_turn(
+                &ws,
+                &message,
+                worker.as_deref(),
+                &[],
+                session,
+                turn,
+            )?;
             println!("Planning worker: {}", report.worker_id);
             println!("Proposal: {}", report.proposal_id);
             println!("Semantic diff: {}", report.semantic_diff_fields.join(", "));
