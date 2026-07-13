@@ -360,6 +360,30 @@ and doesn't rewrite code; a researcher makes no code changes; security audits
 adversarially and never prints secret values). Extend a role per workspace by
 writing `.agents/agents/<role>.md`; it is appended to that role's packets.
 
+## Serial isolation and owned integration
+
+Every eligible task selected through the serial execution path runs in a
+run-owned git worktree, including when dependency scheduling leaves only one
+eligible task. That serial worker writes its result files to a staging run
+directory inside the worktree. The main Yardlet process imports those artifacts
+and remains the only writer of the canonical queue, conversation, telemetry,
+and `.agents/runs/` state. This staging/import boundary is specific to the
+serial path; parallel workers use their canonical run directories directly, as
+described below.
+
+Automatic serial commit and merge remain off by default:
+
+```yaml
+auto_commit: false
+```
+
+With the default, a changed run creates no commit or merge; it stays Partial
+with the owned worktree retained for inspection. With `auto_commit: true`,
+Yardlet commits only the isolated non-`.agents/` diff and merges tasks back in
+dependency order. Dirty or concurrent main-checkout edits are never staged or
+attributed. An unsafe merge stays Partial and retains its worktree and ownership
+record. A no-change run needs no commit and its worktree is cleaned up.
+
 ## Parallel execution
 
 The planner marks which tasks genuinely depend on each other (`depends_on`);

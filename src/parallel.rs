@@ -392,6 +392,7 @@ pub fn run_batch<F: FnMut(&str)>(
                 started_at: Local::now().to_rfc3339(),
                 completed_at: None,
                 worktree: p.wt_path.display().to_string(),
+                serial_isolated: false,
                 baseline_oid: p.baseline_oid.clone(),
                 worktree_branch: p.branch.clone(),
                 integration_oid: String::new(),
@@ -432,6 +433,7 @@ pub fn run_batch<F: FnMut(&str)>(
         let bin = p.bin.clone();
         let packet_text = p.packet_text.clone();
         let cwd = p.wt_path.clone();
+        let worker_run_dir = p.run_dir.clone();
         let log_path = p.run_dir.join("worker-output.log");
         let timeout = Duration::from_secs(p.profile.limits.max_wall_minutes as u64 * 60);
         let images = images.clone();
@@ -442,6 +444,7 @@ pub fn run_batch<F: FnMut(&str)>(
                 &profile,
                 &bin,
                 &packet_text,
+                &worker_run_dir,
                 &cwd,
                 &env,
                 &log_path,
@@ -539,6 +542,7 @@ pub fn run_batch<F: FnMut(&str)>(
                             &eff_profile,
                             &alt.bin,
                             &failover_packet,
+                            &p.run_dir,
                             &p.wt_path,
                             &env,
                             &p.run_dir.join("worker-output.log"),
@@ -603,6 +607,8 @@ pub fn run_batch<F: FnMut(&str)>(
                 wt_path: &p.wt_path,
                 branch: &p.branch,
                 baseline_oid: &p.baseline_oid,
+                expected_tip_oid: None,
+                auto_commit: true,
             }),
         }) {
             Ok(r) => r,
@@ -687,6 +693,7 @@ pub(crate) fn integrate_worktree(
     branch: &str,
     task_id: &str,
     baseline_oid: &str,
+    expected_tip_oid: Option<&str>,
 ) -> Result<Integration> {
     // Legacy run records did not persist a baseline. Recovery can safely derive
     // the worktree branch's merge-base, while new runs always pass the pinned
@@ -717,9 +724,27 @@ pub(crate) fn integrate_worktree(
         }
         None => {}
     }
+    if let Some(expected_tip_oid) = expected_tip_oid.filter(|oid| !oid.is_empty()) {
+        let current_tip_oid = git(
+            root,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("refs/heads/{branch}^{{commit}}"),
+            ],
+        )?
+        .trim()
+        .to_string();
+        if current_tip_oid != expected_tip_oid {
+            return Ok(Integration::Conflict(format!(
+                "worktree branch tip changed after evidence collection: expected {expected_tip_oid}, found {current_tip_oid}"
+            )));
+        }
+    }
     git(wt, &["add", "-A", "--", ".", ":(exclude).agents"])?;
     let staged = git(wt, &["diff", "--cached", "--name-only"])?;
-    if !staged.trim().is_empty() {
+    let committed_by_yardlet = !staged.trim().is_empty();
+    if committed_by_yardlet {
         let message = commit_message(root, task_id);
         git(wt, &["commit", "-m", &message])?;
     }
@@ -729,6 +754,15 @@ pub(crate) fn integrate_worktree(
     )?
     .trim()
     .to_string();
+    if !committed_by_yardlet
+        && expected_tip_oid
+            .filter(|oid| !oid.is_empty())
+            .is_some_and(|expected| expected != worker_tip)
+    {
+        return Ok(Integration::Conflict(
+            "worktree branch tip changed after evidence collection".to_string(),
+        ));
+    }
     let ancestry = git(
         root,
         &["merge-base", "--is-ancestor", baseline_oid, &worker_tip],
@@ -754,11 +788,62 @@ pub(crate) fn integrate_worktree(
     let base_oid = git(root, &["rev-parse", "--verify", "HEAD^{commit}"])?
         .trim()
         .to_string();
-    let ahead = git(root, &["rev-list", "--count", &format!("HEAD..{branch}")])?;
+    let ahead = git(
+        root,
+        &["rev-list", "--count", &format!("HEAD..{worker_tip}")],
+    )?;
     if ahead.trim() == "0" {
+        if worker_tip != baseline_oid {
+            // Crash recovery after `git merge --no-ff` succeeded but before the
+            // run record persisted its integration OID. Reconstruct the exact
+            // existing merge from first-parent history instead of returning
+            // NoChanges and losing ownership evidence. The second parent must
+            // be this run's immutable worktree tip.
+            let history = git(
+                root,
+                &[
+                    "rev-list",
+                    "--first-parent",
+                    "--reverse",
+                    &format!("{baseline_oid}..HEAD"),
+                ],
+            )?;
+            for candidate in history.lines().map(str::trim).filter(|oid| !oid.is_empty()) {
+                let parents = git(root, &["show", "-s", "--format=%P", candidate])?;
+                let parents = parents.split_whitespace().collect::<Vec<_>>();
+                if parents
+                    .get(1..)
+                    .is_some_and(|rest| rest.contains(&worker_tip.as_str()))
+                {
+                    let base_oid = parents[0].to_string();
+                    owned_oids.push(candidate.to_string());
+                    return Ok(Integration::Merged {
+                        oid: candidate.to_string(),
+                        base_oid,
+                        owned_oids,
+                    });
+                }
+            }
+            return Ok(Integration::Conflict(
+                "worktree commit is already reachable but its attributable merge commit \
+                 could not be reconstructed"
+                    .to_string(),
+            ));
+        }
         return Ok(Integration::NoChanges);
     }
-    match git(root, &["merge", "--no-ff", "--no-edit", branch]) {
+    let merge_message = format!("Merge run-owned branch {branch}");
+    match git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "-m",
+            &merge_message,
+            &worker_tip,
+        ],
+    ) {
         Ok(_) => {
             let oid = git(root, &["rev-parse", "--verify", "HEAD^{commit}"])?
                 .trim()
@@ -804,7 +889,7 @@ fn single_line(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn create_worktree(root: &Path, wt: &Path, branch: &str) -> Result<()> {
+pub(crate) fn create_worktree(root: &Path, wt: &Path, branch: &str) -> Result<()> {
     // Clear stale leftovers from a crashed/conflicted earlier run of this task.
     let wt_s = wt.display().to_string();
     let _ = git(root, &["worktree", "remove", "--force", &wt_s]);
@@ -825,7 +910,7 @@ pub(crate) fn remove_worktree(root: &Path, wt: &Path, branch: &str) {
 
 /// Keep `.agents/worktrees/` out of `git status` in any repo Yardlet runs in,
 /// without touching the repo's own .gitignore: use the repo-local exclude file.
-fn ensure_worktrees_excluded(root: &Path) {
+pub(crate) fn ensure_worktrees_excluded(root: &Path) {
     let Ok(common) = git(root, &["rev-parse", "--git-common-dir"]) else {
         return;
     };
@@ -845,7 +930,7 @@ fn ensure_worktrees_excluded(root: &Path) {
 }
 
 /// Best-effort recursive copy for small harness asset dirs (no-op if absent).
-fn copy_dir(src: &Path, dst: &Path) {
+pub(crate) fn copy_dir(src: &Path, dst: &Path) {
     let Ok(rd) = std::fs::read_dir(src) else {
         return;
     };
@@ -1299,7 +1384,8 @@ exit 0
         std::fs::write(wt.join("feature.txt"), "new\n").unwrap();
         std::fs::create_dir_all(wt.join(".agents")).unwrap();
         std::fs::write(wt.join(".agents/work-queue.yaml"), "copy").unwrap();
-        match integrate_worktree(&root, &wt, "yard/yard-001", "YARD-001", &baseline).unwrap() {
+        match integrate_worktree(&root, &wt, "yard/yard-001", "YARD-001", &baseline, None).unwrap()
+        {
             Integration::Merged { oid, .. } => {
                 assert_eq!(oid, sh_git(&root, &["rev-parse", "HEAD"]).trim());
             }
@@ -1321,6 +1407,105 @@ exit 0
         assert_eq!(merge_commit.trim(), "Local User|local@example.test");
         remove_worktree(&root, &wt, "yard/yard-001");
         assert!(!wt.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn repeated_integration_recovers_the_same_merge_oid_without_new_commit() {
+        let root = temp_repo("merge-recovery");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let wt = root.join(".agents/worktrees/yard-recover");
+        let branch = "yard/yard-recover";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("recovered.txt"), "owned\n").unwrap();
+        // Fault point: the isolated commit exists, but the main-process merge
+        // and run-record persistence did not happen yet.
+        sh_git(&wt, &["add", "recovered.txt"]);
+        sh_git(&wt, &["commit", "-q", "-m", "pre-crash isolated commit"]);
+        let worker_commit = sh_git(&wt, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let first =
+            integrate_worktree(&root, &wt, branch, "YARD-RECOVER", &baseline, None).unwrap();
+        let Integration::Merged {
+            oid: first_oid,
+            base_oid: first_base,
+            owned_oids: first_owned,
+        } = first
+        else {
+            panic!("expected first integration to merge")
+        };
+        let commit_count = sh_git(&root, &["rev-list", "--count", "HEAD"]);
+
+        let repeated =
+            integrate_worktree(&root, &wt, branch, "YARD-RECOVER", &baseline, None).unwrap();
+        let Integration::Merged {
+            oid,
+            base_oid,
+            owned_oids,
+        } = repeated
+        else {
+            panic!("expected recovery to reconstruct the existing integration")
+        };
+        assert_eq!(oid, first_oid);
+        assert_eq!(base_oid, first_base);
+        assert_eq!(owned_oids, first_owned);
+        assert_eq!(sh_git(&wt, &["rev-parse", "HEAD"]).trim(), worker_commit);
+        assert_eq!(
+            sh_git(&root, &["rev-list", "--count", "HEAD"]),
+            commit_count
+        );
+
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integration_rejects_branch_tip_changed_after_evidence() {
+        let root = temp_repo("merge-target-drift");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let wt = root.join(".agents/worktrees/yard-drift");
+        let branch = "yard/yard-drift";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("first.txt"), "evidence-bound\n").unwrap();
+        sh_git(&wt, &["add", "first.txt"]);
+        sh_git(&wt, &["commit", "-q", "-m", "evidence-bound commit"]);
+        let evidence_oid = sh_git(&root, &["rev-parse", &format!("{branch}^{{commit}}")])
+            .trim()
+            .to_string();
+
+        std::fs::write(wt.join("second.txt"), "moved after evidence\n").unwrap();
+        sh_git(&wt, &["add", "second.txt"]);
+        sh_git(&wt, &["commit", "-q", "-m", "post-evidence drift"]);
+        let drifted_oid = sh_git(&root, &["rev-parse", &format!("{branch}^{{commit}}")])
+            .trim()
+            .to_string();
+        assert_ne!(evidence_oid, drifted_oid);
+        let main_before = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let result = integrate_worktree(
+            &root,
+            &wt,
+            branch,
+            "YARD-DRIFT",
+            &baseline,
+            Some(&evidence_oid),
+        )
+        .unwrap();
+
+        let Integration::Conflict(why) = result else {
+            panic!("changed merge target must fail closed")
+        };
+        assert!(why.contains("changed after evidence"), "{why}");
+        assert_eq!(sh_git(&root, &["rev-parse", "HEAD"]).trim(), main_before);
+        assert!(wt.exists(), "the rejected worktree must remain available");
+        assert_eq!(
+            sh_git(&root, &["rev-parse", &format!("{branch}^{{commit}}")]).trim(),
+            drifted_oid
+        );
+
+        remove_worktree(&root, &wt, branch);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1372,7 +1557,8 @@ exit 0
                 "main edit",
             ],
         );
-        match integrate_worktree(&root, &wt, "yard/yard-002", "YARD-002", &baseline).unwrap() {
+        match integrate_worktree(&root, &wt, "yard/yard-002", "YARD-002", &baseline, None).unwrap()
+        {
             Integration::Conflict(_) => {}
             _ => panic!("expected a conflict"),
         }
@@ -1409,7 +1595,8 @@ exit 0
         let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-009").unwrap();
         std::fs::write(wt.join("other.txt"), "fine\n").unwrap();
-        match integrate_worktree(&root, &wt, "yard/yard-009", "YARD-009", &baseline).unwrap() {
+        match integrate_worktree(&root, &wt, "yard/yard-009", "YARD-009", &baseline, None).unwrap()
+        {
             Integration::Conflict(why) => assert!(why.contains("another merge"), "{why}"),
             _ => panic!("expected a conflict report"),
         }
@@ -1428,7 +1615,8 @@ exit 0
         let wt = root.join(".agents/worktrees/yard-003");
         let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-003").unwrap();
-        match integrate_worktree(&root, &wt, "yard/yard-003", "YARD-003", &baseline).unwrap() {
+        match integrate_worktree(&root, &wt, "yard/yard-003", "YARD-003", &baseline, None).unwrap()
+        {
             Integration::NoChanges => {}
             _ => panic!("expected no changes"),
         }

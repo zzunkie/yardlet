@@ -256,6 +256,7 @@ pub fn spawn(
     profile: &WorkerProfile,
     bin: &Path,
     packet: &str,
+    worker_run_dir: &Path,
     cwd: &Path,
     env: &[(String, String)],
     output_log: &Path,
@@ -267,12 +268,15 @@ pub fn spawn(
 ) -> Result<WorkerOutcome> {
     use std::io::{Read, Write};
 
-    let run_dir = output_log.parent().unwrap_or(cwd);
+    // `worker_run_dir` may be a staging directory inside an isolated worktree,
+    // while `output_log` and worker.pid remain owned by the main Yardlet
+    // process in the canonical run directory.
+    let control_run_dir = output_log.parent().unwrap_or(cwd);
     let mut cmd = if resume {
         build_resume_command(
             &profile.id,
             bin,
-            run_dir,
+            worker_run_dir,
             cwd,
             full_access,
             &profile.model,
@@ -285,7 +289,7 @@ pub fn spawn(
             "codex" | "claude-code" => build_command(
                 &profile.id,
                 bin,
-                run_dir,
+                worker_run_dir,
                 cwd,
                 full_access,
                 &profile.model,
@@ -296,7 +300,7 @@ pub fn spawn(
             _ => build_generic_command(
                 &profile.invocation,
                 bin,
-                run_dir,
+                worker_run_dir,
                 cwd,
                 full_access,
                 &profile.model,
@@ -325,7 +329,7 @@ pub fn spawn(
         .with_context(|| format!("spawning worker '{}'", bin.display()))?;
 
     // Record the worker PID so the TUI can stop it (Esc) by killing the process.
-    let pid_path = run_dir.join("worker.pid");
+    let pid_path = control_run_dir.join("worker.pid");
     let _ = std::fs::write(&pid_path, child.id().to_string());
 
     if let Some(mut stdin) = child.stdin.take() {
