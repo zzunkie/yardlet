@@ -1319,6 +1319,7 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
 
 fn cmd_approve(cwd: &std::path::Path, args: ApproveArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
+    crate::planning::validate_active_activation(&ws)?;
     let queue = ws.load_queue()?;
     if !queue.tasks.iter().any(|t| t.id == args.task) {
         anyhow::bail!("task '{}' not found in the queue", args.task);
@@ -1903,6 +1904,7 @@ fn cmd_inspect(cwd: &std::path::Path, args: InspectArgs) -> Result<()> {
 
 fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
+    crate::planning::validate_active_activation(&ws)?;
     let queue = ws.load_queue()?;
     let intent = ws.load_intent()?;
     let task = queue
@@ -2110,6 +2112,43 @@ auto_commit: false
         let output = queue_lines(&current).join("\n");
         assert!(output.contains("CURRENT INTENT REASON"));
         assert!(!output.contains("STALE INTENT REASON"));
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn packet_and_approve_reject_corrupt_activated_state_without_approval_write() {
+        let ws = crate::snapshot::corrupt_activated_state_fixture("cli-entrypoints");
+        let approval_path = ws.agents_dir().join("approvals.yaml");
+
+        let packet_error = cmd_packet(
+            &ws.root,
+            PacketArgs {
+                task: "YARD-001".to_string(),
+                worker: "codex".to_string(),
+                dry_run: true,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            packet_error.contains("unconfirmed_or_inconsistent"),
+            "{packet_error}"
+        );
+
+        let approve_error = cmd_approve(
+            &ws.root,
+            ApproveArgs {
+                task: "YARD-001".to_string(),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            approve_error.contains("unconfirmed_or_inconsistent"),
+            "{approve_error}"
+        );
+        assert!(!approval_path.exists());
 
         let _ = std::fs::remove_dir_all(ws.root);
     }

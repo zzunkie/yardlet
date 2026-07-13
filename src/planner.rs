@@ -910,9 +910,32 @@ pub(crate) fn reconcile_queue_capabilities(
     queue: &mut WorkQueue,
     workers: &WorkersFile,
 ) -> Vec<String> {
+    reconcile_queue_capabilities_inner(queue, workers, None)
+}
+
+pub(crate) fn reconcile_queue_capabilities_for_ids(
+    queue: &mut WorkQueue,
+    workers: &WorkersFile,
+    task_ids: &[String],
+) -> Vec<String> {
+    let task_ids = task_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    reconcile_queue_capabilities_inner(queue, workers, Some(&task_ids))
+}
+
+fn reconcile_queue_capabilities_inner(
+    queue: &mut WorkQueue,
+    workers: &WorkersFile,
+    task_ids: Option<&std::collections::BTreeSet<&str>>,
+) -> Vec<String> {
     let vocab = crate::routing::declared_capabilities(workers);
     let mut parked = Vec::new();
     for t in queue.tasks.iter_mut() {
+        if task_ids.is_some_and(|task_ids| !task_ids.contains(t.id.as_str())) {
+            continue;
+        }
         if t.state != TaskState::Queued || t.required_capabilities.is_empty() {
             continue;
         }
@@ -1060,30 +1083,19 @@ pub(crate) fn ingest_follow_ups(
             }),
             validation: None,
             approval: follow_up_needs_approval(fu).then(risk_based_approval),
-            interaction: None,
+            interaction: is_decision.then(|| {
+                let mut interaction = serde_yaml_ng::Mapping::new();
+                interaction.insert(
+                    yaml::Value::String("decision_question".to_string()),
+                    yaml::Value::String(decision.to_string()),
+                );
+                yaml::Value::Mapping(interaction)
+            }),
             worker_rationale: rationale,
             provenance: "worker-proposed".to_string(),
         });
         // HARD placement: make each named existing task depend on this new one.
         inject_runs_before(queue, &id, &fu.runs_before);
-        // Seed the decision question as the worker's opening conversation turn so
-        // `yardlet status` surfaces it and `yardlet answer` threads it back to the
-        // worker on resume. `ws` is None in unit tests (which assert only the
-        // queue mutation).
-        if is_decision {
-            if let Some(ws) = ws {
-                let _ = crate::state::append_conversation_turn(
-                    ws,
-                    &id,
-                    crate::schemas::ConversationTurn {
-                        role: crate::schemas::TurnRole::Worker,
-                        text: decision.to_string(),
-                        run_id: String::new(),
-                        ts: String::new(),
-                    },
-                );
-            }
-        }
         ingested.push(id);
         next_num += 1;
     }
@@ -1094,14 +1106,53 @@ pub(crate) fn ingest_follow_ups(
             .flatten()
             .map(|intent| intent.raw_request)
             .unwrap_or_default();
-        let _ = crate::skills::project_task_skills_with_context(
-            ws,
-            &inspect::summarize(&ws.root),
-            &mut queue.tasks,
-            &context,
-        );
+        let summary = inspect::summarize(&ws.root);
+        for id in &ingested {
+            if let Some(task) = queue.tasks.iter_mut().find(|task| &task.id == id) {
+                let _ = crate::skills::project_task_skills_with_context(
+                    ws,
+                    &summary,
+                    std::slice::from_mut(task),
+                    &context,
+                );
+            }
+        }
     }
     ingested
+}
+
+pub(crate) fn persist_ingested_decision_questions(
+    ws: &crate::state::Workspace,
+    queue: &WorkQueue,
+    ingested: &[String],
+) -> anyhow::Result<()> {
+    for id in ingested {
+        let Some(task) = queue.tasks.iter().find(|task| &task.id == id) else {
+            continue;
+        };
+        let Some(yaml::Value::Mapping(interaction)) = task.interaction.as_ref() else {
+            continue;
+        };
+        let Some(question) = interaction
+            .get(yaml::Value::String("decision_question".to_string()))
+            .and_then(yaml::Value::as_str)
+            .map(str::trim)
+            .filter(|question| !question.is_empty())
+        else {
+            continue;
+        };
+        crate::state::append_conversation_turn(
+            ws,
+            id,
+            crate::schemas::ConversationTurn {
+                role: crate::schemas::TurnRole::Worker,
+                text: question.to_string(),
+                run_id: String::new(),
+                ts: String::new(),
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// Should an ingested follow-up be gated for human approval before a worker

@@ -1087,8 +1087,7 @@ PY
     wait "$confirm_pid"; confirm_status=$?
     wait "$add_pid"; add_status=$?
     set -e
-    [[ "$add_status" -ne 0 ]] || fail "concurrent add changed immutable activated queue membership"
-    grep -q 'active_runtime_envelope_mismatch' "$EVIDENCE_DIR/runtime-race-add.err" || fail "concurrent add immutable-envelope reason missing"
+    [[ "$add_status" -eq 0 ]] || fail "receipt-backed concurrent add failed with $add_status"
     wait_for_file "$barrier/worker-entered" "$run_pid"
     rm -f "$barrier/entered" "$barrier/release"
     touch "$barrier/worker-release"
@@ -1104,13 +1103,14 @@ PY
     [[ "$confirm_status" -ne 0 ]] || fail "concurrent confirm overwrote runtime queue transition"
     grep -Eq 'active_queue_not_drained|running_queue_isolated' "$EVIDENCE_DIR/runtime-race-confirm.err" || fail "runtime race rejection reason missing"
     [[ "$run_status" -eq 0 ]] || fail "runtime process failed with $run_status"
-    [[ "$finalize_add_status" -ne 0 ]] || fail "concurrent finalize add changed immutable activated queue membership"
-    grep -q 'active_runtime_envelope_mismatch' "$EVIDENCE_DIR/finalize-race-add.err" || fail "finalize add immutable-envelope reason missing"
+    [[ "$finalize_add_status" -eq 0 ]] || fail "receipt-backed finalize add failed with $finalize_add_status"
     run_yardlet queue >"$EVIDENCE_DIR/runtime-race-queue.out"
     grep -Eq 'running|failed|partial|done' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "runtime queue state was lost"
-    ! grep -q 'added during runtime transition' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "rejected runtime add leaked into activated queue"
-    ! grep -q 'added during finalize' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "rejected finalize add leaked into activated queue"
-    write_summary "run/finalize state transition과 confirm/add 경쟁이 동일 lock/CAS 경계에서 직렬화되고 activated queue membership 변경은 거절됨"
+    grep -q 'added during runtime transition' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "runtime add was lost"
+    grep -q 'added during finalize' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "finalize add was lost"
+    [[ "$(find "$ROOT/.agents/runtime-task-receipts" -type f -name '*.yaml' ! -name '*.committed.yaml' | wc -l | tr -d ' ')" == "2" ]] || fail "concurrent additions did not leave two exact origin receipts"
+    [[ "$(find "$ROOT/.agents/runtime-task-receipts" -type f -name '*.committed.yaml' | wc -l | tr -d ' ')" == "2" ]] || fail "concurrent additions did not leave two committed ordinal markers"
+    write_summary "run/finalize state transition, rejected confirm, and two receipt-backed additions serialized without lost updates"
     ;;
   receipt_v2_integrity)
     accept_proposal "$p1" none act-receipt-completed >/dev/null
@@ -1397,17 +1397,143 @@ PY
     [[ "$(json_get "$EVIDENCE_DIR/runtime-state-done.json" exact_active_parity)" == "true" ]] || fail "allowed Done state broke parity"
     write_summary "activated runtime task는 state-only transition만 허용하고 title/scope/worker/risk 변조는 모든 mutation entry에서 bytes 불변으로 거절됨"
     ;;
-  writer_inventory)
-    violations="$EVIDENCE_DIR/writer-inventory.txt"
-    : >"$violations"
-    for file in src/cli.rs src/parallel.rs src/run.rs src/ui/mod.rs; do
-      awk '/^#\[cfg\(test\)\]/{exit} {print}' "$REPO_ROOT/$file" | grep -n '\.save_queue(' >>"$violations" || true
+  runtime_origin_contract)
+    accept_proposal "$p1" none act-runtime-origin-accept >/dev/null
+    head="$(visible_head)"
+    run_yardlet planning confirm --expected-head "$head" --action-id act-runtime-origin-confirm >/dev/null
+    materialized_before="$(sed -n '/^materialized_queue:/,$p' "$ROOT/.agents/work-queue.yaml" | shasum | awk '{print $1}')"
+
+    run_yardlet add "explicit runtime follow-up" --scope src/state.rs >/dev/null
+    run_yardlet add "second runtime follow-up" --scope src/schemas.rs >/dev/null
+    run_yardlet planning show --json >"$EVIDENCE_DIR/runtime-origin-added.json"
+    [[ "$(json_get "$EVIDENCE_DIR/runtime-origin-added.json" exact_active_parity)" == "true" ]] || fail "provenanced user add broke active parity"
+    [[ "$materialized_before" == "$(sed -n '/^materialized_queue:/,$p' "$ROOT/.agents/work-queue.yaml" | shasum | awk '{print $1}')" ]] || fail "user add rewrote immutable materialized queue"
+    grep -Eq "materialized_by_confirmation_id: (''|\"\")" "$ROOT/.agents/work-queue.yaml" || fail "user-added task was disguised as confirmed materialization"
+    receipt="$(find "$ROOT/.agents/runtime-task-receipts" -type f -name 'YARD-002*.yaml' ! -name '*.committed.yaml' | head -n 1)"
+    [[ -n "$receipt" && -f "$receipt" ]] || fail "user add did not persist an immutable origin receipt"
+    [[ -f "${receipt%.yaml}.committed.yaml" ]] || fail "user add did not persist its committed ordinal marker"
+
+    run_yardlet defer YARD-001 "audit pause" >/dev/null
+    run_yardlet planning show --json >"$EVIDENCE_DIR/runtime-origin-deferred.json"
+    [[ "$(json_get "$EVIDENCE_DIR/runtime-origin-deferred.json" exact_active_parity)" == "true" ]] || fail "defer runtime overlay broke active parity"
+    run_yardlet revive YARD-001 >/dev/null
+    run_yardlet planning show --json >"$EVIDENCE_DIR/runtime-origin-revived.json"
+    [[ "$(json_get "$EVIDENCE_DIR/runtime-origin-revived.json" exact_active_parity)" == "true" ]] || fail "revive runtime overlay broke active parity"
+
+    origin_base="$EVIDENCE_DIR/runtime-origin-base"
+    cp -R "$ROOT" "$origin_base"
+    for mode in missing_receipt forged_receipt forged_title confirmed_disguise deleted_task reordered_tasks; do
+      corrupt_root="$EVIDENCE_DIR/runtime-origin-$mode"
+      cp -R "$origin_base" "$corrupt_root"
+      case "$mode" in
+        missing_receipt)
+          rm -rf "$corrupt_root/.agents/runtime-task-receipts"
+          ;;
+        forged_receipt)
+          receipt_path="$(find "$corrupt_root/.agents/runtime-task-receipts" -type f -name 'YARD-002*.yaml' ! -name '*.committed.yaml' | head -n 1)"
+          python3 - "$receipt_path" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text, count = re.subn(r"^origin_action_id: .+$", "origin_action_id: forged-action", text, count=1, flags=re.M)
+if count != 1:
+    raise SystemExit("failed to forge runtime receipt")
+open(path, "w", encoding="utf-8").write(text)
+PY
+          ;;
+        forged_title)
+          python3 - "$corrupt_root/.agents/work-queue.yaml" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+current, materialized = text.split("materialized_queue:", 1)
+current, count = re.subn(r"^(\s+title:) explicit runtime follow-up$", r"\1 forged follow-up", current, count=1, flags=re.M)
+if count != 1:
+    raise SystemExit("failed to forge added task title")
+open(path, "w", encoding="utf-8").write(current + "materialized_queue:" + materialized)
+PY
+          ;;
+        confirmed_disguise)
+          confirmation="$(sed -n 's/^confirmation_id: //p' "$corrupt_root/.agents/work-queue.yaml" | head -n 1)"
+          python3 - "$corrupt_root/.agents/work-queue.yaml" "$confirmation" <<'PY'
+import re
+import sys
+path, confirmation = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+current, materialized = text.split("materialized_queue:", 1)
+current, count = re.subn(r"^(\s+materialized_by_confirmation_id:) (?:''|\"\")$", rf'\1 {confirmation}', current, count=1, flags=re.M)
+if count != 1:
+    raise SystemExit("failed to disguise added task")
+open(path, "w", encoding="utf-8").write(current + "materialized_queue:" + materialized)
+PY
+          ;;
+        deleted_task)
+          python3 - "$corrupt_root/.agents/work-queue.yaml" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+current, materialized = text.split("materialized_queue:", 1)
+current, count = re.subn(r"(?ms)^- id: YARD-003\n.*?(?=^- id: |^planning_session_id:)", "", current, count=1)
+if count != 1:
+    raise SystemExit("failed to delete committed runtime task")
+open(path, "w", encoding="utf-8").write(current + "materialized_queue:" + materialized)
+PY
+          ;;
+        reordered_tasks)
+          python3 - "$corrupt_root/.agents/work-queue.yaml" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+current, materialized = text.split("materialized_queue:", 1)
+pattern = re.compile(r"(?ms)^- id: (YARD-002|YARD-003)\n.*?(?=^- id: |^planning_session_id:)")
+blocks = pattern.findall(current)
+matches = list(pattern.finditer(current))
+if blocks != ["YARD-002", "YARD-003"] or len(matches) != 2:
+    raise SystemExit("failed to locate committed runtime task order")
+first, second = matches
+current = current[:first.start()] + second.group(0) + first.group(0) + current[second.end():]
+open(path, "w", encoding="utf-8").write(current + "materialized_queue:" + materialized)
+PY
+          ;;
+      esac
+      before="$(state_digest "$corrupt_root")"
+      if run_in "$corrupt_root" packet --task YARD-002 --dry-run >"$EVIDENCE_DIR/runtime-origin-$mode.out" 2>"$EVIDENCE_DIR/runtime-origin-$mode.err"; then
+        fail "runtime origin corruption $mode produced a packet"
+      fi
+      grep -Eq 'active_runtime_(origin|envelope)_mismatch|unconfirmed_or_inconsistent' "$EVIDENCE_DIR/runtime-origin-$mode.err" || fail "runtime origin corruption reason missing for $mode"
+      [[ "$before" == "$(state_digest "$corrupt_root")" ]] || fail "runtime origin corruption $mode changed canonical state"
     done
-    [[ ! -s "$violations" ]] || fail "unlocked production queue writers remain: $(tr '\n' ';' <"$violations")"
+    write_summary "confirmed base contract remained immutable while committed receipt-backed additions preserved exact presence/order and defer/revive overlays stayed runnable"
+    ;;
+  writer_inventory)
+    inventory="$EVIDENCE_DIR/writer-inventory.txt"
+    : >"$inventory"
+    while IFS= read -r file; do
+      relative="${file#"$REPO_ROOT/"}"
+      [[ "$relative" == "src/state.rs" ]] && continue
+      awk '/^#\[cfg\(test\)\]/{exit} {print}' "$file" \
+        | grep -nE '\.save_queue(_locked)?\(' \
+        | sed "s#^#$relative:#" >>"$inventory" || true
+    done < <(find "$REPO_ROOT/src" -type f -name '*.rs' | sort)
+    [[ -s "$inventory" ]] || fail "workspace-wide queue writer inventory was unexpectedly empty"
     save_queue_body="$(sed -n '/pub fn save_queue(/,/^    }/p' "$REPO_ROOT/src/state.rs")"
     grep -q 'acquire_planning_lock' <<<"$save_queue_body" || fail "public compatibility queue writer does not acquire the workspace lock"
     grep -q 'save_queue_locked' <<<"$save_queue_body" || fail "public compatibility queue writer bypasses raw-byte CAS"
-    write_summary "production queue writer inventory에 unlocked save_queue API나 caller가 없음"
+    locked_writer_body="$(sed -n '/pub fn save_queue_locked(/,/^    }/p' "$REPO_ROOT/src/state.rs")"
+    grep -q 'PlanningLock' <<<"$locked_writer_body" || fail "locked queue writer does not require the guard token"
+    grep -q 'write_str_atomic_cas' <<<"$locked_writer_body" || fail "locked queue writer bypasses raw-byte CAS"
+    activated_writer_body="$(sed -n '/pub fn save_activated_queue_snapshot_locked(/,/^    }/p' "$REPO_ROOT/src/state.rs")"
+    grep -q 'PlanningLock' <<<"$activated_writer_body" || fail "activation queue writer does not require the guard token"
+    grep -q 'write_str_atomic_cas' <<<"$activated_writer_body" || fail "activation queue writer bypasses raw-byte CAS"
+    architecture_guard="$(sed -n '/fn canonical_agents_state_writes_stay_behind_state_module/,/^}/p' "$REPO_ROOT/tests/state_architecture_guard.rs")"
+    grep -q 'scan_dir' <<<"$architecture_guard" || fail "workspace-wide canonical writer architecture guard is missing"
+    grep -q 'runtime-task-receipts' "$REPO_ROOT/tests/state_architecture_guard.rs" || fail "runtime receipt canonical path is outside the writer architecture guard"
+    grep -q 'runtime-capability-receipts' "$REPO_ROOT/tests/state_architecture_guard.rs" || fail "runtime capability receipt path is outside the writer architecture guard"
+    write_summary "all production Rust queue callers are inventoried; public and guard-token writers converge on state.rs raw-byte CAS"
     ;;
   express_concurrency)
     express_root="$EVIDENCE_DIR/express-workspace"

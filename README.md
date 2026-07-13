@@ -523,7 +523,9 @@ confirmation exactly. Before an accepted revision is stored, its prepared
 receipt reserves the stable result id and exact typed effect event id, payload,
 and digest. A schema-version 2 terminal receipt requires all four effect fields,
 and its canonical payload bytes and digest must equal the one immutable journal
-event; schema version 1 compatibility is an explicit separate branch. The event
+event. Schema version 1 compatibility is an explicit separate branch: realistic
+legacy events may omit the request digest, and replay never appends a synthetic
+duplicate or mutates the old journal. The event
 journal fails closed unless sequence numbers are contiguous from 1, filename and
 embedded identities match, event ids and payloads are unique, action/type
 cardinality is valid, and `next_seq` is not ahead. A persisted session also
@@ -536,11 +538,23 @@ compare-and-swap boundary. Lock acquisition is non-blocking with a bounded
 timeout, retrying interrupt and contention errors, and the descriptor is closed
 across worker execution. Immutable revisions and events use atomic no-clobber
 create, while session and action transitions use compare-and-swap. The activated
-queue retains an immutable materialized plan for confirmation parity while its
-runtime task states evolve. Task ids, order, and every execution-contract field
-must still equal that materialized plan; only `Task.state` may differ. Queue,
-run, add, finalization, and recovery entry points reject an altered runtime
-envelope before changing active bytes. Each express goal holds the same outer
+queue retains an immutable materialized base plan for confirmation parity.
+Confirmed task identity, relative order, worker, scope, dependencies, and
+acceptance stay exact while typed scheduler metadata evolves. Explicit user
+adds and ingested worker follow-ups are append-only runtime tasks with an empty
+confirmation-materialization marker and a separate core-owned immutable origin
+receipt; their execution contract must keep matching that receipt. A committed
+ordinal marker makes their presence and order append-only. Hard `runs_before`
+edges and stale decision-capability clears are accepted only when their exact
+typed runtime receipt replays onto the immutable base. Receipt preparation is
+provisional until that marker exists: if queue CAS never exposes the effect, a
+well-formed uncommitted receipt can be safely superseded by a later retry. Once
+the effect is in the queue, only its exact after-queue digest may repair the
+missing commit marker. Skill projection after confirmation touches only newly
+ingested tasks. Snapshot,
+status, TUI startup, packet, approval, queue, run, add, finalization, and
+recovery reject an altered envelope or missing receipt before exposing trusted
+work or changing canonical bytes. Each express goal holds the same outer
 workspace transaction across session creation, proposal, accept, and confirm,
 so concurrent express processes cannot interleave planning sessions. A new confirmation refuses to replace an active
 queue that still contains Queued, Running, NeedsUser, Partial, or Blocked work,
@@ -571,6 +585,8 @@ Yardlet owns state; workers do not. Canonical state lives under `.agents/` in th
   planning.lock             kernel-held workspace mutation transaction lock
   planning-sessions/        sessions, immutable proposals/drafts, ordered events, action receipts
   activations/              committed exact-promotion receipts
+  runtime-task-receipts/    immutable origins for post-confirm user/follow-up tasks
+  runtime-capability-receipts/ typed stale-decision capability migrations
   activation-required.yaml durable V010-origin discriminator for fail-closed scheduling
   *-policy.yaml             tool / approval / interaction / research / billing policy
   workers.yaml              worker profiles + routing

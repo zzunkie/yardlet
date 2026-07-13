@@ -15,11 +15,15 @@ const CANONICAL_STATE_MARKERS: &[&str] = &[
     "planning_session_path(",
     "draft_revision_path(",
     "activation_path(",
+    "runtime_task_receipt_path(",
+    "runtime_capability_receipt_path(",
     ".agents/work-queue.yaml",
     ".agents/intent-contract.yaml",
     ".agents/transitions",
     ".agents/planning-sessions",
     ".agents/activations",
+    ".agents/runtime-task-receipts",
+    ".agents/runtime-capability-receipts",
 ];
 
 #[test]

@@ -74,6 +74,10 @@ impl Snapshot {
     }
 
     fn load_inner(ws: &Workspace, cached_workers: Option<Vec<WorkerLine>>) -> Result<Snapshot> {
+        // A snapshot is a trusted projection used by both status and every TUI
+        // action. Never expose canonical state until its activation provenance
+        // and immutable runtime envelope have passed the shared fail-closed gate.
+        crate::planning::validate_active_activation(ws)?;
         let config = ws.load_config()?;
         let intent = ws.load_intent()?;
         // Sort for display (active work on top, done at the bottom); in-memory
@@ -335,6 +339,74 @@ records:
 }
 
 #[cfg(test)]
+pub(crate) fn corrupt_activated_state_fixture(name: &str) -> Workspace {
+    let root = std::env::temp_dir().join(format!(
+        "yard-snapshot-corrupt-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let ws = Workspace::at(&root);
+    std::fs::create_dir_all(ws.agents_dir()).unwrap();
+    std::fs::write(
+        ws.config_path(),
+        r#"schema_version: 1
+product: yardlet
+workspace_id: corrupt-snapshot-test
+created_at: "2026-07-14T00:00:00Z"
+state_dir: .agents
+default_interface: tui
+canonical_queue: work-queue.yaml
+current_intent: intent-corrupt-test
+"#,
+    )
+    .unwrap();
+    std::fs::write(ws.billing_path(), crate::templates::BILLING_POLICY).unwrap();
+    std::fs::write(
+        ws.workers_path(),
+        "schema_version: 1\nworkers: []\nrouting: {}\n",
+    )
+    .unwrap();
+
+    let content: crate::schemas::PlanningDraftContent = crate::yaml::from_str(
+        r#"
+intent:
+  schema_version: 1
+  id: intent-corrupt-test
+  source: user
+  raw_request: reject corrupt active state
+  summary: reject corrupt active state
+  allowed_scope: [src]
+  out_of_scope: [docs]
+  acceptance: [fail closed]
+  ambiguity: low
+  status: accepted
+queue:
+  schema_version: 1
+  queue_id: queue-intent-corrupt-test
+  intent_id: intent-corrupt-test
+  tasks:
+    - id: YARD-001
+      title: reject corrupt active state
+      state: queued
+      allowed_scope: [src]
+      acceptance: [fail closed]
+      approval:
+        required: true
+"#,
+    )
+    .unwrap();
+    crate::planning::activate_express_draft(&ws, "reject corrupt active state", content).unwrap();
+
+    let mut queue = ws.load_activated_queue().unwrap().unwrap();
+    queue.tasks[0].task.title = "forged active task".to_string();
+    let lock = ws.acquire_planning_lock().unwrap();
+    ws.save_activated_queue_snapshot_locked(&lock, &queue)
+        .unwrap();
+    drop(lock);
+    ws
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::schemas::{TaskState, TransitionActor, TransitionCause};
@@ -369,6 +441,19 @@ mod tests {
         assert!(preserved.contains("STALE INTENT REASON"));
         assert!(preserved.contains("CURRENT INTENT REASON"));
 
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn snapshot_rejects_corrupt_activated_state_before_projecting_it() {
+        let ws = corrupt_activated_state_fixture("validation-gate");
+
+        let error = Snapshot::load_reusing_workers(&ws, Vec::new())
+            .err()
+            .expect("corrupt activated state must not produce a snapshot")
+            .to_string();
+
+        assert!(error.contains("unconfirmed_or_inconsistent"), "{error}");
         let _ = std::fs::remove_dir_all(ws.root);
     }
 }

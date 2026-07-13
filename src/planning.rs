@@ -589,6 +589,36 @@ fn linked_action_event(
     Ok(matches.into_iter().next())
 }
 
+fn linked_legacy_action_event(
+    ws: &Workspace,
+    session_id: &str,
+    action_id: &str,
+    request_digest: &str,
+    event_type: PlanningEventType,
+) -> Result<Option<PlanningEvent>> {
+    let matches = ws
+        .load_planning_events(session_id)?
+        .into_iter()
+        .filter(|event| event.event_type == event_type && event.action_id == action_id)
+        .collect::<Vec<_>>();
+    if matches.len() > 1 {
+        bail!("planning_event_journal: action/type cardinality violation");
+    }
+    let event = matches.into_iter().next();
+    if event
+        .as_ref()
+        .is_some_and(|event| event.schema_version != 1)
+    {
+        bail!("planning_event_journal: legacy action event schema mismatch");
+    }
+    if event.as_ref().is_some_and(|event| {
+        !event.action_request_digest.is_empty() && event.action_request_digest != request_digest
+    }) {
+        bail!("planning_event_journal: legacy action digest mismatch");
+    }
+    Ok(event)
+}
+
 fn planning_receipt_corrupt(reason: impl std::fmt::Display) -> anyhow::Error {
     anyhow!("planning_receipt_corrupt: {reason}")
 }
@@ -795,34 +825,38 @@ fn begin_action(
         match existing.status {
             PlanningActionStatus::Completed => {
                 validate_terminal_action_effect(ws, &existing)?;
-                append_action_event_once(
-                    ws,
-                    session,
-                    PlanningEventType::ActionCompleted,
-                    "system",
-                    EventFields {
-                        action_id,
-                        action_request_digest: &existing.request_digest,
-                        draft_revision_id: &existing.result_id,
-                        ..EventFields::default()
-                    },
-                )?;
+                if existing.schema_version != 1 {
+                    append_action_event_once(
+                        ws,
+                        session,
+                        PlanningEventType::ActionCompleted,
+                        "system",
+                        EventFields {
+                            action_id,
+                            action_request_digest: &existing.request_digest,
+                            draft_revision_id: &existing.result_id,
+                            ..EventFields::default()
+                        },
+                    )?;
+                }
                 return Ok((existing, true));
             }
             PlanningActionStatus::Rejected => {
                 validate_terminal_action_effect(ws, &existing)?;
-                append_action_event_once(
-                    ws,
-                    session,
-                    PlanningEventType::ActionRejected,
-                    "system",
-                    EventFields {
-                        action_id,
-                        action_request_digest: &existing.request_digest,
-                        message: &existing.error,
-                        ..EventFields::default()
-                    },
-                )?;
+                if existing.schema_version != 1 {
+                    append_action_event_once(
+                        ws,
+                        session,
+                        PlanningEventType::ActionRejected,
+                        "system",
+                        EventFields {
+                            action_id,
+                            action_request_digest: &existing.request_digest,
+                            message: &existing.error,
+                            ..EventFields::default()
+                        },
+                    )?;
+                }
                 bail!(
                     "action_previously_rejected: {}",
                     if existing.error.is_empty() {
@@ -1900,11 +1934,8 @@ pub fn validate_active_activation(ws: &Workspace) -> Result<ActivationGate> {
     if !workspace_requires_activation && !provenance_present(&intent, &queue) {
         return Ok(ActivationGate::Legacy);
     }
-    if !queue.runtime_envelope_matches_materialized() {
-        return Err(inconsistent(
-            "active_runtime_envelope_mismatch: current tasks differ from immutable materialized_queue",
-        ));
-    }
+    ws.validate_activated_queue_runtime(&queue)
+        .map_err(|error| inconsistent(&error.to_string()))?;
     if intent.activation_required != queue.activation_required {
         return Err(inconsistent("active snapshot origin marker mismatch"));
     }
@@ -1973,7 +2004,7 @@ pub fn validate_active_activation(ws: &Workspace) -> Result<ActivationGate> {
         ));
     }
     let effect = match action.schema_version {
-        1 => linked_action_event(
+        1 => linked_legacy_action_event(
             ws,
             &activation.session_id,
             &action.action_id,
@@ -1995,9 +2026,11 @@ pub fn validate_active_activation(ws: &Workspace) -> Result<ActivationGate> {
             )))
         }
     };
+    let effect_digest_matches = effect.action_request_digest == action.request_digest
+        || (action.schema_version == 1 && effect.action_request_digest.is_empty());
     if effect.event_type != PlanningEventType::DraftConfirmed
         || effect.action_id != action.action_id
-        || effect.action_request_digest != action.request_digest
+        || !effect_digest_matches
         || effect.draft_revision_id != activation.draft_revision_id
         || effect.related_revision_id != activation.confirmation_id
     {
@@ -2008,13 +2041,6 @@ pub fn validate_active_activation(ws: &Workspace) -> Result<ActivationGate> {
     }
     if activation.queue_digest != activated_queue_digest(&queue)? {
         return Err(inconsistent("active queue digest mismatch"));
-    }
-    if queue
-        .tasks
-        .iter()
-        .any(|task| task.materialized_by_confirmation_id != activation.confirmation_id)
-    {
-        return Err(inconsistent("task materialization confirmation mismatch"));
     }
     let session = ws
         .load_planning_session(&activation.session_id)
@@ -2176,6 +2202,60 @@ queue:
         Workspace::at(&root)
     }
 
+    fn journal_snapshot(ws: &Workspace, session_id: &str) -> Vec<(String, Vec<u8>)> {
+        let mut paths = std::fs::read_dir(ws.planning_session_dir(session_id).join("events"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths
+            .into_iter()
+            .map(|path| {
+                (
+                    path.file_name().unwrap().to_string_lossy().into_owned(),
+                    std::fs::read(path).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    fn rewrite_receipt_as_v1(
+        ws: &Workspace,
+        session_id: &str,
+        action_id: &str,
+    ) -> PlanningActionReceipt {
+        let mut receipt = ws
+            .load_planning_action(session_id, action_id)
+            .unwrap()
+            .unwrap();
+        receipt.schema_version = 1;
+        receipt.effect_event_id.clear();
+        receipt.effect_event_type = None;
+        receipt.effect_event_digest.clear();
+        receipt.effect_event = None;
+        crate::state::save_yaml(&ws.planning_action_path(session_id, action_id), &receipt).unwrap();
+
+        receipt
+    }
+
+    fn rewrite_action_as_realistic_v1(
+        ws: &Workspace,
+        session_id: &str,
+        action_id: &str,
+    ) -> PlanningActionReceipt {
+        let receipt = rewrite_receipt_as_v1(ws, session_id, action_id);
+
+        for mut event in ws.load_planning_events(session_id).unwrap() {
+            if event.action_id == action_id {
+                event.schema_version = 1;
+                event.action_request_digest.clear();
+                crate::state::save_yaml(&ws.planning_event_path(session_id, event.seq), &event)
+                    .unwrap();
+            }
+        }
+        receipt
+    }
+
     #[test]
     fn semantic_diff_covers_every_contract_plan_surface() {
         let entries = semantic_diff(None, &draft());
@@ -2209,6 +2289,475 @@ queue:
             ActivationGate::Confirmed
         );
         assert!(projection(&ws).unwrap().exact_active_parity);
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn confirmed_queue_accepts_receipted_runs_before_follow_up() {
+        let ws = temp_workspace("runtime-runs-before");
+        activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        let mut queue = ws.load_queue().unwrap();
+        let ids = crate::planner::ingest_follow_ups(
+            &mut queue,
+            &["src/planning.rs".to_string()],
+            &[crate::schemas::FollowUpTask {
+                title: "fix before the confirmed task".to_string(),
+                allowed_scope: vec!["src/planning.rs".to_string()],
+                acceptance: vec!["fix lands first".to_string()],
+                runs_before: vec!["YARD-001".to_string()],
+                ..crate::schemas::FollowUpTask::default()
+            }],
+            Some(&ws),
+        );
+        assert_eq!(ids, vec!["YARD-002"]);
+        assert_eq!(queue.tasks[0].depends_on, vec!["YARD-002"]);
+
+        ws.save_queue(&queue).unwrap();
+
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        let active = ws.load_activated_queue().unwrap().unwrap();
+        assert_eq!(active.tasks[0].task.depends_on, vec!["YARD-002"]);
+        assert!(ws
+            .runtime_task_receipt_path(&active.confirmation_id, "YARD-002")
+            .is_file());
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn committed_runtime_task_inventory_rejects_deletion_and_reordering() {
+        let ws = temp_workspace("runtime-inventory");
+        activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        for title in ["first runtime task", "second runtime task"] {
+            ws.append_user_task(crate::state::UserTaskInput {
+                title: title.to_string(),
+                risk: "low".to_string(),
+                kind: "implementation".to_string(),
+                preferred_worker: String::new(),
+                depends_on: Vec::new(),
+                allowed_scope: vec!["src/planning.rs".to_string()],
+            })
+            .unwrap();
+        }
+        let original = ws.load_activated_queue().unwrap().unwrap();
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        let queue_before_repair = std::fs::read(ws.queue_path()).unwrap();
+        let missing_commit = ws.runtime_task_commit_path(&original.confirmation_id, "YARD-003");
+        std::fs::remove_file(&missing_commit).unwrap();
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        assert!(missing_commit.is_file());
+        assert_eq!(std::fs::read(ws.queue_path()).unwrap(), queue_before_repair);
+
+        let mut deleted = original.clone();
+        deleted.tasks.pop();
+        crate::state::save_yaml(&ws.queue_path(), &deleted).unwrap();
+        let error = validate_active_activation(&ws).unwrap_err().to_string();
+        assert!(error.contains("inventory mismatch"), "{error}");
+
+        let mut reordered = original.clone();
+        reordered.tasks.swap(1, 2);
+        crate::state::save_yaml(&ws.queue_path(), &reordered).unwrap();
+        let error = validate_active_activation(&ws).unwrap_err().to_string();
+        assert!(error.contains("task order mismatch"), "{error}");
+
+        crate::state::save_yaml(&ws.queue_path(), &original).unwrap();
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn uncommitted_runtime_task_receipt_does_not_poison_a_divergent_retry() {
+        let ws = temp_workspace("runtime-task-orphan-retry");
+        activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        let original = ws.load_activated_queue().unwrap().unwrap();
+
+        let mut first = original.as_work_queue();
+        crate::planner::ingest_follow_ups(
+            &mut first,
+            &["src/planning.rs".to_string()],
+            &[crate::schemas::FollowUpTask {
+                title: "abandoned first attempt".to_string(),
+                allowed_scope: vec!["src/planning.rs".to_string()],
+                ..crate::schemas::FollowUpTask::default()
+            }],
+            Some(&ws),
+        );
+        ws.save_queue(&first).unwrap();
+        std::fs::remove_file(ws.runtime_task_commit_path(&original.confirmation_id, "YARD-002"))
+            .unwrap();
+        crate::state::save_yaml(&ws.queue_path(), &original).unwrap();
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+
+        let mut retry = original.as_work_queue();
+        crate::planner::ingest_follow_ups(
+            &mut retry,
+            &["src/planning.rs".to_string()],
+            &[crate::schemas::FollowUpTask {
+                title: "corrected retry".to_string(),
+                allowed_scope: vec!["src/planning.rs".to_string()],
+                ..crate::schemas::FollowUpTask::default()
+            }],
+            Some(&ws),
+        );
+        ws.save_queue(&retry).unwrap();
+
+        let active = ws.load_activated_queue().unwrap().unwrap();
+        assert_eq!(active.tasks[1].task.title, "corrected retry");
+        let receipt = ws
+            .load_runtime_task_receipt(&active.confirmation_id, "YARD-002")
+            .unwrap()
+            .unwrap();
+        assert_eq!(receipt.task.title, "corrected retry");
+        assert!(ws
+            .runtime_task_commit_path(&active.confirmation_id, "YARD-002")
+            .is_file());
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn follow_up_skill_projection_never_rewrites_confirmed_tasks() {
+        let ws = temp_workspace("runtime-skill-projection");
+        let mut content = draft();
+        content.queue.tasks[0].title = "build ui shell".to_string();
+        activate_express_draft(&ws, "bounded test", content).unwrap();
+        std::fs::create_dir_all(ws.root.join("src")).unwrap();
+        std::fs::write(
+            ws.root.join("package.json"),
+            r#"{"dependencies":{"react":"latest","vite":"latest"}}"#,
+        )
+        .unwrap();
+        std::fs::write(ws.root.join("src/App.tsx"), "export function App() {}\n").unwrap();
+        let mut queue = ws.load_queue().unwrap();
+        let confirmed_skills = queue.tasks[0].skills.clone();
+
+        crate::planner::ingest_follow_ups(
+            &mut queue,
+            &["src".to_string()],
+            &[crate::schemas::FollowUpTask {
+                title: "add a runtime ui check".to_string(),
+                allowed_scope: vec!["src/App.tsx".to_string()],
+                ..crate::schemas::FollowUpTask::default()
+            }],
+            Some(&ws),
+        );
+
+        assert_eq!(queue.tasks[0].skills, confirmed_skills);
+        ws.save_queue(&queue).unwrap();
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn confirmed_stale_decision_capability_migrates_with_a_runtime_receipt() {
+        let ws = temp_workspace("runtime-capability-migration");
+        let mut content = draft();
+        content.queue.tasks[0].state = TaskState::Blocked;
+        content.queue.tasks[0].required_capabilities =
+            vec!["user_creative_direction_approval".to_string()];
+        activate_express_draft(&ws, "bounded test", content).unwrap();
+
+        let report = ws.tidy().unwrap();
+
+        assert_eq!(report.migrated_decisions, vec!["YARD-001"]);
+        let queue = ws.load_queue().unwrap();
+        assert_eq!(queue.tasks[0].state, TaskState::NeedsUser);
+        assert!(queue.tasks[0].required_capabilities.is_empty());
+        std::fs::remove_file(ws.conversation_path("YARD-001")).unwrap();
+        assert_eq!(
+            crate::run::latest_question_for(&ws, "YARD-001").as_deref(),
+            Some(
+                "This task needs your decision before Yardlet can run it: implement exact promotion. Reply with the decision or instructions to proceed."
+            )
+        );
+        crate::state::save_yaml(
+            &ws.conversation_path("YARD-001"),
+            &crate::schemas::Conversation {
+                task_id: "YARD-001".to_string(),
+                turns: vec![crate::schemas::ConversationTurn {
+                    role: crate::schemas::TurnRole::Worker,
+                    text: "stale question".to_string(),
+                    run_id: String::new(),
+                    ts: String::new(),
+                }],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            crate::run::latest_question_for(&ws, "YARD-001").as_deref(),
+            Some(
+                "This task needs your decision before Yardlet can run it: implement exact promotion. Reply with the decision or instructions to proceed."
+            ),
+            "a stale unattributed conversation must not mask the current receipt-backed question"
+        );
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        let active = ws.load_activated_queue().unwrap().unwrap();
+        let queue_before_repair = std::fs::read(ws.queue_path()).unwrap();
+        let missing_commit = ws.runtime_capability_commit_path(&active.confirmation_id, "YARD-001");
+        std::fs::remove_file(&missing_commit).unwrap();
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        assert!(missing_commit.is_file());
+        assert_eq!(std::fs::read(ws.queue_path()).unwrap(), queue_before_repair);
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn uncommitted_capability_receipt_does_not_poison_a_later_queue_retry() {
+        let ws = temp_workspace("runtime-capability-orphan-retry");
+        let mut content = draft();
+        content.queue.tasks[0].state = TaskState::Blocked;
+        content.queue.tasks[0].required_capabilities = vec!["stakeholder_choice".to_string()];
+        activate_express_draft(&ws, "bounded test", content).unwrap();
+        let original = ws.load_activated_queue().unwrap().unwrap();
+
+        let mut first = original.as_work_queue();
+        first.tasks[0].state = TaskState::NeedsUser;
+        first.tasks[0].required_capabilities.clear();
+        ws.save_queue(&first).unwrap();
+        std::fs::remove_file(
+            ws.runtime_capability_commit_path(&original.confirmation_id, "YARD-001"),
+        )
+        .unwrap();
+        crate::state::save_yaml(&ws.queue_path(), &original).unwrap();
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+
+        let mut retry = original.as_work_queue();
+        retry.tasks[0].state = TaskState::NeedsUser;
+        retry.tasks[0].required_capabilities.clear();
+        crate::planner::ingest_follow_ups(
+            &mut retry,
+            &["src/planning.rs".to_string()],
+            &[crate::schemas::FollowUpTask {
+                title: "unrelated runtime addition".to_string(),
+                allowed_scope: vec!["src/planning.rs".to_string()],
+                ..crate::schemas::FollowUpTask::default()
+            }],
+            Some(&ws),
+        );
+        ws.save_queue(&retry).unwrap();
+
+        let active = ws.load_activated_queue().unwrap().unwrap();
+        assert_eq!(active.tasks[0].task.state, TaskState::NeedsUser);
+        assert!(active.tasks[0].task.required_capabilities.is_empty());
+        assert_eq!(active.tasks[1].task.title, "unrelated runtime addition");
+        assert!(ws
+            .runtime_capability_commit_path(&active.confirmation_id, "YARD-001")
+            .is_file());
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn rejected_stale_capability_migration_writes_no_phantom_effects() {
+        let ws = temp_workspace("runtime-capability-no-phantom");
+        let mut content = draft();
+        content.queue.tasks[0].state = TaskState::Blocked;
+        content.queue.tasks[0].required_capabilities = vec!["stakeholder_choice".to_string()];
+        activate_express_draft(&ws, "bounded test", content).unwrap();
+        let mut forged = ws.load_activated_queue().unwrap().unwrap();
+        forged.tasks[0].task.title = "forged title".to_string();
+        crate::state::save_yaml(&ws.queue_path(), &forged).unwrap();
+
+        let error = ws.tidy().unwrap_err().to_string();
+
+        assert!(
+            error.contains("active_runtime_envelope_mismatch"),
+            "{error}"
+        );
+        assert!(!ws.conversation_path("YARD-001").exists());
+        assert!(!ws.transition_path("YARD-001").exists());
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn receipt_backed_runtime_task_can_migrate_a_stale_decision_capability() {
+        let ws = temp_workspace("runtime-added-capability-migration");
+        activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        let mut queue = ws.load_queue().unwrap();
+        let ids = crate::planner::ingest_follow_ups(
+            &mut queue,
+            &["src/planning.rs".to_string()],
+            &[crate::schemas::FollowUpTask {
+                title: "legacy runtime decision".to_string(),
+                required_capabilities: vec!["stakeholder_choice".to_string()],
+                ..crate::schemas::FollowUpTask::default()
+            }],
+            Some(&ws),
+        );
+        let workers: crate::schemas::WorkersFile =
+            crate::yaml::from_str("schema_version: 1\nworkers: []\nrouting: {}\n").unwrap();
+        crate::planner::reconcile_queue_capabilities_for_ids(&mut queue, &workers, &ids);
+        ws.save_queue(&queue).unwrap();
+        assert_eq!(queue.tasks[1].state, TaskState::Blocked);
+
+        let report = ws.tidy().unwrap();
+
+        assert_eq!(report.migrated_decisions, vec!["YARD-002"]);
+        let queue = ws.load_queue().unwrap();
+        assert_eq!(queue.tasks[1].state, TaskState::NeedsUser);
+        assert!(queue.tasks[1].required_capabilities.is_empty());
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        let active = ws.load_activated_queue().unwrap().unwrap();
+        assert!(ws
+            .runtime_capability_commit_path(&active.confirmation_id, "YARD-002")
+            .is_file());
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn completed_v1_action_replay_does_not_mutate_the_legacy_journal() {
+        let ws = temp_workspace("v1-completed-replay");
+        let session = begin_user_turn(&ws, "initial request").unwrap();
+        record_answer(&ws, "legacy answer", None, "legacy-completed").unwrap();
+        rewrite_action_as_realistic_v1(&ws, &session.session_id, "legacy-completed");
+        let journal_before = journal_snapshot(&ws, &session.session_id);
+        let receipt_before =
+            std::fs::read(ws.planning_action_path(&session.session_id, "legacy-completed"))
+                .unwrap();
+
+        record_answer(&ws, "legacy answer", None, "legacy-completed").unwrap();
+
+        assert_eq!(journal_snapshot(&ws, &session.session_id), journal_before);
+        assert_eq!(
+            std::fs::read(ws.planning_action_path(&session.session_id, "legacy-completed"))
+                .unwrap(),
+            receipt_before
+        );
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn rejected_v1_action_replay_does_not_mutate_the_legacy_journal() {
+        let ws = temp_workspace("v1-rejected-replay");
+        let session = begin_user_turn(&ws, "initial request").unwrap();
+        let first =
+            record_answer(&ws, "legacy answer", Some("stale-head"), "legacy-rejected").unwrap_err();
+        assert!(first.to_string().contains("stale_head"));
+        rewrite_action_as_realistic_v1(&ws, &session.session_id, "legacy-rejected");
+        let journal_before = journal_snapshot(&ws, &session.session_id);
+        let receipt_before =
+            std::fs::read(ws.planning_action_path(&session.session_id, "legacy-rejected")).unwrap();
+
+        let replay =
+            record_answer(&ws, "legacy answer", Some("stale-head"), "legacy-rejected").unwrap_err();
+
+        assert!(replay.to_string().contains("action_previously_rejected"));
+        assert_eq!(journal_snapshot(&ws, &session.session_id), journal_before);
+        assert_eq!(
+            std::fs::read(ws.planning_action_path(&session.session_id, "legacy-rejected")).unwrap(),
+            receipt_before
+        );
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn confirmed_v1_activation_accepts_one_digestless_legacy_effect() {
+        let ws = temp_workspace("v1-confirmed");
+        let activation = activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        rewrite_action_as_realistic_v1(&ws, &activation.session_id, &activation.action_id);
+
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn confirmed_v1_activation_rejects_ambiguous_legacy_effects() {
+        let ws = temp_workspace("v1-confirmed-ambiguous");
+        let activation = activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        rewrite_action_as_realistic_v1(&ws, &activation.session_id, &activation.action_id);
+        let mut session = ws.load_planning_session(&activation.session_id).unwrap();
+        let mut duplicate = ws
+            .load_planning_events(&activation.session_id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.event_type == PlanningEventType::DraftConfirmed)
+            .unwrap();
+        duplicate.event_id = "evt-ambiguous-legacy-confirm".into();
+        duplicate.seq = session.next_seq;
+        crate::state::save_yaml(
+            &ws.planning_event_path(&activation.session_id, duplicate.seq),
+            &duplicate,
+        )
+        .unwrap();
+        session.next_seq += 1;
+        crate::state::save_yaml(&ws.planning_session_path(&activation.session_id), &session)
+            .unwrap();
+
+        let error = validate_active_activation(&ws).unwrap_err().to_string();
+        assert!(error.contains("cardinality violation"), "{error}");
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn confirmed_v2_activation_still_rejects_a_missing_effect_digest() {
+        let ws = temp_workspace("v2-confirmed-digest");
+        let activation = activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        let action = ws
+            .load_planning_action(&activation.session_id, &activation.action_id)
+            .unwrap()
+            .unwrap();
+        let mut effect = action.effect_event.unwrap();
+        effect.action_request_digest.clear();
+        crate::state::save_yaml(
+            &ws.planning_event_path(&activation.session_id, effect.seq),
+            &effect,
+        )
+        .unwrap();
+
+        let error = validate_active_activation(&ws).unwrap_err().to_string();
+        assert!(error.contains("planning_receipt_corrupt"), "{error}");
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn v1_receipt_cannot_downgrade_a_schema_v2_activation_effect() {
+        let ws = temp_workspace("v1-receipt-v2-effect");
+        let activation = activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        rewrite_receipt_as_v1(&ws, &activation.session_id, &activation.action_id);
+
+        let error = validate_active_activation(&ws).unwrap_err().to_string();
+        assert!(
+            error.contains("legacy action event schema mismatch"),
+            "{error}"
+        );
         let _ = std::fs::remove_dir_all(&ws.root);
     }
 

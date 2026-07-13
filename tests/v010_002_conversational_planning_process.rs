@@ -185,6 +185,11 @@ mod unix {
     }
 
     #[test]
+    fn activated_runtime_contract_preserves_provenanced_add_defer_and_revive() {
+        run_scenario("runtime_origin_contract");
+    }
+
+    #[test]
     fn production_queue_writers_are_guarded_by_the_workspace_transaction() {
         run_scenario("writer_inventory");
     }

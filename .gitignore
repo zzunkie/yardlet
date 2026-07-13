@@ -23,6 +23,12 @@ Cargo.lock.orig
 /.agents/work-queue.yaml
 /.agents/conversations/
 /.agents/approvals.yaml
+/.agents/planning.lock
+/.agents/planning-sessions/
+/.agents/activations/
+/.agents/runtime-task-receipts/
+/.agents/runtime-capability-receipts/
+/.agents/activation-required.yaml
 /.agents/yardlet.yaml
 /.agents/yard.yaml
 /.agents/workers.yaml

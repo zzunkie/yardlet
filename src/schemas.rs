@@ -440,32 +440,142 @@ impl ActivatedQueue {
         }
     }
 
-    /// The confirmed queue is an immutable execution contract. Runtime may
-    /// advance only `Task.state`; every other queue and task field must remain
-    /// byte-equivalent to the materialized snapshot.
-    pub fn runtime_envelope_matches_materialized(&self) -> bool {
-        self.runtime_update_matches_materialized(&self.as_work_queue())
-    }
-
-    pub fn runtime_update_matches_materialized(&self, current: &WorkQueue) -> bool {
+    /// The confirmed draft is an immutable base execution contract. Runtime
+    /// may advance scheduler-owned fields on those tasks and append separately
+    /// receipted user/follow-up tasks, but it may never rewrite, delete, or
+    /// reorder the confirmed contracts.
+    pub fn runtime_envelope_matches_materialized_with_overlays(
+        &self,
+        authorized_runs_before: &std::collections::BTreeMap<String, Vec<String>>,
+        authorized_capability_clears: &std::collections::BTreeSet<String>,
+    ) -> bool {
         let Some(materialized) = self.materialized_queue.as_ref() else {
             return false;
         };
-        if current.tasks.len() != materialized.tasks.len()
-            || current
-                .tasks
-                .iter()
-                .zip(&materialized.tasks)
-                .any(|(runtime, planned)| runtime.id != planned.id)
+        if self.schema_version != materialized.schema_version
+            || self.queue_id != materialized.queue_id
+            || self.intent_id != materialized.intent_id
+            || serde_json::to_vec(&self.selection_policy).ok()
+                != serde_json::to_vec(&materialized.selection_policy).ok()
         {
             return false;
         }
-        let mut normalized = current.clone();
-        for (runtime, planned) in normalized.tasks.iter_mut().zip(&materialized.tasks) {
-            runtime.state = planned.state;
+
+        let mut ids = std::collections::BTreeSet::new();
+        let mut confirmed = Vec::new();
+        let mut saw_runtime_addition = false;
+        for activated in &self.tasks {
+            if !ids.insert(activated.task.id.as_str()) {
+                return false;
+            }
+            if activated.materialized_by_confirmation_id == self.confirmation_id {
+                if saw_runtime_addition {
+                    return false;
+                }
+                confirmed.push(&activated.task);
+            } else if activated.materialized_by_confirmation_id.is_empty()
+                && matches!(
+                    activated.task.provenance.as_str(),
+                    "user-added" | "worker-proposed"
+                )
+            {
+                saw_runtime_addition = true;
+            } else {
+                return false;
+            }
         }
-        serde_json::to_vec(&normalized).ok() == serde_json::to_vec(materialized).ok()
+        confirmed.len() == materialized.tasks.len()
+            && confirmed
+                .iter()
+                .zip(&materialized.tasks)
+                .all(|(runtime, planned)| {
+                    if runtime.id != planned.id {
+                        return false;
+                    }
+                    let mut runtime = (*runtime).clone();
+                    if let Some(additions) = authorized_runs_before.get(&runtime.id) {
+                        let mut expected = planned.depends_on.clone();
+                        expected.extend(additions.iter().cloned());
+                        if runtime.depends_on != expected {
+                            return false;
+                        }
+                        runtime.depends_on = planned.depends_on.clone();
+                    }
+                    if authorized_capability_clears.contains(&runtime.id) {
+                        if planned.required_capabilities.is_empty()
+                            || !runtime.required_capabilities.is_empty()
+                        {
+                            return false;
+                        }
+                        runtime.required_capabilities = planned.required_capabilities.clone();
+                    }
+                    matches!(
+                        (
+                            runtime.runtime_contract_digest(),
+                            planned.runtime_contract_digest()
+                        ),
+                        (Ok(runtime), Ok(planned)) if runtime == planned
+                    )
+                })
     }
+}
+
+/// Core-owned proof that a task appended after confirmation entered through an
+/// allowed runtime action rather than by editing `work-queue.yaml` directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeTaskReceipt {
+    pub schema_version: u32,
+    pub confirmation_id: String,
+    pub intent_id: String,
+    pub queue_id: String,
+    pub task_id: String,
+    pub origin: String,
+    pub origin_action_id: String,
+    #[serde(default)]
+    pub ordinal: usize,
+    #[serde(default)]
+    pub runs_before: Vec<String>,
+    pub task_contract_digest: String,
+    pub task: Task,
+    #[serde(default)]
+    pub queue_digest_after: String,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeTaskCommit {
+    pub schema_version: u32,
+    pub confirmation_id: String,
+    pub task_id: String,
+    pub ordinal: usize,
+    pub receipt_digest: String,
+    pub committed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeCapabilityReceipt {
+    pub schema_version: u32,
+    pub confirmation_id: String,
+    pub intent_id: String,
+    pub queue_id: String,
+    pub task_id: String,
+    pub action: String,
+    pub action_id: String,
+    pub target_state: TaskState,
+    pub decision_question: String,
+    pub original_required_capabilities: Vec<String>,
+    pub replacement_required_capabilities: Vec<String>,
+    pub queue_digest_after: String,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeCapabilityCommit {
+    pub schema_version: u32,
+    pub confirmation_id: String,
+    pub task_id: String,
+    pub receipt_digest: String,
+    pub committed_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -760,6 +870,37 @@ pub struct ReviveBlockedDependency {
 }
 
 impl Task {
+    /// Canonical task contract used by activation/runtime-origin receipts.
+    /// Scheduler-owned lifecycle metadata is deliberately excluded; everything
+    /// that controls worker identity, scope, dependencies, or acceptance stays
+    /// exact.
+    pub fn runtime_contract_snapshot(&self) -> Self {
+        let mut contract = self.clone();
+        contract.state = TaskState::Queued;
+        contract.priority = 0;
+        contract.worker_rationale = None;
+        match contract.interaction.take() {
+            Some(yaml::Value::Mapping(mut interaction)) => {
+                interaction.remove(yaml::Value::String("deferred_by".to_string()));
+                interaction.remove(yaml::Value::String("remediation_for".to_string()));
+                contract.interaction =
+                    (!interaction.is_empty()).then_some(yaml::Value::Mapping(interaction));
+            }
+            other => contract.interaction = other,
+        }
+        contract
+    }
+
+    pub fn runtime_contract_digest(&self) -> Result<String, serde_json::Error> {
+        let bytes = serde_json::to_vec(&self.runtime_contract_snapshot())?;
+        let mut hash = 0xcbf29ce484222325_u64;
+        for byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        Ok(format!("fnv1a64:{hash:016x}"))
+    }
+
     /// Queues written before `goal` existed used a hard two-attempt cap, which
     /// meant one feedback retry after the initial run. Keep that behavior for
     /// old tasks while new goal contracts default to two feedback cycles.
@@ -1628,6 +1769,41 @@ tasks:
         assert!(queue.has_active_remediation_for("REVIEW"));
         queue.tasks[0].state = TaskState::NeedsUser;
         assert!(!queue.has_active_remediation_for("REVIEW"));
+    }
+
+    #[test]
+    fn runtime_contract_digest_ignores_only_typed_scheduler_metadata() {
+        let planned: Task = yaml::from_str(
+            r#"
+id: YARD-001
+title: immutable work
+priority: 10
+preferred_worker: codex
+allowed_scope: [src/state.rs]
+interaction:
+  planner_note: keep exact
+"#,
+        )
+        .unwrap();
+        let planned_digest = planned.runtime_contract_digest().unwrap();
+
+        let mut runtime = planned.clone();
+        runtime.state = TaskState::Deferred;
+        runtime.priority = -20;
+        runtime.worker_rationale = Some("runtime observation".to_string());
+        runtime.set_deferred_by(Some(DeferredBy::new("YARD-001")));
+        runtime.add_remediation_for("REVIEW");
+        assert_eq!(runtime.runtime_contract_digest().unwrap(), planned_digest);
+
+        runtime.allowed_scope = vec!["forged/scope".to_string()];
+        assert_ne!(runtime.runtime_contract_digest().unwrap(), planned_digest);
+
+        let mut non_mapping = planned.clone();
+        non_mapping.interaction = Some(yaml::Value::String("different".to_string()));
+        assert_ne!(
+            non_mapping.runtime_contract_digest().unwrap(),
+            planned_digest
+        );
     }
 
     #[test]
