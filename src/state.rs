@@ -4,9 +4,12 @@
 //! is the only place that reads and writes those files. Everything is durable
 //! and readable without any previous chat context.
 
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use chrono::Local;
@@ -14,8 +17,8 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 
 use crate::schemas::{
-    ActivatedIntent, ActivatedQueue, ActivationReceipt, ActivationRequirement, BillingPolicy,
-    Conversation, ConversationTurn, DraftRevision, FollowUpTask, IntentContract,
+    ActivatedIntent, ActivatedQueue, ActivatedTask, ActivationReceipt, ActivationRequirement,
+    BillingPolicy, Conversation, ConversationTurn, DraftRevision, FollowUpTask, IntentContract,
     PlanningActionReceipt, PlanningEvent, PlanningProposal, PlanningSession, PreservedFollowUps,
     SelectionPolicy, Task, TaskState, TransitionActor, TransitionCause, TransitionLog,
     TransitionRecord, TurnRole, WorkQueue, WorkersFile, YardConfig,
@@ -40,6 +43,7 @@ pub struct Workspace {
 pub struct PlanningLock {
     #[cfg(unix)]
     file: fs::File,
+    queue_snapshot: RefCell<Option<String>>,
 }
 
 #[cfg(unix)]
@@ -48,6 +52,36 @@ impl Drop for PlanningLock {
         // SAFETY: `self.file` owns this descriptor until Drop finishes.
         let _ = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN) };
     }
+}
+
+fn mutation_lock_timeout() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Ok(value) = std::env::var("YARDLET_TEST_LOCK_TIMEOUT_MS") {
+        if let Ok(milliseconds) = value.parse::<u64>() {
+            return Duration::from_millis(milliseconds.max(1));
+        }
+    }
+    Duration::from_secs(5)
+}
+
+fn wait_at_test_mutation_barrier() -> Result<()> {
+    #[cfg(debug_assertions)]
+    if let Ok(directory) = std::env::var("YARDLET_TEST_MUTATION_BARRIER") {
+        let directory = PathBuf::from(directory);
+        fs::create_dir_all(&directory)
+            .with_context(|| format!("creating mutation barrier {}", directory.display()))?;
+        let entered = directory.join("entered");
+        write_str_atomic(&entered, &format!("{}\n", std::process::id()))?;
+        let release = directory.join("release");
+        let started = Instant::now();
+        while !release.is_file() {
+            if started.elapsed() >= Duration::from_secs(10) {
+                bail!("test mutation barrier timed out at {}", directory.display());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,25 +295,74 @@ impl Workspace {
         }
         #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+
             let file = fs::OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
                 .truncate(false)
+                .custom_flags(libc::O_CLOEXEC)
                 .open(&path)
                 .with_context(|| format!("opening planning lock {}", path.display()))?;
-            // SAFETY: `file` stays alive in PlanningLock and flock only reads
-            // its valid descriptor. A crash releases the kernel lock.
-            if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) } != 0 {
-                return Err(std::io::Error::last_os_error())
-                    .with_context(|| format!("locking planning workspace {}", path.display()));
+            let timeout = mutation_lock_timeout();
+            let started = Instant::now();
+            loop {
+                // SAFETY: `file` stays alive in PlanningLock and flock only
+                // reads its valid descriptor. LOCK_NB prevents an unbounded
+                // wait; a crash releases the kernel-owned lock.
+                if unsafe {
+                    libc::flock(
+                        std::os::fd::AsRawFd::as_raw_fd(&file),
+                        libc::LOCK_EX | libc::LOCK_NB,
+                    )
+                } == 0
+                {
+                    break;
+                }
+                let error = std::io::Error::last_os_error();
+                let retryable = error.raw_os_error().is_some_and(|code| {
+                    code == libc::EINTR || code == libc::EAGAIN || code == libc::EWOULDBLOCK
+                });
+                if !retryable {
+                    return Err(error)
+                        .with_context(|| format!("locking planning workspace {}", path.display()));
+                }
+                if started.elapsed() >= timeout {
+                    bail!(
+                        "workspace_mutation_lock_timeout after {}ms at {}",
+                        timeout.as_millis(),
+                        path.display()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
-            Ok(PlanningLock { file })
+            let queue_snapshot = if self.queue_path().is_file() {
+                Some(
+                    fs::read_to_string(self.queue_path())
+                        .with_context(|| format!("reading {}", self.queue_path().display()))?,
+                )
+            } else {
+                None
+            };
+            let guard = PlanningLock {
+                file,
+                queue_snapshot: RefCell::new(queue_snapshot),
+            };
+            wait_at_test_mutation_barrier()?;
+            Ok(guard)
         }
         #[cfg(not(unix))]
         {
             let _ = path;
-            Ok(PlanningLock {})
+            let queue_snapshot = if self.queue_path().is_file() {
+                Some(fs::read_to_string(self.queue_path())?)
+            } else {
+                None
+            };
+            Ok(PlanningLock {
+                queue_snapshot: RefCell::new(queue_snapshot),
+            })
         }
     }
 
@@ -371,10 +454,99 @@ impl Workspace {
     }
 
     pub fn load_planning_events(&self, session_id: &str) -> Result<Vec<PlanningEvent>> {
-        let mut events: Vec<PlanningEvent> =
-            load_yaml_dir(&self.planning_session_dir(session_id).join("events"))?;
+        let dir = self.planning_session_dir(session_id).join("events");
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut events = Vec::new();
+        for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                bail!("planning_event_journal: non-UTF8 event filename");
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            let Some(stem) = name.strip_suffix(".yaml") else {
+                bail!("planning_event_journal: unexpected event file {name}");
+            };
+            let seq = stem.parse::<u64>().map_err(|_| {
+                anyhow::anyhow!("planning_event_journal: invalid event filename {name}")
+            })?;
+            if name != format!("{seq:020}.yaml") {
+                bail!("planning_event_journal: non-canonical event filename {name}");
+            }
+            let event: PlanningEvent = load_yaml(&path)?;
+            if event.seq != seq || event.session_id != session_id || event.event_id.is_empty() {
+                bail!("planning_event_journal: filename/seq/session/event id identity mismatch");
+            }
+            events.push(event);
+        }
         events.sort_by_key(|event| event.seq);
+        let mut event_ids = BTreeSet::new();
+        let mut exact_payloads = BTreeSet::new();
+        let mut action_types = BTreeMap::new();
+        for (index, event) in events.iter().enumerate() {
+            let expected_seq = index as u64 + 1;
+            if event.seq != expected_seq {
+                bail!(
+                    "planning_event_journal: expected contiguous seq {expected_seq}, found {}",
+                    event.seq
+                );
+            }
+            if !event_ids.insert(event.event_id.clone()) {
+                bail!(
+                    "planning_event_journal: duplicate event id {}",
+                    event.event_id
+                );
+            }
+            let payload = serde_json::to_string(event)?;
+            if !exact_payloads.insert(payload) {
+                bail!("planning_event_journal: duplicate exact event payload");
+            }
+            if !event.action_id.is_empty() {
+                let key = (event.action_id.clone(), format!("{:?}", event.event_type));
+                if action_types.insert(key, event.event_id.clone()).is_some() {
+                    bail!("planning_event_journal: action/type cardinality violation");
+                }
+            }
+        }
+        let session: PlanningSession = load_yaml(&self.planning_session_path(session_id))?;
+        let journal_next = events.last().map_or(1, |event| event.seq + 1);
+        if session.next_seq == 0 || session.next_seq > journal_next {
+            bail!(
+                "planning_event_journal: next_seq {} is ahead of journal next {journal_next}",
+                session.next_seq
+            );
+        }
         Ok(events)
+    }
+
+    pub fn load_planning_actions(&self, session_id: &str) -> Result<Vec<PlanningActionReceipt>> {
+        let dir = self.planning_session_dir(session_id).join("actions");
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut actions = Vec::new();
+        for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                bail!("planning action filename is not UTF-8");
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            let Some(action_id) = name.strip_suffix(".yaml") else {
+                bail!("unexpected planning action file {name}");
+            };
+            let receipt: PlanningActionReceipt = load_yaml(&path)?;
+            if receipt.session_id != session_id || receipt.action_id != action_id {
+                bail!("planning action path identity mismatch");
+            }
+            actions.push(receipt);
+        }
+        actions.sort_by(|left, right| left.action_id.cmp(&right.action_id));
+        Ok(actions)
     }
 
     pub fn create_planning_action(&self, receipt: &PlanningActionReceipt) -> Result<()> {
@@ -699,7 +871,69 @@ impl Workspace {
     }
 
     pub fn save_queue(&self, queue: &WorkQueue) -> Result<()> {
-        save_yaml(&self.queue_path(), queue)
+        let existing = if self.queue_path().is_file() {
+            Some(fs::read_to_string(self.queue_path())?)
+        } else {
+            None
+        };
+        let text = self.queue_text_preserving_activation(queue, existing.as_deref())?;
+        write_str_atomic(&self.queue_path(), &text)
+    }
+
+    fn queue_text_preserving_activation(
+        &self,
+        queue: &WorkQueue,
+        existing: Option<&str>,
+    ) -> Result<String> {
+        if let Some(mut activated) = existing.map(yaml::from_str::<ActivatedQueue>).transpose()? {
+            if activated.activation_required
+                || !activated.confirmation_id.is_empty()
+                || !activated.planning_session_id.is_empty()
+            {
+                if activated.queue_id != queue.queue_id || activated.intent_id != queue.intent_id {
+                    bail!("activated queue identity changed during runtime mutation");
+                }
+                let confirmation_id = activated.confirmation_id.clone();
+                let existing_materialization = activated
+                    .tasks
+                    .iter()
+                    .map(|task| {
+                        (
+                            task.task.id.clone(),
+                            task.materialized_by_confirmation_id.clone(),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                activated.schema_version = queue.schema_version;
+                activated.selection_policy = queue.selection_policy.clone();
+                activated.tasks = queue
+                    .tasks
+                    .iter()
+                    .cloned()
+                    .map(|task| ActivatedTask {
+                        materialized_by_confirmation_id: existing_materialization
+                            .get(&task.id)
+                            .cloned()
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or_else(|| confirmation_id.clone()),
+                        task,
+                    })
+                    .collect();
+                return yaml::to_string(&activated);
+            }
+        }
+        yaml::to_string(queue)
+    }
+
+    /// Queue writer for callers that already own the permanent workspace
+    /// mutation lock. Requiring the guard at the call site prevents helpers
+    /// inside a transaction from trying to acquire the non-reentrant lock again.
+    pub fn save_queue_locked(&self, _lock: &PlanningLock, queue: &WorkQueue) -> Result<()> {
+        let expected = _lock.queue_snapshot.borrow().clone();
+        let text = self.queue_text_preserving_activation(queue, expected.as_deref())?;
+        write_str_atomic_cas(&self.queue_path(), expected.as_deref(), &text)?;
+        *_lock.queue_snapshot.borrow_mut() = Some(text);
+        Ok(())
     }
 
     /// Append a user-authored task to the latest queue without re-planning or
@@ -707,6 +941,7 @@ impl Workspace {
     /// auto-drain may already be running; always load the current queue first so
     /// a stale caller cannot clobber runtime state.
     pub fn append_user_task(&self, input: UserTaskInput) -> Result<Task> {
+        let _lock = self.acquire_planning_lock()?;
         let mut queue = self.load_queue()?;
         let next_num = queue
             .tasks
@@ -742,7 +977,7 @@ impl Workspace {
             provenance: "user-added".to_string(),
         };
         queue.tasks.push(task.clone());
-        self.save_queue(&queue)?;
+        self.save_queue_locked(&_lock, &queue)?;
         Ok(task)
     }
 
@@ -877,6 +1112,7 @@ impl Workspace {
         intent_id: &str,
         seed_fn: impl FnOnce(&mut WorkQueue),
     ) -> Result<String> {
+        let lock = self.acquire_planning_lock()?;
         let summary = {
             let title = fu.title.trim();
             let reason = fu.reason.trim();
@@ -915,11 +1151,12 @@ impl Workspace {
             tasks: Vec::new(),
         };
         seed_fn(&mut queue);
-        self.save_queue(&queue)?;
+        self.save_queue_locked(&lock, &queue)?;
         Ok(intent_id.to_string())
     }
 
     pub fn tidy(&self) -> Result<TidyReport> {
+        let lock = self.acquire_planning_lock()?;
         let workers = self.load_workers().ok();
         let vocab = workers
             .as_ref()
@@ -1028,7 +1265,7 @@ impl Workspace {
             }
         }
 
-        self.save_queue(&queue)?;
+        self.save_queue_locked(&lock, &queue)?;
 
         let has_runnable = queue.tasks.iter().any(|t| {
             queue.is_runnable_now(
@@ -1797,6 +2034,7 @@ pub struct ResolveOutcome {
 /// worktree. No worker is re-invoked: the work is already integrated, so this is
 /// pure bookkeeping. Errors if the task is missing or not `Partial`.
 pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<ResolveOutcome> {
+    let lock = ws.acquire_planning_lock()?;
     let mut queue = ws.load_queue()?;
     let Some(idx) = queue.tasks.iter().position(|t| t.id == task_id) else {
         anyhow::bail!("task '{task_id}' not found in the queue");
@@ -1814,7 +2052,7 @@ pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<Re
     }
     queue.tasks[idx].state = TaskState::Done;
     // Yardlet stays the sole queue writer: persist, then record the transition.
-    ws.save_queue(&queue)?;
+    ws.save_queue_locked(&lock, &queue)?;
     append_transition(
         ws,
         transition(

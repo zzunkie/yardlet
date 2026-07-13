@@ -518,13 +518,24 @@ merged (worktree runs included), and unfinished ones are requeued. A durable
 remote OID; verified results are projected once, while ambiguous state stays
 Partial. An interrupted planning confirmation replays the same stable action,
 deduplicates its effect events, and remains non-runnable if any snapshot,
-activation, or completed action receipt does not match. Planning mutations use
-one workspace kernel lock; immutable revisions and events use atomic no-clobber
-create, while session and action transitions use compare-and-swap. Every
-terminal action receipt links its typed effect event. A new confirmation refuses
-to replace an active queue that still contains Queued, Running, NeedsUser,
-Partial, or Blocked work, and a corrupt activation guard is returned as an error
-instead of being treated as an inactive workspace.
+activation, or completed action receipt does not match the current active
+confirmation exactly. Before an accepted revision is stored, its prepared
+receipt reserves the stable result id and exact typed effect event id, payload,
+and digest. The event journal fails closed unless sequence numbers are contiguous
+from 1, filename and embedded identities match, event ids and payloads are
+unique, action/type cardinality is valid, and `next_seq` is not ahead.
+
+Planning confirmation and runtime queue mutations (`add`, run transitions,
+finalization, and orphan recovery) share one permanent workspace kernel lock and
+compare-and-swap boundary. Lock acquisition is non-blocking with a bounded
+timeout, retrying interrupt and contention errors, and the descriptor is closed
+across worker execution. Immutable revisions and events use atomic no-clobber
+create, while session and action transitions use compare-and-swap. The activated
+queue retains an immutable materialized plan for confirmation parity while its
+runtime task states evolve. A new confirmation refuses to replace an active
+queue that still contains Queued, Running, NeedsUser, Partial, or Blocked work,
+and a corrupt activation guard is returned as an error instead of being treated
+as an inactive workspace.
 
 ## Build
 
@@ -547,7 +558,7 @@ Yardlet owns state; workers do not. Canonical state lives under `.agents/` in th
   yardlet.yaml              workspace config
   intent-contract.yaml      current goal / scope / acceptance
   work-queue.yaml           tasks
-  planning.lock             kernel-held workspace planning transaction lock
+  planning.lock             kernel-held workspace mutation transaction lock
   planning-sessions/        sessions, immutable proposals/drafts, ordered events, action receipts
   activations/              committed exact-promotion receipts
   activation-required.yaml durable V010-origin discriminator for fail-closed scheduling

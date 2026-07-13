@@ -360,6 +360,12 @@ pub struct PlanningActionReceipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect_event_type: Option<PlanningEventType>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effect_event_digest: String,
+    /// Exact effect payload reserved while the receipt is still Prepared. The
+    /// immutable effect file is materialized from this value after every crash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_event: Option<PlanningEvent>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prior_intent_digest: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prior_queue_digest: String,
@@ -417,6 +423,10 @@ pub struct ActivatedQueue {
     pub draft_revision_id: String,
     #[serde(default)]
     pub draft_content_digest: String,
+    /// Immutable queue exactly materialized from the confirmed draft. `tasks`
+    /// carries mutable runtime state; this snapshot never changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialized_queue: Option<WorkQueue>,
 }
 
 impl ActivatedQueue {

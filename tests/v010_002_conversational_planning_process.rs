@@ -138,4 +138,34 @@ mod unix {
     fn concurrent_cli_actions_converge_to_one_receipt_and_collision_free_journal() {
         run_scenario("concurrent_action");
     }
+
+    #[test]
+    fn accept_revision_write_crash_replays_from_the_prepared_exact_effect() {
+        run_scenario("accept_revision_crash");
+    }
+
+    #[test]
+    fn unresolved_prepared_action_interlocks_every_other_session_mutation() {
+        run_scenario("prepared_action_interlock");
+    }
+
+    #[test]
+    fn journal_corruption_fails_closed_for_every_identity_and_cardinality_rule() {
+        run_scenario("journal_corruption");
+    }
+
+    #[test]
+    fn completed_confirm_replay_requires_its_activation_to_still_be_current() {
+        run_scenario("completed_active_mismatch");
+    }
+
+    #[test]
+    fn workspace_mutation_lock_has_a_stable_barrier_and_bounded_timeout() {
+        run_scenario("lock_timeout");
+    }
+
+    #[test]
+    fn runtime_queue_transition_wins_atomically_over_concurrent_confirm() {
+        run_scenario("runtime_queue_confirm_race");
+    }
 }

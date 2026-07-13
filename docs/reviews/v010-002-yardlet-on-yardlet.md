@@ -5,7 +5,7 @@
 - 실행 루트: `.agents/runs/run-20260714-011920/dogfood-v010-002/workspace`
 - 실행 주체: 이 worktree에서 빌드한 실제 `yardlet`과 로컬 `codex` planning worker
 - 원래 dogfood 판정: 세 content turn, accept, reject, undo, fresh-process 복원, explicit confirm을 거친 뒤 visible draft와 active intent/queue가 field와 digest 양쪽에서 일치했다.
-- 보수 판정: terminal proposal, undo linkage, stripped provenance, confirm action linkage, 실제 write-order crash, non-confirm prepared-effect replay, active queue no-clobber, 두 CLI process 경쟁을 포함한 결정적 process test 19개가 통과했다. V010-002 최종 완료 표시는 독립 재검토 뒤에만 갱신한다.
+- 보수 판정: terminal proposal, undo linkage, stripped provenance, stable prepared effect, immutable journal 검증, completed-active 일치, bounded process lock, runtime queue 경쟁을 포함한 결정적 process test 25개가 통과했다. V010-002 최종 완료 표시는 독립 재검토 뒤에만 갱신한다.
 
 ## 1. 증거 경계
 
@@ -159,6 +159,62 @@ valid activation을 복원했다. 두 동시 CLI process는 모두 같은 canoni
 반환했으며 revision 1개, receipt 1개, action effect 종류별 event 1개와 중복 없는 seq를
 남겼다.
 
+### 2.3 YARD-007 transaction blocker RED에서 GREEN까지
+
+YARD-007은 수동 YAML로 만든 baseline을 사용하지 않고 실제 `yardlet init` 상태에서
+confirm write order를 재현하도록 fixture를 교체했다. 구현 전에 추가한 여섯 process
+scenario의 RED는 다음 fail-open을 직접 드러냈다.
+
+- `accept_after_revision_write` crash hook이 없어 process가 종료되지 않았다.
+- completed confirm replay가 이후 express goal activation을 무시하고 오래된 activation을
+  반환했다.
+- seq gap이 있는 event journal이 정상 session처럼 열렸다.
+- workspace lock과 runtime queue 경쟁 fixture의 stable barrier가 존재하지 않았다.
+
+GREEN에서는 전체 process suite가 다음 결과로 수렴했다.
+
+```text
+running 25 tests
+25 passed; 0 failed; exit 0
+
+new transaction scenarios:
+- accept_revision_write_crash_replays_from_the_prepared_exact_effect
+- unresolved_prepared_action_interlocks_every_other_session_mutation
+- journal_corruption_fails_closed_for_every_identity_and_cardinality_rule
+- completed_confirm_replay_requires_its_activation_to_still_be_current
+- workspace_mutation_lock_has_a_stable_barrier_and_bounded_timeout
+- runtime_queue_transition_wins_atomically_over_concurrent_confirm
+```
+
+accept는 immutable revision을 쓰기 전에 prepared receipt에 stable revision/result id와
+effect event의 exact id, type, payload, digest를 CAS한다. revision 저장 직후 exit 86으로
+종료해도 같은 action replay가 revision 하나, event 하나, 같은 completed receipt로
+수렴한다. 같은 session에 unresolved prepared action이 있으면 answer, accept, reject,
+undo, confirm, new session mutation은 `planning_action_in_progress`로 닫히며, 해당 action
+owner의 replay만 먼저 끝낼 수 있다.
+
+event journal은 seq 1부터 N까지의 연속성, canonical filename과 내부 seq/session/event
+identity, unique event id와 exact payload, action/type cardinality, `next_seq` 상한을 모두
+검증한다. gap, duplicate id, multi-match, payload mismatch, filename/seq mismatch,
+session mismatch, empty event id, `next_seq` ahead는 session을 열기 전에 fail-closed한다.
+completed confirm replay도 receipt의
+activation이 현재 active intent와 queue의 confirmation/session/head/digest와 정확히
+일치할 때만 같은 결과를 반환한다.
+
+`planning.lock`은 planning 전용 임시 lock이 아니라 workspace mutation lock이다.
+`LOCK_EX|LOCK_NB`와 bounded timeout을 사용하고, `EINTR`, `EAGAIN`, `EWOULDBLOCK`만
+재시도하며, descriptor는 `CLOEXEC`로 worker process에 넘기지 않는다. 내부 transaction
+helper는 이미 획득한 guard를 받으므로 재진입하지 않는다. crash와 barrier hook는 debug
+build에서만 활성이고 release binary에서는 같은 환경 변수를 주어도 accept가 끝까지
+완료된다.
+
+confirm뿐 아니라 `add`, run의 Queued-to-Running 전이, finalize, orphan recovery의 queue
+load-mutate-save도 같은 lock과 raw-byte CAS 경계를 사용한다. stable barrier가 있는 두
+process fixture는 run과 confirm, add가 경쟁할 때 stale confirm은 거절되고 runtime state와
+두 add가 모두 보존됨을 확인한다. activated queue는 confirmed 당시 immutable
+`materialized_queue`를 provenance digest 경계로 보존하고, 별도 runtime task state만
+변경하므로 exact draft parity와 runnability가 동시에 유지된다.
+
 ## 3. 실제 세 turn
 
 초기 요청은 production runtime 변경을 제외하고 V010-002 proof 문서,
@@ -219,9 +275,10 @@ provenance 포함 active 문서 두 개를 receipt와 비교했다.
 ```
 
 `draft_content_digest`는 화면에 보인 draft 전체의 digest다.
-`intent_digest`와 `queue_digest`는 confirmation/session/revision 및 task별
-materialization linkage를 포함한 실제 active 문서의 digest다. 이 세 값은
-각기 올바른 저장 경계를 검증하며 서로 대체하지 않는다.
+`intent_digest`는 confirmation/session/revision linkage를 포함한 실제 active intent의
+digest다. `queue_digest`는 같은 provenance와 confirm 당시 immutable
+`materialized_queue`를 묶은 digest이며 이후 runtime task state 전이와 분리된다. 이 세
+값은 각기 올바른 저장 경계를 검증하며 서로 대체하지 않는다.
 
 ## 6. 재현 명령
 
@@ -231,17 +288,25 @@ materialization linkage를 포함한 실제 active 문서의 digest다. 이 세 
 cargo build
 cargo test --test v010_002_conversational_planning_process
 evidence="$(mktemp -d)"
-tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" dogfood
-tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" terminal_proposal
-tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" undo_integrity
-tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" stripped_modern
-tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" activation_action_linkage
-tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" confirm_crash_replay
-tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" event_seq_crash
-tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" confirm_write_order_crash
-tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" action_effect_crash
-tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" active_queue_guard
-tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" concurrent_action
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" dogfood
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" terminal_proposal
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" undo_integrity
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" stripped_modern
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" activation_action_linkage
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" confirm_crash_replay
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" event_seq_crash
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" confirm_write_order_crash
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" action_effect_crash
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" active_queue_guard
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" concurrent_action
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" accept_revision_crash
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" prepared_action_interlock
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" journal_corruption
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" completed_active_mismatch
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" lock_timeout
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" runtime_queue_confirm_race
+cargo build --release
+bash tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/release/yardlet "$evidence" release_hook_disabled
 ```
 
 live planning은 격리 workspace에서 로컬 subscription CLI worker를 사용해
@@ -276,12 +341,23 @@ yardlet planning show --json
 - confirm prepare 뒤 snapshot 전, intent-only, intent/queue 뒤 activation 전,
   activation 뒤 action completion 전의 replay는 각 effect event 하나와 completed
   receipt 하나로 수렴한다.
-- workspace planning mutation은 kernel single-writer lock 아래 수행되며 immutable
-  revision/event/action create는 no-clobber이고 session/action transition은 CAS다.
+- workspace queue와 planning mutation은 bounded kernel single-writer lock과 raw-byte
+  CAS 아래 수행되며 immutable revision/event/action create는 no-clobber이고
+  session/action transition은 CAS다.
 - event 저장 뒤 `next_seq` 저장 전 crash는 journal의 실제 최대 seq에서 cursor를
   복구하며 기존 event를 덮어쓰거나 중복 기록하지 않는다.
-- terminal action receipt는 action kind/status와 effect event type을 typed 값으로
-  저장하고 exact event id 및 request digest를 연결한다.
+- journal load는 continuous seq, filename/embedded identity, unique exact payload,
+  action/type cardinality, `next_seq` 상한을 모두 검증한다.
+- accept prepared receipt는 immutable revision 저장 전에 stable result id와 exact effect
+  event id/type/payload/digest를 CAS한다. terminal receipt는 이 예약값과 일치해야 한다.
+- 같은 session의 unresolved prepared action은 owner replay를 제외한 다른 session
+  mutation을 `planning_action_in_progress`로 차단한다.
+- completed confirm replay는 receipt activation과 현재 active
+  confirmation/session/head/digest가 정확히 같을 때만 성공한다.
+- `planning.lock`은 `LOCK_EX|LOCK_NB`, bounded timeout, contention retry, `CLOEXEC`를
+  사용하며 debug crash/barrier hook는 release binary에서 비활성이다.
+- run, add, finalize, orphan recovery, confirm은 queue load-mutate-save를 같은 lock/CAS
+  경계에서 수행하고 confirmed materialization과 mutable runtime state를 분리한다.
 - Queued, Running, NeedsUser, Partial, Blocked가 남은 active queue는 새 confirm으로
   교체되지 않으며 active intent와 queue bytes가 그대로 남는다.
 - activation guard parse 또는 linkage 오류는 inactive로 fail-open하지 않고 호출자에게
