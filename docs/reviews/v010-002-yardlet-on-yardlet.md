@@ -568,3 +568,64 @@ cargo test
 README parity도 다시 확인했다. 두 파일은 같은 순서의 section 19개와 `yardlet` command row
 34개를 유지하고 em dash가 없다. 구현 독립 판정은 기존 queue의 `YARD-002` review task가
 criterion별 실제 workspace 검증으로 소유한다.
+
+## 10. Confirmed multi-task 첫 runtime transition provenance 보수
+
+YARD-004 재현은 두 task draft를 explicit confirm한 뒤 `YARD-001`을 실제 fixture worker로
+실행해 failed evaluation과 terminal gate 전이를 만들었다. 구현 전 process RED는 confirm
+직후 queue에 immutable materialized snapshot은 있었지만 그 snapshot의 독립 digest가 없어
+다음 오류로 멈췄다.
+
+```text
+cargo test --test v010_002_conversational_planning_process \
+  first_runtime_failure_preserves_two_task_activation_and_next_runnability -- --nocapture
+  FAILED: confirmed queue omitted immutable materialized digest
+```
+
+별도 RED에서는 `activation-required.yaml`, activation receipt, active intent/queue의 linkage와
+materialized snapshot을 모두 제거하되 confirmed session과 draft는 남겼다. 기존 guard는 이를
+`Legacy`로 강등해 `yardlet run --next`를 허용했다.
+
+```text
+cargo test --test v010_002_conversational_planning_process \
+  stripped_modern_provenance_does_not_fall_back_to_legacy -- --nocapture
+  FAILED: stripped modern activation fell back to Legacy
+```
+
+보수된 `ActivatedQueue`는 confirmed `materialized_queue`와 canonical
+`materialized_queue_digest`를 함께 보존한다. activation receipt의 immutable queue digest도
+이 digest를 포함한다. runtime queue writer는 기존 activated record를 clone한 뒤 current task
+state만 재투영하므로 run, finalize, parallel, add, recovery 경로에서 snapshot, digest, session,
+confirmation, draft linkage가 유지된다. runtime validation은 snapshot을 다시 digest해 envelope
+값과 비교하고, 이후 activation receipt와도 비교한다.
+
+legacy 판정 전에는 active intent/queue id와 일치하는 activation receipt, planning session,
+draft revision을 별도 durable discriminator로 검색한다. 하나라도 남으면 active provenance를
+전량 strip한 상태를 `unconfirmed_or_inconsistent`로 거절한다. 반대로 modern record와 marker가
+전혀 없는 plain schema v1 intent/queue fixture는 기존과 같이 `yardlet run --next`에서
+`YARD-001`을 선택해 legacy compatibility를 명시적으로 증명한다.
+
+최종 process fixture는 첫 task의 failed evaluation 뒤 fresh process로 projection을 다시 열어
+committed activation과 exact parity를 확인한다. materialized snapshot과 digest의 confirm 전후
+byte가 같고 `YARD-002`는 Queued로 남으며, 또 다른 fresh `yardlet run --task YARD-002`가 해당
+task를 정상 준비한다. V010-002 process matrix는 총 37개가 모두 통과했다.
+
+2026-07-14 최종 source에서 fresh completion gate도 모두 통과했다.
+
+```text
+cargo fmt --check
+  exit 0
+cargo clippy --all-targets --all-features -- -D warnings
+  exit 0
+cargo build
+  exit 0
+cargo test
+  exit 0
+  unit 396 passed
+  builtin bundle 3 passed
+  git-finish process 1 passed
+  state architecture 2 passed
+  V010-001 replay 8 passed
+  serial Git finish process 1 passed
+  V010-002 process 37 passed
+```

@@ -161,6 +161,10 @@ routing:
     fallback: ""
 EOF
 
+if [[ "$SCENARIO" == "runtime_transition_provenance" ]]; then
+  touch "$ROOT/.fixture-two-task"
+fi
+
 run_yardlet new "initial planning request" --worker fixture-planner >/dev/null
 p1="$(proposal)"
 
@@ -217,6 +221,36 @@ case "$SCENARIO" in
     [[ "$(json_get "$EVIDENCE_DIR/show.json" activation.status)" == "committed" ]] || fail "activation not committed"
     [[ "$(json_get "$EVIDENCE_DIR/show.json" exact_active_parity)" == "true" ]] || fail "active parity false"
     write_summary "restart restored history and confirm provenance"
+    ;;
+  runtime_transition_provenance)
+    accept_proposal "$p1" none act-runtime-transition-accept >/dev/null
+    head="$(visible_head)"
+    run_yardlet planning confirm --expected-head "$head" --action-id act-runtime-transition-confirm >/dev/null
+    queue_before="$EVIDENCE_DIR/runtime-transition-queue-before.yaml"
+    cp "$ROOT/.agents/work-queue.yaml" "$queue_before"
+    materialized_digest="$(sed -n 's/^materialized_queue_digest: //p' "$queue_before")"
+    [[ -n "$materialized_digest" ]] || fail "confirmed queue omitted immutable materialized digest"
+    materialized_before="$(sed -n '/^materialized_queue:/,$p' "$queue_before" | shasum | awk '{print $1}')"
+
+    (cd "$ROOT" && git init -q && git config user.name fixture && git config user.email fixture@example.invalid && \
+      git add .agents/yardlet.yaml && git commit -qm baseline)
+    run_yardlet run --task YARD-001 --execute >"$EVIDENCE_DIR/runtime-transition-run.out" 2>"$EVIDENCE_DIR/runtime-transition-run.err"
+    run_yardlet planning show --json >"$EVIDENCE_DIR/runtime-transition-restarted.json"
+    [[ "$(json_get "$EVIDENCE_DIR/runtime-transition-restarted.json" activation.status)" == "committed" ]] || fail "fresh process lost committed activation"
+    [[ "$(json_get "$EVIDENCE_DIR/runtime-transition-restarted.json" exact_active_parity)" == "true" ]] || fail "first runtime failure broke exact active parity"
+    grep -q '^activation_required: true$' "$ROOT/.agents/work-queue.yaml" || fail "runtime transition stripped activation envelope"
+    grep -q '^planning_session_id:' "$ROOT/.agents/work-queue.yaml" || fail "runtime transition stripped session provenance"
+    [[ "$materialized_digest" == "$(sed -n 's/^materialized_queue_digest: //p' "$ROOT/.agents/work-queue.yaml")" ]] || fail "runtime transition changed immutable materialized digest"
+    [[ "$materialized_before" == "$(sed -n '/^materialized_queue:/,$p' "$ROOT/.agents/work-queue.yaml" | shasum | awk '{print $1}')" ]] || fail "runtime transition changed immutable materialized snapshot"
+    run_yardlet queue >"$EVIDENCE_DIR/runtime-transition-queue.out"
+    grep -q 'evaluation status: failed' "$EVIDENCE_DIR/runtime-transition-run.out" || fail "first task did not execute a failed evaluation"
+    sed -n '1,/^materialized_queue:/p' "$ROOT/.agents/work-queue.yaml" | \
+      sed -n '/^- id: YARD-001$/,/^- id: YARD-002$/p' | grep -q '^  state: needs_user$' || fail "failed first task did not reach its terminal gate"
+    sed -n '1,/^materialized_queue:/p' "$ROOT/.agents/work-queue.yaml" | \
+      sed -n '/^- id: YARD-002$/,$p' | grep -q '^  state: queued$' || fail "second task did not remain Queued"
+    run_yardlet run --task YARD-002 >"$EVIDENCE_DIR/runtime-transition-next.out"
+    grep -q 'selected task YARD-002' "$EVIDENCE_DIR/runtime-transition-next.out" || fail "fresh process could not prepare second task"
+    write_summary "2-task confirm 뒤 첫 실제 worker failure가 immutable activation provenance를 보존하고 fresh process에서 두 번째 task가 runnable함"
     ;;
   partial_promotion)
     accept_proposal "$p1" none act-accept-1 >/dev/null
@@ -467,7 +501,8 @@ PY
     accept_proposal "$p1" none act-accept-1 >/dev/null
     h1="$(visible_head)"
     run_yardlet planning confirm --expected-head "$h1" --action-id act-confirm-strip >/dev/null
-    rm -rf "$ROOT/.agents/activations" "$ROOT/.agents/planning-sessions"
+    rm -rf "$ROOT/.agents/activations"
+    rm -f "$ROOT/.agents/activation-required.yaml"
     python3 - "$ROOT/.agents/intent-contract.yaml" "$ROOT/.agents/work-queue.yaml" <<'PY'
 import sys
 for path in sys.argv[1:]:
@@ -480,10 +515,13 @@ for path in sys.argv[1:]:
             "confirmation_id",
             "draft_revision_id",
             "draft_content_digest",
+            "materialized_queue_digest",
             "materialized_by_confirmation_id",
             "activation_required",
         }:
             continue
+        if line.startswith("materialized_queue:"):
+            break
         stripped.append(line)
     open(path, "w", encoding="utf-8").writelines(stripped)
 PY
@@ -492,6 +530,40 @@ PY
     fi
     grep -q "unconfirmed_or_inconsistent" "$EVIDENCE_DIR/stripped.err" || fail "stripped modern failure reason missing"
     write_summary "modern activation marker survives stripped linkage and fails closed"
+    ;;
+  legacy_v1)
+    accept_proposal "$p1" none act-legacy-source-accept >/dev/null
+    head="$(visible_head)"
+    run_yardlet planning confirm --expected-head "$head" --action-id act-legacy-source-confirm >/dev/null
+    rm -rf "$ROOT/.agents/activations" "$ROOT/.agents/planning-sessions"
+    rm -f "$ROOT/.agents/activation-required.yaml"
+    python3 - "$ROOT/.agents/intent-contract.yaml" "$ROOT/.agents/work-queue.yaml" <<'PY'
+import sys
+intent_path, queue_path = sys.argv[1:]
+intent_lines = open(intent_path, encoding="utf-8").readlines()
+intent_lines = [line for line in intent_lines if line.strip().split(":", 1)[0] not in {
+    "activation_required", "planning_session_id", "confirmation_id",
+    "draft_revision_id", "draft_content_digest",
+}]
+open(intent_path, "w", encoding="utf-8").writelines(intent_lines)
+
+queue_lines = open(queue_path, encoding="utf-8").readlines()
+legacy = []
+for line in queue_lines:
+    if line.startswith("planning_session_id:"):
+        break
+    if line.strip().split(":", 1)[0] in {
+        "activation_required", "materialized_by_confirmation_id",
+        "materialized_queue_digest",
+    }:
+        continue
+    legacy.append(line)
+open(queue_path, "w", encoding="utf-8").writelines(legacy)
+PY
+    run_yardlet queue >"$EVIDENCE_DIR/legacy-v1-queue.out"
+    run_yardlet run --next >"$EVIDENCE_DIR/legacy-v1-run.out"
+    grep -q 'selected task YARD-001' "$EVIDENCE_DIR/legacy-v1-run.out" || fail "plain legacy v1 queue stopped being runnable"
+    write_summary "modern record가 전혀 없는 plain legacy v1 intent/queue는 기존 runnable semantics를 유지함"
     ;;
   activation_action_linkage)
     accept_proposal "$p1" none act-accept-1 >/dev/null

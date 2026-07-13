@@ -70,6 +70,11 @@ mod unix {
     }
 
     #[test]
+    fn first_runtime_failure_preserves_two_task_activation_and_next_runnability() {
+        run_scenario("runtime_transition_provenance");
+    }
+
+    #[test]
     fn partial_or_tampered_promotion_is_not_runnable() {
         run_scenario("partial_promotion");
     }
@@ -102,6 +107,11 @@ mod unix {
     #[test]
     fn stripped_modern_provenance_does_not_fall_back_to_legacy() {
         run_scenario("stripped_modern");
+    }
+
+    #[test]
+    fn plain_legacy_v1_queue_remains_runnable_without_modern_records() {
+        run_scenario("legacy_v1");
     }
 
     #[test]

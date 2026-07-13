@@ -707,6 +707,79 @@ impl Workspace {
         load_yaml(&path).map(Some)
     }
 
+    /// Detect durable V010 planning evidence that belongs to the active ids.
+    /// This discriminator is independent of the mutable active snapshots, so
+    /// deleting every provenance field from those snapshots cannot make a
+    /// confirmed plan look like a legacy v1 intent/queue pair.
+    pub fn has_matching_modern_planning_evidence(
+        &self,
+        intent_id: &str,
+        queue_id: &str,
+    ) -> Result<bool> {
+        if intent_id.is_empty() && queue_id.is_empty() {
+            return Ok(false);
+        }
+
+        let activations = self.agents_dir().join("activations");
+        if activations.is_dir() {
+            for entry in fs::read_dir(&activations)
+                .with_context(|| format!("reading {}", activations.display()))?
+            {
+                let path = entry?.path();
+                if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
+                    continue;
+                }
+                let activation: ActivationReceipt = load_yaml(&path)?;
+                if (intent_id.is_empty() || activation.intent_id == intent_id)
+                    && (queue_id.is_empty() || activation.queue_id == queue_id)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+
+        let sessions = self.planning_sessions_dir();
+        if !sessions.is_dir() {
+            return Ok(false);
+        }
+        for entry in
+            fs::read_dir(&sessions).with_context(|| format!("reading {}", sessions.display()))?
+        {
+            let session_dir = entry?.path();
+            if !session_dir.is_dir() {
+                continue;
+            }
+            let session_path = session_dir.join("session.yaml");
+            if session_path.is_file() {
+                let session: PlanningSession = load_yaml(&session_path)?;
+                if (intent_id.is_empty() || session.intent_id == intent_id)
+                    && (queue_id.is_empty() || session.queue_id == queue_id)
+                {
+                    return Ok(true);
+                }
+            }
+            let drafts = session_dir.join("drafts");
+            if !drafts.is_dir() {
+                continue;
+            }
+            for draft in
+                fs::read_dir(&drafts).with_context(|| format!("reading {}", drafts.display()))?
+            {
+                let path = draft?.path();
+                if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
+                    continue;
+                }
+                let revision: DraftRevision = load_yaml(&path)?;
+                if (intent_id.is_empty() || revision.content.intent.id == intent_id)
+                    && (queue_id.is_empty() || revision.content.queue.queue_id == queue_id)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     pub fn save_activation(&self, activation: &ActivationReceipt) -> Result<()> {
         save_immutable_yaml(
             &self.activation_path(&activation.confirmation_id),
@@ -1374,6 +1447,12 @@ impl Workspace {
         let materialized = queue.materialized_queue.as_ref().ok_or_else(|| {
             anyhow::anyhow!("active_runtime_envelope_mismatch: materialized queue is missing")
         })?;
+        let materialized_digest = Self::runtime_record_digest(materialized)?;
+        if queue.materialized_queue_digest.is_empty()
+            || queue.materialized_queue_digest != materialized_digest
+        {
+            bail!("active_runtime_envelope_mismatch: immutable materialized queue digest mismatch");
+        }
         let mut committed = self.committed_runtime_tasks(queue)?;
         for task_id in prepared_task_ids {
             if committed

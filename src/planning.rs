@@ -1697,6 +1697,7 @@ fn activated_records(
         confirmation_id: confirmation_id.to_string(),
         draft_revision_id: revision.draft_revision_id.clone(),
         draft_content_digest: revision.content_digest.clone(),
+        materialized_queue_digest: digest(&revision.content.queue)?,
         materialized_queue: Some(revision.content.queue.clone()),
     };
     Ok((intent, queue))
@@ -1713,6 +1714,7 @@ fn activated_queue_digest(queue: &ActivatedQueue) -> Result<String> {
             "confirmation_id": queue.confirmation_id,
             "draft_revision_id": queue.draft_revision_id,
             "draft_content_digest": queue.draft_content_digest,
+            "materialized_queue_digest": queue.materialized_queue_digest,
             "materialized_queue": materialized_queue,
         }));
     }
@@ -2043,6 +2045,8 @@ fn provenance_present(intent: &ActivatedIntent, queue: &ActivatedQueue) -> bool 
         || !queue.draft_revision_id.is_empty()
         || !queue.planning_session_id.is_empty()
         || !queue.draft_content_digest.is_empty()
+        || !queue.materialized_queue_digest.is_empty()
+        || queue.materialized_queue.is_some()
         || queue
             .tasks
             .iter()
@@ -2055,6 +2059,8 @@ fn queue_provenance_present(queue: &ActivatedQueue) -> bool {
         || !queue.draft_revision_id.is_empty()
         || !queue.planning_session_id.is_empty()
         || !queue.draft_content_digest.is_empty()
+        || !queue.materialized_queue_digest.is_empty()
+        || queue.materialized_queue.is_some()
         || queue
             .tasks
             .iter()
@@ -2071,9 +2077,18 @@ pub fn validate_active_activation(ws: &Workspace) -> Result<ActivationGate> {
         .map_err(|_| inconsistent("activation requirement marker is invalid"))?;
     let Some(intent) = ws.load_activated_intent()? else {
         let queue = ws.load_activated_queue()?;
+        let modern_evidence = match &queue {
+            Some(queue) => ws
+                .has_matching_modern_planning_evidence(&queue.intent_id, &queue.queue_id)
+                .map_err(|error| {
+                    inconsistent(&format!("modern planning evidence is invalid: {error}"))
+                })?,
+            None => false,
+        };
         if queue
             .as_ref()
             .is_some_and(|queue| workspace_requires_activation || queue_provenance_present(queue))
+            || modern_evidence
         {
             return Err(inconsistent("active intent is missing"));
         }
@@ -2083,6 +2098,16 @@ pub fn validate_active_activation(ws: &Workspace) -> Result<ActivationGate> {
         .load_activated_queue()?
         .ok_or_else(|| inconsistent("active queue is missing"))?;
     if !workspace_requires_activation && !provenance_present(&intent, &queue) {
+        if ws
+            .has_matching_modern_planning_evidence(&intent.intent.id, &queue.queue_id)
+            .map_err(|error| {
+                inconsistent(&format!("modern planning evidence is invalid: {error}"))
+            })?
+        {
+            return Err(inconsistent(
+                "modern planning evidence exists for provenance-stripped active state",
+            ));
+        }
         return Ok(ActivationGate::Legacy);
     }
     ws.validate_activated_queue_runtime(&queue)
