@@ -5,7 +5,7 @@
 - 실행 루트: `.agents/runs/run-20260714-011920/dogfood-v010-002/workspace`
 - 실행 주체: 이 worktree에서 빌드한 실제 `yardlet`과 로컬 `codex` planning worker
 - 원래 dogfood 판정: 세 content turn, accept, reject, undo, fresh-process 복원, explicit confirm을 거친 뒤 visible draft와 active intent/queue가 field와 digest 양쪽에서 일치했다.
-- 보수 판정: terminal proposal, undo linkage, stripped provenance, stable prepared effect, immutable journal 검증, completed-active 일치, bounded process lock, runtime queue 경쟁, receipt/session/runtime envelope, exact planner turn CAS를 포함한 결정적 process test 35개가 통과했다. YARD-008 독립 재검토와 YARD-006 recovery 보수가 blocker 없이 통과했으며, V010-002 최종 완료 표시는 남은 queue task와 최종 review가 끝난 뒤에만 갱신한다.
+- 보수 판정: terminal proposal, undo linkage, stripped provenance, stable prepared effect, immutable journal 검증, completed-active 일치, bounded process lock, runtime queue 경쟁, receipt/session/runtime envelope, exact planner turn CAS를 포함한 결정적 process test 37개가 통과했다. YARD-008 독립 재검토와 YARD-006 recovery 보수가 blocker 없이 통과했고, YARD-002 최종 독립 리뷰도 AC-001부터 AC-007까지 PASS했다.
 
 ## 1. 증거 경계
 
