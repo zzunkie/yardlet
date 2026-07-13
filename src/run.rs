@@ -558,6 +558,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let intent = ws.load_intent()?;
     let config = ws.load_config()?;
 
+    // V010-002 activation gate. Legacy queues remain compatible, but once any
+    // confirmation provenance is present every contract predicate is required.
+    // Missing or contradictory linkage is visible state, never runnable work.
+    crate::planning::validate_active_activation(ws)?;
+
     // Ambiguity gate (absorption.md A2): while the planner's own self-report
     // says it is still guessing, queue-selected runs refuse to start. A named
     // target or --accept-ambiguity is an explicit human override.

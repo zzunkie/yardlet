@@ -1,0 +1,146 @@
+# V010-002 Yardlet-on-Yardlet 증거
+
+- 대상: 대화형 planning, immutable draft revision, semantic diff, explicit confirm, exact promotion
+- 실행일: 2026-07-14 (Asia/Seoul)
+- 실행 루트: `.agents/runs/run-20260714-011920/dogfood-v010-002/workspace`
+- 실행 주체: 이 worktree에서 빌드한 실제 `yardlet`과 로컬 `codex` planning worker
+- 판정: 세 content turn, accept, reject, undo, fresh-process 복원, explicit confirm을 거친 뒤 visible draft와 active intent/queue가 field와 digest 양쪽에서 일치했다.
+
+## 1. 증거 경계
+
+dogfood는 격리 workspace에서 실행했다. planning session, proposal, draft,
+event, action receipt, active intent, active queue, activation은 모두 Yardlet
+core가 `.agents/`에 기록했다. 이 문서를 만들기 위해 기존 운영 state를
+수동 편집하지 않았다.
+
+```text
+.agents/planning-sessions/ses_20260713164132243292000_000001/
+  session.yaml
+  proposals/*.yaml
+  drafts/*.yaml
+  events/00000000000000000001.yaml ... 00000000000000000030.yaml
+  actions/*.yaml
+.agents/activations/cnf_20260713164851099828000_000002.yaml
+.agents/intent-contract.yaml
+.agents/work-queue.yaml
+```
+
+결정적 재현은 `tests/fixtures/v010_002_conversational_planning/scripts/run.sh`
+가 담당한다. 실제 worker 응답의 문구는 달라질 수 있으므로 live dogfood와
+결정적 process fixture를 분리해 증거로 남겼다.
+
+## 2. RED에서 GREEN까지
+
+production code를 추가하기 전에 아래 process test 9개를 먼저 만들었다.
+
+```bash
+cargo test --test v010_002_conversational_planning_process
+```
+
+첫 실행은 `yardlet planning` subcommand가 없어 9/9가 동일하게 실패했고
+exit 101이었다. 구현 뒤 같은 명령은 9/9 pass, exit 0이 되었다. 시나리오는
+accept, reject, undo, stale head, restart-confirm, partial promotion,
+running isolation, goal regression, multi-turn dogfood다.
+
+## 3. 실제 세 turn
+
+초기 요청은 production runtime 변경을 제외하고 V010-002 proof 문서,
+결정적 process fixture, 두 README만 계획하는 저위험 slice였다.
+
+| turn | 사용자 입력과 action | 저장 결과 |
+|---:|---|---|
+| 1 | 초기 요청을 실제 Codex로 planning한 뒤 proposal accept | `prp_20260713164439129614000_000004`를 `drv_20260713164446251011000_000002`로 accept. active intent와 queue는 그대로 유지 |
+| 2 | allowed path를 정확히 제한하는 scope correction 뒤 proposal reject | `prp_20260713164610725475000_000004` reject. visible head는 turn 1 revision 그대로 유지 |
+| 3 | 세 turn, accept/reject/undo, restart, confirm, field/digest parity를 acceptance에 추가한 proposal accept 후 undo | `prp_20260713164840156315000_000004`를 `drv_20260713164850875518000_000002`로 revise한 뒤 undo해 turn 1 revision 복원 |
+
+undo 뒤 별도 `yardlet planning show --json` process를 실행해 session과
+visible head가 복원됨을 확인했다. 그 fresh process에서 복원한 head를
+`--expected-head`로 넘겨 `dogfood-confirm-final` action을 명시적으로
+confirm했다. confirm action을 같은 action id로 한 번 더 호출했을 때 같은
+activation을 반환해 idempotent recovery도 확인했다.
+
+## 4. ordered channel과 restart 결과
+
+최종 projection은 다음 값을 보고했다.
+
+```json
+{
+  "session_id": "ses_20260713164132243292000_000001",
+  "lifecycle": "confirmed",
+  "current_head": "drv_20260713164446251011000_000002",
+  "confirmation_id": "cnf_20260713164851099828000_000002",
+  "next_seq": 31,
+  "channel_turn_count": 3,
+  "rejected_proposal_count": 1,
+  "undo_count": 1,
+  "exact_active_parity": true
+}
+```
+
+저장 event는 seq 1부터 30까지 빈틈없이 이어졌다. content event는
+`user.message` 3개, `worker.message` 3개, `draft.proposed` 3개였고,
+`draft.accepted`, `draft.rejected`, `draft.revised`, `draft.undo`,
+`draft.confirm.prepared`, `draft.confirmed`와 각 action receipt event가 같은
+session에 기록됐다.
+
+## 5. exact field와 digest parity
+
+독립 검증은 active YAML에서 activation provenance만 제거한 intent와 task
+materialization provenance만 제거한 queue를 visible draft의 두 객체와
+구조적으로 비교했다. 이어 같은 FNV-1a JSON digest 경계에서 visible draft와
+provenance 포함 active 문서 두 개를 receipt와 비교했다.
+
+```json
+{
+  "exact_fields": true,
+  "exact_active_parity": true,
+  "draft_digest": "fnv1a64:2cc0a590c02250bf",
+  "intent_digest": "fnv1a64:70e294b9ed74a88f",
+  "queue_digest": "fnv1a64:d8b4c2163123269a",
+  "confirmation_id": "cnf_20260713164851099828000_000002"
+}
+```
+
+`draft_content_digest`는 화면에 보인 draft 전체의 digest다.
+`intent_digest`와 `queue_digest`는 confirmation/session/revision 및 task별
+materialization linkage를 포함한 실제 active 문서의 digest다. 이 세 값은
+각기 올바른 저장 경계를 검증하며 서로 대체하지 않는다.
+
+## 6. 재현 명령
+
+결정적 전체 journey는 네트워크나 provider API 없이 다음처럼 재현한다.
+
+```bash
+cargo build
+cargo test --test v010_002_conversational_planning_process
+evidence="$(mktemp -d)"
+tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" dogfood
+```
+
+live planning은 격리 workspace에서 로컬 subscription CLI worker를 사용해
+다음 action 순서로 실행했다.
+
+```bash
+yardlet new "<initial request>" --worker codex
+yardlet planning accept <proposal-1> --expected-head none --action-id dogfood-accept-1
+yardlet planning answer "<scope correction>" --expected-head <revision-1> --action-id dogfood-answer-2 --worker codex
+yardlet planning reject <proposal-2> --expected-head <revision-1> --action-id dogfood-reject-2
+yardlet planning answer "<acceptance correction>" --expected-head <revision-1> --action-id dogfood-answer-3 --worker codex
+yardlet planning accept <proposal-3> --expected-head <revision-1> --action-id dogfood-accept-3
+yardlet planning undo --expected-head <revision-2> --action-id dogfood-undo-3
+yardlet planning show --json
+yardlet planning confirm --expected-head <revision-1> --action-id dogfood-confirm-final
+yardlet planning show --json
+```
+
+## 7. 안전 경계
+
+- confirm 전에는 active intent와 queue가 바뀌지 않았다.
+- reject와 stale-head action은 visible head를 바꾸지 않는다.
+- incomplete activation 또는 confirmation/session/revision/digest/task linkage
+  변조는 `unconfirmed_or_inconsistent`로 실행을 닫는다.
+- confirmed 또는 running queue에 대한 free-form planning mutation은 거절된다.
+- `yardlet goal` 기본 및 verifier 포함 express path는 planning worker 없이
+  동작하면서 draft와 confirmation provenance를 기록한다.
+- V010-003 이상의 task channel, runtime resource, TUI, adapter, GUI 범위는
+  이 구현에서 확장하지 않았다.

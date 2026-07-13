@@ -197,6 +197,188 @@ pub struct WorkQueue {
     pub tasks: Vec<Task>,
 }
 
+// ---------------------------------------------------------------------------
+// V010-002 conversational planning and exact activation
+// ---------------------------------------------------------------------------
+
+/// Immutable plan content shown to the user before confirmation. The active
+/// records add activation provenance around this exact payload; they never
+/// re-plan or rewrite it during promotion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningDraftContent {
+    pub intent: IntentContract,
+    pub queue: WorkQueue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanningLifecycle {
+    Open,
+    Confirmed,
+    Closed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningSession {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub workspace_id: String,
+    pub lifecycle: PlanningLifecycle,
+    pub intent_id: String,
+    pub queue_id: String,
+    pub initial_request: String,
+    #[serde(default)]
+    pub current_head: Option<String>,
+    #[serde(default)]
+    pub confirmation_id: Option<String>,
+    pub next_seq: u64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticDiffEntry {
+    pub field: String,
+    pub before: serde_json::Value,
+    pub after: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningProposal {
+    pub schema_version: u32,
+    pub proposal_id: String,
+    pub session_id: String,
+    #[serde(default)]
+    pub expected_head: Option<String>,
+    pub producer_worker_id: String,
+    pub attempt_id: String,
+    pub rationale: String,
+    pub content_digest: String,
+    pub content: PlanningDraftContent,
+    #[serde(default)]
+    pub semantic_diff: Vec<SemanticDiffEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DraftRevision {
+    pub schema_version: u32,
+    pub draft_revision_id: String,
+    pub session_id: String,
+    pub proposal_id: String,
+    #[serde(default)]
+    pub parent_revision_id: Option<String>,
+    pub content_digest: String,
+    pub content: PlanningDraftContent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningEvent {
+    pub schema_version: u32,
+    pub event_id: String,
+    pub session_id: String,
+    pub seq: u64,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub action_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub message: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub proposal_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub draft_revision_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub related_revision_id: String,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanningActionReceipt {
+    pub schema_version: u32,
+    pub action_id: String,
+    pub session_id: String,
+    pub action: String,
+    pub request_digest: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub result_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+}
+
+/// Intent snapshot carrying the activation linkage. Flattening keeps the
+/// legacy `intent-contract.yaml` shape readable by older tolerant readers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivatedIntent {
+    #[serde(flatten)]
+    pub intent: IntentContract,
+    #[serde(default)]
+    pub planning_session_id: String,
+    #[serde(default)]
+    pub confirmation_id: String,
+    #[serde(default)]
+    pub draft_revision_id: String,
+    #[serde(default)]
+    pub draft_content_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivatedTask {
+    #[serde(flatten)]
+    pub task: Task,
+    #[serde(default)]
+    pub materialized_by_confirmation_id: String,
+}
+
+/// Queue snapshot carrying activation and per-task materialization linkage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivatedQueue {
+    pub schema_version: u32,
+    pub queue_id: String,
+    #[serde(default)]
+    pub intent_id: String,
+    #[serde(default)]
+    pub selection_policy: SelectionPolicy,
+    #[serde(default)]
+    pub tasks: Vec<ActivatedTask>,
+    #[serde(default)]
+    pub planning_session_id: String,
+    #[serde(default)]
+    pub confirmation_id: String,
+    #[serde(default)]
+    pub draft_revision_id: String,
+    #[serde(default)]
+    pub draft_content_digest: String,
+}
+
+impl ActivatedQueue {
+    pub fn as_work_queue(&self) -> WorkQueue {
+        WorkQueue {
+            schema_version: self.schema_version,
+            queue_id: self.queue_id.clone(),
+            intent_id: self.intent_id.clone(),
+            selection_policy: self.selection_policy.clone(),
+            tasks: self.tasks.iter().map(|task| task.task.clone()).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivationReceipt {
+    pub schema_version: u32,
+    pub confirmation_id: String,
+    pub action_id: String,
+    pub session_id: String,
+    pub draft_revision_id: String,
+    pub draft_content_digest: String,
+    pub intent_id: String,
+    pub queue_id: String,
+    pub intent_digest: String,
+    pub queue_digest: String,
+    pub status: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectionPolicy {
     #[serde(default = "default_order")]

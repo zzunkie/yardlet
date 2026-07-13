@@ -14,9 +14,11 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 
 use crate::schemas::{
-    BillingPolicy, Conversation, ConversationTurn, FollowUpTask, IntentContract,
-    PreservedFollowUps, SelectionPolicy, Task, TaskState, TransitionActor, TransitionCause,
-    TransitionLog, TransitionRecord, TurnRole, WorkQueue, WorkersFile, YardConfig,
+    ActivatedIntent, ActivatedQueue, ActivationReceipt, BillingPolicy, Conversation,
+    ConversationTurn, DraftRevision, FollowUpTask, IntentContract, PlanningActionReceipt,
+    PlanningEvent, PlanningProposal, PlanningSession, PreservedFollowUps, SelectionPolicy, Task,
+    TaskState, TransitionActor, TransitionCause, TransitionLog, TransitionRecord, TurnRole,
+    WorkQueue, WorkersFile, YardConfig,
 };
 use crate::yaml;
 
@@ -184,6 +186,183 @@ impl Workspace {
     }
     pub fn runs_dir(&self) -> PathBuf {
         self.agents_dir().join("runs")
+    }
+
+    pub fn planning_sessions_dir(&self) -> PathBuf {
+        self.agents_dir().join("planning-sessions")
+    }
+
+    pub fn planning_session_dir(&self, session_id: &str) -> PathBuf {
+        self.planning_sessions_dir().join(session_id)
+    }
+
+    pub fn planning_session_path(&self, session_id: &str) -> PathBuf {
+        self.planning_session_dir(session_id).join("session.yaml")
+    }
+
+    pub fn latest_planning_session_path(&self) -> PathBuf {
+        self.planning_sessions_dir().join("latest")
+    }
+
+    pub fn planning_proposal_path(&self, session_id: &str, proposal_id: &str) -> PathBuf {
+        self.planning_session_dir(session_id)
+            .join("proposals")
+            .join(format!("{proposal_id}.yaml"))
+    }
+
+    pub fn draft_revision_path(&self, session_id: &str, revision_id: &str) -> PathBuf {
+        self.planning_session_dir(session_id)
+            .join("drafts")
+            .join(format!("{revision_id}.yaml"))
+    }
+
+    pub fn planning_event_path(&self, session_id: &str, seq: u64) -> PathBuf {
+        self.planning_session_dir(session_id)
+            .join("events")
+            .join(format!("{seq:020}.yaml"))
+    }
+
+    pub fn planning_action_path(&self, session_id: &str, action_id: &str) -> PathBuf {
+        self.planning_session_dir(session_id)
+            .join("actions")
+            .join(format!("{action_id}.yaml"))
+    }
+
+    pub fn activation_path(&self, confirmation_id: &str) -> PathBuf {
+        self.agents_dir()
+            .join("activations")
+            .join(format!("{confirmation_id}.yaml"))
+    }
+
+    pub fn save_planning_session(&self, session: &PlanningSession) -> Result<()> {
+        let path = self.planning_session_path(&session.session_id);
+        write_str_atomic(&path, &yaml::to_string(session)?)?;
+        write_str_atomic(
+            &self.latest_planning_session_path(),
+            &format!("{}\n", session.session_id),
+        )
+    }
+
+    pub fn load_planning_session(&self, session_id: &str) -> Result<PlanningSession> {
+        load_yaml(&self.planning_session_path(session_id))
+    }
+
+    pub fn load_latest_planning_session(&self) -> Result<Option<PlanningSession>> {
+        let pointer = self.latest_planning_session_path();
+        if pointer.is_file() {
+            let session_id = fs::read_to_string(&pointer)
+                .with_context(|| format!("reading {}", pointer.display()))?;
+            let session_id = session_id.trim();
+            if !session_id.is_empty() {
+                return self.load_planning_session(session_id).map(Some);
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn save_planning_proposal(&self, proposal: &PlanningProposal) -> Result<()> {
+        save_immutable_yaml(
+            &self.planning_proposal_path(&proposal.session_id, &proposal.proposal_id),
+            proposal,
+        )
+    }
+
+    pub fn load_planning_proposal(
+        &self,
+        session_id: &str,
+        proposal_id: &str,
+    ) -> Result<PlanningProposal> {
+        load_yaml(&self.planning_proposal_path(session_id, proposal_id))
+    }
+
+    pub fn load_planning_proposals(&self, session_id: &str) -> Result<Vec<PlanningProposal>> {
+        load_yaml_dir(&self.planning_session_dir(session_id).join("proposals"))
+    }
+
+    pub fn save_draft_revision(&self, revision: &DraftRevision) -> Result<()> {
+        save_immutable_yaml(
+            &self.draft_revision_path(&revision.session_id, &revision.draft_revision_id),
+            revision,
+        )
+    }
+
+    pub fn load_draft_revision(
+        &self,
+        session_id: &str,
+        revision_id: &str,
+    ) -> Result<DraftRevision> {
+        load_yaml(&self.draft_revision_path(session_id, revision_id))
+    }
+
+    pub fn save_planning_event(&self, event: &PlanningEvent) -> Result<()> {
+        save_immutable_yaml(
+            &self.planning_event_path(&event.session_id, event.seq),
+            event,
+        )
+    }
+
+    pub fn load_planning_events(&self, session_id: &str) -> Result<Vec<PlanningEvent>> {
+        let mut events: Vec<PlanningEvent> =
+            load_yaml_dir(&self.planning_session_dir(session_id).join("events"))?;
+        events.sort_by_key(|event| event.seq);
+        Ok(events)
+    }
+
+    pub fn save_planning_action(&self, receipt: &PlanningActionReceipt) -> Result<()> {
+        let path = self.planning_action_path(&receipt.session_id, &receipt.action_id);
+        write_str_atomic(&path, &yaml::to_string(receipt)?)
+    }
+
+    pub fn load_planning_action(
+        &self,
+        session_id: &str,
+        action_id: &str,
+    ) -> Result<Option<PlanningActionReceipt>> {
+        let path = self.planning_action_path(session_id, action_id);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_yaml(&path).map(Some)
+    }
+
+    pub fn save_active_promotion(
+        &self,
+        intent: &ActivatedIntent,
+        queue: &ActivatedQueue,
+    ) -> Result<()> {
+        write_str_atomic(&self.intent_path(), &yaml::to_string(intent)?)?;
+        write_str_atomic(&self.queue_path(), &yaml::to_string(queue)?)
+    }
+
+    pub fn load_activated_intent(&self) -> Result<Option<ActivatedIntent>> {
+        let path = self.intent_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_yaml(&path).map(Some)
+    }
+
+    pub fn load_activated_queue(&self) -> Result<Option<ActivatedQueue>> {
+        let path = self.queue_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_yaml(&path).map(Some)
+    }
+
+    pub fn save_activation(&self, activation: &ActivationReceipt) -> Result<()> {
+        save_immutable_yaml(
+            &self.activation_path(&activation.confirmation_id),
+            activation,
+        )
+    }
+
+    pub fn load_activation(&self, confirmation_id: &str) -> Result<Option<ActivationReceipt>> {
+        let path = self.activation_path(confirmation_id);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_yaml(&path).map(Some)
     }
 
     /// Canonical writer for the secret-free Git finish attempt attached to a
@@ -1007,6 +1186,35 @@ fn memory_slug(input: &str) -> String {
 pub fn load_yaml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     yaml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn load_yaml_dir<T: serde::de::DeserializeOwned>(dir: &Path) -> Result<Vec<T>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut paths = fs::read_dir(dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "yaml")
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.iter().map(|path| load_yaml(path)).collect()
+}
+
+fn save_immutable_yaml<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
+    let text = yaml::to_string(value)?;
+    if path.is_file() {
+        let existing = fs::read_to_string(path)
+            .with_context(|| format!("reading immutable record {}", path.display()))?;
+        if existing == text {
+            return Ok(());
+        }
+        bail!("immutable record conflict at {}", path.display());
+    }
+    write_str_atomic(path, &text)
 }
 
 pub fn save_yaml<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {

@@ -92,7 +92,10 @@ a worker opts a specific var back in only via `pass_env`.
 ```bash
 cd your-project
 yardlet new "add admin order search with status, email, and date filters"
-yardlet queue                      # review the planned tasks
+yardlet planning show              # review the proposal and semantic diff
+yardlet planning accept <proposal> --expected-head none
+yardlet planning confirm --expected-head <draft-revision>
+yardlet queue                      # review the confirmed tasks
 yardlet run --auto                 # drain the queue, stopping only at human gates
 yardlet handoff                    # read the teammate-readable summary
 yardlet                            # or do it all from the terminal UI
@@ -102,9 +105,16 @@ Like the worker CLIs, `yardlet` just works in any directory: the first command
 creates `.agents/` state on demand. `yardlet init` exists for scripting or to
 re-scaffold, but you do not need to run it first.
 
-A one-sentence request becomes an intent contract plus a bounded task queue
-with explicit dependencies; each task runs through a hidden worker, is checked
-by a deterministic evaluator, and leaves a checkpoint and handoff under
+A one-sentence request opens a planning channel. Each worker proposal is an
+immutable draft revision with an inspectable semantic diff. `accept`, `reject`,
+`undo`, and `answer` require the expected visible head, and only explicit
+`confirm` promotes that exact draft to the active intent and bounded queue. No
+active state changes before confirmation, and confirmation does not call the
+worker or hide a re-plan. `yardlet goal` remains the express path: it skips the
+planning worker but records the generated draft and confirmation provenance.
+
+After confirmation, each task runs through a hidden worker, is checked by a
+deterministic evaluator, and leaves a checkpoint and handoff under
 `.agents/runs/`.
 
 Tasks can carry an explicit goal condition and feedback-cycle limit. When a
@@ -242,8 +252,9 @@ are mapped to the same shortcuts.
 | --- | --- |
 | `yardlet` | Open the terminal UI (auto-inits on first use). |
 | `yardlet init [--force]` | Explicitly scaffold `.agents/` state (optional). |
-| `yardlet new "<request>" [--worker <id>]` | Plan a request into an intent contract + queue. |
-| `yardlet goal "<goal>" [--verify "..."]` | Express lane: skip planning, run one goal to a verify condition. |
+| `yardlet new "<request>" [--worker <id>]` | Start or resume conversational planning and record a replacement proposal without changing active state. |
+| `yardlet planning show [--json]` / `accept` / `reject` / `undo` / `answer` / `confirm` | Review the channel and semantic diff, then act against an expected draft head; only `confirm` promotes the visible draft. |
+| `yardlet goal "<goal>" [--verify "..."]` | Express lane: skip the planning worker, record an exact draft and confirmation, then run one goal to a verify condition. |
 | `yardlet new "..." --image <path>` | Attach a local image to the goal (also auto-detected from the request). |
 | `yardlet add "<title>" [--depends-on <id>]` | Append a user-authored task to the current queue without replanning. |
 | `yardlet queue` | List the work queue. |
@@ -528,6 +539,8 @@ Yardlet owns state; workers do not. Canonical state lives under `.agents/` in th
   yardlet.yaml              workspace config
   intent-contract.yaml      current goal / scope / acceptance
   work-queue.yaml           tasks
+  planning-sessions/        sessions, immutable proposals/drafts, ordered events, action receipts
+  activations/              committed exact-promotion receipts
   *-policy.yaml             tool / approval / interaction / research / billing policy
   workers.yaml              worker profiles + routing
   memory/                   durable workspace facts (one fact per .md, git-tracked)
