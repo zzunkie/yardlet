@@ -311,7 +311,7 @@ fn serial_worktree_evidence(
     })
 }
 
-const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 7] = [
+const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 14] = [
     "run.yaml",
     "task-packet.md",
     "worker.pid",
@@ -319,14 +319,45 @@ const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 7] = [
     "git-finish.json",
     "feedback.json",
     "canonical-state-seed",
+    "cancelled",
+    "partial-reason",
+    "failover.json",
+    "evaluation.json",
+    "validation.json",
+    "evidence",
+    "hooks",
 ];
+
+fn is_main_owned_validation_log_name(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase();
+    normalized
+        .strip_prefix("validation-")
+        .and_then(|rest| rest.strip_suffix(".log"))
+        .is_some_and(|index| !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()))
+}
 
 fn is_main_owned_run_artifact_name(name: &std::ffi::OsStr) -> bool {
     name.to_str().is_some_and(|name| {
         MAIN_OWNED_RUN_ARTIFACT_NAMES
             .iter()
             .any(|reserved| name.eq_ignore_ascii_case(reserved))
+            || is_main_owned_validation_log_name(name)
     })
+}
+
+fn validation_log_ascii_alias(name: &std::ffi::OsStr) -> Option<String> {
+    let name = name.to_str()?;
+    let bytes = name.as_bytes();
+    let start = bytes.iter().position(|byte| byte.is_ascii_digit())?;
+    let end = start
+        + bytes[start..]
+            .iter()
+            .position(|byte| !byte.is_ascii_digit())
+            .unwrap_or(bytes.len() - start);
+    if bytes[end..].iter().any(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("validation-{}.log", &name[start..end]))
 }
 
 fn is_main_owned_run_artifact_component(parent: &std::path::Path, name: &std::ffi::OsStr) -> bool {
@@ -339,6 +370,8 @@ fn is_main_owned_run_artifact_component(parent: &std::path::Path, name: &std::ff
         return false;
     };
     MAIN_OWNED_RUN_ARTIFACT_NAMES.iter().any(|reserved| {
+        std::fs::canonicalize(parent.join(reserved)).is_ok_and(|path| path == candidate)
+    }) || validation_log_ascii_alias(name).is_some_and(|reserved| {
         std::fs::canonicalize(parent.join(reserved)).is_ok_and(|path| path == candidate)
     })
 }
@@ -4156,6 +4189,15 @@ mod tests {
             "FEEDBACK.JSON",
             "CANONICAL-STATE-SEED",
             "Canonical-State-Seed",
+            "CANCELLED",
+            "Partial-Reason",
+            "FAILOVER.JSON",
+            "Evaluation.Json",
+            "VALIDATION.JSON",
+            "EVIDENCE",
+            "Hooks",
+            "validation-0.log",
+            "VALIDATION-42.LOG",
         ] {
             assert!(
                 is_main_owned_run_artifact_name(std::ffi::OsStr::new(name)),
@@ -4165,6 +4207,12 @@ mod tests {
         for name in [
             "result.json",
             "handoff.md",
+            "checkpoint.md",
+            "report.md",
+            "validation.log",
+            "validation-.log",
+            "validation-one.log",
+            "validation-1.log.bak",
             "git-finish.json.bak",
             "canonical-state-seed-copy",
         ] {
@@ -4251,6 +4299,120 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(canonical.join("nested/deep/handoff.md")).unwrap(),
             "worker handoff\n"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn worker_import_rejects_core_control_and_validation_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-worker-import-core-artifacts-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let staged = root.join("staged");
+        let canonical = root.join("canonical");
+        for directory in [
+            staged.join("nested/deep/evidence"),
+            staged.join("nested/deep/hooks/pre-run"),
+            staged.join("evidence"),
+            staged.join("hooks/post-run"),
+            canonical.join("nested/deep"),
+            canonical.join("evidence"),
+            canonical.join("hooks/post-run"),
+        ] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+
+        for path in [
+            staged.join("cancelled"),
+            staged.join("partial-reason"),
+            staged.join("failover.json"),
+            staged.join("evaluation.json"),
+            staged.join("validation.json"),
+            staged.join("validation-0.log"),
+            staged.join("nested/deep/CANCELLED"),
+            staged.join("nested/deep/Partial-Reason"),
+            staged.join("nested/deep/FAILOVER.JSON"),
+            staged.join("nested/deep/Evaluation.Json"),
+            staged.join("nested/deep/VALIDATION.JSON"),
+            staged.join("nested/deep/VALIDATION-42.LOG"),
+        ] {
+            write_str(&path, "worker forged\n").unwrap();
+        }
+        write_str(&staged.join("validation.log"), "worker validation\n").unwrap();
+        write_str(
+            &staged.join("evidence/repo-summary.md"),
+            "worker evidence\n",
+        )
+        .unwrap();
+        write_str(&staged.join("hooks/post-run/check.log"), "worker hook\n").unwrap();
+        write_str(
+            &staged.join("nested/deep/evidence/forged.txt"),
+            "worker evidence\n",
+        )
+        .unwrap();
+        write_str(
+            &staged.join("nested/deep/hooks/pre-run/forged.log"),
+            "worker hook\n",
+        )
+        .unwrap();
+
+        for path in [
+            canonical.join("partial-reason"),
+            canonical.join("failover.json"),
+            canonical.join("evaluation.json"),
+            canonical.join("validation.json"),
+            canonical.join("validation-0.log"),
+        ] {
+            write_str(&path, "main owned\n").unwrap();
+        }
+        write_str(
+            &canonical.join("evidence/repo-summary.md"),
+            "main evidence\n",
+        )
+        .unwrap();
+        write_str(&canonical.join("hooks/post-run/check.log"), "main hook\n").unwrap();
+
+        import_worker_run_artifacts(&staged, &canonical).unwrap();
+
+        assert!(!canonical.join("cancelled").exists());
+        for path in [
+            canonical.join("partial-reason"),
+            canonical.join("failover.json"),
+            canonical.join("evaluation.json"),
+            canonical.join("validation.json"),
+            canonical.join("validation-0.log"),
+        ] {
+            assert_eq!(std::fs::read_to_string(path).unwrap(), "main owned\n");
+        }
+        for name in [
+            "cancelled",
+            "partial-reason",
+            "failover.json",
+            "evaluation.json",
+            "validation.json",
+            "validation-42.log",
+        ] {
+            assert!(
+                !directory_has_ascii_case_insensitive_name(&canonical.join("nested/deep"), name),
+                "nested {name} must remain main-owned"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(canonical.join("evidence/repo-summary.md")).unwrap(),
+            "main evidence\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(canonical.join("hooks/post-run/check.log")).unwrap(),
+            "main hook\n"
+        );
+        assert!(!canonical.join("nested/deep/evidence").exists());
+        assert!(!canonical.join("nested/deep/hooks").exists());
+        assert_eq!(
+            std::fs::read_to_string(canonical.join("validation.log")).unwrap(),
+            "worker validation\n"
         );
 
         let _ = std::fs::remove_dir_all(root);
@@ -4783,6 +4945,9 @@ cat > "$run_dir/result.json" <<EOF
 }
 EOF
 printf "# handoff\nattempt %s\n" "$n" > "$run_dir/handoff.md"
+if [ "$n" -eq 1 ]; then
+  printf "merge_conflict\n" > "$run_dir/partial-reason"
+fi
 "##,
         );
         let root = std::env::temp_dir().join(format!("yard-feedback-auto-{}", std::process::id()));
@@ -5931,6 +6096,79 @@ exit 0
     }
 
     #[test]
+    fn worker_staging_cannot_forge_user_cancellation_or_partial_reason() {
+        let source = std::env::temp_dir().join(format!(
+            "yard-worker-forged-cancel-src-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        let builder = write_worker_script(
+            &source,
+            "builder.sh",
+            r##"#!/bin/sh
+run_dir="$1"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-FORGED-CANCEL",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": [], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "worker finished",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+touch "$run_dir/cancelled"
+printf "merge_conflict\n" > "$run_dir/partial-reason"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&builder)
+        );
+        let ws = init_test_workspace("worker-forged-cancel", &worker_yaml);
+        let mut q = queue(vec![task(
+            "YARD-FORGED-CANCEL",
+            TaskState::Queued,
+            10,
+            false,
+        )]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-FORGED-CANCEL".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.result_state, Some(TaskState::Done));
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+        assert!(!report.run_dir.join("cancelled").exists());
+        assert!(!report.run_dir.join("partial-reason").exists());
+        assert!(!report
+            .lines
+            .iter()
+            .any(|line| line.contains("stopped by user")));
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
     fn no_result_worker_fails_over_once_to_alternate_worker() {
         let root = std::env::temp_dir().join(format!("yard-failover-src-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -5966,6 +6204,14 @@ EOF
 cat > "$run_dir/handoff.md" <<EOF
 # Worker handoff
 done by builder
+EOF
+cat > "$run_dir/failover.json" <<EOF
+{
+  "from": "forged-worker",
+  "to": "forged-target",
+  "reason": "worker-controlled audit",
+  "at": "2099-01-01T00:00:00Z"
+}
 EOF
 exit 0
 "#,
@@ -6840,7 +7086,14 @@ exit 1
         crate::parallel::create_worktree(&ws.root, &wt, branch).unwrap();
         std::fs::write(wt.join("staged.txt"), "worker completed\n").unwrap();
         let staged_run_dir = wt.join(".agents/runs").join(run_id);
-        std::fs::create_dir_all(&staged_run_dir).unwrap();
+        for directory in [
+            staged_run_dir.join("evidence"),
+            staged_run_dir.join("hooks/pre-run"),
+            run_dir.join("evidence"),
+            run_dir.join("hooks/pre-run"),
+        ] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
         let result = crate::schemas::RunResult {
             schema_version: 1,
             run_id: run_id.into(),
@@ -6861,6 +7114,54 @@ exit 1
         )
         .unwrap();
         write_str(&staged_run_dir.join("handoff.md"), "# staged handoff\n").unwrap();
+        for path in [
+            staged_run_dir.join("cancelled"),
+            staged_run_dir.join("partial-reason"),
+            staged_run_dir.join("failover.json"),
+            staged_run_dir.join("evaluation.json"),
+            staged_run_dir.join("validation.json"),
+            staged_run_dir.join("validation-0.log"),
+        ] {
+            write_str(&path, "worker forged recovery artifact\n").unwrap();
+        }
+        write_str(
+            &staged_run_dir.join("evidence/repo-summary.md"),
+            "worker forged evidence\n",
+        )
+        .unwrap();
+        write_str(
+            &staged_run_dir.join("hooks/pre-run/check.log"),
+            "worker forged hook\n",
+        )
+        .unwrap();
+        write_str(
+            &staged_run_dir.join("validation.log"),
+            "worker validation allowed\n",
+        )
+        .unwrap();
+        write_str(
+            &staged_run_dir.join("checkpoint.md"),
+            "worker checkpoint allowed\n",
+        )
+        .unwrap();
+        for path in [
+            run_dir.join("failover.json"),
+            run_dir.join("evaluation.json"),
+            run_dir.join("validation.json"),
+            run_dir.join("validation-0.log"),
+        ] {
+            write_str(&path, "main recovery artifact\n").unwrap();
+        }
+        write_str(
+            &run_dir.join("evidence/repo-summary.md"),
+            "main recovery evidence\n",
+        )
+        .unwrap();
+        write_str(
+            &run_dir.join("hooks/pre-run/check.log"),
+            "main recovery hook\n",
+        )
+        .unwrap();
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
@@ -6893,6 +7194,35 @@ exit 1
             "worker completed\n"
         );
         assert!(messages.iter().any(|message| message.contains("recovered")));
+        assert!(!run_dir.join("cancelled").exists());
+        assert!(!run_dir.join("partial-reason").exists());
+        for path in [
+            run_dir.join("failover.json"),
+            run_dir.join("evaluation.json"),
+            run_dir.join("validation.json"),
+            run_dir.join("validation-0.log"),
+        ] {
+            assert_eq!(
+                std::fs::read_to_string(path).unwrap(),
+                "main recovery artifact\n"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(run_dir.join("evidence/repo-summary.md")).unwrap(),
+            "main recovery evidence\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(run_dir.join("hooks/pre-run/check.log")).unwrap(),
+            "main recovery hook\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(run_dir.join("validation.log")).unwrap(),
+            "worker validation allowed\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(run_dir.join("checkpoint.md")).unwrap(),
+            "worker checkpoint allowed\n"
+        );
         let record: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).unwrap();
         assert!(!record.integration_oid.is_empty());
         assert!(!wt.exists());

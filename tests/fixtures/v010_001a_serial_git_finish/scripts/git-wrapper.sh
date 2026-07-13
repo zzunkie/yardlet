@@ -22,7 +22,7 @@ for arg in "$@"; do
       saw_push=1
     else
       git_prefix+=("$arg")
-      [[ "$arg" == "commit" ]] && is_commit=1
+      [[ "$arg" == "commit" || "$arg" == "commit-tree" ]] && is_commit=1
       [[ "$arg" == "merge" ]] && is_merge=1
     fi
   fi

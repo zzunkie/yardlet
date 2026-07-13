@@ -695,6 +695,29 @@ pub(crate) fn integrate_worktree(
     baseline_oid: &str,
     expected_tip_oid: Option<&str>,
 ) -> Result<Integration> {
+    integrate_worktree_after_staged(
+        root,
+        wt,
+        branch,
+        task_id,
+        baseline_oid,
+        expected_tip_oid,
+        |_, _, _| Ok(()),
+    )
+}
+
+fn integrate_worktree_after_staged<F>(
+    root: &Path,
+    wt: &Path,
+    branch: &str,
+    task_id: &str,
+    baseline_oid: &str,
+    expected_tip_oid: Option<&str>,
+    after_staged: F,
+) -> Result<Integration>
+where
+    F: FnOnce(&Path, &Path, &str) -> Result<()>,
+{
     // Legacy run records did not persist a baseline. Recovery can safely derive
     // the worktree branch's merge-base, while new runs always pass the pinned
     // spawn-time OID recorded in run.yaml.
@@ -724,45 +747,70 @@ pub(crate) fn integrate_worktree(
         }
         None => {}
     }
+    let branch_ref = format!("refs/heads/{branch}");
+    let observed_tip = git(
+        root,
+        &["rev-parse", "--verify", &format!("{branch_ref}^{{commit}}")],
+    )?
+    .trim()
+    .to_string();
     if let Some(expected_tip_oid) = expected_tip_oid.filter(|oid| !oid.is_empty()) {
-        let current_tip_oid = git(
-            root,
-            &[
-                "rev-parse",
-                "--verify",
-                &format!("refs/heads/{branch}^{{commit}}"),
-            ],
-        )?
-        .trim()
-        .to_string();
-        if current_tip_oid != expected_tip_oid {
+        if observed_tip != expected_tip_oid {
             return Ok(Integration::Conflict(format!(
-                "worktree branch tip changed after evidence collection: expected {expected_tip_oid}, found {current_tip_oid}"
+                "worktree branch tip changed after evidence collection: expected {expected_tip_oid}, found {observed_tip}"
             )));
         }
     }
     git(wt, &["add", "-A", "--", ".", ":(exclude).agents"])?;
     let staged = git(wt, &["diff", "--cached", "--name-only"])?;
-    let committed_by_yardlet = !staged.trim().is_empty();
-    if committed_by_yardlet {
+    after_staged(root, wt, branch)?;
+    let worker_tip = if !staged.trim().is_empty() {
         let message = commit_message(root, task_id);
-        git(wt, &["commit", "-m", &message])?;
-    }
-    let worker_tip = git(
-        root,
-        &["rev-parse", "--verify", &format!("{branch}^{{commit}}")],
-    )?
-    .trim()
-    .to_string();
-    if !committed_by_yardlet
-        && expected_tip_oid
-            .filter(|oid| !oid.is_empty())
-            .is_some_and(|expected| expected != worker_tip)
-    {
-        return Ok(Integration::Conflict(
-            "worktree branch tip changed after evidence collection".to_string(),
-        ));
-    }
+        let tree_oid = git(wt, &["write-tree"])?.trim().to_string();
+        let commit_oid = git(
+            wt,
+            &[
+                "commit-tree",
+                &tree_oid,
+                "-p",
+                &observed_tip,
+                "-m",
+                &message,
+            ],
+        )?
+        .trim()
+        .to_string();
+        if git(
+            root,
+            &["update-ref", &branch_ref, &commit_oid, &observed_tip],
+        )
+        .is_err()
+        {
+            let found = git(
+                root,
+                &["rev-parse", "--verify", &format!("{branch_ref}^{{commit}}")],
+            )
+            .map(|oid| oid.trim().to_string())
+            .unwrap_or_else(|_| "<missing>".to_string());
+            return Ok(Integration::Conflict(format!(
+                "worktree branch tip changed after evidence collection: expected {observed_tip}, found {found}"
+            )));
+        }
+        commit_oid
+    } else {
+        let current_tip = git(
+            root,
+            &["rev-parse", "--verify", &format!("{branch_ref}^{{commit}}")],
+        )?
+        .trim()
+        .to_string();
+        if current_tip != observed_tip {
+            return Ok(Integration::Conflict(format!(
+                "worktree branch tip changed after evidence collection: expected {observed_tip}, found {current_tip}"
+            )));
+        }
+        observed_tip
+    };
     let ancestry = git(
         root,
         &["merge-base", "--is-ancestor", baseline_oid, &worker_tip],
@@ -1502,6 +1550,87 @@ exit 0
         assert!(wt.exists(), "the rejected worktree must remain available");
         assert_eq!(
             sh_git(&root, &["rev-parse", &format!("{branch}^{{commit}}")]).trim(),
+            drifted_oid
+        );
+
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn integration_rejects_branch_tip_race_after_staging() {
+        let root = temp_repo("merge-target-staged-race");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let wt = root.join(".agents/worktrees/yard-staged-race");
+        let branch = "yard/yard-staged-race";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("feature.txt"), "evidence-bound\n").unwrap();
+        let evidence_oid = sh_git(
+            &root,
+            &["rev-parse", &format!("refs/heads/{branch}^{{commit}}")],
+        )
+        .trim()
+        .to_string();
+        let main_before = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        let mut drifted_oid = String::new();
+
+        let result = integrate_worktree_after_staged(
+            &root,
+            &wt,
+            branch,
+            "YARD-STAGED-RACE",
+            &baseline,
+            Some(&evidence_oid),
+            |root, _, branch| {
+                let old_oid = sh_git(
+                    root,
+                    &["rev-parse", &format!("refs/heads/{branch}^{{commit}}")],
+                )
+                .trim()
+                .to_string();
+                let tree_oid = sh_git(root, &["rev-parse", &format!("{old_oid}^{{tree}}")])
+                    .trim()
+                    .to_string();
+                drifted_oid = sh_git(
+                    root,
+                    &[
+                        "commit-tree",
+                        &tree_oid,
+                        "-p",
+                        &old_oid,
+                        "-m",
+                        "injected post-evidence drift",
+                    ],
+                )
+                .trim()
+                .to_string();
+                sh_git(
+                    root,
+                    &[
+                        "update-ref",
+                        &format!("refs/heads/{branch}"),
+                        &drifted_oid,
+                        &old_oid,
+                    ],
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        let Integration::Conflict(why) = result else {
+            panic!("a branch move after staging must fail closed")
+        };
+        assert!(why.contains("changed after evidence"), "{why}");
+        assert_eq!(sh_git(&root, &["rev-parse", "HEAD"]).trim(), main_before);
+        assert!(wt.exists(), "the rejected worktree must remain available");
+        assert_eq!(
+            sh_git(
+                &root,
+                &["rev-parse", &format!("refs/heads/{branch}^{{commit}}")]
+            )
+            .trim(),
             drifted_oid
         );
 
