@@ -5302,9 +5302,9 @@ mod tests {
         let canonical = root.join("canonical");
         for directory in [
             staged.join("nested/deep"),
-            staged.join("nested/evidence/canonical-ſtate-seed"),
+            staged.join("nested/ordinary/canonical-ſtate-seed"),
             canonical.join("nested/deep"),
-            canonical.join("nested/evidence/canonical-state-seed"),
+            canonical.join("nested/ordinary/canonical-state-seed"),
         ] {
             std::fs::create_dir_all(directory).unwrap();
         }
@@ -5316,7 +5316,7 @@ mod tests {
                 "worker forged finish\n",
             ),
             (
-                staged.join("nested/evidence/canonical-ſtate-seed/work-queue.yaml"),
+                staged.join("nested/ordinary/canonical-ſtate-seed/work-queue.yaml"),
                 "worker forged seed\n",
             ),
             (
@@ -5346,7 +5346,7 @@ mod tests {
                 "main finish\n",
             ),
             (
-                canonical.join("nested/evidence/canonical-state-seed/work-queue.yaml"),
+                canonical.join("nested/ordinary/canonical-state-seed/work-queue.yaml"),
                 "main seed\n",
             ),
         ] {
@@ -5366,7 +5366,7 @@ mod tests {
             );
             assert_eq!(
                 std::fs::read_to_string(
-                    canonical.join("nested/evidence/canonical-state-seed/work-queue.yaml")
+                    canonical.join("nested/ordinary/canonical-state-seed/work-queue.yaml")
                 )
                 .unwrap(),
                 "main seed\n"
@@ -5390,14 +5390,14 @@ mod tests {
             );
             assert_eq!(
                 std::fs::read_to_string(
-                    canonical.join("nested/evidence/canonical-state-seed/work-queue.yaml")
+                    canonical.join("nested/ordinary/canonical-state-seed/work-queue.yaml")
                 )
                 .unwrap(),
                 "main seed\n"
             );
             assert_eq!(
                 std::fs::read_to_string(
-                    canonical.join("nested/evidence/canonical-ſtate-seed/work-queue.yaml")
+                    canonical.join("nested/ordinary/canonical-ſtate-seed/work-queue.yaml")
                 )
                 .unwrap(),
                 "worker forged seed\n"
