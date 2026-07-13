@@ -10,6 +10,7 @@ YARDLET_BIN="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 EVIDENCE_DIR="$2"
 SCENARIO="$3"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 ROOT="$(mktemp -d "$EVIDENCE_DIR/workspace.XXXXXX")"
 PLANNER="$ROOT/planner-worker.sh"
 cp "$SCRIPT_DIR/planner-worker.sh" "$PLANNER"
@@ -111,6 +112,11 @@ wait_for_file() {
     sleep 0.02
   done
   return 1
+}
+
+state_digest() {
+  local root="$1"
+  (cd "$root" && find .agents -type f ! -name planning.lock -print0 | sort -z | xargs -0 shasum | shasum | awk '{print $1}')
 }
 
 run_yardlet init >/dev/null
@@ -405,7 +411,7 @@ PY
     if run_yardlet planning undo --expected-head "$h2" --action-id act-undo-bad-digest >"$EVIDENCE_DIR/undo-digest.out" 2>"$EVIDENCE_DIR/undo-digest.err"; then
       fail "undo accepted corrupt current digest"
     fi
-    [[ "$(visible_head)" == "$h2" ]] || fail "corrupt digest undo changed head"
+    [[ "$(sed -n 's/^current_head: //p' "$session_dir/session.yaml")" == "$h2" ]] || fail "corrupt digest undo changed head"
     cp "$EVIDENCE_DIR/current.yaml" "$current_path"
 
     python3 - "$current_path" <<'PY'
@@ -419,7 +425,7 @@ PY
     if run_yardlet planning undo --expected-head "$h2" --action-id act-undo-missing-parent >"$EVIDENCE_DIR/undo-missing.out" 2>"$EVIDENCE_DIR/undo-missing.err"; then
       fail "undo accepted missing parent"
     fi
-    [[ "$(visible_head)" == "$h2" ]] || fail "missing parent undo changed head"
+    [[ "$(sed -n 's/^current_head: //p' "$session_dir/session.yaml")" == "$h2" ]] || fail "missing parent undo changed head"
     cp "$EVIDENCE_DIR/current.yaml" "$current_path"
 
     python3 - "$parent_path" <<'PY'
@@ -433,7 +439,7 @@ PY
     if run_yardlet planning undo --expected-head "$h2" --action-id act-undo-foreign-parent >"$EVIDENCE_DIR/undo-parent.out" 2>"$EVIDENCE_DIR/undo-parent.err"; then
       fail "undo accepted cross-session parent"
     fi
-    [[ "$(visible_head)" == "$h2" ]] || fail "cross-session parent undo changed head"
+    [[ "$(sed -n 's/^current_head: //p' "$session_dir/session.yaml")" == "$h2" ]] || fail "cross-session parent undo changed head"
     [[ "$(revision_count)" == "$before_count" ]] || fail "invalid undo changed revision count"
     cp "$EVIDENCE_DIR/parent.yaml" "$parent_path"
     show
@@ -1000,7 +1006,7 @@ PY
       if run_in "$corrupt_root" planning accept "$p1" --expected-head none --action-id act-journal >"$EVIDENCE_DIR/$mode.out" 2>"$EVIDENCE_DIR/$mode.err"; then
         fail "journal corruption $mode failed open"
       fi
-      grep -Eq 'planning_event_journal|terminal action receipt effect' "$EVIDENCE_DIR/$mode.err" || fail "journal corruption reason missing for $mode"
+      grep -Eq 'planning_event_journal|planning_receipt_corrupt|terminal action receipt effect' "$EVIDENCE_DIR/$mode.err" || fail "journal corruption reason missing for $mode"
     done
     write_summary "journal gap duplicate multi-match payload mismatch next_seq ahead filename/seq/session/event id identity 변조가 모두 fail-closed됨"
     ;;
@@ -1081,7 +1087,8 @@ PY
     wait "$confirm_pid"; confirm_status=$?
     wait "$add_pid"; add_status=$?
     set -e
-    [[ "$add_status" -eq 0 ]] || fail "concurrent add failed with $add_status"
+    [[ "$add_status" -ne 0 ]] || fail "concurrent add changed immutable activated queue membership"
+    grep -q 'active_runtime_envelope_mismatch' "$EVIDENCE_DIR/runtime-race-add.err" || fail "concurrent add immutable-envelope reason missing"
     wait_for_file "$barrier/worker-entered" "$run_pid"
     rm -f "$barrier/entered" "$barrier/release"
     touch "$barrier/worker-release"
@@ -1097,12 +1104,338 @@ PY
     [[ "$confirm_status" -ne 0 ]] || fail "concurrent confirm overwrote runtime queue transition"
     grep -Eq 'active_queue_not_drained|running_queue_isolated' "$EVIDENCE_DIR/runtime-race-confirm.err" || fail "runtime race rejection reason missing"
     [[ "$run_status" -eq 0 ]] || fail "runtime process failed with $run_status"
-    [[ "$finalize_add_status" -eq 0 ]] || fail "concurrent finalize add failed with $finalize_add_status"
+    [[ "$finalize_add_status" -ne 0 ]] || fail "concurrent finalize add changed immutable activated queue membership"
+    grep -q 'active_runtime_envelope_mismatch' "$EVIDENCE_DIR/finalize-race-add.err" || fail "finalize add immutable-envelope reason missing"
     run_yardlet queue >"$EVIDENCE_DIR/runtime-race-queue.out"
     grep -Eq 'running|failed|partial|done' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "runtime queue state was lost"
-    grep -q 'added during runtime transition' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "runtime transition overwrote concurrent add"
-    grep -q 'added during finalize' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "finalize overwrote concurrent add"
-    write_summary "run/add/finalize queue transaction과 confirm 경쟁이 동일 lock/CAS 경계에서 직렬화되어 stale overwrite가 없음"
+    ! grep -q 'added during runtime transition' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "rejected runtime add leaked into activated queue"
+    ! grep -q 'added during finalize' "$EVIDENCE_DIR/runtime-race-queue.out" || fail "rejected finalize add leaked into activated queue"
+    write_summary "run/finalize state transition과 confirm/add 경쟁이 동일 lock/CAS 경계에서 직렬화되고 activated queue membership 변경은 거절됨"
+    ;;
+  receipt_v2_integrity)
+    accept_proposal "$p1" none act-receipt-completed >/dev/null
+    if accept_proposal "$p1" none act-receipt-rejected >/dev/null 2>&1; then
+      fail "receipt fixture did not create a rejected terminal action"
+    fi
+    receipt_base="$EVIDENCE_DIR/receipt-base"
+    cp -R "$ROOT" "$receipt_base"
+    for terminal in completed rejected; do
+      if [[ "$terminal" == "completed" ]]; then
+        action_id="act-receipt-completed"
+      else
+        action_id="act-receipt-rejected"
+      fi
+      for mode in strip_event_id strip_event_type strip_event_digest strip_exact_payload forged_actor forged_target forged_result forged_parent forged_message multi_match; do
+        corrupt_root="$EVIDENCE_DIR/receipt-$terminal-$mode"
+        cp -R "$receipt_base" "$corrupt_root"
+        python3 - "$corrupt_root" "$action_id" "$mode" <<'PY'
+import json
+import os
+import re
+import shutil
+import sys
+
+root, action_id, mode = sys.argv[1:]
+sessions = os.path.join(root, ".agents", "planning-sessions")
+session_dir = next(
+    os.path.join(sessions, name)
+    for name in os.listdir(sessions)
+    if os.path.isfile(os.path.join(sessions, name, "actions", f"{action_id}.yaml"))
+)
+receipt_path = os.path.join(session_dir, "actions", f"{action_id}.yaml")
+receipt = open(receipt_path, encoding="utf-8").read()
+
+def strip_top_level(text, field):
+    return re.sub(rf"^{field}:.*\n", "", text, count=1, flags=re.M)
+
+if mode == "strip_event_id":
+    receipt = strip_top_level(receipt, "effect_event_id")
+elif mode == "strip_event_type":
+    receipt = strip_top_level(receipt, "effect_event_type")
+elif mode == "strip_event_digest":
+    receipt = strip_top_level(receipt, "effect_event_digest")
+elif mode == "strip_exact_payload":
+    receipt = re.sub(r"^effect_event:\n(?:  .*\n)+", "", receipt, count=1, flags=re.M)
+else:
+    event_id = re.search(r"^effect_event_id: (.+)$", receipt, re.M).group(1)
+    events_dir = os.path.join(session_dir, "events")
+    event_path = next(
+        os.path.join(events_dir, name)
+        for name in os.listdir(events_dir)
+        if name.endswith(".yaml") and f"event_id: {event_id}" in open(os.path.join(events_dir, name), encoding="utf-8").read()
+    )
+    event = open(event_path, encoding="utf-8").read()
+
+    if mode == "multi_match":
+        names = sorted(name for name in os.listdir(events_dir) if name.endswith(".yaml"))
+        seq = len(names) + 1
+        duplicate = re.sub(r"^event_id: .+$", "event_id: evt-forged-receipt-multi", event, count=1, flags=re.M)
+        duplicate = re.sub(r"^seq: .+$", f"seq: {seq}", duplicate, count=1, flags=re.M)
+        open(os.path.join(events_dir, f"{seq:020}.yaml"), "w", encoding="utf-8").write(duplicate)
+        session_path = os.path.join(session_dir, "session.yaml")
+        session = open(session_path, encoding="utf-8").read()
+        session = re.sub(r"^next_seq: .+$", f"next_seq: {seq + 1}", session, count=1, flags=re.M)
+        open(session_path, "w", encoding="utf-8").write(session)
+    else:
+        field_by_mode = {
+            "forged_actor": "actor",
+            "forged_target": "proposal_id",
+            "forged_result": "draft_revision_id",
+            "forged_parent": "related_revision_id",
+            "forged_message": "message",
+        }
+        field = field_by_mode[mode]
+        value = f"forged-{field}"
+
+        def set_field(text, field, value, indent=""):
+            pattern = rf"^{re.escape(indent)}{field}:.*$"
+            replacement = f"{indent}{field}: {value}"
+            if re.search(pattern, text, re.M):
+                return re.sub(pattern, replacement, text, count=1, flags=re.M)
+            return re.sub(
+                rf"^{re.escape(indent)}recorded_at:",
+                f"{replacement}\n{indent}recorded_at:",
+                text,
+                count=1,
+                flags=re.M,
+            )
+
+        event = set_field(event, field, value)
+        receipt = set_field(receipt, field, value, "  ")
+        if mode == "forged_result":
+            receipt = re.sub(r"^result_id: .+$", f"result_id: {value}", receipt, count=1, flags=re.M)
+
+        values = {}
+        for line in event.splitlines():
+            if not line or line.startswith(" ") or ":" not in line:
+                continue
+            key, raw = line.split(":", 1)
+            raw = raw.strip()
+            if raw in {"''", '""'}:
+                raw = ""
+            elif len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+                raw = raw[1:-1]
+            values[key] = int(raw) if key in {"schema_version", "seq"} else raw
+        ordered = {}
+        for key in [
+            "schema_version", "event_id", "session_id", "seq", "type", "actor",
+            "action_id", "action_request_digest", "message", "proposal_id",
+            "draft_revision_id", "related_revision_id", "recorded_at",
+        ]:
+            if key in values and (key not in {"action_id", "action_request_digest", "message", "proposal_id", "draft_revision_id", "related_revision_id"} or values[key] != ""):
+                ordered[key] = values[key]
+        payload = json.dumps(ordered, ensure_ascii=False, separators=(",", ":")).encode()
+        digest = 0xcbf29ce484222325
+        for byte in payload:
+            digest ^= byte
+            digest = (digest * 0x100000001b3) & 0xffffffffffffffff
+        receipt = re.sub(
+            r"^effect_event_digest: .+$",
+            f"effect_event_digest: fnv1a64:{digest:016x}",
+            receipt,
+            count=1,
+            flags=re.M,
+        )
+        open(event_path, "w", encoding="utf-8").write(event)
+
+open(receipt_path, "w", encoding="utf-8").write(receipt)
+PY
+        before="$(state_digest "$corrupt_root")"
+        set +e
+        if [[ "$terminal" == "completed" ]]; then
+          run_in "$corrupt_root" planning accept "$p1" --expected-head none --action-id "$action_id" \
+            >"$EVIDENCE_DIR/$terminal-$mode.out" 2>"$EVIDENCE_DIR/$terminal-$mode.err"
+        else
+          run_in "$corrupt_root" planning accept "$p1" --expected-head none --action-id "$action_id" \
+            >"$EVIDENCE_DIR/$terminal-$mode.out" 2>"$EVIDENCE_DIR/$terminal-$mode.err"
+        fi
+        status=$?
+        set -e
+        [[ "$status" -ne 0 ]] || fail "$terminal v2 receipt corruption $mode failed open"
+        grep -q 'planning_receipt_corrupt' "$EVIDENCE_DIR/$terminal-$mode.err" || fail "$terminal v2 receipt corruption reason missing for $mode"
+        after="$(state_digest "$corrupt_root")"
+        [[ "$before" == "$after" ]] || fail "$terminal v2 receipt corruption $mode mutated canonical state"
+      done
+    done
+    for terminal in completed rejected; do
+      legacy_root="$EVIDENCE_DIR/receipt-v1-$terminal"
+      cp -R "$receipt_base" "$legacy_root"
+      if [[ "$terminal" == "completed" ]]; then
+        action_id="act-receipt-completed"
+      else
+        action_id="act-receipt-rejected"
+      fi
+      action_path="$(find "$legacy_root/.agents/planning-sessions" -path "*/actions/$action_id.yaml" -print -quit)"
+      python3 - "$action_path" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = re.sub(r"^schema_version: 2$", "schema_version: 1", text, count=1, flags=re.M)
+for field in ["effect_event_id", "effect_event_type", "effect_event_digest"]:
+    text = re.sub(rf"^{field}:.*\n", "", text, count=1, flags=re.M)
+text = re.sub(r"^effect_event:\n(?:  .*\n)+", "", text, count=1, flags=re.M)
+open(path, "w", encoding="utf-8").write(text)
+PY
+      set +e
+      run_in "$legacy_root" planning accept "$p1" --expected-head none --action-id "$action_id" \
+        >"$EVIDENCE_DIR/v1-$terminal.out" 2>"$EVIDENCE_DIR/v1-$terminal.err"
+      status=$?
+      set -e
+      if [[ "$terminal" == "completed" ]]; then
+        [[ "$status" -eq 0 ]] || fail "explicit v1 completed compatibility branch regressed"
+      else
+        [[ "$status" -ne 0 ]] || fail "v1 rejected action unexpectedly succeeded"
+        grep -q 'action_previously_rejected' "$EVIDENCE_DIR/v1-$terminal.err" || fail "explicit v1 rejected compatibility branch regressed"
+      fi
+    done
+    write_summary "v2 completed/rejected receipt의 필수 exact effect와 immutable journal linkage 변조가 모두 planning_receipt_corrupt로 무변경 거절됨"
+    ;;
+  session_storage_integrity)
+    accept_proposal "$p1" none act-session-storage >/dev/null
+    session_base="$EVIDENCE_DIR/session-base"
+    cp -R "$ROOT" "$session_base"
+    for mode in missing_events empty_next_seq_ahead session_path_id latest_identity; do
+      corrupt_root="$EVIDENCE_DIR/session-$mode"
+      cp -R "$session_base" "$corrupt_root"
+      python3 - "$corrupt_root" "$mode" <<'PY'
+import os
+import re
+import shutil
+import sys
+root, mode = sys.argv[1:]
+sessions = os.path.join(root, ".agents", "planning-sessions")
+latest_path = os.path.join(sessions, "latest")
+latest = open(latest_path, encoding="utf-8").read().strip()
+session_dir = os.path.join(sessions, latest)
+session_path = os.path.join(session_dir, "session.yaml")
+events_dir = os.path.join(session_dir, "events")
+if mode == "missing_events":
+    shutil.rmtree(events_dir)
+elif mode == "empty_next_seq_ahead":
+    for name in os.listdir(events_dir):
+        os.remove(os.path.join(events_dir, name))
+elif mode == "session_path_id":
+    text = open(session_path, encoding="utf-8").read()
+    text = re.sub(r"^session_id: .+$", "session_id: ses-forged-path", text, count=1, flags=re.M)
+    open(session_path, "w", encoding="utf-8").write(text)
+elif mode == "latest_identity":
+    alias = "ses-forged-latest"
+    shutil.copytree(session_dir, os.path.join(sessions, alias))
+    open(latest_path, "w", encoding="utf-8").write(alias + "\n")
+PY
+      before="$(state_digest "$corrupt_root")"
+      if run_in "$corrupt_root" planning show --json >"$EVIDENCE_DIR/session-$mode.out" 2>"$EVIDENCE_DIR/session-$mode.err"; then
+        fail "persisted session corruption $mode failed open"
+      fi
+      grep -Eq 'planning_session_corrupt|planning_event_journal' "$EVIDENCE_DIR/session-$mode.err" || fail "persisted session corruption reason missing for $mode"
+      after="$(state_digest "$corrupt_root")"
+      [[ "$before" == "$after" ]] || fail "persisted session corruption $mode mutated canonical state"
+    done
+    write_summary "persisted session의 journal directory, next_seq, path id, latest identity 변조가 모두 무변경 fail-closed됨"
+    ;;
+  runtime_envelope)
+    accept_proposal "$p1" none act-runtime-envelope-accept >/dev/null
+    head="$(visible_head)"
+    run_yardlet planning confirm --expected-head "$head" --action-id act-runtime-envelope-confirm >/dev/null
+    runtime_base="$EVIDENCE_DIR/runtime-envelope-base"
+    cp -R "$ROOT" "$runtime_base"
+    for mode in title scope worker risk; do
+      corrupt_root="$EVIDENCE_DIR/runtime-envelope-$mode"
+      cp -R "$runtime_base" "$corrupt_root"
+      python3 - "$corrupt_root/.agents/work-queue.yaml" "$mode" <<'PY'
+import re
+import sys
+path, mode = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+current, materialized = text.split("materialized_queue:", 1)
+patterns = {
+    "title": (r"^(\s+title:) .+$", r"\1 forged runtime title"),
+    "scope": (r"^(\s+- )src/planning\.rs$", r"\1forged/runtime/scope"),
+    "worker": (r"^(\s+preferred_worker:) .+$", r"\1 forged-worker"),
+    "risk": (r"^(\s+risk:) .+$", r"\1 critical"),
+}
+pattern, replacement = patterns[mode]
+current, count = re.subn(pattern, replacement, current, count=1, flags=re.M)
+if count != 1:
+    raise SystemExit(f"failed to mutate {mode}")
+current, state_count = re.subn(r"^(\s+state:) queued$", r"\1 partial", current, count=1, flags=re.M)
+if state_count != 1:
+    raise SystemExit("failed to prepare finalization entry")
+open(path, "w", encoding="utf-8").write(current + "materialized_queue:" + materialized)
+PY
+      run_in "$corrupt_root" planning show --json >"$EVIDENCE_DIR/runtime-$mode-show.json"
+      [[ "$(json_get "$EVIDENCE_DIR/runtime-$mode-show.json" exact_active_parity)" == "false" ]] || fail "runtime $mode tamper retained exact_active_parity"
+      before="$(state_digest "$corrupt_root")"
+      for command in "queue" "run --next" "add blocked-runtime-write" "defer YARD-001" "resolve YARD-001" "recover"; do
+        set +e
+        run_in "$corrupt_root" $command >"$EVIDENCE_DIR/runtime-$mode-command.out" 2>"$EVIDENCE_DIR/runtime-$mode-command.err"
+        status=$?
+        set -e
+        [[ "$status" -ne 0 ]] || fail "runtime $mode tamper allowed $command"
+        grep -q 'active_runtime_envelope_mismatch' "$EVIDENCE_DIR/runtime-$mode-command.err" || fail "runtime envelope reason missing for $mode via $command"
+        [[ "$before" == "$(state_digest "$corrupt_root")" ]] || fail "runtime $mode rejection changed canonical bytes via $command"
+      done
+    done
+    state_root="$EVIDENCE_DIR/runtime-envelope-state-only"
+    cp -R "$runtime_base" "$state_root"
+    python3 - "$state_root/.agents/work-queue.yaml" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+current, materialized = text.split("materialized_queue:", 1)
+current, count = re.subn(r"^(\s+state:) queued$", r"\1 partial", current, count=1, flags=re.M)
+if count != 1:
+    raise SystemExit("failed to make the state-only Partial transition")
+open(path, "w", encoding="utf-8").write(current + "materialized_queue:" + materialized)
+PY
+    run_in "$state_root" planning show --json >"$EVIDENCE_DIR/runtime-state-partial.json"
+    [[ "$(json_get "$EVIDENCE_DIR/runtime-state-partial.json" exact_active_parity)" == "true" ]] || fail "allowed Partial state broke parity"
+    run_in "$state_root" resolve YARD-001 >/dev/null
+    run_in "$state_root" planning show --json >"$EVIDENCE_DIR/runtime-state-done.json"
+    [[ "$(json_get "$EVIDENCE_DIR/runtime-state-done.json" exact_active_parity)" == "true" ]] || fail "allowed Done state broke parity"
+    write_summary "activated runtime task는 state-only transition만 허용하고 title/scope/worker/risk 변조는 모든 mutation entry에서 bytes 불변으로 거절됨"
+    ;;
+  writer_inventory)
+    violations="$EVIDENCE_DIR/writer-inventory.txt"
+    : >"$violations"
+    for file in src/cli.rs src/parallel.rs src/run.rs src/ui/mod.rs; do
+      awk '/^#\[cfg\(test\)\]/{exit} {print}' "$REPO_ROOT/$file" | grep -n '\.save_queue(' >>"$violations" || true
+    done
+    [[ ! -s "$violations" ]] || fail "unlocked production queue writers remain: $(tr '\n' ';' <"$violations")"
+    save_queue_body="$(sed -n '/pub fn save_queue(/,/^    }/p' "$REPO_ROOT/src/state.rs")"
+    grep -q 'acquire_planning_lock' <<<"$save_queue_body" || fail "public compatibility queue writer does not acquire the workspace lock"
+    grep -q 'save_queue_locked' <<<"$save_queue_body" || fail "public compatibility queue writer bypasses raw-byte CAS"
+    write_summary "production queue writer inventory에 unlocked save_queue API나 caller가 없음"
+    ;;
+  express_concurrency)
+    express_root="$EVIDENCE_DIR/express-workspace"
+    mkdir -p "$express_root"
+    run_in "$express_root" init >/dev/null
+    barrier="$EVIDENCE_DIR/express-barrier"
+    mkdir -p "$barrier"
+    (cd "$express_root" && YARDLET_TEST_MUTATION_BARRIER="$barrier" \
+      "$YARDLET_BIN" goal "first concurrent express goal" --plan-only \
+      >"$EVIDENCE_DIR/express-first.out" 2>"$EVIDENCE_DIR/express-first.err") &
+    first_pid=$!
+    wait_for_file "$barrier/entered" "$first_pid" || { kill "$first_pid" 2>/dev/null || true; fail "first express process missed stable barrier"; }
+    (cd "$express_root" && YARDLET_TEST_MUTATION_BARRIER="$barrier" \
+      "$YARDLET_BIN" goal "second concurrent express goal" --plan-only \
+      >"$EVIDENCE_DIR/express-second.out" 2>"$EVIDENCE_DIR/express-second.err") &
+    second_pid=$!
+    sleep 0.1
+    touch "$barrier/release"
+    set +e
+    wait "$first_pid"; first_status=$?
+    wait "$second_pid"; second_status=$?
+    set -e
+    [[ "$first_status" -eq 0 && "$second_status" -eq 0 ]] || fail "concurrent express transactions diverged: first=$first_status second=$second_status"
+    run_in "$express_root" planning show --json >"$EVIDENCE_DIR/express-final.json"
+    [[ "$(json_get "$EVIDENCE_DIR/express-final.json" exact_active_parity)" == "true" ]] || fail "concurrent express final activation parity false"
+    session_count="$(find "$express_root/.agents/planning-sessions" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+    [[ "$session_count" == "2" ]] || fail "concurrent express did not leave two complete sessions"
+    write_summary "two-process stable barrier에서 각 express goal의 create/propose/accept/confirm이 outer transaction으로 직렬화됨"
     ;;
   release_hook_disabled)
     (cd "$ROOT" && YARDLET_TEST_PLANNING_CRASH=accept_after_revision_write \

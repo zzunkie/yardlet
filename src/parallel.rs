@@ -217,7 +217,6 @@ pub fn git_preflight(root: &Path) -> std::result::Result<(), String> {
 }
 
 struct Prep {
-    queue_idx: usize,
     task: Task,
     worker_id: String,
     reason: String,
@@ -255,6 +254,7 @@ pub fn run_batch<F: FnMut(&str)>(
     full_access: bool,
     mut on_event: F,
 ) -> Result<Vec<(String, TaskState)>> {
+    crate::planning::validate_active_activation(ws)?;
     let mut queue = ws.load_queue()?;
     let workers_file = ws.load_workers()?;
     let billing = ws.load_billing()?;
@@ -312,7 +312,6 @@ pub fn run_batch<F: FnMut(&str)>(
         let session = (resolved.worker_id == "claude-code").then(|| run::gen_session_uuid(&run_id));
         let branch = format!("yard/{}/{}", task.id.to_lowercase(), run_id);
         preps.push(Prep {
-            queue_idx: idx,
             branch,
             wt_path: ws.agents_dir().join("worktrees").join(&run_id),
             baseline_oid: String::new(),
@@ -411,10 +410,25 @@ pub fn run_batch<F: FnMut(&str)>(
     }
 
     // ---- mark running (one write), then spawn workers --------------------
+    let queue_lock = ws.acquire_planning_lock()?;
+    let mut latest = ws.load_queue()?;
     for p in &preps {
-        queue.tasks[p.queue_idx].state = TaskState::Running;
+        let task = latest
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == p.task.id)
+            .ok_or_else(|| anyhow!("queue_transaction_conflict: task {} vanished", p.task.id))?;
+        if task.state != TaskState::Queued {
+            return Err(anyhow!(
+                "queue_transaction_conflict: task {} is no longer queued",
+                p.task.id
+            ));
+        }
+        task.state = TaskState::Running;
     }
-    ws.save_queue(&queue)?;
+    ws.save_queue_locked(&queue_lock, &latest)?;
+    queue = latest;
+    drop(queue_lock);
     on_event(&format!(
         "parallel batch: {}",
         preps

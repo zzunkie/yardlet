@@ -606,6 +606,7 @@ fn cmd_harness(cwd: &std::path::Path, args: HarnessArgs) -> Result<()> {
 
 fn cmd_recover(cwd: &std::path::Path) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
+    crate::planning::validate_active_activation(&ws)?;
     let mut msgs = Vec::new();
     if let Some(m) = crate::planner::recover_unconsumed_plan(&ws) {
         msgs.push(m);
@@ -1177,6 +1178,7 @@ fn cmd_add(cwd: &std::path::Path, args: AddArgs) -> Result<()> {
 
 fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
+    crate::planning::validate_active_activation(&ws)?;
     let snap = Snapshot::load(&ws)?;
     if snap.queue.tasks.is_empty() {
         println!("Queue is empty. Run `yardlet new \"...\"` to create work.");
@@ -1331,6 +1333,7 @@ fn cmd_approve(cwd: &std::path::Path, args: ApproveArgs) -> Result<()> {
 
 fn cmd_defer(cwd: &std::path::Path, args: DeferArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
+    let lock = ws.acquire_planning_lock()?;
     let mut queue = ws.load_queue()?;
     let before = queue.clone();
     let reason = args.reason.join(" ");
@@ -1338,7 +1341,7 @@ fn cmd_defer(cwd: &std::path::Path, args: DeferArgs) -> Result<()> {
     let outcome = queue
         .defer_task(&id, args.cascade, &reason)
         .map_err(anyhow::Error::msg)?;
-    ws.save_queue(&queue)?;
+    ws.save_queue_locked(&lock, &queue)?;
     for task_id in &outcome.deferred {
         if let Some(prev) = before.tasks.iter().find(|t| &t.id == task_id) {
             crate::state::append_transition(
@@ -1386,12 +1389,13 @@ fn cmd_defer(cwd: &std::path::Path, args: DeferArgs) -> Result<()> {
 
 fn cmd_revive(cwd: &std::path::Path, args: ReviveArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
+    let lock = ws.acquire_planning_lock()?;
     let mut queue = ws.load_queue()?;
     let before = queue.clone();
     let outcome = queue
         .revive_task(&args.task, args.group)
         .map_err(anyhow::Error::msg)?;
-    ws.save_queue(&queue)?;
+    ws.save_queue_locked(&lock, &queue)?;
     for task_id in &outcome.revived {
         if let Some(prev) = before.tasks.iter().find(|t| &t.id == task_id) {
             crate::state::append_transition(

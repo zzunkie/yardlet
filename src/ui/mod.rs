@@ -1193,6 +1193,13 @@ fn defer_selected_task(app: &mut App) {
             return;
         }
     }
+    let lock = match app.ws.acquire_planning_lock() {
+        Ok(lock) => lock,
+        Err(e) => {
+            app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+            return;
+        }
+    };
     let before = app.ws.load_queue().ok();
     let mut queue = match before.clone() {
         Some(q) => q,
@@ -1200,7 +1207,7 @@ fn defer_selected_task(app: &mut App) {
     };
     match queue.defer_task(&id, false, "deferred from the TUI") {
         Ok(outcome) => {
-            if let Err(e) = app.ws.save_queue(&queue) {
+            if let Err(e) = app.ws.save_queue_locked(&lock, &queue) {
                 app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
                 return;
             }
@@ -1240,6 +1247,13 @@ fn revive_selected_task(app: &mut App) {
             return;
         }
     }
+    let lock = match app.ws.acquire_planning_lock() {
+        Ok(lock) => lock,
+        Err(e) => {
+            app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+            return;
+        }
+    };
     let before = app.ws.load_queue().ok();
     let mut queue = match before.clone() {
         Some(q) => q,
@@ -1247,7 +1261,7 @@ fn revive_selected_task(app: &mut App) {
     };
     match queue.revive_task(&id, false) {
         Ok(outcome) => {
-            if let Err(e) = app.ws.save_queue(&queue) {
+            if let Err(e) = app.ws.save_queue_locked(&lock, &queue) {
                 app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
                 return;
             }
@@ -1724,16 +1738,22 @@ fn clamp_scroll(app: &mut App) {
 }
 
 fn redo_all(app: &mut App) {
-    if let Ok(mut q) = app.ws.load_queue() {
-        let mut n = 0;
-        for t in q.tasks.iter_mut() {
-            if t.state == TaskState::Done {
-                t.state = TaskState::Queued;
-                n += 1;
+    if let Ok(lock) = app.ws.acquire_planning_lock() {
+        if let Ok(mut q) = app.ws.load_queue() {
+            let mut n = 0;
+            for t in q.tasks.iter_mut() {
+                if t.state == TaskState::Done {
+                    t.state = TaskState::Queued;
+                    n += 1;
+                }
+            }
+            match app.ws.save_queue_locked(&lock, &q) {
+                Ok(()) => app.toast = Some((true, format!("{}: {n}", app.lang.l().redo_done))),
+                Err(error) => {
+                    app.toast = Some((false, format!("{} {error}", app.lang.l().run_failed)))
+                }
             }
         }
-        let _ = app.ws.save_queue(&q);
-        app.toast = Some((true, format!("{}: {n}", app.lang.l().redo_done)));
     }
     app.reload();
     app.screen = Screen::Home;
@@ -2399,6 +2419,14 @@ fn grant_approval_batch(ws: &Workspace, ids: &[String]) -> anyhow::Result<()> {
 }
 
 fn hold_batch(app: &mut App, ids: Vec<String>) {
+    let lock = match app.ws.acquire_planning_lock() {
+        Ok(lock) => lock,
+        Err(e) => {
+            app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
+            app.screen = Screen::Home;
+            return;
+        }
+    };
     let mut queue = match app.ws.load_queue() {
         Ok(q) => q,
         Err(e) => {
@@ -2414,7 +2442,7 @@ fn hold_batch(app: &mut App, ids: Vec<String>) {
             Err(e) => app.toast = Some((false, e)),
         }
     }
-    if let Err(e) = app.ws.save_queue(&queue) {
+    if let Err(e) = app.ws.save_queue_locked(&lock, &queue) {
         app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed)));
         app.screen = Screen::Home;
         return;

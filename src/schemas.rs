@@ -439,6 +439,33 @@ impl ActivatedQueue {
             tasks: self.tasks.iter().map(|task| task.task.clone()).collect(),
         }
     }
+
+    /// The confirmed queue is an immutable execution contract. Runtime may
+    /// advance only `Task.state`; every other queue and task field must remain
+    /// byte-equivalent to the materialized snapshot.
+    pub fn runtime_envelope_matches_materialized(&self) -> bool {
+        self.runtime_update_matches_materialized(&self.as_work_queue())
+    }
+
+    pub fn runtime_update_matches_materialized(&self, current: &WorkQueue) -> bool {
+        let Some(materialized) = self.materialized_queue.as_ref() else {
+            return false;
+        };
+        if current.tasks.len() != materialized.tasks.len()
+            || current
+                .tasks
+                .iter()
+                .zip(&materialized.tasks)
+                .any(|(runtime, planned)| runtime.id != planned.id)
+        {
+            return false;
+        }
+        let mut normalized = current.clone();
+        for (runtime, planned) in normalized.tasks.iter_mut().zip(&materialized.tasks) {
+            runtime.state = planned.state;
+        }
+        serde_json::to_vec(&normalized).ok() == serde_json::to_vec(materialized).ok()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

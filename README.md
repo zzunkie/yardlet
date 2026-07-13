@@ -521,9 +521,14 @@ deduplicates its effect events, and remains non-runnable if any snapshot,
 activation, or completed action receipt does not match the current active
 confirmation exactly. Before an accepted revision is stored, its prepared
 receipt reserves the stable result id and exact typed effect event id, payload,
-and digest. The event journal fails closed unless sequence numbers are contiguous
-from 1, filename and embedded identities match, event ids and payloads are
-unique, action/type cardinality is valid, and `next_seq` is not ahead.
+and digest. A schema-version 2 terminal receipt requires all four effect fields,
+and its canonical payload bytes and digest must equal the one immutable journal
+event; schema version 1 compatibility is an explicit separate branch. The event
+journal fails closed unless sequence numbers are contiguous from 1, filename and
+embedded identities match, event ids and payloads are unique, action/type
+cardinality is valid, and `next_seq` is not ahead. A persisted session also
+rejects a missing journal directory or a session/latest-pointer identity
+mismatch; only an empty, artifact-free `next_seq: 1` initial journal is valid.
 
 Planning confirmation and runtime queue mutations (`add`, run transitions,
 finalization, and orphan recovery) share one permanent workspace kernel lock and
@@ -532,7 +537,12 @@ timeout, retrying interrupt and contention errors, and the descriptor is closed
 across worker execution. Immutable revisions and events use atomic no-clobber
 create, while session and action transitions use compare-and-swap. The activated
 queue retains an immutable materialized plan for confirmation parity while its
-runtime task states evolve. A new confirmation refuses to replace an active
+runtime task states evolve. Task ids, order, and every execution-contract field
+must still equal that materialized plan; only `Task.state` may differ. Queue,
+run, add, finalization, and recovery entry points reject an altered runtime
+envelope before changing active bytes. Each express goal holds the same outer
+workspace transaction across session creation, proposal, accept, and confirm,
+so concurrent express processes cannot interleave planning sessions. A new confirmation refuses to replace an active
 queue that still contains Queued, Running, NeedsUser, Partial, or Blocked work,
 and a corrupt activation guard is returned as an error instead of being treated
 as an inactive workspace.

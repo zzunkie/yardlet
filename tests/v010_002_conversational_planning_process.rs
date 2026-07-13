@@ -168,4 +168,29 @@ mod unix {
     fn runtime_queue_transition_wins_atomically_over_concurrent_confirm() {
         run_scenario("runtime_queue_confirm_race");
     }
+
+    #[test]
+    fn v2_terminal_receipts_require_the_exact_immutable_effect_event() {
+        run_scenario("receipt_v2_integrity");
+    }
+
+    #[test]
+    fn persisted_session_storage_identity_and_journal_are_fail_closed() {
+        run_scenario("session_storage_integrity");
+    }
+
+    #[test]
+    fn activated_runtime_envelope_allows_only_task_state_changes() {
+        run_scenario("runtime_envelope");
+    }
+
+    #[test]
+    fn production_queue_writers_are_guarded_by_the_workspace_transaction() {
+        run_scenario("writer_inventory");
+    }
+
+    #[test]
+    fn concurrent_express_goals_are_one_transaction_each() {
+        run_scenario("express_concurrency");
+    }
 }
