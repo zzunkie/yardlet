@@ -277,7 +277,7 @@ PY
     if run_yardlet planning confirm --expected-head "$h2" --action-id act-confirm-running >"$EVIDENCE_DIR/running.out" 2>"$EVIDENCE_DIR/running.err"; then
       fail "running queue was replaced by planning confirmation"
     fi
-    grep -q "running_queue_isolated" "$EVIDENCE_DIR/running.err" || fail "running isolation error missing"
+    grep -Eq "running_queue_isolated|unconfirmed_or_inconsistent" "$EVIDENCE_DIR/running.err" || fail "running isolation error missing"
     write_summary "confirmed session mutation and running queue replacement are rejected"
     ;;
   goal_regression)
@@ -529,6 +529,11 @@ PY
   confirm_crash_replay)
     accept_proposal "$p1" none act-accept-1 >/dev/null
     h1="$(visible_head)"
+    if [[ -f "$ROOT/.agents/work-queue.yaml" ]]; then
+      cp "$ROOT/.agents/work-queue.yaml" "$EVIDENCE_DIR/pre-confirm-queue.yaml"
+    else
+      touch "$EVIDENCE_DIR/pre-confirm-queue.missing"
+    fi
     run_yardlet planning confirm --expected-head "$h1" --action-id act-confirm-crash >/dev/null
     baseline="$EVIDENCE_DIR/confirm-baseline"
     cp -R "$ROOT" "$baseline"
@@ -587,6 +592,13 @@ elif window == "intent_only":
     if os.path.exists(queue):
         os.remove(queue)
 PY
+      if [[ "$window" == "prepare" || "$window" == "intent_only" ]]; then
+        if [[ -f "$EVIDENCE_DIR/pre-confirm-queue.yaml" ]]; then
+          cp "$EVIDENCE_DIR/pre-confirm-queue.yaml" "$crash_root/.agents/work-queue.yaml"
+        else
+          rm -f "$crash_root/.agents/work-queue.yaml"
+        fi
+      fi
       run_in "$crash_root" planning confirm --expected-head "$h1" --action-id act-confirm-crash >/dev/null
       run_in "$crash_root" planning show --json >"$EVIDENCE_DIR/crash-$window.json"
       [[ "$(json_get "$EVIDENCE_DIR/crash-$window.json" session.lifecycle)" == "confirmed" ]] || fail "$window replay did not confirm session"
@@ -617,6 +629,251 @@ if any(count != 1 for count in counts.values()):
 PY
     done
     write_summary "four confirm crash windows replay to one completed action and valid activation"
+    ;;
+  event_seq_crash)
+    if (cd "$ROOT" && YARDLET_TEST_PLANNING_CRASH=after_event_write_before_next_seq \
+      "$YARDLET_BIN" planning accept "$p1" --expected-head none --action-id act-event-crash \
+      >"$EVIDENCE_DIR/event-crash.out" 2>"$EVIDENCE_DIR/event-crash.err"); then
+      fail "event/next_seq crash injection did not terminate the process"
+    fi
+    accept_proposal "$p1" none act-event-crash >/dev/null
+    show
+    [[ "$(json_get "$EVIDENCE_DIR/show.json" session.next_seq)" -gt 1 ]] || fail "next_seq did not recover"
+    python3 - "$ROOT" <<'PY'
+import os
+import sys
+session_root = os.path.join(sys.argv[1], ".agents", "planning-sessions")
+session_dir = next(os.path.join(session_root, name) for name in os.listdir(session_root) if os.path.isdir(os.path.join(session_root, name)))
+events = []
+for name in os.listdir(os.path.join(session_dir, "events")):
+    if name.endswith(".yaml"):
+        events.append(open(os.path.join(session_dir, "events", name), encoding="utf-8").read())
+seqs = [int(next(line.split(":", 1)[1] for line in event.splitlines() if line.startswith("seq:"))) for event in events]
+if len(seqs) != len(set(seqs)):
+    raise SystemExit(f"duplicate event seq: {seqs}")
+for kind in ("action.requested", "draft.accepted", "action.completed"):
+    count = sum(f"type: {kind}" in event and "action_id: act-event-crash" in event for event in events)
+    if count != 1:
+        raise SystemExit(f"{kind} count was {count}")
+PY
+    write_summary "event 저장 뒤 next_seq 저장 전 crash가 무충돌 journal로 replay됨"
+    ;;
+  confirm_write_order_crash)
+    accept_proposal "$p1" none act-accept-before-confirm-crash >/dev/null
+    h1="$(visible_head)"
+    cat >"$ROOT/.agents/work-queue.yaml" <<'EOF'
+schema_version: 1
+queue_id: queue-existing-fresh
+intent_id: ''
+selection_policy:
+  default_order: priority_then_created_at
+  require_planning_gate: true
+  skip_if_blocked: true
+  skip_if_approval_required: true
+tasks: []
+EOF
+    baseline="$EVIDENCE_DIR/confirm-write-order-baseline"
+    cp -R "$ROOT" "$baseline"
+    for window in confirm_after_prepare confirm_after_intent_write confirm_after_activation_write confirm_after_effect_before_completion; do
+      crash_root="$EVIDENCE_DIR/actual-$window"
+      cp -R "$baseline" "$crash_root"
+      if (cd "$crash_root" && YARDLET_TEST_PLANNING_CRASH="$window" \
+        "$YARDLET_BIN" planning confirm --expected-head "$h1" --action-id act-actual-confirm \
+        >"$EVIDENCE_DIR/$window.out" 2>"$EVIDENCE_DIR/$window.err"); then
+        fail "$window injection did not terminate the process"
+      fi
+      run_in "$crash_root" planning confirm --expected-head "$h1" --action-id act-actual-confirm >/dev/null
+      run_in "$crash_root" planning show --json >"$EVIDENCE_DIR/$window.json"
+      [[ "$(json_get "$EVIDENCE_DIR/$window.json" session.lifecycle)" == "confirmed" ]] || fail "$window replay did not confirm"
+      [[ "$(json_get "$EVIDENCE_DIR/$window.json" exact_active_parity)" == "true" ]] || fail "$window replay parity false"
+      python3 - "$crash_root" <<'PY'
+import os
+import sys
+session_root = os.path.join(sys.argv[1], ".agents", "planning-sessions")
+session_dir = next(os.path.join(session_root, name) for name in os.listdir(session_root) if os.path.isdir(os.path.join(session_root, name)))
+receipt = open(os.path.join(session_dir, "actions", "act-actual-confirm.yaml"), encoding="utf-8").read()
+if "status: completed" not in receipt:
+    raise SystemExit("confirm receipt not completed")
+events = [open(os.path.join(session_dir, "events", name), encoding="utf-8").read() for name in os.listdir(os.path.join(session_dir, "events")) if name.endswith(".yaml")]
+for kind in ("action.requested", "draft.confirm.prepared", "draft.confirmed", "action.completed"):
+    count = sum(f"type: {kind}" in event and "action_id: act-actual-confirm" in event for event in events)
+    if count != 1:
+        raise SystemExit(f"{kind} count was {count}")
+PY
+    done
+    write_summary "실제 confirm write-order crash 네 지점이 수동 보정 없이 completed activation으로 replay됨"
+    ;;
+  action_effect_crash)
+    action_base="$EVIDENCE_DIR/action-base"
+    cp -R "$ROOT" "$action_base"
+
+    accept_root="$EVIDENCE_DIR/action-accept"
+    cp -R "$action_base" "$accept_root"
+    if (cd "$accept_root" && YARDLET_TEST_PLANNING_CRASH=action_after_effect \
+      "$YARDLET_BIN" planning accept "$p1" --expected-head none --action-id act-crash-accept >/dev/null 2>&1); then
+      fail "accept effect crash injection did not terminate"
+    fi
+    run_in "$accept_root" planning accept "$p1" --expected-head none --action-id act-crash-accept >/dev/null
+
+    reject_root="$EVIDENCE_DIR/action-reject"
+    cp -R "$action_base" "$reject_root"
+    if (cd "$reject_root" && YARDLET_TEST_PLANNING_CRASH=action_after_effect \
+      "$YARDLET_BIN" planning reject "$p1" --expected-head none --action-id act-crash-reject >/dev/null 2>&1); then
+      fail "reject effect crash injection did not terminate"
+    fi
+    run_in "$reject_root" planning reject "$p1" --expected-head none --action-id act-crash-reject >/dev/null
+
+    answer_root="$EVIDENCE_DIR/action-answer"
+    cp -R "$action_base" "$answer_root"
+    if (cd "$answer_root" && YARDLET_TEST_PLANNING_CRASH=action_after_effect \
+      "$YARDLET_BIN" planning answer "crash answer" --expected-head none --action-id act-crash-answer --worker fixture-planner >/dev/null 2>&1); then
+      fail "answer effect crash injection did not terminate"
+    fi
+    run_in "$answer_root" planning answer "crash answer" --expected-head none --action-id act-crash-answer --worker fixture-planner >/dev/null
+
+    rejected_root="$EVIDENCE_DIR/action-rejected-receipt"
+    cp -R "$action_base" "$rejected_root"
+    if (cd "$rejected_root" && YARDLET_TEST_PLANNING_CRASH=action_after_rejected_effect \
+      "$YARDLET_BIN" planning accept "$p1" --expected-head forged-head --action-id act-crash-rejected >/dev/null 2>&1); then
+      fail "rejected receipt crash injection did not terminate"
+    fi
+    if run_in "$rejected_root" planning accept "$p1" --expected-head forged-head --action-id act-crash-rejected >"$EVIDENCE_DIR/rejected-replay.out" 2>"$EVIDENCE_DIR/rejected-replay.err"; then
+      fail "replayed rejected action unexpectedly succeeded"
+    fi
+    grep -q "stale_head" "$EVIDENCE_DIR/rejected-replay.err" || fail "replayed rejection reason changed"
+
+    undo_root="$EVIDENCE_DIR/action-undo"
+    cp -R "$action_base" "$undo_root"
+    run_in "$undo_root" planning accept "$p1" --expected-head none --action-id act-undo-accept-1 >/dev/null
+    run_in "$undo_root" planning show --json >"$EVIDENCE_DIR/undo-first.json"
+    uh1="$(json_get "$EVIDENCE_DIR/undo-first.json" session.current_head)"
+    run_in "$undo_root" planning answer "second revision" --expected-head "$uh1" --action-id act-undo-answer --worker fixture-planner >/dev/null
+    run_in "$undo_root" planning show --json >"$EVIDENCE_DIR/undo-proposal.json"
+    up2="$(json_get "$EVIDENCE_DIR/undo-proposal.json" pending_proposals.0.proposal_id)"
+    run_in "$undo_root" planning accept "$up2" --expected-head "$uh1" --action-id act-undo-accept-2 >/dev/null
+    run_in "$undo_root" planning show --json >"$EVIDENCE_DIR/undo-second.json"
+    uh2="$(json_get "$EVIDENCE_DIR/undo-second.json" session.current_head)"
+    if (cd "$undo_root" && YARDLET_TEST_PLANNING_CRASH=action_after_effect \
+      "$YARDLET_BIN" planning undo --expected-head "$uh2" --action-id act-crash-undo >/dev/null 2>&1); then
+      fail "undo effect crash injection did not terminate"
+    fi
+    run_in "$undo_root" planning undo --expected-head "$uh2" --action-id act-crash-undo >/dev/null
+    run_in "$undo_root" planning show --json >"$EVIDENCE_DIR/undo-replayed.json"
+    [[ "$(json_get "$EVIDENCE_DIR/undo-replayed.json" session.current_head)" == "$uh1" ]] || fail "undo effect replay did not restore parent"
+
+    python3 - "$accept_root" "$reject_root" "$answer_root" "$undo_root" "$rejected_root" <<'PY'
+import os
+import sys
+for root, action_id, effect, status in zip(
+    sys.argv[1:],
+    ("act-crash-accept", "act-crash-reject", "act-crash-answer", "act-crash-undo", "act-crash-rejected"),
+    ("draft.accepted", "draft.rejected", "user.message", "draft.undo", "action.rejected"),
+    ("completed", "completed", "completed", "completed", "rejected"),
+):
+    session_root = os.path.join(root, ".agents", "planning-sessions")
+    session_dir = next(os.path.join(session_root, name) for name in os.listdir(session_root) if os.path.isdir(os.path.join(session_root, name)))
+    receipt = open(os.path.join(session_dir, "actions", action_id + ".yaml"), encoding="utf-8").read()
+    if f"status: {status}" not in receipt or "effect_event_id:" not in receipt:
+        raise SystemExit(f"terminal linked receipt missing for {action_id}")
+    events = [open(os.path.join(session_dir, "events", name), encoding="utf-8").read() for name in os.listdir(os.path.join(session_dir, "events")) if name.endswith(".yaml")]
+    count = sum(f"type: {effect}" in event and f"action_id: {action_id}" in event for event in events)
+    if count != 1:
+        raise SystemExit(f"{action_id} effect count was {count}")
+PY
+    write_summary "accept reject undo answer prepared-effect crash가 linked completed receipt로 한 번 수렴함"
+    ;;
+  active_queue_guard)
+    accept_proposal "$p1" none act-guard-accept >/dev/null
+    guard_head="$(visible_head)"
+    guard_base="$EVIDENCE_DIR/guard-base"
+    cp -R "$ROOT" "$guard_base"
+    for state in queued needs_user partial blocked; do
+      state_root="$EVIDENCE_DIR/guard-$state"
+      cp -R "$guard_base" "$state_root"
+      cat >"$state_root/.agents/work-queue.yaml" <<EOF
+schema_version: 1
+queue_id: queue-existing-$state
+intent_id: intent-existing-$state
+selection_policy:
+  default_order: priority_then_created_at
+  require_planning_gate: true
+  skip_if_blocked: true
+  skip_if_approval_required: true
+tasks:
+  - id: EXISTING-001
+    title: existing active task
+    state: $state
+    priority: 10
+    risk: low
+    kind: implementation
+EOF
+      cp "$state_root/.agents/work-queue.yaml" "$EVIDENCE_DIR/$state.queue.before"
+      if run_in "$state_root" planning confirm --expected-head "$guard_head" --action-id "act-guard-$state" >"$EVIDENCE_DIR/$state.out" 2>"$EVIDENCE_DIR/$state.err"; then
+        fail "$state active queue was overwritten"
+      fi
+      cmp "$EVIDENCE_DIR/$state.queue.before" "$state_root/.agents/work-queue.yaml" || fail "$state queue bytes changed"
+      grep -q "active_queue_not_drained" "$EVIDENCE_DIR/$state.err" || fail "$state guard reason missing"
+    done
+
+    corrupt_root="$EVIDENCE_DIR/guard-corrupt"
+    cp -R "$guard_base" "$corrupt_root"
+    ch1="$guard_head"
+    run_in "$corrupt_root" planning confirm --expected-head "$ch1" --action-id act-corrupt-confirm-1 >/dev/null
+    run_in "$corrupt_root" new "next plan" --worker fixture-planner >/dev/null
+    run_in "$corrupt_root" planning show --json >"$EVIDENCE_DIR/corrupt-next.json"
+    cp2="$(json_get "$EVIDENCE_DIR/corrupt-next.json" pending_proposals.0.proposal_id)"
+    run_in "$corrupt_root" planning accept "$cp2" --expected-head none --action-id act-corrupt-accept-2 >/dev/null
+    run_in "$corrupt_root" planning show --json >"$EVIDENCE_DIR/corrupt-head.json"
+    ch2="$(json_get "$EVIDENCE_DIR/corrupt-head.json" session.current_head)"
+    activation_path="$(find "$corrupt_root/.agents/activations" -type f -name '*.yaml' -print -quit)"
+    python3 - "$activation_path" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = re.sub(r"^status: committed$", "status: prepared", text, count=1, flags=re.M)
+open(path, "w", encoding="utf-8").write(text)
+PY
+    cp "$corrupt_root/.agents/intent-contract.yaml" "$EVIDENCE_DIR/corrupt.intent.before"
+    cp "$corrupt_root/.agents/work-queue.yaml" "$EVIDENCE_DIR/corrupt.queue.before"
+    if run_in "$corrupt_root" planning confirm --expected-head "$ch2" --action-id act-corrupt-confirm-2 >"$EVIDENCE_DIR/corrupt.out" 2>"$EVIDENCE_DIR/corrupt.err"; then
+      fail "corrupt activation guard failed open"
+    fi
+    grep -q "unconfirmed_or_inconsistent" "$EVIDENCE_DIR/corrupt.err" || fail "corrupt activation error was swallowed"
+    cmp "$EVIDENCE_DIR/corrupt.intent.before" "$corrupt_root/.agents/intent-contract.yaml" || fail "corrupt guard changed intent bytes"
+    cmp "$EVIDENCE_DIR/corrupt.queue.before" "$corrupt_root/.agents/work-queue.yaml" || fail "corrupt guard changed queue bytes"
+    write_summary "unfinished active states와 corrupted activation이 active bytes 불변으로 confirm을 거절함"
+    ;;
+  concurrent_action)
+    set +e
+    (run_yardlet planning accept "$p1" --expected-head none --action-id act-concurrent >"$EVIDENCE_DIR/concurrent-1.out" 2>"$EVIDENCE_DIR/concurrent-1.err") &
+    pid1=$!
+    (run_yardlet planning accept "$p1" --expected-head none --action-id act-concurrent >"$EVIDENCE_DIR/concurrent-2.out" 2>"$EVIDENCE_DIR/concurrent-2.err") &
+    pid2=$!
+    wait "$pid1"; status1=$?
+    wait "$pid2"; status2=$?
+    set -e
+    [[ "$status1" -eq 0 && "$status2" -eq 0 ]] || fail "concurrent replay statuses were $status1/$status2"
+    show
+    python3 - "$ROOT" <<'PY'
+import os
+import sys
+session_root = os.path.join(sys.argv[1], ".agents", "planning-sessions")
+session_dir = next(os.path.join(session_root, name) for name in os.listdir(session_root) if os.path.isdir(os.path.join(session_root, name)))
+drafts = [name for name in os.listdir(os.path.join(session_dir, "drafts")) if name.endswith(".yaml")]
+actions = [name for name in os.listdir(os.path.join(session_dir, "actions")) if name == "act-concurrent.yaml"]
+events = [open(os.path.join(session_dir, "events", name), encoding="utf-8").read() for name in os.listdir(os.path.join(session_dir, "events")) if name.endswith(".yaml")]
+seqs = [int(next(line.split(":", 1)[1] for line in event.splitlines() if line.startswith("seq:"))) for event in events]
+if len(drafts) != 1 or len(actions) != 1:
+    raise SystemExit(f"canonical counts drafts/actions={len(drafts)}/{len(actions)}")
+if len(seqs) != len(set(seqs)):
+    raise SystemExit(f"event seq collision: {seqs}")
+for kind in ("action.requested", "draft.accepted", "action.completed"):
+    count = sum(f"type: {kind}" in event and "action_id: act-concurrent" in event for event in events)
+    if count != 1:
+        raise SystemExit(f"{kind} count was {count}")
+PY
+    write_summary "동시 CLI action이 하나의 revision receipt와 무충돌 journal로 수렴함"
     ;;
   *)
     fail "unknown scenario $SCENARIO"

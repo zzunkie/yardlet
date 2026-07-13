@@ -5,7 +5,7 @@
 - 실행 루트: `.agents/runs/run-20260714-011920/dogfood-v010-002/workspace`
 - 실행 주체: 이 worktree에서 빌드한 실제 `yardlet`과 로컬 `codex` planning worker
 - 원래 dogfood 판정: 세 content turn, accept, reject, undo, fresh-process 복원, explicit confirm을 거친 뒤 visible draft와 active intent/queue가 field와 digest 양쪽에서 일치했다.
-- 보수 판정: terminal proposal, undo linkage, stripped provenance, confirm action linkage, 네 crash window의 결정적 process test가 통과했다. V010-002 최종 완료 표시는 독립 재검토 뒤에만 갱신한다.
+- 보수 판정: terminal proposal, undo linkage, stripped provenance, confirm action linkage, 실제 write-order crash, non-confirm prepared-effect replay, active queue no-clobber, 두 CLI process 경쟁을 포함한 결정적 process test 19개가 통과했다. V010-002 최종 완료 표시는 독립 재검토 뒤에만 갱신한다.
 
 ## 1. 증거 경계
 
@@ -118,6 +118,47 @@ failed:
 일치했다. 구현 뒤 같은 명령은 기존 9개 journey를 포함해 14/14 pass,
 exit 0이었다.
 
+### 2.2 planning transaction hardening RED에서 GREEN까지
+
+YARD-005에서는 완료된 snapshot을 수동으로 잘라 만든 crash 상태와 별도로,
+실제 CLI process가 core write 직후 종료되는 scenario 5개를 추가했다.
+
+RED에서 `event_seq_crash`는 crash hook이 없어 process가 종료되지 않았고 exit
+101이었다. `concurrent_action`은 같은 head와 action id를 사용한 두 process가
+draft revision 두 개를 만들어 `drafts/actions=2/1`로 실패했다. 이는 각각 event
+저장과 `next_seq` 저장 사이의 recovery 부재, workspace single-writer 부재를 직접
+재현했다.
+
+GREEN에서는 다음 경계를 실제 process로 통과했다.
+
+```text
+running 19 tests
+19 passed; 0 failed; exit 0
+
+new transaction scenarios:
+- event_write_before_next_seq_crash_replays_without_a_journal_collision
+- actual_confirm_write_order_crashes_replay_without_manual_state_repair
+- prepared_non_confirm_actions_replay_their_existing_effect_once
+- unfinished_active_queue_and_corrupt_activation_block_confirm_without_clobber
+- concurrent_cli_actions_converge_to_one_receipt_and_collision_free_journal
+```
+
+`YARDLET_TEST_PLANNING_CRASH` fixture hook가 실제 binary를 다음 위치에서 exit 86으로
+종료했다.
+
+- event file atomic create 직후, session `next_seq` CAS 전
+- `draft.confirm.prepared` 직후, 기존 fresh-workspace queue를 둔 상태
+- active intent atomic write 직후, queue write 전
+- activation receipt atomic create 직후, session 및 action completion 전
+- `draft.confirmed` effect 직후, action receipt completion 전
+- accept, reject, undo, answer effect 직후와 rejected receipt effect 직후
+
+재실행은 수동 YAML 보정 없이 같은 action id를 사용했다. 각 action은 같은 terminal
+receipt와 정확히 하나의 typed effect event로 수렴했고, confirm은 exact draft parity와
+valid activation을 복원했다. 두 동시 CLI process는 모두 같은 canonical accept 결과를
+반환했으며 revision 1개, receipt 1개, action effect 종류별 event 1개와 중복 없는 seq를
+남겼다.
+
 ## 3. 실제 세 turn
 
 초기 요청은 production runtime 변경을 제외하고 V010-002 proof 문서,
@@ -196,6 +237,11 @@ tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yard
 tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" stripped_modern
 tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" activation_action_linkage
 tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" confirm_crash_replay
+tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" event_seq_crash
+tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" confirm_write_order_crash
+tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" action_effect_crash
+tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" active_queue_guard
+tests/fixtures/v010_002_conversational_planning/scripts/run.sh target/debug/yardlet "$evidence" concurrent_action
 ```
 
 live planning은 격리 workspace에서 로컬 subscription CLI worker를 사용해
@@ -230,6 +276,16 @@ yardlet planning show --json
 - confirm prepare 뒤 snapshot 전, intent-only, intent/queue 뒤 activation 전,
   activation 뒤 action completion 전의 replay는 각 effect event 하나와 completed
   receipt 하나로 수렴한다.
+- workspace planning mutation은 kernel single-writer lock 아래 수행되며 immutable
+  revision/event/action create는 no-clobber이고 session/action transition은 CAS다.
+- event 저장 뒤 `next_seq` 저장 전 crash는 journal의 실제 최대 seq에서 cursor를
+  복구하며 기존 event를 덮어쓰거나 중복 기록하지 않는다.
+- terminal action receipt는 action kind/status와 effect event type을 typed 값으로
+  저장하고 exact event id 및 request digest를 연결한다.
+- Queued, Running, NeedsUser, Partial, Blocked가 남은 active queue는 새 confirm으로
+  교체되지 않으며 active intent와 queue bytes가 그대로 남는다.
+- activation guard parse 또는 linkage 오류는 inactive로 fail-open하지 않고 호출자에게
+  `unconfirmed_or_inconsistent` 오류로 전파된다.
 - confirmed 또는 running queue에 대한 free-form planning mutation은 거절된다.
 - `yardlet goal` 기본 및 verifier 포함 express path는 planning worker 없이
   동작하면서 draft와 confirmation provenance를 기록한다.

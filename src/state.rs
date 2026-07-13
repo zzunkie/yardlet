@@ -34,6 +34,22 @@ pub struct Workspace {
     pub root: PathBuf,
 }
 
+/// Kernel-owned workspace lock for every conversational-planning mutation.
+/// The descriptor lifetime is the transaction lifetime, and process exit
+/// releases the lock without a stale PID cleanup protocol.
+pub struct PlanningLock {
+    #[cfg(unix)]
+    file: fs::File,
+}
+
+#[cfg(unix)]
+impl Drop for PlanningLock {
+    fn drop(&mut self) {
+        // SAFETY: `self.file` owns this descriptor until Drop finishes.
+        let _ = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN) };
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IntegrationProvenance {
@@ -238,9 +254,58 @@ impl Workspace {
         self.agents_dir().join("activation-required.yaml")
     }
 
+    pub fn acquire_planning_lock(&self) -> Result<PlanningLock> {
+        let path = self.agents_dir().join("planning.lock");
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        }
+        #[cfg(unix)]
+        {
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&path)
+                .with_context(|| format!("opening planning lock {}", path.display()))?;
+            // SAFETY: `file` stays alive in PlanningLock and flock only reads
+            // its valid descriptor. A crash releases the kernel lock.
+            if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) } != 0 {
+                return Err(std::io::Error::last_os_error())
+                    .with_context(|| format!("locking planning workspace {}", path.display()));
+            }
+            Ok(PlanningLock { file })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(PlanningLock {})
+        }
+    }
+
     pub fn save_planning_session(&self, session: &PlanningSession) -> Result<()> {
         let path = self.planning_session_path(&session.session_id);
         write_str_atomic(&path, &yaml::to_string(session)?)?;
+        write_str_atomic(
+            &self.latest_planning_session_path(),
+            &format!("{}\n", session.session_id),
+        )
+    }
+
+    pub fn save_planning_session_cas(
+        &self,
+        expected: &PlanningSession,
+        session: &PlanningSession,
+    ) -> Result<()> {
+        let path = self.planning_session_path(&session.session_id);
+        if expected.session_id != session.session_id {
+            bail!("planning session CAS identity mismatch");
+        }
+        write_str_atomic_cas(
+            &path,
+            Some(&yaml::to_string(expected)?),
+            &yaml::to_string(session)?,
+        )?;
         write_str_atomic(
             &self.latest_planning_session_path(),
             &format!("{}\n", session.session_id),
@@ -312,9 +377,25 @@ impl Workspace {
         Ok(events)
     }
 
-    pub fn save_planning_action(&self, receipt: &PlanningActionReceipt) -> Result<()> {
+    pub fn create_planning_action(&self, receipt: &PlanningActionReceipt) -> Result<()> {
         let path = self.planning_action_path(&receipt.session_id, &receipt.action_id);
-        write_str_atomic(&path, &yaml::to_string(receipt)?)
+        save_immutable_yaml(&path, receipt)
+    }
+
+    pub fn save_planning_action_cas(
+        &self,
+        expected: &PlanningActionReceipt,
+        receipt: &PlanningActionReceipt,
+    ) -> Result<()> {
+        if expected.session_id != receipt.session_id || expected.action_id != receipt.action_id {
+            bail!("planning action CAS identity mismatch");
+        }
+        let path = self.planning_action_path(&receipt.session_id, &receipt.action_id);
+        write_str_atomic_cas(
+            &path,
+            Some(&yaml::to_string(expected)?),
+            &yaml::to_string(receipt)?,
+        )
     }
 
     pub fn load_planning_action(
@@ -329,13 +410,27 @@ impl Workspace {
         load_yaml(&path).map(Some)
     }
 
-    pub fn save_active_promotion(
-        &self,
-        intent: &ActivatedIntent,
-        queue: &ActivatedQueue,
-    ) -> Result<()> {
-        write_str_atomic(&self.intent_path(), &yaml::to_string(intent)?)?;
+    pub fn save_activated_intent_snapshot(&self, intent: &ActivatedIntent) -> Result<()> {
+        write_str_atomic(&self.intent_path(), &yaml::to_string(intent)?)
+    }
+
+    pub fn save_activated_queue_snapshot(&self, queue: &ActivatedQueue) -> Result<()> {
         write_str_atomic(&self.queue_path(), &yaml::to_string(queue)?)
+    }
+
+    pub fn load_active_snapshot_texts(&self) -> Result<(Option<String>, Option<String>)> {
+        fn read_optional(path: &Path) -> Result<Option<String>> {
+            if !path.is_file() {
+                return Ok(None);
+            }
+            fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))
+                .map(Some)
+        }
+        Ok((
+            read_optional(&self.intent_path())?,
+            read_optional(&self.queue_path())?,
+        ))
     }
 
     pub fn load_activated_intent(&self) -> Result<Option<ActivatedIntent>> {
@@ -1232,15 +1327,16 @@ fn load_yaml_dir<T: serde::de::DeserializeOwned>(dir: &Path) -> Result<Vec<T>> {
 
 fn save_immutable_yaml<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     let text = yaml::to_string(value)?;
-    if path.is_file() {
-        let existing = fs::read_to_string(path)
-            .with_context(|| format!("reading immutable record {}", path.display()))?;
-        if existing == text {
-            return Ok(());
-        }
-        bail!("immutable record conflict at {}", path.display());
+    if write_str_atomic_create(path, &text)? {
+        return Ok(());
     }
-    write_str_atomic(path, &text)
+    let existing = fs::read_to_string(path)
+        .with_context(|| format!("reading immutable record {}", path.display()))?;
+    if existing == text {
+        Ok(())
+    } else {
+        bail!("immutable record conflict at {}", path.display())
+    }
 }
 
 pub fn save_yaml<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -1818,6 +1914,77 @@ pub fn write_str_atomic(path: &Path, contents: &str) -> Result<()> {
     fs::rename(&tmp, path)
         .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
     Ok(())
+}
+
+/// Atomically create an immutable file without a check-then-replace race.
+/// A fully synced temporary inode is linked into the final name with
+/// no-clobber semantics. `Ok(false)` means another writer won the name.
+fn write_str_atomic_create(path: &Path, contents: &str) -> Result<bool> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("immutable path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state");
+    let mut created = None;
+    for suffix in 0..1_000_u32 {
+        let tmp = parent.join(format!(
+            ".{file_name}.create-{}-{suffix}",
+            std::process::id()
+        ));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => {
+                created = Some((tmp, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error).with_context(|| format!("creating {}", tmp.display())),
+        }
+    }
+    let (tmp, mut file) = created.ok_or_else(|| {
+        anyhow::anyhow!("exhausted immutable temporary names for {}", path.display())
+    })?;
+    let written = (|| -> Result<()> {
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("syncing {}", tmp.display()))?;
+        Ok(())
+    })();
+    if let Err(error) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+    let linked = match fs::hard_link(&tmp, path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(error) => {
+            let _ = fs::remove_file(&tmp);
+            return Err(error).with_context(|| {
+                format!("atomically creating immutable record {}", path.display())
+            });
+        }
+    };
+    fs::remove_file(&tmp).with_context(|| format!("removing {}", tmp.display()))?;
+    Ok(linked)
+}
+
+fn write_str_atomic_cas(path: &Path, expected: Option<&str>, contents: &str) -> Result<()> {
+    let current = if path.is_file() {
+        Some(fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?)
+    } else {
+        None
+    };
+    if current.as_deref() != expected {
+        bail!("compare_and_swap_conflict at {}", path.display());
+    }
+    write_str_atomic(path, contents)
 }
 
 pub fn append_str(path: &Path, contents: &str) -> Result<()> {

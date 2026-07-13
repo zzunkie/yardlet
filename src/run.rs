@@ -552,6 +552,10 @@ pub(crate) struct RunFailover {
 }
 
 pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
+    // Serialize queue selection and the first runtime transition against a
+    // planning confirmation. Once Running is canonical, confirm observes it
+    // and fails closed; the worker itself never holds this lock.
+    let planning_lock = ws.acquire_planning_lock()?;
     let mut queue = ws.load_queue()?;
     let workers = ws.load_workers()?;
     let billing = ws.load_billing()?;
@@ -949,6 +953,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let from = queue.tasks[idx].state;
     queue.tasks[idx].state = TaskState::Running;
     ws.save_queue(&queue)?;
+    drop(planning_lock);
     let _ = state::append_transition(
         ws,
         state::transition(

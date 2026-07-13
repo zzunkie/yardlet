@@ -113,4 +113,29 @@ mod unix {
     fn interrupted_confirmation_replay_converges_without_duplicate_effects() {
         run_scenario("confirm_crash_replay");
     }
+
+    #[test]
+    fn event_write_before_next_seq_crash_replays_without_a_journal_collision() {
+        run_scenario("event_seq_crash");
+    }
+
+    #[test]
+    fn actual_confirm_write_order_crashes_replay_without_manual_state_repair() {
+        run_scenario("confirm_write_order_crash");
+    }
+
+    #[test]
+    fn prepared_non_confirm_actions_replay_their_existing_effect_once() {
+        run_scenario("action_effect_crash");
+    }
+
+    #[test]
+    fn unfinished_active_queue_and_corrupt_activation_block_confirm_without_clobber() {
+        run_scenario("active_queue_guard");
+    }
+
+    #[test]
+    fn concurrent_cli_actions_converge_to_one_receipt_and_collision_free_journal() {
+        run_scenario("concurrent_action");
+    }
 }
