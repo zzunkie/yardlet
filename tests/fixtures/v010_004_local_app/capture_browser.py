@@ -64,6 +64,14 @@ def main():
     metadata.parent.mkdir(parents=True, exist_ok=True)
     profile = tempfile.mkdtemp(prefix="yardlet-local-browser-")
     executable = browser_binary()
+    version = subprocess.run(
+        [executable, "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    stderr_path = metadata.with_suffix(".stderr.log")
     command = [
         executable,
         "--headless",
@@ -84,40 +92,41 @@ def main():
         f"--screenshot={screenshot}",
         args.url,
     ]
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    identity = wait_for_identity(process.pid)
-    try:
-        deadline = time.monotonic() + 60
-        payload = b""
-        while time.monotonic() < deadline:
-            if screenshot.is_file():
-                payload = screenshot.read_bytes()
-                if payload.startswith(b"\x89PNG\r\n\x1a\n") and payload.endswith(
-                    b"\x00\x00\x00\x00IEND\xaeB\x60\x82"
-                ):
-                    break
-            if process.poll() is not None:
-                raise RuntimeError(
-                    f"headless Chromium exited with {process.returncode} before screenshot completion"
-                )
-            time.sleep(0.05)
-        else:
-            raise RuntimeError("headless Chromium screenshot timed out")
-    finally:
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=5)
-        shutil.rmtree(profile, ignore_errors=True)
+    with stderr_path.open("wb") as stderr_log:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_log,
+            start_new_session=True,
+        )
+        identity = wait_for_identity(process.pid)
+        try:
+            deadline = time.monotonic() + 60
+            payload = b""
+            while time.monotonic() < deadline:
+                if screenshot.is_file():
+                    payload = screenshot.read_bytes()
+                    if payload.startswith(b"\x89PNG\r\n\x1a\n") and payload.endswith(
+                        b"\x00\x00\x00\x00IEND\xaeB\x60\x82"
+                    ):
+                        break
+                if process.poll() is not None:
+                    raise RuntimeError(
+                        f"headless Chromium exited with {process.returncode} before screenshot completion"
+                    )
+                time.sleep(0.05)
+            else:
+                raise RuntimeError("headless Chromium screenshot timed out")
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=5)
+            shutil.rmtree(profile, ignore_errors=True)
 
     metadata.write_text(
         json.dumps(
@@ -128,6 +137,7 @@ def main():
                 "exit_code": process.returncode,
                 "url": args.url,
                 "browser": executable,
+                "browser_version": (version.stdout or version.stderr).strip(),
             },
             indent=2,
         )

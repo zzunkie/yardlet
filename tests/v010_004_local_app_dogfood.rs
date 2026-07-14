@@ -123,9 +123,13 @@ mod unix {
             let worker = copy_fixture(&fixture_source, &fixture_bin, "worker.sh");
             let app = copy_fixture(&fixture_source, &fixture_bin, "app.py");
             let capture = copy_fixture(&fixture_source, &fixture_bin, "capture_browser.py");
+            let restart = copy_fixture(&fixture_source, &fixture_bin, "restart_app.sh");
             let mut permissions = fs::metadata(&worker).unwrap().permissions();
             permissions.set_mode(0o755);
             fs::set_permissions(&worker, permissions).unwrap();
+            let mut permissions = fs::metadata(&restart).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&restart, permissions).unwrap();
 
             let config_path = root.join(".agents/yardlet.yaml");
             let config = fs::read_to_string(&config_path)
@@ -221,6 +225,26 @@ mod unix {
                 observation["pid"].as_u64().unwrap() as u32,
                 observation["start_identity"].as_str().unwrap().to_string(),
             ));
+        }
+
+        fn diagnostic_logs(&self) -> String {
+            let mut pending = vec![self.root.join(".agents")];
+            let mut logs = String::new();
+            while let Some(directory) = pending.pop() {
+                let Ok(entries) = fs::read_dir(directory) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        pending.push(path);
+                    } else if path.extension().and_then(|value| value.to_str()) == Some("log") {
+                        logs.push_str(&format!("\n--- {} ---\n", path.display()));
+                        logs.push_str(&fs::read_to_string(path).unwrap_or_default());
+                    }
+                }
+            }
+            logs
         }
     }
 
@@ -412,7 +436,15 @@ mod unix {
         let sentinel = ExternalSentinel::spawn();
         let mut fixture = Fixture::new(&sentinel);
 
-        let (publisher_pid, _) = fixture.run_process(&["run", "--task", TASK_ID, "--execute"]);
+        let (publisher_pid, publisher) =
+            fixture.run_process(&["run", "--task", TASK_ID, "--execute"]);
+        let publisher_output = String::from_utf8_lossy(&publisher.stdout);
+        assert!(
+            publisher_output.contains("evaluation status: done"),
+            "local app worker did not pass evaluation\nstdout:\n{publisher_output}\nstderr:\n{}\nlogs:{}",
+            String::from_utf8_lossy(&publisher.stderr),
+            fixture.diagnostic_logs()
+        );
         let (discover_pid, discover) = fixture.json_process(&[
             "resource",
             "discover",
