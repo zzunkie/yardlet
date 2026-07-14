@@ -280,14 +280,11 @@ fn effective_process(ws: &Workspace, resource: &RuntimeResource) -> Result<Optio
         .into_iter()
         .last()
     {
-        if observation.status != ResourceStatus::Orphaned
-            && observation.pid.is_some()
-            && !observation.start_identity.is_empty()
+        if observation.status != ResourceStatus::Orphaned && !observation.start_identity.is_empty()
         {
-            return Ok(Some((
-                observation.pid.expect("checked observation pid"),
-                observation.start_identity,
-            )));
+            if let Some(pid) = observation.pid {
+                return Ok(Some((pid, observation.start_identity)));
+            }
         }
         if observation.status == ResourceStatus::Unrecoverable {
             return Ok(None);
@@ -716,6 +713,7 @@ fn destructive_process_probe(resource: &RuntimeResource, observed: &Probe) -> Pr
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lifecycle_result(
     ws: &Workspace,
     resource: &RuntimeResource,
