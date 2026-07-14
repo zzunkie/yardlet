@@ -160,15 +160,19 @@ mod unix {
     }
 
     fn channel_dir(root: &Path, task_id: &str) -> PathBuf {
+        maybe_channel_dir(root, task_id)
+            .unwrap_or_else(|| panic!("channel for {task_id} not found"))
+    }
+
+    fn maybe_channel_dir(root: &Path, task_id: &str) -> Option<PathBuf> {
         fs::read_dir(root.join(".agents/task-channels"))
-            .unwrap()
+            .ok()?
             .flatten()
             .map(|entry| entry.path())
             .find(|path| {
                 path.join("channel.yaml").is_file()
                     && string(&read_yaml(&path.join("channel.yaml")), "task_id") == task_id
             })
-            .unwrap_or_else(|| panic!("channel for {task_id} not found"))
     }
 
     fn yaml_dir(path: &Path) -> Vec<Value> {
@@ -232,6 +236,10 @@ mod unix {
             .stderr(Stdio::null())
             .status()
             .is_ok_and(|status| status.success())
+    }
+
+    fn worker_path(fixture: &FixtureWorkspace) -> PathBuf {
+        fixture.root.join(".agents/fixture-bin/worker.sh")
     }
 
     #[test]
@@ -980,5 +988,345 @@ mod unix {
             String::from_utf8_lossy(&output.stderr).contains("attempt raw stream already exists")
         );
         assert_eq!(fs::read(&overwrite_path).unwrap(), b"do not overwrite\n");
+    }
+
+    #[test]
+    fn provider_progress_is_canonical_while_worker_lives_and_artifacts_keep_attempt_provenance() {
+        let fixture = FixtureWorkspace::new("live-progress-artifacts");
+        fixture.write_queue(
+            "  - id: YARD-LIVE\n    title: live provider progress and artifacts\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n",
+        );
+
+        let mut running = Command::new(&fixture.binary)
+            .args(["run", "--task", "YARD-LIVE", "--execute"])
+            .current_dir(&fixture.root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let live_events_visible = wait_until(Duration::from_secs(10), || {
+            let Some(channel) = maybe_channel_dir(&fixture.root, "YARD-LIVE") else {
+                return false;
+            };
+            let Some(pid_path) = files_below(&fixture.root.join(".agents/runs"), "/worker.pid")
+                .into_iter()
+                .next()
+            else {
+                return false;
+            };
+            let Some(pid) = fs::read_to_string(pid_path)
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok())
+            else {
+                return false;
+            };
+            if !process_is_alive(pid) {
+                return false;
+            }
+            let events = yaml_dir(&channel.join("events"));
+            events
+                .iter()
+                .any(|event| string(event, "event_type") == "worker.message")
+                && events
+                    .iter()
+                    .any(|event| string(event, "event_type") == "tool.started")
+                && events
+                    .iter()
+                    .any(|event| string(event, "event_type") == "tool.completed")
+        });
+        assert!(
+            live_events_visible,
+            "normalized events were not visible while the worker lived"
+        );
+        assert!(
+            running.try_wait().unwrap().is_none(),
+            "worker run exited before live channel observation"
+        );
+
+        let channel = channel_dir(&fixture.root, "YARD-LIVE");
+        let live_events = yaml_dir(&channel.join("events"));
+        let attempts = yaml_dir(&channel.join("attempts"));
+        let attempt = attempts.first().unwrap();
+        let stdout_path = {
+            let path = PathBuf::from(string(attempt, "raw_stdout_ref"));
+            if path.is_absolute() {
+                path
+            } else {
+                fixture.root.join(".agents").join(path)
+            }
+        };
+        let stdout = fs::read(&stdout_path).unwrap();
+        for event in live_events.iter().filter(|event| {
+            matches!(
+                string(event, "event_type"),
+                "worker.message" | "tool.started" | "tool.completed"
+            )
+        }) {
+            assert_eq!(event["raw_ref"]["stream"], "stdout");
+            let start = number(&event["raw_ref"], "byte_start") as usize;
+            let end = number(&event["raw_ref"], "byte_end") as usize;
+            assert!(start < end && end <= stdout.len());
+            assert!(String::from_utf8_lossy(&stdout[start..end]).contains("item."));
+        }
+        assert!(live_events.iter().all(|event| {
+            !serde_yaml_ng::to_string(&event["payload"])
+                .unwrap()
+                .contains("private fixture reasoning")
+        }));
+
+        let output = running.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "live fixture failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let events = yaml_dir(&channel.join("events"));
+        let artifact_events = events
+            .iter()
+            .filter(|event| string(event, "event_type") == "artifact.created")
+            .collect::<Vec<_>>();
+        let roles = artifact_events
+            .iter()
+            .filter_map(|event| event["payload"]["role"].as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        for role in [
+            "worker_result",
+            "evaluation",
+            "checkpoint",
+            "handoff",
+            "worker_declared",
+        ] {
+            assert!(
+                roles.contains(role),
+                "missing artifact role {role}: {roles:?}"
+            );
+        }
+        assert!(artifact_events.iter().all(|event| {
+            event["attempt_id"] == attempt["attempt_id"]
+                && event["payload"]["producer_attempt_id"] == attempt["attempt_id"]
+                && event["payload"]["content_digest"]
+                    .as_str()
+                    .is_some_and(|digest| !digest.is_empty())
+        }));
+    }
+
+    #[test]
+    fn redirect_closes_superseded_question_and_stale_answer_fails_without_mutation() {
+        let fixture = FixtureWorkspace::new("redirect-question-close");
+        fixture.write_queue(
+            "  - id: YARD-REDIRECT-QUESTION\n    title: redirect closes prior question\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
+        );
+        fixture.run(&["run", "--task", "YARD-REDIRECT-QUESTION", "--execute"]);
+        let channel = channel_dir(&fixture.root, "YARD-REDIRECT-QUESTION");
+        let first_question = yaml_dir(&channel.join("questions"))
+            .into_iter()
+            .next()
+            .unwrap();
+        fixture.run(&[
+            "redirect",
+            "YARD-REDIRECT-QUESTION",
+            "ask a current question",
+            "--reason",
+            "prior question superseded",
+            "--action-id",
+            "act-question-redirect",
+        ]);
+        fixture.run(&[
+            "answer",
+            "resolve current question",
+            "--task",
+            "YARD-REDIRECT-QUESTION",
+            "--action-id",
+            "act-current-answer",
+        ]);
+        assert_eq!(task_state(&fixture.root, "YARD-REDIRECT-QUESTION"), "done");
+
+        let events = yaml_dir(&channel.join("events"));
+        let closed = events
+            .iter()
+            .find(|event| {
+                string(event, "event_type") == "question.closed"
+                    && event["payload"]["question_id"] == first_question["question_id"]
+            })
+            .expect("redirect did not record a question.closed event");
+        assert_eq!(string(closed, "action_id"), "act-question-redirect");
+
+        let attempts_before = yaml_dir(&channel.join("attempts"));
+        let events_before = yaml_dir(&channel.join("events"));
+        let stale = command(
+            &fixture.root,
+            &fixture.binary,
+            &[
+                "answer",
+                "stale answer",
+                "--task",
+                "YARD-REDIRECT-QUESTION",
+                "--action-id",
+                "act-stale-answer",
+            ],
+        );
+        assert!(
+            !stale.status.success(),
+            "stale answer unexpectedly resumed work"
+        );
+        assert_eq!(yaml_dir(&channel.join("attempts")), attempts_before);
+        assert_eq!(yaml_dir(&channel.join("events")), events_before);
+        assert!(!channel
+            .join("actions/act-stale-answer.terminal.yaml")
+            .exists());
+    }
+
+    #[test]
+    fn unavailable_question_producer_falls_back_to_selected_worker_with_explicit_packet() {
+        let fixture = FixtureWorkspace::new("answer-fallback-worker");
+        let worker = worker_path(&fixture);
+        let workers_path = fixture.root.join(".agents/workers.yaml");
+        let write_workers = |producer_command: &Path| {
+            fs::write(
+                &workers_path,
+                format!(
+                    "schema_version: 1\nworkers:\n  - id: fixture-fallback-a\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"] }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\n  - id: fixture-fallback-b\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"] }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\nrouting:\n  default_worker: fixture-fallback-a\n  fallback_order: [fixture-fallback-b]\n",
+                    producer_command.display(),
+                    worker.display()
+                ),
+            )
+            .unwrap();
+        };
+        write_workers(&worker);
+        fixture.write_queue(
+            "  - id: YARD-FALLBACK\n    title: fallback owns answer continuation\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture-fallback-a\n",
+        );
+        fixture.run(&["run", "--task", "YARD-FALLBACK", "--execute"]);
+        write_workers(Path::new("yardlet-missing-question-producer"));
+
+        fixture.run(&[
+            "answer",
+            "continue on fallback",
+            "--task",
+            "YARD-FALLBACK",
+            "--action-id",
+            "act-fallback-answer",
+        ]);
+        let channel = channel_dir(&fixture.root, "YARD-FALLBACK");
+        let attempts = yaml_dir(&channel.join("attempts"));
+        let continuation = attempts
+            .iter()
+            .find(|attempt| string(attempt, "continuation") == "explicit_packet")
+            .unwrap();
+        assert_eq!(string(continuation, "worker_id"), "fixture-fallback-b");
+        assert_eq!(
+            string(continuation, "caused_by_action_id"),
+            "act-fallback-answer"
+        );
+        assert_eq!(task_state(&fixture.root, "YARD-FALLBACK"), "done");
+        assert!(
+            files_below(&fixture.root.join(".agents/runs"), "/task-packet.md")
+                .iter()
+                .any(|path| fs::read_to_string(path)
+                    .is_ok_and(|packet| packet.contains("Explicit continuation packet")))
+        );
+    }
+
+    #[test]
+    fn redirect_receipt_crash_retries_same_action_and_runs_stored_attempt_once() {
+        let fixture = FixtureWorkspace::new("redirect-receipt-crash");
+        fixture.write_queue(
+            "  - id: YARD-REDIRECT\n    title: redirect receipt crash recovery\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
+        );
+        let running = Command::new(&fixture.binary)
+            .args(["run", "--task", "YARD-REDIRECT", "--execute"])
+            .current_dir(&fixture.root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        assert!(wait_until(Duration::from_secs(10), || {
+            task_state(&fixture.root, "YARD-REDIRECT") == "running"
+                && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
+        }));
+
+        let crashed = Command::new(&fixture.binary)
+            .args([
+                "redirect",
+                "YARD-REDIRECT",
+                "recover stored redirect guidance",
+                "--reason",
+                "inject receipt crash",
+                "--action-id",
+                "act-redirect-crash",
+            ])
+            .env("YARDLET_TEST_CRASH_AFTER_REDIRECT_RECEIPT", "1")
+            .current_dir(&fixture.root)
+            .output()
+            .unwrap();
+        assert!(
+            !crashed.status.success(),
+            "redirect did not stop after the terminal receipt"
+        );
+        let original = running.wait_with_output().unwrap();
+        assert!(original.status.success());
+        let channel = channel_dir(&fixture.root, "YARD-REDIRECT");
+        let prepared_attempts = yaml_dir(&channel.join("attempts"));
+        assert_eq!(prepared_attempts.len(), 2);
+        assert!(channel
+            .join("actions/act-redirect-crash.terminal.yaml")
+            .is_file());
+
+        fixture.run(&[
+            "redirect",
+            "YARD-REDIRECT",
+            "recover stored redirect guidance",
+            "--reason",
+            "inject receipt crash",
+            "--action-id",
+            "act-redirect-crash",
+        ]);
+        let attempts = yaml_dir(&channel.join("attempts"));
+        assert_eq!(
+            attempts.len(),
+            2,
+            "restart created a duplicate redirect attempt"
+        );
+        let redirect_attempt = attempts
+            .iter()
+            .find(|attempt| string(attempt, "continuation") == "redirect")
+            .unwrap();
+        let events = yaml_dir(&channel.join("events"));
+        let starts = events
+            .iter()
+            .filter(|event| {
+                string(event, "event_type") == "worker.started"
+                    && event["attempt_id"] == redirect_attempt["attempt_id"]
+            })
+            .count();
+        assert_eq!(
+            starts, 1,
+            "stored redirect attempt did not execute exactly once"
+        );
+        assert_eq!(task_state(&fixture.root, "YARD-REDIRECT"), "done");
+    }
+
+    #[test]
+    fn needs_user_question_precedes_worker_completed_and_is_its_cause() {
+        let fixture = FixtureWorkspace::new("needs-user-ordering");
+        fixture.write_queue(
+            "  - id: YARD-ASK\n    title: question ordering\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture-ask\n",
+        );
+        fixture.run(&["run", "--task", "YARD-ASK", "--execute"]);
+        let channel = channel_dir(&fixture.root, "YARD-ASK");
+        let events = yaml_dir(&channel.join("events"));
+        let asked = events
+            .iter()
+            .find(|event| string(event, "event_type") == "question.asked")
+            .unwrap();
+        let completed = events
+            .iter()
+            .find(|event| string(event, "event_type") == "worker.completed")
+            .unwrap();
+        assert!(number(asked, "seq") < number(completed, "seq"));
+        assert_eq!(string(completed, "causation_id"), string(asked, "event_id"));
+        assert_eq!(completed["payload"]["result"], "needs_user");
     }
 }

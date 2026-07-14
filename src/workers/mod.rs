@@ -73,6 +73,9 @@ pub struct NormalizedWorkerEvent {
     pub raw_ref: RawEventRef,
 }
 
+pub type AttemptEventSink =
+    std::sync::Arc<dyn Fn(NormalizedWorkerEvent) -> std::result::Result<(), String> + Send + Sync>;
+
 #[derive(Debug, Clone)]
 pub struct AttemptCapture {
     pub combined_log: PathBuf,
@@ -284,6 +287,35 @@ pub fn normalize_worker_output(
         start = end;
     }
     events
+}
+
+fn publish_complete_public_lines(
+    worker_id: &str,
+    stream: RawStreamKind,
+    artifact_id: &str,
+    pending: &mut Vec<u8>,
+    consumed: &mut u64,
+    flush_tail: bool,
+    sink: &AttemptEventSink,
+) -> std::io::Result<()> {
+    loop {
+        let line_len = pending
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|newline| newline + 1)
+            .or_else(|| (flush_tail && !pending.is_empty()).then_some(pending.len()));
+        let Some(line_len) = line_len else {
+            break;
+        };
+        let line = pending.drain(..line_len).collect::<Vec<_>>();
+        for mut event in normalize_worker_output(worker_id, stream, &line, artifact_id) {
+            event.raw_ref.byte_start += *consumed;
+            event.raw_ref.byte_end += *consumed;
+            sink(event).map_err(std::io::Error::other)?;
+        }
+        *consumed += line_len as u64;
+    }
+    Ok(())
 }
 
 /// A model/effort value counts as explicit only when it is set and is not the
@@ -595,6 +627,7 @@ pub fn spawn(
         env,
         output_log,
         None,
+        None,
         timeout,
         full_access,
         images,
@@ -618,6 +651,39 @@ pub fn spawn_attempt(
     session: Option<&str>,
     resume: bool,
 ) -> Result<WorkerOutcome> {
+    spawn_attempt_with_sink(
+        profile,
+        bin,
+        packet,
+        worker_run_dir,
+        cwd,
+        env,
+        capture,
+        None,
+        timeout,
+        full_access,
+        images,
+        session,
+        resume,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_attempt_with_sink(
+    profile: &WorkerProfile,
+    bin: &Path,
+    packet: &str,
+    worker_run_dir: &Path,
+    cwd: &Path,
+    env: &[(String, String)],
+    capture: &AttemptCapture,
+    event_sink: Option<AttemptEventSink>,
+    timeout: Duration,
+    full_access: bool,
+    images: &[String],
+    session: Option<&str>,
+    resume: bool,
+) -> Result<WorkerOutcome> {
     spawn_internal(
         profile,
         bin,
@@ -627,6 +693,7 @@ pub fn spawn_attempt(
         env,
         &capture.combined_log,
         Some(capture),
+        event_sink,
         timeout,
         full_access,
         images,
@@ -645,6 +712,7 @@ fn spawn_internal(
     env: &[(String, String)],
     output_log: &Path,
     attempt_capture: Option<&AttemptCapture>,
+    event_sink: Option<AttemptEventSink>,
     timeout: Duration,
     full_access: bool,
     images: &[String],
@@ -813,60 +881,109 @@ fn spawn_internal(
         None => (None, None),
     };
     type RawSink = Option<std::sync::Arc<std::sync::Mutex<std::fs::File>>>;
-    let mut sources: Vec<(Box<dyn Read + Send>, bool, RawSink)> = Vec::new();
+    let attempt_id = attempt_capture.and_then(|capture| {
+        capture
+            .stdout_log
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+    });
+    type StreamSource = (Box<dyn Read + Send>, bool, RawSink, RawStreamKind, String);
+    let mut sources: Vec<StreamSource> = Vec::new();
     if let Some(o) = child.stdout.take() {
-        sources.push((Box::new(o), profile.id == "codex" && !resume, stdout_raw));
+        sources.push((
+            Box::new(o),
+            profile.id == "codex" && !resume,
+            stdout_raw,
+            RawStreamKind::Stdout,
+            format!("raw_{}_stdout", attempt_id.unwrap_or("unknown")),
+        ));
     }
     if let Some(e) = child.stderr.take() {
-        sources.push((Box::new(e), false, stderr_raw));
+        sources.push((
+            Box::new(e),
+            false,
+            stderr_raw,
+            RawStreamKind::Stderr,
+            format!("raw_{}_stderr", attempt_id.unwrap_or("unknown")),
+        ));
     }
     let readers: Vec<_> = sources
         .into_iter()
-        .map(|(mut src, capture_session, raw_sink)| {
-            let log = std::sync::Arc::clone(&log_file);
-            let captured = std::sync::Arc::clone(&captured_session);
-            thread::spawn(move || -> std::io::Result<()> {
-                let mut buf = [0u8; 4096];
-                let mut pending = Vec::new();
-                loop {
-                    match src.read(&mut buf) {
-                        Ok(0) => {
-                            if capture_session && !pending.is_empty() {
-                                if let Some(id) = codex_thread_id_from_json_line(&pending) {
-                                    if let Ok(mut guard) = captured.lock() {
-                                        *guard = Some(id);
+        .map(
+            |(mut src, capture_session, raw_sink, stream, artifact_id)| {
+                let log = std::sync::Arc::clone(&log_file);
+                let captured = std::sync::Arc::clone(&captured_session);
+                let worker_id = profile.id.clone();
+                let event_sink = event_sink.clone();
+                thread::spawn(move || -> std::io::Result<()> {
+                    let mut buf = [0u8; 4096];
+                    let mut pending = Vec::new();
+                    let mut public_pending = Vec::new();
+                    let mut public_consumed = 0_u64;
+                    loop {
+                        match src.read(&mut buf) {
+                            Ok(0) => {
+                                if capture_session && !pending.is_empty() {
+                                    if let Some(id) = codex_thread_id_from_json_line(&pending) {
+                                        if let Ok(mut guard) = captured.lock() {
+                                            *guard = Some(id);
+                                        }
                                     }
                                 }
-                            }
-                            break;
-                        }
-                        Err(error) => return Err(error),
-                        Ok(n) => {
-                            if capture_session {
-                                capture_codex_thread_id(&mut pending, &buf[..n], &captured);
-                            }
-                            if let Ok(mut guard) = log.lock() {
-                                if let Some(f) = guard.as_mut() {
-                                    let _ = f.write_all(&buf[..n]);
-                                    let _ = f.flush();
+                                if let Some(sink) = &event_sink {
+                                    publish_complete_public_lines(
+                                        &worker_id,
+                                        stream,
+                                        &artifact_id,
+                                        &mut public_pending,
+                                        &mut public_consumed,
+                                        true,
+                                        sink,
+                                    )?;
                                 }
+                                break;
                             }
-                            if let Some(raw_sink) = &raw_sink {
-                                if let Ok(mut raw) = raw_sink.lock() {
-                                    raw.write_all(&buf[..n])?;
-                                    raw.flush()?;
-                                } else {
-                                    return Err(std::io::Error::other(
-                                        "attempt raw stream lock poisoned",
-                                    ));
+                            Err(error) => return Err(error),
+                            Ok(n) => {
+                                if capture_session {
+                                    capture_codex_thread_id(&mut pending, &buf[..n], &captured);
+                                }
+                                if let Ok(mut guard) = log.lock() {
+                                    if let Some(f) = guard.as_mut() {
+                                        let _ = f.write_all(&buf[..n]);
+                                        let _ = f.flush();
+                                    }
+                                }
+                                if let Some(raw_sink) = &raw_sink {
+                                    if let Ok(mut raw) = raw_sink.lock() {
+                                        raw.write_all(&buf[..n])?;
+                                        raw.flush()?;
+                                    } else {
+                                        return Err(std::io::Error::other(
+                                            "attempt raw stream lock poisoned",
+                                        ));
+                                    }
+                                }
+                                if let Some(sink) = &event_sink {
+                                    public_pending.extend_from_slice(&buf[..n]);
+                                    publish_complete_public_lines(
+                                        &worker_id,
+                                        stream,
+                                        &artifact_id,
+                                        &mut public_pending,
+                                        &mut public_consumed,
+                                        false,
+                                        sink,
+                                    )?;
                                 }
                             }
                         }
                     }
-                }
-                Ok(())
-            })
-        })
+                    Ok(())
+                })
+            },
+        )
         .collect();
 
     let start = Instant::now();

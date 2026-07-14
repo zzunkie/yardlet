@@ -112,6 +112,41 @@ case "$task_id" in
       write_question "index rebuild를 계속할까요?"
     fi
     ;;
+  YARD-LIVE)
+    printf '{"type":"item.started","item":{"type":"command_execution","command":"printf live"}}\n'
+    printf '{"type":"item.completed","item":{"type":"reasoning","text":"private fixture reasoning"}}\n'
+    printf '{"type":"item.completed","item":{"type":"agent_message","text":"live public message"}}\n'
+    printf '{"type":"item.completed","item":{"type":"command_execution","command":"printf live","exit_code":0}}\n'
+    sleep 3
+    printf 'live worker artifact\n' >live-worker-artifact.txt
+    printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "changes": {"files_created": ["live-worker-artifact.txt"]},\n  "compact_summary": "live event and artifact fixture complete"\n}\n' \
+      "$run_id" "$task_id" >"$run_dir/result.json"
+    write_handoff "live event and artifact fixture complete"
+    ;;
+  YARD-REDIRECT-QUESTION)
+    if grep -q '> \[user\] resolve current question' <<<"$packet"; then
+      printf 'current question resolved\n'
+      write_done "redirected current question resolved"
+    elif grep -q '> \[user\] ask a current question' <<<"$packet"; then
+      printf 'redirected question context\n'
+      write_question "current question after redirect"
+    elif grep -q '> \[user\] stale answer' <<<"$packet"; then
+      printf 'stale question was incorrectly resumed\n'
+      write_done "stale question incorrectly resumed"
+    else
+      printf 'superseded question context\n'
+      write_question "question that redirect will supersede"
+    fi
+    ;;
+  YARD-FALLBACK)
+    if grep -q 'Explicit continuation packet' <<<"$packet"; then
+      printf 'fallback worker explicit continuation\n'
+      write_done "fallback worker completed explicit continuation"
+    else
+      printf 'producer worker question context\n'
+      write_question "continue with a fallback worker?"
+    fi
+    ;;
   *)
     printf 'unexpected fixture task: %s\n' "$task_id" >&2
     exit 64

@@ -657,6 +657,59 @@ fn record_channel_event(
     }
 }
 
+fn live_worker_event_sink(
+    ws: &Workspace,
+    context: &ChannelRunContext,
+    attempt: &WorkerAttempt,
+) -> workers::AttemptEventSink {
+    let ws = ws.clone();
+    let context = context.clone();
+    let attempt_id = attempt.attempt_id.clone();
+    let worker_id = attempt.worker_id.clone();
+    std::sync::Arc::new(move |normalized| {
+        let channel = ws
+            .load_task_channel(&context.intent_id, &context.task_id)
+            .map_err(|error| error.to_string())?;
+        if let Some(existing) = channel.events.iter().find(|event| {
+            event.attempt_id.as_deref() == Some(&attempt_id)
+                && event.event_type == normalized.event_type
+                && event.raw_ref.as_ref() == Some(&normalized.raw_ref)
+        }) {
+            if existing.payload == normalized.payload {
+                return Ok(());
+            }
+            return Err(format!(
+                "normalized raw event changed for {} at {}..{}",
+                normalized.raw_ref.artifact_id,
+                normalized.raw_ref.byte_start,
+                normalized.raw_ref.byte_end
+            ));
+        }
+        let causation_id = channel
+            .events
+            .iter()
+            .rev()
+            .find(|event| event.attempt_id.as_deref() == Some(&attempt_id))
+            .map(|event| event.event_id.clone());
+        record_channel_event(
+            &ws,
+            None,
+            &context,
+            normalized.event_type,
+            EventActor {
+                kind: EventActorKind::Worker,
+                id: worker_id.clone(),
+            },
+            Some(&attempt_id),
+            causation_id,
+            normalized.payload,
+            Some(normalized.raw_ref),
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+}
+
 fn raw_attempt_path(ws: &Workspace, reference: &str) -> PathBuf {
     let path = std::path::Path::new(reference);
     if path.is_absolute() {
@@ -878,6 +931,22 @@ pub(crate) fn finish_worker_attempt(
             causation_id = Some(recorded.event_id);
         }
     }
+    if worker_attempt_result(run_dir, outcome) == "needs_user" {
+        if let Ok(result) = std::fs::read_to_string(run_dir.join("result.json")) {
+            if let Ok(result) = serde_json::from_str::<RunResult>(&result) {
+                if let Some(question) = result
+                    .question_for_user
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|question| !question.is_empty())
+                {
+                    if let Some(asked) = record_result_question(ws, context, run_dir, question)? {
+                        causation_id = Some(asked.event_id);
+                    }
+                }
+            }
+        }
+    }
     if !channel.events.iter().any(|event| {
         event.event_type == ChannelEventType::WorkerCompleted
             && event.attempt_id.as_deref() == Some(&attempt.attempt_id)
@@ -952,7 +1021,7 @@ fn record_result_question(
     context: &ChannelRunContext,
     run_dir: &std::path::Path,
     question_text: &str,
-) -> Result<()> {
+) -> Result<Option<ChannelEvent>> {
     let attempt_id = std::fs::read_to_string(run_dir.join("latest-attempt"))
         .with_context(|| format!("reading latest attempt for {}", context.task_id))?;
     let attempt_id = attempt_id.trim();
@@ -962,7 +1031,15 @@ fn record_result_question(
         .iter()
         .any(|question| question.attempt_id == attempt_id && question.text == question_text)
     {
-        return Ok(());
+        return Ok(channel
+            .events
+            .iter()
+            .find(|event| {
+                event.event_type == ChannelEventType::QuestionAsked
+                    && event.attempt_id.as_deref() == Some(attempt_id)
+                    && event.payload["text"] == question_text
+            })
+            .cloned());
     }
     let question_id = format!("qst_{attempt_id}");
     let asked = if let Some(existing) = channel.events.iter().find(|event| {
@@ -1002,7 +1079,7 @@ fn record_result_question(
         session_id: context.session_id.clone(),
         task_id: context.task_id.clone(),
         attempt_id: attempt_id.to_string(),
-        asked_event_id: asked.event_id,
+        asked_event_id: asked.event_id.clone(),
         asked_seq: asked.seq,
         context_start_seq,
         text: question_text.to_string(),
@@ -1010,7 +1087,7 @@ fn record_result_question(
         answer_id: None,
     })?;
     ws.load_or_rebuild_task_channel(&context.intent_id, &context.task_id)?;
-    Ok(())
+    Ok(Some(asked))
 }
 
 pub(crate) fn action_attempt_id(action_id: &str) -> String {
@@ -1110,7 +1187,10 @@ pub(crate) fn prepare_answer_action(
         .rev()
         .find(|question| question.state == QuestionState::Open)
     else {
-        return Ok(false);
+        if channel.questions.is_empty() {
+            return Ok(false);
+        }
+        bail!("question_closed: task {task_id} has no actionable open question");
     };
     let producer = channel
         .attempts
@@ -1124,6 +1204,15 @@ pub(crate) fn prepare_answer_action(
             std::process::id()
         )
     });
+    let task = queue
+        .tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| anyhow!("task {task_id} not found in queue"))?;
+    let workers_file = ws.load_workers()?;
+    let billing = ws.load_billing()?;
+    let selected = routing::resolve_worker_for_task(ws, &workers_file, &billing, None, task)?;
+    let same_worker = selected.worker_id == producer.worker_id;
     ws.answer_question(&AnswerActionRequest {
         continuation_attempt_id: action_attempt_id(&action_id),
         answer_id: format!("ans-{}", action_attempt_id(&action_id)),
@@ -1133,9 +1222,11 @@ pub(crate) fn prepare_answer_action(
         task_id: task_id.to_string(),
         question_id: question.question_id.clone(),
         text: reply.to_string(),
-        worker_id: producer.worker_id.clone(),
-        worker_session_ref: producer.worker_session_ref.clone(),
-        supports_native_resume: workers::supports_native_resume(&producer.worker_id),
+        worker_id: selected.worker_id.clone(),
+        worker_session_ref: same_worker
+            .then(|| producer.worker_session_ref.clone())
+            .flatten(),
+        supports_native_resume: same_worker && workers::supports_native_resume(&selected.worker_id),
     })?;
     Ok(true)
 }
@@ -1297,23 +1388,28 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     } else {
         Vec::new()
     };
-    let prepared_answer_attempt = if opts.answer.is_some() {
-        ws.load_task_channel(&queue.intent_id, &task.id)
-            .ok()
-            .and_then(|channel| {
-                channel.attempts.into_iter().rev().find(|attempt| {
-                    attempt.state == AttemptState::Prepared
-                        && matches!(
-                            attempt.continuation,
-                            ContinuationMode::NativeResume
-                                | ContinuationMode::ExplicitPacket
-                                | ContinuationMode::Redirect
-                        )
-                })
+    let prepared_answer_attempt = ws
+        .load_task_channel(&queue.intent_id, &task.id)
+        .ok()
+        .and_then(|channel| {
+            channel.attempts.into_iter().rev().find(|attempt| {
+                attempt.state == AttemptState::Prepared
+                    && matches!(
+                        attempt.continuation,
+                        ContinuationMode::NativeResume
+                            | ContinuationMode::ExplicitPacket
+                            | ContinuationMode::Redirect
+                    )
             })
-    } else {
-        None
-    };
+        });
+    #[cfg(debug_assertions)]
+    if prepared_answer_attempt
+        .as_ref()
+        .is_some_and(|attempt| attempt.continuation == ContinuationMode::Redirect)
+        && std::env::var("YARDLET_TEST_CRASH_AFTER_REDIRECT_RECEIPT").as_deref() == Ok("1")
+    {
+        bail!("injected crash after redirect receipt and before continuation spawn");
+    }
     // Re-running a Partial task uses its checkpoint. An answer/redirect that
     // cannot honestly resume a native provider session receives a bounded,
     // causally explicit packet instead of an unbounded transcript.
@@ -1667,7 +1763,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         first_continuation,
         None,
     )?;
-    let mut outcome = match workers::spawn_attempt(
+    let mut outcome = match workers::spawn_attempt_with_sink(
         &eff_profile,
         &active_bin,
         &packet_text,
@@ -1675,6 +1771,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         worker_cwd,
         &env,
         &current_capture,
+        Some(live_worker_event_sink(
+            ws,
+            &channel_context,
+            &current_attempt,
+        )),
         timeout,
         full_access,
         &images,
@@ -1742,7 +1843,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         )?;
         current_attempt = begun.0;
         current_capture = begun.1;
-        outcome = match workers::spawn_attempt(
+        outcome = match workers::spawn_attempt_with_sink(
             &eff_profile,
             &active_bin,
             cont,
@@ -1750,6 +1851,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             worker_cwd,
             &env,
             &current_capture,
+            Some(live_worker_event_sink(
+                ws,
+                &channel_context,
+                &current_attempt,
+            )),
             timeout,
             full_access,
             &images,
@@ -1871,7 +1977,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 )?;
                 current_attempt = begun.0;
                 current_capture = begun.1;
-                outcome = match workers::spawn_attempt(
+                outcome = match workers::spawn_attempt_with_sink(
                     &eff_profile,
                     &active_bin,
                     &failover_packet,
@@ -1879,6 +1985,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                     worker_cwd,
                     &env,
                     &current_capture,
+                    Some(live_worker_event_sink(
+                        ws,
+                        &channel_context,
+                        &current_attempt,
+                    )),
                     timeout,
                     full_access,
                     &images,
@@ -4365,6 +4476,182 @@ pub(crate) fn feedback_next_state(feedback: &FeedbackRecord) -> TaskState {
     }
 }
 
+fn artifact_content_digest(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv1a64:{hash:016x}")
+}
+
+fn artifact_media_type(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("json") => "application/json",
+        Some("yaml" | "yml") => "application/yaml",
+        Some("md") => "text/markdown",
+        _ => "application/octet-stream",
+    }
+}
+
+fn record_artifact_created(
+    ws: &Workspace,
+    context: &ChannelRunContext,
+    attempt_id: &str,
+    path: &std::path::Path,
+    recorded_path: &str,
+    role: &str,
+    worker_authored: bool,
+) -> Result<()> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("reading artifact for channel event {}", path.display()))?;
+    let content_digest = artifact_content_digest(&bytes);
+    let seed = format!("{attempt_id}\0{role}\0{recorded_path}\0{content_digest}");
+    let artifact_id = format!(
+        "art_{}",
+        artifact_content_digest(seed.as_bytes()).trim_start_matches("fnv1a64:")
+    );
+    let channel = ws.load_task_channel(&context.intent_id, &context.task_id)?;
+    if let Some(existing) = channel.events.iter().find(|event| {
+        event.event_type == ChannelEventType::ArtifactCreated
+            && event.payload["artifact_id"] == artifact_id
+    }) {
+        if existing.payload["content_digest"] == content_digest
+            && existing.attempt_id.as_deref() == Some(attempt_id)
+        {
+            return Ok(());
+        }
+        bail!("artifact event conflict for {artifact_id}");
+    }
+    let worker_id = channel
+        .attempts
+        .iter()
+        .find(|attempt| attempt.attempt_id == attempt_id)
+        .map(|attempt| attempt.worker_id.clone())
+        .ok_or_else(|| anyhow!("artifact producer attempt missing: {attempt_id}"))?;
+    let causation_id = channel.events.last().map(|event| event.event_id.clone());
+    record_channel_event(
+        ws,
+        None,
+        context,
+        ChannelEventType::ArtifactCreated,
+        if worker_authored {
+            EventActor {
+                kind: EventActorKind::Worker,
+                id: worker_id.clone(),
+            }
+        } else {
+            EventActor {
+                kind: EventActorKind::System,
+                id: String::new(),
+            }
+        },
+        Some(attempt_id),
+        causation_id,
+        serde_json::json!({
+            "artifact_id": artifact_id,
+            "path": recorded_path,
+            "content_digest": content_digest,
+            "media_type": artifact_media_type(path),
+            "role": role,
+            "producer_attempt_id": attempt_id,
+            "producer_worker_id": worker_id
+        }),
+        None,
+    )?;
+    Ok(())
+}
+
+fn record_finalization_artifacts(
+    ws: &Workspace,
+    context: &ChannelRunContext,
+    run_dir: &std::path::Path,
+    worker_root: &std::path::Path,
+    result: Option<&RunResult>,
+) -> Result<()> {
+    let Some(attempt_id) = std::fs::read_to_string(run_dir.join("latest-attempt"))
+        .ok()
+        .map(|attempt| attempt.trim().to_string())
+        .filter(|attempt| !attempt.is_empty())
+    else {
+        return Ok(());
+    };
+    for (name, role, worker_authored) in [
+        ("result.json", "worker_result", true),
+        ("evaluation.json", "evaluation", false),
+        ("checkpoint.md", "checkpoint", false),
+        ("handoff.md", "handoff", false),
+    ] {
+        let path = run_dir.join(name);
+        let recorded_path = path
+            .strip_prefix(&ws.root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        record_artifact_created(
+            ws,
+            context,
+            &attempt_id,
+            &path,
+            &recorded_path,
+            role,
+            worker_authored,
+        )?;
+    }
+
+    let Some(result) = result else {
+        ws.load_or_rebuild_task_channel(&context.intent_id, &context.task_id)?;
+        return Ok(());
+    };
+    let Ok(canonical_root) = std::fs::canonicalize(worker_root) else {
+        return Ok(());
+    };
+    let mut declared = result
+        .changes
+        .files_created
+        .iter()
+        .chain(&result.changes.files_modified)
+        .collect::<Vec<_>>();
+    declared.sort();
+    declared.dedup();
+    for recorded_path in declared {
+        let relative = std::path::Path::new(recorded_path);
+        if relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            continue;
+        }
+        let path = worker_root.join(relative);
+        let Ok(canonical_path) = std::fs::canonicalize(&path) else {
+            continue;
+        };
+        if canonical_path.strip_prefix(&canonical_root).is_err() || !canonical_path.is_file() {
+            continue;
+        }
+        record_artifact_created(
+            ws,
+            context,
+            &attempt_id,
+            &canonical_path,
+            recorded_path,
+            "worker_declared",
+            true,
+        )?;
+    }
+    ws.load_or_rebuild_task_channel(&context.intent_id, &context.task_id)?;
+    Ok(())
+}
+
 /// The single finalization pipeline shared by the run paths (Slice 1: serial
 /// only). Evaluate -> gates -> artifacts -> conversation -> learned -> queue
 /// state + follow-up ingestion -> telemetry. Behavior is identical to the
@@ -4567,6 +4854,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             append_nonblocking_follow_up_notes(run_dir, r)?;
         }
     }
+    let artifact_context = channel_run_context(ws, &intent_id, &task.id);
+    let worker_root = merge
+        .as_ref()
+        .map(|merge| merge.wt_path)
+        .unwrap_or(ws.root.as_path());
+    record_finalization_artifacts(ws, &artifact_context, run_dir, worker_root, result.as_ref())?;
 
     // Harness learning loop (S3): record skills/rules the worker proposed. The
     // worker authored the content; Yardlet (the core) does the writing.
