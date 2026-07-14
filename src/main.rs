@@ -21,6 +21,7 @@ mod parallel;
 mod planner;
 mod planning;
 mod report;
+mod resource;
 mod review;
 mod routing;
 mod rubric;

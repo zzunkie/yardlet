@@ -18,15 +18,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::schemas::{
     ActionReceipt, ActivatedIntent, ActivatedQueue, ActivatedTask, ActivationReceipt,
-    ActivationRequirement, Answer, AnswerActionOutcome, AnswerActionRequest, AttemptState,
-    BillingPolicy, ChannelActionKind, ChannelActionStatus, ChannelEvent, ChannelEventType,
-    ContinuationMode, Conversation, ConversationTurn, DraftRevision, EventActor, EventActorKind,
-    FollowUpTask, IntentContract, PlanningActionReceipt, PlanningEvent, PlanningProposal,
-    PlanningSession, PreservedFollowUps, Question, QuestionState, RedirectActionOutcome,
-    RedirectActionRequest, RuntimeCapabilityCommit, RuntimeCapabilityReceipt, RuntimeTaskCommit,
-    RuntimeTaskReceipt, SelectionPolicy, Task, TaskChannel, TaskChannelIndex, TaskState,
-    TransitionActor, TransitionCause, TransitionLog, TransitionRecord, TurnRole, WorkQueue,
-    WorkerAttempt, WorkersFile, YardConfig,
+    ActivationRequirement, Answer, AnswerActionOutcome, AnswerActionRequest, Artifact,
+    ArtifactProposal, AttemptState, BillingPolicy, ChannelActionKind, ChannelActionStatus,
+    ChannelEvent, ChannelEventType, ContinuationMode, Conversation, ConversationTurn,
+    DraftRevision, EventActor, EventActorKind, FollowUpTask, IntentContract, PlanningActionReceipt,
+    PlanningEvent, PlanningProposal, PlanningSession, PreservedFollowUps, Question, QuestionState,
+    RedirectActionOutcome, RedirectActionRequest, ResourceActionReceipt,
+    ResourceActionRecoveryReceipt, ResourceIndex, ResourceObservation, ResourceStatus,
+    ResourceTaskIndex, RuntimeCapabilityCommit, RuntimeCapabilityReceipt, RuntimeResource,
+    RuntimeResourceProposal, RuntimeTaskCommit, RuntimeTaskReceipt, SelectionPolicy, Task,
+    TaskChannel, TaskChannelIndex, TaskState, TransitionActor, TransitionCause, TransitionLog,
+    TransitionRecord, TurnRole, WorkQueue, WorkerAttempt, WorkersFile, YardConfig,
 };
 use crate::yaml;
 
@@ -36,6 +38,7 @@ pub const STATE_DIR: &str = ".agents";
 pub const CONFIG_FILE: &str = "yardlet.yaml";
 pub const LEGACY_CONFIG_FILE: &str = "yard.yaml";
 pub const CHANNEL_INDEX_EVENT_LIMIT: usize = 128;
+pub const RESOURCE_INDEX_ENTRY_LIMIT: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct TaskChannelIdentity {
@@ -267,6 +270,30 @@ impl Workspace {
 
     pub fn task_channel_index_path(&self, intent_id: &str, task_id: &str) -> PathBuf {
         self.task_channel_dir(intent_id, task_id).join("index.yaml")
+    }
+
+    pub fn resources_dir(&self) -> PathBuf {
+        self.agents_dir().join("resources")
+    }
+
+    pub fn resource_index_path(&self) -> PathBuf {
+        self.resources_dir().join("index.yaml")
+    }
+
+    fn artifacts_dir(&self) -> PathBuf {
+        self.resources_dir().join("artifacts")
+    }
+
+    fn runtime_resources_dir(&self) -> PathBuf {
+        self.resources_dir().join("runtime")
+    }
+
+    fn resource_observations_dir(&self, resource_id: &str) -> PathBuf {
+        self.resources_dir().join("observations").join(resource_id)
+    }
+
+    fn resource_actions_dir(&self) -> PathBuf {
+        self.resources_dir().join("actions")
     }
 
     pub fn is_initialized(&self) -> bool {
@@ -2285,6 +2312,650 @@ impl Workspace {
                 .join(format!("{}.yaml", attempt.attempt_id)),
             attempt,
         )
+    }
+
+    fn validate_publication_attempt(
+        &self,
+        intent_id: &str,
+        task_id: &str,
+        attempt_id: &str,
+        worker_id: &str,
+    ) -> Result<WorkerAttempt> {
+        let Some((identity, attempt)) = self.find_worker_attempt(attempt_id)? else {
+            bail!("publication_attempt_missing: {attempt_id}");
+        };
+        if identity.intent_id != intent_id
+            || identity.task_id != task_id
+            || attempt.intent_id != intent_id
+            || attempt.task_id != task_id
+            || attempt.worker_id != worker_id
+        {
+            bail!("publication_attempt_linkage_conflict: {attempt_id}");
+        }
+        Ok(attempt)
+    }
+
+    fn resolve_publication_causation(
+        &self,
+        intent_id: &str,
+        task_id: &str,
+        attempt_id: &str,
+        proposed_causation_id: &str,
+    ) -> Result<String> {
+        let channel = self.load_task_channel(intent_id, task_id)?;
+        let cause = if proposed_causation_id == attempt_id {
+            channel
+                .events
+                .iter()
+                .rev()
+                .find(|event| {
+                    event.attempt_id.as_deref() == Some(attempt_id)
+                        && event.event_type == ChannelEventType::WorkerCompleted
+                })
+                .or_else(|| {
+                    channel
+                        .events
+                        .iter()
+                        .rev()
+                        .find(|event| event.attempt_id.as_deref() == Some(attempt_id))
+                })
+        } else {
+            channel
+                .events
+                .iter()
+                .find(|event| event.event_id == proposed_causation_id)
+        }
+        .ok_or_else(|| anyhow::anyhow!("publication_causation_missing: {proposed_causation_id}"))?;
+        if cause.attempt_id.as_deref() != Some(attempt_id) {
+            bail!("publication_causation_linkage_conflict: {proposed_causation_id}");
+        }
+        Ok(cause.event_id.clone())
+    }
+
+    fn find_artifact_by_proposal(&self, proposal_id: &str) -> Result<Option<Artifact>> {
+        let mut found = None;
+        for artifact in load_yaml_dir::<Artifact>(&self.artifacts_dir())? {
+            if artifact.proposal_id != proposal_id {
+                continue;
+            }
+            if found.is_some() {
+                bail!("artifact_proposal_conflict: {proposal_id}");
+            }
+            found = Some(artifact);
+        }
+        Ok(found)
+    }
+
+    fn find_resource_by_proposal(&self, proposal_id: &str) -> Result<Option<RuntimeResource>> {
+        let mut found = None;
+        for resource in load_yaml_dir::<RuntimeResource>(&self.runtime_resources_dir())? {
+            if resource.proposal_id != proposal_id {
+                continue;
+            }
+            if found.is_some() {
+                bail!("resource_proposal_conflict: {proposal_id}");
+            }
+            found = Some(resource);
+        }
+        Ok(found)
+    }
+
+    pub fn publish_artifact(
+        &self,
+        session_id: &str,
+        intent_id: &str,
+        proposal: &ArtifactProposal,
+        source_path: &str,
+    ) -> Result<Artifact> {
+        proposal
+            .validate_provenance(&proposal.task_id, &proposal.attempt_id)
+            .map_err(anyhow::Error::msg)?;
+        self.validate_publication_attempt(
+            intent_id,
+            &proposal.task_id,
+            &proposal.attempt_id,
+            &proposal.producer.worker_id,
+        )?;
+        let causation_id = self.resolve_publication_causation(
+            intent_id,
+            &proposal.task_id,
+            &proposal.attempt_id,
+            &proposal.causation_id,
+        )?;
+        let _lock = self.acquire_planning_lock()?;
+        if let Some(existing) = self.find_artifact_by_proposal(&proposal.proposal_id)? {
+            let same = existing.session_id == session_id
+                && existing.intent_id == intent_id
+                && existing.task_id == proposal.task_id
+                && existing.attempt_id == proposal.attempt_id
+                && existing.producer == proposal.producer
+                && existing.causation_id == causation_id
+                && existing.path == proposal.path
+                && existing.source_path == source_path
+                && existing.digest == proposal.digest
+                && existing.media_type == proposal.media_type
+                && existing.role == proposal.role
+                && existing.channel_role == proposal.channel_role;
+            if same {
+                return Ok(existing);
+            }
+            bail!("artifact_proposal_conflict: {}", proposal.proposal_id);
+        }
+        let artifact_id = format!(
+            "art_{}",
+            stable_digest_bytes(
+                format!("{}\0{}", proposal.attempt_id, proposal.proposal_id).as_bytes()
+            )
+        );
+        let event_role = if proposal.channel_role.is_empty() {
+            serde_json::to_value(proposal.role)?
+        } else {
+            serde_json::Value::String(proposal.channel_role.clone())
+        };
+        let event = self.record_task_event_locked(
+            intent_id,
+            ChannelEvent {
+                schema_version: 1,
+                event_id: format!("evt_publish_{artifact_id}"),
+                session_id: session_id.to_string(),
+                seq: 0,
+                event_type: ChannelEventType::ArtifactCreated,
+                recorded_at: String::new(),
+                actor: EventActor {
+                    kind: EventActorKind::Worker,
+                    id: proposal.producer.worker_id.clone(),
+                },
+                action_id: None,
+                causation_id: Some(causation_id.clone()),
+                correlation_id: format!("cor_{}", task_channel_id(intent_id, &proposal.task_id)),
+                task_id: proposal.task_id.clone(),
+                attempt_id: Some(proposal.attempt_id.clone()),
+                payload: serde_json::json!({
+                    "artifact_id": artifact_id,
+                    "proposal_id": proposal.proposal_id,
+                    "path": proposal.path,
+                    "source_path": source_path,
+                    "content_digest": proposal.digest,
+                    "media_type": proposal.media_type,
+                    "role": event_role,
+                    "producer_attempt_id": proposal.attempt_id,
+                    "producer_worker_id": proposal.producer.worker_id
+                }),
+                raw_ref: None,
+            },
+        )?;
+        let artifact = Artifact {
+            schema_version: 1,
+            artifact_id: artifact_id.clone(),
+            proposal_id: proposal.proposal_id.clone(),
+            session_id: session_id.to_string(),
+            intent_id: intent_id.to_string(),
+            task_id: proposal.task_id.clone(),
+            attempt_id: proposal.attempt_id.clone(),
+            producer: proposal.producer.clone(),
+            causation_id,
+            path: proposal.path.clone(),
+            source_path: source_path.to_string(),
+            digest: proposal.digest.clone(),
+            media_type: proposal.media_type.clone(),
+            role: proposal.role,
+            channel_role: proposal.channel_role.clone(),
+            created_event_id: event.event_id,
+            published_seq: event.seq,
+            recorded_at: event.recorded_at,
+        };
+        save_immutable_yaml(
+            &self.artifacts_dir().join(format!("{artifact_id}.yaml")),
+            &artifact,
+        )?;
+        Ok(artifact)
+    }
+
+    pub fn publish_runtime_resource(
+        &self,
+        session_id: &str,
+        intent_id: &str,
+        proposal: &RuntimeResourceProposal,
+    ) -> Result<RuntimeResource> {
+        proposal
+            .validate_provenance(&proposal.task_id, &proposal.attempt_id)
+            .map_err(anyhow::Error::msg)?;
+        let capabilities = proposal
+            .target
+            .normalize_capabilities(&proposal.capabilities)
+            .map_err(anyhow::Error::msg)?;
+        self.validate_publication_attempt(
+            intent_id,
+            &proposal.task_id,
+            &proposal.attempt_id,
+            &proposal.producer.worker_id,
+        )?;
+        let causation_id = self.resolve_publication_causation(
+            intent_id,
+            &proposal.task_id,
+            &proposal.attempt_id,
+            &proposal.causation_id,
+        )?;
+        let _lock = self.acquire_planning_lock()?;
+        if let Some(existing) = self.find_resource_by_proposal(&proposal.proposal_id)? {
+            let same = existing.session_id == session_id
+                && existing.intent_id == intent_id
+                && existing.task_id == proposal.task_id
+                && existing.attempt_id == proposal.attempt_id
+                && existing.producer == proposal.producer
+                && existing.causation_id == causation_id
+                && existing.ownership == proposal.ownership
+                && existing.capabilities == capabilities
+                && existing.target == proposal.target;
+            if same {
+                return Ok(existing);
+            }
+            bail!("resource_proposal_conflict: {}", proposal.proposal_id);
+        }
+        let resource_id = format!(
+            "res_{}",
+            stable_digest_bytes(
+                format!("{}\0{}", proposal.attempt_id, proposal.proposal_id).as_bytes()
+            )
+        );
+        let event = self.record_task_event_locked(
+            intent_id,
+            ChannelEvent {
+                schema_version: 1,
+                event_id: format!("evt_publish_{resource_id}"),
+                session_id: session_id.to_string(),
+                seq: 0,
+                event_type: ChannelEventType::ResourceDeclared,
+                recorded_at: String::new(),
+                actor: EventActor {
+                    kind: EventActorKind::Worker,
+                    id: proposal.producer.worker_id.clone(),
+                },
+                action_id: None,
+                causation_id: Some(causation_id.clone()),
+                correlation_id: format!("cor_{}", task_channel_id(intent_id, &proposal.task_id)),
+                task_id: proposal.task_id.clone(),
+                attempt_id: Some(proposal.attempt_id.clone()),
+                payload: serde_json::json!({
+                    "resource_id": resource_id,
+                    "proposal_id": proposal.proposal_id,
+                    "ownership": proposal.ownership,
+                    "capabilities": capabilities,
+                    "target": proposal.target
+                }),
+                raw_ref: None,
+            },
+        )?;
+        let resource = RuntimeResource {
+            schema_version: 1,
+            resource_id: resource_id.clone(),
+            proposal_id: proposal.proposal_id.clone(),
+            session_id: session_id.to_string(),
+            intent_id: intent_id.to_string(),
+            task_id: proposal.task_id.clone(),
+            attempt_id: proposal.attempt_id.clone(),
+            producer: proposal.producer.clone(),
+            causation_id,
+            ownership: proposal.ownership,
+            capabilities,
+            target: proposal.target.clone(),
+            created_event_id: event.event_id,
+            published_seq: event.seq,
+            recorded_at: event.recorded_at,
+        };
+        save_immutable_yaml(
+            &self
+                .runtime_resources_dir()
+                .join(format!("{resource_id}.yaml")),
+            &resource,
+        )?;
+        let _ = self.record_resource_observation_locked(
+            &resource,
+            ResourceStatus::Unknown,
+            false,
+            None,
+            "",
+            "declared; current liveness has not been probed",
+            &resource.created_event_id,
+            None,
+            &format!("obs_{resource_id}_declared"),
+        )?;
+        Ok(resource)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_resource_observation_locked(
+        &self,
+        resource: &RuntimeResource,
+        status: ResourceStatus,
+        current: bool,
+        pid: Option<u32>,
+        start_identity: &str,
+        detail: &str,
+        causation_id: &str,
+        action_id: Option<&str>,
+        observation_id: &str,
+    ) -> Result<ResourceObservation> {
+        let path = self
+            .resource_observations_dir(&resource.resource_id)
+            .join(format!("{observation_id}.yaml"));
+        if path.is_file() {
+            return load_yaml(&path);
+        }
+        let event = self.record_task_event_locked(
+            &resource.intent_id,
+            ChannelEvent {
+                schema_version: 1,
+                event_id: format!("evt_{observation_id}"),
+                session_id: resource.session_id.clone(),
+                seq: 0,
+                event_type: ChannelEventType::ResourceObserved,
+                recorded_at: String::new(),
+                actor: EventActor {
+                    kind: EventActorKind::System,
+                    id: String::new(),
+                },
+                action_id: action_id.map(str::to_string),
+                causation_id: Some(causation_id.to_string()),
+                correlation_id: format!(
+                    "cor_{}",
+                    task_channel_id(&resource.intent_id, &resource.task_id)
+                ),
+                task_id: resource.task_id.clone(),
+                attempt_id: Some(resource.attempt_id.clone()),
+                payload: serde_json::json!({
+                    "resource_id": resource.resource_id,
+                    "observation_id": observation_id,
+                    "status": status,
+                    "current": current,
+                    "pid": pid,
+                    "start_identity": start_identity,
+                    "detail": detail
+                }),
+                raw_ref: None,
+            },
+        )?;
+        let observation = ResourceObservation {
+            schema_version: 1,
+            observation_id: observation_id.to_string(),
+            resource_id: resource.resource_id.clone(),
+            task_id: resource.task_id.clone(),
+            attempt_id: resource.attempt_id.clone(),
+            status,
+            observed_at: event.recorded_at,
+            current,
+            pid,
+            start_identity: start_identity.to_string(),
+            detail: detail.to_string(),
+            causation_id: causation_id.to_string(),
+            event_id: event.event_id,
+            seq: event.seq,
+        };
+        save_immutable_yaml(&path, &observation)?;
+        Ok(observation)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_resource_observation(
+        &self,
+        resource: &RuntimeResource,
+        status: ResourceStatus,
+        current: bool,
+        pid: Option<u32>,
+        start_identity: &str,
+        detail: &str,
+        causation_id: &str,
+        action_id: &str,
+    ) -> Result<ResourceObservation> {
+        validate_action_id(action_id)?;
+        let _lock = self.acquire_planning_lock()?;
+        self.record_resource_observation_locked(
+            resource,
+            status,
+            current,
+            pid,
+            start_identity,
+            detail,
+            causation_id,
+            Some(action_id),
+            &format!(
+                "obs_{}_{}",
+                stable_digest_bytes(action_id.as_bytes()),
+                stable_digest_bytes(resource.resource_id.as_bytes())
+            ),
+        )
+    }
+
+    pub fn load_artifacts(&self) -> Result<Vec<Artifact>> {
+        let mut artifacts = load_yaml_dir::<Artifact>(&self.artifacts_dir())?;
+        artifacts.sort_by(|left, right| {
+            left.published_seq
+                .cmp(&right.published_seq)
+                .then_with(|| left.artifact_id.cmp(&right.artifact_id))
+        });
+        Ok(artifacts)
+    }
+
+    pub fn load_runtime_resources(&self) -> Result<Vec<RuntimeResource>> {
+        let mut resources = load_yaml_dir::<RuntimeResource>(&self.runtime_resources_dir())?;
+        resources.sort_by(|left, right| {
+            left.published_seq
+                .cmp(&right.published_seq)
+                .then_with(|| left.resource_id.cmp(&right.resource_id))
+        });
+        Ok(resources)
+    }
+
+    pub fn load_resource_observations(
+        &self,
+        resource_id: &str,
+    ) -> Result<Vec<ResourceObservation>> {
+        let mut observations =
+            load_yaml_dir::<ResourceObservation>(&self.resource_observations_dir(resource_id))?;
+        observations.sort_by(|left, right| {
+            left.seq
+                .cmp(&right.seq)
+                .then_with(|| left.observation_id.cmp(&right.observation_id))
+        });
+        Ok(observations)
+    }
+
+    pub fn load_or_rebuild_resource_index(&self) -> Result<ResourceIndex> {
+        let artifacts = self.load_artifacts()?;
+        let resources = self.load_runtime_resources()?;
+        let mut canonical = Vec::new();
+        for artifact in &artifacts {
+            canonical.extend(serde_json::to_vec(artifact)?);
+        }
+        for resource in &resources {
+            canonical.extend(serde_json::to_vec(resource)?);
+            for observation in self.load_resource_observations(&resource.resource_id)? {
+                canonical.extend(serde_json::to_vec(&observation)?);
+            }
+        }
+        let artifact_start = artifacts.len().saturating_sub(RESOURCE_INDEX_ENTRY_LIMIT);
+        let resource_start = resources.len().saturating_sub(RESOURCE_INDEX_ENTRY_LIMIT);
+        let artifact_ids = artifacts[artifact_start..]
+            .iter()
+            .map(|artifact| artifact.artifact_id.clone())
+            .collect::<Vec<_>>();
+        let resource_ids = resources[resource_start..]
+            .iter()
+            .map(|resource| resource.resource_id.clone())
+            .collect::<Vec<_>>();
+        let mut attempts = artifacts[artifact_start..]
+            .iter()
+            .map(|artifact| artifact.attempt_id.clone())
+            .chain(
+                resources[resource_start..]
+                    .iter()
+                    .map(|resource| resource.attempt_id.clone()),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if attempts.len() > RESOURCE_INDEX_ENTRY_LIMIT {
+            attempts = attempts.split_off(attempts.len() - RESOURCE_INDEX_ENTRY_LIMIT);
+        }
+        let mut task_entries = BTreeMap::<(String, String), ResourceTaskIndex>::new();
+        for artifact in &artifacts {
+            let entry = task_entries
+                .entry((artifact.intent_id.clone(), artifact.task_id.clone()))
+                .or_insert_with(|| ResourceTaskIndex {
+                    intent_id: artifact.intent_id.clone(),
+                    task_id: artifact.task_id.clone(),
+                    artifacts: Vec::new(),
+                    resources: Vec::new(),
+                    attempts: Vec::new(),
+                    truncated: false,
+                });
+            entry.artifacts.push(artifact.artifact_id.clone());
+            if !entry.attempts.contains(&artifact.attempt_id) {
+                entry.attempts.push(artifact.attempt_id.clone());
+            }
+        }
+        for resource in &resources {
+            let entry = task_entries
+                .entry((resource.intent_id.clone(), resource.task_id.clone()))
+                .or_insert_with(|| ResourceTaskIndex {
+                    intent_id: resource.intent_id.clone(),
+                    task_id: resource.task_id.clone(),
+                    artifacts: Vec::new(),
+                    resources: Vec::new(),
+                    attempts: Vec::new(),
+                    truncated: false,
+                });
+            entry.resources.push(resource.resource_id.clone());
+            if !entry.attempts.contains(&resource.attempt_id) {
+                entry.attempts.push(resource.attempt_id.clone());
+            }
+        }
+        for entry in task_entries.values_mut() {
+            for values in [
+                &mut entry.artifacts,
+                &mut entry.resources,
+                &mut entry.attempts,
+            ] {
+                if values.len() > RESOURCE_INDEX_ENTRY_LIMIT {
+                    *values = values.split_off(values.len() - RESOURCE_INDEX_ENTRY_LIMIT);
+                    entry.truncated = true;
+                }
+            }
+        }
+        let tasks_truncated = task_entries.len() > RESOURCE_INDEX_ENTRY_LIMIT;
+        let mut tasks = task_entries.into_values().collect::<Vec<_>>();
+        if tasks_truncated {
+            tasks = tasks.split_off(tasks.len() - RESOURCE_INDEX_ENTRY_LIMIT);
+        }
+        let index = ResourceIndex {
+            schema_version: 1,
+            canonical_digest: format!("fnv1a64:{}", stable_digest_bytes(&canonical)),
+            artifacts: artifact_ids,
+            resources: resource_ids,
+            attempts,
+            tasks,
+            tasks_truncated,
+        };
+        let current = if self.resource_index_path().is_file() {
+            load_yaml::<ResourceIndex>(&self.resource_index_path()).ok()
+        } else {
+            None
+        };
+        if current.as_ref() != Some(&index) {
+            write_str_atomic(&self.resource_index_path(), &yaml::to_string(&index)?)?;
+        }
+        Ok(index)
+    }
+
+    pub fn load_resource_action(&self, action_id: &str) -> Result<Option<ResourceActionReceipt>> {
+        validate_action_id(action_id)?;
+        let path =
+            contained_action_path(&self.resource_actions_dir(), &format!("{action_id}.yaml"))?;
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_yaml(&path).map(Some)
+    }
+
+    pub fn save_resource_action(&self, receipt: &ResourceActionReceipt) -> Result<()> {
+        validate_action_id(&receipt.action_id)?;
+        let path = contained_action_path(
+            &self.resource_actions_dir(),
+            &format!("{}.yaml", receipt.action_id),
+        )?;
+        if path.is_file() {
+            let existing: ResourceActionReceipt = load_yaml(&path)?;
+            if existing == *receipt {
+                return Ok(());
+            }
+            bail!("resource_action_conflict: {}", receipt.action_id);
+        }
+        save_immutable_yaml(&path, receipt)
+    }
+
+    pub fn load_resource_action_recovery(
+        &self,
+        action_id: &str,
+    ) -> Result<Option<ResourceActionRecoveryReceipt>> {
+        validate_action_id(action_id)?;
+        let path = contained_action_path(
+            &self.resource_actions_dir(),
+            &format!("{action_id}.recovery.yaml"),
+        )?;
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_yaml(&path).map(Some)
+    }
+
+    pub fn save_resource_action_recovery(
+        &self,
+        recovery: &ResourceActionRecoveryReceipt,
+    ) -> Result<()> {
+        validate_action_id(&recovery.action_id)?;
+        let path = contained_action_path(
+            &self.resource_actions_dir(),
+            &format!("{}.recovery.yaml", recovery.action_id),
+        )?;
+        if path.is_file() {
+            let existing: ResourceActionRecoveryReceipt = load_yaml(&path)?;
+            if existing == *recovery {
+                return Ok(());
+            }
+            let same_action = existing.action_id == recovery.action_id
+                && existing.request_digest == recovery.request_digest
+                && existing.operation == recovery.operation
+                && existing.intent_id == recovery.intent_id
+                && existing.task_id == recovery.task_id
+                && existing.target_id == recovery.target_id
+                && existing.expected_status == recovery.expected_status
+                && existing.requested_event_id == recovery.requested_event_id;
+            let fills_spawn_identity = existing.phase == recovery.phase
+                && existing.phase == crate::schemas::ResourceActionRecoveryPhase::Spawned
+                && existing.effect_pid == recovery.effect_pid
+                && existing.effect_start_identity.is_empty()
+                && !recovery.effect_start_identity.is_empty();
+            if !same_action
+                || (existing.phase.rank() >= recovery.phase.rank() && !fills_spawn_identity)
+            {
+                bail!("resource_action_recovery_conflict: {}", recovery.action_id);
+            }
+        }
+        write_str_atomic(&path, &yaml::to_string(recovery)?)
+    }
+
+    pub fn load_artifact(&self, artifact_id: &str) -> Result<Option<Artifact>> {
+        Ok(self
+            .load_artifacts()?
+            .into_iter()
+            .find(|artifact| artifact.artifact_id == artifact_id))
+    }
+
+    pub fn load_runtime_resource(&self, resource_id: &str) -> Result<Option<RuntimeResource>> {
+        Ok(self
+            .load_runtime_resources()?
+            .into_iter()
+            .find(|resource| resource.resource_id == resource_id))
     }
 
     /// Replay the canonical event stream for one work session across every

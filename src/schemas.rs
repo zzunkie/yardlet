@@ -1549,6 +1549,583 @@ pub struct RunResult {
     /// Yardlet assigns ids/priority and is the sole writer of the queue.
     #[serde(default)]
     pub follow_up_tasks: Vec<FollowUpTask>,
+    /// Durable evidence proposals authored by the worker. Yardlet validates
+    /// exact task/attempt/producer linkage and writes canonical declarations.
+    #[serde(default)]
+    pub artifacts: Vec<ArtifactProposal>,
+    /// Live target proposals authored by the worker. These are declarations,
+    /// never current-liveness claims; the core records probe observations.
+    #[serde(default)]
+    pub resources: Vec<RuntimeResourceProposal>,
+}
+
+impl RunResult {
+    pub fn resource_provenance_errors(&self, attempt_id: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        for proposal in &self.artifacts {
+            if let Err(error) = proposal.validate_worker_provenance(&self.task_id, attempt_id) {
+                errors.push(format!("artifact {}: {error}", proposal.proposal_id));
+            }
+        }
+        for proposal in &self.resources {
+            if let Err(error) = proposal.validate_worker_provenance(&self.task_id, attempt_id) {
+                errors.push(format!("resource {}: {error}", proposal.proposal_id));
+            }
+        }
+        errors
+    }
+}
+
+// ---------------------------------------------------------------------------
+// V010-004 runtime resources and durable artifacts
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceProducer {
+    #[serde(default)]
+    pub worker_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactRole {
+    File,
+    Screenshot,
+    GitDiff,
+    ValidationOutput,
+    ReviewReport,
+    Handoff,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactProposal {
+    #[serde(default)]
+    pub proposal_id: String,
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default)]
+    pub attempt_id: String,
+    #[serde(default)]
+    pub producer: ResourceProducer,
+    #[serde(default)]
+    pub causation_id: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub digest: String,
+    #[serde(default)]
+    pub media_type: String,
+    pub role: ArtifactRole,
+    /// More specific existing task-channel projection label for core-generated
+    /// run artifacts. Worker proposals leave this empty and use `role`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub channel_role: String,
+}
+
+impl ArtifactProposal {
+    pub fn validate_provenance(&self, task_id: &str, attempt_id: &str) -> Result<(), String> {
+        if self.proposal_id.trim().is_empty()
+            || self.task_id != task_id
+            || self.attempt_id != attempt_id
+            || self.producer.worker_id.trim().is_empty()
+            || self.causation_id.trim().is_empty()
+            || self.path.trim().is_empty()
+            || self.digest.trim().is_empty()
+            || self.media_type.trim().is_empty()
+        {
+            return Err("artifact proposal lacks exact task/attempt/producer evidence".into());
+        }
+        Ok(())
+    }
+
+    pub fn validate_worker_provenance(
+        &self,
+        task_id: &str,
+        attempt_id: &str,
+    ) -> Result<(), String> {
+        self.validate_provenance(task_id, attempt_id)?;
+        if self.causation_id != attempt_id {
+            return Err("artifact proposal causation must name its exact attempt".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Artifact {
+    pub schema_version: u32,
+    pub artifact_id: String,
+    pub proposal_id: String,
+    pub session_id: String,
+    pub intent_id: String,
+    pub task_id: String,
+    pub attempt_id: String,
+    pub producer: ResourceProducer,
+    pub causation_id: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_path: String,
+    pub digest: String,
+    pub media_type: String,
+    pub role: ArtifactRole,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub channel_role: String,
+    pub created_event_id: String,
+    pub published_seq: u64,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceOwnership {
+    Yardlet,
+    Worker,
+    User,
+    External,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceCapability {
+    Open,
+    Attach,
+    Stop,
+    Restart,
+    Detach,
+    Cleanup,
+    Reconcile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeResourceTarget {
+    Terminal {
+        terminal_id: String,
+        pid: u32,
+        start_identity: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        attach_hint: String,
+    },
+    Process {
+        pid: u32,
+        start_identity: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        command: Vec<String>,
+    },
+    Service {
+        url: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        health_url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pid: Option<u32>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        start_identity: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        restart_command: Vec<String>,
+    },
+    Browser {
+        url: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        session_id: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        session_probe_url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pid: Option<u32>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        start_identity: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        screenshot_artifact_id: String,
+    },
+}
+
+impl RuntimeResourceTarget {
+    pub fn inferred_capabilities(&self) -> Vec<ResourceCapability> {
+        use ResourceCapability as Capability;
+
+        let mut capabilities = match self {
+            Self::Terminal { .. } => vec![
+                Capability::Open,
+                Capability::Attach,
+                Capability::Stop,
+                Capability::Detach,
+                Capability::Cleanup,
+                Capability::Reconcile,
+            ],
+            Self::Process { command, .. } => {
+                let mut capabilities = vec![
+                    Capability::Open,
+                    Capability::Attach,
+                    Capability::Stop,
+                    Capability::Cleanup,
+                    Capability::Reconcile,
+                ];
+                if !command.is_empty() {
+                    capabilities.push(Capability::Restart);
+                }
+                capabilities
+            }
+            Self::Service {
+                pid,
+                restart_command,
+                ..
+            } => {
+                let mut capabilities = vec![Capability::Open, Capability::Reconcile];
+                if pid.is_some() {
+                    capabilities.extend([Capability::Stop, Capability::Cleanup]);
+                    if !restart_command.is_empty() {
+                        capabilities.push(Capability::Restart);
+                    }
+                }
+                capabilities
+            }
+            Self::Browser { .. } => vec![Capability::Open, Capability::Reconcile],
+        };
+        capabilities.sort_unstable();
+        capabilities
+    }
+
+    pub fn normalize_capabilities(
+        &self,
+        declared: &[ResourceCapability],
+    ) -> Result<Vec<ResourceCapability>, String> {
+        let supported = self.inferred_capabilities();
+        if declared.is_empty() {
+            return Ok(supported);
+        }
+        let mut normalized = declared.to_vec();
+        normalized.sort_unstable();
+        normalized.dedup();
+        if let Some(capability) = normalized
+            .iter()
+            .find(|capability| !supported.contains(capability))
+        {
+            return Err(format!(
+                "resource target cannot support declared capability {capability:?}"
+            ));
+        }
+        Ok(normalized)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Terminal {
+                terminal_id,
+                pid,
+                start_identity,
+                ..
+            } => {
+                if terminal_id.trim().is_empty() || *pid == 0 || start_identity.trim().is_empty() {
+                    return Err(
+                        "terminal target requires terminal_id, pid, and start_identity".into(),
+                    );
+                }
+            }
+            Self::Process {
+                pid,
+                start_identity,
+                ..
+            } => {
+                if *pid == 0 || start_identity.trim().is_empty() {
+                    return Err("process target requires pid and start_identity".into());
+                }
+            }
+            Self::Service {
+                url,
+                pid,
+                start_identity,
+                ..
+            } => {
+                if url.trim().is_empty() || (pid.is_some() && start_identity.trim().is_empty()) {
+                    return Err("service target requires url and identity for any pid".into());
+                }
+            }
+            Self::Browser {
+                url,
+                pid,
+                start_identity,
+                ..
+            } => {
+                if url.trim().is_empty() || (pid.is_some() && start_identity.trim().is_empty()) {
+                    return Err("browser target requires url and identity for any pid".into());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeResourceProposal {
+    #[serde(default)]
+    pub proposal_id: String,
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default)]
+    pub attempt_id: String,
+    #[serde(default)]
+    pub producer: ResourceProducer,
+    #[serde(default)]
+    pub causation_id: String,
+    #[serde(default)]
+    pub ownership: ResourceOwnership,
+    #[serde(default)]
+    pub capabilities: Vec<ResourceCapability>,
+    pub target: RuntimeResourceTarget,
+}
+
+impl RuntimeResourceProposal {
+    pub fn validate_provenance(&self, task_id: &str, attempt_id: &str) -> Result<(), String> {
+        if self.proposal_id.trim().is_empty()
+            || self.task_id != task_id
+            || self.attempt_id != attempt_id
+            || self.producer.worker_id.trim().is_empty()
+            || self.causation_id.trim().is_empty()
+        {
+            return Err("resource proposal lacks exact task/attempt/producer evidence".into());
+        }
+        self.target.validate()?;
+        self.target
+            .normalize_capabilities(&self.capabilities)
+            .map(|_| ())
+    }
+
+    pub fn validate_worker_provenance(
+        &self,
+        task_id: &str,
+        attempt_id: &str,
+    ) -> Result<(), String> {
+        self.validate_provenance(task_id, attempt_id)?;
+        if self.causation_id != attempt_id {
+            return Err("resource proposal causation must name its exact attempt".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeResource {
+    pub schema_version: u32,
+    pub resource_id: String,
+    pub proposal_id: String,
+    pub session_id: String,
+    pub intent_id: String,
+    pub task_id: String,
+    pub attempt_id: String,
+    pub producer: ResourceProducer,
+    pub causation_id: String,
+    pub ownership: ResourceOwnership,
+    #[serde(default)]
+    pub capabilities: Vec<ResourceCapability>,
+    pub target: RuntimeResourceTarget,
+    pub created_event_id: String,
+    pub published_seq: u64,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceStatus {
+    Unknown,
+    Available,
+    Live,
+    Dead,
+    Unavailable,
+    Expired,
+    Orphaned,
+    Unrecoverable,
+    Detached,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceObservation {
+    pub schema_version: u32,
+    pub observation_id: String,
+    pub resource_id: String,
+    pub task_id: String,
+    pub attempt_id: String,
+    pub status: ResourceStatus,
+    pub observed_at: String,
+    #[serde(default)]
+    pub current: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub start_identity: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+    pub causation_id: String,
+    pub event_id: String,
+    pub seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceTaskIndex {
+    pub intent_id: String,
+    pub task_id: String,
+    pub artifacts: Vec<String>,
+    pub resources: Vec<String>,
+    pub attempts: Vec<String>,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceIndex {
+    pub schema_version: u32,
+    pub canonical_digest: String,
+    pub artifacts: Vec<String>,
+    pub resources: Vec<String>,
+    pub attempts: Vec<String>,
+    #[serde(default)]
+    pub tasks: Vec<ResourceTaskIndex>,
+    #[serde(default)]
+    pub tasks_truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceOperationKind {
+    Discover,
+    Inspect,
+    Open,
+    Attach,
+    Stop,
+    Restart,
+    Detach,
+    Cleanup,
+    Reconcile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceOperationRequest {
+    pub action_id: String,
+    pub operation: ResourceOperationKind,
+    #[serde(default)]
+    pub intent_id: String,
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default)]
+    pub target_id: String,
+    pub expected_status: ResourceStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceActionStatus {
+    Completed,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceActionRecoveryPhase {
+    Prepared,
+    Terminated,
+    Spawned,
+}
+
+impl ResourceActionRecoveryPhase {
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Prepared => 0,
+            Self::Terminated => 1,
+            Self::Spawned => 2,
+        }
+    }
+}
+
+/// Durable, non-terminal action progress. The terminal receipt remains an
+/// immutable `ResourceActionReceipt`; this snapshot only prevents a recovered
+/// stop/restart action from repeating an external side effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceActionRecoveryReceipt {
+    pub schema_version: u32,
+    pub action_id: String,
+    pub request_digest: String,
+    pub operation: ResourceOperationKind,
+    pub intent_id: String,
+    pub task_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_id: String,
+    pub expected_status: ResourceStatus,
+    pub requested_event_id: String,
+    pub phase: ResourceActionRecoveryPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effect_start_identity: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "target_type", rename_all = "snake_case")]
+pub enum ResourceOpenTarget {
+    File {
+        path: String,
+        media_type: String,
+    },
+    Url {
+        url: String,
+    },
+    TerminalSession {
+        terminal_id: String,
+        attach_hint: String,
+    },
+    ProcessMonitor {
+        pid: u32,
+    },
+    Unavailable {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "entry_type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
+pub enum ResourceEntry {
+    Artifact {
+        artifact: Artifact,
+        status: ResourceStatus,
+        open_target: ResourceOpenTarget,
+    },
+    RuntimeResource {
+        resource: RuntimeResource,
+        status: ResourceStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_observation: Option<ResourceObservation>,
+        open_target: ResourceOpenTarget,
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceActionResult {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<ResourceEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_target: Option<ResourceOpenTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation: Option<ResourceObservation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceActionReceipt {
+    pub schema_version: u32,
+    pub action_id: String,
+    pub operation: ResourceOperationKind,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub intent_id: String,
+    pub task_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_id: String,
+    pub request_digest: String,
+    pub status: ResourceActionStatus,
+    #[serde(default)]
+    pub result: ResourceActionResult,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_event_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
 }
 
 /// A follow-up task a worker PROPOSES in its result (propose -> ingest). A
@@ -1681,6 +2258,9 @@ pub enum ChannelEventType {
     QuestionClosed,
     UserAnswered,
     ArtifactCreated,
+    ResourceDeclared,
+    ResourceObserved,
+    ResourceStateChanged,
     ValidationStarted,
     ValidationCompleted,
     WorkerCompleted,
@@ -1705,6 +2285,9 @@ impl ChannelEventType {
             Self::QuestionClosed => "question.closed",
             Self::UserAnswered => "user.answered",
             Self::ArtifactCreated => "artifact.created",
+            Self::ResourceDeclared => "resource.declared",
+            Self::ResourceObserved => "resource.observed",
+            Self::ResourceStateChanged => "resource.state.changed",
             Self::ValidationStarted => "validation.started",
             Self::ValidationCompleted => "validation.completed",
             Self::WorkerCompleted => "worker.completed",
@@ -1728,6 +2311,9 @@ impl ChannelEventType {
                 | Self::QuestionAsked
                 | Self::QuestionClosed
                 | Self::ArtifactCreated
+                | Self::ResourceDeclared
+                | Self::ResourceObserved
+                | Self::ResourceStateChanged
                 | Self::ValidationStarted
                 | Self::ValidationCompleted
                 | Self::WorkerCompleted
@@ -1763,6 +2349,9 @@ impl<'de> Deserialize<'de> for ChannelEventType {
             "question.closed" => Self::QuestionClosed,
             "user.answered" => Self::UserAnswered,
             "artifact.created" => Self::ArtifactCreated,
+            "resource.declared" => Self::ResourceDeclared,
+            "resource.observed" => Self::ResourceObserved,
+            "resource.state.changed" => Self::ResourceStateChanged,
             "validation.started" => Self::ValidationStarted,
             "validation.completed" => Self::ValidationCompleted,
             "worker.completed" => Self::WorkerCompleted,
