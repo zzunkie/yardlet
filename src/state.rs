@@ -24,11 +24,11 @@ use crate::schemas::{
     DraftRevision, EventActor, EventActorKind, FollowUpTask, IntentContract, PlanningActionReceipt,
     PlanningEvent, PlanningProposal, PlanningSession, PreservedFollowUps, Question, QuestionState,
     RedirectActionOutcome, RedirectActionRequest, ResourceActionReceipt, ResourceIndex,
-    ResourceObservation, ResourceStatus, RuntimeCapabilityCommit, RuntimeCapabilityReceipt,
-    RuntimeResource, RuntimeResourceProposal, RuntimeTaskCommit, RuntimeTaskReceipt,
-    SelectionPolicy, Task, TaskChannel, TaskChannelIndex, TaskState, TransitionActor,
-    TransitionCause, TransitionLog, TransitionRecord, TurnRole, WorkQueue, WorkerAttempt,
-    WorkersFile, YardConfig,
+    ResourceObservation, ResourceStatus, ResourceTaskIndex, RuntimeCapabilityCommit,
+    RuntimeCapabilityReceipt, RuntimeResource, RuntimeResourceProposal, RuntimeTaskCommit,
+    RuntimeTaskReceipt, SelectionPolicy, Task, TaskChannel, TaskChannelIndex, TaskState,
+    TransitionActor, TransitionCause, TransitionLog, TransitionRecord, TurnRole, WorkQueue,
+    WorkerAttempt, WorkersFile, YardConfig,
 };
 use crate::yaml;
 
@@ -2335,6 +2335,43 @@ impl Workspace {
         Ok(attempt)
     }
 
+    fn resolve_publication_causation(
+        &self,
+        intent_id: &str,
+        task_id: &str,
+        attempt_id: &str,
+        proposed_causation_id: &str,
+    ) -> Result<String> {
+        let channel = self.load_task_channel(intent_id, task_id)?;
+        let cause = if proposed_causation_id == attempt_id {
+            channel
+                .events
+                .iter()
+                .rev()
+                .find(|event| {
+                    event.attempt_id.as_deref() == Some(attempt_id)
+                        && event.event_type == ChannelEventType::WorkerCompleted
+                })
+                .or_else(|| {
+                    channel
+                        .events
+                        .iter()
+                        .rev()
+                        .find(|event| event.attempt_id.as_deref() == Some(attempt_id))
+                })
+        } else {
+            channel
+                .events
+                .iter()
+                .find(|event| event.event_id == proposed_causation_id)
+        }
+        .ok_or_else(|| anyhow::anyhow!("publication_causation_missing: {proposed_causation_id}"))?;
+        if cause.attempt_id.as_deref() != Some(attempt_id) {
+            bail!("publication_causation_linkage_conflict: {proposed_causation_id}");
+        }
+        Ok(cause.event_id.clone())
+    }
+
     fn find_artifact_by_proposal(&self, proposal_id: &str) -> Result<Option<Artifact>> {
         let mut found = None;
         for artifact in load_yaml_dir::<Artifact>(&self.artifacts_dir())? {
@@ -2379,6 +2416,12 @@ impl Workspace {
             &proposal.attempt_id,
             &proposal.producer.worker_id,
         )?;
+        let causation_id = self.resolve_publication_causation(
+            intent_id,
+            &proposal.task_id,
+            &proposal.attempt_id,
+            &proposal.causation_id,
+        )?;
         let _lock = self.acquire_planning_lock()?;
         if let Some(existing) = self.find_artifact_by_proposal(&proposal.proposal_id)? {
             let same = existing.session_id == session_id
@@ -2386,12 +2429,13 @@ impl Workspace {
                 && existing.task_id == proposal.task_id
                 && existing.attempt_id == proposal.attempt_id
                 && existing.producer == proposal.producer
-                && existing.causation_id == proposal.causation_id
+                && existing.causation_id == causation_id
                 && existing.path == proposal.path
                 && existing.source_path == source_path
                 && existing.digest == proposal.digest
                 && existing.media_type == proposal.media_type
-                && existing.role == proposal.role;
+                && existing.role == proposal.role
+                && existing.channel_role == proposal.channel_role;
             if same {
                 return Ok(existing);
             }
@@ -2403,6 +2447,11 @@ impl Workspace {
                 format!("{}\0{}", proposal.attempt_id, proposal.proposal_id).as_bytes()
             )
         );
+        let event_role = if proposal.channel_role.is_empty() {
+            serde_json::to_value(proposal.role)?
+        } else {
+            serde_json::Value::String(proposal.channel_role.clone())
+        };
         let event = self.record_task_event_locked(
             intent_id,
             ChannelEvent {
@@ -2417,7 +2466,7 @@ impl Workspace {
                     id: proposal.producer.worker_id.clone(),
                 },
                 action_id: None,
-                causation_id: Some(proposal.causation_id.clone()),
+                causation_id: Some(causation_id.clone()),
                 correlation_id: format!("cor_{}", task_channel_id(intent_id, &proposal.task_id)),
                 task_id: proposal.task_id.clone(),
                 attempt_id: Some(proposal.attempt_id.clone()),
@@ -2428,7 +2477,7 @@ impl Workspace {
                     "source_path": source_path,
                     "content_digest": proposal.digest,
                     "media_type": proposal.media_type,
-                    "role": proposal.role,
+                    "role": event_role,
                     "producer_attempt_id": proposal.attempt_id,
                     "producer_worker_id": proposal.producer.worker_id
                 }),
@@ -2444,12 +2493,13 @@ impl Workspace {
             task_id: proposal.task_id.clone(),
             attempt_id: proposal.attempt_id.clone(),
             producer: proposal.producer.clone(),
-            causation_id: proposal.causation_id.clone(),
+            causation_id,
             path: proposal.path.clone(),
             source_path: source_path.to_string(),
             digest: proposal.digest.clone(),
             media_type: proposal.media_type.clone(),
             role: proposal.role,
+            channel_role: proposal.channel_role.clone(),
             created_event_id: event.event_id,
             published_seq: event.seq,
             recorded_at: event.recorded_at,
@@ -2476,6 +2526,12 @@ impl Workspace {
             &proposal.attempt_id,
             &proposal.producer.worker_id,
         )?;
+        let causation_id = self.resolve_publication_causation(
+            intent_id,
+            &proposal.task_id,
+            &proposal.attempt_id,
+            &proposal.causation_id,
+        )?;
         let _lock = self.acquire_planning_lock()?;
         if let Some(existing) = self.find_resource_by_proposal(&proposal.proposal_id)? {
             let same = existing.session_id == session_id
@@ -2483,7 +2539,7 @@ impl Workspace {
                 && existing.task_id == proposal.task_id
                 && existing.attempt_id == proposal.attempt_id
                 && existing.producer == proposal.producer
-                && existing.causation_id == proposal.causation_id
+                && existing.causation_id == causation_id
                 && existing.ownership == proposal.ownership
                 && existing.target == proposal.target;
             if same {
@@ -2511,7 +2567,7 @@ impl Workspace {
                     id: proposal.producer.worker_id.clone(),
                 },
                 action_id: None,
-                causation_id: Some(proposal.causation_id.clone()),
+                causation_id: Some(causation_id.clone()),
                 correlation_id: format!("cor_{}", task_channel_id(intent_id, &proposal.task_id)),
                 task_id: proposal.task_id.clone(),
                 attempt_id: Some(proposal.attempt_id.clone()),
@@ -2533,7 +2589,7 @@ impl Workspace {
             task_id: proposal.task_id.clone(),
             attempt_id: proposal.attempt_id.clone(),
             producer: proposal.producer.clone(),
-            causation_id: proposal.causation_id.clone(),
+            causation_id,
             ownership: proposal.ownership,
             target: proposal.target.clone(),
             created_event_id: event.event_id,
@@ -2734,12 +2790,62 @@ impl Workspace {
         if attempts.len() > RESOURCE_INDEX_ENTRY_LIMIT {
             attempts = attempts.split_off(attempts.len() - RESOURCE_INDEX_ENTRY_LIMIT);
         }
+        let mut task_entries = BTreeMap::<String, ResourceTaskIndex>::new();
+        for artifact in &artifacts {
+            let entry = task_entries
+                .entry(artifact.task_id.clone())
+                .or_insert_with(|| ResourceTaskIndex {
+                    task_id: artifact.task_id.clone(),
+                    artifacts: Vec::new(),
+                    resources: Vec::new(),
+                    attempts: Vec::new(),
+                    truncated: false,
+                });
+            entry.artifacts.push(artifact.artifact_id.clone());
+            if !entry.attempts.contains(&artifact.attempt_id) {
+                entry.attempts.push(artifact.attempt_id.clone());
+            }
+        }
+        for resource in &resources {
+            let entry = task_entries
+                .entry(resource.task_id.clone())
+                .or_insert_with(|| ResourceTaskIndex {
+                    task_id: resource.task_id.clone(),
+                    artifacts: Vec::new(),
+                    resources: Vec::new(),
+                    attempts: Vec::new(),
+                    truncated: false,
+                });
+            entry.resources.push(resource.resource_id.clone());
+            if !entry.attempts.contains(&resource.attempt_id) {
+                entry.attempts.push(resource.attempt_id.clone());
+            }
+        }
+        for entry in task_entries.values_mut() {
+            for values in [
+                &mut entry.artifacts,
+                &mut entry.resources,
+                &mut entry.attempts,
+            ] {
+                if values.len() > RESOURCE_INDEX_ENTRY_LIMIT {
+                    *values = values.split_off(values.len() - RESOURCE_INDEX_ENTRY_LIMIT);
+                    entry.truncated = true;
+                }
+            }
+        }
+        let tasks_truncated = task_entries.len() > RESOURCE_INDEX_ENTRY_LIMIT;
+        let mut tasks = task_entries.into_values().collect::<Vec<_>>();
+        if tasks_truncated {
+            tasks = tasks.split_off(tasks.len() - RESOURCE_INDEX_ENTRY_LIMIT);
+        }
         let index = ResourceIndex {
             schema_version: 1,
             canonical_digest: format!("fnv1a64:{}", stable_digest_bytes(&canonical)),
             artifacts: artifact_ids,
             resources: resource_ids,
             attempts,
+            tasks,
+            tasks_truncated,
         };
         let current = if self.resource_index_path().is_file() {
             load_yaml::<ResourceIndex>(&self.resource_index_path()).ok()

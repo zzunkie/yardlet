@@ -58,20 +58,20 @@ case "$task_id" in
   "validation":{"commands_run":[],"passed":true,"failures":[]},
   "compact_summary":"resource operation fixture",
   "artifacts":[
-    {"proposal_id":"ops-file","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","path":"ops-file.txt","digest":"$file_digest","media_type":"text/plain","role":"file"}
+    {"proposal_id":"ops-file","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","path":"ops-file.txt","digest":"$file_digest","media_type":"text/plain","role":"file"}
   ],
   "resources":[
-    {"proposal_id":"ops-stop","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"worker","target":{"kind":"process","pid":$stop_pid,"start_identity":"$stop_identity","command":["/bin/sleep","90"]}},
-    {"proposal_id":"ops-restart","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"yardlet","target":{"kind":"process","pid":$restart_pid,"start_identity":"$restart_identity","command":["/bin/sleep","90"]}},
-    {"proposal_id":"ops-cleanup","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"yardlet","target":{"kind":"process","pid":$cleanup_pid,"start_identity":"$cleanup_identity","command":["/bin/sleep","90"]}},
-    {"proposal_id":"ops-detach","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"worker","target":{"kind":"terminal","terminal_id":"ops-terminal","pid":$detach_pid,"start_identity":"$detach_identity","attach_hint":"fixture attach"}},
-    {"proposal_id":"ops-external","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"external","target":{"kind":"process","pid":$external_pid,"start_identity":"$external_identity","command":["/bin/sleep","90"]}},
-    {"proposal_id":"ops-unknown","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"unknown","target":{"kind":"process","pid":$external_pid,"start_identity":"$external_identity","command":["/bin/sleep","90"]}},
-    {"proposal_id":"ops-mismatch","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"worker","target":{"kind":"process","pid":$external_pid,"start_identity":"forged-start-identity","command":["/bin/sleep","90"]}},
-    {"proposal_id":"ops-dead","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"worker","target":{"kind":"process","pid":$dead_pid,"start_identity":"$dead_identity","command":["/bin/sleep","90"]}},
-    {"proposal_id":"ops-service","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"worker","target":{"kind":"service","url":"http://127.0.0.1:9/health"}},
-    {"proposal_id":"ops-unrecoverable","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"worker","target":{"kind":"service","url":"not-a-url"}},
-    {"proposal_id":"ops-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"worker","target":{"kind":"browser","url":"http://127.0.0.1:9/","session_id":"expired-browser"}}
+    {"proposal_id":"ops-stop","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"process","pid":$stop_pid,"start_identity":"$stop_identity","command":["/bin/sleep","90"]}},
+    {"proposal_id":"ops-restart","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"yardlet","target":{"kind":"process","pid":$restart_pid,"start_identity":"$restart_identity","command":["/bin/sleep","90"]}},
+    {"proposal_id":"ops-cleanup","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"yardlet","target":{"kind":"process","pid":$cleanup_pid,"start_identity":"$cleanup_identity","command":["/bin/sleep","90"]}},
+    {"proposal_id":"ops-detach","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"terminal","terminal_id":"ops-terminal","pid":$detach_pid,"start_identity":"$detach_identity","attach_hint":"fixture attach"}},
+    {"proposal_id":"ops-external","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"external","target":{"kind":"process","pid":$external_pid,"start_identity":"$external_identity","command":["/bin/sleep","90"]}},
+    {"proposal_id":"ops-unknown","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"unknown","target":{"kind":"process","pid":$external_pid,"start_identity":"$external_identity","command":["/bin/sleep","90"]}},
+    {"proposal_id":"ops-mismatch","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"process","pid":$external_pid,"start_identity":"forged-start-identity","command":["/bin/sleep","90"]}},
+    {"proposal_id":"ops-dead","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"process","pid":$dead_pid,"start_identity":"$dead_identity","command":["/bin/sleep","90"]}},
+    {"proposal_id":"ops-service","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"service","url":"http://127.0.0.1:9/health"}},
+    {"proposal_id":"ops-unrecoverable","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"service","url":"not-a-url"}},
+    {"proposal_id":"ops-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"browser","url":"http://127.0.0.1:9/","session_id":"expired-browser"}}
   ]
 }
 EOF
@@ -103,19 +103,19 @@ EOF
   "validation": {"commands_run": [], "passed": true, "failures": []},
   "compact_summary": "typed resource publication fixture",
   "artifacts": [
-    {"proposal_id":"proposal-file","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","path":"artifact-file.txt","digest":"$file_digest","media_type":"text/plain","role":"file"},
-    {"proposal_id":"proposal-file","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","path":"artifact-file.txt","digest":"$file_digest","media_type":"text/plain","role":"file"},
-    {"proposal_id":"proposal-screenshot","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","path":"artifact-screenshot.png","digest":"$screenshot_digest","media_type":"image/png","role":"screenshot"},
-    {"proposal_id":"proposal-diff","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","path":"artifact.diff","digest":"$diff_digest","media_type":"text/x-diff","role":"git_diff"},
-    {"proposal_id":"proposal-validation","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","path":"artifact-validation.log","digest":"$validation_digest","media_type":"text/plain","role":"validation_output"},
-    {"proposal_id":"proposal-review","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","path":"artifact-review.json","digest":"$review_digest","media_type":"application/json","role":"review_report"},
-    {"proposal_id":"proposal-handoff","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","path":"artifact-handoff.md","digest":"$handoff_digest","media_type":"text/markdown","role":"handoff"}
+    {"proposal_id":"proposal-file","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","path":"artifact-file.txt","digest":"$file_digest","media_type":"text/plain","role":"file"},
+    {"proposal_id":"proposal-file","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","path":"artifact-file.txt","digest":"$file_digest","media_type":"text/plain","role":"file"},
+    {"proposal_id":"proposal-screenshot","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","path":"artifact-screenshot.png","digest":"$screenshot_digest","media_type":"image/png","role":"screenshot"},
+    {"proposal_id":"proposal-diff","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","path":"artifact.diff","digest":"$diff_digest","media_type":"text/x-diff","role":"git_diff"},
+    {"proposal_id":"proposal-validation","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","path":"artifact-validation.log","digest":"$validation_digest","media_type":"text/plain","role":"validation_output"},
+    {"proposal_id":"proposal-review","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","path":"artifact-review.json","digest":"$review_digest","media_type":"application/json","role":"review_report"},
+    {"proposal_id":"proposal-handoff","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","path":"artifact-handoff.md","digest":"$handoff_digest","media_type":"text/markdown","role":"handoff"}
   ],
   "resources": [
-    {"proposal_id":"proposal-terminal","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"worker","target":{"kind":"terminal","terminal_id":"fixture-terminal","pid":$$,"start_identity":"$terminal_identity"}},
-    {"proposal_id":"proposal-process","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"worker","target":{"kind":"process","pid":$$,"start_identity":"$terminal_identity","command":["fixture-worker"]}},
-    {"proposal_id":"proposal-service","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"worker","target":{"kind":"service","url":"http://127.0.0.1:9/health"}},
-    {"proposal_id":"proposal-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","ownership":"worker","target":{"kind":"browser","url":"http://127.0.0.1:9/","session_id":"fixture-browser"}}
+    {"proposal_id":"proposal-terminal","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"terminal","terminal_id":"fixture-terminal","pid":$$,"start_identity":"$terminal_identity"}},
+    {"proposal_id":"proposal-process","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"process","pid":$$,"start_identity":"$terminal_identity","command":["fixture-worker"]}},
+    {"proposal_id":"proposal-service","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"service","url":"http://127.0.0.1:9/health"}},
+    {"proposal_id":"proposal-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"browser","url":"http://127.0.0.1:9/","session_id":"fixture-browser"}}
   ]
 }
 EOF
@@ -130,7 +130,7 @@ EOF
       digest="$(fnv_digest "$path")"
       [[ -z "$artifacts" ]] || artifacts+=','
       [[ -z "$changes" ]] || changes+=','
-      artifacts+="{\"proposal_id\":\"cap-$index\",\"task_id\":\"$task_id\",\"attempt_id\":\"$run_id\",\"producer\":{\"worker_id\":\"fixture\"},\"causation_id\":\"fixture-result\",\"path\":\"$path\",\"digest\":\"$digest\",\"media_type\":\"text/plain\",\"role\":\"file\"}"
+      artifacts+="{\"proposal_id\":\"cap-$index\",\"task_id\":\"$task_id\",\"attempt_id\":\"$run_id\",\"producer\":{\"worker_id\":\"fixture\"},\"causation_id\":\"$run_id\",\"path\":\"$path\",\"digest\":\"$digest\",\"media_type\":\"text/plain\",\"role\":\"file\"}"
       changes+="\"$path\""
     done
     write_handoff
@@ -138,12 +138,20 @@ EOF
 {"schema_version":1,"run_id":"$run_id","task_id":"$task_id","status":"done","changes":{"files_created":[$changes]},"validation":{"commands_run":[],"passed":true,"failures":[]},"compact_summary":"bounded artifact fixture","artifacts":[$artifacts]}
 EOF
     ;;
+  YARD-CAUSE)
+    printf 'forged causation\n' >forged-causation.txt
+    digest="$(fnv_digest forged-causation.txt)"
+    write_handoff
+    cat >"$run_dir/result.json" <<EOF
+{"schema_version":1,"run_id":"$run_id","task_id":"$task_id","status":"done","changes":{"files_created":["forged-causation.txt"]},"validation":{"commands_run":[],"passed":true,"failures":[]},"compact_summary":"must reject forged causation","artifacts":[{"proposal_id":"forged-cause","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"fixture"},"causation_id":"evt-from-another-attempt","path":"forged-causation.txt","digest":"$digest","media_type":"text/plain","role":"file"}]}
+EOF
+    ;;
   YARD-BAD)
     printf 'unowned evidence\n' >unowned.txt
     digest="$(fnv_digest unowned.txt)"
     write_handoff
     cat >"$run_dir/result.json" <<EOF
-{"schema_version":1,"run_id":"$run_id","task_id":"$task_id","status":"done","changes":{"files_created":["unowned.txt"]},"validation":{"commands_run":[],"passed":true,"failures":[]},"compact_summary":"must not complete","artifacts":[{"proposal_id":"bad","task_id":"$task_id","attempt_id":"","producer":{"worker_id":"fixture"},"causation_id":"fixture-result","path":"unowned.txt","digest":"$digest","media_type":"text/plain","role":"file"}]}
+{"schema_version":1,"run_id":"$run_id","task_id":"$task_id","status":"done","changes":{"files_created":["unowned.txt"]},"validation":{"commands_run":[],"passed":true,"failures":[]},"compact_summary":"must not complete","artifacts":[{"proposal_id":"bad","task_id":"$task_id","attempt_id":"","producer":{"worker_id":"fixture"},"causation_id":"$run_id","path":"unowned.txt","digest":"$digest","media_type":"text/plain","role":"file"}]}
 EOF
     ;;
   *)

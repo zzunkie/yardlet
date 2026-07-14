@@ -1563,12 +1563,12 @@ impl RunResult {
     pub fn resource_provenance_errors(&self, attempt_id: &str) -> Vec<String> {
         let mut errors = Vec::new();
         for proposal in &self.artifacts {
-            if let Err(error) = proposal.validate_provenance(&self.task_id, attempt_id) {
+            if let Err(error) = proposal.validate_worker_provenance(&self.task_id, attempt_id) {
                 errors.push(format!("artifact {}: {error}", proposal.proposal_id));
             }
         }
         for proposal in &self.resources {
-            if let Err(error) = proposal.validate_provenance(&self.task_id, attempt_id) {
+            if let Err(error) = proposal.validate_worker_provenance(&self.task_id, attempt_id) {
                 errors.push(format!("resource {}: {error}", proposal.proposal_id));
             }
         }
@@ -1616,6 +1616,10 @@ pub struct ArtifactProposal {
     #[serde(default)]
     pub media_type: String,
     pub role: ArtifactRole,
+    /// More specific existing task-channel projection label for core-generated
+    /// run artifacts. Worker proposals leave this empty and use `role`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub channel_role: String,
 }
 
 impl ArtifactProposal {
@@ -1630,6 +1634,18 @@ impl ArtifactProposal {
             || self.media_type.trim().is_empty()
         {
             return Err("artifact proposal lacks exact task/attempt/producer evidence".into());
+        }
+        Ok(())
+    }
+
+    pub fn validate_worker_provenance(
+        &self,
+        task_id: &str,
+        attempt_id: &str,
+    ) -> Result<(), String> {
+        self.validate_provenance(task_id, attempt_id)?;
+        if self.causation_id != attempt_id {
+            return Err("artifact proposal causation must name its exact attempt".into());
         }
         Ok(())
     }
@@ -1652,6 +1668,8 @@ pub struct Artifact {
     pub digest: String,
     pub media_type: String,
     pub role: ArtifactRole,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub channel_role: String,
     pub created_event_id: String,
     pub published_seq: u64,
     pub recorded_at: String,
@@ -1791,6 +1809,18 @@ impl RuntimeResourceProposal {
         }
         self.target.validate()
     }
+
+    pub fn validate_worker_provenance(
+        &self,
+        task_id: &str,
+        attempt_id: &str,
+    ) -> Result<(), String> {
+        self.validate_provenance(task_id, attempt_id)?;
+        if self.causation_id != attempt_id {
+            return Err("resource proposal causation must name its exact attempt".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1848,12 +1878,26 @@ pub struct ResourceObservation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceTaskIndex {
+    pub task_id: String,
+    pub artifacts: Vec<String>,
+    pub resources: Vec<String>,
+    pub attempts: Vec<String>,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceIndex {
     pub schema_version: u32,
     pub canonical_digest: String,
     pub artifacts: Vec<String>,
     pub resources: Vec<String>,
     pub attempts: Vec<String>,
+    #[serde(default)]
+    pub tasks: Vec<ResourceTaskIndex>,
+    #[serde(default)]
+    pub tasks_truncated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

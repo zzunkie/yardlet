@@ -603,16 +603,30 @@ fn lifecycle_result(
 fn discover_entries(ws: &Workspace, task_id: &str) -> Result<Vec<ResourceEntry>> {
     let index = ws.load_or_rebuild_resource_index()?;
     let mut entries = Vec::new();
-    for artifact_id in index.artifacts {
-        if let Some(artifact) = ws.load_artifact(&artifact_id)? {
-            if artifact.task_id == task_id {
+    let task_index = index.tasks.iter().find(|entry| entry.task_id == task_id);
+    if task_index.is_none_or(|entry| entry.truncated) {
+        for artifact in ws
+            .load_artifacts()?
+            .into_iter()
+            .filter(|artifact| artifact.task_id == task_id)
+        {
+            entries.push(artifact_entry(ws, artifact));
+        }
+        for resource in ws
+            .load_runtime_resources()?
+            .into_iter()
+            .filter(|resource| resource.task_id == task_id)
+        {
+            entries.push(runtime_entry(ws, resource)?);
+        }
+    } else if let Some(task_index) = task_index {
+        for artifact_id in &task_index.artifacts {
+            if let Some(artifact) = ws.load_artifact(artifact_id)? {
                 entries.push(artifact_entry(ws, artifact));
             }
         }
-    }
-    for resource_id in index.resources {
-        if let Some(resource) = ws.load_runtime_resource(&resource_id)? {
-            if resource.task_id == task_id {
+        for resource_id in &task_index.resources {
+            if let Some(resource) = ws.load_runtime_resource(resource_id)? {
                 entries.push(runtime_entry(ws, resource)?);
             }
         }

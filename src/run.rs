@@ -4494,18 +4494,14 @@ fn artifact_media_type(path: &std::path::Path) -> &'static str {
     }
 }
 
-fn finalization_artifact_causation(
-    events: &[ChannelEvent],
-    attempt_id: &str,
-) -> Option<String> {
+fn finalization_artifact_causation(events: &[ChannelEvent], attempt_id: &str) -> Option<String> {
     for event_type in [
         ChannelEventType::ValidationCompleted,
         ChannelEventType::WorkerCompleted,
         ChannelEventType::AttemptPrepared,
     ] {
         if let Some(event) = events.iter().rev().find(|event| {
-            event.attempt_id.as_deref() == Some(attempt_id)
-                && event.event_type == event_type
+            event.attempt_id.as_deref() == Some(attempt_id) && event.event_type == event_type
         }) {
             return Some(event.event_id.clone());
         }
@@ -4536,7 +4532,7 @@ fn record_artifact_created(
         .map(|attempt| attempt.worker_id.clone())
         .ok_or_else(|| anyhow!("artifact producer attempt missing: {attempt_id}"))?;
     let causation_id = finalization_artifact_causation(&channel.events, attempt_id)
-        .unwrap_or_else(|| format!("attempt:{attempt_id}"));
+        .unwrap_or_else(|| attempt_id.to_string());
     let artifact_role = match role {
         "handoff" | "checkpoint" => crate::schemas::ArtifactRole::Handoff,
         "evaluation" => crate::schemas::ArtifactRole::ValidationOutput,
@@ -4545,8 +4541,10 @@ fn record_artifact_created(
     let proposal = crate::schemas::ArtifactProposal {
         proposal_id: format!(
             "core-{}",
-            artifact_content_digest(format!("{attempt_id}\0{role}\0{recorded_path}").as_bytes())
-                .trim_start_matches("fnv1a64:")
+            artifact_content_digest(
+                format!("{attempt_id}\0{role}\0{recorded_path}\0{content_digest}").as_bytes(),
+            )
+            .trim_start_matches("fnv1a64:")
         ),
         task_id: context.task_id.clone(),
         attempt_id: attempt_id.to_string(),
@@ -4556,6 +4554,7 @@ fn record_artifact_created(
         digest: content_digest,
         media_type: artifact_media_type(path).to_string(),
         role: artifact_role,
+        channel_role: role.to_string(),
     };
     ws.publish_artifact(
         &context.session_id,

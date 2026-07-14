@@ -14,7 +14,7 @@ mod unix {
     }
 
     impl Fixture {
-        fn new() -> Self {
+        fn new(label: &str) -> Self {
             let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
             let nonce = SystemTime::now()
@@ -22,7 +22,7 @@ mod unix {
                 .unwrap()
                 .as_nanos();
             let root = std::env::temp_dir().join(format!(
-                "yardlet-v010-004-operations-{}-{nonce}",
+                "yardlet-v010-004-operations-{label}-{}-{nonce}",
                 std::process::id()
             ));
             fs::create_dir_all(&root).unwrap();
@@ -179,7 +179,7 @@ mod unix {
 
     #[test]
     fn all_nine_operations_share_receipts_and_minimum_cli_open_targets() {
-        let fixture = Fixture::new();
+        let fixture = Fixture::new("all-operations");
         let discover = fixture.discover();
         assert_receipt(&discover, "discover", "completed");
         let file = artifact_id(&discover, "ops-file");
@@ -315,7 +315,7 @@ mod unix {
 
     #[test]
     fn fresh_probe_and_identity_ownership_gates_prevent_false_live_and_external_kill() {
-        let fixture = Fixture::new();
+        let fixture = Fixture::new("lifecycle-gates");
         let discover = fixture.discover();
         let stop = resource_id(&discover, "ops-stop");
         let external = resource_id(&discover, "ops-external");
