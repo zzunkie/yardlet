@@ -337,6 +337,19 @@ mod unix {
         })
     }
 
+    fn process_snapshot(pid: u32) -> String {
+        Command::new("ps")
+            .args([
+                "-o",
+                "pid=,ppid=,pgid=,state=,command=",
+                "-p",
+                &pid.to_string(),
+            ])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .unwrap_or_default()
+    }
+
     fn terminate_if_exact(pid: u32, identity: &str) {
         if process_identity(pid).as_deref() != Some(identity) {
             return;
@@ -678,7 +691,8 @@ mod unix {
         assert_eq!(
             healthy_restart["status"],
             "completed",
-            "unexpected restart recovery receipt: {healthy_restart}\nlogs:{}",
+            "unexpected restart recovery receipt: {healthy_restart}\nprocess:{}\nlogs:{}",
+            process_snapshot(spawned_pid),
             fixture.diagnostic_logs()
         );
         assert_eq!(healthy_restart["result"]["observation"]["status"], "live");

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -69,7 +70,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", required=True, type=int)
     args = parser.parse_args()
+    print(f"starting local app on 127.0.0.1:{args.port}", file=sys.stderr, flush=True)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    print(f"listening on 127.0.0.1:{args.port}", file=sys.stderr, flush=True)
     server.serve_forever()
 
 
