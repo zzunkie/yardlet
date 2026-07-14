@@ -198,6 +198,31 @@ fn task_channel_id(intent_id: &str, task_id: &str) -> String {
     format!("chn_{}", stable_digest_bytes(input.as_bytes()))
 }
 
+pub(crate) fn validate_action_id(action_id: &str) -> Result<()> {
+    let mut chars = action_id.chars();
+    let safe = action_id.len() <= 128
+        && chars.next().is_some_and(|ch| ch.is_ascii_alphanumeric())
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+        && Path::new(action_id).components().count() == 1
+        && Path::new(action_id)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)));
+    if !safe {
+        bail!(
+            "invalid action id '{action_id}': expected one portable identifier using letters, digits, '.', '_' or '-'"
+        );
+    }
+    Ok(())
+}
+
+fn contained_action_path(actions_dir: &Path, filename: &str) -> Result<PathBuf> {
+    let path = actions_dir.join(filename);
+    if path.parent() != Some(actions_dir) {
+        bail!("action receipt path escapes its canonical actions directory");
+    }
+    Ok(path)
+}
+
 fn channel_action_digest<T: Serialize>(value: &T) -> Result<String> {
     let bytes = serde_json::to_vec(value)?;
     Ok(format!("fnv1a64:{}", stable_digest_bytes(&bytes)))
@@ -328,6 +353,16 @@ impl Workspace {
         self.planning_session_dir(session_id)
             .join("actions")
             .join(format!("{action_id}.yaml"))
+    }
+
+    fn checked_planning_action_path(&self, session_id: &str, action_id: &str) -> Result<PathBuf> {
+        validate_action_id(action_id)?;
+        let actions_dir = self.planning_session_dir(session_id).join("actions");
+        let path = self.planning_action_path(session_id, action_id);
+        if path.parent() != Some(actions_dir.as_path()) {
+            bail!("action receipt path escapes its canonical actions directory");
+        }
+        Ok(path)
     }
 
     pub fn activation_path(&self, confirmation_id: &str) -> PathBuf {
@@ -674,7 +709,7 @@ impl Workspace {
     }
 
     pub fn create_planning_action(&self, receipt: &PlanningActionReceipt) -> Result<()> {
-        let path = self.planning_action_path(&receipt.session_id, &receipt.action_id);
+        let path = self.checked_planning_action_path(&receipt.session_id, &receipt.action_id)?;
         save_immutable_yaml(&path, receipt)
     }
 
@@ -686,7 +721,7 @@ impl Workspace {
         if expected.session_id != receipt.session_id || expected.action_id != receipt.action_id {
             bail!("planning action CAS identity mismatch");
         }
-        let path = self.planning_action_path(&receipt.session_id, &receipt.action_id);
+        let path = self.checked_planning_action_path(&receipt.session_id, &receipt.action_id)?;
         write_str_atomic_cas(
             &path,
             Some(&yaml::to_string(expected)?),
@@ -699,7 +734,7 @@ impl Workspace {
         session_id: &str,
         action_id: &str,
     ) -> Result<Option<PlanningActionReceipt>> {
-        let path = self.planning_action_path(session_id, action_id);
+        let path = self.checked_planning_action_path(session_id, action_id)?;
         if !path.is_file() {
             return Ok(None);
         }
@@ -2592,13 +2627,16 @@ impl Workspace {
         task_id: &str,
         action_id: &str,
         terminal: bool,
-    ) -> PathBuf {
-        self.task_channel_dir(intent_id, task_id)
-            .join("actions")
-            .join(format!(
+    ) -> Result<PathBuf> {
+        validate_action_id(action_id)?;
+        let actions_dir = self.task_channel_dir(intent_id, task_id).join("actions");
+        contained_action_path(
+            &actions_dir,
+            &format!(
                 "{action_id}.{}.yaml",
                 if terminal { "terminal" } else { "prepared" }
-            ))
+            ),
+        )
     }
 
     fn load_answer_action_outcome(
@@ -2637,6 +2675,7 @@ impl Workspace {
         {
             bail!("invalid answer action request");
         }
+        validate_action_id(&request.action_id)?;
         let digest = channel_action_digest(request)?;
         let _lock = self.acquire_planning_lock()?;
         let terminal_path = self.channel_action_path(
@@ -2644,7 +2683,7 @@ impl Workspace {
             &request.task_id,
             &request.action_id,
             true,
-        );
+        )?;
         if terminal_path.is_file() {
             let receipt: ActionReceipt = load_yaml(&terminal_path)?;
             if receipt.request_digest != digest {
@@ -2658,7 +2697,7 @@ impl Workspace {
             &request.task_id,
             &request.action_id,
             false,
-        );
+        )?;
         let recovering = if prepared_path.is_file() {
             let existing: ActionReceipt = load_yaml(&prepared_path)?;
             if existing.request_digest != digest {
@@ -2907,6 +2946,7 @@ impl Workspace {
         {
             bail!("invalid redirect action request");
         }
+        validate_action_id(&request.action_id)?;
         if !request.observed_terminal_state.is_terminal() {
             bail!("redirect_requires_observed_terminal");
         }
@@ -2917,7 +2957,7 @@ impl Workspace {
             &request.task_id,
             &request.action_id,
             true,
-        );
+        )?;
         if terminal_path.is_file() {
             let receipt: ActionReceipt = load_yaml(&terminal_path)?;
             if receipt.request_digest != digest {
@@ -2951,7 +2991,7 @@ impl Workspace {
             &request.task_id,
             &request.action_id,
             false,
-        );
+        )?;
         if prepared_path.is_file() {
             let existing: ActionReceipt = load_yaml(&prepared_path)?;
             if existing.request_digest != digest {
@@ -4913,6 +4953,69 @@ routing:
     }
 
     #[test]
+    fn answer_action_rejects_unsafe_action_id_before_writing_a_receipt() {
+        for label in ["absolute", "parent"] {
+            let dir = temp_root(&format!("channel-unsafe-action-{label}"));
+            let _ = fs::remove_dir_all(&dir);
+            let ws = Workspace::at(&dir);
+            let action_id = if label == "absolute" {
+                dir.join("escaped-action-receipt").display().to_string()
+            } else {
+                "../escaped-action-receipt".to_string()
+            };
+            ws.record_worker_attempt(&prepared_attempt("att_1"))
+                .unwrap();
+            let asked = ws
+                .record_task_event(
+                    "intent_channel",
+                    channel_event(ChannelEventType::QuestionAsked, Some("att_1")),
+                )
+                .unwrap();
+            ws.record_question(&Question {
+                schema_version: 1,
+                question_id: "qst_unsafe".into(),
+                session_id: "ses_channel".into(),
+                task_id: "YARD-001".into(),
+                attempt_id: "att_1".into(),
+                asked_event_id: asked.event_id,
+                asked_seq: asked.seq,
+                context_start_seq: 1,
+                text: "Continue?".into(),
+                state: QuestionState::Open,
+                answer_id: None,
+            })
+            .unwrap();
+            let request = AnswerActionRequest {
+                action_id,
+                answer_id: "ans_unsafe".into(),
+                continuation_attempt_id: "att_unsafe".into(),
+                session_id: "ses_channel".into(),
+                intent_id: "intent_channel".into(),
+                task_id: "YARD-001".into(),
+                question_id: "qst_unsafe".into(),
+                text: "Continue".into(),
+                worker_id: "generic-text".into(),
+                worker_session_ref: None,
+                supports_native_resume: false,
+            };
+
+            let error = ws.answer_question(&request).unwrap_err();
+            assert!(
+                error.to_string().contains("invalid action id"),
+                "unexpected error for {label}: {error}"
+            );
+            assert!(
+                ws.task_channel_dir("intent_channel", "YARD-001")
+                    .join("actions")
+                    .read_dir()
+                    .is_err(),
+                "unsafe {label} action id created an action receipt"
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
     fn answer_action_recovers_after_restart_from_a_prepared_receipt() {
         let dir = temp_root("channel-answer-restart");
         let _ = fs::remove_dir_all(&dir);
@@ -4954,7 +5057,8 @@ routing:
         };
         let digest = channel_action_digest(&request).unwrap();
         save_immutable_yaml(
-            &ws.channel_action_path("intent_channel", "YARD-001", &request.action_id, false),
+            &ws.channel_action_path("intent_channel", "YARD-001", &request.action_id, false)
+                .unwrap(),
             &ActionReceipt {
                 schema_version: 1,
                 action_id: request.action_id.clone(),

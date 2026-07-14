@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
@@ -332,10 +332,11 @@ fn serial_worktree_evidence(
     })
 }
 
-const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 17] = [
+const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 18] = [
     "run.yaml",
     "task-packet.md",
     "worker.pid",
+    "worker-process.yaml",
     "worker-output.log",
     "git-finish.json",
     "git-integration.json",
@@ -2818,6 +2819,46 @@ pub(crate) fn live_worker_pid(run_dir: &std::path::Path) -> Option<u32> {
         .ok()?
         .success()
         .then_some(pid)
+}
+
+pub(crate) fn verified_worker_pid_for_redirect(
+    run_dir: &std::path::Path,
+    expected_task_id: &str,
+    expected_attempt_id: &str,
+    expected_worker_id: &str,
+) -> Result<u32> {
+    let record: RunRecord =
+        state::load_yaml(&run_dir.join("run.yaml")).context("loading redirect run identity")?;
+    let path_run_id = run_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("redirect run directory has no valid identity"))?;
+    if record.run_id != path_run_id
+        || record.task_id != expected_task_id
+        || record.completed_at.is_some()
+        || record.state != "running"
+    {
+        bail!("redirect run identity/provenance mismatch; refusing to signal a process");
+    }
+
+    let provenance = workers::load_worker_process_provenance(run_dir)
+        .context("worker process provenance is missing or invalid; refusing redirect signal")?;
+    if provenance.schema_version != 1
+        || provenance.run_id != record.run_id
+        || provenance.attempt_id != expected_attempt_id
+        || provenance.worker_id != expected_worker_id
+        || provenance.pid == 0
+    {
+        bail!(
+            "worker process provenance does not match the active attempt; refusing redirect signal"
+        );
+    }
+    let observed_start = workers::process_start_marker(provenance.pid)
+        .ok_or_else(|| anyhow!("verified worker process is no longer alive"))?;
+    if observed_start != provenance.process_start_marker {
+        bail!("worker process identity changed since spawn; refusing redirect signal");
+    }
+    Ok(provenance.pid)
 }
 
 /// A run Yardlet never finalized: its `worker.pid` is still on disk (a finalized

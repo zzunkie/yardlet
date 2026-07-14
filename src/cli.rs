@@ -1038,14 +1038,16 @@ fn parse_expected_head(value: &str) -> Option<&str> {
     (!value.eq_ignore_ascii_case("none")).then_some(value)
 }
 
-fn cli_action_id(prefix: &str, provided: Option<String>) -> String {
-    provided.unwrap_or_else(|| {
+fn cli_action_id(prefix: &str, provided: Option<String>) -> Result<String> {
+    let action_id = provided.unwrap_or_else(|| {
         format!(
             "act-{prefix}-{}-{}",
             chrono::Utc::now().format("%Y%m%d%H%M%S%6f"),
             std::process::id()
         )
-    })
+    });
+    crate::state::validate_action_id(&action_id)?;
+    Ok(action_id)
 }
 
 fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
@@ -1057,7 +1059,7 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
             expected_head,
             action_id,
         } => {
-            let action_id = cli_action_id("accept", action_id);
+            let action_id = cli_action_id("accept", action_id)?;
             let revision = crate::planning::accept_proposal(
                 &ws,
                 &proposal,
@@ -1076,7 +1078,7 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
             expected_head,
             action_id,
         } => {
-            let action_id = cli_action_id("reject", action_id);
+            let action_id = cli_action_id("reject", action_id)?;
             crate::planning::reject_proposal(
                 &ws,
                 &proposal,
@@ -1090,7 +1092,7 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
             expected_head,
             action_id,
         } => {
-            let action_id = cli_action_id("undo", action_id);
+            let action_id = cli_action_id("undo", action_id)?;
             let restored = crate::planning::undo(&ws, &expected_head, &action_id)?;
             println!(
                 "Undo complete. Visible head: {}",
@@ -1105,7 +1107,7 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
             worker,
         } => {
             let message = message.join(" ");
-            let action_id = cli_action_id("answer", action_id);
+            let action_id = cli_action_id("answer", action_id)?;
             let (session, turn) = crate::planning::record_answer_exact(
                 &ws,
                 &message,
@@ -1129,7 +1131,7 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
             expected_head,
             action_id,
         } => {
-            let action_id = cli_action_id("confirm", action_id);
+            let action_id = cli_action_id("confirm", action_id)?;
             let activation = crate::planning::confirm(&ws, &expected_head, &action_id)?;
             println!(
                 "Confirmed {} with activation {}. The exact visible draft is now active.",
@@ -1285,6 +1287,10 @@ fn cmd_tidy(cwd: &std::path::Path) -> Result<()> {
 fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let reply = args.reply.join(" ");
+    let action_id = args
+        .action_id
+        .map(|action_id| cli_action_id("answer", Some(action_id)))
+        .transpose()?;
     let queue = ws.load_queue()?;
     let task_id = match &args.task {
         Some(t) => t.clone(),
@@ -1317,7 +1323,7 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
         return Ok(());
     }
 
-    run::prepare_answer_action(&ws, &task_id, &reply, args.action_id)?;
+    run::prepare_answer_action(&ws, &task_id, &reply, action_id)?;
 
     println!("You: {reply}\n");
     let report = run::run_next(
@@ -1354,6 +1360,7 @@ fn cmd_redirect(cwd: &std::path::Path, args: RedirectArgs) -> Result<()> {
     if guidance.trim().is_empty() {
         anyhow::bail!("redirect guidance must not be empty");
     }
+    let action_id = cli_action_id("redirect", args.action_id)?;
     let queue = ws.load_queue()?;
     let task = queue
         .tasks
@@ -1395,12 +1402,12 @@ fn cmd_redirect(cwd: &std::path::Path, args: RedirectArgs) -> Result<()> {
         let active_dir = run_dir
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("running task has no run directory"))?;
-        let pid = run::live_worker_pid(active_dir).ok_or_else(|| {
-            anyhow::anyhow!(
-                "attempt '{}' is non-terminal but has no live worker; run `yardlet recover` first",
-                latest_attempt_id
-            )
-        })?;
+        let pid = run::verified_worker_pid_for_redirect(
+            active_dir,
+            &args.task,
+            &latest_attempt_id,
+            &stopped.worker_id,
+        )?;
         crate::state::write_str_atomic(&active_dir.join("cancelled"), "redirect\n")?;
         let status = std::process::Command::new("kill")
             .arg(pid.to_string())
@@ -1436,7 +1443,6 @@ fn cmd_redirect(cwd: &std::path::Path, args: RedirectArgs) -> Result<()> {
         })?;
     }
 
-    let action_id = cli_action_id("redirect", args.action_id);
     let checkpoint_ref = run_dir.take().and_then(|dir| {
         [dir.join("checkpoint.md"), dir.join("handoff.md")]
             .into_iter()
