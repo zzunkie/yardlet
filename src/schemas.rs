@@ -1678,6 +1678,7 @@ pub enum ChannelEventType {
     ToolCompleted,
     WorkerCheckpoint,
     QuestionAsked,
+    QuestionClosed,
     UserAnswered,
     ArtifactCreated,
     ValidationStarted,
@@ -1701,6 +1702,7 @@ impl ChannelEventType {
             Self::ToolCompleted => "tool.completed",
             Self::WorkerCheckpoint => "worker.checkpoint",
             Self::QuestionAsked => "question.asked",
+            Self::QuestionClosed => "question.closed",
             Self::UserAnswered => "user.answered",
             Self::ArtifactCreated => "artifact.created",
             Self::ValidationStarted => "validation.started",
@@ -1724,6 +1726,7 @@ impl ChannelEventType {
                 | Self::ToolCompleted
                 | Self::WorkerCheckpoint
                 | Self::QuestionAsked
+                | Self::QuestionClosed
                 | Self::ArtifactCreated
                 | Self::ValidationStarted
                 | Self::ValidationCompleted
@@ -1757,6 +1760,7 @@ impl<'de> Deserialize<'de> for ChannelEventType {
             "tool.completed" => Self::ToolCompleted,
             "worker.checkpoint" => Self::WorkerCheckpoint,
             "question.asked" => Self::QuestionAsked,
+            "question.closed" => Self::QuestionClosed,
             "user.answered" => Self::UserAnswered,
             "artifact.created" => Self::ArtifactCreated,
             "validation.started" => Self::ValidationStarted,

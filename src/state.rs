@@ -2500,6 +2500,29 @@ impl Workspace {
                 question.answer_id = Some(answer.answer_id.clone());
             }
         }
+        for event in events
+            .iter()
+            .filter(|event| event.event_type == ChannelEventType::QuestionClosed)
+        {
+            let Some(question_id) = event
+                .payload
+                .get("question_id")
+                .and_then(|value| value.as_str())
+            else {
+                replay_errors.push(format!("question_closed_id_missing:{}", event.event_id));
+                continue;
+            };
+            let Some(question) = questions
+                .iter_mut()
+                .find(|question| question.question_id == question_id)
+            else {
+                replay_errors.push(format!("question_closed_missing:{question_id}"));
+                continue;
+            };
+            if question.answer_id.is_none() {
+                question.state = QuestionState::Closed;
+            }
+        }
         for event in &events {
             let Some(attempt_id) = event.attempt_id.as_deref() else {
                 continue;
@@ -3050,6 +3073,44 @@ impl Workspace {
             },
         )?;
         let mut result_event_ids = vec![requested.event_id.clone()];
+        let mut redirect_cause = requested.event_id.clone();
+        for question in channel.questions.iter().filter(|question| {
+            question.attempt_id == request.stopped_attempt_id
+                && question.state == QuestionState::Open
+                && !channel
+                    .answers
+                    .iter()
+                    .any(|answer| answer.question_id == question.question_id)
+        }) {
+            let closed = self.record_task_event_locked(
+                &request.intent_id,
+                ChannelEvent {
+                    schema_version: 1,
+                    event_id: format!("evt_{suffix}_closed_{}", question.question_id),
+                    session_id: request.session_id.clone(),
+                    seq: 0,
+                    event_type: ChannelEventType::QuestionClosed,
+                    recorded_at: Local::now().to_rfc3339(),
+                    actor: EventActor {
+                        kind: EventActorKind::System,
+                        id: String::new(),
+                    },
+                    action_id: Some(request.action_id.clone()),
+                    causation_id: Some(redirect_cause.clone()),
+                    correlation_id: requested.correlation_id.clone(),
+                    task_id: request.task_id.clone(),
+                    attempt_id: Some(request.stopped_attempt_id.clone()),
+                    payload: serde_json::json!({
+                        "question_id": question.question_id,
+                        "reason": "superseded_by_redirect",
+                        "continuation_attempt_id": request.continuation_attempt_id
+                    }),
+                    raw_ref: None,
+                },
+            )?;
+            redirect_cause = closed.event_id.clone();
+            result_event_ids.push(closed.event_id);
+        }
         let cause = if let Some(checkpoint_ref) = request.checkpoint_ref.as_deref() {
             let checkpoint = self.record_task_event_locked(
                 &request.intent_id,
@@ -3065,7 +3126,7 @@ impl Workspace {
                         id: String::new(),
                     },
                     action_id: Some(request.action_id.clone()),
-                    causation_id: Some(requested.event_id.clone()),
+                    causation_id: Some(redirect_cause.clone()),
                     correlation_id: requested.correlation_id.clone(),
                     task_id: request.task_id.clone(),
                     attempt_id: Some(request.stopped_attempt_id.clone()),
@@ -3076,7 +3137,7 @@ impl Workspace {
             result_event_ids.push(checkpoint.event_id.clone());
             checkpoint.event_id
         } else {
-            requested.event_id.clone()
+            redirect_cause
         };
 
         let attempt = WorkerAttempt {
@@ -3163,6 +3224,17 @@ impl Workspace {
             result_attempt_id: Some(attempt.attempt_id.clone()),
             error: String::new(),
         };
+        let mut queue = self.load_queue()?;
+        if let Some(task) = queue
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == request.task_id)
+        {
+            if task.state == TaskState::Queued {
+                task.state = TaskState::NeedsUser;
+                self.save_queue_locked(&_lock, &queue)?;
+            }
+        }
         save_immutable_yaml(&terminal_path, &receipt)?;
         self.load_or_rebuild_task_channel(&request.intent_id, &request.task_id)?;
         Ok(RedirectActionOutcome { receipt, attempt })
