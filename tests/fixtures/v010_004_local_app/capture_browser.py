@@ -13,10 +13,10 @@ from urllib.parse import urlparse
 
 def browser_binary():
     candidates = [
-        shutil.which("chromium"),
-        shutil.which("chromium-browser"),
         shutil.which("google-chrome"),
         shutil.which("google-chrome-stable"),
+        shutil.which("chromium"),
+        shutil.which("chromium-browser"),
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Chromium.app/Contents/MacOS/Chromium",
     ]

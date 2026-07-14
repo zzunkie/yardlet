@@ -647,8 +647,10 @@ mod unix {
             .push((spawned_pid, spawned_identity.clone()));
         let (_, healthy_restart) = fixture.json_process(&healthy_restart_args);
         assert_eq!(
-            healthy_restart["status"], "completed",
-            "unexpected restart recovery receipt: {healthy_restart}"
+            healthy_restart["status"],
+            "completed",
+            "unexpected restart recovery receipt: {healthy_restart}\nlogs:{}",
+            fixture.diagnostic_logs()
         );
         assert_eq!(healthy_restart["result"]["observation"]["status"], "live");
         assert_eq!(
