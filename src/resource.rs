@@ -41,6 +41,7 @@ fn safe_relative_path(path: &Path) -> bool {
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn ingest_run_proposals(
     ws: &Workspace,
     session_id: &str,
@@ -662,6 +663,7 @@ fn open_target(entry: &ResourceEntry) -> ResourceOpenTarget {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_action_event(
     ws: &Workspace,
     action_id: &str,

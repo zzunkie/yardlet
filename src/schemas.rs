@@ -1675,20 +1675,15 @@ pub struct Artifact {
     pub recorded_at: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceOwnership {
     Yardlet,
     Worker,
     User,
     External,
+    #[default]
     Unknown,
-}
-
-impl Default for ResourceOwnership {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1957,6 +1952,7 @@ pub enum ResourceOpenTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "entry_type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum ResourceEntry {
     Artifact {
         artifact: Artifact,
