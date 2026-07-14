@@ -1020,6 +1020,13 @@ fn lifecycle_result(
             }
 
             test_resource_fault(action_id, "spawn")?;
+            #[cfg(unix)]
+            let mut child = {
+                let mut child = Command::new("nohup");
+                child.arg(&command[0]);
+                child
+            };
+            #[cfg(not(unix))]
             let mut child = Command::new(&command[0]);
             child
                 .args(&command[1..])

@@ -660,6 +660,17 @@ mod unix {
             Some(spawned_pid),
             "restarted resources must survive orchestrator process-group exit"
         );
+        must_succeed(
+            &fixture.root,
+            Path::new("kill"),
+            &["-HUP", &spawned_pid.to_string()],
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            process_identity(spawned_pid).as_deref(),
+            Some(spawned_identity.as_str()),
+            "restarted resources must ignore session hangup"
+        );
         fixture
             .owned_processes
             .push((spawned_pid, spawned_identity.clone()));
