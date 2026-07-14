@@ -80,6 +80,7 @@ def main():
         "--no-sandbox",
         f"--user-data-dir={profile}",
         "--window-size=960,720",
+        "--timeout=10000",
         f"--screenshot={screenshot}",
         args.url,
     ]

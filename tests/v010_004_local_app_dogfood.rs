@@ -614,7 +614,10 @@ mod unix {
             .owned_processes
             .push((spawned_pid, spawned_identity.clone()));
         let (_, healthy_restart) = fixture.json_process(&healthy_restart_args);
-        assert_eq!(healthy_restart["status"], "completed");
+        assert_eq!(
+            healthy_restart["status"], "completed",
+            "unexpected restart recovery receipt: {healthy_restart}"
+        );
         assert_eq!(healthy_restart["result"]["observation"]["status"], "live");
         assert_eq!(
             healthy_restart["result"]["observation"]["pid"], spawned_pid,
