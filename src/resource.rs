@@ -663,7 +663,7 @@ fn probe_restarted_resource(
     pid: u32,
     expected_identity: &str,
 ) -> Probe {
-    let deadline = Instant::now() + Duration::from_secs(1);
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let mut process = probe_process(pid, expected_identity);
         if process.status != ResourceStatus::Live {
@@ -1526,4 +1526,90 @@ pub fn dispatch(
     )?;
     test_resource_fault(&request.action_id, "after_terminal_event")?;
     Ok(receipt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+
+    #[cfg(unix)]
+    #[test]
+    fn restarted_service_waits_for_a_slow_but_healthy_local_endpoint() {
+        let mut child = Command::new("/bin/sleep")
+            .arg("10")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn restart target");
+        let pid = child.id();
+        let identity = process_identity(pid).expect("restart target identity");
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind delayed health server");
+        let address = listener.local_addr().expect("delayed health address");
+        listener
+            .set_nonblocking(true)
+            .expect("set delayed health server nonblocking");
+        let finished = Arc::new(AtomicBool::new(false));
+        let server_finished = Arc::clone(&finished);
+        let server = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(1_200));
+            while !server_finished.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut request = [0_u8; 1_024];
+                        let _ = stream.read(&mut request);
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        );
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept delayed health request: {error}"),
+                }
+            }
+        });
+
+        let health_url = format!("http://{address}/health");
+        let resource = RuntimeResource {
+            schema_version: 1,
+            resource_id: "res-delayed-health".to_string(),
+            proposal_id: "proposal-delayed-health".to_string(),
+            session_id: "session-delayed-health".to_string(),
+            intent_id: "intent-delayed-health".to_string(),
+            task_id: "YARD-DELAYED-HEALTH".to_string(),
+            attempt_id: "attempt-delayed-health".to_string(),
+            producer: crate::schemas::ResourceProducer {
+                worker_id: "fixture".to_string(),
+            },
+            causation_id: "attempt-delayed-health".to_string(),
+            ownership: ResourceOwnership::Yardlet,
+            capabilities: vec![ResourceCapability::Restart],
+            target: RuntimeResourceTarget::Service {
+                url: health_url.clone(),
+                health_url,
+                pid: Some(pid),
+                start_identity: identity.clone(),
+                restart_command: vec!["/bin/sleep".to_string(), "10".to_string()],
+            },
+            created_event_id: "evt-delayed-health".to_string(),
+            published_seq: 1,
+            recorded_at: "2026-07-15T00:00:00Z".to_string(),
+        };
+
+        let probe = probe_restarted_resource(&resource, pid, &identity);
+        finished.store(true, Ordering::SeqCst);
+        server.join().expect("join delayed health server");
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert_eq!(probe.status, ResourceStatus::Live, "{}", probe.detail);
+    }
 }

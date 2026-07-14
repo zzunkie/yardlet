@@ -92,7 +92,7 @@ def main():
     )
     identity = wait_for_identity(process.pid)
     try:
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + 60
         payload = b""
         while time.monotonic() < deadline:
             if screenshot.is_file():
