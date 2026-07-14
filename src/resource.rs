@@ -1027,6 +1027,11 @@ fn lifecycle_result(
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                child.process_group(0);
+            }
             let child = child.spawn().context("starting owned resource")?;
             let pid = child.id();
             drop(child);

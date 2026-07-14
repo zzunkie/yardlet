@@ -324,6 +324,19 @@ mod unix {
         panic!("process {pid} never exposed a start identity");
     }
 
+    fn process_group(pid: u32) -> Option<u32> {
+        let output = Command::new("ps")
+            .args(["-o", "pgid=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        output.status.success().then(|| {
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse()
+                .expect("numeric process group")
+        })
+    }
+
     fn terminate_if_exact(pid: u32, identity: &str) {
         if process_identity(pid).as_deref() != Some(identity) {
             return;
@@ -642,6 +655,11 @@ mod unix {
             .as_str()
             .unwrap()
             .to_string();
+        assert_eq!(
+            process_group(spawned_pid),
+            Some(spawned_pid),
+            "restarted resources must survive orchestrator process-group exit"
+        );
         fixture
             .owned_processes
             .push((spawned_pid, spawned_identity.clone()));
