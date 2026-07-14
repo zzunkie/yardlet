@@ -5,12 +5,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 MARKER = "yardlet-local-app"
+BROWSER_SESSION_ID = "local-active-browser-session"
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        status = 200
         if self.path == "/health":
             body = json.dumps({"status": "ok", "marker": MARKER}).encode()
+            content_type = "application/json"
+        elif self.path == "/unhealthy":
+            status = 503
+            body = json.dumps({"status": "unhealthy", "marker": MARKER}).encode()
+            content_type = "application/json"
+        elif self.path == "/browser/session":
+            body = json.dumps({"session_id": BROWSER_SESSION_ID, "marker": MARKER}).encode()
             content_type = "application/json"
         elif self.path == "/":
             body = f"""<!doctype html>
@@ -45,7 +54,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")

@@ -1686,6 +1686,18 @@ pub enum ResourceOwnership {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceCapability {
+    Open,
+    Attach,
+    Stop,
+    Restart,
+    Detach,
+    Cleanup,
+    Reconcile,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RuntimeResourceTarget {
@@ -1717,6 +1729,8 @@ pub enum RuntimeResourceTarget {
         url: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         session_id: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        session_probe_url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pid: Option<u32>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1727,6 +1741,73 @@ pub enum RuntimeResourceTarget {
 }
 
 impl RuntimeResourceTarget {
+    pub fn inferred_capabilities(&self) -> Vec<ResourceCapability> {
+        use ResourceCapability as Capability;
+
+        let mut capabilities = match self {
+            Self::Terminal { .. } => vec![
+                Capability::Open,
+                Capability::Attach,
+                Capability::Stop,
+                Capability::Detach,
+                Capability::Cleanup,
+                Capability::Reconcile,
+            ],
+            Self::Process { command, .. } => {
+                let mut capabilities = vec![
+                    Capability::Open,
+                    Capability::Attach,
+                    Capability::Stop,
+                    Capability::Cleanup,
+                    Capability::Reconcile,
+                ];
+                if !command.is_empty() {
+                    capabilities.push(Capability::Restart);
+                }
+                capabilities
+            }
+            Self::Service {
+                pid,
+                restart_command,
+                ..
+            } => {
+                let mut capabilities = vec![Capability::Open, Capability::Reconcile];
+                if pid.is_some() {
+                    capabilities.extend([Capability::Stop, Capability::Cleanup]);
+                    if !restart_command.is_empty() {
+                        capabilities.push(Capability::Restart);
+                    }
+                }
+                capabilities
+            }
+            Self::Browser { .. } => vec![Capability::Open, Capability::Reconcile],
+        };
+        capabilities.sort_unstable();
+        capabilities
+    }
+
+    pub fn normalize_capabilities(
+        &self,
+        declared: &[ResourceCapability],
+    ) -> Result<Vec<ResourceCapability>, String> {
+        let supported = self.inferred_capabilities();
+        if declared.is_empty() {
+            return Ok(supported);
+        }
+        let mut normalized = declared.to_vec();
+        normalized.sort_unstable();
+        normalized.dedup();
+        if let Some(capability) = normalized
+            .iter()
+            .find(|capability| !supported.contains(capability))
+        {
+            return Err(format!(
+                "resource target cannot support declared capability {capability:?}"
+            ));
+        }
+        Ok(normalized)
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Terminal {
@@ -1789,6 +1870,8 @@ pub struct RuntimeResourceProposal {
     pub causation_id: String,
     #[serde(default)]
     pub ownership: ResourceOwnership,
+    #[serde(default)]
+    pub capabilities: Vec<ResourceCapability>,
     pub target: RuntimeResourceTarget,
 }
 
@@ -1802,7 +1885,10 @@ impl RuntimeResourceProposal {
         {
             return Err("resource proposal lacks exact task/attempt/producer evidence".into());
         }
-        self.target.validate()
+        self.target.validate()?;
+        self.target
+            .normalize_capabilities(&self.capabilities)
+            .map(|_| ())
     }
 
     pub fn validate_worker_provenance(
@@ -1830,6 +1916,8 @@ pub struct RuntimeResource {
     pub producer: ResourceProducer,
     pub causation_id: String,
     pub ownership: ResourceOwnership,
+    #[serde(default)]
+    pub capabilities: Vec<ResourceCapability>,
     pub target: RuntimeResourceTarget,
     pub created_event_id: String,
     pub published_seq: u64,
@@ -1874,6 +1962,7 @@ pub struct ResourceObservation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceTaskIndex {
+    pub intent_id: String,
     pub task_id: String,
     pub artifacts: Vec<String>,
     pub resources: Vec<String>,
@@ -1914,11 +2003,12 @@ pub struct ResourceOperationRequest {
     pub action_id: String,
     pub operation: ResourceOperationKind,
     #[serde(default)]
+    pub intent_id: String,
+    #[serde(default)]
     pub task_id: String,
     #[serde(default)]
     pub target_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_status: Option<ResourceStatus>,
+    pub expected_status: ResourceStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1983,6 +2073,8 @@ pub struct ResourceActionReceipt {
     pub schema_version: u32,
     pub action_id: String,
     pub operation: ResourceOperationKind,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub intent_id: String,
     pub task_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub target_id: String,

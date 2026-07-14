@@ -334,12 +334,19 @@ mod unix {
         canonical_id.to_string()
     }
 
-    fn reconcile(fixture: &Fixture, target_id: &str, action_id: &str) -> Value {
+    fn reconcile(
+        fixture: &Fixture,
+        target_id: &str,
+        expected_status: &str,
+        action_id: &str,
+    ) -> Value {
         fixture
             .json_process(&[
                 "resource",
                 "reconcile",
                 target_id,
+                "--expected-status",
+                expected_status,
                 "--action-id",
                 action_id,
                 "--json",
@@ -372,6 +379,8 @@ mod unix {
         let (discover_pid, discover) = fixture.json_process(&[
             "resource",
             "discover",
+            "--intent",
+            "intent-local-app-dogfood",
             "--task",
             TASK_ID,
             "--action-id",
@@ -388,7 +397,11 @@ mod unix {
             "local-terminal",
             "local-process",
             "local-service",
+            "local-unhealthy-service",
+            "local-open-only-browser",
             "local-browser",
+            "local-live-browser",
+            "local-stale-browser",
             "local-external",
             "local-screenshot",
             "local-diff",
@@ -435,13 +448,34 @@ mod unix {
 
         let process = entry_by_proposal(&discover, "local-process");
         let service = entry_by_proposal(&discover, "local-service");
+        let unhealthy_service = entry_by_proposal(&discover, "local-unhealthy-service");
+        let open_only_browser = entry_by_proposal(&discover, "local-open-only-browser");
         let browser = entry_by_proposal(&discover, "local-browser");
+        let live_browser = entry_by_proposal(&discover, "local-live-browser");
+        let stale_browser = entry_by_proposal(&discover, "local-stale-browser");
         let terminal = entry_by_proposal(&discover, "local-terminal");
         let external = entry_by_proposal(&discover, "local-external");
         assert_eq!(process["resource"]["target"]["kind"], "process");
         assert_eq!(service["resource"]["target"]["kind"], "service");
         assert_eq!(browser["resource"]["target"]["kind"], "browser");
         assert_eq!(terminal["resource"]["target"]["kind"], "terminal");
+        for entry in [
+            process,
+            service,
+            unhealthy_service,
+            open_only_browser,
+            browser,
+            live_browser,
+            stale_browser,
+        ] {
+            assert!(
+                !entry["resource"]["capabilities"]
+                    .as_array()
+                    .expect("typed resource capabilities")
+                    .is_empty(),
+                "runtime declaration must record typed capabilities: {entry}"
+            );
+        }
         fixture.remember_owned_process(&process["resource"]);
         let service_url = service["resource"]["target"]["url"].as_str().unwrap();
         assert!(http_get(service_url).contains("yardlet-local-app"));
@@ -449,6 +483,7 @@ mod unix {
         let live_process = reconcile(
             &fixture,
             resource_id(process),
+            "live",
             "act-local-app-reconcile-process-live",
         );
         assert_eq!(live_process["result"]["observation"]["status"], "live");
@@ -456,21 +491,89 @@ mod unix {
         let live_service = reconcile(
             &fixture,
             resource_id(service),
+            "live",
             "act-local-app-reconcile-service-live",
         );
         assert_eq!(live_service["result"]["observation"]["status"], "live");
         let expired_browser = reconcile(
             &fixture,
             resource_id(browser),
+            "expired",
             "act-local-app-reconcile-browser-expired",
         );
         assert_eq!(
             expired_browser["result"]["observation"]["status"],
             "expired"
         );
+        let live_browser_receipt = reconcile(
+            &fixture,
+            resource_id(live_browser),
+            "live",
+            "act-local-app-reconcile-browser-live-session",
+        );
+        assert_eq!(
+            live_browser_receipt["result"]["observation"]["status"],
+            "live"
+        );
+        let stale_browser_receipt = reconcile(
+            &fixture,
+            resource_id(stale_browser),
+            "expired",
+            "act-local-app-reconcile-browser-stale-session",
+        );
+        assert_eq!(
+            stale_browser_receipt["result"]["observation"]["status"],
+            "expired"
+        );
+        let unhealthy_service_receipt = reconcile(
+            &fixture,
+            resource_id(unhealthy_service),
+            "unavailable",
+            "act-local-app-reconcile-service-unhealthy",
+        );
+        assert_eq!(
+            unhealthy_service_receipt["result"]["observation"]["status"], "unavailable",
+            "an open port with a failing declared health URL is not live"
+        );
+        for (operation, action_id) in [
+            ("stop", "act-local-app-reject-pidless-service-stop"),
+            ("cleanup", "act-local-app-reject-pidless-service-cleanup"),
+        ] {
+            let (_, rejected) = fixture.json_process(&[
+                "resource",
+                operation,
+                resource_id(unhealthy_service),
+                "--expected-status",
+                "unavailable",
+                "--action-id",
+                action_id,
+                "--json",
+            ]);
+            assert_eq!(rejected["status"], "rejected");
+            assert!(rejected["error"].as_str().unwrap().contains("unsupported"));
+        }
+        for operation in [
+            "attach",
+            "stop",
+            "restart",
+            "detach",
+            "cleanup",
+            "reconcile",
+        ] {
+            let action_id = format!("act-local-app-reject-open-only-{operation}");
+            let mut args = vec!["resource", operation, resource_id(open_only_browser)];
+            if operation != "attach" {
+                args.extend(["--expected-status", "expired"]);
+            }
+            args.extend(["--action-id", action_id.as_str(), "--json"]);
+            let (_, rejected) = fixture.json_process(&args);
+            assert_eq!(rejected["status"], "rejected");
+            assert!(rejected["error"].as_str().unwrap().contains("unsupported"));
+        }
         let dead_terminal = reconcile(
             &fixture,
             resource_id(terminal),
+            "dead",
             "act-local-app-reconcile-terminal-dead",
         );
         assert_eq!(dead_terminal["result"]["observation"]["status"], "dead");
@@ -525,6 +628,8 @@ mod unix {
             "resource",
             "cleanup",
             resource_id(external),
+            "--expected-status",
+            "live",
             "--action-id",
             "act-local-app-reject-external-cleanup",
             "--json",
@@ -554,6 +659,7 @@ mod unix {
         let unavailable_service = reconcile(
             &fixture,
             resource_id(service),
+            "unavailable",
             "act-local-app-reconcile-service-unavailable",
         );
         assert_eq!(
