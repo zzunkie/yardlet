@@ -54,7 +54,7 @@ mod unix {
     struct Fixture {
         root: PathBuf,
         binary: PathBuf,
-        owned_process: Option<(u32, String)>,
+        owned_processes: Vec<(u32, String)>,
     }
 
     impl Fixture {
@@ -82,7 +82,19 @@ mod unix {
             fs::write(root.join("app-state.txt"), "state=before\n").unwrap();
             fs::write(root.join("unrelated.txt"), "preserve me\n").unwrap();
             let port = reserve_local_port();
+            let restart_healthy_port = reserve_local_port();
+            let restart_unhealthy_port = reserve_local_port();
             fs::write(root.join("fixture-port.txt"), format!("{port}\n")).unwrap();
+            fs::write(
+                root.join("fixture-restart-healthy-port.txt"),
+                format!("{restart_healthy_port}\n"),
+            )
+            .unwrap();
+            fs::write(
+                root.join("fixture-restart-unhealthy-port.txt"),
+                format!("{restart_unhealthy_port}\n"),
+            )
+            .unwrap();
             fs::write(
                 root.join("external-sentinel.meta"),
                 format!("{}|{}\n", sentinel.pid(), sentinel.start_identity),
@@ -97,6 +109,8 @@ mod unix {
                     "app-state.txt",
                     "unrelated.txt",
                     "fixture-port.txt",
+                    "fixture-restart-healthy-port.txt",
+                    "fixture-restart-unhealthy-port.txt",
                     "external-sentinel.meta",
                 ],
             );
@@ -142,7 +156,7 @@ mod unix {
             Self {
                 root,
                 binary,
-                owned_process: None,
+                owned_processes: Vec::new(),
             }
         }
 
@@ -176,8 +190,24 @@ mod unix {
             (pid, value)
         }
 
+        fn run_process_with_fault(&self, args: &[&str], fault: &str) -> (u32, Output) {
+            let child = Command::new(&self.binary)
+                .args(args)
+                .current_dir(&self.root)
+                .env("YARDLET_TEST_RESOURCE_ACTION_FAULT", fault)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap_or_else(|error| panic!("failed to run yardlet with {fault}: {error}"));
+            let pid = child.id();
+            let output = child
+                .wait_with_output()
+                .expect("wait for faulted yardlet process");
+            (pid, output)
+        }
+
         fn remember_owned_process(&mut self, resource: &Value) {
-            self.owned_process = Some((
+            self.owned_processes.push((
                 resource["target"]["pid"].as_u64().unwrap() as u32,
                 resource["target"]["start_identity"]
                     .as_str()
@@ -185,11 +215,18 @@ mod unix {
                     .to_string(),
             ));
         }
+
+        fn remember_observation_process(&mut self, observation: &Value) {
+            self.owned_processes.push((
+                observation["pid"].as_u64().unwrap() as u32,
+                observation["start_identity"].as_str().unwrap().to_string(),
+            ));
+        }
     }
 
     impl Drop for Fixture {
         fn drop(&mut self) {
-            if let Some((pid, identity)) = &self.owned_process {
+            for (pid, identity) in &self.owned_processes {
                 terminate_if_exact(*pid, identity);
             }
             if std::thread::panicking() {
@@ -398,6 +435,8 @@ mod unix {
             "local-process",
             "local-service",
             "local-unhealthy-service",
+            "local-restart-service",
+            "local-unhealthy-restart-service",
             "local-open-only-browser",
             "local-browser",
             "local-live-browser",
@@ -449,6 +488,9 @@ mod unix {
         let process = entry_by_proposal(&discover, "local-process");
         let service = entry_by_proposal(&discover, "local-service");
         let unhealthy_service = entry_by_proposal(&discover, "local-unhealthy-service");
+        let restart_service = entry_by_proposal(&discover, "local-restart-service");
+        let unhealthy_restart_service =
+            entry_by_proposal(&discover, "local-unhealthy-restart-service");
         let open_only_browser = entry_by_proposal(&discover, "local-open-only-browser");
         let browser = entry_by_proposal(&discover, "local-browser");
         let live_browser = entry_by_proposal(&discover, "local-live-browser");
@@ -463,6 +505,8 @@ mod unix {
             process,
             service,
             unhealthy_service,
+            restart_service,
+            unhealthy_restart_service,
             open_only_browser,
             browser,
             live_browser,
@@ -477,6 +521,8 @@ mod unix {
             );
         }
         fixture.remember_owned_process(&process["resource"]);
+        fixture.remember_owned_process(&restart_service["resource"]);
+        fixture.remember_owned_process(&unhealthy_restart_service["resource"]);
         let service_url = service["resource"]["target"]["url"].as_str().unwrap();
         assert!(http_get(service_url).contains("yardlet-local-app"));
 
@@ -534,6 +580,110 @@ mod unix {
         assert_eq!(
             unhealthy_service_receipt["result"]["observation"]["status"], "unavailable",
             "an open port with a failing declared health URL is not live"
+        );
+
+        let healthy_restart_args = [
+            "resource",
+            "restart",
+            resource_id(restart_service),
+            "--expected-status",
+            "live",
+            "--action-id",
+            "act-local-app-restart-crash-after-spawn",
+            "--json",
+        ];
+        let (_, healthy_restart_crash) = fixture.run_process_with_fault(
+            &healthy_restart_args,
+            "act-local-app-restart-crash-after-spawn:after_spawn",
+        );
+        assert_eq!(healthy_restart_crash.status.code(), Some(86));
+        let restart_recovery: Value = serde_yaml_ng::from_str(
+            &fs::read_to_string(fixture.root.join(
+                ".agents/resources/actions/act-local-app-restart-crash-after-spawn.recovery.yaml",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(restart_recovery["phase"], "spawned");
+        let spawned_pid = restart_recovery["effect_pid"].as_u64().unwrap() as u32;
+        let spawned_identity = restart_recovery["effect_start_identity"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        fixture
+            .owned_processes
+            .push((spawned_pid, spawned_identity.clone()));
+        let (_, healthy_restart) = fixture.json_process(&healthy_restart_args);
+        assert_eq!(healthy_restart["status"], "completed");
+        assert_eq!(healthy_restart["result"]["observation"]["status"], "live");
+        assert_eq!(
+            healthy_restart["result"]["observation"]["pid"], spawned_pid,
+            "recovery must not spawn a second service process"
+        );
+        assert_eq!(
+            healthy_restart,
+            fixture.json_process(&healthy_restart_args).1
+        );
+
+        let unhealthy_restart_args = [
+            "resource",
+            "restart",
+            resource_id(unhealthy_restart_service),
+            "--expected-status",
+            "unavailable",
+            "--action-id",
+            "act-local-app-unhealthy-restart-terminal-crash",
+            "--json",
+        ];
+        let (_, unhealthy_terminal_crash) = fixture.run_process_with_fault(
+            &unhealthy_restart_args,
+            "act-local-app-unhealthy-restart-terminal-crash:after_terminal_event",
+        );
+        assert_eq!(unhealthy_terminal_crash.status.code(), Some(86));
+        let (_, unhealthy_restart) = fixture.json_process(&unhealthy_restart_args);
+        assert_eq!(unhealthy_restart["status"], "rejected");
+        assert_eq!(
+            unhealthy_restart["result"]["observation"]["status"], "unavailable",
+            "a restarted process is not live until its declared health URL is 2xx"
+        );
+        let unhealthy_spawned_pid = unhealthy_restart["result"]["observation"]["pid"]
+            .as_u64()
+            .unwrap() as u32;
+        fixture.remember_observation_process(&unhealthy_restart["result"]["observation"]);
+        let unhealthy_reconcile = reconcile(
+            &fixture,
+            resource_id(unhealthy_restart_service),
+            "unavailable",
+            "act-local-app-reconcile-unhealthy-restart",
+        );
+        assert_eq!(unhealthy_reconcile["status"], "completed");
+        assert_eq!(
+            unhealthy_reconcile["result"]["observation"]["status"],
+            "unavailable"
+        );
+        assert_eq!(
+            unhealthy_reconcile["result"]["observation"]["pid"], unhealthy_spawned_pid,
+            "reconcile must retain the restarted process identity even when health is unavailable"
+        );
+        let (_, unhealthy_cleanup) = fixture.json_process(&[
+            "resource",
+            "cleanup",
+            resource_id(unhealthy_restart_service),
+            "--expected-status",
+            "unavailable",
+            "--action-id",
+            "act-local-app-cleanup-unhealthy-restart",
+            "--json",
+        ]);
+        assert_eq!(unhealthy_cleanup["status"], "completed");
+        assert_eq!(unhealthy_cleanup["result"]["observation"]["status"], "dead");
+        assert_eq!(
+            unhealthy_cleanup["result"]["observation"]["pid"],
+            unhealthy_spawned_pid
+        );
+        assert!(
+            process_identity(unhealthy_spawned_pid).is_none(),
+            "cleanup must signal the current unhealthy restart process"
         );
         for (operation, action_id) in [
             ("stop", "act-local-app-reject-pidless-service-stop"),

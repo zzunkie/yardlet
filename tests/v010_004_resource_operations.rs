@@ -49,6 +49,32 @@ mod unix {
                 &worker,
             )
             .unwrap();
+            if label == "spawn-before-recovery" {
+                let restart_helper = root.join("restart-once.sh");
+                let spawn_log = root.join("restart-spawns.log");
+                fs::write(
+                    &restart_helper,
+                    format!(
+                        "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$$\" >> \"{}\"\nexec /bin/sleep 15\n",
+                        spawn_log.display()
+                    ),
+                )
+                .unwrap();
+                let mut helper_permissions = fs::metadata(&restart_helper).unwrap().permissions();
+                helper_permissions.set_mode(0o755);
+                fs::set_permissions(&restart_helper, helper_permissions).unwrap();
+
+                let source = fs::read_to_string(&worker).unwrap();
+                let needle =
+                    "\"command\":[\"/bin/sleep\",\"90\"]}},\n    {\"proposal_id\":\"ops-cleanup\"";
+                let replacement = format!(
+                    "\"command\":[\"{}\"]}}}},\n    {{\"proposal_id\":\"ops-cleanup\"",
+                    restart_helper.display()
+                );
+                let updated = source.replacen(needle, &replacement, 1);
+                assert_ne!(source, updated, "restart command fixture marker changed");
+                fs::write(&worker, updated).unwrap();
+            }
             let mut permissions = fs::metadata(&worker).unwrap().permissions();
             permissions.set_mode(0o755);
             fs::set_permissions(&worker, permissions).unwrap();
@@ -93,6 +119,25 @@ mod unix {
             })
         }
 
+        fn command_with_fault(&self, args: &[&str], fault: &str) -> Output {
+            Command::new(&self.binary)
+                .args(args)
+                .current_dir(&self.root)
+                .env("YARDLET_TEST_RESOURCE_ACTION_FAULT", fault)
+                .output()
+                .unwrap_or_else(|error| panic!("failed to run yardlet with {fault}: {error}"))
+        }
+
+        fn command_with_fault_trace(&self, args: &[&str], fault: &str, trace: &Path) -> Output {
+            Command::new(&self.binary)
+                .args(args)
+                .current_dir(&self.root)
+                .env("YARDLET_TEST_RESOURCE_ACTION_FAULT", fault)
+                .env("YARDLET_TEST_RESOURCE_ACTION_TRACE", trace)
+                .output()
+                .unwrap_or_else(|error| panic!("failed to run yardlet with {fault}: {error}"))
+        }
+
         fn discover(&self) -> Value {
             self.receipt(&[
                 "resource",
@@ -116,6 +161,13 @@ mod unix {
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .status();
+            }
+            if std::thread::panicking() {
+                eprintln!(
+                    "V010-004 resource operations evidence kept at {}",
+                    self.root.display()
+                );
+                return;
             }
             let _ = fs::remove_dir_all(&self.root);
         }
@@ -197,6 +249,18 @@ mod unix {
             }
         }
         panic!("missing canonical event {event_id}");
+    }
+
+    fn resource_pid(discover: &Value, proposal_id: &str) -> u32 {
+        discover["result"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["resource"]["proposal_id"] == proposal_id)
+            .unwrap_or_else(|| panic!("missing resource proposal {proposal_id}"))["resource"]
+            ["target"]["pid"]
+            .as_u64()
+            .unwrap() as u32
     }
 
     #[test]
@@ -517,6 +581,256 @@ mod unix {
         assert_eq!(
             missing["result"]["open_target"]["target_type"],
             "unavailable"
+        );
+    }
+
+    #[test]
+    fn requested_and_post_terminate_crashes_recover_without_duplicate_signal() {
+        let fixture = Fixture::new("action-crash-recovery");
+        let discover = fixture.discover();
+        let cleanup = resource_id(&discover, "ops-cleanup");
+        let cleanup_pid = resource_pid(&discover, "ops-cleanup");
+        let cleanup_args = [
+            "resource",
+            "cleanup",
+            cleanup.as_str(),
+            "--expected-status",
+            "live",
+            "--action-id",
+            "act-crash-after-requested",
+            "--json",
+        ];
+
+        let requested_crash =
+            fixture.command_with_fault(&cleanup_args, "act-crash-after-requested:after_requested");
+        assert_eq!(requested_crash.status.code(), Some(86));
+        assert!(
+            process_alive(cleanup_pid),
+            "requested-only crash must happen before cleanup mutation"
+        );
+        let cleanup_receipt = fixture.receipt(&cleanup_args);
+        assert_receipt(&cleanup_receipt, "cleanup", "completed");
+        assert!(!process_alive(cleanup_pid));
+        assert_eq!(cleanup_receipt, fixture.receipt(&cleanup_args));
+
+        let restart = resource_id(&discover, "ops-restart");
+        let restart_pid = resource_pid(&discover, "ops-restart");
+        let prepared_args = [
+            "resource",
+            "restart",
+            restart.as_str(),
+            "--expected-status",
+            "live",
+            "--action-id",
+            "act-crash-after-prepared",
+            "--json",
+        ];
+        let prepared_crash =
+            fixture.command_with_fault(&prepared_args, "act-crash-after-prepared:after_prepared");
+        assert_eq!(prepared_crash.status.code(), Some(86));
+        assert!(process_alive(restart_pid));
+        let prepared_receipt = fixture.receipt(&prepared_args);
+        assert_receipt(&prepared_receipt, "restart", "rejected");
+        assert!(prepared_receipt["error"]
+            .as_str()
+            .unwrap()
+            .contains("prepared"));
+        assert!(
+            process_alive(restart_pid),
+            "ambiguous prepared-only recovery must not signal or spawn"
+        );
+        assert_eq!(prepared_receipt, fixture.receipt(&prepared_args));
+
+        let stop = resource_id(&discover, "ops-stop");
+        let stop_pid = resource_pid(&discover, "ops-stop");
+        let stop_args = [
+            "resource",
+            "stop",
+            stop.as_str(),
+            "--expected-status",
+            "live",
+            "--action-id",
+            "act-crash-after-terminate",
+            "--json",
+        ];
+        let terminated_crash =
+            fixture.command_with_fault(&stop_args, "act-crash-after-terminate:after_terminate");
+        assert_eq!(terminated_crash.status.code(), Some(86));
+        assert!(!process_alive(stop_pid));
+        let recovery_path = fixture
+            .root
+            .join(".agents/resources/actions/act-crash-after-terminate.recovery.yaml");
+        let recovery: YamlValue =
+            serde_yaml_ng::from_str(&fs::read_to_string(recovery_path).unwrap()).unwrap();
+        assert_eq!(recovery["phase"].as_str(), Some("terminated"));
+
+        let stop_receipt = fixture.receipt(&stop_args);
+        assert_receipt(&stop_receipt, "stop", "completed");
+        assert_eq!(stop_receipt["result"]["observation"]["status"], "dead");
+        assert_eq!(stop_receipt, fixture.receipt(&stop_args));
+    }
+
+    #[test]
+    fn lifecycle_failures_terminalize_as_immutable_rejections() {
+        let fixture = Fixture::new("action-failure-receipts");
+        let discover = fixture.discover();
+        let cases = [
+            (
+                "reconcile",
+                resource_id(&discover, "ops-stop"),
+                "live",
+                "act-fail-probe",
+                "probe",
+            ),
+            (
+                "stop",
+                resource_id(&discover, "ops-cleanup"),
+                "live",
+                "act-fail-terminate",
+                "terminate",
+            ),
+            (
+                "restart",
+                resource_id(&discover, "ops-restart"),
+                "live",
+                "act-fail-spawn",
+                "spawn",
+            ),
+            (
+                "detach",
+                resource_id(&discover, "ops-detach"),
+                "live",
+                "act-fail-receipt",
+                "receipt",
+            ),
+        ];
+
+        for (operation, target, expected, action_id, point) in cases {
+            let args = [
+                "resource",
+                operation,
+                target.as_str(),
+                "--expected-status",
+                expected,
+                "--action-id",
+                action_id,
+                "--json",
+            ];
+            let output = fixture.command_with_fault(&args, &format!("{action_id}:{point}"));
+            assert!(
+                output.status.success(),
+                "{point} failure must return its rejected receipt\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let receipt: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_receipt(&receipt, operation, "rejected");
+            assert!(receipt["error"].as_str().unwrap().contains(point));
+            let terminal_event = channel_event(
+                &fixture.root,
+                receipt["result_event_ids"][1].as_str().unwrap(),
+            );
+            assert_eq!(terminal_event["type"].as_str(), Some("action.rejected"));
+            let terminal_path = fixture
+                .root
+                .join(format!(".agents/resources/actions/{action_id}.yaml"));
+            let terminal_before = fs::read(&terminal_path).unwrap();
+            assert_eq!(receipt, fixture.receipt(&args));
+            assert_eq!(terminal_before, fs::read(terminal_path).unwrap());
+        }
+    }
+
+    #[test]
+    fn spawn_before_recovery_crash_rejects_without_a_second_spawn() {
+        let mut fixture = Fixture::new("spawn-before-recovery");
+        let discover = fixture.discover();
+        let restart = resource_id(&discover, "ops-restart");
+        let original_pid = resource_pid(&discover, "ops-restart");
+        let args = [
+            "resource",
+            "restart",
+            restart.as_str(),
+            "--expected-status",
+            "live",
+            "--action-id",
+            "act-crash-after-spawn-before-recovery",
+            "--json",
+        ];
+
+        let spawn_trace = fixture.root.join("spawn-gap-pid.txt");
+        let crashed = fixture.command_with_fault_trace(
+            &args,
+            "act-crash-after-spawn-before-recovery:after_spawn_before_recovery",
+            &spawn_trace,
+        );
+        let spawned_pids: Vec<u32> = fs::read_to_string(&spawn_trace)
+            .unwrap()
+            .lines()
+            .map(|line| line.parse().unwrap())
+            .collect();
+        fixture.owned_pids.extend(spawned_pids.iter().copied());
+        let spawn_log = fixture.root.join("restart-spawns.log");
+        for _ in 0..50 {
+            if fs::metadata(&spawn_log).is_ok_and(|metadata| metadata.len() > 0) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let spawn_log_before_retry = fs::read(&spawn_log).unwrap();
+
+        assert_eq!(crashed.status.code(), Some(86));
+        assert!(!process_alive(original_pid));
+        assert_eq!(spawned_pids.len(), 1, "the interrupted action spawned once");
+        assert_eq!(
+            String::from_utf8(spawn_log_before_retry.clone()).unwrap(),
+            format!("{}\n", spawned_pids[0])
+        );
+        assert!(process_alive(spawned_pids[0]));
+        let recovery_path = fixture
+            .root
+            .join(".agents/resources/actions/act-crash-after-spawn-before-recovery.recovery.yaml");
+        let recovery: YamlValue =
+            serde_yaml_ng::from_str(&fs::read_to_string(recovery_path).unwrap()).unwrap();
+        assert_eq!(recovery["phase"].as_str(), Some("terminated"));
+
+        let spawn_trace_before_retry = fs::read(&spawn_trace).unwrap();
+        let receipt = fixture.receipt(&args);
+        assert_receipt(&receipt, "restart", "rejected");
+        assert_eq!(receipt["result"]["observation"]["status"], "unrecoverable");
+        assert!(receipt["error"]
+            .as_str()
+            .unwrap()
+            .contains("terminated restart recovery"));
+        assert_eq!(spawn_trace_before_retry, fs::read(&spawn_trace).unwrap());
+        assert_eq!(spawn_log_before_retry, fs::read(&spawn_log).unwrap());
+        assert!(process_alive(spawned_pids[0]));
+        assert_eq!(receipt, fixture.receipt(&args));
+        assert_eq!(spawn_trace_before_retry, fs::read(&spawn_trace).unwrap());
+        assert_eq!(spawn_log_before_retry, fs::read(&spawn_log).unwrap());
+
+        let reconcile = fixture.receipt(&[
+            "resource",
+            "reconcile",
+            restart.as_str(),
+            "--expected-status",
+            "unrecoverable",
+            "--action-id",
+            "act-reconcile-spawn-gap",
+            "--json",
+        ]);
+        assert_receipt(&reconcile, "reconcile", "rejected");
+        assert!(reconcile["result"]["observation"].is_null());
+        let inspect = fixture.receipt(&[
+            "resource",
+            "inspect",
+            restart.as_str(),
+            "--action-id",
+            "act-inspect-spawn-gap",
+            "--json",
+        ]);
+        assert_eq!(
+            inspect["result"]["entries"][0]["last_observation"]["status"],
+            "unrecoverable"
         );
     }
 }

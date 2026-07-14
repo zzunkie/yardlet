@@ -2018,6 +2018,46 @@ pub enum ResourceActionStatus {
     Rejected,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceActionRecoveryPhase {
+    Prepared,
+    Terminated,
+    Spawned,
+}
+
+impl ResourceActionRecoveryPhase {
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Prepared => 0,
+            Self::Terminated => 1,
+            Self::Spawned => 2,
+        }
+    }
+}
+
+/// Durable, non-terminal action progress. The terminal receipt remains an
+/// immutable `ResourceActionReceipt`; this snapshot only prevents a recovered
+/// stop/restart action from repeating an external side effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceActionRecoveryReceipt {
+    pub schema_version: u32,
+    pub action_id: String,
+    pub request_digest: String,
+    pub operation: ResourceOperationKind,
+    pub intent_id: String,
+    pub task_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_id: String,
+    pub expected_status: ResourceStatus,
+    pub requested_event_id: String,
+    pub phase: ResourceActionRecoveryPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effect_start_identity: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "target_type", rename_all = "snake_case")]
 pub enum ResourceOpenTarget {
