@@ -4289,6 +4289,43 @@ pub fn write_str(path: &Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
+/// Create an immutable private evidence file. On Unix the requested mode is
+/// applied at inode creation, so there is no window where raw worker output is
+/// readable by group or other users.
+pub(crate) fn create_private_file(path: &Path) -> Result<fs::File> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .with_context(|| format!("creating private evidence {}", path.display()))
+}
+
+/// Open a private append-only evidence file. `mode` affects creation only;
+/// callers retain append semantics for a combined log shared by stream readers.
+pub(crate) fn append_private_file(path: &Path) -> Result<fs::File> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .with_context(|| format!("opening private evidence {}", path.display()))
+}
+
 /// Write a durable state snapshot through a same-directory temporary file so a
 /// crash cannot leave readers with a truncated JSON/YAML record.
 pub fn write_str_atomic(path: &Path, contents: &str) -> Result<()> {

@@ -687,21 +687,12 @@ fn spawn_internal(
                 anyhow::bail!("attempt raw stream already exists: {}", path.display());
             }
         }
-        let stdout = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&capture.stdout_log)
-            .with_context(|| format!("creating {}", capture.stdout_log.display()))?;
-        let stderr = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&capture.stderr_log)
-        {
+        let stdout = crate::state::create_private_file(&capture.stdout_log)?;
+        let stderr = match crate::state::create_private_file(&capture.stderr_log) {
             Ok(file) => file,
             Err(error) => {
                 let _ = std::fs::remove_file(&capture.stdout_log);
-                return Err(error)
-                    .with_context(|| format!("creating {}", capture.stderr_log.display()));
+                return Err(error);
             }
         };
         Some((stdout, stderr))
@@ -731,13 +722,7 @@ fn spawn_internal(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
-        Some(
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(output_log)
-                .with_context(|| format!("opening {}", output_log.display()))?,
-        )
+        Some(crate::state::append_private_file(output_log)?)
     } else {
         std::fs::File::create(output_log).ok()
     };
