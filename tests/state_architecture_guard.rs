@@ -17,6 +17,8 @@ const CANONICAL_STATE_MARKERS: &[&str] = &[
     "activation_path(",
     "runtime_task_receipt_path(",
     "runtime_capability_receipt_path(",
+    "task_channel_dir(",
+    "task_channel_index_path(",
     ".agents/work-queue.yaml",
     ".agents/intent-contract.yaml",
     ".agents/transitions",
@@ -24,6 +26,7 @@ const CANONICAL_STATE_MARKERS: &[&str] = &[
     ".agents/activations",
     ".agents/runtime-task-receipts",
     ".agents/runtime-capability-receipts",
+    ".agents/task-channels",
 ];
 
 #[test]

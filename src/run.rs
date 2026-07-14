@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
@@ -18,8 +18,10 @@ use crate::guard;
 use crate::inspect;
 use crate::packet::{self, PacketInputs};
 use crate::schemas::{
-    ConversationTurn, RunResult, TaskState, TransitionActor, TransitionCause, TurnRole, WorkQueue,
-    WorkerProfile, WorkersFile,
+    AnswerActionRequest, AttemptState, ChannelEvent, ChannelEventType, ContinuationMode,
+    ConversationTurn, EventActor, EventActorKind, Question, QuestionState, RunResult, TaskState,
+    TransitionActor, TransitionCause, TurnRole, WorkQueue, WorkerAttempt, WorkerProfile,
+    WorkersFile,
 };
 use crate::state::{self, append_str, write_str, PlanningLock, Workspace};
 use crate::ui::i18n::{self, Lang};
@@ -330,10 +332,11 @@ fn serial_worktree_evidence(
     })
 }
 
-const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 15] = [
+const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 18] = [
     "run.yaml",
     "task-packet.md",
     "worker.pid",
+    "worker-process.yaml",
     "worker-output.log",
     "git-finish.json",
     "git-integration.json",
@@ -346,6 +349,8 @@ const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 15] = [
     "validation.json",
     "evidence",
     "hooks",
+    "attempts",
+    "latest-attempt",
 ];
 
 fn is_main_owned_validation_log_name(name: &str) -> bool {
@@ -551,6 +556,681 @@ pub(crate) struct RunFailover {
     pub at: String,
 }
 
+pub(crate) fn attempt_id_for_ordinal(run_id: &str, ordinal: u32) -> String {
+    if ordinal <= 1 {
+        run_id.to_string()
+    } else {
+        format!("{run_id}-attempt-{ordinal}")
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ChannelRunContext {
+    session_id: String,
+    intent_id: String,
+    task_id: String,
+    correlation_id: String,
+}
+
+pub(crate) fn channel_run_context(
+    ws: &Workspace,
+    intent_id: &str,
+    task_id: &str,
+) -> ChannelRunContext {
+    // Pre-activation/legacy queues had no intent id. Keep that execution path
+    // additive while still giving the durable envelope a non-empty identity.
+    let channel_intent_id = if intent_id.trim().is_empty() {
+        "legacy-intent"
+    } else {
+        intent_id
+    };
+    if let Ok(existing) = ws.load_task_channel(channel_intent_id, task_id) {
+        if !existing.session_id.is_empty() {
+            return ChannelRunContext {
+                correlation_id: existing
+                    .events
+                    .first()
+                    .map(|event| event.correlation_id.clone())
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| format!("cor_{}", existing.channel_id)),
+                session_id: existing.session_id,
+                intent_id: channel_intent_id.to_string(),
+                task_id: task_id.to_string(),
+            };
+        }
+    }
+    let session_id = ws
+        .load_activated_intent()
+        .ok()
+        .flatten()
+        .filter(|intent| intent.intent.id == channel_intent_id)
+        .map(|intent| intent.planning_session_id)
+        .filter(|session| !session.is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "ses_{}",
+                gen_session_uuid(channel_intent_id).replace('-', "")
+            )
+        });
+    ChannelRunContext {
+        correlation_id: format!(
+            "cor_{}",
+            gen_session_uuid(channel_intent_id).replace('-', "")
+        ),
+        session_id,
+        intent_id: channel_intent_id.to_string(),
+        task_id: task_id.to_string(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_channel_event(
+    ws: &Workspace,
+    lock: Option<&PlanningLock>,
+    context: &ChannelRunContext,
+    event_type: ChannelEventType,
+    actor: EventActor,
+    attempt_id: Option<&str>,
+    causation_id: Option<String>,
+    payload: serde_json::Value,
+    raw_ref: Option<crate::schemas::RawEventRef>,
+) -> Result<ChannelEvent> {
+    let event = ChannelEvent {
+        schema_version: 1,
+        event_id: String::new(),
+        session_id: context.session_id.clone(),
+        seq: 0,
+        event_type,
+        recorded_at: Local::now().to_rfc3339(),
+        actor,
+        action_id: None,
+        causation_id,
+        correlation_id: context.correlation_id.clone(),
+        task_id: context.task_id.clone(),
+        attempt_id: attempt_id.map(str::to_string),
+        payload,
+        raw_ref,
+    };
+    match lock {
+        Some(lock) => ws.record_task_event_with_lock(lock, &context.intent_id, event),
+        None => ws.record_task_event(&context.intent_id, event),
+    }
+}
+
+fn live_worker_event_sink(
+    ws: &Workspace,
+    context: &ChannelRunContext,
+    attempt: &WorkerAttempt,
+) -> workers::AttemptEventSink {
+    let ws = ws.clone();
+    let context = context.clone();
+    let attempt_id = attempt.attempt_id.clone();
+    let worker_id = attempt.worker_id.clone();
+    std::sync::Arc::new(move |normalized| {
+        let channel = ws
+            .load_task_channel(&context.intent_id, &context.task_id)
+            .map_err(|error| error.to_string())?;
+        if let Some(existing) = channel.events.iter().find(|event| {
+            event.attempt_id.as_deref() == Some(&attempt_id)
+                && event.event_type == normalized.event_type
+                && event.raw_ref.as_ref() == Some(&normalized.raw_ref)
+        }) {
+            if existing.payload == normalized.payload {
+                return Ok(());
+            }
+            return Err(format!(
+                "normalized raw event changed for {} at {}..{}",
+                normalized.raw_ref.artifact_id,
+                normalized.raw_ref.byte_start,
+                normalized.raw_ref.byte_end
+            ));
+        }
+        let causation_id = channel
+            .events
+            .iter()
+            .rev()
+            .find(|event| event.attempt_id.as_deref() == Some(&attempt_id))
+            .map(|event| event.event_id.clone());
+        record_channel_event(
+            &ws,
+            None,
+            &context,
+            normalized.event_type,
+            EventActor {
+                kind: EventActorKind::Worker,
+                id: worker_id.clone(),
+            },
+            Some(&attempt_id),
+            causation_id,
+            normalized.payload,
+            Some(normalized.raw_ref),
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+}
+
+fn raw_attempt_path(ws: &Workspace, reference: &str) -> PathBuf {
+    let path = std::path::Path::new(reference);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else if let Ok(relative) = path.strip_prefix(".agents") {
+        ws.agents_dir().join(relative)
+    } else if reference.starts_with("task-channels/") {
+        ws.agents_dir().join(path)
+    } else {
+        ws.root.join(path)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn begin_worker_attempt(
+    ws: &Workspace,
+    lock: Option<&PlanningLock>,
+    context: &ChannelRunContext,
+    run_dir: &std::path::Path,
+    attempt_id: &str,
+    worker_id: &str,
+    worker_session_ref: Option<String>,
+    continuation: ContinuationMode,
+    caused_by_event_id: Option<String>,
+) -> Result<(WorkerAttempt, workers::AttemptCapture)> {
+    let channel = ws.load_task_channel(&context.intent_id, &context.task_id)?;
+    let attempt = if let Some(existing) = channel
+        .attempts
+        .into_iter()
+        .find(|attempt| attempt.attempt_id == attempt_id)
+    {
+        if existing.state != AttemptState::Prepared
+            || existing.worker_id != worker_id
+            || existing.continuation != continuation
+        {
+            return Err(anyhow!("prepared attempt does not match invocation"));
+        }
+        existing
+    } else {
+        let attempt_dir = run_dir.join("attempts").join(attempt_id);
+        let attempt = WorkerAttempt {
+            schema_version: 1,
+            attempt_id: attempt_id.to_string(),
+            session_id: context.session_id.clone(),
+            intent_id: context.intent_id.clone(),
+            task_id: context.task_id.clone(),
+            worker_id: worker_id.to_string(),
+            worker_session_ref,
+            state: AttemptState::Prepared,
+            continuation,
+            caused_by_event_id,
+            caused_by_action_id: None,
+            raw_stdout_ref: attempt_dir.join("stdout.log").display().to_string(),
+            raw_stderr_ref: attempt_dir.join("stderr.log").display().to_string(),
+        };
+        ws.record_worker_attempt(&attempt)?;
+        attempt
+    };
+    let prepared_exists = ws
+        .load_task_channel(&context.intent_id, &context.task_id)?
+        .events
+        .iter()
+        .any(|event| {
+            event.event_type == ChannelEventType::AttemptPrepared
+                && event.attempt_id.as_deref() == Some(attempt_id)
+        });
+    let prepared_event = if prepared_exists {
+        ws.load_task_channel(&context.intent_id, &context.task_id)?
+            .events
+            .into_iter()
+            .find(|event| {
+                event.event_type == ChannelEventType::AttemptPrepared
+                    && event.attempt_id.as_deref() == Some(attempt_id)
+            })
+            .expect("prepared event checked above")
+    } else {
+        record_channel_event(
+            ws,
+            lock,
+            context,
+            ChannelEventType::AttemptPrepared,
+            EventActor {
+                kind: EventActorKind::System,
+                id: String::new(),
+            },
+            Some(attempt_id),
+            attempt.caused_by_event_id.clone(),
+            serde_json::json!({
+                "worker_id": worker_id,
+                "worker_session_ref": attempt.worker_session_ref,
+                "continuation": continuation
+            }),
+            None,
+        )?
+    };
+    let started_exists = ws
+        .load_task_channel(&context.intent_id, &context.task_id)?
+        .events
+        .iter()
+        .any(|event| {
+            event.event_type == ChannelEventType::WorkerStarted
+                && event.attempt_id.as_deref() == Some(attempt_id)
+        });
+    if !started_exists {
+        record_channel_event(
+            ws,
+            lock,
+            context,
+            ChannelEventType::WorkerStarted,
+            EventActor {
+                kind: EventActorKind::Worker,
+                id: worker_id.to_string(),
+            },
+            Some(attempt_id),
+            Some(prepared_event.event_id),
+            serde_json::json!({"worker_id": worker_id}),
+            None,
+        )?;
+    }
+    state::write_str_atomic(&run_dir.join("latest-attempt"), &format!("{attempt_id}\n"))?;
+    let capture = workers::AttemptCapture {
+        combined_log: run_dir.join("worker-output.log"),
+        stdout_log: raw_attempt_path(ws, &attempt.raw_stdout_ref),
+        stderr_log: raw_attempt_path(ws, &attempt.raw_stderr_ref),
+    };
+    Ok((attempt, capture))
+}
+
+fn worker_attempt_result(
+    run_dir: &std::path::Path,
+    outcome: &workers::WorkerOutcome,
+) -> &'static str {
+    if run_dir.join("cancelled").is_file() {
+        return "cancelled";
+    }
+    if outcome.timed_out {
+        return "timed_out";
+    }
+    if let Ok(raw) = std::fs::read_to_string(run_dir.join("result.json")) {
+        if let Ok(result) = serde_json::from_str::<RunResult>(&raw) {
+            return match result.status.as_str() {
+                "needs_user" => "needs_user",
+                "failed" => "failed",
+                _ => "succeeded",
+            };
+        }
+    }
+    "failed"
+}
+
+pub(crate) fn finish_worker_attempt(
+    ws: &Workspace,
+    lock: Option<&PlanningLock>,
+    context: &ChannelRunContext,
+    run_dir: &std::path::Path,
+    attempt: &WorkerAttempt,
+    capture: &workers::AttemptCapture,
+    outcome: &workers::WorkerOutcome,
+) -> Result<()> {
+    let mut channel = ws.load_task_channel(&context.intent_id, &context.task_id)?;
+    let mut causation_id = channel
+        .events
+        .iter()
+        .find(|event| {
+            event.event_type == ChannelEventType::WorkerStarted
+                && event.attempt_id.as_deref() == Some(&attempt.attempt_id)
+        })
+        .map(|event| event.event_id.clone());
+    for (stream, path, artifact_id) in [
+        (
+            workers::RawStreamKind::Stdout,
+            &capture.stdout_log,
+            format!("raw_{}_stdout", attempt.attempt_id),
+        ),
+        (
+            workers::RawStreamKind::Stderr,
+            &capture.stderr_log,
+            format!("raw_{}_stderr", attempt.attempt_id),
+        ),
+    ] {
+        let raw = std::fs::read(path)
+            .with_context(|| format!("reading attempt raw stream {}", path.display()))?;
+        for normalized in
+            workers::normalize_worker_output(&attempt.worker_id, stream, &raw, &artifact_id)
+        {
+            let existing = channel.events.iter().find(|event| {
+                event.attempt_id.as_deref() == Some(&attempt.attempt_id)
+                    && event.event_type == normalized.event_type
+                    && event.raw_ref.as_ref() == Some(&normalized.raw_ref)
+            });
+            let recorded = if let Some(existing) = existing {
+                if existing.payload != normalized.payload {
+                    return Err(anyhow!(
+                        "normalized raw event changed for {} at {}..{}",
+                        normalized.raw_ref.artifact_id,
+                        normalized.raw_ref.byte_start,
+                        normalized.raw_ref.byte_end
+                    ));
+                }
+                existing.clone()
+            } else {
+                let recorded = record_channel_event(
+                    ws,
+                    lock,
+                    context,
+                    normalized.event_type,
+                    EventActor {
+                        kind: EventActorKind::Worker,
+                        id: attempt.worker_id.clone(),
+                    },
+                    Some(&attempt.attempt_id),
+                    causation_id,
+                    normalized.payload,
+                    Some(normalized.raw_ref),
+                )?;
+                channel.events.push(recorded.clone());
+                recorded
+            };
+            causation_id = Some(recorded.event_id);
+        }
+    }
+    if worker_attempt_result(run_dir, outcome) == "needs_user" {
+        if let Ok(result) = std::fs::read_to_string(run_dir.join("result.json")) {
+            if let Ok(result) = serde_json::from_str::<RunResult>(&result) {
+                if let Some(question) = result
+                    .question_for_user
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|question| !question.is_empty())
+                {
+                    if let Some(asked) = record_result_question(ws, context, run_dir, question)? {
+                        causation_id = Some(asked.event_id);
+                    }
+                }
+            }
+        }
+    }
+    if !channel.events.iter().any(|event| {
+        event.event_type == ChannelEventType::WorkerCompleted
+            && event.attempt_id.as_deref() == Some(&attempt.attempt_id)
+    }) {
+        record_channel_event(
+            ws,
+            lock,
+            context,
+            ChannelEventType::WorkerCompleted,
+            EventActor {
+                kind: EventActorKind::System,
+                id: String::new(),
+            },
+            Some(&attempt.attempt_id),
+            causation_id,
+            serde_json::json!({
+                "result": worker_attempt_result(run_dir, outcome),
+                "exit_ok": outcome.exit_ok,
+                "timed_out": outcome.timed_out,
+                "worker_session_ref": outcome.session_id
+            }),
+            None,
+        )?;
+    }
+    ws.load_or_rebuild_task_channel(&context.intent_id, &context.task_id)?;
+    Ok(())
+}
+
+pub(crate) fn finish_worker_attempt_error(
+    ws: &Workspace,
+    context: &ChannelRunContext,
+    attempt: &WorkerAttempt,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let channel = ws.load_task_channel(&context.intent_id, &context.task_id)?;
+    if channel.events.iter().any(|event| {
+        event.event_type == ChannelEventType::WorkerCompleted
+            && event.attempt_id.as_deref() == Some(&attempt.attempt_id)
+    }) {
+        return Ok(());
+    }
+    let causation_id = channel
+        .events
+        .into_iter()
+        .rev()
+        .find(|event| event.attempt_id.as_deref() == Some(&attempt.attempt_id))
+        .map(|event| event.event_id);
+    record_channel_event(
+        ws,
+        None,
+        context,
+        ChannelEventType::WorkerCompleted,
+        EventActor {
+            kind: EventActorKind::System,
+            id: String::new(),
+        },
+        Some(&attempt.attempt_id),
+        causation_id,
+        serde_json::json!({
+            "result": "failed",
+            "spawn_error": error.to_string(),
+            "worker_session_ref": attempt.worker_session_ref
+        }),
+        None,
+    )?;
+    ws.load_or_rebuild_task_channel(&context.intent_id, &context.task_id)?;
+    Ok(())
+}
+
+fn record_result_question(
+    ws: &Workspace,
+    context: &ChannelRunContext,
+    run_dir: &std::path::Path,
+    question_text: &str,
+) -> Result<Option<ChannelEvent>> {
+    let attempt_id = std::fs::read_to_string(run_dir.join("latest-attempt"))
+        .with_context(|| format!("reading latest attempt for {}", context.task_id))?;
+    let attempt_id = attempt_id.trim();
+    let channel = ws.load_task_channel(&context.intent_id, &context.task_id)?;
+    if channel
+        .questions
+        .iter()
+        .any(|question| question.attempt_id == attempt_id && question.text == question_text)
+    {
+        return Ok(channel
+            .events
+            .iter()
+            .find(|event| {
+                event.event_type == ChannelEventType::QuestionAsked
+                    && event.attempt_id.as_deref() == Some(attempt_id)
+                    && event.payload["text"] == question_text
+            })
+            .cloned());
+    }
+    let question_id = format!("qst_{attempt_id}");
+    let asked = if let Some(existing) = channel.events.iter().find(|event| {
+        event.event_type == ChannelEventType::QuestionAsked
+            && event.attempt_id.as_deref() == Some(attempt_id)
+            && event.payload["question_id"] == question_id
+    }) {
+        if existing.payload["text"] != question_text {
+            return Err(anyhow!("question event payload changed after persistence"));
+        }
+        existing.clone()
+    } else {
+        record_channel_event(
+            ws,
+            None,
+            context,
+            ChannelEventType::QuestionAsked,
+            EventActor {
+                kind: EventActorKind::Worker,
+                id: channel
+                    .attempts
+                    .iter()
+                    .find(|attempt| attempt.attempt_id == attempt_id)
+                    .map(|attempt| attempt.worker_id.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
+            },
+            Some(attempt_id),
+            channel.events.last().map(|event| event.event_id.clone()),
+            serde_json::json!({"question_id": question_id, "text": question_text}),
+            None,
+        )?
+    };
+    let context_start_seq = asked.seq.saturating_sub(20).max(1);
+    ws.record_question(&Question {
+        schema_version: 1,
+        question_id,
+        session_id: context.session_id.clone(),
+        task_id: context.task_id.clone(),
+        attempt_id: attempt_id.to_string(),
+        asked_event_id: asked.event_id.clone(),
+        asked_seq: asked.seq,
+        context_start_seq,
+        text: question_text.to_string(),
+        state: QuestionState::Open,
+        answer_id: None,
+    })?;
+    ws.load_or_rebuild_task_channel(&context.intent_id, &context.task_id)?;
+    Ok(Some(asked))
+}
+
+pub(crate) fn action_attempt_id(action_id: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in action_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("att-action-{hash:016x}")
+}
+
+fn explicit_continuation_packet(
+    attempt_id: &str,
+    caused_by_event_id: Option<&str>,
+    caused_by_action_id: Option<&str>,
+    public_context: &[(u64, String)],
+    checkpoint: Option<&str>,
+) -> String {
+    const CONTEXT_LIMIT: usize = 20;
+    let retained = public_context.len().saturating_sub(CONTEXT_LIMIT);
+    let mut packet = format!(
+        "Explicit continuation packet\n\
+         continuation_attempt_id: {attempt_id}\n\
+         caused_by_event_id: {}\n\
+         caused_by_action_id: {}\n",
+        caused_by_event_id.unwrap_or("none"),
+        caused_by_action_id.unwrap_or("none")
+    );
+    if let Some(checkpoint) = checkpoint.filter(|value| !value.trim().is_empty()) {
+        packet.push_str("\nCheckpoint:\n");
+        packet.push_str(checkpoint.trim());
+        packet.push('\n');
+    }
+    packet.push_str("\nBounded public channel context:\n");
+    for (seq, text) in &public_context[retained..] {
+        packet.push_str(&format!("[{seq}] {}\n", text.trim()));
+    }
+    packet
+}
+
+fn public_channel_context(channel: &crate::schemas::TaskChannel) -> Vec<(u64, String)> {
+    channel
+        .events
+        .iter()
+        .filter_map(|event| {
+            let text = match event.event_type {
+                ChannelEventType::WorkerMessage
+                | ChannelEventType::QuestionAsked
+                | ChannelEventType::UserAnswered => event
+                    .payload
+                    .get("text")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+                ChannelEventType::ToolStarted | ChannelEventType::ToolCompleted => Some(format!(
+                    "{}: {}",
+                    event.event_type.as_str(),
+                    event
+                        .payload
+                        .get("name")
+                        .or_else(|| event.payload.get("command"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("tool")
+                )),
+                ChannelEventType::WorkerCheckpoint => Some("worker.checkpoint".to_string()),
+                ChannelEventType::WorkerCompleted => Some(format!(
+                    "worker.completed: {}",
+                    event
+                        .payload
+                        .get("result")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("unknown")
+                )),
+                _ => None,
+            }?;
+            (!text.trim().is_empty()).then_some((event.seq, text))
+        })
+        .collect()
+}
+
+/// Bind a UI or CLI reply to the exact open channel question before `run_next`
+/// appends the legacy conversation turn. Legacy channels remain additive and
+/// simply return `false`.
+pub(crate) fn prepare_answer_action(
+    ws: &Workspace,
+    task_id: &str,
+    reply: &str,
+    requested_action_id: Option<String>,
+) -> Result<bool> {
+    let queue = ws.load_queue()?;
+    if queue.intent_id.is_empty() {
+        return Ok(false);
+    }
+    let channel = ws.load_task_channel(&queue.intent_id, task_id)?;
+    let Some(question) = channel
+        .questions
+        .iter()
+        .rev()
+        .find(|question| question.state == QuestionState::Open)
+    else {
+        if channel.questions.is_empty() {
+            return Ok(false);
+        }
+        bail!("question_closed: task {task_id} has no actionable open question");
+    };
+    let producer = channel
+        .attempts
+        .iter()
+        .find(|attempt| attempt.attempt_id == question.attempt_id)
+        .ok_or_else(|| anyhow!("question producer attempt is missing"))?;
+    let action_id = requested_action_id.unwrap_or_else(|| {
+        format!(
+            "act-answer-{}-{}",
+            chrono::Utc::now().format("%Y%m%d%H%M%S%6f"),
+            std::process::id()
+        )
+    });
+    let task = queue
+        .tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| anyhow!("task {task_id} not found in queue"))?;
+    let workers_file = ws.load_workers()?;
+    let billing = ws.load_billing()?;
+    let selected = routing::resolve_worker_for_task(ws, &workers_file, &billing, None, task)?;
+    let same_worker = selected.worker_id == producer.worker_id;
+    ws.answer_question(&AnswerActionRequest {
+        continuation_attempt_id: action_attempt_id(&action_id),
+        answer_id: format!("ans-{}", action_attempt_id(&action_id)),
+        action_id,
+        session_id: channel.session_id.clone(),
+        intent_id: queue.intent_id,
+        task_id: task_id.to_string(),
+        question_id: question.question_id.clone(),
+        text: reply.to_string(),
+        worker_id: selected.worker_id.clone(),
+        worker_session_ref: same_worker
+            .then(|| producer.worker_session_ref.clone())
+            .flatten(),
+        supports_native_resume: same_worker && workers::supports_native_resume(&selected.worker_id),
+    })?;
+    Ok(true)
+}
+
 pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // Serialize queue selection and the first runtime transition against a
     // planning confirmation. Once Running is canonical, confirm observes it
@@ -708,9 +1388,47 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     } else {
         Vec::new()
     };
-    // Re-running a Partial task: continue from the previous run's checkpoint
-    // instead of redoing the work from scratch.
-    let continuation = if task.state == TaskState::Partial {
+    let prepared_answer_attempt = ws
+        .load_task_channel(&queue.intent_id, &task.id)
+        .ok()
+        .and_then(|channel| {
+            channel.attempts.into_iter().rev().find(|attempt| {
+                attempt.state == AttemptState::Prepared
+                    && matches!(
+                        attempt.continuation,
+                        ContinuationMode::NativeResume
+                            | ContinuationMode::ExplicitPacket
+                            | ContinuationMode::Redirect
+                    )
+            })
+        });
+    #[cfg(debug_assertions)]
+    if prepared_answer_attempt
+        .as_ref()
+        .is_some_and(|attempt| attempt.continuation == ContinuationMode::Redirect)
+        && std::env::var("YARDLET_TEST_CRASH_AFTER_REDIRECT_RECEIPT").as_deref() == Ok("1")
+    {
+        bail!("injected crash after redirect receipt and before continuation spawn");
+    }
+    // Re-running a Partial task uses its checkpoint. An answer/redirect that
+    // cannot honestly resume a native provider session receives a bounded,
+    // causally explicit packet instead of an unbounded transcript.
+    let continuation = if let Some(attempt) = prepared_answer_attempt.as_ref().filter(|attempt| {
+        matches!(
+            attempt.continuation,
+            ContinuationMode::ExplicitPacket | ContinuationMode::Redirect
+        )
+    }) {
+        let channel = ws.load_task_channel(&queue.intent_id, &task.id)?;
+        let context = public_channel_context(&channel);
+        Some(explicit_continuation_packet(
+            &attempt.attempt_id,
+            attempt.caused_by_event_id.as_deref(),
+            attempt.caused_by_action_id.as_deref(),
+            &context,
+            continuation_context(ws, &task.id).as_deref(),
+        ))
+    } else if task.state == TaskState::Partial {
         continuation_context(ws, &task.id)
     } else {
         None
@@ -990,7 +1708,6 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 
     // Session id for resume-on-transient: claude lets us set one up front; codex
     // generates its own, captured from that child's JSONL stdout.
-    let log_path = run_dir.join("worker-output.log");
     let mut effective_chained = chained;
     let mut session_id: Option<String> = if chained {
         opts.chain.as_ref().map(|c| c.session.clone())
@@ -999,6 +1716,15 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     } else {
         None
     };
+    let channel_context = channel_run_context(ws, &queue.intent_id, &task.id);
+    if let Some(attempt) = &prepared_answer_attempt {
+        if attempt.continuation == ContinuationMode::NativeResume {
+            session_id = attempt.worker_session_ref.clone();
+            effective_chained = true;
+        } else {
+            effective_chained = false;
+        }
+    }
     // Snapshot the workspace before the worker runs so the evaluator can diff
     // against ACTUAL on-disk changes, not the worker's self-report. Git
     // workspaces use `git status`; non-git workspaces use a bounded folder scan.
@@ -1011,25 +1737,71 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         .map(|owned| owned.path.as_path())
         .unwrap_or(ws.root.as_path());
     let run_started = std::time::Instant::now();
-    let mut outcome = workers::spawn(
+    let mut attempt_ordinal = 1_u32;
+    let first_attempt_id = prepared_answer_attempt
+        .as_ref()
+        .map(|attempt| attempt.attempt_id.clone())
+        .unwrap_or_else(|| attempt_id_for_ordinal(&run_id, attempt_ordinal));
+    let first_continuation = prepared_answer_attempt
+        .as_ref()
+        .map(|attempt| attempt.continuation)
+        .unwrap_or_else(|| {
+            if chained {
+                ContinuationMode::NativeResume
+            } else {
+                ContinuationMode::Fresh
+            }
+        });
+    let (mut current_attempt, mut current_capture) = begin_worker_attempt(
+        ws,
+        None,
+        &channel_context,
+        &run_dir,
+        &first_attempt_id,
+        &active_worker_id,
+        session_id.clone(),
+        first_continuation,
+        None,
+    )?;
+    let mut outcome = match workers::spawn_attempt_with_sink(
         &eff_profile,
         &active_bin,
         &packet_text,
         worker_run_dir,
         worker_cwd,
         &env,
-        &log_path,
+        &current_capture,
+        Some(live_worker_event_sink(
+            ws,
+            &channel_context,
+            &current_attempt,
+        )),
         timeout,
         full_access,
         &images,
         session_id.as_deref(),
-        chained,
-    )?;
+        effective_chained,
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            finish_worker_attempt_error(ws, &channel_context, &current_attempt, &error)?;
+            return Err(error);
+        }
+    };
     // From this point the worktree may contain completed or partially completed
     // worker work. Any import/finalization error must retain it for recovery;
     // the guard is only for failures before a worker actually ran.
     serial_cleanup.disarm();
     import_worker_run_artifacts(worker_run_dir, &run_dir)?;
+    finish_worker_attempt(
+        ws,
+        None,
+        &channel_context,
+        &run_dir,
+        &current_attempt,
+        &current_capture,
+        &outcome,
+    )?;
     if active_worker_id == "codex" && session_id.is_none() {
         session_id = outcome.session_id.clone();
         if session_id.is_none() {
@@ -1056,21 +1828,56 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         let cont = "The previous run was interrupted by a connection error before it finished. \
                     Continue from where you left off, complete the task, and write the result file \
                     exactly as specified in the original task packet.";
-        outcome = workers::spawn(
+        attempt_ordinal += 1;
+        let attempt_id = attempt_id_for_ordinal(&run_id, attempt_ordinal);
+        let begun = begin_worker_attempt(
+            ws,
+            None,
+            &channel_context,
+            &run_dir,
+            &attempt_id,
+            &active_worker_id,
+            session_id.clone(),
+            ContinuationMode::NativeResume,
+            None,
+        )?;
+        current_attempt = begun.0;
+        current_capture = begun.1;
+        outcome = match workers::spawn_attempt_with_sink(
             &eff_profile,
             &active_bin,
             cont,
             worker_run_dir,
             worker_cwd,
             &env,
-            &log_path,
+            &current_capture,
+            Some(live_worker_event_sink(
+                ws,
+                &channel_context,
+                &current_attempt,
+            )),
             timeout,
             full_access,
             &images,
             session_id.as_deref(),
             true,
-        )?;
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                finish_worker_attempt_error(ws, &channel_context, &current_attempt, &error)?;
+                return Err(error);
+            }
+        };
         import_worker_run_artifacts(worker_run_dir, &run_dir)?;
+        finish_worker_attempt(
+            ws,
+            None,
+            &channel_context,
+            &run_dir,
+            &current_attempt,
+            &current_capture,
+            &outcome,
+        )?;
     }
 
     // User stopped it (Esc): requeue rather than evaluate as a real failure.
@@ -1155,21 +1962,61 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                     approved,
                 });
                 write_str(&workers::packet_path(&run_dir), &failover_packet)?;
-                outcome = workers::spawn(
+                attempt_ordinal += 1;
+                let attempt_id = attempt_id_for_ordinal(&run_id, attempt_ordinal);
+                let begun = begin_worker_attempt(
+                    ws,
+                    None,
+                    &channel_context,
+                    &run_dir,
+                    &attempt_id,
+                    &active_worker_id,
+                    session_id.clone(),
+                    ContinuationMode::Fallback,
+                    None,
+                )?;
+                current_attempt = begun.0;
+                current_capture = begun.1;
+                outcome = match workers::spawn_attempt_with_sink(
                     &eff_profile,
                     &active_bin,
                     &failover_packet,
                     worker_run_dir,
                     worker_cwd,
                     &env,
-                    &log_path,
+                    &current_capture,
+                    Some(live_worker_event_sink(
+                        ws,
+                        &channel_context,
+                        &current_attempt,
+                    )),
                     timeout,
                     full_access,
                     &images,
                     session_id.as_deref(),
                     false,
-                )?;
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        finish_worker_attempt_error(
+                            ws,
+                            &channel_context,
+                            &current_attempt,
+                            &error,
+                        )?;
+                        return Err(error);
+                    }
+                };
                 import_worker_run_artifacts(worker_run_dir, &run_dir)?;
+                finish_worker_attempt(
+                    ws,
+                    None,
+                    &channel_context,
+                    &run_dir,
+                    &current_attempt,
+                    &current_capture,
+                    &outcome,
+                )?;
                 if active_worker_id == "codex" && session_id.is_none() {
                     session_id = outcome.session_id.clone();
                     if session_id.is_none() {
@@ -1368,6 +2215,13 @@ pub(crate) mod gate_msg {
 /// coming back partial, including across restarts. `bypass` drops the worker sandbox for the whole run
 /// (workers still self-gate dangerous actions per the packet).
 #[allow(clippy::too_many_arguments)]
+/// A held decision is local to its dependency branch. Auto-drain may keep
+/// selecting other ready work; only a hard block or an actually running task
+/// ends the current drain loop.
+fn continues_auto_drain(state: TaskState) -> bool {
+    !matches!(state, TaskState::Blocked | TaskState::Running)
+}
+
 pub fn run_auto<F: FnMut(&str)>(
     ws: &Workspace,
     bypass: bool,
@@ -1694,6 +2548,9 @@ pub fn run_auto<F: FnMut(&str)>(
             }
             TaskState::NeedsUser => {
                 emit(gate_msg::needs_user(&report.task_id));
+                if continues_auto_drain(state) {
+                    continue;
+                }
                 break;
             }
             TaskState::Partial => {
@@ -1888,9 +2745,13 @@ fn is_transient_failure(outcome: &workers::WorkerOutcome, run_dir: &std::path::P
 /// or a bare sequence. Yardlet runs these itself (a worker's self-reported
 /// validation is advisory, not the gate).
 fn validation_commands(task: &crate::schemas::Task) -> Vec<String> {
-    let Some(v) = &task.validation else {
+    if !task.has_validation() {
         return Vec::new();
-    };
+    }
+    let v = task
+        .validation
+        .as_ref()
+        .expect("has_validation guarantees validation is present");
     let seq = v
         .get("commands")
         .and_then(|c| c.as_sequence())
@@ -2069,6 +2930,46 @@ pub(crate) fn live_worker_pid(run_dir: &std::path::Path) -> Option<u32> {
         .ok()?
         .success()
         .then_some(pid)
+}
+
+pub(crate) fn verified_worker_pid_for_redirect(
+    run_dir: &std::path::Path,
+    expected_task_id: &str,
+    expected_attempt_id: &str,
+    expected_worker_id: &str,
+) -> Result<u32> {
+    let record: RunRecord =
+        state::load_yaml(&run_dir.join("run.yaml")).context("loading redirect run identity")?;
+    let path_run_id = run_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("redirect run directory has no valid identity"))?;
+    if record.run_id != path_run_id
+        || record.task_id != expected_task_id
+        || record.completed_at.is_some()
+        || record.state != "running"
+    {
+        bail!("redirect run identity/provenance mismatch; refusing to signal a process");
+    }
+
+    let provenance = workers::load_worker_process_provenance(run_dir)
+        .context("worker process provenance is missing or invalid; refusing redirect signal")?;
+    if provenance.schema_version != 1
+        || provenance.run_id != record.run_id
+        || provenance.attempt_id != expected_attempt_id
+        || provenance.worker_id != expected_worker_id
+        || provenance.pid == 0
+    {
+        bail!(
+            "worker process provenance does not match the active attempt; refusing redirect signal"
+        );
+    }
+    let observed_start = workers::process_start_marker(provenance.pid)
+        .ok_or_else(|| anyhow!("verified worker process is no longer alive"))?;
+    if observed_start != provenance.process_start_marker {
+        bail!("worker process identity changed since spawn; refusing redirect signal");
+    }
+    Ok(provenance.pid)
 }
 
 /// A run Yardlet never finalized: its `worker.pid` is still on disk (a finalized
@@ -2960,7 +3861,7 @@ pub(crate) fn find_worker<'a>(workers: &'a [WorkerProfile], id: &str) -> Result<
         .ok_or_else(|| anyhow!("worker '{id}' is not defined in .agents/workers.yaml"))
 }
 
-fn save_task_state_on_latest_queue(
+pub(crate) fn save_task_state_on_latest_queue(
     ws: &Workspace,
     fallback_queue: &mut WorkQueue,
     task_id: &str,
@@ -3279,18 +4180,15 @@ impl FinalizeFlags {
         }
     }
 
-    /// The parallel path runs in an isolated worktree, so the in-tree gates that
-    /// need the real workspace are deferred: validation is OFF (the pre-merge
-    /// worktree lacks gitignored build deps like node_modules/target, so running
-    /// it there spuriously fails self-contained-looking tasks — a post-merge gate
-    /// is the proper future design), and post-run hooks are OFF for the same
-    /// reason. The evaluator's forbidden-path gate still runs on the worktree
-    /// diff, so the safety floor holds. Conversation/learned are skipped (batches
-    /// only pick Queued tasks). Artifacts, telemetry, and follow-up ingestion land.
+    /// The parallel path runs validation in the isolated worktree before merge,
+    /// preserving the same fatal gate and channel events as serial execution.
+    /// Post-run hooks remain deferred because they may rely on workspace-local
+    /// dependencies. Conversation/learned are skipped (batches only pick Queued
+    /// tasks). Artifacts, telemetry, and follow-up ingestion land.
     pub fn parallel() -> Self {
         Self {
             post_hooks: false,
-            validation: false,
+            validation: true,
             conversation: false,
             learned: false,
             artifacts: true,
@@ -3578,6 +4476,182 @@ pub(crate) fn feedback_next_state(feedback: &FeedbackRecord) -> TaskState {
     }
 }
 
+fn artifact_content_digest(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv1a64:{hash:016x}")
+}
+
+fn artifact_media_type(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("json") => "application/json",
+        Some("yaml" | "yml") => "application/yaml",
+        Some("md") => "text/markdown",
+        _ => "application/octet-stream",
+    }
+}
+
+fn record_artifact_created(
+    ws: &Workspace,
+    context: &ChannelRunContext,
+    attempt_id: &str,
+    path: &std::path::Path,
+    recorded_path: &str,
+    role: &str,
+    worker_authored: bool,
+) -> Result<()> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("reading artifact for channel event {}", path.display()))?;
+    let content_digest = artifact_content_digest(&bytes);
+    let seed = format!("{attempt_id}\0{role}\0{recorded_path}\0{content_digest}");
+    let artifact_id = format!(
+        "art_{}",
+        artifact_content_digest(seed.as_bytes()).trim_start_matches("fnv1a64:")
+    );
+    let channel = ws.load_task_channel(&context.intent_id, &context.task_id)?;
+    if let Some(existing) = channel.events.iter().find(|event| {
+        event.event_type == ChannelEventType::ArtifactCreated
+            && event.payload["artifact_id"] == artifact_id
+    }) {
+        if existing.payload["content_digest"] == content_digest
+            && existing.attempt_id.as_deref() == Some(attempt_id)
+        {
+            return Ok(());
+        }
+        bail!("artifact event conflict for {artifact_id}");
+    }
+    let worker_id = channel
+        .attempts
+        .iter()
+        .find(|attempt| attempt.attempt_id == attempt_id)
+        .map(|attempt| attempt.worker_id.clone())
+        .ok_or_else(|| anyhow!("artifact producer attempt missing: {attempt_id}"))?;
+    let causation_id = channel.events.last().map(|event| event.event_id.clone());
+    record_channel_event(
+        ws,
+        None,
+        context,
+        ChannelEventType::ArtifactCreated,
+        if worker_authored {
+            EventActor {
+                kind: EventActorKind::Worker,
+                id: worker_id.clone(),
+            }
+        } else {
+            EventActor {
+                kind: EventActorKind::System,
+                id: String::new(),
+            }
+        },
+        Some(attempt_id),
+        causation_id,
+        serde_json::json!({
+            "artifact_id": artifact_id,
+            "path": recorded_path,
+            "content_digest": content_digest,
+            "media_type": artifact_media_type(path),
+            "role": role,
+            "producer_attempt_id": attempt_id,
+            "producer_worker_id": worker_id
+        }),
+        None,
+    )?;
+    Ok(())
+}
+
+fn record_finalization_artifacts(
+    ws: &Workspace,
+    context: &ChannelRunContext,
+    run_dir: &std::path::Path,
+    worker_root: &std::path::Path,
+    result: Option<&RunResult>,
+) -> Result<()> {
+    let Some(attempt_id) = std::fs::read_to_string(run_dir.join("latest-attempt"))
+        .ok()
+        .map(|attempt| attempt.trim().to_string())
+        .filter(|attempt| !attempt.is_empty())
+    else {
+        return Ok(());
+    };
+    for (name, role, worker_authored) in [
+        ("result.json", "worker_result", true),
+        ("evaluation.json", "evaluation", false),
+        ("checkpoint.md", "checkpoint", false),
+        ("handoff.md", "handoff", false),
+    ] {
+        let path = run_dir.join(name);
+        let recorded_path = path
+            .strip_prefix(&ws.root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        record_artifact_created(
+            ws,
+            context,
+            &attempt_id,
+            &path,
+            &recorded_path,
+            role,
+            worker_authored,
+        )?;
+    }
+
+    let Some(result) = result else {
+        ws.load_or_rebuild_task_channel(&context.intent_id, &context.task_id)?;
+        return Ok(());
+    };
+    let Ok(canonical_root) = std::fs::canonicalize(worker_root) else {
+        return Ok(());
+    };
+    let mut declared = result
+        .changes
+        .files_created
+        .iter()
+        .chain(&result.changes.files_modified)
+        .collect::<Vec<_>>();
+    declared.sort();
+    declared.dedup();
+    for recorded_path in declared {
+        let relative = std::path::Path::new(recorded_path);
+        if relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            continue;
+        }
+        let path = worker_root.join(relative);
+        let Ok(canonical_path) = std::fs::canonicalize(&path) else {
+            continue;
+        };
+        if canonical_path.strip_prefix(&canonical_root).is_err() || !canonical_path.is_file() {
+            continue;
+        }
+        record_artifact_created(
+            ws,
+            context,
+            &attempt_id,
+            &canonical_path,
+            recorded_path,
+            "worker_declared",
+            true,
+        )?;
+    }
+    ws.load_or_rebuild_task_channel(&context.intent_id, &context.task_id)?;
+    Ok(())
+}
+
 /// The single finalization pipeline shared by the run paths (Slice 1: serial
 /// only). Evaluate -> gates -> artifacts -> conversation -> learned -> queue
 /// state + follow-up ingestion -> telemetry. Behavior is identical to the
@@ -3642,8 +4716,48 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             .map(|m| m.wt_path)
             .unwrap_or(ws.root.as_path());
         let validation_cmds = validation_commands(task);
+        let validation_attempt = std::fs::read_to_string(run_dir.join("latest-attempt"))
+            .ok()
+            .map(|attempt| attempt.trim().to_string())
+            .filter(|attempt| !attempt.is_empty());
+        let validation_context = channel_run_context(ws, &intent_id, &task.id);
+        let validation_started = if let Some(attempt_id) = validation_attempt.as_deref() {
+            Some(record_channel_event(
+                ws,
+                None,
+                &validation_context,
+                ChannelEventType::ValidationStarted,
+                EventActor {
+                    kind: EventActorKind::System,
+                    id: String::new(),
+                },
+                Some(attempt_id),
+                None,
+                serde_json::json!({"commands": validation_cmds.clone()}),
+                None,
+            )?)
+        } else {
+            None
+        };
         let (validation_ran, validation_passed) =
             run_validation_commands(&validation_cmds, validation_cwd, run_dir, billing);
+        if let Some(attempt_id) = validation_attempt.as_deref() {
+            record_channel_event(
+                ws,
+                None,
+                &validation_context,
+                ChannelEventType::ValidationCompleted,
+                EventActor {
+                    kind: EventActorKind::System,
+                    id: String::new(),
+                },
+                Some(attempt_id),
+                validation_started.map(|event| event.event_id),
+                serde_json::json!({"ran": validation_ran, "passed": validation_passed}),
+                None,
+            )?;
+            ws.load_or_rebuild_task_channel(&validation_context.intent_id, &task.id)?;
+        }
         if (validation_ran && !validation_passed) || (validation_required(task) && !validation_ran)
         {
             lines.push("validation failed (blocks Done)".to_string());
@@ -3695,6 +4809,17 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         }
     }
 
+    if let Some(question) = result
+        .as_ref()
+        .filter(|result| result.status == "needs_user")
+        .and_then(|result| result.question_for_user.as_deref())
+        .map(str::trim)
+        .filter(|question| !question.is_empty())
+    {
+        let channel_context = channel_run_context(ws, &intent_id, &task.id);
+        record_result_question(ws, &channel_context, run_dir, question)?;
+    }
+
     // Record the worker's user-facing message into the conversation transcript
     // whenever a run pauses for the user, so the next resume threads the full
     // exchange back (deduped by run_id).
@@ -3729,6 +4854,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             append_nonblocking_follow_up_notes(run_dir, r)?;
         }
     }
+    let artifact_context = channel_run_context(ws, &intent_id, &task.id);
+    let worker_root = merge
+        .as_ref()
+        .map(|merge| merge.wt_path)
+        .unwrap_or(ws.root.as_path());
+    record_finalization_artifacts(ws, &artifact_context, run_dir, worker_root, result.as_ref())?;
 
     // Harness learning loop (S3): record skills/rules the worker proposed. The
     // worker authored the content; Yardlet (the core) does the writing.
@@ -4121,6 +5252,40 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     }
 
     drop(queue_lock);
+
+    if let Some(attempt_id) = std::fs::read_to_string(run_dir.join("latest-attempt"))
+        .ok()
+        .map(|attempt| attempt.trim().to_string())
+        .filter(|attempt| !attempt.is_empty())
+    {
+        let context = channel_run_context(ws, &intent_id, &task.id);
+        let channel = ws.load_task_channel(&context.intent_id, &task.id)?;
+        let completion_id = format!("cmp_{run_id}");
+        if !channel.events.iter().any(|event| {
+            event.event_type == ChannelEventType::CompletionRecorded
+                && event.payload["completion_id"] == completion_id
+        }) {
+            record_channel_event(
+                ws,
+                None,
+                &context,
+                ChannelEventType::CompletionRecorded,
+                EventActor {
+                    kind: EventActorKind::System,
+                    id: String::new(),
+                },
+                Some(&attempt_id),
+                channel.events.last().map(|event| event.event_id.clone()),
+                serde_json::json!({
+                    "completion_id": completion_id,
+                    "run_id": run_id,
+                    "task_state": run_outcome_label(evaluated_state)
+                }),
+                None,
+            )?;
+            ws.load_or_rebuild_task_channel(&context.intent_id, &task.id)?;
+        }
+    }
 
     if flags.telemetry {
         let _ = telemetry::append_run(
@@ -4590,6 +5755,18 @@ pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
         .as_ref()
         .map(|q| q.intent_id.clone())
         .filter(|s| !s.is_empty());
+    if let Some(intent_id) = current_intent.as_deref() {
+        if let Ok(channel) = ws.load_task_channel(intent_id, task_id) {
+            if let Some(question) = channel
+                .questions
+                .iter()
+                .rev()
+                .find(|question| question.state == QuestionState::Open)
+            {
+                return Some(question.text.clone());
+            }
+        }
+    }
     let mut best: Option<(SystemTime, String)> = None;
     if let Ok(entries) = std::fs::read_dir(ws.runs_dir()) {
         for entry in entries.flatten() {
@@ -4680,6 +5857,17 @@ pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_invocation_ordinal_gets_a_distinct_attempt_identity() {
+        assert_eq!(attempt_id_for_ordinal("run-1", 1), "run-1");
+        assert_eq!(attempt_id_for_ordinal("run-1", 2), "run-1-attempt-2");
+        assert_eq!(attempt_id_for_ordinal("run-1", 3), "run-1-attempt-3");
+        assert_ne!(
+            attempt_id_for_ordinal("run-1", 2),
+            attempt_id_for_ordinal("run-1", 3)
+        );
+    }
     use crate::schemas::{SelectionPolicy, Task, WorkQueue};
 
     #[test]
@@ -7985,6 +9173,34 @@ exit 1
             dependent,
         ]);
         assert_eq!(select_next(&q, &opts()).unwrap(), None);
+    }
+
+    #[test]
+    fn a_new_needs_user_result_does_not_stop_the_independent_drain() {
+        assert!(continues_auto_drain(TaskState::NeedsUser));
+        assert!(continues_auto_drain(TaskState::Done));
+        assert!(!continues_auto_drain(TaskState::Blocked));
+        assert!(!continues_auto_drain(TaskState::Running));
+    }
+
+    #[test]
+    fn explicit_continuation_packet_is_bounded_and_causally_exact() {
+        let context = (1..=25)
+            .map(|seq| (seq, format!("message-{seq}")))
+            .collect::<Vec<_>>();
+        let packet = explicit_continuation_packet(
+            "att-next",
+            Some("evt-answer"),
+            Some("act-answer"),
+            &context,
+            Some("checkpoint text"),
+        );
+        assert!(!packet.contains("message-5\n"));
+        assert!(packet.contains("message-6"));
+        assert!(packet.contains("message-25"));
+        assert!(packet.contains("caused_by_event_id: evt-answer"));
+        assert!(packet.contains("caused_by_action_id: act-answer"));
+        assert!(packet.contains("checkpoint text"));
     }
 
     #[test]

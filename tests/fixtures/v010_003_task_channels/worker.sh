@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'fixture-worker 1.0\n'
+  exit 0
+fi
+
+packet="$(cat)"
+native_adapter=false
+if [[ "${1:-}" == "exec" ]]; then
+  native_adapter=true
+  run_dir="$(sed -n 's#.*- `\(/.*\)/result.json`.*#\1#p' <<<"$packet" | head -n 1)"
+else
+  run_dir="${1:?run directory is required}"
+fi
+if [[ -z "$run_dir" ]]; then
+  printf 'fixture could not resolve run directory\n' >&2
+  exit 65
+fi
+task_id="$(sed -n 's/^# Yardlet task packet: //p' <<<"$packet" | head -n 1)"
+run_id="${run_dir##*/}"
+mkdir -p "$run_dir"
+
+write_handoff() {
+  printf '# Handoff\n\n%s\n' "$1" >"$run_dir/handoff.md"
+}
+
+write_done() {
+  local summary="$1"
+  printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "compact_summary": "%s"\n}\n' \
+    "$run_id" "$task_id" "$summary" >"$run_dir/result.json"
+  write_handoff "$summary"
+}
+
+write_question() {
+  local question="$1"
+  printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "needs_user",\n  "question_for_user": "%s",\n  "compact_summary": "사용자 선택 대기"\n}\n' \
+    "$run_id" "$task_id" "$question" >"$run_dir/result.json"
+  write_handoff "사용자 선택을 기다립니다."
+}
+
+case "$task_id" in
+  YARD-ASK)
+    printf 'ask worker public context before question\n'
+    printf 'ask worker diagnostic stream\n' >&2
+    write_question "A 또는 B를 선택해 주세요."
+    ;;
+  YARD-DRAIN)
+    sleep 1
+    printf 'drain worker public progress\n'
+    printf 'drain worker diagnostic stream\n' >&2
+    printf 'validated fixture artifact\n' >drain-artifact.txt
+    write_done "독립 task worker 완료"
+    ;;
+  YARD-001)
+    if grep -q '> \[user\] A' <<<"$packet"; then
+      printf 'fixture second stdout\n'
+      printf 'fixture second stderr\n' >&2
+      write_done "질문 답변 뒤 explicit continuation 완료"
+    else
+      printf 'fixture first stdout\n'
+      printf 'fixture first stderr\n' >&2
+      write_question "A 또는 B를 선택해 주세요."
+    fi
+    ;;
+  YARD-NATIVE)
+    if [[ "$native_adapter" != true ]]; then
+      printf 'native fixture requires the codex adapter\n' >&2
+      exit 66
+    fi
+    printf '%s\n' "$*" >"$run_dir/native-args.txt"
+    if [[ " $* " == *" resume "* ]]; then
+      printf '{"type":"item.completed","item":{"type":"agent_message","text":"native resumed stdout"}}\n'
+      printf 'native resumed stderr\n' >&2
+      write_done "native session resume 완료"
+    else
+      printf '{"type":"thread.started","thread_id":"11111111-1111-4111-8111-111111111111"}\n'
+      printf '{"type":"item.completed","item":{"type":"agent_message","text":"native first stdout"}}\n'
+      printf 'native first stderr\n' >&2
+      write_question "native session으로 이어갈까요?"
+    fi
+    ;;
+  YARD-REDIRECT)
+    if grep -q 'Explicit continuation packet' <<<"$packet"; then
+      printf 'redirected worker public completion\n'
+      printf 'redirected worker diagnostic completion\n' >&2
+      write_done "redirect guidance 완료"
+    else
+      printf 'running worker public progress\n'
+      printf 'running worker diagnostic progress\n' >&2
+      write_handoff "checkpoint before redirect"
+      child_pid=''
+      trap '[[ -z "$child_pid" ]] || kill "$child_pid" 2>/dev/null || true; exit 143' TERM INT
+      while true; do
+        sleep 30 &
+        child_pid=$!
+        wait "$child_pid"
+      done
+    fi
+    ;;
+  YARD-INDEX)
+    if grep -q '> \[user\] A' <<<"$packet"; then
+      printf 'index continuation stdout\n'
+      printf 'index continuation stderr\n' >&2
+      write_done "bounded index rebuild 완료"
+    else
+      for index in $(seq 1 140); do
+        printf 'index public progress %03d\n' "$index"
+      done
+      printf 'index diagnostic stream\n' >&2
+      write_question "index rebuild를 계속할까요?"
+    fi
+    ;;
+  YARD-LIVE)
+    printf '{"type":"item.started","item":{"type":"command_execution","command":"printf live"}}\n'
+    printf '{"type":"item.completed","item":{"type":"reasoning","text":"private fixture reasoning"}}\n'
+    printf '{"type":"item.completed","item":{"type":"agent_message","text":"live public message"}}\n'
+    printf '{"type":"item.completed","item":{"type":"command_execution","command":"printf live","exit_code":0}}\n'
+    sleep 3
+    printf 'live worker artifact\n' >live-worker-artifact.txt
+    printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "changes": {"files_created": ["live-worker-artifact.txt"]},\n  "compact_summary": "live event and artifact fixture complete"\n}\n' \
+      "$run_id" "$task_id" >"$run_dir/result.json"
+    write_handoff "live event and artifact fixture complete"
+    ;;
+  YARD-REDIRECT-QUESTION)
+    if grep -q '> \[user\] resolve current question' <<<"$packet"; then
+      printf 'current question resolved\n'
+      write_done "redirected current question resolved"
+    elif grep -q '> \[user\] ask a current question' <<<"$packet"; then
+      printf 'redirected question context\n'
+      write_question "current question after redirect"
+    elif grep -q '> \[user\] stale answer' <<<"$packet"; then
+      printf 'stale question was incorrectly resumed\n'
+      write_done "stale question incorrectly resumed"
+    else
+      printf 'superseded question context\n'
+      write_question "question that redirect will supersede"
+    fi
+    ;;
+  YARD-FALLBACK)
+    if grep -q 'Explicit continuation packet' <<<"$packet"; then
+      printf 'fallback worker explicit continuation\n'
+      write_done "fallback worker completed explicit continuation"
+    else
+      printf 'producer worker question context\n'
+      write_question "continue with a fallback worker?"
+    fi
+    ;;
+  *)
+    printf 'unexpected fixture task: %s\n' "$task_id" >&2
+    exit 64
+    ;;
+esac

@@ -1661,6 +1661,467 @@ pub struct Conversation {
     pub turns: Vec<ConversationTurn>,
 }
 
+// ---------------------------------------------------------------------------
+// .agents/task-channels/** — V010-003 durable task channel facts/projection
+// ---------------------------------------------------------------------------
+
+/// Stable normalized event vocabulary shared by CLI/TUI projections. Unknown
+/// strings are retained so additive provider events stay displayable without
+/// being mistaken for scheduler evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChannelEventType {
+    TaskStateChanged,
+    AttemptPrepared,
+    WorkerStarted,
+    WorkerMessage,
+    ToolStarted,
+    ToolCompleted,
+    WorkerCheckpoint,
+    QuestionAsked,
+    QuestionClosed,
+    UserAnswered,
+    ArtifactCreated,
+    ValidationStarted,
+    ValidationCompleted,
+    WorkerCompleted,
+    CompletionRecorded,
+    ActionRequested,
+    ActionCompleted,
+    ActionRejected,
+    Unknown(String),
+}
+
+impl ChannelEventType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::TaskStateChanged => "task.state.changed",
+            Self::AttemptPrepared => "attempt.prepared",
+            Self::WorkerStarted => "worker.started",
+            Self::WorkerMessage => "worker.message",
+            Self::ToolStarted => "tool.started",
+            Self::ToolCompleted => "tool.completed",
+            Self::WorkerCheckpoint => "worker.checkpoint",
+            Self::QuestionAsked => "question.asked",
+            Self::QuestionClosed => "question.closed",
+            Self::UserAnswered => "user.answered",
+            Self::ArtifactCreated => "artifact.created",
+            Self::ValidationStarted => "validation.started",
+            Self::ValidationCompleted => "validation.completed",
+            Self::WorkerCompleted => "worker.completed",
+            Self::CompletionRecorded => "completion.recorded",
+            Self::ActionRequested => "action.requested",
+            Self::ActionCompleted => "action.completed",
+            Self::ActionRejected => "action.rejected",
+            Self::Unknown(value) => value,
+        }
+    }
+
+    pub fn requires_attempt(&self) -> bool {
+        matches!(
+            self,
+            Self::AttemptPrepared
+                | Self::WorkerStarted
+                | Self::WorkerMessage
+                | Self::ToolStarted
+                | Self::ToolCompleted
+                | Self::WorkerCheckpoint
+                | Self::QuestionAsked
+                | Self::QuestionClosed
+                | Self::ArtifactCreated
+                | Self::ValidationStarted
+                | Self::ValidationCompleted
+                | Self::WorkerCompleted
+                | Self::CompletionRecorded
+        )
+    }
+}
+
+impl Serialize for ChannelEventType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ChannelEventType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "task.state.changed" => Self::TaskStateChanged,
+            "attempt.prepared" => Self::AttemptPrepared,
+            "worker.started" => Self::WorkerStarted,
+            "worker.message" => Self::WorkerMessage,
+            "tool.started" => Self::ToolStarted,
+            "tool.completed" => Self::ToolCompleted,
+            "worker.checkpoint" => Self::WorkerCheckpoint,
+            "question.asked" => Self::QuestionAsked,
+            "question.closed" => Self::QuestionClosed,
+            "user.answered" => Self::UserAnswered,
+            "artifact.created" => Self::ArtifactCreated,
+            "validation.started" => Self::ValidationStarted,
+            "validation.completed" => Self::ValidationCompleted,
+            "worker.completed" => Self::WorkerCompleted,
+            "completion.recorded" => Self::CompletionRecorded,
+            "action.requested" => Self::ActionRequested,
+            "action.completed" => Self::ActionCompleted,
+            "action.rejected" => Self::ActionRejected,
+            _ => Self::Unknown(value),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventActorKind {
+    System,
+    User,
+    Worker,
+    Surface,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventActor {
+    pub kind: EventActorKind,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawEventRef {
+    pub artifact_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stream: String,
+    pub byte_start: u64,
+    pub byte_end: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelEvent {
+    pub schema_version: u32,
+    pub event_id: String,
+    pub session_id: String,
+    pub seq: u64,
+    #[serde(rename = "type")]
+    pub event_type: ChannelEventType,
+    pub recorded_at: String,
+    pub actor: EventActor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causation_id: Option<String>,
+    pub correlation_id: String,
+    pub task_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_ref: Option<RawEventRef>,
+}
+
+impl ChannelEvent {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != 1 {
+            return Err("unsupported channel event schema_version".into());
+        }
+        if self.event_id.is_empty()
+            || self.session_id.is_empty()
+            || self.seq == 0
+            || self.recorded_at.is_empty()
+            || self.correlation_id.is_empty()
+            || self.task_id.is_empty()
+        {
+            return Err("channel event is missing required envelope linkage".into());
+        }
+        if matches!(
+            self.actor.kind,
+            EventActorKind::Worker | EventActorKind::Surface
+        ) && self.actor.id.is_empty()
+        {
+            return Err("worker/surface actor id is required".into());
+        }
+        if self.event_type.requires_attempt()
+            && self.attempt_id.as_deref().is_none_or(str::is_empty)
+        {
+            return Err(format!(
+                "attempt_id is required for {}",
+                self.event_type.as_str()
+            ));
+        }
+        if let Some(raw) = &self.raw_ref {
+            if raw.artifact_id.is_empty() || raw.byte_end <= raw.byte_start {
+                return Err("raw_ref must name a non-empty exact byte span".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptState {
+    Prepared,
+    Running,
+    NeedsUser,
+    Succeeded,
+    Failed,
+    TimedOut,
+    Cancelled,
+    Abandoned,
+}
+
+impl AttemptState {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::NeedsUser
+                | Self::Succeeded
+                | Self::Failed
+                | Self::TimedOut
+                | Self::Cancelled
+                | Self::Abandoned
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContinuationMode {
+    Fresh,
+    NativeResume,
+    ExplicitPacket,
+    Retry,
+    Fallback,
+    Redirect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerAttempt {
+    pub schema_version: u32,
+    pub attempt_id: String,
+    pub session_id: String,
+    pub intent_id: String,
+    pub task_id: String,
+    pub worker_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_session_ref: Option<String>,
+    pub state: AttemptState,
+    pub continuation: ContinuationMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caused_by_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caused_by_action_id: Option<String>,
+    pub raw_stdout_ref: String,
+    pub raw_stderr_ref: String,
+}
+
+impl WorkerAttempt {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != 1
+            || self.attempt_id.is_empty()
+            || self.session_id.is_empty()
+            || self.intent_id.is_empty()
+            || self.task_id.is_empty()
+            || self.worker_id.is_empty()
+            || self.raw_stdout_ref.is_empty()
+            || self.raw_stderr_ref.is_empty()
+        {
+            return Err("attempt is missing required identity or raw evidence linkage".into());
+        }
+        if self.continuation == ContinuationMode::NativeResume
+            && self.worker_session_ref.as_deref().is_none_or(str::is_empty)
+        {
+            return Err("native resume requires exact worker_session_ref".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionState {
+    Open,
+    Answered,
+    Closed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Question {
+    pub schema_version: u32,
+    pub question_id: String,
+    pub session_id: String,
+    pub task_id: String,
+    pub attempt_id: String,
+    pub asked_event_id: String,
+    pub asked_seq: u64,
+    pub context_start_seq: u64,
+    pub text: String,
+    pub state: QuestionState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_id: Option<String>,
+}
+
+impl Question {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != 1
+            || self.question_id.is_empty()
+            || self.session_id.is_empty()
+            || self.task_id.is_empty()
+            || self.attempt_id.is_empty()
+            || self.asked_event_id.is_empty()
+            || self.asked_seq == 0
+            || self.context_start_seq == 0
+            || self.context_start_seq > self.asked_seq
+            || self.text.trim().is_empty()
+        {
+            return Err("question is missing exact channel position linkage".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Answer {
+    pub schema_version: u32,
+    pub answer_id: String,
+    pub question_id: String,
+    pub action_id: String,
+    pub answered_event_id: String,
+    pub text: String,
+}
+
+impl Answer {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != 1
+            || self.answer_id.is_empty()
+            || self.question_id.is_empty()
+            || self.action_id.is_empty()
+            || self.answered_event_id.is_empty()
+            || self.text.trim().is_empty()
+        {
+            return Err("answer is missing exact question/action/event linkage".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelActionKind {
+    Answer,
+    Redirect,
+    Retry,
+    Stop,
+    Resume,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelActionStatus {
+    Prepared,
+    Completed,
+    Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionReceipt {
+    pub schema_version: u32,
+    pub action_id: String,
+    pub session_id: String,
+    pub task_id: String,
+    pub action: ChannelActionKind,
+    pub request_digest: String,
+    pub status: ChannelActionStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_event_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_attempt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerActionRequest {
+    pub action_id: String,
+    pub answer_id: String,
+    pub continuation_attempt_id: String,
+    pub session_id: String,
+    pub intent_id: String,
+    pub task_id: String,
+    pub question_id: String,
+    pub text: String,
+    pub worker_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_session_ref: Option<String>,
+    #[serde(default)]
+    pub supports_native_resume: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerActionOutcome {
+    pub receipt: ActionReceipt,
+    pub answer: Answer,
+    pub attempt: WorkerAttempt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedirectActionRequest {
+    pub action_id: String,
+    pub continuation_attempt_id: String,
+    pub session_id: String,
+    pub intent_id: String,
+    pub task_id: String,
+    pub stopped_attempt_id: String,
+    pub observed_terminal_state: AttemptState,
+    pub reason: String,
+    pub guidance: String,
+    pub worker_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedirectActionOutcome {
+    pub receipt: ActionReceipt,
+    pub attempt: WorkerAttempt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskChannel {
+    pub schema_version: u32,
+    pub channel_id: String,
+    pub session_id: String,
+    pub intent_id: String,
+    pub task_id: String,
+    pub highest_seq: u64,
+    #[serde(default)]
+    pub attempts: Vec<WorkerAttempt>,
+    #[serde(default)]
+    pub questions: Vec<Question>,
+    #[serde(default)]
+    pub answers: Vec<Answer>,
+    #[serde(default)]
+    pub events: Vec<ChannelEvent>,
+    #[serde(default)]
+    pub replay_errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskChannelIndex {
+    pub schema_version: u32,
+    pub channel_id: String,
+    pub highest_applied_seq: u64,
+    pub retained_from_seq: u64,
+    pub event_count: usize,
+    #[serde(default)]
+    pub tail_events: Vec<ChannelEvent>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Verdict {
     /// The acceptance-criterion id being judged (e.g. "AC-004").
@@ -2131,5 +2592,93 @@ tasks:
         let encoded = yaml::to_string(&queue).unwrap();
         assert!(encoded.contains("condition: all checks pass"));
         assert!(encoded.contains("max_feedback_cycles: 3"));
+    }
+
+    #[test]
+    fn channel_event_enforces_attempt_and_raw_linkage_additively() {
+        let event: ChannelEvent = serde_json::from_str(
+            r#"{
+                "schema_version": 1,
+                "event_id": "evt_1",
+                "session_id": "ses_1",
+                "seq": 1,
+                "type": "worker.message",
+                "recorded_at": "2026-07-14T00:00:00Z",
+                "actor": { "kind": "worker", "id": "codex" },
+                "correlation_id": "cor_1",
+                "task_id": "YARD-001",
+                "attempt_id": "att_1",
+                "payload": { "text": "visible progress" },
+                "raw_ref": {
+                    "artifact_id": "raw_att_1_stdout",
+                    "stream": "stdout",
+                    "byte_start": 0,
+                    "byte_end": 17
+                },
+                "future_additive_field": true
+            }"#,
+        )
+        .unwrap();
+
+        event.validate().unwrap();
+        assert_eq!(event.event_type, ChannelEventType::WorkerMessage);
+        assert_eq!(event.attempt_id.as_deref(), Some("att_1"));
+
+        let mut missing_attempt = event.clone();
+        missing_attempt.attempt_id = None;
+        assert!(missing_attempt
+            .validate()
+            .unwrap_err()
+            .contains("attempt_id"));
+
+        let mut invalid_raw = event;
+        invalid_raw.raw_ref.as_mut().unwrap().byte_end = 0;
+        assert!(invalid_raw.validate().unwrap_err().contains("raw_ref"));
+    }
+
+    #[test]
+    fn durable_channel_types_preserve_attempt_and_exact_question_causality() {
+        let attempt = WorkerAttempt {
+            schema_version: 1,
+            attempt_id: "att_2".into(),
+            session_id: "ses_1".into(),
+            intent_id: "intent_1".into(),
+            task_id: "YARD-001".into(),
+            worker_id: "codex".into(),
+            worker_session_ref: Some("thread-1".into()),
+            state: AttemptState::Prepared,
+            continuation: ContinuationMode::NativeResume,
+            caused_by_event_id: Some("evt_answer".into()),
+            caused_by_action_id: Some("act_answer".into()),
+            raw_stdout_ref: "attempts/att_2/stdout.log".into(),
+            raw_stderr_ref: "attempts/att_2/stderr.log".into(),
+        };
+        let question = Question {
+            schema_version: 1,
+            question_id: "qst_1".into(),
+            session_id: "ses_1".into(),
+            task_id: "YARD-001".into(),
+            attempt_id: "att_1".into(),
+            asked_event_id: "evt_question".into(),
+            asked_seq: 9,
+            context_start_seq: 4,
+            text: "Which path?".into(),
+            state: QuestionState::Open,
+            answer_id: None,
+        };
+        let answer = Answer {
+            schema_version: 1,
+            answer_id: "ans_1".into(),
+            question_id: question.question_id.clone(),
+            action_id: "act_answer".into(),
+            answered_event_id: "evt_answer".into(),
+            text: "Path A".into(),
+        };
+
+        attempt.validate().unwrap();
+        question.validate().unwrap();
+        answer.validate().unwrap();
+        assert_eq!(attempt.continuation, ContinuationMode::NativeResume);
+        assert_eq!(answer.question_id, question.question_id);
     }
 }

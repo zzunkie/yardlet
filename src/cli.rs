@@ -52,6 +52,8 @@ pub enum Command {
     Run(RunArgs),
     /// Answer a task that is waiting on you, and resume it.
     Answer(AnswerArgs),
+    /// Stop or checkpoint a task, record the redirect, and start new guidance.
+    Redirect(RedirectArgs),
     /// Grant single-use approval to a gated task.
     Approve(ApproveArgs),
     /// Set a task aside by decision (Deferred: not pending, not done).
@@ -216,6 +218,26 @@ pub struct AnswerArgs {
     #[arg(long)]
     task: Option<String>,
     /// Drop the worker sandbox when resuming (e.g. to grant the access asked for).
+    #[arg(long)]
+    full_access: bool,
+    /// Stable idempotency key for retrying the same answer action.
+    #[arg(long)]
+    action_id: Option<String>,
+}
+
+#[derive(Args)]
+pub struct RedirectArgs {
+    /// The task whose current attempt should be redirected.
+    task: String,
+    /// New guidance for the next attempt.
+    guidance: Vec<String>,
+    /// Auditable reason for stopping the old attempt.
+    #[arg(long, default_value = "user redirect")]
+    reason: String,
+    /// Stable idempotency key for retrying the same redirect action.
+    #[arg(long)]
+    action_id: Option<String>,
+    /// Drop the worker sandbox for the new attempt.
     #[arg(long)]
     full_access: bool,
 }
@@ -513,6 +535,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Packet(a)) => cmd_packet(&cwd, a),
         Some(Command::Run(a)) => cmd_run(&cwd, a),
         Some(Command::Answer(a)) => cmd_answer(&cwd, a),
+        Some(Command::Redirect(a)) => cmd_redirect(&cwd, a),
         Some(Command::Approve(a)) => cmd_approve(&cwd, a),
         Some(Command::Defer(a)) => cmd_defer(&cwd, a),
         Some(Command::Revive(a)) => cmd_revive(&cwd, a),
@@ -1015,14 +1038,16 @@ fn parse_expected_head(value: &str) -> Option<&str> {
     (!value.eq_ignore_ascii_case("none")).then_some(value)
 }
 
-fn cli_action_id(prefix: &str, provided: Option<String>) -> String {
-    provided.unwrap_or_else(|| {
+fn cli_action_id(prefix: &str, provided: Option<String>) -> Result<String> {
+    let action_id = provided.unwrap_or_else(|| {
         format!(
             "act-{prefix}-{}-{}",
             chrono::Utc::now().format("%Y%m%d%H%M%S%6f"),
             std::process::id()
         )
-    })
+    });
+    crate::state::validate_action_id(&action_id)?;
+    Ok(action_id)
 }
 
 fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
@@ -1034,7 +1059,7 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
             expected_head,
             action_id,
         } => {
-            let action_id = cli_action_id("accept", action_id);
+            let action_id = cli_action_id("accept", action_id)?;
             let revision = crate::planning::accept_proposal(
                 &ws,
                 &proposal,
@@ -1053,7 +1078,7 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
             expected_head,
             action_id,
         } => {
-            let action_id = cli_action_id("reject", action_id);
+            let action_id = cli_action_id("reject", action_id)?;
             crate::planning::reject_proposal(
                 &ws,
                 &proposal,
@@ -1067,7 +1092,7 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
             expected_head,
             action_id,
         } => {
-            let action_id = cli_action_id("undo", action_id);
+            let action_id = cli_action_id("undo", action_id)?;
             let restored = crate::planning::undo(&ws, &expected_head, &action_id)?;
             println!(
                 "Undo complete. Visible head: {}",
@@ -1082,7 +1107,7 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
             worker,
         } => {
             let message = message.join(" ");
-            let action_id = cli_action_id("answer", action_id);
+            let action_id = cli_action_id("answer", action_id)?;
             let (session, turn) = crate::planning::record_answer_exact(
                 &ws,
                 &message,
@@ -1106,7 +1131,7 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
             expected_head,
             action_id,
         } => {
-            let action_id = cli_action_id("confirm", action_id);
+            let action_id = cli_action_id("confirm", action_id)?;
             let activation = crate::planning::confirm(&ws, &expected_head, &action_id)?;
             println!(
                 "Confirmed {} with activation {}. The exact visible draft is now active.",
@@ -1262,6 +1287,10 @@ fn cmd_tidy(cwd: &std::path::Path) -> Result<()> {
 fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let reply = args.reply.join(" ");
+    let action_id = args
+        .action_id
+        .map(|action_id| cli_action_id("answer", Some(action_id)))
+        .transpose()?;
     let queue = ws.load_queue()?;
     let task_id = match &args.task {
         Some(t) => t.clone(),
@@ -1294,6 +1323,8 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
         return Ok(());
     }
 
+    run::prepare_answer_action(&ws, &task_id, &reply, action_id)?;
+
     println!("You: {reply}\n");
     let report = run::run_next(
         &ws,
@@ -1319,6 +1350,133 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
         }
     } else if !report.run_id.is_empty() {
         println!("\nrun {} resumed", report.run_id);
+    }
+    Ok(())
+}
+
+fn cmd_redirect(cwd: &std::path::Path, args: RedirectArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let guidance = args.guidance.join(" ");
+    if guidance.trim().is_empty() {
+        anyhow::bail!("redirect guidance must not be empty");
+    }
+    let action_id = cli_action_id("redirect", args.action_id)?;
+    let queue = ws.load_queue()?;
+    let task = queue
+        .tasks
+        .iter()
+        .find(|task| task.id == args.task)
+        .ok_or_else(|| anyhow::anyhow!("task '{}' not found in the queue", args.task))?;
+    if !matches!(
+        task.state,
+        crate::schemas::TaskState::Running | crate::schemas::TaskState::NeedsUser
+    ) {
+        anyhow::bail!(
+            "task '{}' must be Running or NeedsUser to redirect (currently {:?})",
+            args.task,
+            task.state
+        );
+    }
+
+    let mut channel = ws.load_task_channel(&queue.intent_id, &args.task)?;
+    let latest_attempt_id = run::latest_run_for(&ws, &args.task)
+        .and_then(|(_, dir)| std::fs::read_to_string(dir.join("latest-attempt")).ok())
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .or_else(|| {
+            channel
+                .attempts
+                .last()
+                .map(|attempt| attempt.attempt_id.clone())
+        })
+        .ok_or_else(|| anyhow::anyhow!("task '{}' has no durable attempt", args.task))?;
+
+    let mut run_dir = run::latest_run_for(&ws, &args.task).map(|(_, dir)| dir);
+    let mut stopped = channel
+        .attempts
+        .iter()
+        .find(|attempt| attempt.attempt_id == latest_attempt_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("latest attempt '{}' is missing", latest_attempt_id))?;
+    if !stopped.state.is_terminal() {
+        let active_dir = run_dir
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("running task has no run directory"))?;
+        let pid = run::verified_worker_pid_for_redirect(
+            active_dir,
+            &args.task,
+            &latest_attempt_id,
+            &stopped.worker_id,
+        )?;
+        crate::state::write_str_atomic(&active_dir.join("cancelled"), "redirect\n")?;
+        let status = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status()?;
+        if !status.success() {
+            anyhow::bail!("failed to stop worker pid {pid}; redirect was not recorded");
+        }
+
+        let mut observed = None;
+        for _ in 0..100 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            channel = ws.load_task_channel(&queue.intent_id, &args.task)?;
+            observed = channel
+                .attempts
+                .iter()
+                .find(|attempt| attempt.attempt_id == latest_attempt_id)
+                .filter(|attempt| attempt.state.is_terminal())
+                .cloned();
+            let no_longer_running = ws.load_queue().ok().is_some_and(|latest| {
+                latest.tasks.iter().any(|task| {
+                    task.id == args.task && task.state != crate::schemas::TaskState::Running
+                })
+            });
+            if observed.is_some() && no_longer_running {
+                break;
+            }
+        }
+        stopped = observed.ok_or_else(|| {
+            anyhow::anyhow!(
+                "worker stop was requested but attempt '{}' has no observed terminal event yet",
+                latest_attempt_id
+            )
+        })?;
+    }
+
+    let checkpoint_ref = run_dir.take().and_then(|dir| {
+        [dir.join("checkpoint.md"), dir.join("handoff.md")]
+            .into_iter()
+            .find(|path| path.is_file())
+            .map(|path| path.display().to_string())
+    });
+    ws.redirect_task(&crate::schemas::RedirectActionRequest {
+        continuation_attempt_id: run::action_attempt_id(&action_id),
+        action_id,
+        session_id: channel.session_id,
+        intent_id: queue.intent_id,
+        task_id: args.task.clone(),
+        stopped_attempt_id: stopped.attempt_id,
+        observed_terminal_state: stopped.state,
+        reason: args.reason,
+        guidance: guidance.clone(),
+        worker_id: stopped.worker_id,
+        checkpoint_ref,
+    })?;
+
+    let report = run::run_next(
+        &ws,
+        &RunOptions {
+            execute: true,
+            worker_override: None,
+            target: Some(args.task),
+            answer: Some(guidance),
+            full_access: args.full_access,
+            accept_ambiguity: false,
+            chain: None,
+        },
+    )?;
+    for line in report.lines {
+        println!("{line}");
     }
     Ok(())
 }

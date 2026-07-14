@@ -64,11 +64,8 @@ pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
             if is_verifier(t) && (work_pending || queue.has_active_remediation_for(&t.id)) {
                 return false;
             }
-            // Any validation-bearing task is excluded: parallel skips validation,
-            // so it must run serially where failed checks can enter feedback.
             queue.runnable_class(t, false, &caps) == RunnableClass::Runnable
                 && !t.approval_required()
-                && !t.has_validation()
         })
         .map(|(i, _)| i)
         .collect();
@@ -175,18 +172,6 @@ pub fn assess_parallelism(queue: &WorkQueue, max_parallel: usize) -> ParallelAss
     if !approval_required.is_empty() {
         reasons.push(SequentialReason::ApprovalRequired {
             tasks: approval_required,
-        });
-    }
-
-    let validation_required = queue
-        .tasks
-        .iter()
-        .filter(|t| t.state == TaskState::Queued && t.has_validation() && queue.deps_met(t))
-        .map(|t| t.id.clone())
-        .collect::<Vec<_>>();
-    if !validation_required.is_empty() {
-        reasons.push(SequentialReason::ValidationRequired {
-            tasks: validation_required,
         });
     }
 
@@ -438,6 +423,25 @@ pub fn run_batch<F: FnMut(&str)>(
             .join(", ")
     ));
 
+    let attempt_runtime = preps
+        .iter()
+        .map(|prep| {
+            let context = run::channel_run_context(ws, &queue.intent_id, &prep.task.id);
+            let (attempt, capture) = run::begin_worker_attempt(
+                ws,
+                None,
+                &context,
+                &prep.run_dir,
+                &prep.run_id,
+                &prep.worker_id,
+                prep.session.clone(),
+                crate::schemas::ContinuationMode::Fresh,
+                None,
+            )?;
+            Ok((context, attempt, capture))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     let (tx, rx) = mpsc::channel::<Finished>();
     let mut handles = Vec::new();
     for (i, p) in preps.iter().enumerate() {
@@ -451,20 +455,20 @@ pub fn run_batch<F: FnMut(&str)>(
         let packet_text = p.packet_text.clone();
         let cwd = p.wt_path.clone();
         let worker_run_dir = p.run_dir.clone();
-        let log_path = p.run_dir.join("worker-output.log");
+        let capture = attempt_runtime[i].2.clone();
         let timeout = Duration::from_secs(p.profile.limits.max_wall_minutes as u64 * 60);
         let images = images.clone();
         let session = p.session.clone();
         handles.push(std::thread::spawn(move || {
             let started = std::time::Instant::now();
-            let outcome = workers::spawn(
+            let outcome = workers::spawn_attempt(
                 &profile,
                 &bin,
                 &packet_text,
                 &worker_run_dir,
                 &cwd,
                 &env,
-                &log_path,
+                &capture,
                 timeout,
                 full_access,
                 &images,
@@ -491,12 +495,39 @@ pub fn run_batch<F: FnMut(&str)>(
         let mut wall_seconds = fin.wall_seconds;
         let mut failover_note: Option<String> = None;
 
+        if let Ok(completed) = &outcome {
+            let runtime = &attempt_runtime[fin.prep_idx];
+            run::finish_worker_attempt(
+                ws, None, &runtime.0, &p.run_dir, &runtime.1, &runtime.2, completed,
+            )?;
+        } else if let Err(error) = &outcome {
+            let runtime = &attempt_runtime[fin.prep_idx];
+            run::finish_worker_attempt_error(ws, &runtime.0, &runtime.1, error)?;
+        }
+
         match &outcome {
             Ok(o) => on_event(&format!(
                 "{}: worker finished ({}); integrating",
                 p.task.id, o.note
             )),
             Err(e) => on_event(&format!("{}: worker error: {e}", p.task.id)),
+        }
+
+        if p.run_dir.join("cancelled").is_file() {
+            let _ = std::fs::remove_file(p.run_dir.join("cancelled"));
+            run::save_task_state_on_latest_queue(
+                ws,
+                &mut queue,
+                &p.task.id,
+                TaskState::Queued,
+                crate::schemas::TransitionCause::RunOutcome,
+                "stopped by user; task requeued",
+                crate::schemas::TransitionActor::System,
+            )?;
+            remove_worktree(&ws.root, &p.wt_path, &p.branch);
+            on_event(&format!("{}: stopped by user; requeued", p.task.id));
+            states.push((p.task.id.clone(), TaskState::Queued));
+            continue;
         }
 
         if !p.run_dir.join("result.json").exists() {
@@ -555,20 +586,43 @@ pub fn run_batch<F: FnMut(&str)>(
                         write_str(&workers::packet_path(&p.run_dir), &failover_packet)?;
                         let session = (worker_id == "claude-code")
                             .then(|| run::gen_session_uuid(&format!("{}-{worker_id}", p.run_id)));
-                        workers::spawn(
+                        let context = run::channel_run_context(ws, &queue.intent_id, &p.task.id);
+                        let attempt_id = run::attempt_id_for_ordinal(&p.run_id, 2);
+                        let (attempt, capture) = run::begin_worker_attempt(
+                            ws,
+                            None,
+                            &context,
+                            &p.run_dir,
+                            &attempt_id,
+                            &worker_id,
+                            session.clone(),
+                            crate::schemas::ContinuationMode::Fallback,
+                            None,
+                        )?;
+                        let completed = match workers::spawn_attempt(
                             &eff_profile,
                             &alt.bin,
                             &failover_packet,
                             &p.run_dir,
                             &p.wt_path,
                             &env,
-                            &p.run_dir.join("worker-output.log"),
+                            &capture,
                             timeout,
                             full_access,
                             &images,
                             session.as_deref(),
                             false,
-                        )
+                        ) {
+                            Ok(completed) => completed,
+                            Err(error) => {
+                                run::finish_worker_attempt_error(ws, &context, &attempt, &error)?;
+                                return Err(error);
+                            }
+                        };
+                        run::finish_worker_attempt(
+                            ws, None, &context, &p.run_dir, &attempt, &capture, &completed,
+                        )?;
+                        Ok(completed)
                     })();
                     wall_seconds += failover_started.elapsed().as_secs();
                     match &outcome {
@@ -1724,14 +1778,13 @@ mod tests {
     }
 
     #[test]
-    fn ready_set_excludes_all_validation_tasks() {
-        // Validation-bearing tasks are held back from parallel batches (parallel
-        // skips validation), so they run serially where failure enters feedback.
+    fn ready_set_includes_validation_tasks() {
+        // Validation-bearing tasks use the same pre-merge gate in their isolated
+        // worktree and therefore remain eligible for parallel batches.
         let mut needs_val = task("V", TaskState::Queued, 5, vec![]);
         needs_val.validation = Some(crate::yaml::from_str("commands: [cargo test]").unwrap());
         let q = queue(vec![task("A", TaskState::Queued, 10, vec![]), needs_val]);
-        // Only A is parallel-ready; V is excluded despite its lower priority.
-        assert_eq!(ready_independent(&q, 10), vec![0]);
+        assert_eq!(ready_independent(&q, 10), vec![1, 0]);
     }
 
     #[test]
@@ -1760,9 +1813,9 @@ mod tests {
         serial_builder.validation = Some(crate::yaml::from_str("required: true").unwrap());
         let mut q = queue(vec![review, serial_builder]);
 
-        // The serial-only builder still holds the review out of a parallel
-        // batch; run_auto will fall through and select it sequentially.
-        assert!(ready_independent(&q, 4).is_empty());
+        // The validation-bearing builder holds the review out of the batch and
+        // itself remains runnable through the parallel validation path.
+        assert_eq!(ready_independent(&q, 4), vec![1]);
 
         q.tasks[1].validation = None;
         q.tasks[1].approval = Some(crate::yaml::from_str("required: true").unwrap());
@@ -1848,7 +1901,7 @@ mod tests {
 
         let assessment = assess_parallelism(&q, 4);
 
-        assert_eq!(assessment.runnable, vec!["A"]);
+        assert_eq!(assessment.runnable, vec!["VALIDATE", "A"]);
         assert!(assessment
             .reasons
             .contains(&SequentialReason::DependencyChain {
@@ -1859,14 +1912,10 @@ mod tests {
             .contains(&SequentialReason::ApprovalRequired {
                 tasks: vec!["APPROVE".to_string()]
             }));
-        assert!(assessment
+        assert!(!assessment
             .reasons
-            .contains(&SequentialReason::ValidationRequired {
-                tasks: vec!["VALIDATE".to_string()]
-            }));
-        assert!(assessment
-            .reasons
-            .contains(&SequentialReason::RunnableTaskCount { runnable: 1 }));
+            .iter()
+            .any(|reason| matches!(reason, SequentialReason::ValidationRequired { .. })));
     }
 
     #[test]
