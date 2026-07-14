@@ -93,6 +93,24 @@ pub fn evaluate(
             r.task_id == task.id && r.run_id == run_id,
             format!("result ids match run {run_id} / task {}", task.id),
         ));
+        let exact_attempt_id = std::fs::read_to_string(run_dir.join("latest-attempt"))
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| run_id.to_string());
+        let resource_errors = r.resource_provenance_errors(&exact_attempt_id);
+        checks.push(check(
+            "resource_provenance_valid",
+            resource_errors.is_empty(),
+            if resource_errors.is_empty() {
+                format!("resource proposals link to exact attempt {exact_attempt_id}")
+            } else {
+                format!(
+                    "invalid resource proposal provenance: {}",
+                    resource_errors.join("; ")
+                )
+            },
+        ));
         checks.push(check(
             "no_uncontrolled_drift",
             !r.intent_adherence.drift_detected,
@@ -600,6 +618,8 @@ mod tests {
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         }
     }
 
@@ -1314,6 +1334,8 @@ exit 89
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         std::fs::write(
             dir.join("result.json"),

@@ -4494,6 +4494,25 @@ fn artifact_media_type(path: &std::path::Path) -> &'static str {
     }
 }
 
+fn finalization_artifact_causation(
+    events: &[ChannelEvent],
+    attempt_id: &str,
+) -> Option<String> {
+    for event_type in [
+        ChannelEventType::ValidationCompleted,
+        ChannelEventType::WorkerCompleted,
+        ChannelEventType::AttemptPrepared,
+    ] {
+        if let Some(event) = events.iter().rev().find(|event| {
+            event.attempt_id.as_deref() == Some(attempt_id)
+                && event.event_type == event_type
+        }) {
+            return Some(event.event_id.clone());
+        }
+    }
+    None
+}
+
 fn record_artifact_created(
     ws: &Workspace,
     context: &ChannelRunContext,
@@ -4509,59 +4528,42 @@ fn record_artifact_created(
     let bytes = std::fs::read(path)
         .with_context(|| format!("reading artifact for channel event {}", path.display()))?;
     let content_digest = artifact_content_digest(&bytes);
-    let seed = format!("{attempt_id}\0{role}\0{recorded_path}\0{content_digest}");
-    let artifact_id = format!(
-        "art_{}",
-        artifact_content_digest(seed.as_bytes()).trim_start_matches("fnv1a64:")
-    );
     let channel = ws.load_task_channel(&context.intent_id, &context.task_id)?;
-    if let Some(existing) = channel.events.iter().find(|event| {
-        event.event_type == ChannelEventType::ArtifactCreated
-            && event.payload["artifact_id"] == artifact_id
-    }) {
-        if existing.payload["content_digest"] == content_digest
-            && existing.attempt_id.as_deref() == Some(attempt_id)
-        {
-            return Ok(());
-        }
-        bail!("artifact event conflict for {artifact_id}");
-    }
     let worker_id = channel
         .attempts
         .iter()
         .find(|attempt| attempt.attempt_id == attempt_id)
         .map(|attempt| attempt.worker_id.clone())
         .ok_or_else(|| anyhow!("artifact producer attempt missing: {attempt_id}"))?;
-    let causation_id = channel.events.last().map(|event| event.event_id.clone());
-    record_channel_event(
-        ws,
-        None,
-        context,
-        ChannelEventType::ArtifactCreated,
-        if worker_authored {
-            EventActor {
-                kind: EventActorKind::Worker,
-                id: worker_id.clone(),
-            }
-        } else {
-            EventActor {
-                kind: EventActorKind::System,
-                id: String::new(),
-            }
-        },
-        Some(attempt_id),
+    let causation_id = finalization_artifact_causation(&channel.events, attempt_id)
+        .unwrap_or_else(|| format!("attempt:{attempt_id}"));
+    let artifact_role = match role {
+        "handoff" | "checkpoint" => crate::schemas::ArtifactRole::Handoff,
+        "evaluation" => crate::schemas::ArtifactRole::ValidationOutput,
+        _ => crate::schemas::ArtifactRole::File,
+    };
+    let proposal = crate::schemas::ArtifactProposal {
+        proposal_id: format!(
+            "core-{}",
+            artifact_content_digest(format!("{attempt_id}\0{role}\0{recorded_path}").as_bytes())
+                .trim_start_matches("fnv1a64:")
+        ),
+        task_id: context.task_id.clone(),
+        attempt_id: attempt_id.to_string(),
+        producer: crate::schemas::ResourceProducer { worker_id },
         causation_id,
-        serde_json::json!({
-            "artifact_id": artifact_id,
-            "path": recorded_path,
-            "content_digest": content_digest,
-            "media_type": artifact_media_type(path),
-            "role": role,
-            "producer_attempt_id": attempt_id,
-            "producer_worker_id": worker_id
-        }),
-        None,
+        path: recorded_path.to_string(),
+        digest: content_digest,
+        media_type: artifact_media_type(path).to_string(),
+        role: artifact_role,
+    };
+    ws.publish_artifact(
+        &context.session_id,
+        &context.intent_id,
+        &proposal,
+        &path.display().to_string(),
     )?;
+    let _ = worker_authored;
     Ok(())
 }
 
@@ -4606,6 +4608,23 @@ fn record_finalization_artifacts(
         ws.load_or_rebuild_task_channel(&context.intent_id, &context.task_id)?;
         return Ok(());
     };
+    if result.resource_provenance_errors(&attempt_id).is_empty() {
+        crate::resource::ingest_run_proposals(
+            ws,
+            &context.session_id,
+            &context.intent_id,
+            &context.task_id,
+            &attempt_id,
+            &ws.load_task_channel(&context.intent_id, &context.task_id)?
+                .attempts
+                .into_iter()
+                .find(|attempt| attempt.attempt_id == attempt_id)
+                .ok_or_else(|| anyhow!("resource producer attempt missing: {attempt_id}"))?
+                .worker_id,
+            worker_root,
+            result,
+        )?;
+    }
     let Ok(canonical_root) = std::fs::canonicalize(worker_root) else {
         return Ok(());
     };
@@ -5858,6 +5877,69 @@ pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn channel_event(
+        event_id: &str,
+        event_type: ChannelEventType,
+        attempt_id: Option<&str>,
+    ) -> ChannelEvent {
+        ChannelEvent {
+            schema_version: 1,
+            event_id: event_id.into(),
+            session_id: "session-test".into(),
+            seq: 0,
+            event_type,
+            recorded_at: String::new(),
+            actor: EventActor {
+                kind: EventActorKind::System,
+                id: String::new(),
+            },
+            action_id: None,
+            causation_id: None,
+            correlation_id: "cor-test".into(),
+            task_id: "YARD-001".into(),
+            attempt_id: attempt_id.map(str::to_string),
+            payload: serde_json::Value::Null,
+            raw_ref: None,
+        }
+    }
+
+    #[test]
+    fn finalization_artifact_causation_is_stable_across_recovery_publications() {
+        let attempt_id = "run-test";
+        let mut events = vec![
+            channel_event(
+                "evt-attempt",
+                ChannelEventType::AttemptPrepared,
+                Some(attempt_id),
+            ),
+            channel_event(
+                "evt-worker",
+                ChannelEventType::WorkerCompleted,
+                Some(attempt_id),
+            ),
+            channel_event(
+                "evt-validation",
+                ChannelEventType::ValidationCompleted,
+                Some(attempt_id),
+            ),
+        ];
+
+        assert_eq!(
+            finalization_artifact_causation(&events, attempt_id),
+            Some("evt-validation".to_string())
+        );
+
+        events.push(channel_event(
+            "evt-artifact",
+            ChannelEventType::ArtifactCreated,
+            Some(attempt_id),
+        ));
+        assert_eq!(
+            finalization_artifact_causation(&events, attempt_id),
+            Some("evt-validation".to_string())
+        );
+    }
+
     #[test]
     fn every_invocation_ordinal_gets_a_distinct_attempt_identity() {
         assert_eq!(attempt_id_for_ordinal("run-1", 1), "run-1");
@@ -6041,6 +6123,8 @@ mod tests {
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &rd.join("result.json"),
@@ -6974,6 +7058,8 @@ mod tests {
             }],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
 
         let run1 = ws.runs_dir().join("run-1");
@@ -9483,6 +9569,8 @@ exit 1
                 verdict: vec![],
                 harness_suggestions: vec![],
                 follow_up_tasks: vec![],
+                artifacts: vec![],
+                resources: vec![],
             };
             write_str(
                 &run_dir.join("result.json"),
@@ -9696,6 +9784,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -9776,6 +9866,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -9886,6 +9978,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -9986,6 +10080,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &staged_run_dir.join("result.json"),
@@ -10170,6 +10266,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -10401,6 +10499,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -10463,6 +10563,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -10540,6 +10642,8 @@ exit 1
                 insert: String::new(),
                 runs_before: vec![],
             }],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -10603,6 +10707,8 @@ exit 1
                 risk: "low".into(),
                 ..Default::default()
             }],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -10683,6 +10789,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -10771,6 +10879,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -10893,6 +11003,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         write_str(
             &run_dir.join("result.json"),
@@ -11035,6 +11147,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         result.validation.passed = true;
         write_str(
@@ -11231,6 +11345,8 @@ exit 1
             verdict: vec![],
             harness_suggestions: vec![],
             follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
         };
         result.validation.passed = true;
         write_str(
@@ -11469,6 +11585,8 @@ exit 1
                 verdict: vec![],
                 harness_suggestions: vec![],
                 follow_up_tasks: vec![],
+                artifacts: vec![],
+                resources: vec![],
             };
             result.validation.passed = true;
             write_str(

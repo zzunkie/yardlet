@@ -46,6 +46,8 @@ pub enum Command {
     Worker(WorkerArgs),
     /// Gather cheap deterministic local evidence.
     Inspect(InspectArgs),
+    /// Discover and operate on task-owned runtime resources and artifacts.
+    Resource(ResourceArgs),
     /// Compile a worker-specific task packet.
     Packet(PacketArgs),
     /// Prepare (and optionally execute) the next bounded task.
@@ -92,6 +94,61 @@ pub enum Command {
 pub struct HarnessArgs {
     #[command(subcommand)]
     cmd: HarnessCmd,
+}
+
+#[derive(Args)]
+pub struct ResourceArgs {
+    #[command(subcommand)]
+    cmd: ResourceCmd,
+}
+
+#[derive(Subcommand)]
+enum ResourceCmd {
+    /// Discover bounded artifacts and runtime resources for one task.
+    Discover {
+        #[arg(long)]
+        task: String,
+        #[arg(long)]
+        action_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect one canonical artifact or runtime resource.
+    Inspect(ResourceTargetArgs),
+    /// Return the surface-neutral viewer target for an entry.
+    Open(ResourceTargetArgs),
+    /// Return the surface-neutral attachment target for a live-capable entry.
+    Attach(ResourceTargetArgs),
+    /// Stop an owned resource after a fresh identity probe.
+    Stop(ResourceLifecycleArgs),
+    /// Restart an owned resource when a typed restart command exists.
+    Restart(ResourceLifecycleArgs),
+    /// Detach Yardlet without killing the target.
+    Detach(ResourceLifecycleArgs),
+    /// Clean up an owned resource after a fresh identity probe.
+    Cleanup(ResourceLifecycleArgs),
+    /// Probe and append a current observation.
+    Reconcile(ResourceLifecycleArgs),
+}
+
+#[derive(Args)]
+struct ResourceTargetArgs {
+    target: String,
+    #[arg(long)]
+    action_id: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct ResourceLifecycleArgs {
+    target: String,
+    #[arg(long)]
+    action_id: Option<String>,
+    #[arg(long)]
+    expected_status: Option<String>,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -532,6 +589,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Tidy) => cmd_tidy(&cwd),
         Some(Command::Worker(a)) => cmd_worker(&cwd, a),
         Some(Command::Inspect(a)) => cmd_inspect(&cwd, a),
+        Some(Command::Resource(a)) => cmd_resource(&cwd, a),
         Some(Command::Packet(a)) => cmd_packet(&cwd, a),
         Some(Command::Run(a)) => cmd_run(&cwd, a),
         Some(Command::Answer(a)) => cmd_answer(&cwd, a),
@@ -553,6 +611,120 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Skill(a)) => cmd_skill(&cwd, a),
         Some(Command::Harness(a)) => cmd_harness(&cwd, a),
     }
+}
+
+fn generated_resource_action_id(operation: crate::schemas::ResourceOperationKind) -> String {
+    format!(
+        "resource-{}-{}-{}",
+        format!("{operation:?}").to_lowercase(),
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    )
+}
+
+fn parse_resource_status(value: Option<String>) -> Result<Option<crate::schemas::ResourceStatus>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let status = match value.as_str() {
+        "unknown" => crate::schemas::ResourceStatus::Unknown,
+        "available" => crate::schemas::ResourceStatus::Available,
+        "live" => crate::schemas::ResourceStatus::Live,
+        "dead" => crate::schemas::ResourceStatus::Dead,
+        "unavailable" => crate::schemas::ResourceStatus::Unavailable,
+        "expired" => crate::schemas::ResourceStatus::Expired,
+        "orphaned" => crate::schemas::ResourceStatus::Orphaned,
+        "unrecoverable" => crate::schemas::ResourceStatus::Unrecoverable,
+        "detached" => crate::schemas::ResourceStatus::Detached,
+        _ => anyhow::bail!("unknown resource status '{value}'"),
+    };
+    Ok(Some(status))
+}
+
+fn cmd_resource(cwd: &std::path::Path, args: ResourceArgs) -> Result<()> {
+    use crate::schemas::{ResourceOperationKind as Op, ResourceOperationRequest};
+
+    let ws = init::ensure_initialized(cwd)?.0;
+    let (request, json) = match args.cmd {
+        ResourceCmd::Discover {
+            task,
+            action_id,
+            json,
+        } => (
+            ResourceOperationRequest {
+                action_id: action_id.unwrap_or_else(|| generated_resource_action_id(Op::Discover)),
+                operation: Op::Discover,
+                task_id: task,
+                target_id: String::new(),
+                expected_status: None,
+            },
+            json,
+        ),
+        ResourceCmd::Inspect(args) => resource_target_request(Op::Inspect, args),
+        ResourceCmd::Open(args) => resource_target_request(Op::Open, args),
+        ResourceCmd::Attach(args) => resource_target_request(Op::Attach, args),
+        ResourceCmd::Stop(args) => resource_lifecycle_request(Op::Stop, args)?,
+        ResourceCmd::Restart(args) => resource_lifecycle_request(Op::Restart, args)?,
+        ResourceCmd::Detach(args) => resource_lifecycle_request(Op::Detach, args)?,
+        ResourceCmd::Cleanup(args) => resource_lifecycle_request(Op::Cleanup, args)?,
+        ResourceCmd::Reconcile(args) => resource_lifecycle_request(Op::Reconcile, args)?,
+    };
+    let receipt = crate::resource::dispatch(&ws, request)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&receipt)?);
+    } else {
+        println!(
+            "{:?} {}: {:?}",
+            receipt.operation, receipt.action_id, receipt.status
+        );
+        if !receipt.error.is_empty() {
+            println!("  {}", receipt.error);
+        }
+        for entry in &receipt.result.entries {
+            println!("  {}", serde_json::to_string(entry)?);
+        }
+        if let Some(target) = &receipt.result.open_target {
+            println!("  target: {}", serde_json::to_string(target)?);
+        }
+    }
+    Ok(())
+}
+
+fn resource_target_request(
+    operation: crate::schemas::ResourceOperationKind,
+    args: ResourceTargetArgs,
+) -> (crate::schemas::ResourceOperationRequest, bool) {
+    (
+        crate::schemas::ResourceOperationRequest {
+            action_id: args
+                .action_id
+                .unwrap_or_else(|| generated_resource_action_id(operation)),
+            operation,
+            task_id: String::new(),
+            target_id: args.target,
+            expected_status: None,
+        },
+        args.json,
+    )
+}
+
+fn resource_lifecycle_request(
+    operation: crate::schemas::ResourceOperationKind,
+    args: ResourceLifecycleArgs,
+) -> Result<(crate::schemas::ResourceOperationRequest, bool)> {
+    let expected_status = parse_resource_status(args.expected_status)?;
+    Ok((
+        crate::schemas::ResourceOperationRequest {
+            action_id: args
+                .action_id
+                .unwrap_or_else(|| generated_resource_action_id(operation)),
+            operation,
+            task_id: String::new(),
+            target_id: args.target,
+            expected_status,
+        },
+        args.json,
+    ))
 }
 
 fn cmd_eval(args: EvalArgs) -> Result<()> {
