@@ -6,7 +6,7 @@ mod unix {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     struct Fixture {
         root: PathBuf,
@@ -199,6 +199,34 @@ mod unix {
             .args(["-0", &pid.to_string()])
             .status()
             .is_ok_and(|status| status.success())
+    }
+
+    fn wait_for_nonempty_spawn_log(path: &Path) -> Vec<u8> {
+        const TIMEOUT: Duration = Duration::from_secs(5);
+        const POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+        let started = Instant::now();
+        loop {
+            let last_observation = match fs::read(path) {
+                Ok(contents) if !contents.is_empty() => return contents,
+                Ok(_) => "empty",
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing",
+                Err(error) => panic!(
+                    "failed to inspect restart spawn log {} while waiting for publication: {error}",
+                    path.display()
+                ),
+            };
+
+            assert!(
+                started.elapsed() < TIMEOUT,
+                "timed out after {TIMEOUT:?} waiting for restart spawn log {} to become non-empty \
+                 (last observation: {last_observation}); the helper writes its PID before its \
+                 15-second sleep, so this bound permits delayed scheduling under 8-way parallel \
+                 load while still failing before the helper exits",
+                path.display()
+            );
+            std::thread::sleep(POLL_INTERVAL);
+        }
     }
 
     fn resource_id(discover: &Value, proposal_id: &str) -> String {
@@ -770,13 +798,7 @@ mod unix {
             .collect();
         fixture.owned_pids.extend(spawned_pids.iter().copied());
         let spawn_log = fixture.root.join("restart-spawns.log");
-        for _ in 0..50 {
-            if fs::metadata(&spawn_log).is_ok_and(|metadata| metadata.len() > 0) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let spawn_log_before_retry = fs::read(&spawn_log).unwrap();
+        let spawn_log_before_retry = wait_for_nonempty_spawn_log(&spawn_log);
 
         assert_eq!(crashed.status.code(), Some(86));
         assert!(!process_alive(original_pid));
