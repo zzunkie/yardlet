@@ -23,12 +23,12 @@ use crate::schemas::{
     ChannelEvent, ChannelEventType, ContinuationMode, Conversation, ConversationTurn,
     DraftRevision, EventActor, EventActorKind, FollowUpTask, IntentContract, PlanningActionReceipt,
     PlanningEvent, PlanningProposal, PlanningSession, PreservedFollowUps, Question, QuestionState,
-    RedirectActionOutcome, RedirectActionRequest, ResourceActionReceipt, ResourceIndex,
-    ResourceObservation, ResourceStatus, ResourceTaskIndex, RuntimeCapabilityCommit,
-    RuntimeCapabilityReceipt, RuntimeResource, RuntimeResourceProposal, RuntimeTaskCommit,
-    RuntimeTaskReceipt, SelectionPolicy, Task, TaskChannel, TaskChannelIndex, TaskState,
-    TransitionActor, TransitionCause, TransitionLog, TransitionRecord, TurnRole, WorkQueue,
-    WorkerAttempt, WorkersFile, YardConfig,
+    RedirectActionOutcome, RedirectActionRequest, ResourceActionReceipt,
+    ResourceActionRecoveryReceipt, ResourceIndex, ResourceObservation, ResourceStatus,
+    ResourceTaskIndex, RuntimeCapabilityCommit, RuntimeCapabilityReceipt, RuntimeResource,
+    RuntimeResourceProposal, RuntimeTaskCommit, RuntimeTaskReceipt, SelectionPolicy, Task,
+    TaskChannel, TaskChannelIndex, TaskState, TransitionActor, TransitionCause, TransitionLog,
+    TransitionRecord, TurnRole, WorkQueue, WorkerAttempt, WorkersFile, YardConfig,
 };
 use crate::yaml;
 
@@ -2891,6 +2891,57 @@ impl Workspace {
             bail!("resource_action_conflict: {}", receipt.action_id);
         }
         save_immutable_yaml(&path, receipt)
+    }
+
+    pub fn load_resource_action_recovery(
+        &self,
+        action_id: &str,
+    ) -> Result<Option<ResourceActionRecoveryReceipt>> {
+        validate_action_id(action_id)?;
+        let path = contained_action_path(
+            &self.resource_actions_dir(),
+            &format!("{action_id}.recovery.yaml"),
+        )?;
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_yaml(&path).map(Some)
+    }
+
+    pub fn save_resource_action_recovery(
+        &self,
+        recovery: &ResourceActionRecoveryReceipt,
+    ) -> Result<()> {
+        validate_action_id(&recovery.action_id)?;
+        let path = contained_action_path(
+            &self.resource_actions_dir(),
+            &format!("{}.recovery.yaml", recovery.action_id),
+        )?;
+        if path.is_file() {
+            let existing: ResourceActionRecoveryReceipt = load_yaml(&path)?;
+            if existing == *recovery {
+                return Ok(());
+            }
+            let same_action = existing.action_id == recovery.action_id
+                && existing.request_digest == recovery.request_digest
+                && existing.operation == recovery.operation
+                && existing.intent_id == recovery.intent_id
+                && existing.task_id == recovery.task_id
+                && existing.target_id == recovery.target_id
+                && existing.expected_status == recovery.expected_status
+                && existing.requested_event_id == recovery.requested_event_id;
+            let fills_spawn_identity = existing.phase == recovery.phase
+                && existing.phase == crate::schemas::ResourceActionRecoveryPhase::Spawned
+                && existing.effect_pid == recovery.effect_pid
+                && existing.effect_start_identity.is_empty()
+                && !recovery.effect_start_identity.is_empty();
+            if !same_action
+                || (existing.phase.rank() >= recovery.phase.rank() && !fills_spawn_identity)
+            {
+                bail!("resource_action_recovery_conflict: {}", recovery.action_id);
+            }
+        }
+        write_str_atomic(&path, &yaml::to_string(recovery)?)
     }
 
     pub fn load_artifact(&self, artifact_id: &str) -> Result<Option<Artifact>> {

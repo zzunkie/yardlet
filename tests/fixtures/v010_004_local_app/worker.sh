@@ -43,13 +43,26 @@ external_identity="${external_meta#*|}"
 external_identity="${external_identity%$'\n'}"
 app_pid=''
 app_identity=''
+restart_healthy_pid=''
+restart_healthy_identity=''
+restart_unhealthy_pid=''
+restart_unhealthy_identity=''
 published=0
 
 cleanup_failed_publication() {
-  if [[ "$published" -eq 0 && -n "$app_pid" ]]; then
-    if [[ "$(process_identity "$app_pid" 2>/dev/null || true)" == "$app_identity" ]]; then
-      kill "$app_pid" 2>/dev/null || true
-    fi
+  if [[ "$published" -eq 0 ]]; then
+    local pair pid identity
+    for pair in \
+      "$app_pid|$app_identity" \
+      "$restart_healthy_pid|$restart_healthy_identity" \
+      "$restart_unhealthy_pid|$restart_unhealthy_identity"
+    do
+      pid="${pair%%|*}"
+      identity="${pair#*|}"
+      if [[ -n "$pid" && "$(process_identity "$pid" 2>/dev/null || true)" == "$identity" ]]; then
+        kill "$pid" 2>/dev/null || true
+      fi
+    done
   fi
 }
 trap cleanup_failed_publication EXIT
@@ -75,6 +88,45 @@ PY
 done
 if [[ -z "$app_identity" || "$service_ready" -ne 1 ]]; then
   printf 'local app did not become probeable\n' >&2
+  exit 1
+fi
+
+restart_healthy_port="$(tr -d '[:space:]' <fixture-restart-healthy-port.txt)"
+restart_unhealthy_port="$(tr -d '[:space:]' <fixture-restart-unhealthy-port.txt)"
+restart_healthy_url="http://127.0.0.1:${restart_healthy_port}/health"
+restart_unhealthy_url="http://127.0.0.1:${restart_unhealthy_port}/unhealthy"
+
+nohup "$python_bin" "$app_script" --port "$restart_healthy_port" \
+  </dev/null >"$run_dir/restart-healthy.stdout.log" 2>"$run_dir/restart-healthy.stderr.log" &
+restart_healthy_pid=$!
+nohup "$python_bin" "$app_script" --port "$restart_unhealthy_port" \
+  </dev/null >"$run_dir/restart-unhealthy.stdout.log" 2>"$run_dir/restart-unhealthy.stderr.log" &
+restart_unhealthy_pid=$!
+
+for _ in $(seq 1 100); do
+  restart_healthy_identity="$(process_identity "$restart_healthy_pid" 2>/dev/null || true)"
+  restart_unhealthy_identity="$(process_identity "$restart_unhealthy_pid" 2>/dev/null || true)"
+  healthy_ready=0
+  unhealthy_ready=0
+  if [[ -n "$restart_healthy_identity" ]] && "$python_bin" - "http://127.0.0.1:${restart_healthy_port}/health" <<'PY' >/dev/null 2>&1
+import sys
+from urllib.request import urlopen
+with urlopen(sys.argv[1], timeout=0.2) as response:
+    assert response.status == 200
+PY
+  then healthy_ready=1; fi
+  if [[ -n "$restart_unhealthy_identity" ]] && "$python_bin" - "http://127.0.0.1:${restart_unhealthy_port}/health" <<'PY' >/dev/null 2>&1
+import sys
+from urllib.request import urlopen
+with urlopen(sys.argv[1], timeout=0.2) as response:
+    assert response.status == 200
+PY
+  then unhealthy_ready=1; fi
+  if [[ "$healthy_ready" -eq 1 && "$unhealthy_ready" -eq 1 ]]; then break; fi
+  sleep 0.02
+done
+if [[ "${healthy_ready:-0}" -ne 1 || "${unhealthy_ready:-0}" -ne 1 ]]; then
+  printf 'restart service fixtures did not become probeable\n' >&2
   exit 1
 fi
 
@@ -144,6 +196,8 @@ cat >"$run_dir/result.json" <<EOF
     {"proposal_id":"local-process","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","attach","stop","restart","cleanup","reconcile"],"target":{"kind":"process","pid":$app_pid,"start_identity":"$app_identity","command":["$python_bin","$app_script","--port","$port"]}},
     {"proposal_id":"local-service","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","reconcile"],"target":{"kind":"service","url":"$url","health_url":"$health_url"}},
     {"proposal_id":"local-unhealthy-service","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","reconcile"],"target":{"kind":"service","url":"$url","health_url":"$unhealthy_url"}},
+    {"proposal_id":"local-restart-service","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"yardlet","capabilities":["open","restart","cleanup","reconcile"],"target":{"kind":"service","url":"$restart_healthy_url","health_url":"$restart_healthy_url","pid":$restart_healthy_pid,"start_identity":"$restart_healthy_identity","restart_command":["$python_bin","$app_script","--port","$restart_healthy_port"]}},
+    {"proposal_id":"local-unhealthy-restart-service","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"yardlet","capabilities":["open","restart","cleanup","reconcile"],"target":{"kind":"service","url":"http://127.0.0.1:${restart_unhealthy_port}/","health_url":"$restart_unhealthy_url","pid":$restart_unhealthy_pid,"start_identity":"$restart_unhealthy_identity","restart_command":["$python_bin","$app_script","--port","$restart_unhealthy_port"]}},
     {"proposal_id":"local-open-only-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open"],"target":{"kind":"browser","url":"$url","session_id":"local-open-only-browser"}},
     {"proposal_id":"local-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","reconcile"],"target":{"kind":"browser","url":"$url","session_id":"local-browser-$browser_pid","pid":$browser_pid,"start_identity":"$browser_identity"}},
     {"proposal_id":"local-live-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","reconcile"],"target":{"kind":"browser","url":"$url","session_id":"local-active-browser-session","session_probe_url":"$browser_session_url","pid":$app_pid,"start_identity":"$app_identity"}},
