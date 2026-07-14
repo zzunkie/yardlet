@@ -17,12 +17,16 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 
 use crate::schemas::{
-    ActivatedIntent, ActivatedQueue, ActivatedTask, ActivationReceipt, ActivationRequirement,
-    BillingPolicy, Conversation, ConversationTurn, DraftRevision, FollowUpTask, IntentContract,
-    PlanningActionReceipt, PlanningEvent, PlanningProposal, PlanningSession, PreservedFollowUps,
-    RuntimeCapabilityCommit, RuntimeCapabilityReceipt, RuntimeTaskCommit, RuntimeTaskReceipt,
-    SelectionPolicy, Task, TaskState, TransitionActor, TransitionCause, TransitionLog,
-    TransitionRecord, TurnRole, WorkQueue, WorkersFile, YardConfig,
+    ActionReceipt, ActivatedIntent, ActivatedQueue, ActivatedTask, ActivationReceipt,
+    ActivationRequirement, Answer, AnswerActionOutcome, AnswerActionRequest, AttemptState,
+    BillingPolicy, ChannelActionKind, ChannelActionStatus, ChannelEvent, ChannelEventType,
+    ContinuationMode, Conversation, ConversationTurn, DraftRevision, EventActor, EventActorKind,
+    FollowUpTask, IntentContract, PlanningActionReceipt, PlanningEvent, PlanningProposal,
+    PlanningSession, PreservedFollowUps, Question, QuestionState, RedirectActionOutcome,
+    RedirectActionRequest, RuntimeCapabilityCommit, RuntimeCapabilityReceipt, RuntimeTaskCommit,
+    RuntimeTaskReceipt, SelectionPolicy, Task, TaskChannel, TaskChannelIndex, TaskState,
+    TransitionActor, TransitionCause, TransitionLog, TransitionRecord, TurnRole, WorkQueue,
+    WorkerAttempt, WorkersFile, YardConfig,
 };
 use crate::yaml;
 
@@ -31,6 +35,16 @@ pub const STATE_DIR: &str = ".agents";
 /// (and written in place) for back-compat so existing workspaces keep working.
 pub const CONFIG_FILE: &str = "yardlet.yaml";
 pub const LEGACY_CONFIG_FILE: &str = "yard.yaml";
+pub const CHANNEL_INDEX_EVENT_LIMIT: usize = 128;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TaskChannelIdentity {
+    schema_version: u32,
+    channel_id: String,
+    session_id: String,
+    intent_id: String,
+    task_id: String,
+}
 
 /// A located Yardlet workspace: the directory that owns `.agents/`.
 #[derive(Debug, Clone)]
@@ -170,6 +184,25 @@ fn default_auto() -> String {
     "auto".to_string()
 }
 
+fn stable_digest_bytes(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn task_channel_id(intent_id: &str, task_id: &str) -> String {
+    let input = format!("{intent_id}\0{task_id}");
+    format!("chn_{}", stable_digest_bytes(input.as_bytes()))
+}
+
+fn channel_action_digest<T: Serialize>(value: &T) -> Result<String> {
+    let bytes = serde_json::to_vec(value)?;
+    Ok(format!("fnv1a64:{}", stable_digest_bytes(&bytes)))
+}
+
 impl Workspace {
     /// Walk up from `start` looking for an existing config file (the canonical
     /// `.agents/yardlet.yaml` or the legacy `.agents/yard.yaml`).
@@ -196,6 +229,19 @@ impl Workspace {
 
     pub fn agents_dir(&self) -> PathBuf {
         self.root.join(STATE_DIR)
+    }
+
+    pub fn task_channels_dir(&self) -> PathBuf {
+        self.agents_dir().join("task-channels")
+    }
+
+    pub fn task_channel_dir(&self, intent_id: &str, task_id: &str) -> PathBuf {
+        self.task_channels_dir()
+            .join(task_channel_id(intent_id, task_id))
+    }
+
+    pub fn task_channel_index_path(&self, intent_id: &str, task_id: &str) -> PathBuf {
+        self.task_channel_dir(intent_id, task_id).join("index.yaml")
     }
 
     pub fn is_initialized(&self) -> bool {
@@ -2125,6 +2171,963 @@ impl Workspace {
         })
     }
 
+    fn ensure_task_channel_identity(
+        &self,
+        intent_id: &str,
+        task_id: &str,
+        session_id: &str,
+    ) -> Result<TaskChannelIdentity> {
+        if intent_id.is_empty() || task_id.is_empty() || session_id.is_empty() {
+            bail!("task channel identity requires session, intent, and task ids");
+        }
+        let identity = TaskChannelIdentity {
+            schema_version: 1,
+            channel_id: task_channel_id(intent_id, task_id),
+            session_id: session_id.to_string(),
+            intent_id: intent_id.to_string(),
+            task_id: task_id.to_string(),
+        };
+        save_immutable_yaml(
+            &self
+                .task_channel_dir(intent_id, task_id)
+                .join("channel.yaml"),
+            &identity,
+        )?;
+        Ok(identity)
+    }
+
+    fn find_worker_attempt(
+        &self,
+        attempt_id: &str,
+    ) -> Result<Option<(TaskChannelIdentity, WorkerAttempt)>> {
+        let mut channel_dirs = if self.task_channels_dir().is_dir() {
+            fs::read_dir(self.task_channels_dir())?
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .filter(|path| path.is_dir())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        channel_dirs.sort();
+        let mut found = None;
+        for directory in channel_dirs {
+            let path = directory
+                .join("attempts")
+                .join(format!("{attempt_id}.yaml"));
+            if !path.is_file() {
+                continue;
+            }
+            let identity: TaskChannelIdentity = load_yaml(&directory.join("channel.yaml"))?;
+            let attempt: WorkerAttempt = load_yaml(&path)?;
+            if found.is_some() {
+                bail!("attempt_id_conflict: {attempt_id} appears in multiple task channels");
+            }
+            found = Some((identity, attempt));
+        }
+        Ok(found)
+    }
+
+    pub fn record_worker_attempt(&self, attempt: &WorkerAttempt) -> Result<()> {
+        attempt.validate().map_err(anyhow::Error::msg)?;
+        if let Some((identity, existing)) = self.find_worker_attempt(&attempt.attempt_id)? {
+            if existing == *attempt
+                && identity.intent_id == attempt.intent_id
+                && identity.task_id == attempt.task_id
+            {
+                return Ok(());
+            }
+            bail!("attempt_id_conflict: {}", attempt.attempt_id);
+        }
+        self.ensure_task_channel_identity(
+            &attempt.intent_id,
+            &attempt.task_id,
+            &attempt.session_id,
+        )?;
+        save_immutable_yaml(
+            &self
+                .task_channel_dir(&attempt.intent_id, &attempt.task_id)
+                .join("attempts")
+                .join(format!("{}.yaml", attempt.attempt_id)),
+            attempt,
+        )
+    }
+
+    /// Replay the canonical event stream for one work session across every
+    /// task channel. Channel directories are a storage partition only; `seq`
+    /// belongs to the session and therefore may have gaps in an individual
+    /// task projection but must be contiguous in this merged stream.
+    fn replay_task_session_events(
+        &self,
+        session_id: &str,
+    ) -> Result<(Vec<ChannelEvent>, Vec<String>)> {
+        let mut events = Vec::new();
+        let mut channel_dirs = if self.task_channels_dir().is_dir() {
+            fs::read_dir(self.task_channels_dir())?
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .filter(|path| path.is_dir())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        channel_dirs.sort();
+        for directory in channel_dirs {
+            let identity_path = directory.join("channel.yaml");
+            if !identity_path.is_file() {
+                continue;
+            }
+            let identity: TaskChannelIdentity = load_yaml(&identity_path)?;
+            if identity.session_id == session_id {
+                events.extend(load_yaml_dir::<ChannelEvent>(&directory.join("events"))?);
+            }
+        }
+        events.sort_by(|left, right| {
+            left.seq
+                .cmp(&right.seq)
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        });
+
+        let mut replayed = Vec::new();
+        let mut errors = Vec::new();
+        let mut event_ids: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let mut expected_seq = 1_u64;
+        for event in events {
+            let bytes = serde_json::to_vec(&event)?;
+            if let Some(existing) = event_ids.get(&event.event_id) {
+                if *existing == bytes {
+                    continue;
+                }
+                errors.push(format!("event_id_conflict:{}", event.event_id));
+                break;
+            }
+            if event.seq != expected_seq {
+                errors.push(format!("session_sequence_gap:{expected_seq}-{}", event.seq));
+                break;
+            }
+            if event.session_id != session_id {
+                errors.push(format!("event_session_conflict:{}", event.event_id));
+                break;
+            }
+            if let Err(error) = event.validate() {
+                errors.push(format!("invalid_event:{}:{error}", event.event_id));
+                break;
+            }
+            event_ids.insert(event.event_id.clone(), bytes);
+            expected_seq += 1;
+            replayed.push(event);
+        }
+        Ok((replayed, errors))
+    }
+
+    fn record_task_event_locked(
+        &self,
+        intent_id: &str,
+        mut event: ChannelEvent,
+    ) -> Result<ChannelEvent> {
+        let identity =
+            self.ensure_task_channel_identity(intent_id, &event.task_id, &event.session_id)?;
+        let (session_events, replay_errors) = self.replay_task_session_events(&event.session_id)?;
+        if !replay_errors.is_empty() {
+            bail!("task_channel_corrupt: {}", replay_errors.join(", "));
+        }
+        if !event.event_id.is_empty() {
+            if let Some(existing) = session_events
+                .iter()
+                .find(|existing| existing.event_id == event.event_id)
+            {
+                event.seq = existing.seq;
+                event.recorded_at = existing.recorded_at.clone();
+                if event == *existing {
+                    return Ok(existing.clone());
+                }
+                bail!("event_id_conflict: {}", event.event_id);
+            }
+        }
+        event.seq = session_events.last().map_or(1, |existing| existing.seq + 1);
+        if event.event_id.is_empty() {
+            event.event_id = format!("evt_{}_{:020}", &identity.channel_id[4..], event.seq);
+        }
+        if event.recorded_at.is_empty() {
+            event.recorded_at = Local::now().to_rfc3339();
+        }
+        event.validate().map_err(anyhow::Error::msg)?;
+        let path = self
+            .task_channel_dir(intent_id, &event.task_id)
+            .join("events")
+            .join(format!("{:020}.yaml", event.seq));
+        save_immutable_yaml(&path, &event)?;
+        Ok(event)
+    }
+
+    pub fn record_task_event(&self, intent_id: &str, event: ChannelEvent) -> Result<ChannelEvent> {
+        let _lock = self.acquire_planning_lock()?;
+        self.record_task_event_locked(intent_id, event)
+    }
+
+    pub fn record_task_event_with_lock(
+        &self,
+        _lock: &PlanningLock,
+        intent_id: &str,
+        event: ChannelEvent,
+    ) -> Result<ChannelEvent> {
+        self.record_task_event_locked(intent_id, event)
+    }
+
+    pub fn record_question(&self, question: &Question) -> Result<()> {
+        question.validate().map_err(anyhow::Error::msg)?;
+        let Some((identity, attempt)) = self.find_worker_attempt(&question.attempt_id)? else {
+            bail!("question_attempt_missing: {}", question.attempt_id);
+        };
+        if attempt.session_id != question.session_id
+            || attempt.task_id != question.task_id
+            || identity.task_id != question.task_id
+        {
+            bail!(
+                "question_attempt_linkage_conflict: {}",
+                question.question_id
+            );
+        }
+        let channel = self.load_task_channel(&identity.intent_id, &identity.task_id)?;
+        let asked = channel
+            .events
+            .iter()
+            .find(|event| event.event_id == question.asked_event_id)
+            .ok_or_else(|| anyhow::anyhow!("question_asked_event_missing"))?;
+        if asked.seq != question.asked_seq
+            || asked.event_type != ChannelEventType::QuestionAsked
+            || asked.attempt_id.as_deref() != Some(question.attempt_id.as_str())
+        {
+            bail!("question_asked_event_linkage_conflict");
+        }
+        save_immutable_yaml(
+            &self
+                .task_channel_dir(&identity.intent_id, &identity.task_id)
+                .join("questions")
+                .join(format!("{}.yaml", question.question_id)),
+            question,
+        )
+    }
+
+    pub fn load_task_channel(&self, intent_id: &str, task_id: &str) -> Result<TaskChannel> {
+        let directory = self.task_channel_dir(intent_id, task_id);
+        if !directory.is_dir() {
+            return Ok(TaskChannel {
+                schema_version: 1,
+                channel_id: task_channel_id(intent_id, task_id),
+                session_id: format!("legacy:{intent_id}"),
+                intent_id: intent_id.to_string(),
+                task_id: task_id.to_string(),
+                highest_seq: 0,
+                attempts: Vec::new(),
+                questions: Vec::new(),
+                answers: Vec::new(),
+                events: Vec::new(),
+                replay_errors: Vec::new(),
+            });
+        }
+        let identity: TaskChannelIdentity = load_yaml(&directory.join("channel.yaml"))?;
+        if identity.schema_version != 1
+            || identity.channel_id != task_channel_id(intent_id, task_id)
+            || identity.intent_id != intent_id
+            || identity.task_id != task_id
+        {
+            bail!("task_channel_identity_conflict");
+        }
+
+        let (session_events, mut replay_errors) =
+            self.replay_task_session_events(&identity.session_id)?;
+        let events = session_events
+            .into_iter()
+            .filter(|event| event.task_id == identity.task_id)
+            .collect::<Vec<_>>();
+
+        let mut attempts: Vec<WorkerAttempt> = load_yaml_dir(&directory.join("attempts"))?;
+        let mut questions: Vec<Question> = load_yaml_dir(&directory.join("questions"))?;
+        let mut answers: Vec<Answer> = load_yaml_dir(&directory.join("answers"))?;
+        for attempt in &attempts {
+            if attempt.intent_id != intent_id || attempt.task_id != task_id {
+                replay_errors.push(format!("attempt_identity_conflict:{}", attempt.attempt_id));
+            }
+        }
+        for answer in &answers {
+            if !questions
+                .iter()
+                .any(|question| question.question_id == answer.question_id)
+            {
+                replay_errors.push(format!("answer_question_missing:{}", answer.answer_id));
+            }
+        }
+        for question in &mut questions {
+            if let Some(answer) = answers
+                .iter()
+                .find(|answer| answer.question_id == question.question_id)
+            {
+                question.state = QuestionState::Answered;
+                question.answer_id = Some(answer.answer_id.clone());
+            }
+        }
+        for event in &events {
+            let Some(attempt_id) = event.attempt_id.as_deref() else {
+                continue;
+            };
+            let Some(attempt) = attempts
+                .iter_mut()
+                .find(|attempt| attempt.attempt_id == attempt_id)
+            else {
+                replay_errors.push(format!("event_attempt_missing:{}", event.event_id));
+                continue;
+            };
+            match event.event_type {
+                ChannelEventType::WorkerStarted => attempt.state = AttemptState::Running,
+                ChannelEventType::WorkerCompleted => {
+                    if let Some(worker_session_ref) = event
+                        .payload
+                        .get("worker_session_ref")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                    {
+                        attempt.worker_session_ref = Some(worker_session_ref.to_string());
+                    }
+                    attempt.state = match event.payload.get("result").and_then(|v| v.as_str()) {
+                        Some("needs_user") => AttemptState::NeedsUser,
+                        Some("succeeded") => AttemptState::Succeeded,
+                        Some("timed_out") => AttemptState::TimedOut,
+                        Some("cancelled") => AttemptState::Cancelled,
+                        Some("abandoned") => AttemptState::Abandoned,
+                        _ => AttemptState::Failed,
+                    }
+                }
+                _ => {}
+            }
+        }
+        let attempt_order = events
+            .iter()
+            .filter_map(|event| {
+                (event.event_type == ChannelEventType::AttemptPrepared)
+                    .then(|| event.attempt_id.clone())
+                    .flatten()
+            })
+            .enumerate()
+            .map(|(index, id)| (id, index))
+            .collect::<BTreeMap<_, _>>();
+        attempts.sort_by_key(|attempt| {
+            attempt_order
+                .get(&attempt.attempt_id)
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
+        questions.sort_by_key(|question| question.asked_seq);
+        let answer_order = events
+            .iter()
+            .filter_map(|event| {
+                (event.event_type == ChannelEventType::UserAnswered)
+                    .then(|| {
+                        event
+                            .payload
+                            .get("answer_id")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    })
+                    .flatten()
+                    .map(|answer_id| (answer_id, event.seq))
+            })
+            .collect::<BTreeMap<_, _>>();
+        answers.sort_by_key(|answer| {
+            answer_order
+                .get(&answer.answer_id)
+                .copied()
+                .unwrap_or(u64::MAX)
+        });
+        let highest_seq = events.last().map_or(0, |event| event.seq);
+        Ok(TaskChannel {
+            schema_version: 1,
+            channel_id: identity.channel_id,
+            session_id: identity.session_id,
+            intent_id: identity.intent_id,
+            task_id: identity.task_id,
+            highest_seq,
+            attempts,
+            questions,
+            answers,
+            events,
+            replay_errors,
+        })
+    }
+
+    fn build_task_channel_index(channel: &TaskChannel) -> TaskChannelIndex {
+        let start = channel
+            .events
+            .len()
+            .saturating_sub(CHANNEL_INDEX_EVENT_LIMIT);
+        let tail_events = channel.events[start..].to_vec();
+        TaskChannelIndex {
+            schema_version: 1,
+            channel_id: channel.channel_id.clone(),
+            highest_applied_seq: channel.highest_seq,
+            retained_from_seq: tail_events.first().map_or(0, |event| event.seq),
+            event_count: channel.events.len(),
+            tail_events,
+        }
+    }
+
+    pub fn load_or_rebuild_task_channel(
+        &self,
+        intent_id: &str,
+        task_id: &str,
+    ) -> Result<TaskChannel> {
+        let channel = self.load_task_channel(intent_id, task_id)?;
+        if !channel.replay_errors.is_empty() {
+            bail!("task_channel_corrupt: {}", channel.replay_errors.join(", "));
+        }
+        let index = Self::build_task_channel_index(&channel);
+        write_str_atomic(
+            &self.task_channel_index_path(intent_id, task_id),
+            &yaml::to_string(&index)?,
+        )?;
+        Ok(channel)
+    }
+
+    fn channel_action_path(
+        &self,
+        intent_id: &str,
+        task_id: &str,
+        action_id: &str,
+        terminal: bool,
+    ) -> PathBuf {
+        self.task_channel_dir(intent_id, task_id)
+            .join("actions")
+            .join(format!(
+                "{action_id}.{}.yaml",
+                if terminal { "terminal" } else { "prepared" }
+            ))
+    }
+
+    fn load_answer_action_outcome(
+        &self,
+        request: &AnswerActionRequest,
+        receipt: ActionReceipt,
+    ) -> Result<AnswerActionOutcome> {
+        let channel = self.load_task_channel(&request.intent_id, &request.task_id)?;
+        let answer = channel
+            .answers
+            .into_iter()
+            .find(|answer| answer.answer_id == request.answer_id)
+            .ok_or_else(|| anyhow::anyhow!("answer_action_corrupt: answer missing"))?;
+        let attempt = channel
+            .attempts
+            .into_iter()
+            .find(|attempt| attempt.attempt_id == request.continuation_attempt_id)
+            .ok_or_else(|| anyhow::anyhow!("answer_action_corrupt: attempt missing"))?;
+        Ok(AnswerActionOutcome {
+            receipt,
+            answer,
+            attempt,
+        })
+    }
+
+    pub fn answer_question(&self, request: &AnswerActionRequest) -> Result<AnswerActionOutcome> {
+        if request.action_id.is_empty()
+            || request.answer_id.is_empty()
+            || request.continuation_attempt_id.is_empty()
+            || request.session_id.is_empty()
+            || request.intent_id.is_empty()
+            || request.task_id.is_empty()
+            || request.question_id.is_empty()
+            || request.text.trim().is_empty()
+            || request.worker_id.is_empty()
+        {
+            bail!("invalid answer action request");
+        }
+        let digest = channel_action_digest(request)?;
+        let _lock = self.acquire_planning_lock()?;
+        let terminal_path = self.channel_action_path(
+            &request.intent_id,
+            &request.task_id,
+            &request.action_id,
+            true,
+        );
+        if terminal_path.is_file() {
+            let receipt: ActionReceipt = load_yaml(&terminal_path)?;
+            if receipt.request_digest != digest {
+                bail!("idempotency_conflict: {}", request.action_id);
+            }
+            return self.load_answer_action_outcome(request, receipt);
+        }
+
+        let prepared_path = self.channel_action_path(
+            &request.intent_id,
+            &request.task_id,
+            &request.action_id,
+            false,
+        );
+        let recovering = if prepared_path.is_file() {
+            let existing: ActionReceipt = load_yaml(&prepared_path)?;
+            if existing.request_digest != digest {
+                bail!("idempotency_conflict: {}", request.action_id);
+            }
+            true
+        } else {
+            false
+        };
+        let channel = self.load_task_channel(&request.intent_id, &request.task_id)?;
+        let question = channel
+            .questions
+            .iter()
+            .find(|question| question.question_id == request.question_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("question_missing: {}", request.question_id))?;
+        if question.session_id != request.session_id || question.task_id != request.task_id {
+            bail!("question_linkage_conflict: {}", request.question_id);
+        }
+        if !recovering
+            && (question.state != QuestionState::Open
+                || channel
+                    .answers
+                    .iter()
+                    .any(|answer| answer.question_id == request.question_id))
+        {
+            bail!("question_closed: {}", request.question_id);
+        }
+        if recovering
+            && channel.answers.iter().any(|answer| {
+                answer.question_id == request.question_id
+                    && (answer.answer_id != request.answer_id
+                        || answer.action_id != request.action_id
+                        || answer.text != request.text)
+            })
+        {
+            bail!("idempotency_conflict: {}", request.action_id);
+        }
+
+        if !recovering {
+            save_immutable_yaml(
+                &prepared_path,
+                &ActionReceipt {
+                    schema_version: 1,
+                    action_id: request.action_id.clone(),
+                    session_id: request.session_id.clone(),
+                    task_id: request.task_id.clone(),
+                    action: ChannelActionKind::Answer,
+                    request_digest: digest.clone(),
+                    status: ChannelActionStatus::Prepared,
+                    result_event_ids: Vec::new(),
+                    result_attempt_id: Some(request.continuation_attempt_id.clone()),
+                    error: String::new(),
+                },
+            )?;
+        }
+
+        let event_id_suffix = stable_digest_bytes(request.action_id.as_bytes());
+        let requested = self.record_task_event_locked(
+            &request.intent_id,
+            ChannelEvent {
+                schema_version: 1,
+                event_id: format!("evt_{event_id_suffix}_requested"),
+                session_id: request.session_id.clone(),
+                seq: 0,
+                event_type: ChannelEventType::ActionRequested,
+                recorded_at: Local::now().to_rfc3339(),
+                actor: EventActor {
+                    kind: EventActorKind::User,
+                    id: String::new(),
+                },
+                action_id: Some(request.action_id.clone()),
+                causation_id: Some(question.asked_event_id.clone()),
+                correlation_id: channel
+                    .events
+                    .first()
+                    .map(|event| event.correlation_id.clone())
+                    .unwrap_or_else(|| format!("cor_{}", channel.channel_id)),
+                task_id: request.task_id.clone(),
+                attempt_id: None,
+                payload: serde_json::json!({"action": "answer", "question_id": request.question_id}),
+                raw_ref: None,
+            },
+        )?;
+        let answered_event = self.record_task_event_locked(
+            &request.intent_id,
+            ChannelEvent {
+                schema_version: 1,
+                event_id: format!("evt_{event_id_suffix}_answered"),
+                session_id: request.session_id.clone(),
+                seq: 0,
+                event_type: ChannelEventType::UserAnswered,
+                recorded_at: Local::now().to_rfc3339(),
+                actor: EventActor {
+                    kind: EventActorKind::User,
+                    id: String::new(),
+                },
+                action_id: Some(request.action_id.clone()),
+                causation_id: Some(question.asked_event_id.clone()),
+                correlation_id: requested.correlation_id.clone(),
+                task_id: request.task_id.clone(),
+                attempt_id: None,
+                payload: serde_json::json!({
+                    "answer_id": request.answer_id,
+                    "question_id": request.question_id,
+                    "text": request.text
+                }),
+                raw_ref: None,
+            },
+        )?;
+        let answer = Answer {
+            schema_version: 1,
+            answer_id: request.answer_id.clone(),
+            question_id: request.question_id.clone(),
+            action_id: request.action_id.clone(),
+            answered_event_id: answered_event.event_id.clone(),
+            text: request.text.clone(),
+        };
+        answer.validate().map_err(anyhow::Error::msg)?;
+        save_immutable_yaml(
+            &self
+                .task_channel_dir(&request.intent_id, &request.task_id)
+                .join("answers")
+                .join(format!("{}.yaml", request.answer_id)),
+            &answer,
+        )?;
+
+        let native = request.supports_native_resume
+            && request
+                .worker_session_ref
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+        let attempt = WorkerAttempt {
+            schema_version: 1,
+            attempt_id: request.continuation_attempt_id.clone(),
+            session_id: request.session_id.clone(),
+            intent_id: request.intent_id.clone(),
+            task_id: request.task_id.clone(),
+            worker_id: request.worker_id.clone(),
+            worker_session_ref: native.then(|| request.worker_session_ref.clone()).flatten(),
+            state: AttemptState::Prepared,
+            continuation: if native {
+                ContinuationMode::NativeResume
+            } else {
+                ContinuationMode::ExplicitPacket
+            },
+            caused_by_event_id: Some(answered_event.event_id.clone()),
+            caused_by_action_id: Some(request.action_id.clone()),
+            raw_stdout_ref: format!(
+                "task-channels/{}/attempts/{}/stdout.log",
+                channel.channel_id, request.continuation_attempt_id
+            ),
+            raw_stderr_ref: format!(
+                "task-channels/{}/attempts/{}/stderr.log",
+                channel.channel_id, request.continuation_attempt_id
+            ),
+        };
+        self.record_worker_attempt(&attempt)?;
+        let attempt_event = self.record_task_event_locked(
+            &request.intent_id,
+            ChannelEvent {
+                schema_version: 1,
+                event_id: format!("evt_{event_id_suffix}_attempt"),
+                session_id: request.session_id.clone(),
+                seq: 0,
+                event_type: ChannelEventType::AttemptPrepared,
+                recorded_at: Local::now().to_rfc3339(),
+                actor: EventActor {
+                    kind: EventActorKind::System,
+                    id: String::new(),
+                },
+                action_id: Some(request.action_id.clone()),
+                causation_id: Some(answered_event.event_id.clone()),
+                correlation_id: requested.correlation_id.clone(),
+                task_id: request.task_id.clone(),
+                attempt_id: Some(attempt.attempt_id.clone()),
+                payload: serde_json::json!({
+                    "worker_id": attempt.worker_id,
+                    "worker_session_ref": attempt.worker_session_ref,
+                    "continuation": attempt.continuation
+                }),
+                raw_ref: None,
+            },
+        )?;
+        let completed_event = self.record_task_event_locked(
+            &request.intent_id,
+            ChannelEvent {
+                schema_version: 1,
+                event_id: format!("evt_{event_id_suffix}_completed"),
+                session_id: request.session_id.clone(),
+                seq: 0,
+                event_type: ChannelEventType::ActionCompleted,
+                recorded_at: Local::now().to_rfc3339(),
+                actor: EventActor {
+                    kind: EventActorKind::System,
+                    id: String::new(),
+                },
+                action_id: Some(request.action_id.clone()),
+                causation_id: Some(attempt_event.event_id.clone()),
+                correlation_id: requested.correlation_id,
+                task_id: request.task_id.clone(),
+                attempt_id: None,
+                payload: serde_json::json!({
+                    "answer_id": answer.answer_id,
+                    "attempt_id": attempt.attempt_id
+                }),
+                raw_ref: None,
+            },
+        )?;
+        let receipt = ActionReceipt {
+            schema_version: 1,
+            action_id: request.action_id.clone(),
+            session_id: request.session_id.clone(),
+            task_id: request.task_id.clone(),
+            action: ChannelActionKind::Answer,
+            request_digest: digest,
+            status: ChannelActionStatus::Completed,
+            result_event_ids: vec![
+                requested.event_id,
+                answered_event.event_id,
+                attempt_event.event_id,
+                completed_event.event_id,
+            ],
+            result_attempt_id: Some(attempt.attempt_id.clone()),
+            error: String::new(),
+        };
+        save_immutable_yaml(&terminal_path, &receipt)?;
+        self.load_or_rebuild_task_channel(&request.intent_id, &request.task_id)?;
+        Ok(AnswerActionOutcome {
+            receipt,
+            answer,
+            attempt,
+        })
+    }
+
+    pub fn redirect_task(&self, request: &RedirectActionRequest) -> Result<RedirectActionOutcome> {
+        if request.action_id.is_empty()
+            || request.continuation_attempt_id.is_empty()
+            || request.session_id.is_empty()
+            || request.intent_id.is_empty()
+            || request.task_id.is_empty()
+            || request.stopped_attempt_id.is_empty()
+            || request.reason.trim().is_empty()
+            || request.guidance.trim().is_empty()
+            || request.worker_id.is_empty()
+        {
+            bail!("invalid redirect action request");
+        }
+        if !request.observed_terminal_state.is_terminal() {
+            bail!("redirect_requires_observed_terminal");
+        }
+        let digest = channel_action_digest(request)?;
+        let _lock = self.acquire_planning_lock()?;
+        let terminal_path = self.channel_action_path(
+            &request.intent_id,
+            &request.task_id,
+            &request.action_id,
+            true,
+        );
+        if terminal_path.is_file() {
+            let receipt: ActionReceipt = load_yaml(&terminal_path)?;
+            if receipt.request_digest != digest {
+                bail!("idempotency_conflict: {}", request.action_id);
+            }
+            let channel = self.load_task_channel(&request.intent_id, &request.task_id)?;
+            let attempt = channel
+                .attempts
+                .into_iter()
+                .find(|attempt| attempt.attempt_id == request.continuation_attempt_id)
+                .ok_or_else(|| anyhow::anyhow!("redirect_action_corrupt: attempt missing"))?;
+            return Ok(RedirectActionOutcome { receipt, attempt });
+        }
+
+        let channel = self.load_task_channel(&request.intent_id, &request.task_id)?;
+        let stopped = channel
+            .attempts
+            .iter()
+            .find(|attempt| attempt.attempt_id == request.stopped_attempt_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "redirect_stopped_attempt_missing: {}",
+                    request.stopped_attempt_id
+                )
+            })?;
+        if stopped.state != request.observed_terminal_state || !stopped.state.is_terminal() {
+            bail!("redirect_requires_observed_terminal");
+        }
+        let prepared_path = self.channel_action_path(
+            &request.intent_id,
+            &request.task_id,
+            &request.action_id,
+            false,
+        );
+        if prepared_path.is_file() {
+            let existing: ActionReceipt = load_yaml(&prepared_path)?;
+            if existing.request_digest != digest {
+                bail!("idempotency_conflict: {}", request.action_id);
+            }
+        } else {
+            save_immutable_yaml(
+                &prepared_path,
+                &ActionReceipt {
+                    schema_version: 1,
+                    action_id: request.action_id.clone(),
+                    session_id: request.session_id.clone(),
+                    task_id: request.task_id.clone(),
+                    action: ChannelActionKind::Redirect,
+                    request_digest: digest.clone(),
+                    status: ChannelActionStatus::Prepared,
+                    result_event_ids: Vec::new(),
+                    result_attempt_id: Some(request.continuation_attempt_id.clone()),
+                    error: String::new(),
+                },
+            )?;
+        }
+
+        let suffix = stable_digest_bytes(request.action_id.as_bytes());
+        let requested = self.record_task_event_locked(
+            &request.intent_id,
+            ChannelEvent {
+                schema_version: 1,
+                event_id: format!("evt_{suffix}_redirect_requested"),
+                session_id: request.session_id.clone(),
+                seq: 0,
+                event_type: ChannelEventType::ActionRequested,
+                recorded_at: Local::now().to_rfc3339(),
+                actor: EventActor {
+                    kind: EventActorKind::User,
+                    id: String::new(),
+                },
+                action_id: Some(request.action_id.clone()),
+                causation_id: channel.events.last().map(|event| event.event_id.clone()),
+                correlation_id: channel
+                    .events
+                    .first()
+                    .map(|event| event.correlation_id.clone())
+                    .unwrap_or_else(|| format!("cor_{}", channel.channel_id)),
+                task_id: request.task_id.clone(),
+                attempt_id: None,
+                payload: serde_json::json!({
+                    "action": "redirect",
+                    "reason": request.reason,
+                    "guidance": request.guidance,
+                    "stopped_attempt_id": request.stopped_attempt_id,
+                    "observed_terminal_state": request.observed_terminal_state,
+                    "live_message_delivered": false
+                }),
+                raw_ref: None,
+            },
+        )?;
+        let mut result_event_ids = vec![requested.event_id.clone()];
+        let cause = if let Some(checkpoint_ref) = request.checkpoint_ref.as_deref() {
+            let checkpoint = self.record_task_event_locked(
+                &request.intent_id,
+                ChannelEvent {
+                    schema_version: 1,
+                    event_id: format!("evt_{suffix}_checkpoint"),
+                    session_id: request.session_id.clone(),
+                    seq: 0,
+                    event_type: ChannelEventType::WorkerCheckpoint,
+                    recorded_at: Local::now().to_rfc3339(),
+                    actor: EventActor {
+                        kind: EventActorKind::System,
+                        id: String::new(),
+                    },
+                    action_id: Some(request.action_id.clone()),
+                    causation_id: Some(requested.event_id.clone()),
+                    correlation_id: requested.correlation_id.clone(),
+                    task_id: request.task_id.clone(),
+                    attempt_id: Some(request.stopped_attempt_id.clone()),
+                    payload: serde_json::json!({"checkpoint_ref": checkpoint_ref}),
+                    raw_ref: None,
+                },
+            )?;
+            result_event_ids.push(checkpoint.event_id.clone());
+            checkpoint.event_id
+        } else {
+            requested.event_id.clone()
+        };
+
+        let attempt = WorkerAttempt {
+            schema_version: 1,
+            attempt_id: request.continuation_attempt_id.clone(),
+            session_id: request.session_id.clone(),
+            intent_id: request.intent_id.clone(),
+            task_id: request.task_id.clone(),
+            worker_id: request.worker_id.clone(),
+            worker_session_ref: None,
+            state: AttemptState::Prepared,
+            continuation: ContinuationMode::Redirect,
+            caused_by_event_id: Some(cause.clone()),
+            caused_by_action_id: Some(request.action_id.clone()),
+            raw_stdout_ref: format!(
+                "task-channels/{}/attempts/{}/stdout.log",
+                channel.channel_id, request.continuation_attempt_id
+            ),
+            raw_stderr_ref: format!(
+                "task-channels/{}/attempts/{}/stderr.log",
+                channel.channel_id, request.continuation_attempt_id
+            ),
+        };
+        self.record_worker_attempt(&attempt)?;
+        let attempt_event = self.record_task_event_locked(
+            &request.intent_id,
+            ChannelEvent {
+                schema_version: 1,
+                event_id: format!("evt_{suffix}_redirect_attempt"),
+                session_id: request.session_id.clone(),
+                seq: 0,
+                event_type: ChannelEventType::AttemptPrepared,
+                recorded_at: Local::now().to_rfc3339(),
+                actor: EventActor {
+                    kind: EventActorKind::System,
+                    id: String::new(),
+                },
+                action_id: Some(request.action_id.clone()),
+                causation_id: Some(cause),
+                correlation_id: requested.correlation_id.clone(),
+                task_id: request.task_id.clone(),
+                attempt_id: Some(attempt.attempt_id.clone()),
+                payload: serde_json::json!({
+                    "worker_id": attempt.worker_id,
+                    "continuation": "redirect",
+                    "guidance": request.guidance
+                }),
+                raw_ref: None,
+            },
+        )?;
+        result_event_ids.push(attempt_event.event_id.clone());
+        let completed = self.record_task_event_locked(
+            &request.intent_id,
+            ChannelEvent {
+                schema_version: 1,
+                event_id: format!("evt_{suffix}_redirect_completed"),
+                session_id: request.session_id.clone(),
+                seq: 0,
+                event_type: ChannelEventType::ActionCompleted,
+                recorded_at: Local::now().to_rfc3339(),
+                actor: EventActor {
+                    kind: EventActorKind::System,
+                    id: String::new(),
+                },
+                action_id: Some(request.action_id.clone()),
+                causation_id: Some(attempt_event.event_id),
+                correlation_id: requested.correlation_id,
+                task_id: request.task_id.clone(),
+                attempt_id: None,
+                payload: serde_json::json!({"attempt_id": attempt.attempt_id}),
+                raw_ref: None,
+            },
+        )?;
+        result_event_ids.push(completed.event_id);
+        let receipt = ActionReceipt {
+            schema_version: 1,
+            action_id: request.action_id.clone(),
+            session_id: request.session_id.clone(),
+            task_id: request.task_id.clone(),
+            action: ChannelActionKind::Redirect,
+            request_digest: digest,
+            status: ChannelActionStatus::Completed,
+            result_event_ids,
+            result_attempt_id: Some(attempt.attempt_id.clone()),
+            error: String::new(),
+        };
+        save_immutable_yaml(&terminal_path, &receipt)?;
+        self.load_or_rebuild_task_channel(&request.intent_id, &request.task_id)?;
+        Ok(RedirectActionOutcome { receipt, attempt })
+    }
+
     pub fn load_transition_log(&self, task_id: &str) -> TransitionLog {
         let p = self.transition_path(task_id);
         if !p.is_file() {
@@ -3672,6 +4675,324 @@ routing:
         // A task that never paused reads as an empty transcript.
         assert!(ws.load_conversation("YARD-2").turns.is_empty());
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn channel_event(kind: ChannelEventType, attempt_id: Option<&str>) -> ChannelEvent {
+        ChannelEvent {
+            schema_version: 1,
+            event_id: String::new(),
+            session_id: "ses_channel".into(),
+            seq: 0,
+            event_type: kind,
+            recorded_at: "2026-07-14T00:00:00Z".into(),
+            actor: EventActor {
+                kind: EventActorKind::Worker,
+                id: "codex".into(),
+            },
+            action_id: None,
+            causation_id: None,
+            correlation_id: "cor_channel".into(),
+            task_id: "YARD-001".into(),
+            attempt_id: attempt_id.map(str::to_string),
+            payload: serde_json::json!({"text": "progress"}),
+            raw_ref: None,
+        }
+    }
+
+    fn prepared_attempt(id: &str) -> WorkerAttempt {
+        WorkerAttempt {
+            schema_version: 1,
+            attempt_id: id.into(),
+            session_id: "ses_channel".into(),
+            intent_id: "intent_channel".into(),
+            task_id: "YARD-001".into(),
+            worker_id: "codex".into(),
+            worker_session_ref: Some("thread-1".into()),
+            state: AttemptState::Prepared,
+            continuation: ContinuationMode::Fresh,
+            caused_by_event_id: None,
+            caused_by_action_id: None,
+            raw_stdout_ref: format!("attempts/{id}/stdout.log"),
+            raw_stderr_ref: format!("attempts/{id}/stderr.log"),
+        }
+    }
+
+    #[test]
+    fn channel_replay_recovers_a_deleted_or_malformed_bounded_index() {
+        let dir = temp_root("channel-index-replay");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        ws.record_worker_attempt(&prepared_attempt("att_1"))
+            .unwrap();
+        let raw_path = ws
+            .task_channel_dir("intent_channel", "YARD-001")
+            .join("attempts/att_1/stdout.log");
+        fs::create_dir_all(raw_path.parent().unwrap()).unwrap();
+        fs::write(&raw_path, b"durable raw evidence").unwrap();
+
+        let mut prepared = channel_event(ChannelEventType::AttemptPrepared, Some("att_1"));
+        prepared.payload = serde_json::json!({"worker_id": "codex"});
+        ws.record_task_event("intent_channel", prepared).unwrap();
+        for index in 0..140 {
+            let mut event = channel_event(ChannelEventType::WorkerMessage, Some("att_1"));
+            event.payload = serde_json::json!({"text": format!("message-{index}")});
+            ws.record_task_event("intent_channel", event).unwrap();
+        }
+
+        let original = ws
+            .load_or_rebuild_task_channel("intent_channel", "YARD-001")
+            .unwrap();
+        let index_path = ws.task_channel_index_path("intent_channel", "YARD-001");
+        let bounded: TaskChannelIndex = load_yaml(&index_path).unwrap();
+        assert_eq!(original.events.len(), 141);
+        assert!(bounded.tail_events.len() <= CHANNEL_INDEX_EVENT_LIMIT);
+        assert_eq!(bounded.highest_applied_seq, 141);
+
+        fs::remove_file(&index_path).unwrap();
+        drop(ws);
+        let restarted = Workspace::at(&dir);
+        let rebuilt = restarted
+            .load_or_rebuild_task_channel("intent_channel", "YARD-001")
+            .unwrap();
+        assert_eq!(rebuilt, original);
+        assert!(index_path.is_file());
+        assert_eq!(fs::read(&raw_path).unwrap(), b"durable raw evidence");
+
+        fs::write(&index_path, "not: [valid yaml").unwrap();
+        let repaired = restarted
+            .load_or_rebuild_task_channel("intent_channel", "YARD-001")
+            .unwrap();
+        assert_eq!(repaired, original);
+        let repaired_index: TaskChannelIndex = load_yaml(&index_path).unwrap();
+        assert_eq!(repaired_index.highest_applied_seq, 141);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn channel_events_share_one_strict_sequence_across_tasks_in_a_session() {
+        let dir = temp_root("channel-session-sequence");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+
+        let mut first = channel_event(ChannelEventType::WorkerMessage, Some("att_1"));
+        first.task_id = "YARD-001".into();
+        let mut second = channel_event(ChannelEventType::WorkerMessage, Some("att_2"));
+        second.task_id = "YARD-002".into();
+        let first = ws.record_task_event("intent_channel", first).unwrap();
+        let second = ws.record_task_event("intent_channel", second).unwrap();
+
+        assert_eq!(first.seq, 1);
+        assert_eq!(second.seq, 2);
+        assert_eq!(
+            ws.load_task_channel("intent_channel", "YARD-001")
+                .unwrap()
+                .events[0]
+                .seq,
+            1
+        );
+        assert_eq!(
+            ws.load_task_channel("intent_channel", "YARD-002")
+                .unwrap()
+                .events[0]
+                .seq,
+            2
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn answer_action_is_exact_idempotent_and_creates_a_new_continuation_attempt() {
+        let dir = temp_root("channel-answer-action");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        ws.record_worker_attempt(&prepared_attempt("att_1"))
+            .unwrap();
+
+        let asked = ws
+            .record_task_event(
+                "intent_channel",
+                channel_event(ChannelEventType::QuestionAsked, Some("att_1")),
+            )
+            .unwrap();
+        ws.record_question(&Question {
+            schema_version: 1,
+            question_id: "qst_1".into(),
+            session_id: "ses_channel".into(),
+            task_id: "YARD-001".into(),
+            attempt_id: "att_1".into(),
+            asked_event_id: asked.event_id.clone(),
+            asked_seq: asked.seq,
+            context_start_seq: 1,
+            text: "Which path?".into(),
+            state: QuestionState::Open,
+            answer_id: None,
+        })
+        .unwrap();
+
+        let request = AnswerActionRequest {
+            action_id: "act_answer_1".into(),
+            answer_id: "ans_1".into(),
+            continuation_attempt_id: "att_2".into(),
+            session_id: "ses_channel".into(),
+            intent_id: "intent_channel".into(),
+            task_id: "YARD-001".into(),
+            question_id: "qst_1".into(),
+            text: "Path A".into(),
+            worker_id: "codex".into(),
+            worker_session_ref: Some("thread-1".into()),
+            supports_native_resume: false,
+        };
+        let first = ws.answer_question(&request).unwrap();
+        let duplicate = ws.answer_question(&request).unwrap();
+        assert_eq!(duplicate, first);
+        assert_eq!(first.attempt.attempt_id, "att_2");
+        assert_eq!(first.attempt.continuation, ContinuationMode::ExplicitPacket);
+        assert_eq!(first.answer.question_id, "qst_1");
+
+        let channel = ws.load_task_channel("intent_channel", "YARD-001").unwrap();
+        assert_eq!(channel.answers.len(), 1);
+        assert_eq!(channel.attempts.len(), 2);
+
+        let mut conflicting = request.clone();
+        conflicting.text = "Path B".into();
+        assert!(ws
+            .answer_question(&conflicting)
+            .unwrap_err()
+            .to_string()
+            .contains("idempotency_conflict"));
+
+        let mut stale = request;
+        stale.action_id = "act_answer_2".into();
+        stale.answer_id = "ans_2".into();
+        stale.continuation_attempt_id = "att_3".into();
+        assert!(ws
+            .answer_question(&stale)
+            .unwrap_err()
+            .to_string()
+            .contains("question_closed"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn answer_action_recovers_after_restart_from_a_prepared_receipt() {
+        let dir = temp_root("channel-answer-restart");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        ws.record_worker_attempt(&prepared_attempt("att_1"))
+            .unwrap();
+        let asked = ws
+            .record_task_event(
+                "intent_channel",
+                channel_event(ChannelEventType::QuestionAsked, Some("att_1")),
+            )
+            .unwrap();
+        ws.record_question(&Question {
+            schema_version: 1,
+            question_id: "qst_restart".into(),
+            session_id: "ses_channel".into(),
+            task_id: "YARD-001".into(),
+            attempt_id: "att_1".into(),
+            asked_event_id: asked.event_id,
+            asked_seq: asked.seq,
+            context_start_seq: 1,
+            text: "Continue?".into(),
+            state: QuestionState::Open,
+            answer_id: None,
+        })
+        .unwrap();
+        let request = AnswerActionRequest {
+            action_id: "act_restart".into(),
+            answer_id: "ans_restart".into(),
+            continuation_attempt_id: "att_restart".into(),
+            session_id: "ses_channel".into(),
+            intent_id: "intent_channel".into(),
+            task_id: "YARD-001".into(),
+            question_id: "qst_restart".into(),
+            text: "Continue".into(),
+            worker_id: "generic-text".into(),
+            worker_session_ref: None,
+            supports_native_resume: false,
+        };
+        let digest = channel_action_digest(&request).unwrap();
+        save_immutable_yaml(
+            &ws.channel_action_path("intent_channel", "YARD-001", &request.action_id, false),
+            &ActionReceipt {
+                schema_version: 1,
+                action_id: request.action_id.clone(),
+                session_id: request.session_id.clone(),
+                task_id: request.task_id.clone(),
+                action: ChannelActionKind::Answer,
+                request_digest: digest,
+                status: ChannelActionStatus::Prepared,
+                result_event_ids: Vec::new(),
+                result_attempt_id: Some(request.continuation_attempt_id.clone()),
+                error: String::new(),
+            },
+        )
+        .unwrap();
+        drop(ws);
+
+        let restarted = Workspace::at(&dir);
+        let outcome = restarted.answer_question(&request).unwrap();
+        assert_eq!(outcome.receipt.status, ChannelActionStatus::Completed);
+        assert_eq!(
+            outcome.attempt.continuation,
+            ContinuationMode::ExplicitPacket
+        );
+        assert_eq!(restarted.answer_question(&request).unwrap(), outcome);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn redirect_requires_observed_terminal_state_before_new_guidance_attempt() {
+        let dir = temp_root("channel-redirect-action");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        ws.record_worker_attempt(&prepared_attempt("att_1"))
+            .unwrap();
+        ws.record_task_event(
+            "intent_channel",
+            channel_event(ChannelEventType::AttemptPrepared, Some("att_1")),
+        )
+        .unwrap();
+
+        let request = RedirectActionRequest {
+            action_id: "act_redirect_1".into(),
+            continuation_attempt_id: "att_2".into(),
+            session_id: "ses_channel".into(),
+            intent_id: "intent_channel".into(),
+            task_id: "YARD-001".into(),
+            stopped_attempt_id: "att_1".into(),
+            observed_terminal_state: AttemptState::Cancelled,
+            reason: "user changed the target".into(),
+            guidance: "build path B".into(),
+            worker_id: "codex".into(),
+            checkpoint_ref: None,
+        };
+        assert!(ws
+            .redirect_task(&request)
+            .unwrap_err()
+            .to_string()
+            .contains("redirect_requires_observed_terminal"));
+
+        let mut completed = channel_event(ChannelEventType::WorkerCompleted, Some("att_1"));
+        completed.payload = serde_json::json!({"result": "cancelled", "reason": "user stop"});
+        ws.record_task_event("intent_channel", completed).unwrap();
+
+        let first = ws.redirect_task(&request).unwrap();
+        let duplicate = ws.redirect_task(&request).unwrap();
+        assert_eq!(first, duplicate);
+        assert_eq!(first.attempt.attempt_id, "att_2");
+        assert_eq!(first.attempt.continuation, ContinuationMode::Redirect);
+        assert!(first.attempt.worker_session_ref.is_none());
+        let channel = ws.load_task_channel("intent_channel", "YARD-001").unwrap();
+        assert_eq!(channel.attempts.len(), 2);
+        assert!(channel.events.iter().any(|event| {
+            event.event_type == ChannelEventType::ActionRequested
+                && event.payload["reason"] == "user changed the target"
+        }));
         let _ = fs::remove_dir_all(&dir);
     }
 

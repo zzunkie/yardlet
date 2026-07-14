@@ -456,13 +456,34 @@ impl App {
                 .map(|v| v.trim().trim_matches('"').to_string())
                 .unwrap_or_default()
         };
+        let task_id = field("task_id:");
+        if let Some(intent_id) = self
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.queue.intent_id.as_str())
+            .filter(|intent_id| !intent_id.is_empty())
+        {
+            if let Ok(channel) = self.ws.load_task_channel(intent_id, &task_id) {
+                let projected = channel_projection_lines(&channel);
+                let has_public_progress = channel.events.iter().any(|event| {
+                    !matches!(
+                        event.event_type,
+                        crate::schemas::ChannelEventType::AttemptPrepared
+                            | crate::schemas::ChannelEventType::WorkerStarted
+                    )
+                });
+                if has_public_progress && !projected.is_empty() {
+                    self.monitor.log_lines = projected;
+                }
+            }
+        }
         self.monitor.header = Some(MonitorHeader {
             run_name: dir
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string(),
-            task_id: field("task_id:"),
+            task_id,
             worker: field("worker:"),
             recorded_state: field("state:"),
         });
@@ -2664,6 +2685,101 @@ fn current_intent_id(app: &App) -> Option<&str> {
         .filter(|id| !id.is_empty())
 }
 
+fn channel_projection_lines(channel: &crate::schemas::TaskChannel) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current_attempt: Option<&str> = None;
+    for event in &channel.events {
+        if event.attempt_id.as_deref() != current_attempt {
+            current_attempt = event.attempt_id.as_deref();
+            if let Some(attempt_id) = current_attempt {
+                let worker = channel
+                    .attempts
+                    .iter()
+                    .find(|attempt| attempt.attempt_id == attempt_id)
+                    .map(|attempt| attempt.worker_id.as_str())
+                    .unwrap_or("unknown");
+                lines.push(format!("--- attempt {attempt_id} · {worker} ---"));
+            }
+        }
+        let text = match event.event_type {
+            crate::schemas::ChannelEventType::WorkerStarted => Some("worker started".to_string()),
+            crate::schemas::ChannelEventType::WorkerMessage => event
+                .payload
+                .get("text")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            crate::schemas::ChannelEventType::ToolStarted => Some(format!(
+                "tool started: {}",
+                event
+                    .payload
+                    .get("name")
+                    .or_else(|| event.payload.get("command"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("tool")
+            )),
+            crate::schemas::ChannelEventType::ToolCompleted => Some(format!(
+                "tool completed: {}",
+                event
+                    .payload
+                    .get("name")
+                    .or_else(|| event.payload.get("command"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("tool")
+            )),
+            crate::schemas::ChannelEventType::QuestionAsked => event
+                .payload
+                .get("text")
+                .and_then(|value| value.as_str())
+                .map(|text| format!("question: {text}")),
+            crate::schemas::ChannelEventType::UserAnswered => event
+                .payload
+                .get("text")
+                .and_then(|value| value.as_str())
+                .map(|text| format!("user: {text}")),
+            crate::schemas::ChannelEventType::WorkerCheckpoint => {
+                Some("worker checkpoint recorded".to_string())
+            }
+            crate::schemas::ChannelEventType::WorkerCompleted => Some(format!(
+                "worker completed: {}",
+                event
+                    .payload
+                    .get("result")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown")
+            )),
+            crate::schemas::ChannelEventType::CompletionRecorded => Some(format!(
+                "task completed: {}",
+                event
+                    .payload
+                    .get("task_state")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown")
+            )),
+            crate::schemas::ChannelEventType::ValidationStarted => {
+                Some("validation started".to_string())
+            }
+            crate::schemas::ChannelEventType::ValidationCompleted => Some(format!(
+                "validation completed: {}",
+                if event
+                    .payload
+                    .get("passed")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+                {
+                    "passed"
+                } else {
+                    "failed"
+                }
+            )),
+            _ => None,
+        };
+        if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
+            lines.push(format!("[{}] {text}", event.seq));
+        }
+    }
+    lines
+}
+
 /// Latest run for this task that belongs to the live intent. Task ids repeat
 /// across plans, so a bare latest-by-task lookup can expose a past intent's
 /// worker output on the Answer screen.
@@ -2785,9 +2901,24 @@ fn build_answer_context(app: &App, target_id: &str, question: &str) -> String {
 
     let run_dir = latest_answer_run(app, target_id);
     let mut has_detail = false;
-    if let Some(output) = run_dir.as_deref().and_then(readable_worker_output) {
-        context.push_str(&format!("## {}\n\n{output}\n\n", l.worker_output_title));
-        has_detail = true;
+    if let Some(intent_id) = current_intent_id(app) {
+        if let Ok(channel) = app.ws.load_task_channel(intent_id, target_id) {
+            let lines = channel_projection_lines(&channel);
+            if !lines.is_empty() {
+                context.push_str(&format!(
+                    "## {}\n\n{}\n\n",
+                    l.worker_output_title,
+                    lines.join("\n")
+                ));
+                has_detail = true;
+            }
+        }
+    }
+    if !has_detail {
+        if let Some(output) = run_dir.as_deref().and_then(readable_worker_output) {
+            context.push_str(&format!("## {}\n\n{output}\n\n", l.worker_output_title));
+            has_detail = true;
+        }
     }
     if let Some(conversation) = answer_conversation(app, target_id, question) {
         context.push_str(&format!(
@@ -2874,6 +3005,10 @@ fn start_answer(app: &mut App) {
     let ws = app.ws.clone();
     let lang = app.lang;
     let answer = app.input.trim().to_string();
+    if let Err(e) = run::prepare_answer_action(&app.ws, &task_id, &answer, None) {
+        app.toast = Some((false, format!("{} {e}", app.lang.l().answer_failed)));
+        return;
+    }
     let lbl = app.lang.l();
     let (resumed_via, failed) = (lbl.resumed_via, lbl.answer_failed);
     let (tx, rx) = mpsc::channel();
