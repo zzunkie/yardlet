@@ -62,7 +62,7 @@ mod unix {
             .unwrap();
             fs::write(
                 root.join(".agents/work-queue.yaml"),
-                "schema_version: 1\nqueue_id: queue-resource-fixture\nintent_id: intent-resource-fixture\ntasks:\n  - {id: YARD-001, title: publish typed resources, state: queued, priority: 10, preferred_worker: fixture}\n  - {id: YARD-CAP, title: publish bounded artifacts, state: queued, priority: 20, preferred_worker: fixture}\n  - {id: YARD-BAD, title: reject unowned evidence, state: queued, priority: 30, preferred_worker: fixture}\n",
+                "schema_version: 1\nqueue_id: queue-resource-fixture\nintent_id: intent-resource-fixture\ntasks:\n  - {id: YARD-001, title: publish typed resources, state: queued, priority: 10, preferred_worker: fixture}\n  - {id: YARD-CAP, title: publish bounded artifacts, state: queued, priority: 20, preferred_worker: fixture}\n  - {id: YARD-BAD, title: reject unowned evidence, state: queued, priority: 30, preferred_worker: fixture}\n  - {id: YARD-CAUSE, title: reject forged causation, state: queued, priority: 40, preferred_worker: fixture}\n",
             )
             .unwrap();
             Self { root, binary }
@@ -126,6 +126,22 @@ mod unix {
 
     fn read_yaml(path: &Path) -> YamlValue {
         serde_yaml_ng::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn task_channel_events(root: &Path) -> Vec<YamlValue> {
+        let channels = root.join(".agents/task-channels");
+        if !channels.is_dir() {
+            return Vec::new();
+        }
+        let mut events = Vec::new();
+        for channel in fs::read_dir(channels).unwrap().flatten() {
+            events.extend(
+                yaml_files(&channel.path().join("events"))
+                    .iter()
+                    .map(|path| read_yaml(path)),
+            );
+        }
+        events
     }
 
     fn canonical_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
@@ -202,12 +218,25 @@ mod unix {
         kinds.sort_unstable();
         assert_eq!(kinds, ["browser", "process", "service", "terminal"]);
 
+        let events = task_channel_events(&fixture.root);
         for entry in entries {
             let record = entry.get("artifact").unwrap_or(&entry["resource"]);
             assert_eq!(record["task_id"], "YARD-001");
             assert!(!record["attempt_id"].as_str().unwrap().is_empty());
             assert_eq!(record["producer"]["worker_id"], "fixture");
             assert!(!record["created_event_id"].as_str().unwrap().is_empty());
+            if record["proposal_id"]
+                .as_str()
+                .is_some_and(|proposal_id| proposal_id.starts_with("proposal-"))
+            {
+                let causation_id = record["causation_id"].as_str().unwrap();
+                assert_ne!(causation_id, record["attempt_id"].as_str().unwrap());
+                let cause = events
+                    .iter()
+                    .find(|event| event["event_id"].as_str() == Some(causation_id))
+                    .expect("canonical publication causation event");
+                assert_eq!(cause["attempt_id"].as_str(), record["attempt_id"].as_str());
+            }
         }
 
         for (index, entry) in entries.iter().enumerate() {
@@ -262,7 +291,7 @@ mod unix {
         assert!(index_path.is_file());
         fs::remove_file(&index_path).unwrap();
 
-        fixture.must_run(&[
+        let discovered = fixture.must_run(&[
             "resource",
             "discover",
             "--task",
@@ -271,8 +300,33 @@ mod unix {
             "act-index-missing",
             "--json",
         ]);
+        let discovered: Value = serde_json::from_slice(&discovered.stdout).unwrap();
+        let discovered_cap_artifacts = discovered["result"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| {
+                entry["artifact"]["proposal_id"]
+                    .as_str()
+                    .is_some_and(|proposal_id| proposal_id.starts_with("cap-"))
+            })
+            .count();
+        assert_eq!(
+            discovered_cap_artifacts, 140,
+            "bounded index must fall back to canonical task facts"
+        );
         let rebuilt = read_yaml(&index_path);
         assert!(rebuilt["artifacts"].as_sequence().unwrap().len() <= 128);
+        let task_index = rebuilt["tasks"]
+            .as_sequence()
+            .expect("resource index must carry bounded task projections")
+            .iter()
+            .find(|entry| entry["task_id"].as_str() == Some("YARD-CAP"))
+            .expect("YARD-CAP task projection");
+        assert!(task_index["artifacts"].as_sequence().unwrap().len() <= 128);
+        assert_eq!(task_index["resources"].as_sequence().unwrap().len(), 0);
+        assert_eq!(task_index["attempts"].as_sequence().unwrap().len(), 1);
+        assert_eq!(task_index["truncated"].as_bool(), Some(true));
         fs::write(&index_path, "malformed: [\n").unwrap();
         fixture.must_run(&[
             "resource",
@@ -344,6 +398,50 @@ mod unix {
                     .iter()
                     .map(|path| read_yaml(path))
                     .all(|record| record["proposal_id"].as_str() != Some("bad"))
+        );
+    }
+
+    #[test]
+    fn evidence_with_forged_attempt_causation_cannot_complete() {
+        let fixture = Fixture::new("invalid-causation");
+        let output = fixture.run(&["run", "--task", "YARD-CAUSE", "--execute"]);
+        assert!(
+            output.status.success(),
+            "the orchestrator should record rejected evidence cleanly: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let queue = read_yaml(&fixture.root.join(".agents/work-queue.yaml"));
+        let state = queue["tasks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|task| task["id"].as_str() == Some("YARD-CAUSE"))
+            .unwrap()["state"]
+            .as_str()
+            .unwrap();
+        assert_ne!(state, "done");
+        let evaluation_path = fs::read_dir(fixture.root.join(".agents/runs"))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path().join("evaluation.json"))
+            .find(|path| path.is_file())
+            .expect("evaluation record");
+        let evaluation: Value =
+            serde_json::from_str(&fs::read_to_string(evaluation_path).unwrap()).unwrap();
+        let provenance_check = evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "resource_provenance_valid")
+            .expect("causation must be part of the exact provenance gate");
+        assert_eq!(provenance_check["passed"], false);
+        assert_eq!(provenance_check["fatal"], true);
+        assert!(
+            !fixture.root.join(".agents/resources/artifacts").is_dir()
+                || yaml_files(&fixture.root.join(".agents/resources/artifacts"))
+                    .iter()
+                    .map(|path| read_yaml(path))
+                    .all(|record| record["proposal_id"].as_str() != Some("forged-cause"))
         );
     }
 }
