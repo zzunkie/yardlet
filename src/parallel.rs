@@ -438,6 +438,25 @@ pub fn run_batch<F: FnMut(&str)>(
             .join(", ")
     ));
 
+    let attempt_runtime = preps
+        .iter()
+        .map(|prep| {
+            let context = run::channel_run_context(ws, &queue.intent_id, &prep.task.id);
+            let (attempt, capture) = run::begin_worker_attempt(
+                ws,
+                None,
+                &context,
+                &prep.run_dir,
+                &prep.run_id,
+                &prep.worker_id,
+                prep.session.clone(),
+                crate::schemas::ContinuationMode::Fresh,
+                None,
+            )?;
+            Ok((context, attempt, capture))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     let (tx, rx) = mpsc::channel::<Finished>();
     let mut handles = Vec::new();
     for (i, p) in preps.iter().enumerate() {
@@ -451,20 +470,20 @@ pub fn run_batch<F: FnMut(&str)>(
         let packet_text = p.packet_text.clone();
         let cwd = p.wt_path.clone();
         let worker_run_dir = p.run_dir.clone();
-        let log_path = p.run_dir.join("worker-output.log");
+        let capture = attempt_runtime[i].2.clone();
         let timeout = Duration::from_secs(p.profile.limits.max_wall_minutes as u64 * 60);
         let images = images.clone();
         let session = p.session.clone();
         handles.push(std::thread::spawn(move || {
             let started = std::time::Instant::now();
-            let outcome = workers::spawn(
+            let outcome = workers::spawn_attempt(
                 &profile,
                 &bin,
                 &packet_text,
                 &worker_run_dir,
                 &cwd,
                 &env,
-                &log_path,
+                &capture,
                 timeout,
                 full_access,
                 &images,
@@ -491,12 +510,39 @@ pub fn run_batch<F: FnMut(&str)>(
         let mut wall_seconds = fin.wall_seconds;
         let mut failover_note: Option<String> = None;
 
+        if let Ok(completed) = &outcome {
+            let runtime = &attempt_runtime[fin.prep_idx];
+            run::finish_worker_attempt(
+                ws, None, &runtime.0, &p.run_dir, &runtime.1, &runtime.2, completed,
+            )?;
+        } else if let Err(error) = &outcome {
+            let runtime = &attempt_runtime[fin.prep_idx];
+            run::finish_worker_attempt_error(ws, &runtime.0, &runtime.1, error)?;
+        }
+
         match &outcome {
             Ok(o) => on_event(&format!(
                 "{}: worker finished ({}); integrating",
                 p.task.id, o.note
             )),
             Err(e) => on_event(&format!("{}: worker error: {e}", p.task.id)),
+        }
+
+        if p.run_dir.join("cancelled").is_file() {
+            let _ = std::fs::remove_file(p.run_dir.join("cancelled"));
+            run::save_task_state_on_latest_queue(
+                ws,
+                &mut queue,
+                &p.task.id,
+                TaskState::Queued,
+                crate::schemas::TransitionCause::RunOutcome,
+                "stopped by user; task requeued",
+                crate::schemas::TransitionActor::System,
+            )?;
+            remove_worktree(&ws.root, &p.wt_path, &p.branch);
+            on_event(&format!("{}: stopped by user; requeued", p.task.id));
+            states.push((p.task.id.clone(), TaskState::Queued));
+            continue;
         }
 
         if !p.run_dir.join("result.json").exists() {
@@ -555,20 +601,43 @@ pub fn run_batch<F: FnMut(&str)>(
                         write_str(&workers::packet_path(&p.run_dir), &failover_packet)?;
                         let session = (worker_id == "claude-code")
                             .then(|| run::gen_session_uuid(&format!("{}-{worker_id}", p.run_id)));
-                        workers::spawn(
+                        let context = run::channel_run_context(ws, &queue.intent_id, &p.task.id);
+                        let attempt_id = run::attempt_id_for_ordinal(&p.run_id, 2);
+                        let (attempt, capture) = run::begin_worker_attempt(
+                            ws,
+                            None,
+                            &context,
+                            &p.run_dir,
+                            &attempt_id,
+                            &worker_id,
+                            session.clone(),
+                            crate::schemas::ContinuationMode::Fallback,
+                            None,
+                        )?;
+                        let completed = match workers::spawn_attempt(
                             &eff_profile,
                             &alt.bin,
                             &failover_packet,
                             &p.run_dir,
                             &p.wt_path,
                             &env,
-                            &p.run_dir.join("worker-output.log"),
+                            &capture,
                             timeout,
                             full_access,
                             &images,
                             session.as_deref(),
                             false,
-                        )
+                        ) {
+                            Ok(completed) => completed,
+                            Err(error) => {
+                                run::finish_worker_attempt_error(ws, &context, &attempt, &error)?;
+                                return Err(error);
+                            }
+                        };
+                        run::finish_worker_attempt(
+                            ws, None, &context, &p.run_dir, &attempt, &capture, &completed,
+                        )?;
+                        Ok(completed)
                     })();
                     wall_seconds += failover_started.elapsed().as_secs();
                     match &outcome {

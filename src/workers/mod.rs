@@ -17,13 +17,252 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use crate::schemas::{Invocation, WorkerProfile};
+use crate::schemas::{ChannelEventType, Invocation, RawEventRef, WorkerProfile};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RawStreamKind {
+    Stdout,
+    Stderr,
+}
+
+impl RawStreamKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedWorkerEvent {
+    pub event_type: ChannelEventType,
+    pub payload: serde_json::Value,
+    pub raw_ref: RawEventRef,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttemptCapture {
+    pub combined_log: PathBuf,
+    pub stdout_log: PathBuf,
+    pub stderr_log: PathBuf,
+}
+
+fn normalized_event(
+    event_type: ChannelEventType,
+    payload: serde_json::Value,
+    artifact_id: &str,
+    stream: RawStreamKind,
+    byte_start: usize,
+    byte_end: usize,
+) -> NormalizedWorkerEvent {
+    NormalizedWorkerEvent {
+        event_type,
+        payload,
+        raw_ref: RawEventRef {
+            artifact_id: artifact_id.to_string(),
+            stream: stream.as_str().to_string(),
+            byte_start: byte_start as u64,
+            byte_end: byte_end as u64,
+        },
+    }
+}
+
+fn text_event(
+    text: &str,
+    artifact_id: &str,
+    stream: RawStreamKind,
+    start: usize,
+    end: usize,
+) -> Option<NormalizedWorkerEvent> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| {
+        normalized_event(
+            ChannelEventType::WorkerMessage,
+            serde_json::json!({"text": text}),
+            artifact_id,
+            stream,
+            start,
+            end,
+        )
+    })
+}
+
+fn normalize_codex_json(
+    value: &serde_json::Value,
+    artifact_id: &str,
+    stream: RawStreamKind,
+    start: usize,
+    end: usize,
+) -> Vec<NormalizedWorkerEvent> {
+    let Some(kind) = value.get("type").and_then(|value| value.as_str()) else {
+        return Vec::new();
+    };
+    let item = value.get("item").unwrap_or(value);
+    let item_type = item.get("type").and_then(|value| value.as_str());
+    if matches!(item_type, Some("reasoning" | "thinking" | "analysis")) {
+        return Vec::new();
+    }
+    match (kind, item_type) {
+        ("item.started", Some("command_execution" | "tool_call")) => vec![normalized_event(
+            ChannelEventType::ToolStarted,
+            serde_json::json!({
+                "name": item.get("name").and_then(|value| value.as_str()).unwrap_or("command"),
+                "command": item.get("command").and_then(|value| value.as_str()).unwrap_or("")
+            }),
+            artifact_id,
+            stream,
+            start,
+            end,
+        )],
+        ("item.completed", Some("command_execution" | "tool_call")) => {
+            vec![normalized_event(
+                ChannelEventType::ToolCompleted,
+                serde_json::json!({
+                    "name": item.get("name").and_then(|value| value.as_str()).unwrap_or("command"),
+                    "command": item.get("command").and_then(|value| value.as_str()).unwrap_or(""),
+                    "exit_code": item.get("exit_code").cloned().unwrap_or(serde_json::Value::Null)
+                }),
+                artifact_id,
+                stream,
+                start,
+                end,
+            )]
+        }
+        ("item.completed", Some("agent_message" | "message")) => item
+            .get("text")
+            .and_then(|value| value.as_str())
+            .and_then(|text| text_event(text, artifact_id, stream, start, end))
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn normalize_claude_json(
+    value: &serde_json::Value,
+    artifact_id: &str,
+    stream: RawStreamKind,
+    start: usize,
+    end: usize,
+) -> Vec<NormalizedWorkerEvent> {
+    let mut out = Vec::new();
+    if value.get("type").and_then(|value| value.as_str()) == Some("content_block_start") {
+        let block = &value["content_block"];
+        if block.get("type").and_then(|value| value.as_str()) == Some("tool_use") {
+            out.push(normalized_event(
+                ChannelEventType::ToolStarted,
+                serde_json::json!({
+                    "name": block.get("name").and_then(|value| value.as_str()).unwrap_or("tool")
+                }),
+                artifact_id,
+                stream,
+                start,
+                end,
+            ));
+        }
+        return out;
+    }
+    let content = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_array());
+    if let Some(content) = content {
+        for block in content {
+            match block.get("type").and_then(|value| value.as_str()) {
+                Some("text") => {
+                    if let Some(event) = block
+                        .get("text")
+                        .and_then(|value| value.as_str())
+                        .and_then(|text| text_event(text, artifact_id, stream, start, end))
+                    {
+                        out.push(event);
+                    }
+                }
+                Some("tool_use") => out.push(normalized_event(
+                    ChannelEventType::ToolStarted,
+                    serde_json::json!({
+                        "name": block.get("name").and_then(|value| value.as_str()).unwrap_or("tool")
+                    }),
+                    artifact_id,
+                    stream,
+                    start,
+                    end,
+                )),
+                Some("thinking" | "reasoning" | "analysis") => {}
+                _ => {}
+            }
+        }
+    } else if value.get("type").and_then(|value| value.as_str()) == Some("result") {
+        if let Some(event) = value
+            .get("result")
+            .and_then(|value| value.as_str())
+            .and_then(|text| text_event(text, artifact_id, stream, start, end))
+        {
+            out.push(event);
+        }
+    }
+    out
+}
+
+/// Normalize only provider-exposed public messages/tool activity. Raw bytes
+/// remain the source of truth and every emitted event points at its exact line.
+pub fn normalize_worker_output(
+    worker_id: &str,
+    stream: RawStreamKind,
+    raw: &[u8],
+    artifact_id: &str,
+) -> Vec<NormalizedWorkerEvent> {
+    let mut events = Vec::new();
+    let mut start = 0_usize;
+    while start < raw.len() {
+        let end = raw[start..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(raw.len(), |offset| start + offset + 1);
+        let line = String::from_utf8_lossy(&raw[start..end]);
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            match serde_json::from_str::<serde_json::Value>(trimmed) {
+                Ok(value) if worker_id == "codex" => {
+                    events.extend(normalize_codex_json(
+                        &value,
+                        artifact_id,
+                        stream,
+                        start,
+                        end,
+                    ));
+                }
+                Ok(value) if worker_id == "claude-code" => {
+                    events.extend(normalize_claude_json(
+                        &value,
+                        artifact_id,
+                        stream,
+                        start,
+                        end,
+                    ));
+                }
+                Ok(_) | Err(_) => {
+                    if let Some(event) = text_event(trimmed, artifact_id, stream, start, end) {
+                        events.push(event);
+                    }
+                }
+            }
+        }
+        start = end;
+    }
+    events
+}
 
 /// A model/effort value counts as explicit only when it is set and is not the
 /// "auto" sentinel. Empty or "auto" means: omit the flag and let the worker CLI
 /// choose (its own default / automatic selection).
 fn explicit(v: &str) -> bool {
     !v.trim().is_empty() && !v.eq_ignore_ascii_case("auto")
+}
+
+pub fn supports_native_resume(worker_id: &str) -> bool {
+    matches!(worker_id, "codex" | "claude-code")
 }
 
 /// The profile a task actually runs with. A per-task `model`/`effort` overrides
@@ -315,6 +554,71 @@ pub fn spawn(
     session: Option<&str>,
     resume: bool,
 ) -> Result<WorkerOutcome> {
+    spawn_internal(
+        profile,
+        bin,
+        packet,
+        worker_run_dir,
+        cwd,
+        env,
+        output_log,
+        None,
+        timeout,
+        full_access,
+        images,
+        session,
+        resume,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_attempt(
+    profile: &WorkerProfile,
+    bin: &Path,
+    packet: &str,
+    worker_run_dir: &Path,
+    cwd: &Path,
+    env: &[(String, String)],
+    capture: &AttemptCapture,
+    timeout: Duration,
+    full_access: bool,
+    images: &[String],
+    session: Option<&str>,
+    resume: bool,
+) -> Result<WorkerOutcome> {
+    spawn_internal(
+        profile,
+        bin,
+        packet,
+        worker_run_dir,
+        cwd,
+        env,
+        &capture.combined_log,
+        Some(capture),
+        timeout,
+        full_access,
+        images,
+        session,
+        resume,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_internal(
+    profile: &WorkerProfile,
+    bin: &Path,
+    packet: &str,
+    worker_run_dir: &Path,
+    cwd: &Path,
+    env: &[(String, String)],
+    output_log: &Path,
+    attempt_capture: Option<&AttemptCapture>,
+    timeout: Duration,
+    full_access: bool,
+    images: &[String],
+    session: Option<&str>,
+    resume: bool,
+) -> Result<WorkerOutcome> {
     use std::io::{Read, Write};
 
     // `worker_run_dir` may be a staging directory inside an isolated worktree,
@@ -373,6 +677,38 @@ pub fn spawn(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
+    let attempt_raw_files = if let Some(capture) = attempt_capture {
+        for path in [&capture.stdout_log, &capture.stderr_log] {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            if path.exists() {
+                anyhow::bail!("attempt raw stream already exists: {}", path.display());
+            }
+        }
+        let stdout = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&capture.stdout_log)
+            .with_context(|| format!("creating {}", capture.stdout_log.display()))?;
+        let stderr = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&capture.stderr_log)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = std::fs::remove_file(&capture.stdout_log);
+                return Err(error)
+                    .with_context(|| format!("creating {}", capture.stderr_log.display()));
+            }
+        };
+        Some((stdout, stderr))
+    } else {
+        None
+    };
+
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning worker '{}'", bin.display()))?;
@@ -390,28 +726,49 @@ pub fn spawn(
     // can tail the worker live. Worker CLIs often route progress to stderr or
     // block-buffer stdout on a pipe, so capturing stderr live (not only after
     // exit) is what keeps the monitor non-empty during a run.
-    let log_file = std::sync::Arc::new(std::sync::Mutex::new(
-        std::fs::File::create(output_log).ok(),
-    ));
+    let combined = if attempt_capture.is_some() {
+        if let Some(parent) = output_log.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        Some(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(output_log)
+                .with_context(|| format!("opening {}", output_log.display()))?,
+        )
+    } else {
+        std::fs::File::create(output_log).ok()
+    };
+    let log_file = std::sync::Arc::new(std::sync::Mutex::new(combined));
     let captured_session = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let mut sources: Vec<(Box<dyn Read + Send>, bool)> = Vec::new();
+    let (stdout_raw, stderr_raw) = match attempt_raw_files {
+        Some((stdout, stderr)) => (
+            Some(std::sync::Arc::new(std::sync::Mutex::new(stdout))),
+            Some(std::sync::Arc::new(std::sync::Mutex::new(stderr))),
+        ),
+        None => (None, None),
+    };
+    type RawSink = Option<std::sync::Arc<std::sync::Mutex<std::fs::File>>>;
+    let mut sources: Vec<(Box<dyn Read + Send>, bool, RawSink)> = Vec::new();
     if let Some(o) = child.stdout.take() {
-        sources.push((Box::new(o), profile.id == "codex" && !resume));
+        sources.push((Box::new(o), profile.id == "codex" && !resume, stdout_raw));
     }
     if let Some(e) = child.stderr.take() {
-        sources.push((Box::new(e), false));
+        sources.push((Box::new(e), false, stderr_raw));
     }
     let readers: Vec<_> = sources
         .into_iter()
-        .map(|(mut src, capture_session)| {
+        .map(|(mut src, capture_session, raw_sink)| {
             let log = std::sync::Arc::clone(&log_file);
             let captured = std::sync::Arc::clone(&captured_session);
-            thread::spawn(move || {
+            thread::spawn(move || -> std::io::Result<()> {
                 let mut buf = [0u8; 4096];
                 let mut pending = Vec::new();
                 loop {
                     match src.read(&mut buf) {
-                        Ok(0) | Err(_) => {
+                        Ok(0) => {
                             if capture_session && !pending.is_empty() {
                                 if let Some(id) = codex_thread_id_from_json_line(&pending) {
                                     if let Ok(mut guard) = captured.lock() {
@@ -421,6 +778,7 @@ pub fn spawn(
                             }
                             break;
                         }
+                        Err(error) => return Err(error),
                         Ok(n) => {
                             if capture_session {
                                 capture_codex_thread_id(&mut pending, &buf[..n], &captured);
@@ -431,9 +789,20 @@ pub fn spawn(
                                     let _ = f.flush();
                                 }
                             }
+                            if let Some(raw_sink) = &raw_sink {
+                                if let Ok(mut raw) = raw_sink.lock() {
+                                    raw.write_all(&buf[..n])?;
+                                    raw.flush()?;
+                                } else {
+                                    return Err(std::io::Error::other(
+                                        "attempt raw stream lock poisoned",
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
+                Ok(())
             })
         })
         .collect();
@@ -451,10 +820,24 @@ pub fn spawn(
         }
         thread::sleep(Duration::from_millis(200));
     };
-    for r in readers {
-        let _ = r.join();
+    let mut reader_error = None;
+    for reader in readers {
+        match reader.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                reader_error.get_or_insert(error);
+            }
+            Err(_) => {
+                reader_error.get_or_insert_with(|| {
+                    std::io::Error::other("worker stream reader thread panicked")
+                });
+            }
+        }
     }
     let _ = std::fs::remove_file(&pid_path);
+    if let Some(error) = reader_error {
+        return Err(error).context("preserving attempt raw stream");
+    }
     let session_id = captured_session
         .lock()
         .ok()
@@ -979,5 +1362,135 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
                 "claude --effort omitted for {effort:?}"
             );
         }
+    }
+
+    #[test]
+    fn codex_public_stream_normalizes_messages_and_tools_but_not_reasoning() {
+        let raw = concat!(
+            "{\"type\":\"thread.started\",\"thread_id\":\"11111111-2222-4333-8444-555555555555\"}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"reasoning\",\"text\":\"private\"}}\n",
+            "{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\",\"command\":\"cargo test\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\",\"command\":\"cargo test\",\"exit_code\":0}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"public update\"}}\n"
+        );
+        let events = normalize_worker_output(
+            "codex",
+            RawStreamKind::Stdout,
+            raw.as_bytes(),
+            "raw_att_1_stdout",
+        );
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[0].event_type,
+            crate::schemas::ChannelEventType::ToolStarted
+        );
+        assert_eq!(
+            events[1].event_type,
+            crate::schemas::ChannelEventType::ToolCompleted
+        );
+        assert_eq!(
+            events[2].event_type,
+            crate::schemas::ChannelEventType::WorkerMessage
+        );
+        assert_eq!(events[2].payload["text"], "public update");
+        assert!(events.iter().all(|event| {
+            event.raw_ref.byte_end > event.raw_ref.byte_start
+                && event.raw_ref.artifact_id == "raw_att_1_stdout"
+        }));
+        assert!(events
+            .iter()
+            .all(|event| !event.payload.to_string().contains("private")));
+    }
+
+    #[test]
+    fn text_only_stream_degrades_to_message_events_with_exact_spans() {
+        let events = normalize_worker_output(
+            "generic-text",
+            RawStreamKind::Stderr,
+            b"first line\n\nsecond line\n",
+            "raw_att_2_stderr",
+        );
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].payload["text"], "first line");
+        assert_eq!(events[0].raw_ref.byte_start, 0);
+        assert_eq!(events[0].raw_ref.byte_end, 11);
+        assert_eq!(events[1].payload["text"], "second line");
+        assert_eq!(events[1].raw_ref.stream, "stderr");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attempt_capture_separates_stdout_stderr_and_refuses_overwrite() {
+        let root =
+            std::env::temp_dir().join(format!("yard-attempt-capture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let profile: WorkerProfile = crate::yaml::from_str(
+            r#"
+id: fixture
+invocation:
+  command: sh
+  args: ["-c", "printf stdout-only; printf stderr-only >&2"]
+limits: {max_wall_minutes: 1}
+"#,
+        )
+        .unwrap();
+        let capture = AttemptCapture {
+            combined_log: root.join("worker-output.log"),
+            stdout_log: root.join("attempts/att_1/stdout.log"),
+            stderr_log: root.join("attempts/att_1/stderr.log"),
+        };
+        let outcome = spawn_attempt(
+            &profile,
+            Path::new("/bin/sh"),
+            "packet",
+            &root,
+            &root,
+            &[],
+            &capture,
+            Duration::from_secs(5),
+            false,
+            &[],
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(outcome.exit_ok);
+        assert_eq!(
+            std::fs::read_to_string(&capture.stdout_log).unwrap(),
+            "stdout-only"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&capture.stderr_log).unwrap(),
+            "stderr-only"
+        );
+        let combined = std::fs::read_to_string(&capture.combined_log).unwrap();
+        assert!(combined.contains("stdout-only"));
+        assert!(combined.contains("stderr-only"));
+
+        let error = spawn_attempt(
+            &profile,
+            Path::new("/bin/sh"),
+            "packet",
+            &root,
+            &root,
+            &[],
+            &capture,
+            Duration::from_secs(5),
+            false,
+            &[],
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("attempt raw stream already exists"));
+        assert_eq!(
+            std::fs::read_to_string(&capture.stdout_log).unwrap(),
+            "stdout-only"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }
