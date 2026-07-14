@@ -6,8 +6,18 @@ if [[ "${1:-}" == "--version" ]]; then
   exit 0
 fi
 
-run_dir="${1:?run directory is required}"
 packet="$(cat)"
+native_adapter=false
+if [[ "${1:-}" == "exec" ]]; then
+  native_adapter=true
+  run_dir="$(sed -n 's#.*- `\(/.*\)/result.json`.*#\1#p' <<<"$packet" | head -n 1)"
+else
+  run_dir="${1:?run directory is required}"
+fi
+if [[ -z "$run_dir" ]]; then
+  printf 'fixture could not resolve run directory\n' >&2
+  exit 65
+fi
 task_id="$(sed -n 's/^# Yardlet task packet: //p' <<<"$packet" | head -n 1)"
 run_id="${run_dir##*/}"
 mkdir -p "$run_dir"
@@ -52,6 +62,54 @@ case "$task_id" in
       printf 'fixture first stdout\n'
       printf 'fixture first stderr\n' >&2
       write_question "A 또는 B를 선택해 주세요."
+    fi
+    ;;
+  YARD-NATIVE)
+    if [[ "$native_adapter" != true ]]; then
+      printf 'native fixture requires the codex adapter\n' >&2
+      exit 66
+    fi
+    printf '%s\n' "$*" >"$run_dir/native-args.txt"
+    if [[ " $* " == *" resume "* ]]; then
+      printf '{"type":"item.completed","item":{"type":"agent_message","text":"native resumed stdout"}}\n'
+      printf 'native resumed stderr\n' >&2
+      write_done "native session resume 완료"
+    else
+      printf '{"type":"thread.started","thread_id":"11111111-1111-4111-8111-111111111111"}\n'
+      printf '{"type":"item.completed","item":{"type":"agent_message","text":"native first stdout"}}\n'
+      printf 'native first stderr\n' >&2
+      write_question "native session으로 이어갈까요?"
+    fi
+    ;;
+  YARD-REDIRECT)
+    if grep -q 'Explicit continuation packet' <<<"$packet"; then
+      printf 'redirected worker public completion\n'
+      printf 'redirected worker diagnostic completion\n' >&2
+      write_done "redirect guidance 완료"
+    else
+      printf 'running worker public progress\n'
+      printf 'running worker diagnostic progress\n' >&2
+      write_handoff "checkpoint before redirect"
+      child_pid=''
+      trap '[[ -z "$child_pid" ]] || kill "$child_pid" 2>/dev/null || true; exit 143' TERM INT
+      while true; do
+        sleep 30 &
+        child_pid=$!
+        wait "$child_pid"
+      done
+    fi
+    ;;
+  YARD-INDEX)
+    if grep -q '> \[user\] A' <<<"$packet"; then
+      printf 'index continuation stdout\n'
+      printf 'index continuation stderr\n' >&2
+      write_done "bounded index rebuild 완료"
+    else
+      for index in $(seq 1 140); do
+        printf 'index public progress %03d\n' "$index"
+      done
+      printf 'index diagnostic stream\n' >&2
+      write_question "index rebuild를 계속할까요?"
     fi
     ;;
   *)
