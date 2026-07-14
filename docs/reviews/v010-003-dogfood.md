@@ -111,3 +111,66 @@ cargo test redirect_requires_observed_terminal_state_before_new_guidance_attempt
 409/409, builtin bundle 3/3, Git finish process 1/1, state architecture 2/2,
 V010-001 replay 8/8, serial Git finish process 1/1, V010-002 process 37/37,
 V010-003 process 7/7 pass다. 명령별 결과는 현재 run의 `validation.log`에도 보존했다.
+
+## YARD-008 security remediation
+
+### HIGH-001 action-id receipt escape
+
+Red 명령은 다음과 같다.
+
+```bash
+cargo test answer_action_rejects_unsafe_action_id_before_writing_a_receipt -- --nocapture
+cargo test --test v010_003_task_channels_process action_id_rejects_absolute_and_parent_paths_without_receipt_escape -- --nocapture
+```
+
+수정 전 state 단위 test는 임시 workspace 안의 절대경로 action id를 정상
+`AnswerActionOutcome`으로 받아들였다. 실제 CLI process도 같은 절대경로
+`--action-id`로 answer continuation을 완료했다. 원인은 `cli_action_id`가 사용자 입력을
+검증하지 않고, `channel_action_path`가 action id를 receipt filename에 그대로 보간한
+것이다. 절대경로는 `PathBuf::join`의 channel action root를 대체했고 `..` 성분도
+actions directory를 벗어날 수 있었다.
+
+Remediation은 다음 경계를 추가했다.
+
+- action id는 최대 128 byte의 단일 portable identifier만 허용한다. 첫 문자는 ASCII
+  영숫자이고 나머지는 ASCII 영숫자, `.`, `_`, `-`만 허용한다.
+- CLI answer, redirect, planning action은 사용자 제공 id를 mutation 전에 검증한다.
+  특히 redirect는 invalid id를 worker stop 전에 거절한다.
+- state writer는 CLI를 우회한 호출도 다시 검증한다. planning 및 task-channel receipt
+  path의 parent가 canonical actions directory와 정확히 같은지 확인한 뒤에만 쓴다.
+- process test는 절대경로와 `../` 입력이 non-zero로 끝나고 channel action receipt와
+  예상 escape 위치 모두에 파일이 생기지 않는지 확인한다.
+
+수정 뒤 위 두 명령은 각각 1/1 pass다.
+
+### HIGH-002 redirect decoy PID signal
+
+Red 명령은 다음과 같다.
+
+```bash
+cargo test --test v010_003_task_channels_process redirect_ignores_decoy_pid_and_signals_verified_worker -- --nocapture
+```
+
+수정 전 fixture는 long-running worker의 실제 PID를 읽은 뒤 별도 `sleep` decoy를
+시작하고 `worker.pid`만 decoy PID로 바꿨다. Redirect는 decoy를 종료했고 실제 worker는
+계속 살아 있었다. 10초 뒤 CLI는 `no observed terminal event yet`로 실패했다. 원인은
+`live_worker_pid`가 mutable `worker.pid` 숫자와 `kill -0`만 신뢰한 것이다.
+
+Remediation은 spawn 직후 private 0600 `worker-process.yaml`을 create-new로 기록한다.
+Receipt는 `run_id`, `attempt_id`, `worker_id`, 실제 PID 및 OS process start marker를
+담는다. Redirect는 signal 전에 다음을 모두 대조한다.
+
+1. canonical `run.yaml`의 run id, task id, running state 및 미완료 상태
+2. receipt의 run, attempt, worker identity와 현재 redirect 대상
+3. receipt PID의 현재 OS process start marker와 spawn 시 marker
+
+`worker.pid`는 기존 monitor 및 legacy recovery를 위한 projection으로만 남고 redirect
+signal source로 사용하지 않는다. Process test는 receipt identity와 0600 mode를 읽고,
+`worker.pid` 변조 뒤 decoy 생존, 실제 worker 종료, redirect continuation의 `done` 수렴을
+확인한다. 수정 뒤 위 명령은 1/1 pass이며 전체 V010-003 process suite는 9/9 pass다.
+
+YARD-008 최종 gate는 `cargo fmt --all -- --check`,
+`cargo clippy --all-targets --all-features -- -D warnings`, `cargo build`가 모두 exit 0이다.
+새 전체 `cargo test --quiet` 관찰치는 unit 410/410, builtin bundle 3/3,
+Git finish process 1/1, state architecture 2/2, V010-001 replay 8/8,
+serial Git finish process 1/1, V010-002 process 37/37, V010-003 process 9/9 pass다.

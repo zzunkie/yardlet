@@ -225,6 +225,15 @@ mod unix {
         false
     }
 
+    fn process_is_alive(pid: u32) -> bool {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
     #[test]
     fn text_worker_answer_creates_a_new_attempt_and_preserves_both_raw_streams() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -625,6 +634,191 @@ mod unix {
         assert!(!duplicate.status.success());
         fixture.run(&["queue"]);
         assert_eq!(yaml_dir(&channel.join("attempts")), before_restart);
+    }
+
+    #[test]
+    fn action_id_rejects_absolute_and_parent_paths_without_receipt_escape() {
+        for kind in ["absolute", "parent"] {
+            let fixture = FixtureWorkspace::new(&format!("unsafe-action-id-{kind}"));
+            fixture.write_queue(
+                "  - id: YARD-001\n    title: unsafe action id boundary\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
+            );
+            fixture.run(&["run", "--task", "YARD-001", "--execute"]);
+            let channel = channel_dir(&fixture.root, "YARD-001");
+            let (action_id, escaped_paths) = if kind == "absolute" {
+                let base = fixture.root.join("escaped-absolute-action");
+                (
+                    base.display().to_string(),
+                    vec![
+                        PathBuf::from(format!("{}.prepared.yaml", base.display())),
+                        PathBuf::from(format!("{}.terminal.yaml", base.display())),
+                    ],
+                )
+            } else {
+                (
+                    "../escaped-parent-action".to_string(),
+                    vec![
+                        channel.join("escaped-parent-action.prepared.yaml"),
+                        channel.join("escaped-parent-action.terminal.yaml"),
+                    ],
+                )
+            };
+
+            let output = command(
+                &fixture.root,
+                &fixture.binary,
+                &[
+                    "answer",
+                    "A",
+                    "--task",
+                    "YARD-001",
+                    "--action-id",
+                    &action_id,
+                ],
+            );
+            assert!(
+                !output.status.success(),
+                "unsafe {kind} action id unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("invalid action id"),
+                "unsafe {kind} action id did not fail at validation: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                escaped_paths.iter().all(|path| !path.exists()),
+                "unsafe {kind} action id created a receipt outside actions/: {escaped_paths:?}"
+            );
+            assert!(
+                yaml_dir(&channel.join("actions")).is_empty(),
+                "unsafe {kind} action id created a channel action receipt"
+            );
+        }
+    }
+
+    #[test]
+    fn redirect_ignores_decoy_pid_and_signals_verified_worker() {
+        let fixture = FixtureWorkspace::new("redirect-worker-provenance");
+        fixture.write_queue(
+            "  - id: YARD-REDIRECT\n    title: redirect verifies worker provenance\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
+        );
+
+        let mut running = Command::new(&fixture.binary)
+            .args(["run", "--task", "YARD-REDIRECT", "--execute"])
+            .current_dir(&fixture.root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = wait_until(Duration::from_secs(10), || {
+            task_state(&fixture.root, "YARD-REDIRECT") == "running"
+                && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
+        });
+        if !started {
+            let _ = running.kill();
+            let output = running.wait_with_output().unwrap();
+            panic!(
+                "redirect provenance fixture never reached running\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let pid_path = files_below(&fixture.root.join(".agents/runs"), "/worker.pid")
+            .into_iter()
+            .next()
+            .unwrap();
+        let worker_pid: u32 = fs::read_to_string(&pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let run_dir = pid_path.parent().unwrap();
+        let provenance_path = run_dir.join("worker-process.yaml");
+        let provenance = read_yaml(&provenance_path);
+        assert_eq!(
+            fs::metadata(&provenance_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(number(&provenance, "pid"), u64::from(worker_pid));
+        assert_eq!(string(&provenance, "worker_id"), "fixture");
+        assert_eq!(
+            string(&provenance, "run_id"),
+            run_dir.file_name().unwrap().to_str().unwrap()
+        );
+        assert_eq!(
+            string(&provenance, "attempt_id"),
+            fs::read_to_string(run_dir.join("latest-attempt"))
+                .unwrap()
+                .trim()
+        );
+        assert!(!string(&provenance, "process_start_marker").is_empty());
+
+        let unsafe_redirect = command(
+            &fixture.root,
+            &fixture.binary,
+            &[
+                "redirect",
+                "YARD-REDIRECT",
+                "this guidance must not stop the worker",
+                "--action-id",
+                "../escaped-redirect-action",
+            ],
+        );
+        assert!(!unsafe_redirect.status.success());
+        assert!(String::from_utf8_lossy(&unsafe_redirect.stderr).contains("invalid action id"));
+        assert!(
+            process_is_alive(worker_pid),
+            "invalid redirect action id stopped the worker before validation"
+        );
+        assert!(!run_dir.join("cancelled").exists());
+
+        let mut decoy = Command::new("sleep").arg("60").spawn().unwrap();
+        let decoy_pid = decoy.id();
+        fs::write(&pid_path, decoy_pid.to_string()).unwrap();
+
+        let redirect = command(
+            &fixture.root,
+            &fixture.binary,
+            &[
+                "redirect",
+                "YARD-REDIRECT",
+                "finish with verified worker guidance",
+                "--reason",
+                "verify run-owned worker provenance",
+                "--action-id",
+                "act-verified-worker-redirect",
+            ],
+        );
+        let worker_was_still_alive = process_is_alive(worker_pid);
+        let decoy_survived = decoy.try_wait().unwrap().is_none();
+
+        if worker_was_still_alive {
+            let _ = Command::new("kill").arg(worker_pid.to_string()).status();
+        }
+        let original = running.wait_with_output().unwrap();
+        if decoy_survived {
+            let _ = decoy.kill();
+        }
+        let _ = decoy.wait();
+
+        assert!(
+            redirect.status.success(),
+            "redirect failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&redirect.stdout),
+            String::from_utf8_lossy(&redirect.stderr)
+        );
+        assert!(
+            original.status.success(),
+            "original yardlet run failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&original.stdout),
+            String::from_utf8_lossy(&original.stderr)
+        );
+        assert!(!worker_was_still_alive, "verified worker was not stopped");
+        assert!(decoy_survived, "redirect signalled the decoy process");
+        assert_eq!(task_state(&fixture.root, "YARD-REDIRECT"), "done");
     }
 
     #[test]

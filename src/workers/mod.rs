@@ -19,6 +19,38 @@ use anyhow::{Context, Result};
 
 use crate::schemas::{ChannelEventType, Invocation, RawEventRef, WorkerProfile};
 
+pub(crate) const WORKER_PROCESS_PROVENANCE_FILE: &str = "worker-process.yaml";
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct WorkerProcessProvenance {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub attempt_id: String,
+    pub worker_id: String,
+    pub pid: u32,
+    pub process_start_marker: String,
+}
+
+pub(crate) fn process_start_marker(pid: u32) -> Option<String> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let marker = String::from_utf8(output.stdout)
+        .ok()?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!marker.is_empty()).then_some(marker)
+}
+
+pub(crate) fn load_worker_process_provenance(run_dir: &Path) -> Result<WorkerProcessProvenance> {
+    crate::state::load_yaml(&run_dir.join(WORKER_PROCESS_PROVENANCE_FILE))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RawStreamKind {
     Stdout,
@@ -704,9 +736,54 @@ fn spawn_internal(
         .spawn()
         .with_context(|| format!("spawning worker '{}'", bin.display()))?;
 
-    // Record the worker PID so the TUI can stop it (Esc) by killing the process.
+    let provenance_path = control_run_dir.join(WORKER_PROCESS_PROVENANCE_FILE);
+    let provenance_result = (|| -> Result<()> {
+        let Some(capture) = attempt_capture else {
+            return Ok(());
+        };
+        let run_id = control_run_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("worker control directory has no run identity"))?;
+        let attempt_id = capture
+            .stdout_log
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("attempt capture path has no attempt identity"))?;
+        let process_start_marker = process_start_marker(child.id())
+            .ok_or_else(|| anyhow::anyhow!("could not observe spawned worker process identity"))?;
+        let provenance = WorkerProcessProvenance {
+            schema_version: 1,
+            run_id: run_id.to_string(),
+            attempt_id: attempt_id.to_string(),
+            worker_id: profile.id.clone(),
+            pid: child.id(),
+            process_start_marker,
+        };
+        let mut file = crate::state::create_private_file(&provenance_path)?;
+        file.write_all(crate::yaml::to_string(&provenance)?.as_bytes())?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = provenance_result {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&provenance_path);
+        return Err(error).context("recording run-owned worker process provenance");
+    }
+
+    // Keep the legacy PID projection for monitors. Redirect signaling verifies
+    // the separate run-owned provenance record and never trusts this file.
     let pid_path = control_run_dir.join("worker.pid");
-    let _ = std::fs::write(&pid_path, child.id().to_string());
+    if let Err(error) = crate::state::write_str_atomic(&pid_path, &child.id().to_string()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&provenance_path);
+        return Err(error).context("recording worker PID projection");
+    }
 
     if let Some(mut stdin) = child.stdin.take() {
         // Best-effort: a worker that ignores stdin will simply not receive it.
@@ -820,6 +897,7 @@ fn spawn_internal(
         }
     }
     let _ = std::fs::remove_file(&pid_path);
+    let _ = std::fs::remove_file(&provenance_path);
     if let Some(error) = reader_error {
         return Err(error).context("preserving attempt raw stream");
     }
