@@ -64,11 +64,8 @@ pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
             if is_verifier(t) && (work_pending || queue.has_active_remediation_for(&t.id)) {
                 return false;
             }
-            // Any validation-bearing task is excluded: parallel skips validation,
-            // so it must run serially where failed checks can enter feedback.
             queue.runnable_class(t, false, &caps) == RunnableClass::Runnable
                 && !t.approval_required()
-                && !t.has_validation()
         })
         .map(|(i, _)| i)
         .collect();
@@ -175,18 +172,6 @@ pub fn assess_parallelism(queue: &WorkQueue, max_parallel: usize) -> ParallelAss
     if !approval_required.is_empty() {
         reasons.push(SequentialReason::ApprovalRequired {
             tasks: approval_required,
-        });
-    }
-
-    let validation_required = queue
-        .tasks
-        .iter()
-        .filter(|t| t.state == TaskState::Queued && t.has_validation() && queue.deps_met(t))
-        .map(|t| t.id.clone())
-        .collect::<Vec<_>>();
-    if !validation_required.is_empty() {
-        reasons.push(SequentialReason::ValidationRequired {
-            tasks: validation_required,
         });
     }
 
@@ -1793,14 +1778,13 @@ mod tests {
     }
 
     #[test]
-    fn ready_set_excludes_all_validation_tasks() {
-        // Validation-bearing tasks are held back from parallel batches (parallel
-        // skips validation), so they run serially where failure enters feedback.
+    fn ready_set_includes_validation_tasks() {
+        // Validation-bearing tasks use the same pre-merge gate in their isolated
+        // worktree and therefore remain eligible for parallel batches.
         let mut needs_val = task("V", TaskState::Queued, 5, vec![]);
         needs_val.validation = Some(crate::yaml::from_str("commands: [cargo test]").unwrap());
         let q = queue(vec![task("A", TaskState::Queued, 10, vec![]), needs_val]);
-        // Only A is parallel-ready; V is excluded despite its lower priority.
-        assert_eq!(ready_independent(&q, 10), vec![0]);
+        assert_eq!(ready_independent(&q, 10), vec![1, 0]);
     }
 
     #[test]
@@ -1829,9 +1813,9 @@ mod tests {
         serial_builder.validation = Some(crate::yaml::from_str("required: true").unwrap());
         let mut q = queue(vec![review, serial_builder]);
 
-        // The serial-only builder still holds the review out of a parallel
-        // batch; run_auto will fall through and select it sequentially.
-        assert!(ready_independent(&q, 4).is_empty());
+        // The validation-bearing builder holds the review out of the batch and
+        // itself remains runnable through the parallel validation path.
+        assert_eq!(ready_independent(&q, 4), vec![1]);
 
         q.tasks[1].validation = None;
         q.tasks[1].approval = Some(crate::yaml::from_str("required: true").unwrap());
@@ -1917,7 +1901,7 @@ mod tests {
 
         let assessment = assess_parallelism(&q, 4);
 
-        assert_eq!(assessment.runnable, vec!["A"]);
+        assert_eq!(assessment.runnable, vec!["VALIDATE", "A"]);
         assert!(assessment
             .reasons
             .contains(&SequentialReason::DependencyChain {
@@ -1928,14 +1912,10 @@ mod tests {
             .contains(&SequentialReason::ApprovalRequired {
                 tasks: vec!["APPROVE".to_string()]
             }));
-        assert!(assessment
+        assert!(!assessment
             .reasons
-            .contains(&SequentialReason::ValidationRequired {
-                tasks: vec!["VALIDATE".to_string()]
-            }));
-        assert!(assessment
-            .reasons
-            .contains(&SequentialReason::RunnableTaskCount { runnable: 1 }));
+            .iter()
+            .any(|reason| matches!(reason, SequentialReason::ValidationRequired { .. })));
     }
 
     #[test]

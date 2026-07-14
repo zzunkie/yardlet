@@ -14,6 +14,7 @@ Cargo.lock.orig
 # `yardlet init` regenerates it from templates::WORKERS, and untracking it
 # keeps the parallel-mode git preflight green while you tune it.
 /.agents/runs/
+/.agents/task-channels/
 /.agents/checkpoints/
 /.agents/handoffs/
 /.agents/telemetry/

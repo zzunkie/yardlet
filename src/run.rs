@@ -2633,9 +2633,13 @@ fn is_transient_failure(outcome: &workers::WorkerOutcome, run_dir: &std::path::P
 /// or a bare sequence. Yardlet runs these itself (a worker's self-reported
 /// validation is advisory, not the gate).
 fn validation_commands(task: &crate::schemas::Task) -> Vec<String> {
-    let Some(v) = &task.validation else {
+    if !task.has_validation() {
         return Vec::new();
-    };
+    }
+    let v = task
+        .validation
+        .as_ref()
+        .expect("has_validation guarantees validation is present");
     let seq = v
         .get("commands")
         .and_then(|c| c.as_sequence())
@@ -4024,18 +4028,15 @@ impl FinalizeFlags {
         }
     }
 
-    /// The parallel path runs in an isolated worktree, so the in-tree gates that
-    /// need the real workspace are deferred: validation is OFF (the pre-merge
-    /// worktree lacks gitignored build deps like node_modules/target, so running
-    /// it there spuriously fails self-contained-looking tasks — a post-merge gate
-    /// is the proper future design), and post-run hooks are OFF for the same
-    /// reason. The evaluator's forbidden-path gate still runs on the worktree
-    /// diff, so the safety floor holds. Conversation/learned are skipped (batches
-    /// only pick Queued tasks). Artifacts, telemetry, and follow-up ingestion land.
+    /// The parallel path runs validation in the isolated worktree before merge,
+    /// preserving the same fatal gate and channel events as serial execution.
+    /// Post-run hooks remain deferred because they may rely on workspace-local
+    /// dependencies. Conversation/learned are skipped (batches only pick Queued
+    /// tasks). Artifacts, telemetry, and follow-up ingestion land.
     pub fn parallel() -> Self {
         Self {
             post_hooks: false,
-            validation: false,
+            validation: true,
             conversation: false,
             learned: false,
             artifacts: true,
