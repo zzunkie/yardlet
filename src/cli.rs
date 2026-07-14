@@ -107,6 +107,8 @@ enum ResourceCmd {
     /// Discover bounded artifacts and runtime resources for one task.
     Discover {
         #[arg(long)]
+        intent: String,
+        #[arg(long)]
         task: String,
         #[arg(long)]
         action_id: Option<String>,
@@ -146,7 +148,7 @@ struct ResourceLifecycleArgs {
     #[arg(long)]
     action_id: Option<String>,
     #[arg(long)]
-    expected_status: Option<String>,
+    expected_status: String,
     #[arg(long)]
     json: bool,
 }
@@ -622,11 +624,8 @@ fn generated_resource_action_id(operation: crate::schemas::ResourceOperationKind
     )
 }
 
-fn parse_resource_status(value: Option<String>) -> Result<Option<crate::schemas::ResourceStatus>> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let status = match value.as_str() {
+fn parse_resource_status(value: &str) -> Result<crate::schemas::ResourceStatus> {
+    let status = match value {
         "unknown" => crate::schemas::ResourceStatus::Unknown,
         "available" => crate::schemas::ResourceStatus::Available,
         "live" => crate::schemas::ResourceStatus::Live,
@@ -638,7 +637,7 @@ fn parse_resource_status(value: Option<String>) -> Result<Option<crate::schemas:
         "detached" => crate::schemas::ResourceStatus::Detached,
         _ => anyhow::bail!("unknown resource status '{value}'"),
     };
-    Ok(Some(status))
+    Ok(status)
 }
 
 fn cmd_resource(cwd: &std::path::Path, args: ResourceArgs) -> Result<()> {
@@ -647,6 +646,7 @@ fn cmd_resource(cwd: &std::path::Path, args: ResourceArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let (request, json) = match args.cmd {
         ResourceCmd::Discover {
+            intent,
             task,
             action_id,
             json,
@@ -654,9 +654,10 @@ fn cmd_resource(cwd: &std::path::Path, args: ResourceArgs) -> Result<()> {
             ResourceOperationRequest {
                 action_id: action_id.unwrap_or_else(|| generated_resource_action_id(Op::Discover)),
                 operation: Op::Discover,
+                intent_id: intent,
                 task_id: task,
                 target_id: String::new(),
-                expected_status: None,
+                expected_status: crate::schemas::ResourceStatus::Unknown,
             },
             json,
         ),
@@ -700,9 +701,10 @@ fn resource_target_request(
                 .action_id
                 .unwrap_or_else(|| generated_resource_action_id(operation)),
             operation,
+            intent_id: String::new(),
             task_id: String::new(),
             target_id: args.target,
-            expected_status: None,
+            expected_status: crate::schemas::ResourceStatus::Unknown,
         },
         args.json,
     )
@@ -712,13 +714,14 @@ fn resource_lifecycle_request(
     operation: crate::schemas::ResourceOperationKind,
     args: ResourceLifecycleArgs,
 ) -> Result<(crate::schemas::ResourceOperationRequest, bool)> {
-    let expected_status = parse_resource_status(args.expected_status)?;
+    let expected_status = parse_resource_status(&args.expected_status)?;
     Ok((
         crate::schemas::ResourceOperationRequest {
             action_id: args
                 .action_id
                 .unwrap_or_else(|| generated_resource_action_id(operation)),
             operation,
+            intent_id: String::new(),
             task_id: String::new(),
             target_id: args.target,
             expected_status,

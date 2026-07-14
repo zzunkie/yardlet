@@ -3,6 +3,7 @@
 //! Workers author proposals. This module validates content and live targets;
 //! `state.rs` remains the only canonical `.agents/` writer.
 
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path};
 use std::process::{Command, Stdio};
@@ -11,9 +12,10 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::schemas::{
-    Artifact, ResourceActionReceipt, ResourceActionResult, ResourceActionStatus, ResourceEntry,
-    ResourceObservation, ResourceOpenTarget, ResourceOperationKind, ResourceOperationRequest,
-    ResourceOwnership, ResourceStatus, RunResult, RuntimeResource, RuntimeResourceTarget,
+    Artifact, ResourceActionReceipt, ResourceActionResult, ResourceActionStatus,
+    ResourceCapability, ResourceEntry, ResourceObservation, ResourceOpenTarget,
+    ResourceOperationKind, ResourceOperationRequest, ResourceOwnership, ResourceStatus, RunResult,
+    RuntimeResource, RuntimeResourceTarget,
 };
 use crate::state::{validate_action_id, Workspace};
 
@@ -298,6 +300,81 @@ fn url_socket(url: &str) -> Option<SocketAddr> {
     (host, port).to_socket_addrs().ok()?.next()
 }
 
+enum HttpProbe {
+    Response { status: u16, body: String },
+    Unavailable(String),
+    Unrecoverable(String),
+}
+
+fn probe_http(url: &str) -> HttpProbe {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return HttpProbe::Unrecoverable("URL has no scheme".to_string());
+    };
+    if !scheme.eq_ignore_ascii_case("http") {
+        return HttpProbe::Unrecoverable(format!("unsupported semantic probe scheme {scheme}"));
+    }
+    let (authority, path) = rest
+        .split_once('/')
+        .map(|(authority, path)| (authority, format!("/{path}")))
+        .unwrap_or((rest, "/".to_string()));
+    if authority.is_empty() {
+        return HttpProbe::Unrecoverable("URL has no authority".to_string());
+    }
+    let Some(address) = url_socket(url) else {
+        return HttpProbe::Unrecoverable("URL cannot be resolved".to_string());
+    };
+    let mut stream = match TcpStream::connect_timeout(&address, Duration::from_millis(300)) {
+        Ok(stream) => stream,
+        Err(error) => {
+            return HttpProbe::Unavailable(format!(
+                "HTTP probe could not connect to {address}: {error}"
+            ))
+        }
+    };
+    let timeout = Some(Duration::from_millis(500));
+    let _ = stream.set_read_timeout(timeout);
+    let _ = stream.set_write_timeout(timeout);
+    if let Err(error) = write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\nAccept: application/json\r\n\r\n"
+    ) {
+        return HttpProbe::Unavailable(format!("HTTP probe write failed: {error}"));
+    }
+    let mut bytes = Vec::new();
+    if let Err(error) = stream.take(64 * 1024).read_to_end(&mut bytes) {
+        return HttpProbe::Unavailable(format!("HTTP probe read failed: {error}"));
+    }
+    let response = String::from_utf8_lossy(&bytes);
+    let Some(head_end) = response.find("\r\n\r\n") else {
+        return HttpProbe::Unrecoverable("HTTP probe returned a malformed response".to_string());
+    };
+    let status = response
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|status| status.parse::<u16>().ok());
+    let Some(status) = status else {
+        return HttpProbe::Unrecoverable("HTTP probe returned no status code".to_string());
+    };
+    HttpProbe::Response {
+        status,
+        body: response[head_end + 4..].to_string(),
+    }
+}
+
+fn browser_session_attested(body: &str, session_id: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .as_deref()
+        == Some(session_id)
+}
+
 fn probe_resource(ws: &Workspace, resource: &RuntimeResource) -> Result<Probe> {
     match &resource.target {
         RuntimeResourceTarget::Terminal { .. } | RuntimeResourceTarget::Process { .. } => {
@@ -305,7 +382,12 @@ fn probe_resource(ws: &Workspace, resource: &RuntimeResource) -> Result<Probe> {
                 .ok_or_else(|| anyhow!("process resource lacks identity"))?;
             Ok(probe_process(pid, &identity))
         }
-        RuntimeResourceTarget::Service { url, pid, .. } => {
+        RuntimeResourceTarget::Service {
+            url,
+            health_url,
+            pid,
+            ..
+        } => {
             if pid.is_some() {
                 let (pid, identity) = effective_process(ws, resource)?
                     .ok_or_else(|| anyhow!("service process lacks identity"))?;
@@ -314,49 +396,129 @@ fn probe_resource(ws: &Workspace, resource: &RuntimeResource) -> Result<Probe> {
                     return Ok(process);
                 }
             }
-            let Some(address) = url_socket(url) else {
+            let process = effective_process(ws, resource)?;
+            let (observed_pid, start_identity) = process
+                .map(|(pid, identity)| (Some(pid), identity))
+                .unwrap_or_default();
+            if health_url.trim().is_empty() {
+                let Some(address) = url_socket(url) else {
+                    return Ok(Probe {
+                        status: ResourceStatus::Unrecoverable,
+                        pid: observed_pid,
+                        start_identity,
+                        detail: "service URL cannot be parsed for a local probe".to_string(),
+                    });
+                };
+                let reachable =
+                    TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok();
                 return Ok(Probe {
-                    status: ResourceStatus::Unrecoverable,
-                    pid: effective_process(ws, resource)?.map(|(pid, _)| pid),
-                    start_identity: effective_process(ws, resource)?
-                        .map(|(_, identity)| identity)
-                        .unwrap_or_default(),
-                    detail: "service url cannot be parsed for a local probe".to_string(),
+                    status: if reachable {
+                        ResourceStatus::Unknown
+                    } else {
+                        ResourceStatus::Unavailable
+                    },
+                    pid: observed_pid,
+                    start_identity,
+                    detail: if reachable {
+                        format!(
+                            "service port {address} is reachable but no semantic health_url was declared"
+                        )
+                    } else {
+                        format!("service socket probe could not reach {address}")
+                    },
                 });
+            }
+            let (status, detail) = match probe_http(health_url) {
+                HttpProbe::Response { status, .. } if (200..300).contains(&status) => (
+                    ResourceStatus::Live,
+                    format!("declared health URL returned HTTP {status}"),
+                ),
+                HttpProbe::Response { status, .. } => (
+                    ResourceStatus::Unavailable,
+                    format!("declared health URL returned HTTP {status}"),
+                ),
+                HttpProbe::Unavailable(detail) => (ResourceStatus::Unavailable, detail),
+                HttpProbe::Unrecoverable(detail) => (ResourceStatus::Unrecoverable, detail),
             };
-            let live = TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok();
             Ok(Probe {
-                status: if live {
-                    ResourceStatus::Live
-                } else {
-                    ResourceStatus::Unavailable
-                },
-                pid: effective_process(ws, resource)?.map(|(pid, _)| pid),
-                start_identity: effective_process(ws, resource)?
-                    .map(|(_, identity)| identity)
-                    .unwrap_or_default(),
-                detail: if live {
-                    format!("service socket probe reached {address}")
-                } else {
-                    format!("service socket probe could not reach {address}")
-                },
+                status,
+                pid: observed_pid,
+                start_identity,
+                detail,
             })
         }
-        RuntimeResourceTarget::Browser { pid: None, .. } => Ok(Probe {
-            status: ResourceStatus::Expired,
-            pid: None,
-            start_identity: String::new(),
-            detail: "browser session has no probeable process identity".to_string(),
-        }),
-        RuntimeResourceTarget::Browser { .. } => {
-            let (pid, identity) = effective_process(ws, resource)?
-                .ok_or_else(|| anyhow!("browser process lacks identity"))?;
-            let mut process = probe_process(pid, &identity);
-            if process.status == ResourceStatus::Dead {
-                process.status = ResourceStatus::Expired;
-                process.detail = "browser session process expired".to_string();
+        RuntimeResourceTarget::Browser {
+            session_id,
+            session_probe_url,
+            pid,
+            ..
+        } => {
+            let process = if pid.is_some() {
+                let (pid, identity) = effective_process(ws, resource)?
+                    .ok_or_else(|| anyhow!("browser process lacks identity"))?;
+                let mut process = probe_process(pid, &identity);
+                if process.status == ResourceStatus::Dead {
+                    process.status = ResourceStatus::Expired;
+                    process.detail = "browser session process expired".to_string();
+                    return Ok(process);
+                }
+                if process.status != ResourceStatus::Live {
+                    return Ok(process);
+                }
+                Some(process)
+            } else {
+                None
+            };
+            let observed_pid = process.as_ref().and_then(|process| process.pid);
+            let start_identity = process
+                .as_ref()
+                .map(|process| process.start_identity.clone())
+                .unwrap_or_default();
+            if session_id.trim().is_empty() {
+                return Ok(Probe {
+                    status: ResourceStatus::Unrecoverable,
+                    pid: observed_pid,
+                    start_identity,
+                    detail: "browser target has no session identity to probe".to_string(),
+                });
             }
-            Ok(process)
+            if session_probe_url.trim().is_empty() {
+                return Ok(Probe {
+                    status: if process.is_some() {
+                        ResourceStatus::Unknown
+                    } else {
+                        ResourceStatus::Expired
+                    },
+                    pid: observed_pid,
+                    start_identity,
+                    detail: "browser session has no semantic session probe".to_string(),
+                });
+            }
+            let (status, detail) = match probe_http(session_probe_url) {
+                HttpProbe::Response { status, body }
+                    if (200..300).contains(&status)
+                        && browser_session_attested(&body, session_id) =>
+                {
+                    (
+                        ResourceStatus::Live,
+                        "browser session probe attested the declared session".to_string(),
+                    )
+                }
+                HttpProbe::Response { status, .. } => (
+                    ResourceStatus::Expired,
+                    format!(
+                        "browser session probe HTTP {status} did not attest the declared session"
+                    ),
+                ),
+                HttpProbe::Unavailable(detail) => (ResourceStatus::Unknown, detail),
+                HttpProbe::Unrecoverable(detail) => (ResourceStatus::Unrecoverable, detail),
+            };
+            Ok(Probe {
+                status,
+                pid: observed_pid,
+                start_identity,
+                detail,
+            })
         }
     }
 }
@@ -421,26 +583,24 @@ fn lifecycle_result(
     ws: &Workspace,
     resource: &RuntimeResource,
     operation: ResourceOperationKind,
-    expected_status: Option<ResourceStatus>,
+    expected_status: ResourceStatus,
     requested_event: &str,
     action_id: &str,
 ) -> Result<(ResourceActionStatus, ResourceActionResult, String)> {
     let probe = probe_resource(ws, resource)?;
-    if let Some(expected) = expected_status {
-        if probe.status != expected {
-            let observation = persist_probe(ws, resource, &probe, requested_event, action_id)?;
-            return Ok((
-                ResourceActionStatus::Rejected,
-                ResourceActionResult {
-                    observation: Some(observation),
-                    ..Default::default()
-                },
-                format!(
-                    "expected status {:?}, current probe found {:?}",
-                    expected, probe.status
-                ),
-            ));
-        }
+    if probe.status != expected_status {
+        let observation = persist_probe(ws, resource, &probe, requested_event, action_id)?;
+        return Ok((
+            ResourceActionStatus::Rejected,
+            ResourceActionResult {
+                observation: Some(observation),
+                ..Default::default()
+            },
+            format!(
+                "expected status {:?}, current probe found {:?}",
+                expected_status, probe.status
+            ),
+        ));
     }
 
     if operation == ResourceOperationKind::Reconcile {
@@ -601,22 +761,25 @@ fn lifecycle_result(
     }
 }
 
-fn discover_entries(ws: &Workspace, task_id: &str) -> Result<Vec<ResourceEntry>> {
+fn discover_entries(ws: &Workspace, intent_id: &str, task_id: &str) -> Result<Vec<ResourceEntry>> {
     let index = ws.load_or_rebuild_resource_index()?;
     let mut entries = Vec::new();
-    let task_index = index.tasks.iter().find(|entry| entry.task_id == task_id);
+    let task_index = index
+        .tasks
+        .iter()
+        .find(|entry| entry.intent_id == intent_id && entry.task_id == task_id);
     if task_index.is_none_or(|entry| entry.truncated) {
         for artifact in ws
             .load_artifacts()?
             .into_iter()
-            .filter(|artifact| artifact.task_id == task_id)
+            .filter(|artifact| artifact.intent_id == intent_id && artifact.task_id == task_id)
         {
             entries.push(artifact_entry(ws, artifact));
         }
         for resource in ws
             .load_runtime_resources()?
             .into_iter()
-            .filter(|resource| resource.task_id == task_id)
+            .filter(|resource| resource.intent_id == intent_id && resource.task_id == task_id)
         {
             entries.push(runtime_entry(ws, resource)?);
         }
@@ -661,6 +824,24 @@ fn open_target(entry: &ResourceEntry) -> ResourceOpenTarget {
         ResourceEntry::Artifact { open_target, .. }
         | ResourceEntry::RuntimeResource { open_target, .. } => open_target.clone(),
     }
+}
+
+fn operation_capability(operation: ResourceOperationKind) -> Option<ResourceCapability> {
+    match operation {
+        ResourceOperationKind::Discover | ResourceOperationKind::Inspect => None,
+        ResourceOperationKind::Open => Some(ResourceCapability::Open),
+        ResourceOperationKind::Attach => Some(ResourceCapability::Attach),
+        ResourceOperationKind::Stop => Some(ResourceCapability::Stop),
+        ResourceOperationKind::Restart => Some(ResourceCapability::Restart),
+        ResourceOperationKind::Detach => Some(ResourceCapability::Detach),
+        ResourceOperationKind::Cleanup => Some(ResourceCapability::Cleanup),
+        ResourceOperationKind::Reconcile => Some(ResourceCapability::Reconcile),
+    }
+}
+
+fn runtime_supports(resource: &RuntimeResource, operation: ResourceOperationKind) -> bool {
+    operation_capability(operation)
+        .is_none_or(|capability| resource.capabilities.contains(&capability))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -728,10 +909,10 @@ pub fn dispatch(
 
     let (entries, context_entry) = match request.operation {
         ResourceOperationKind::Discover => {
-            if request.task_id.trim().is_empty() {
-                bail!("discover requires task_id");
+            if request.intent_id.trim().is_empty() || request.task_id.trim().is_empty() {
+                bail!("discover requires intent_id and task_id");
             }
-            let entries = discover_entries(ws, &request.task_id)?;
+            let entries = discover_entries(ws, &request.intent_id, &request.task_id)?;
             let context = entries.first().cloned();
             (entries, context)
         }
@@ -751,6 +932,9 @@ pub fn dispatch(
     let session_id = session_id.to_string();
     let intent_id = intent_id.to_string();
     let actual_task_id = actual_task_id.to_string();
+    if !request.intent_id.is_empty() && request.intent_id != intent_id {
+        bail!("resource intent linkage conflict");
+    }
     if !request.task_id.is_empty() && request.task_id != actual_task_id {
         bail!("resource task linkage conflict");
     }
@@ -777,22 +961,40 @@ pub fn dispatch(
             },
             String::new(),
         ),
-        ResourceOperationKind::Open => (
-            ResourceActionStatus::Completed,
-            ResourceActionResult {
-                entries,
-                open_target: Some(open_target(&context_entry)),
-                observation: None,
-            },
-            String::new(),
-        ),
+        ResourceOperationKind::Open => match &context_entry {
+            ResourceEntry::RuntimeResource { resource, .. }
+                if !runtime_supports(resource, ResourceOperationKind::Open) =>
+            {
+                (
+                    ResourceActionStatus::Rejected,
+                    ResourceActionResult::default(),
+                    "open is unsupported for this runtime resource".to_string(),
+                )
+            }
+            _ => (
+                ResourceActionStatus::Completed,
+                ResourceActionResult {
+                    entries,
+                    open_target: Some(open_target(&context_entry)),
+                    observation: None,
+                },
+                String::new(),
+            ),
+        },
         ResourceOperationKind::Attach => {
             let target = open_target(&context_entry);
-            if matches!(
-                target,
-                ResourceOpenTarget::TerminalSession { .. }
-                    | ResourceOpenTarget::ProcessMonitor { .. }
-            ) {
+            let supported = matches!(
+                &context_entry,
+                ResourceEntry::RuntimeResource { resource, .. }
+                    if runtime_supports(resource, ResourceOperationKind::Attach)
+            );
+            if supported
+                && matches!(
+                    target,
+                    ResourceOpenTarget::TerminalSession { .. }
+                        | ResourceOpenTarget::ProcessMonitor { .. }
+                )
+            {
                 (
                     ResourceActionStatus::Completed,
                     ResourceActionResult {
@@ -821,16 +1023,27 @@ pub fn dispatch(
                 "lifecycle operation is unsupported for artifacts".to_string(),
             ),
             ResourceEntry::RuntimeResource { resource, .. } => {
-                let (status, mut result, error) = lifecycle_result(
-                    ws,
-                    resource,
-                    operation,
-                    request.expected_status,
-                    &requested_event,
-                    &request.action_id,
-                )?;
-                result.entries = entries;
-                (status, result, error)
+                if !runtime_supports(resource, operation) {
+                    (
+                        ResourceActionStatus::Rejected,
+                        ResourceActionResult::default(),
+                        format!(
+                            "{} is unsupported for this runtime resource",
+                            format!("{operation:?}").to_lowercase()
+                        ),
+                    )
+                } else {
+                    let (status, mut result, error) = lifecycle_result(
+                        ws,
+                        resource,
+                        operation,
+                        request.expected_status,
+                        &requested_event,
+                        &request.action_id,
+                    )?;
+                    result.entries = entries;
+                    (status, result, error)
+                }
             }
         },
     };
@@ -860,6 +1073,7 @@ pub fn dispatch(
         schema_version: 1,
         action_id: request.action_id,
         operation: request.operation,
+        intent_id,
         task_id: actual_task_id,
         target_id: request.target_id,
         request_digest: digest,

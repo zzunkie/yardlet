@@ -171,6 +171,22 @@ mod unix {
         out
     }
 
+    fn copy_tree(source: &Path, destination: &Path) {
+        if !source.is_dir() {
+            return;
+        }
+        fs::create_dir_all(destination).unwrap();
+        for entry in fs::read_dir(source).unwrap().flatten() {
+            let source_path = entry.path();
+            let destination_path = destination.join(entry.file_name());
+            if source_path.is_dir() {
+                copy_tree(&source_path, &destination_path);
+            } else {
+                fs::copy(source_path, destination_path).unwrap();
+            }
+        }
+    }
+
     #[test]
     fn publishes_every_typed_kind_and_role_with_exact_attempt_provenance() {
         let fixture = Fixture::new("round-trip");
@@ -179,6 +195,8 @@ mod unix {
         let output = fixture.must_run(&[
             "resource",
             "discover",
+            "--intent",
+            "intent-resource-fixture",
             "--task",
             "YARD-001",
             "--action-id",
@@ -217,6 +235,18 @@ mod unix {
             .collect::<Vec<_>>();
         kinds.sort_unstable();
         assert_eq!(kinds, ["browser", "process", "service", "terminal"]);
+        for entry in entries
+            .iter()
+            .filter(|entry| entry["entry_type"] == "runtime_resource")
+        {
+            assert!(
+                !entry["resource"]["capabilities"]
+                    .as_array()
+                    .expect("typed runtime capabilities")
+                    .is_empty(),
+                "canonical runtime declaration must record capabilities: {entry}"
+            );
+        }
 
         let events = task_channel_events(&fixture.root);
         for entry in entries {
@@ -294,6 +324,8 @@ mod unix {
         let discovered = fixture.must_run(&[
             "resource",
             "discover",
+            "--intent",
+            "intent-resource-fixture",
             "--task",
             "YARD-CAP",
             "--action-id",
@@ -331,6 +363,8 @@ mod unix {
         fixture.must_run(&[
             "resource",
             "discover",
+            "--intent",
+            "intent-resource-fixture",
             "--task",
             "YARD-CAP",
             "--action-id",
@@ -355,6 +389,92 @@ mod unix {
             })
             .count();
         assert_eq!(cap_records, 140);
+    }
+
+    #[test]
+    fn resource_index_and_discover_use_exact_intent_task_namespace() {
+        let first = Fixture::new("namespace-first");
+        first.must_run(&["run", "--task", "YARD-001", "--execute"]);
+
+        let second = Fixture::new("namespace-second");
+        fs::write(
+            second.root.join(".agents/intent-contract.yaml"),
+            "schema_version: 1\nid: intent-resource-fixture-two\nsummary: second resource fixture\nstatus: accepted\n",
+        )
+        .unwrap();
+        fs::write(
+            second.root.join(".agents/work-queue.yaml"),
+            "schema_version: 1\nqueue_id: queue-resource-fixture-two\nintent_id: intent-resource-fixture-two\ntasks:\n  - {id: YARD-001, title: publish typed resources again, state: queued, priority: 10, preferred_worker: fixture}\n",
+        )
+        .unwrap();
+        second.must_run(&["run", "--task", "YARD-001", "--execute"]);
+
+        let first_resources = first.root.join(".agents/resources");
+        let second_resources = second.root.join(".agents/resources");
+        for directory in ["artifacts", "runtime", "observations"] {
+            copy_tree(
+                &second_resources.join(directory),
+                &first_resources.join(directory),
+            );
+        }
+        let _ = fs::remove_file(first_resources.join("index.yaml"));
+
+        let discover = |intent: &str, action: &str| {
+            let output = first.must_run(&[
+                "resource",
+                "discover",
+                "--intent",
+                intent,
+                "--task",
+                "YARD-001",
+                "--action-id",
+                action,
+                "--json",
+            ]);
+            serde_json::from_slice::<Value>(&output.stdout).unwrap()
+        };
+        let first_projection = discover("intent-resource-fixture", "act-namespace-first");
+        let second_projection = discover("intent-resource-fixture-two", "act-namespace-second");
+        assert_eq!(first_projection["intent_id"], "intent-resource-fixture");
+        assert_eq!(
+            second_projection["intent_id"],
+            "intent-resource-fixture-two"
+        );
+
+        let projection_attempts = |receipt: &Value, intent: &str| {
+            receipt["result"]["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry.get("artifact").unwrap_or(&entry["resource"]))
+                .map(|record| {
+                    assert_eq!(record["intent_id"], intent);
+                    record["attempt_id"].as_str().unwrap().to_string()
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let first_attempts = projection_attempts(&first_projection, "intent-resource-fixture");
+        let second_attempts =
+            projection_attempts(&second_projection, "intent-resource-fixture-two");
+        assert!(!first_attempts.is_empty());
+        assert!(!second_attempts.is_empty());
+        assert!(first_attempts.is_disjoint(&second_attempts));
+
+        let index = read_yaml(&first_resources.join("index.yaml"));
+        let namespaces = index["tasks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["task_id"].as_str() == Some("YARD-001"))
+            .map(|entry| entry["intent_id"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            namespaces,
+            std::collections::BTreeSet::from([
+                "intent-resource-fixture",
+                "intent-resource-fixture-two"
+            ])
+        );
     }
 
     #[test]

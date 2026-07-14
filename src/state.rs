@@ -2520,6 +2520,10 @@ impl Workspace {
         proposal
             .validate_provenance(&proposal.task_id, &proposal.attempt_id)
             .map_err(anyhow::Error::msg)?;
+        let capabilities = proposal
+            .target
+            .normalize_capabilities(&proposal.capabilities)
+            .map_err(anyhow::Error::msg)?;
         self.validate_publication_attempt(
             intent_id,
             &proposal.task_id,
@@ -2541,6 +2545,7 @@ impl Workspace {
                 && existing.producer == proposal.producer
                 && existing.causation_id == causation_id
                 && existing.ownership == proposal.ownership
+                && existing.capabilities == capabilities
                 && existing.target == proposal.target;
             if same {
                 return Ok(existing);
@@ -2575,6 +2580,7 @@ impl Workspace {
                     "resource_id": resource_id,
                     "proposal_id": proposal.proposal_id,
                     "ownership": proposal.ownership,
+                    "capabilities": capabilities,
                     "target": proposal.target
                 }),
                 raw_ref: None,
@@ -2591,6 +2597,7 @@ impl Workspace {
             producer: proposal.producer.clone(),
             causation_id,
             ownership: proposal.ownership,
+            capabilities,
             target: proposal.target.clone(),
             created_event_id: event.event_id,
             published_seq: event.seq,
@@ -2790,11 +2797,12 @@ impl Workspace {
         if attempts.len() > RESOURCE_INDEX_ENTRY_LIMIT {
             attempts = attempts.split_off(attempts.len() - RESOURCE_INDEX_ENTRY_LIMIT);
         }
-        let mut task_entries = BTreeMap::<String, ResourceTaskIndex>::new();
+        let mut task_entries = BTreeMap::<(String, String), ResourceTaskIndex>::new();
         for artifact in &artifacts {
             let entry = task_entries
-                .entry(artifact.task_id.clone())
+                .entry((artifact.intent_id.clone(), artifact.task_id.clone()))
                 .or_insert_with(|| ResourceTaskIndex {
+                    intent_id: artifact.intent_id.clone(),
                     task_id: artifact.task_id.clone(),
                     artifacts: Vec::new(),
                     resources: Vec::new(),
@@ -2808,8 +2816,9 @@ impl Workspace {
         }
         for resource in &resources {
             let entry = task_entries
-                .entry(resource.task_id.clone())
+                .entry((resource.intent_id.clone(), resource.task_id.clone()))
                 .or_insert_with(|| ResourceTaskIndex {
+                    intent_id: resource.intent_id.clone(),
                     task_id: resource.task_id.clone(),
                     artifacts: Vec::new(),
                     resources: Vec::new(),

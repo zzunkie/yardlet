@@ -1,6 +1,7 @@
 #[cfg(unix)]
 mod unix {
     use serde_json::Value;
+    use serde_yaml_ng::Value as YamlValue;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
@@ -96,6 +97,8 @@ mod unix {
             self.receipt(&[
                 "resource",
                 "discover",
+                "--intent",
+                "intent-resource-operations",
                 "--task",
                 "YARD-OPS",
                 "--action-id",
@@ -177,6 +180,25 @@ mod unix {
         assert_eq!(receipt["result_event_ids"].as_array().unwrap().len(), 2);
     }
 
+    fn channel_event(root: &Path, event_id: &str) -> YamlValue {
+        let channels = root.join(".agents/task-channels");
+        for channel in fs::read_dir(channels).unwrap().flatten() {
+            let events = channel.path().join("events");
+            if !events.is_dir() {
+                continue;
+            }
+            for path in fs::read_dir(events).unwrap().flatten() {
+                let path = path.path();
+                let event: YamlValue =
+                    serde_yaml_ng::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+                if event["event_id"].as_str() == Some(event_id) {
+                    return event;
+                }
+            }
+        }
+        panic!("missing canonical event {event_id}");
+    }
+
     #[test]
     fn all_nine_operations_share_receipts_and_minimum_cli_open_targets() {
         let fixture = Fixture::new("all-operations");
@@ -235,6 +257,8 @@ mod unix {
             "resource",
             "reconcile",
             &restart,
+            "--expected-status",
+            "live",
             "--action-id",
             "act-ops-reconcile",
             "--json",
@@ -278,6 +302,8 @@ mod unix {
             "resource",
             "detach",
             &terminal,
+            "--expected-status",
+            "live",
             "--action-id",
             "act-ops-detach",
             "--json",
@@ -314,6 +340,60 @@ mod unix {
     }
 
     #[test]
+    fn unsupported_operations_are_canonical_rejections_and_expected_state_is_required() {
+        let fixture = Fixture::new("capability-rejections");
+        let discover = fixture.discover();
+        let file = artifact_id(&discover, "ops-file");
+        let external = resource_id(&discover, "ops-external");
+        let external_pid = discover["result"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["resource"]["proposal_id"] == "ops-external")
+            .unwrap()["resource"]["target"]["pid"]
+            .as_u64()
+            .unwrap() as u32;
+
+        let missing_expected = command(
+            &fixture.root,
+            &fixture.binary,
+            &[
+                "resource",
+                "stop",
+                &external,
+                "--action-id",
+                "act-missing-expected-state",
+                "--json",
+            ],
+        );
+        assert!(!missing_expected.status.success());
+        assert!(String::from_utf8_lossy(&missing_expected.stderr).contains("--expected-status"));
+        assert!(process_alive(external_pid));
+
+        for (operation, expected_status) in [
+            ("attach", None),
+            ("stop", Some("available")),
+            ("restart", Some("available")),
+            ("detach", Some("available")),
+            ("cleanup", Some("available")),
+            ("reconcile", Some("available")),
+        ] {
+            let action_id = format!("act-unsupported-{operation}");
+            let mut args = vec!["resource", operation, file.as_str()];
+            if let Some(expected_status) = expected_status {
+                args.extend(["--expected-status", expected_status]);
+            }
+            args.extend(["--action-id", action_id.as_str(), "--json"]);
+            let receipt = fixture.receipt(&args);
+            assert_receipt(&receipt, operation, "rejected");
+            assert!(receipt["error"].as_str().unwrap().contains("unsupported"));
+            let terminal_event_id = receipt["result_event_ids"][1].as_str().unwrap();
+            let terminal_event = channel_event(&fixture.root, terminal_event_id);
+            assert_eq!(terminal_event["type"].as_str(), Some("action.rejected"));
+        }
+    }
+
+    #[test]
     fn fresh_probe_and_identity_ownership_gates_prevent_false_live_and_external_kill() {
         let fixture = Fixture::new("lifecycle-gates");
         let discover = fixture.discover();
@@ -338,6 +418,8 @@ mod unix {
             "resource",
             "stop",
             &external,
+            "--expected-status",
+            "live",
             "--action-id",
             "act-external-stop",
             "--json",
@@ -349,6 +431,8 @@ mod unix {
             "resource",
             "cleanup",
             &unknown,
+            "--expected-status",
+            "live",
             "--action-id",
             "act-unknown-cleanup",
             "--json",
@@ -364,6 +448,8 @@ mod unix {
             "resource",
             "reconcile",
             &mismatch,
+            "--expected-status",
+            "orphaned",
             "--action-id",
             "act-mismatch-probe",
             "--json",
@@ -376,6 +462,8 @@ mod unix {
             "resource",
             "stop",
             &mismatch,
+            "--expected-status",
+            "orphaned",
             "--action-id",
             "act-mismatch-stop",
             "--json",
@@ -393,6 +481,8 @@ mod unix {
                 "resource",
                 "reconcile",
                 target,
+                "--expected-status",
+                status,
                 "--action-id",
                 action,
                 "--json",

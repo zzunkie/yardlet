@@ -35,6 +35,8 @@ process_identity() {
 port="$(tr -d '[:space:]' <fixture-port.txt)"
 url="http://127.0.0.1:${port}/"
 health_url="http://127.0.0.1:${port}/health"
+unhealthy_url="http://127.0.0.1:${port}/unhealthy"
+browser_session_url="http://127.0.0.1:${port}/browser/session"
 external_meta="$(cat external-sentinel.meta)"
 external_pid="${external_meta%%|*}"
 external_identity="${external_meta#*|}"
@@ -138,11 +140,15 @@ cat >"$run_dir/result.json" <<EOF
     {"proposal_id":"local-validation","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","path":"local-app-validation.json","digest":"$validation_digest","media_type":"application/json","role":"validation_output"}
   ],
   "resources": [
-    {"proposal_id":"local-terminal","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"terminal","terminal_id":"local-app-worker-terminal","pid":$$,"start_identity":"$terminal_identity","attach_hint":"worker process terminal"}},
-    {"proposal_id":"local-process","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"process","pid":$app_pid,"start_identity":"$app_identity","command":["$python_bin","$app_script","--port","$port"]}},
-    {"proposal_id":"local-service","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"service","url":"$url","health_url":"$health_url"}},
-    {"proposal_id":"local-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","target":{"kind":"browser","url":"$url","session_id":"local-browser-$browser_pid","pid":$browser_pid,"start_identity":"$browser_identity"}},
-    {"proposal_id":"local-external","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"external","target":{"kind":"process","pid":$external_pid,"start_identity":"$external_identity","command":["/bin/sleep","120"]}}
+    {"proposal_id":"local-terminal","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","attach","detach","reconcile"],"target":{"kind":"terminal","terminal_id":"local-app-worker-terminal","pid":$$,"start_identity":"$terminal_identity","attach_hint":"worker process terminal"}},
+    {"proposal_id":"local-process","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","attach","stop","restart","cleanup","reconcile"],"target":{"kind":"process","pid":$app_pid,"start_identity":"$app_identity","command":["$python_bin","$app_script","--port","$port"]}},
+    {"proposal_id":"local-service","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","reconcile"],"target":{"kind":"service","url":"$url","health_url":"$health_url"}},
+    {"proposal_id":"local-unhealthy-service","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","reconcile"],"target":{"kind":"service","url":"$url","health_url":"$unhealthy_url"}},
+    {"proposal_id":"local-open-only-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open"],"target":{"kind":"browser","url":"$url","session_id":"local-open-only-browser"}},
+    {"proposal_id":"local-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","reconcile"],"target":{"kind":"browser","url":"$url","session_id":"local-browser-$browser_pid","pid":$browser_pid,"start_identity":"$browser_identity"}},
+    {"proposal_id":"local-live-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","reconcile"],"target":{"kind":"browser","url":"$url","session_id":"local-active-browser-session","session_probe_url":"$browser_session_url","pid":$app_pid,"start_identity":"$app_identity"}},
+    {"proposal_id":"local-stale-browser","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"worker","capabilities":["open","reconcile"],"target":{"kind":"browser","url":"$url","session_id":"local-stale-browser-session","session_probe_url":"$browser_session_url","pid":$app_pid,"start_identity":"$app_identity"}},
+    {"proposal_id":"local-external","task_id":"$task_id","attempt_id":"$run_id","producer":{"worker_id":"local-app-fixture"},"causation_id":"$run_id","ownership":"external","capabilities":["open","attach","stop","cleanup","reconcile"],"target":{"kind":"process","pid":$external_pid,"start_identity":"$external_identity","command":["/bin/sleep","120"]}}
   ],
   "verdict": [],
   "harness_suggestions": [],
