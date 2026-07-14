@@ -1454,7 +1454,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         .unwrap_or_else(|_| candidate_id.clone());
 
     // ---- run directory ---------------------------------------------------
-    let base_run_id = format!("run-{}", Local::now().format("%Y%m%d-%H%M%S"));
+    let base_run_id = format!(
+        "run-{}-{}",
+        Local::now().format("%Y%m%d-%H%M%S%9f"),
+        std::process::id()
+    );
     let (run_id, run_dir) = ws.claim_run_dir(&base_run_id)?;
     std::fs::create_dir_all(run_dir.join("evidence"))?;
     let serial_worktree = if opts.execute {
