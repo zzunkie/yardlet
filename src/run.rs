@@ -3155,6 +3155,14 @@ fn pending_git_finishes(ws: &Workspace, queue: &WorkQueue) -> Vec<PendingGitFini
         else {
             continue;
         };
+        // The live queue is authoritative for task completion. Historical
+        // runs belonging to an already-Done task must not be re-finalized just
+        // because an older Git-finish record used another target or never
+        // reached a verified status. Recovery remains available for Partial
+        // tasks, including the post-push crash window repaired below.
+        if task_state == TaskState::Done {
+            continue;
+        }
         if run.intent_id != queue.intent_id || !run_dir.join("result.json").exists() {
             continue;
         }
@@ -6114,6 +6122,91 @@ mod tests {
                 "{status:?}"
             );
         }
+    }
+
+    #[test]
+    fn pending_git_finish_recovery_skips_done_historical_runs_on_other_targets() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-done-historical-git-finishes-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let ws = Workspace::at(&root);
+        let mut q = queue(vec![
+            task("YARD-001", TaskState::Done, 10, false),
+            task("YARD-005", TaskState::Done, 20, false),
+            task("YARD-010", TaskState::Partial, 30, false),
+        ]);
+        q.intent_id = "intent-git-finish-history".into();
+        ws.save_queue(&q).unwrap();
+
+        for (index, task_id, state, target_ref) in [
+            (1, "YARD-001", "done", "refs/heads/release-v010-001"),
+            (5, "YARD-005", "done", "refs/heads/release-v010-005"),
+            (10, "YARD-010", "partial", "refs/heads/main"),
+        ] {
+            let run_id = format!("run-20990101-0000{index:02}-{task_id}");
+            let run_dir = ws.runs_dir().join(&run_id);
+            std::fs::create_dir_all(&run_dir).unwrap();
+            write_str(&run_dir.join("result.json"), "{\"status\":\"done\"}").unwrap();
+            state::save_yaml(
+                &run_dir.join("run.yaml"),
+                &RunRecord {
+                    schema_version: 1,
+                    run_id: run_id.clone(),
+                    task_id: task_id.into(),
+                    intent_id: q.intent_id.clone(),
+                    worker: "codex".into(),
+                    state: state.into(),
+                    started_at: format!("2099-01-01T00:00:{index:02}+00:00"),
+                    completed_at: Some(format!("2099-01-01T00:01:{index:02}+00:00")),
+                    integration_oid: format!("integration-{index}"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            ws.save_git_finish_record(
+                &run_dir,
+                &crate::git_finish::GitFinishRecord {
+                    schema_version: 2,
+                    run_id,
+                    task_id: task_id.into(),
+                    attempted_at: String::new(),
+                    status: crate::git_finish::GitFinishStatus::CheckBlocked,
+                    policy: crate::git_finish::GitFinishPolicySnapshot {
+                        auto_push: true,
+                        remote: format!("fixture-{index}"),
+                        target_ref: target_ref.into(),
+                        pre_push_checks: vec![],
+                    },
+                    expected_oid: Some(format!("integration-{index}")),
+                    baseline_oid: format!("baseline-{index}"),
+                    owned_oids: vec![format!("integration-{index}")],
+                    checks: vec![],
+                    push_invoked: false,
+                    push_succeeded: false,
+                    remote_oid: None,
+                    remote_before_oid: None,
+                    reason: "historical fixture".into(),
+                },
+            )
+            .unwrap();
+        }
+
+        let candidates = pending_git_finishes(&ws, &q);
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["YARD-010"],
+            "Done historical runs must not be re-finalized for unrelated targets"
+        );
+        assert_eq!(q.tasks[0].state, TaskState::Done);
+        assert_eq!(q.tasks[1].state, TaskState::Done);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -2431,12 +2431,17 @@ impl Workspace {
                 && existing.producer == proposal.producer
                 && existing.causation_id == causation_id
                 && existing.path == proposal.path
-                && existing.source_path == source_path
                 && existing.digest == proposal.digest
                 && existing.media_type == proposal.media_type
                 && existing.role == proposal.role
                 && existing.channel_role == proposal.channel_role;
             if same {
+                // `source_path` is the physical location used to verify the
+                // publication, not proposal identity. A Git-finish recovery
+                // can replay an already-published worktree artifact from the
+                // integrated workspace root. Preserve the first canonical
+                // record while still failing closed on provenance, logical
+                // path, digest, media type, or role mutations.
                 return Ok(existing);
             }
             bail!("artifact_proposal_conflict: {}", proposal.proposal_id);
@@ -5536,6 +5541,89 @@ routing:
             raw_stdout_ref: format!("attempts/{id}/stdout.log"),
             raw_stderr_ref: format!("attempts/{id}/stderr.log"),
         }
+    }
+
+    #[test]
+    fn artifact_proposal_replay_accepts_a_new_source_location_but_rejects_mutation() {
+        let dir = temp_root("artifact-proposal-source-replay");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        let attempt_id = "att_artifact_replay";
+        let mut attempt = prepared_attempt(attempt_id);
+        attempt.raw_stdout_ref = format!("attempts/{attempt_id}/stdout.log");
+        attempt.raw_stderr_ref = format!("attempts/{attempt_id}/stderr.log");
+        ws.record_worker_attempt(&attempt).unwrap();
+
+        let mut completed = channel_event(ChannelEventType::WorkerCompleted, Some(attempt_id));
+        completed.payload = serde_json::json!({"worker_id": "codex", "outcome": "succeeded"});
+        ws.record_task_event("intent_channel", completed).unwrap();
+
+        let proposal = ArtifactProposal {
+            proposal_id: "proposal_guard_rs".into(),
+            task_id: "YARD-001".into(),
+            attempt_id: attempt_id.into(),
+            producer: crate::schemas::ResourceProducer {
+                worker_id: "codex".into(),
+            },
+            causation_id: attempt_id.into(),
+            path: "src/guard.rs".into(),
+            digest: "fnv1a64:0123456789abcdef".into(),
+            media_type: "text/plain".into(),
+            role: crate::schemas::ArtifactRole::File,
+            channel_role: "worker_declared".into(),
+        };
+
+        let first = ws
+            .publish_artifact(
+                "ses_channel",
+                "intent_channel",
+                &proposal,
+                "/workspace/.agents/worktrees/run-yard-010/src/guard.rs",
+            )
+            .unwrap();
+        let replay = ws
+            .publish_artifact(
+                "ses_channel",
+                "intent_channel",
+                &proposal,
+                "/workspace/src/guard.rs",
+            )
+            .expect("recovery must replay the same proposal from the workspace root");
+
+        assert_eq!(replay, first);
+        assert_eq!(ws.load_artifacts().unwrap(), vec![first]);
+
+        let mut mutated = proposal.clone();
+        mutated.digest = "fnv1a64:fedcba9876543210".into();
+        let error = ws
+            .publish_artifact(
+                "ses_channel",
+                "intent_channel",
+                &mutated,
+                "/workspace/src/guard.rs",
+            )
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("artifact_proposal_conflict"),
+            "{error:#}"
+        );
+        let mut mutated = proposal;
+        mutated.path = "src/guard-mutated.rs".into();
+        let error = ws
+            .publish_artifact(
+                "ses_channel",
+                "intent_channel",
+                &mutated,
+                "/workspace/src/guard-mutated.rs",
+            )
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("artifact_proposal_conflict"),
+            "{error:#}"
+        );
+        assert_eq!(ws.load_artifacts().unwrap().len(), 1);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
