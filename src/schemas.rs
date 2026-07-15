@@ -1320,6 +1320,11 @@ pub struct Routing {
     pub default_worker: String,
     #[serde(default)]
     pub fallback_order: Vec<String>,
+    /// Permit a task that names `preferred_worker` to switch to another worker
+    /// after exhausting its own retries. Default false: a pinned provider/model
+    /// fails closed instead of silently incurring work or cost elsewhere.
+    #[serde(default)]
+    pub allow_preferred_worker_failover: bool,
     /// Human cost dial read by the planner: cheap | balanced | quality.
     #[serde(default = "default_cost_bias")]
     pub cost_bias: String,
@@ -1348,6 +1353,7 @@ impl Default for Routing {
         Self {
             default_worker: default_codex(),
             fallback_order: vec!["codex".to_string(), "claude-code".to_string()],
+            allow_preferred_worker_failover: false,
             cost_bias: default_cost_bias(),
             planning_gate: GateRoute::default(),
         }

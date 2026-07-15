@@ -942,6 +942,24 @@ pub fn compile(inputs: &PacketInputs) -> String {
 /// draft revision after explicit acceptance, and active intent/queue snapshots
 /// only after explicit confirmation. The worker therefore only needs write
 /// access to the run directory.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlanningGitPolicy {
+    pub auto_commit: bool,
+    pub auto_push: bool,
+    pub push_target_configured: bool,
+}
+
+impl From<&crate::schemas::YardConfig> for PlanningGitPolicy {
+    fn from(config: &crate::schemas::YardConfig) -> Self {
+        Self {
+            auto_commit: config.auto_commit,
+            auto_push: config.git_finish.auto_push,
+            push_target_configured: !config.git_finish.remote.trim().is_empty()
+                && !config.git_finish.target_ref.trim().is_empty(),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn compile_planning(
     request: &str,
@@ -953,6 +971,7 @@ pub fn compile_planning(
     images: &[String],
     harness: &Harness,
     planner_worker_id: &str,
+    git_policy: PlanningGitPolicy,
 ) -> String {
     let mut p = String::new();
     p.push_str("# Yardlet planning gate\n\n");
@@ -1030,6 +1049,31 @@ pub fn compile_planning(
         ));
     }
     p.push_str(&format!("- top level: {}\n\n", repo.top_level.join(", ")));
+
+    p.push_str("## Git delivery policy\n\n");
+    p.push_str(&format!(
+        "- auto_commit: {}\n- auto_push: {}\n- push target configured: {}\n",
+        if git_policy.auto_commit {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if git_policy.auto_push {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if git_policy.push_target_configured {
+            "yes"
+        } else {
+            "no"
+        },
+    ));
+    p.push_str(
+        "- Git integration and configured exact-ref push are Yardlet core/author-session responsibilities, not worker actions. Yardlet has no PR-create or merge policy in this contract.\n\
+         - Do not make commit, push, PR creation, or merge a worker-verifiable intent or task acceptance criterion. Review criteria must be satisfiable from the workspace before author-session delivery.\n\
+         - When delivery is explicitly requested, make the worker-verifiable criterion prepare a PR body or exact author-session commands in the handoff; keep the external delivery responsibility outside worker acceptance.\n\n",
+    );
 
     let classification = crate::skills::classify_repo(repo, request);
     p.push_str("## Deterministic repository classification\n\n");
@@ -1747,6 +1791,7 @@ mod tests {
             &[],
             &harness,
             "codex",
+            PlanningGitPolicy::default(),
         );
         assert!(plan.contains("## Workspace rules (always apply)"));
         assert!(plan.contains("## Skills (read on demand)"));
@@ -1765,11 +1810,36 @@ mod tests {
             &[],
             &Harness::default(),
             "codex",
+            PlanningGitPolicy::default(),
         );
 
         assert!(plan.contains("cost as a tie-breaker, not a proxy for task breadth"));
         assert!(plan.contains("broad work with executable terminal feedback"));
         assert!(plan.contains("prefer a different worker from the builder"));
+    }
+
+    #[test]
+    fn planning_packet_excludes_author_session_git_delivery_from_worker_acceptance() {
+        let plan = compile_planning(
+            "implement issue 21 and open a PR with Refs #21",
+            None,
+            &crate::inspect::RepoSummary::default(),
+            ".agents/runs/plan-git-policy",
+            "en",
+            "",
+            &[],
+            &Harness::default(),
+            "codex",
+            PlanningGitPolicy::default(),
+        );
+
+        assert!(plan.contains("## Git delivery policy"));
+        assert!(plan.contains("auto_commit: disabled"));
+        assert!(plan.contains("auto_push: disabled"));
+        assert!(
+            plan.contains("Do not make commit, push, PR creation, or merge a worker-verifiable")
+        );
+        assert!(plan.contains("PR body or exact author-session commands"));
     }
 
     #[test]
@@ -1800,6 +1870,7 @@ mod tests {
             &[],
             &Harness::default(),
             "codex",
+            PlanningGitPolicy::default(),
         );
 
         assert!(plan.contains("## Current intent (same planning thread)"));
@@ -1820,6 +1891,7 @@ mod tests {
             &[],
             &Harness::default(),
             "codex",
+            PlanningGitPolicy::default(),
         );
         assert!(!fresh.contains("intent-current"));
         assert!(!fresh.contains("current intent summary"));

@@ -1624,6 +1624,7 @@ mod tests {
             &[],
             &planning_harness,
             "codex",
+            crate::packet::PlanningGitPolicy::default(),
         );
         assert!(planning_packet.contains("mcp-builder"));
         assert!(!planning_packet.contains("frontend-design"));
