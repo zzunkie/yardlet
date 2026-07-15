@@ -3255,6 +3255,11 @@ fn recover_pending_git_finishes(
                 .collect()
         });
         let worker = run_worker(&candidate.run_dir).unwrap_or_default();
+        let flags = if task.state == TaskState::Done {
+            FinalizeFlags::done_projection_recovery()
+        } else {
+            FinalizeFlags::recovery()
+        };
         match finalize_run(FinalizeInput {
             ws,
             run_dir: &candidate.run_dir,
@@ -3268,7 +3273,7 @@ fn recover_pending_git_finishes(
             intent_summary: "",
             billing,
             queue,
-            flags: FinalizeFlags::recovery(),
+            flags,
             merge: None,
         }) {
             Ok(report) if report.next_state == TaskState::Done => {
@@ -4286,6 +4291,10 @@ pub(crate) struct FinalizeFlags {
     /// Reconcile a previously integrated run whose exact OID may sit behind
     /// later integrations. The run's durable ownership proof remains immutable.
     pub git_finish_recovery: bool,
+    /// Repair only the stale run projection of a queue task that is already
+    /// Done with a verified Git-finish record. Re-evaluation may add diagnostics,
+    /// but it cannot regress the canonical queue state or verified finish fact.
+    pub repairs_done_projection: bool,
     /// Ingest worker-proposed follow-ups AND run review auto-remediation (both
     /// rewrite queue topology from the worker's proposals). Off for recovery,
     /// which must only finalize the stranded run, not mutate the queue graph.
@@ -4303,6 +4312,7 @@ impl FinalizeFlags {
             artifacts: true,
             telemetry: true,
             git_finish_recovery: false,
+            repairs_done_projection: false,
             follow_ups: true,
         }
     }
@@ -4321,6 +4331,7 @@ impl FinalizeFlags {
             artifacts: true,
             telemetry: true,
             git_finish_recovery: false,
+            repairs_done_projection: false,
             follow_ups: true,
         }
     }
@@ -4342,7 +4353,15 @@ impl FinalizeFlags {
             artifacts: false,
             telemetry: true,
             git_finish_recovery: true,
+            repairs_done_projection: false,
             follow_ups: false,
+        }
+    }
+
+    pub fn done_projection_recovery() -> Self {
+        Self {
+            repairs_done_projection: true,
+            ..Self::recovery()
         }
     }
 }
@@ -4953,6 +4972,13 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             lines.push(format!("feedback stopped: {}", f.terminal_reason));
         }
     }
+    if flags.repairs_done_projection && next_state != TaskState::Done {
+        lines.push(format!(
+            "{}: retained Done while repairing its verified Git finish projection",
+            task.id
+        ));
+        next_state = TaskState::Done;
+    }
 
     if let Some(question) = result
         .as_ref()
@@ -5261,7 +5287,15 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     let git_finish = if git_finish_not_needed {
         crate::git_finish::finish_no_change_run(ws, run_dir, run_id, &task.id, next_state)?
     } else if flags.git_finish_recovery {
-        crate::git_finish::recover_owned_run(ws, run_dir, run_id, &task.id, next_state, ownership)?
+        crate::git_finish::recover_owned_run(
+            ws,
+            run_dir,
+            run_id,
+            &task.id,
+            next_state,
+            ownership,
+            flags.repairs_done_projection,
+        )?
     } else {
         crate::git_finish::finish_owned_run(ws, run_dir, run_id, &task.id, next_state, ownership)?
     };
@@ -11687,10 +11721,16 @@ exit 1
         let _ = std::fs::remove_dir_all(&remote);
     }
 
-    #[test]
-    fn verified_external_finish_recovers_partial_projection_without_duplicate_push() {
+    fn assert_verified_external_finish_recovers_partial_projection(
+        sensitive_uncommitted_file: bool,
+    ) {
         let root = std::env::temp_dir().join(format!(
-            "yard-verified-finish-projection-{}",
+            "yard-verified-finish-projection-{}-{}",
+            if sensitive_uncommitted_file {
+                "sensitive"
+            } else {
+                "clean"
+            },
             std::process::id()
         ));
         let remote = root.with_extension("bare.git");
@@ -11868,6 +11908,9 @@ exit 1
             crate::git_finish::GitFinishStatus::Pushed
         );
         std::fs::remove_dir_all(run_dir.join("git-finish.json")).unwrap();
+        if sensitive_uncommitted_file {
+            std::fs::write(root.join(".env.recovery-secret"), "must remain untouched\n").unwrap();
+        }
 
         let messages = recover_orphans(&ws);
         assert_eq!(
@@ -11876,11 +11919,18 @@ exit 1
             "{messages:?}"
         );
         let finish = ws.load_git_finish_record(&run_dir).unwrap();
-        assert_eq!(
-            finish.status,
-            crate::git_finish::GitFinishStatus::AlreadyApplied
-        );
-        assert!(!finish.push_invoked, "recovery must not repeat the push");
+        if sensitive_uncommitted_file {
+            assert_eq!(finish.status, crate::git_finish::GitFinishStatus::Pushed);
+            assert_eq!(finish.reason, "remote_verified");
+            assert_eq!(finish.attempted_at, "2099-01-01T00:00:01+00:00");
+        } else {
+            assert_eq!(
+                finish.status,
+                crate::git_finish::GitFinishStatus::AlreadyApplied
+            );
+            assert!(!finish.push_invoked, "recovery must not repeat the push");
+        }
+        assert!(finish.status.verified_complete());
         assert_eq!(finish.remote_oid.as_deref(), Some(integration_oid.as_str()));
         let sealed = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")).unwrap();
         assert_eq!(sealed.state, "done");
@@ -11889,6 +11939,12 @@ exit 1
             git(&["ls-remote", "--refs", "fixture", "refs/heads/main"]),
             format!("{integration_oid}\trefs/heads/main")
         );
+        if sensitive_uncommitted_file {
+            assert_eq!(
+                std::fs::read_to_string(root.join(".env.recovery-secret")).unwrap(),
+                "must remain untouched\n"
+            );
+        }
 
         let second = recover_orphans(&ws);
         assert!(
@@ -11897,6 +11953,16 @@ exit 1
         );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn verified_external_finish_recovers_partial_projection_without_duplicate_push() {
+        assert_verified_external_finish_recovers_partial_projection(false);
+    }
+
+    #[test]
+    fn done_projection_recovery_preserves_verified_finish_with_sensitive_uncommitted_file() {
+        assert_verified_external_finish_recovers_partial_projection(true);
     }
 
     #[test]
