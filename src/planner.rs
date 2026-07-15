@@ -585,6 +585,7 @@ fn plan_core(
         images,
         &harness,
         &worker_id,
+        packet::PlanningGitPolicy::from(config),
     );
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
@@ -794,6 +795,7 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         &images,
         &harness,
         &worker_id,
+        packet::PlanningGitPolicy::from(&config),
     );
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
     let env = guard::sanitized_worker_env_for(&billing, &profile.invocation.pass_env)
@@ -1051,6 +1053,9 @@ pub(crate) fn ingest_follow_ups(
         .unwrap_or(tail_priority + 10);
     let mut ingested = Vec::new();
     for fu in follow_ups {
+        if !follow_up_scope_is_workspace_local(fu) {
+            continue;
+        }
         let title = fu.title.trim();
         if title.is_empty() {
             continue;
@@ -1155,6 +1160,21 @@ pub(crate) fn ingest_follow_ups(
         }
     }
     ingested
+}
+
+fn follow_up_scope_is_workspace_local(follow_up: &crate::schemas::FollowUpTask) -> bool {
+    follow_up.allowed_scope.iter().all(|scope| {
+        let path = std::path::Path::new(scope.trim());
+        !path.is_absolute()
+            && !path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+    })
 }
 
 pub(crate) fn persist_ingested_decision_questions(
@@ -1802,6 +1822,7 @@ mod tests {
             &[],
             &harness,
             "codex",
+            packet::PlanningGitPolicy::default(),
         );
 
         assert!(packet.contains("CURRENT_REQUEST_ANCHOR"));
@@ -2517,6 +2538,53 @@ routing:
             by_id("YARD-005").approval_required(),
             "a high-risk follow-up must be gated"
         );
+    }
+
+    #[test]
+    fn ingest_follow_ups_keeps_cross_workspace_scope_as_suggestion_only() {
+        use crate::schemas::FollowUpTask;
+        let root = std::env::temp_dir().join(format!(
+            "yard-cross-workspace-follow-up-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let plan: PlanningResult = serde_json::from_str(
+            r#"{ "summary": "s", "tasks": [{ "id": "YARD-001", "title": "existing", "risk": "low" }] }"#,
+        )
+        .unwrap();
+        let mut queue = build_queue("intent-x", &plan);
+
+        let ingested = ingest_follow_ups(
+            &mut queue,
+            &["evidence/**".to_string()],
+            &[
+                FollowUpTask {
+                    title: "modify another repository".into(),
+                    reason: "valid adjacent work, but not owned here".into(),
+                    allowed_scope: vec!["/tmp/another-repository/src/**".into()],
+                    ..Default::default()
+                },
+                FollowUpTask {
+                    title: "escape to a sibling repository".into(),
+                    reason: "relative path still leaves this workspace".into(),
+                    allowed_scope: vec!["../another-repository/src/**".into()],
+                    ..Default::default()
+                },
+                FollowUpTask {
+                    title: "record local evidence".into(),
+                    reason: "repo-local follow-up".into(),
+                    allowed_scope: vec!["evidence/**".into()],
+                    ..Default::default()
+                },
+            ],
+            Some(&ws),
+        );
+
+        assert_eq!(ingested, vec!["YARD-002".to_string()]);
+        assert_eq!(queue.tasks.len(), 2);
+        assert_eq!(queue.tasks[1].title, "record local evidence");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

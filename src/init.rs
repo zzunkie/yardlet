@@ -150,4 +150,22 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn init_writes_explicit_default_off_preferred_worker_failover_policy() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-init-preferred-worker-failover-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        init(&root, false).unwrap();
+
+        let text = std::fs::read_to_string(root.join(".agents/workers.yaml")).unwrap();
+        let workers: crate::schemas::WorkersFile = crate::yaml::from_str(&text).unwrap();
+        assert!(!workers.routing.allow_preferred_worker_failover);
+        assert!(text.contains("allow_preferred_worker_failover: false"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

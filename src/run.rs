@@ -120,6 +120,7 @@ impl Drop for SerialWorktreeErrorCleanup<'_> {
 }
 
 const SERIAL_CANONICAL_SEED_DIR: &str = "evidence/canonical-state-seed";
+pub(crate) const HARNESS_SEED_DIR: &str = "evidence/harness-state-seed";
 
 fn git_stdout(root: &std::path::Path, args: &[&str]) -> Result<String> {
     let output = std::process::Command::new("git")
@@ -164,8 +165,13 @@ fn prepare_serial_worktree(
         let queue = ws.queue_path();
         std::fs::copy(&queue, wt_agents.join("work-queue.yaml"))?;
         std::fs::copy(&queue, canonical_seed_dir.join("work-queue.yaml"))?;
+        let harness_seed_dir = run_dir.join(HARNESS_SEED_DIR);
         for directory in ["rules", "skills", "agents"] {
             crate::parallel::copy_dir(&ws.agents_dir().join(directory), &wt_agents.join(directory));
+            crate::parallel::copy_dir(
+                &ws.agents_dir().join(directory),
+                &harness_seed_dir.join(directory),
+            );
         }
         let worker_run_dir = wt_agents.join("runs").join(run_id);
         std::fs::create_dir_all(&worker_run_dir)?;
@@ -218,6 +224,7 @@ struct SerialCommittedEvidence {
 struct SerialWorktreeEvidence {
     paths: Vec<String>,
     merge_target_oid: String,
+    unchanged_seeded_harness: Vec<String>,
 }
 
 fn serial_committed_paths(
@@ -290,6 +297,7 @@ fn serial_worktree_evidence(
         return Some(SerialWorktreeEvidence {
             paths,
             merge_target_oid: committed.merge_target_oid,
+            unchanged_seeded_harness: Vec::new(),
         });
     }
 
@@ -323,13 +331,103 @@ fn serial_worktree_evidence(
             paths.push(path);
         }
     }
+    let harness_seed_dir = run_dir.join(HARNESS_SEED_DIR);
+    let mut unchanged_seeded_harness = Vec::new();
+    if harness_seed_dir.is_dir() {
+        let (seeded_harness, modified_harness) =
+            seeded_harness_evidence(&harness_seed_dir, worktree)?;
+        unchanged_seeded_harness = paths
+            .iter()
+            .filter(|path| seeded_harness.contains(*path) && !modified_harness.contains(*path))
+            .cloned()
+            .collect();
+        paths.retain(|path| !seeded_harness.contains(path) || modified_harness.contains(path));
+        for path in modified_harness {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
     paths.extend(committed.paths);
     paths.sort();
     paths.dedup();
     Some(SerialWorktreeEvidence {
         paths,
         merge_target_oid: committed.merge_target_oid,
+        unchanged_seeded_harness,
     })
+}
+
+fn remove_unchanged_seeded_harness_copies(
+    worktree: &std::path::Path,
+    evidence: &SerialWorktreeEvidence,
+) -> Result<()> {
+    for path in &evidence.unchanged_seeded_harness {
+        discard_unchanged_seeded_harness_copy(worktree, path)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn discard_unchanged_seeded_harness_copy(
+    worktree: &std::path::Path,
+    path: &str,
+) -> Result<()> {
+    git_stdout(worktree, &["reset", "-q", "HEAD", "--", path])?;
+    let tracked = !git_stdout(worktree, &["ls-files", "--", path])?
+        .trim()
+        .is_empty();
+    if tracked {
+        git_stdout(
+            worktree,
+            &["restore", "--source=HEAD", "--worktree", "--", path],
+        )?;
+    } else {
+        let candidate = worktree.join(path);
+        if candidate.is_file() {
+            std::fs::remove_file(candidate)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn seeded_harness_evidence(
+    seed_root: &std::path::Path,
+    worktree: &std::path::Path,
+) -> Option<(
+    std::collections::BTreeSet<String>,
+    std::collections::BTreeSet<String>,
+)> {
+    fn visit(
+        seed_root: &std::path::Path,
+        directory: &std::path::Path,
+        worktree: &std::path::Path,
+        seeded: &mut std::collections::BTreeSet<String>,
+        modified: &mut std::collections::BTreeSet<String>,
+    ) -> Option<()> {
+        for entry in std::fs::read_dir(directory).ok()? {
+            let entry = entry.ok()?;
+            let metadata = entry.file_type().ok()?;
+            if metadata.is_dir() {
+                visit(seed_root, &entry.path(), worktree, seeded, modified)?;
+                continue;
+            }
+            if !metadata.is_file() {
+                continue;
+            }
+            let relative = entry.path().strip_prefix(seed_root).ok()?.to_path_buf();
+            let path = format!(".agents/{}", relative.to_string_lossy());
+            seeded.insert(path.clone());
+            if !seeded_canonical_file_unchanged(&entry.path(), &worktree.join(&path)) {
+                modified.insert(path);
+            }
+        }
+        Some(())
+    }
+
+    let mut seeded = std::collections::BTreeSet::new();
+    let mut modified = std::collections::BTreeSet::new();
+    visit(seed_root, seed_root, worktree, &mut seeded, &mut modified)?;
+    Some((seeded, modified))
 }
 
 const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 18] = [
@@ -1486,10 +1584,17 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 
     // ---- deterministic evidence -----------------------------------------
     let summary = inspect::summarize(&ws.root);
+    let summary_markdown = inspect::to_markdown(&summary);
     write_str(
         &run_dir.join("evidence").join("repo-summary.md"),
-        &inspect::to_markdown(&summary),
+        &summary_markdown,
     )?;
+    if serial_worktree.is_some() {
+        write_str(
+            &worker_run_dir.join("evidence").join("repo-summary.md"),
+            &summary_markdown,
+        )?;
+    }
 
     // ---- compile packet --------------------------------------------------
     // Resolve output language from config (auto-detects Korean from the intent).
@@ -2084,6 +2189,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let serial_evidence = serial_worktree
         .as_ref()
         .and_then(|owned| serial_worktree_evidence(&owned.path, &run_dir));
+    if let (Some(owned), Some(serial_evidence)) = (&serial_worktree, &serial_evidence) {
+        remove_unchanged_seeded_harness_copies(&owned.path, serial_evidence)?;
+    }
     let evidence: Option<Vec<String>> = if serial_worktree.is_some() {
         serial_evidence
             .as_ref()
@@ -2166,14 +2274,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 /// changes were left to commit when the run actually produced deliverable
 /// (non-`.agents/`) edits. `None` evidence (no git signal) counts as no change.
 /// A leading `./` is normalized so `./.agents/x` is still recognized as state.
-fn worker_changed_outside_agents(evidence: Option<&[String]>) -> bool {
+fn worker_changed_integratable_path(evidence: Option<&[String]>) -> bool {
     evidence
-        .map(|e| {
-            e.iter().any(|p| {
-                let p = p.trim_start_matches("./");
-                !p.starts_with(".agents/") && p != ".agents"
-            })
-        })
+        .map(|e| e.iter().any(|p| evaluator::is_integratable_path(p)))
         .unwrap_or(false)
 }
 
@@ -3677,6 +3780,14 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 let serial_evidence = wt
                     .as_ref()
                     .and_then(|w| serial_worktree_evidence(w, &run_dir));
+                if let (Some(wt), Some(serial_evidence)) = (&wt, &serial_evidence) {
+                    if let Err(error) = remove_unchanged_seeded_harness_copies(wt, serial_evidence)
+                    {
+                        msgs.push(format!(
+                            "{id}: could not remove unchanged harness seed copies: {error}"
+                        ));
+                    }
+                }
                 let evidence = if wt.is_some() {
                     serial_evidence
                         .as_ref()
@@ -4918,7 +5029,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         if !m.auto_commit {
             let has_changes = evidence
                 .as_ref()
-                .is_some_and(|paths| worker_changed_outside_agents(Some(paths)));
+                .is_some_and(|paths| worker_changed_integratable_path(Some(paths)));
             if next_state == TaskState::Done && has_changes {
                 next_state = TaskState::Partial;
                 let _ = state::write_str(&run_dir.join("partial-reason"), "auto_commit_disabled");
@@ -7916,11 +8027,18 @@ case "$mode" in
     git -c user.name="Worker" -c user.email="worker@example.test" commit -q -m "worker canonical commit"
     git checkout -q --detach HEAD~1
     ;;
-  committed-and-uncommitted)
-    printf "committed deliverable\n" > committed.txt
-    git add -- committed.txt
-    git -c user.name="Worker" -c user.email="worker@example.test" commit -q -m "worker commit"
-    printf "schema_version: 1\nid: worker-uncommitted\nsummary: forbidden\nstatus: accepted\n" > .agents/intent-contract.yaml
+	  committed-and-uncommitted)
+	    printf "committed deliverable\n" > committed.txt
+	    git add -- committed.txt
+	    git -c user.name="Worker" -c user.email="worker@example.test" commit -q -m "worker commit"
+	    printf "schema_version: 1\nid: worker-uncommitted\nsummary: forbidden\nstatus: accepted\n" > .agents/intent-contract.yaml
+	    ;;
+  harness-asset)
+    mkdir -p .agents/skills/example
+    printf '%s\n' '---' 'name: example' 'description: fixture' '---' > .agents/skills/example/SKILL.md
+    ;;
+  anchor-probe)
+    test -f "$run_dir/evidence/repo-summary.md" || exit 42
     ;;
 esac
 cat > "$run_dir/result.json" <<EOF
@@ -7947,6 +8065,20 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
             shell_literal(&builder), task_id, mode
         );
         let ws = init_test_workspace(name, &worker_yaml);
+        if mode == "preexisting-learned-rule" {
+            write_str(
+                &ws.agents_dir().join("rules/learned-from-earlier-run.md"),
+                "# Earlier learning\n\nDo not blame the next worker.\n",
+            )
+            .unwrap();
+        }
+        if mode == "preexisting-dirty-tracked-rule" {
+            let rule = ws.agents_dir().join("rules/tracked-dirty.md");
+            write_str(&rule, "# Tracked baseline\n").unwrap();
+            git_stdout(&ws.root, &["add", ".agents/rules/tracked-dirty.md"]).unwrap();
+            git_stdout(&ws.root, &["commit", "-q", "-m", "track harness fixture"]).unwrap();
+            write_str(&rule, "# User dirty edit\n").unwrap();
+        }
         if mode == "canonical-detach" {
             write_str(
                 &ws.agents_dir().join("tool-policy.yaml"),
@@ -8054,6 +8186,33 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
     }
 
     #[test]
+    fn auto_commit_off_retains_harness_asset_as_partial() {
+        let (ws, report, source) = run_serial_worker_commit_case(
+            "serial-default-off-harness-asset",
+            "YARD-DEFAULT-OFF-HARNESS",
+            "harness-asset",
+            false,
+        );
+        let record: RunRecord = state::load_yaml(&report.run_dir.join("run.yaml")).unwrap();
+        let wt = std::path::Path::new(&record.worktree);
+
+        assert_eq!(report.result_state, Some(TaskState::Partial));
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Partial);
+        assert_eq!(
+            std::fs::read_to_string(report.run_dir.join("partial-reason"))
+                .unwrap()
+                .trim(),
+            "auto_commit_disabled"
+        );
+        assert!(wt.join(".agents/skills/example/SKILL.md").is_file());
+        assert!(!ws.root.join(".agents/skills/example/SKILL.md").exists());
+
+        crate::parallel::remove_worktree(&ws.root, wt, &record.worktree_branch);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
     fn auto_commit_on_blocks_worker_committed_canonical_mutation_before_merge() {
         let (ws, report, source) = run_serial_worker_commit_case(
             "serial-worker-canonical-commit",
@@ -8089,6 +8248,105 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         crate::parallel::remove_worktree(&ws.root, wt, &record.worktree_branch);
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn auto_commit_on_integrates_harness_asset() {
+        let (ws, report, source) = run_serial_worker_commit_case(
+            "serial-auto-commit-harness-asset",
+            "YARD-AUTO-COMMIT-HARNESS",
+            "harness-asset",
+            true,
+        );
+
+        assert_eq!(report.result_state, Some(TaskState::Done));
+        assert!(ws.root.join(".agents/skills/example/SKILL.md").is_file());
+        let integrated_names =
+            git_stdout(&ws.root, &["diff", "--name-only", "HEAD^1", "HEAD"]).unwrap();
+        assert!(
+            integrated_names
+                .lines()
+                .any(|path| path == ".agents/skills/example/SKILL.md"),
+            "integrated diff should contain the harness asset: {integrated_names}"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn serial_worker_packet_repo_summary_anchor_exists_before_spawn() {
+        let (ws, report, source) = run_serial_worker_commit_case(
+            "serial-repo-summary-anchor",
+            "YARD-REPO-SUMMARY-ANCHOR",
+            "anchor-probe",
+            false,
+        );
+
+        assert_eq!(report.result_state, Some(TaskState::Done));
+        assert!(report.run_dir.join("evidence/repo-summary.md").is_file());
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn serial_evidence_does_not_attribute_preexisting_learned_rule_to_next_worker() {
+        let (ws, report, source) = run_serial_worker_commit_case(
+            "serial-preexisting-learned-rule",
+            "YARD-PREEXISTING-LEARNED-RULE",
+            "preexisting-learned-rule",
+            false,
+        );
+
+        assert_eq!(report.result_state, Some(TaskState::Done));
+        let evaluation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("evaluation.json")).unwrap(),
+        )
+        .unwrap();
+        let disclosure = evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "diff_matches_report")
+            .unwrap();
+        assert_eq!(disclosure["passed"], true);
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn serial_seed_cleanup_preserves_preexisting_dirty_tracked_harness_file() {
+        for (name, auto_commit) in [("off", false), ("on", true)] {
+            let (ws, report, source) = run_serial_worker_commit_case(
+                &format!("serial-dirty-tracked-harness-{name}"),
+                &format!("YARD-DIRTY-TRACKED-HARNESS-{}", name.to_uppercase()),
+                "preexisting-dirty-tracked-rule",
+                auto_commit,
+            );
+
+            assert_eq!(report.result_state, Some(TaskState::Done));
+            assert_eq!(
+                std::fs::read_to_string(ws.agents_dir().join("rules/tracked-dirty.md")).unwrap(),
+                "# User dirty edit\n"
+            );
+            assert!(git_stdout(
+                &ws.root,
+                &[
+                    "diff",
+                    "--name-only",
+                    "--",
+                    ".agents/rules/tracked-dirty.md"
+                ]
+            )
+            .unwrap()
+            .lines()
+            .any(|path| path == ".agents/rules/tracked-dirty.md"));
+
+            let _ = std::fs::remove_dir_all(&source);
+            let _ = std::fs::remove_dir_all(ws.root);
+        }
     }
 
     #[test]
@@ -9177,7 +9435,7 @@ exit 1
     }
 
     #[test]
-    fn serial_auto_commit_guidance_fires_only_on_non_agents_changes() {
+    fn serial_auto_commit_guidance_fires_only_on_integratable_changes() {
         // 1d worktree-only interim: a serial run never auto-commits, but it points
         // an opted-in user at a manual commit ONLY when the worker produced real
         // deliverable changes — not on a no-op Done or a .agents-only write.
@@ -9186,15 +9444,18 @@ exit 1
             ".agents/work-queue.yaml".to_string(),
             "src/feature.rs".to_string(),
         ];
-        assert!(!worker_changed_outside_agents(None)); // no git signal
-        assert!(!worker_changed_outside_agents(Some(&[]))); // nothing changed
-        assert!(!worker_changed_outside_agents(Some(&agents_only))); // state-only
-        assert!(!worker_changed_outside_agents(Some(&[
+        assert!(!worker_changed_integratable_path(None)); // no git signal
+        assert!(!worker_changed_integratable_path(Some(&[]))); // nothing changed
+        assert!(!worker_changed_integratable_path(Some(&agents_only))); // state-only
+        assert!(!worker_changed_integratable_path(Some(&[
             "./.agents/telemetry/runs.jsonl".to_string()
         ]))); // ./-prefixed state still recognized
-        assert!(worker_changed_outside_agents(Some(&with_work))); // real deliverable
-        assert!(worker_changed_outside_agents(Some(&[
+        assert!(worker_changed_integratable_path(Some(&with_work))); // real deliverable
+        assert!(worker_changed_integratable_path(Some(&[
             "./README.md".to_string()
+        ])));
+        assert!(worker_changed_integratable_path(Some(&[
+            ".agents/skills/example/SKILL.md".to_string()
         ])));
     }
 

@@ -104,6 +104,9 @@ routing:
   # is not ready. Resolution is deterministic; telemetry never overrides it.
   default_worker: codex
   fallback_order: [codex, claude-code]
+  # A task that names preferred_worker stays on that worker unless this is
+  # explicitly enabled. Default-off prevents silent provider/model cost changes.
+  allow_preferred_worker_failover: false
   # The planner itself runs on this worker (primary, then fallback if not ready).
   planning_gate:
     primary: codex

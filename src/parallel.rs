@@ -334,8 +334,10 @@ pub fn run_batch<F: FnMut(&str)>(
         let _ = std::fs::copy(ws.queue_path(), wt_agents.join("work-queue.yaml"));
         // Harness assets too (small text): skill anchors and role notes are
         // cwd-relative in the packet and must resolve inside the worktree.
+        let harness_seed_dir = p.run_dir.join(run::HARNESS_SEED_DIR);
         for d in ["rules", "skills", "agents"] {
             copy_dir(&ws.agents_dir().join(d), &wt_agents.join(d));
+            copy_dir(&ws.agents_dir().join(d), &harness_seed_dir.join(d));
         }
 
         std::fs::create_dir_all(p.run_dir.join("evidence"))?;
@@ -651,12 +653,16 @@ pub fn run_batch<F: FnMut(&str)>(
         // self-report), then — only on a Done run — merges the worktree back;
         // it writes artifacts, the queue state, follow-ups, and telemetry. The
         // single finalization pipeline is shared with the serial path.
-        let evidence = evaluator::changed_paths(&p.wt_path).map(|paths| {
-            paths
-                .into_iter()
-                .filter(|path| !path.starts_with(".agents/"))
-                .collect()
-        });
+        let evidence = match parallel_worker_evidence(&p.wt_path, &p.run_dir) {
+            Ok(paths) => Some(paths),
+            Err(error) => {
+                on_event(&format!(
+                    "{}: change evidence unavailable after harness seed cleanup: {error}",
+                    p.task.id
+                ));
+                None
+            }
+        };
         // A finalize error for one task (e.g. a transient queue-write hiccup)
         // must not abort the whole batch and strand the other already-finished
         // worktrees — log it and move on; `yardlet recover` salvages this one.
@@ -1287,7 +1293,7 @@ where
             )));
         }
     }
-    git(wt, &["add", "-A", "--", ".", ":(exclude).agents"])?;
+    stage_integratable_changes(wt)?;
     let staged = git(wt, &["diff", "--cached", "--name-only"])?;
     after_staged(root, wt, branch)?;
     let transaction_exists = match commit_mode {
@@ -1608,7 +1614,7 @@ pub(crate) fn cleanup_integrated_worktree(
         };
         let retained = changed
             .into_iter()
-            .filter(|path| path != ".agents" && !path.starts_with(".agents/"))
+            .filter(|path| evaluator::is_integratable_path(path))
             .collect::<Vec<_>>();
         if !retained.is_empty() {
             warnings.push(format!(
@@ -1665,6 +1671,50 @@ pub(crate) fn cleanup_integrated_worktree(
         complete: target_clean && transaction_clean,
         warnings,
     }
+}
+
+fn stage_integratable_changes(wt: &Path) -> Result<()> {
+    let paths = evaluator::changed_paths(wt)
+        .ok_or_else(|| anyhow!("could not enumerate worktree changes before integration"))?;
+    // Discard worker-controlled index state, then rebuild the staged tree from
+    // the deterministic integration allowlist. This keeps canonical/runtime
+    // `.agents` state out while permitting repository harness assets.
+    git(wt, &["reset", "-q"])?;
+    for path in paths
+        .into_iter()
+        .filter(|path| evaluator::is_integratable_path(path))
+    {
+        git(wt, &["add", "-A", "--", &path])?;
+    }
+    Ok(())
+}
+
+fn parallel_worker_evidence(wt: &Path, run_dir: &Path) -> Result<Vec<String>> {
+    let mut paths = evaluator::changed_paths(wt)
+        .ok_or_else(|| anyhow!("could not enumerate parallel worktree changes"))?;
+    let seed_root = run_dir.join(run::HARNESS_SEED_DIR);
+    if seed_root.is_dir() {
+        let (seeded, modified) = run::seeded_harness_evidence(&seed_root, wt)
+            .ok_or_else(|| anyhow!("could not compare harness seed snapshot"))?;
+        let unchanged = paths
+            .iter()
+            .filter(|path| seeded.contains(*path) && !modified.contains(*path))
+            .cloned()
+            .collect::<Vec<_>>();
+        paths.retain(|path| !seeded.contains(path) || modified.contains(path));
+        for path in modified {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+        for path in unchanged {
+            run::discard_unchanged_seeded_harness_copy(wt, &path)?;
+        }
+    }
+    Ok(paths
+        .into_iter()
+        .filter(|path| evaluator::is_integratable_path(path))
+        .collect())
 }
 
 /// Keep `.agents/worktrees/` out of `git status` in any repo Yardlet runs in,
@@ -1998,6 +2048,44 @@ mod tests {
         sh_git(&root, &["add", "base.txt"]);
         sh_git(&root, &["commit", "-q", "-m", "init"]);
         root
+    }
+
+    #[test]
+    fn parallel_seed_cleanup_restores_dirty_tracked_harness_to_worktree_head() {
+        let root = temp_repo("parallel-dirty-tracked-harness-seed");
+        let tracked = root.join(".agents/rules/tracked-dirty.md");
+        write_str(&tracked, "# Tracked baseline\n").unwrap();
+        sh_git(&root, &["add", ".agents/rules/tracked-dirty.md"]);
+        sh_git(&root, &["commit", "-q", "-m", "track harness fixture"]);
+        write_str(&tracked, "# User dirty edit\n").unwrap();
+
+        let wt = root.join(".agents/worktrees/parallel-dirty-seed");
+        let branch = "yard/parallel-dirty-seed/run-test";
+        create_worktree(&root, &wt, branch).unwrap();
+        let run_dir = root.join(".agents/runs/run-parallel-dirty-seed");
+        let seed = run_dir
+            .join(run::HARNESS_SEED_DIR)
+            .join("rules/tracked-dirty.md");
+        write_str(
+            &wt.join(".agents/rules/tracked-dirty.md"),
+            "# User dirty edit\n",
+        )
+        .unwrap();
+        write_str(&seed, "# User dirty edit\n").unwrap();
+
+        let evidence = parallel_worker_evidence(&wt, &run_dir).unwrap();
+        assert!(evidence.is_empty(), "seed copy is not worker evidence");
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# Tracked baseline\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&tracked).unwrap(),
+            "# User dirty edit\n"
+        );
+
+        remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn setup_workspace(root: &Path, worker_yaml: &str, tasks: Vec<Task>) -> Workspace {

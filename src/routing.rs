@@ -93,6 +93,25 @@ pub fn resolve_worker_for_task(
         }
     }
 
+    if candidate.reason == "planner preferred"
+        && !task.preferred_worker.trim().is_empty()
+        && !workers.routing.allow_preferred_worker_failover
+    {
+        let pinned = candidate.worker_id.clone();
+        return resolve_order(
+            workers,
+            billing,
+            pinned.clone(),
+            candidate.reason,
+            std::slice::from_ref(&pinned),
+        )
+        .map_err(|_| {
+            anyhow!(
+                "preferred worker '{pinned}' is not invocable; cross-worker fallback requires explicit opt-in with routing.allow_preferred_worker_failover"
+            )
+        });
+    }
+
     resolve_candidate(
         workers,
         billing,
@@ -108,6 +127,13 @@ pub fn resolve_failover_worker_for_task(
     failed_worker: &str,
     task: &Task,
 ) -> Result<Resolved> {
+    if !task.preferred_worker.trim().is_empty() && !workers.routing.allow_preferred_worker_failover
+    {
+        return Err(anyhow!(
+            "task pinned preferred worker '{}'; cross-worker failover requires explicit opt-in with routing.allow_preferred_worker_failover",
+            task.preferred_worker
+        ));
+    }
     let required: Vec<String> = task
         .required_capabilities
         .iter()
@@ -472,6 +498,65 @@ mod tests {
             err.contains("no alternate worker") && err.contains("image_generation"),
             "the failed worker must stay excluded and only capable alternatives may be tried: {err}"
         );
+    }
+
+    #[test]
+    fn preferred_worker_failover_requires_explicit_opt_in() {
+        let mut w: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, second]\nworkers:\n  - id: first\n    invocation: { command: bash }\n  - id: second\n    invocation: { command: bash }\n",
+        )
+        .unwrap();
+        let task: Task = crate::yaml::from_str(
+            "id: T\ntitle: t\npreferred_worker: first\nmodel: pinned-model\n",
+        )
+        .unwrap();
+
+        let error = resolve_failover_worker_for_task(&w, &BillingPolicy::default(), "first", &task)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("preferred worker") && error.contains("opt-in"),
+            "a pinned task must fail closed instead of changing workers: {error}"
+        );
+
+        w.routing.allow_preferred_worker_failover = true;
+        let resolved =
+            resolve_failover_worker_for_task(&w, &BillingPolicy::default(), "first", &task)
+                .unwrap();
+        assert_eq!(resolved.worker_id, "second");
+    }
+
+    #[test]
+    fn preferred_worker_initial_resolution_requires_explicit_fallback_opt_in() {
+        let mut workers: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nrouting:\n  default_worker: ready\n  fallback_order: [missing, ready]\nworkers:\n  - id: missing\n    invocation: { command: yardlet-definitely-missing-worker-command }\n  - id: ready\n    invocation: { command: bash }\n",
+        )
+        .unwrap();
+        let task: Task = crate::yaml::from_str(
+            "id: T\ntitle: t\npreferred_worker: missing\nmodel: pinned-model\n",
+        )
+        .unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "yard-routing-preferred-initial-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::at(&root);
+
+        let error =
+            resolve_worker_for_task(&workspace, &workers, &BillingPolicy::default(), None, &task)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("preferred worker") && error.contains("opt-in"));
+
+        workers.routing.allow_preferred_worker_failover = true;
+        let resolved =
+            resolve_worker_for_task(&workspace, &workers, &BillingPolicy::default(), None, &task)
+                .unwrap();
+        assert_eq!(resolved.worker_id, "ready");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

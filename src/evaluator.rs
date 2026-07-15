@@ -153,6 +153,7 @@ pub fn evaluate(
                 let undisclosed: Vec<String> = actual
                     .iter()
                     .map(|p| norm(p))
+                    .filter(|p| !is_current_run_artifact(p, run_id))
                     .filter(|p| !reported_norm.contains(p))
                     .collect();
                 checks.push(advisory(
@@ -287,6 +288,12 @@ pub fn evaluate(
     }
 }
 
+fn is_current_run_artifact(path: &str, run_id: &str) -> bool {
+    let path = path.trim_start_matches("./").trim_matches('"');
+    let root = format!(".agents/runs/{run_id}");
+    path == root || path.starts_with(&format!("{root}/"))
+}
+
 /// Paths that are sensitive (secrets/keys), escape the workspace, or are
 /// Yardlet-owned canonical state a worker must never write directly. A worker
 /// touching any of these fails the run regardless of its self-report.
@@ -337,6 +344,20 @@ pub fn is_canonical_state_path(path: &str) -> bool {
         rest,
         "work-queue.yaml" | "intent-contract.yaml" | "workers.yaml" | "yardlet.yaml" | "yard.yaml"
     ) || rest.ends_with("-policy.yaml")
+}
+
+/// Is this path a repository deliverable that Yardlet may integrate from an
+/// isolated worker worktree? Everything outside `.agents/` is deliverable. The
+/// only deliverables inside `.agents/` are the workspace-authored harness asset
+/// roots; canonical and runtime state remain main-process-owned.
+pub fn is_integratable_path(path: &str) -> bool {
+    let p = path.trim_start_matches("./").trim_matches('"');
+    if p == ".agents" || p.starts_with(".agents/") {
+        return [".agents/rules", ".agents/skills", ".agents/agents"]
+            .iter()
+            .any(|root| p == *root || p.starts_with(&format!("{root}/")));
+    }
+    true
 }
 
 /// Paths git reports as changed or untracked in `cwd`: the actual on-disk
@@ -753,6 +774,46 @@ mod tests {
             .expect("reported validation must be a fatal check");
         assert!(check.fatal && !check.passed);
         assert!(check.note.contains("test_parser failed"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn diff_report_ignores_current_run_artifacts_owned_by_yardlet() {
+        let dir = temp_path("core-run-artifact-disclosure");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("handoff.md"), "h").unwrap();
+        let mut result = dummy_result();
+        result.run_id = "run-x".into();
+        result.task_id = "YARD-RUN-ARTIFACT".into();
+        result.status = "done".into();
+        std::fs::write(
+            dir.join("result.json"),
+            serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+
+        let actual = vec![
+            ".agents/runs/run-x/worker-output.log".to_string(),
+            ".agents/runs/another-run/worker-output.log".to_string(),
+        ];
+        let evaluation = evaluate(
+            &dir,
+            "run-x",
+            &implementation_task("YARD-RUN-ARTIFACT"),
+            Some(&actual),
+        );
+        let disclosure = evaluation
+            .checks
+            .iter()
+            .find(|check| check.name == "diff_matches_report")
+            .unwrap();
+        assert!(!disclosure.passed);
+        assert!(!disclosure
+            .note
+            .contains(".agents/runs/run-x/worker-output.log"));
+        assert!(disclosure
+            .note
+            .contains(".agents/runs/another-run/worker-output.log"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
