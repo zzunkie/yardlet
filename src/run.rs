@@ -3117,12 +3117,21 @@ struct PendingGitFinish {
     started_at: String,
 }
 
-/// Find every unverified integration for the live intent and order each remote
-/// target by the workspace's first-parent integration history. This deliberately
-/// scans runs rather than tasks: multiple runs may own distinct accumulated
+/// Find every integration whose Git-finish or run projection still needs
+/// recovery for the live intent, then order each remote target by the
+/// workspace's first-parent integration history. This deliberately scans runs
+/// rather than tasks: multiple non-Done runs may own distinct accumulated
 /// commits even when they share a task id.
 fn pending_git_finishes(ws: &Workspace, queue: &WorkQueue) -> Vec<PendingGitFinish> {
     let config_policy = ws.load_config().ok().map(|config| config.git_finish);
+    let latest_done_runs = queue
+        .tasks
+        .iter()
+        .filter(|task| task.state == TaskState::Done)
+        .filter_map(|task| {
+            latest_run_for(ws, &task.id).map(|(_, run_dir)| (task.id.clone(), run_dir))
+        })
+        .collect::<HashMap<_, _>>();
     let positions = std::process::Command::new("git")
         .arg("-C")
         .arg(&ws.root)
@@ -3155,18 +3164,25 @@ fn pending_git_finishes(ws: &Workspace, queue: &WorkQueue) -> Vec<PendingGitFini
         else {
             continue;
         };
-        // The live queue is authoritative for task completion. Historical
-        // runs belonging to an already-Done task must not be re-finalized just
-        // because an older Git-finish record used another target or never
-        // reached a verified status. Recovery remains available for Partial
-        // tasks, including the post-push crash window repaired below.
-        if task_state == TaskState::Done {
-            continue;
-        }
         if run.intent_id != queue.intent_id || !run_dir.join("result.json").exists() {
             continue;
         }
         let finish = ws.load_git_finish_record(&run_dir).ok();
+        // The live queue is authoritative for task completion, so Done tasks
+        // skip historical and unverified runs. The one exception is their
+        // latest run after a verified external finish when the run projection
+        // is still stale. Recovery may re-seal that run without pushing again.
+        let repairs_done_projection = task_state == TaskState::Done
+            && latest_done_runs
+                .get(&run.task_id)
+                .is_some_and(|latest| latest == &run_dir)
+            && finish
+                .as_ref()
+                .is_some_and(|record| record.status.verified_complete())
+            && (run.state != "done" || run.completed_at.is_none());
+        if task_state == TaskState::Done && !repairs_done_projection {
+            continue;
+        }
         let (auto_push, remote, target_ref, expected_oid) = match finish.as_ref() {
             Some(record) => (
                 record.policy.auto_push,
@@ -3186,19 +3202,7 @@ fn pending_git_finishes(ws: &Workspace, queue: &WorkQueue) -> Vec<PendingGitFini
                 )
             }
         };
-        // A verified external finish is only globally terminal once the queue
-        // and worker-writable run projection agree. A crash can land after the
-        // authoritative Pushed/AlreadyApplied checkpoint but before sealing a
-        // previously Partial run; include that mismatch so recovery re-derives
-        // remote truth, repairs the projection, and converges without pushing
-        // again.
-        let verified_everywhere = finish
-            .as_ref()
-            .is_some_and(|record| record.status.verified_complete())
-            && task_state == TaskState::Done
-            && run.state == "done"
-            && run.completed_at.is_some();
-        if !auto_push || verified_everywhere || expected_oid.is_empty() {
+        if !auto_push || expected_oid.is_empty() {
             continue;
         }
         pending.push(PendingGitFinish {
@@ -6203,8 +6207,82 @@ mod tests {
             vec!["YARD-010"],
             "Done historical runs must not be re-finalized for unrelated targets"
         );
-        assert_eq!(q.tasks[0].state, TaskState::Done);
-        assert_eq!(q.tasks[1].state, TaskState::Done);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pending_git_finish_recovery_retains_only_latest_verified_stale_done_run() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-latest-verified-stale-git-finish-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let ws = Workspace::at(&root);
+        let task_id = "YARD-DONE-STALE";
+        let mut q = queue(vec![task(task_id, TaskState::Done, 10, false)]);
+        q.intent_id = "intent-latest-verified-stale".into();
+        ws.save_queue(&q).unwrap();
+
+        for index in [1, 2] {
+            let run_id = format!("run-20990101-00000{index}-{task_id}");
+            let run_dir = ws.runs_dir().join(&run_id);
+            std::fs::create_dir_all(&run_dir).unwrap();
+            write_str(&run_dir.join("result.json"), "{\"status\":\"done\"}").unwrap();
+            state::save_yaml(
+                &run_dir.join("run.yaml"),
+                &RunRecord {
+                    schema_version: 1,
+                    run_id: run_id.clone(),
+                    task_id: task_id.into(),
+                    intent_id: q.intent_id.clone(),
+                    worker: "codex".into(),
+                    state: "partial".into(),
+                    started_at: format!("2099-01-01T00:00:0{index}+00:00"),
+                    completed_at: Some(format!("2099-01-01T00:01:0{index}+00:00")),
+                    integration_oid: format!("integration-{index}"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            ws.save_git_finish_record(
+                &run_dir,
+                &crate::git_finish::GitFinishRecord {
+                    schema_version: 2,
+                    run_id: run_id.clone(),
+                    task_id: task_id.into(),
+                    attempted_at: String::new(),
+                    status: crate::git_finish::GitFinishStatus::Pushed,
+                    policy: crate::git_finish::GitFinishPolicySnapshot {
+                        auto_push: true,
+                        remote: "fixture".into(),
+                        target_ref: "refs/heads/main".into(),
+                        pre_push_checks: vec![],
+                    },
+                    expected_oid: Some(format!("integration-{index}")),
+                    baseline_oid: format!("baseline-{index}"),
+                    owned_oids: vec![format!("integration-{index}")],
+                    checks: vec![],
+                    push_invoked: true,
+                    push_succeeded: true,
+                    remote_oid: Some(format!("integration-{index}")),
+                    remote_before_oid: Some(format!("baseline-{index}")),
+                    reason: "remote_verified".into(),
+                },
+            )
+            .unwrap();
+        }
+
+        let candidates = pending_git_finishes(&ws, &q);
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.run_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["run-20990101-000002-YARD-DONE-STALE"],
+            "only the latest verified run may repair a stale Done projection"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -11683,7 +11761,7 @@ exit 1
         let worktree = ws.agents_dir().join("worktrees").join(run_id);
         let run_dir = ws.runs_dir().join(run_id);
         std::fs::create_dir_all(&run_dir).unwrap();
-        let mut queued = task(task_id, TaskState::Partial, 10, false);
+        let mut queued = task(task_id, TaskState::Done, 10, false);
         queued.kind = "implementation".into();
         let mut q = queue(vec![queued]);
         q.intent_id = "intent-verified-projection".into();
@@ -11754,8 +11832,8 @@ exit 1
         .unwrap();
 
         // Reproduce the post-push crash boundary: the authoritative checkpoint
-        // is durable, but the worker-writable projection cannot be replaced and
-        // the queue is still Partial.
+        // and queue state are durable, but the completed run projection is
+        // still Partial.
         std::fs::create_dir_all(run_dir.join("git-finish.json")).unwrap();
         let projection_error = ws
             .save_git_finish_record(
@@ -11804,6 +11882,9 @@ exit 1
         );
         assert!(!finish.push_invoked, "recovery must not repeat the push");
         assert_eq!(finish.remote_oid.as_deref(), Some(integration_oid.as_str()));
+        let sealed = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")).unwrap();
+        assert_eq!(sealed.state, "done");
+        assert!(sealed.completed_at.is_some());
         assert_eq!(
             git(&["ls-remote", "--refs", "fixture", "refs/heads/main"]),
             format!("{integration_oid}\trefs/heads/main")
