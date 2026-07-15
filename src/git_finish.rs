@@ -153,7 +153,6 @@ pub fn finish_owned_run(
         task_state,
         ownership,
         FinishMode::CurrentHead,
-        false,
     )
 }
 
@@ -216,15 +215,23 @@ pub(crate) fn recover_owned_run(
         task_id,
         task_state,
         ownership,
-        FinishMode::AccumulatedHead,
-        preserve_verified,
+        FinishMode::AccumulatedHead { preserve_verified },
     )
 }
 
 #[derive(Clone, Copy)]
 enum FinishMode {
     CurrentHead,
-    AccumulatedHead,
+    AccumulatedHead { preserve_verified: bool },
+}
+
+impl FinishMode {
+    fn preserve_verified(self) -> bool {
+        match self {
+            Self::CurrentHead => false,
+            Self::AccumulatedHead { preserve_verified } => preserve_verified,
+        }
+    }
 }
 
 fn finish_owned_run_with_mode(
@@ -235,12 +242,11 @@ fn finish_owned_run_with_mode(
     task_state: TaskState,
     ownership: Option<GitFinishOwnership>,
     mode: FinishMode,
-    preserve_verified: bool,
 ) -> anyhow::Result<GitFinishRecord> {
     let previous = ws.load_git_finish_record(run_dir).ok();
     let verified_floor = previous
         .as_ref()
-        .filter(|record| preserve_verified && record.status.verified_complete())
+        .filter(|record| mode.preserve_verified() && record.status.verified_complete())
         .cloned();
     let persist_result =
         |record| persist_with_verified_floor(ws, run_dir, record, verified_floor.as_ref());
@@ -342,7 +348,7 @@ fn finish_owned_run_with_mode(
             block(&mut record, "owned_oid_is_not_head");
             return persist_result(record);
         }
-        FinishMode::AccumulatedHead
+        FinishMode::AccumulatedHead { .. }
             if !git_ok(
                 &ws.root,
                 &["merge-base", "--is-ancestor", &expected, &pins_before.head],
@@ -366,7 +372,7 @@ fn finish_owned_run_with_mode(
             return persist_result(record);
         }
         Ok(Some(oid))
-            if matches!(mode, FinishMode::AccumulatedHead)
+            if matches!(mode, FinishMode::AccumulatedHead { .. })
                 && git_ok(&ws.root, &["merge-base", "--is-ancestor", &expected, &oid]) =>
         {
             record.status = GitFinishStatus::AlreadyApplied;
