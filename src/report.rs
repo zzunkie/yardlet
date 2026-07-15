@@ -72,6 +72,15 @@ pub fn collect_proposed_follow_ups(ws: &Workspace, queue: &WorkQueue) -> Vec<Fol
     out
 }
 
+/// Return proposals that remain visible in run results but are intentionally
+/// not ingested because their declared scope leaves this workspace.
+fn collect_withheld_follow_ups(ws: &Workspace, queue: &WorkQueue) -> Vec<FollowUpTask> {
+    collect_proposed_follow_ups(ws, queue)
+        .into_iter()
+        .filter(|follow_up| !crate::planner::follow_up_scope_is_workspace_local(follow_up))
+        .collect()
+}
+
 /// Promote a preserved (or freshly proposed) follow-up into a new live intent +
 /// queue seed. The engine path behind AC-007: it mints a fresh intent id, writes
 /// the derived `intent-contract.yaml`, and seeds a one-task queue by handing the
@@ -252,6 +261,19 @@ pub fn build_final_report(ws: &Workspace) -> Result<String> {
         }
     }
 
+    let withheld = collect_withheld_follow_ups(ws, &queue);
+    if !withheld.is_empty() {
+        md.push_str("## Withheld suggestions\n\n");
+        md.push_str(&format!(
+            "{} cross-workspace follow-up suggestion(s) were not ingested into this workspace:\n\n",
+            withheld.len()
+        ));
+        for follow_up in withheld {
+            md.push_str(&format!("- {}\n", follow_up.title.trim()));
+        }
+        md.push('\n');
+    }
+
     if !all_changed.is_empty() {
         all_changed.sort();
         all_changed.dedup();
@@ -363,6 +385,40 @@ mod tests {
 
         assert!(report.contains("unfinished (held:"), "{report}");
         assert!(!report.contains("complete (held:"), "{report}");
+    }
+
+    #[test]
+    fn final_report_surfaces_cross_workspace_follow_ups_as_withheld_suggestions() {
+        let ws = temp_ws("withheld-follow-ups");
+        crate::state::save_yaml(&ws.intent_path(), &intent("intent-withheld")).unwrap();
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.intent_id = "intent-withheld".to_string();
+        queue
+            .tasks
+            .push(seed_task("YARD-001", "builder", TaskState::Done));
+        ws.save_queue(&queue).unwrap();
+        write_run(
+            &ws,
+            "run-withheld",
+            "YARD-001",
+            r#"{"schema_version":1,"run_id":"run-withheld","task_id":"YARD-001","status":"done",
+               "follow_up_tasks":[
+                 {"title":"modify another repository","allowed_scope":["/tmp/other/**"]},
+                 {"title":"modify a home checkout","allowed_scope":["~/other/**"]},
+                 {"title":"record local evidence","allowed_scope":["evidence/**"]}
+               ]}"#,
+        );
+
+        let report = build_final_report(&ws).unwrap();
+
+        assert!(report.contains("## Withheld suggestions"), "{report}");
+        assert!(
+            report.contains("2 cross-workspace follow-up suggestion(s) were not ingested"),
+            "{report}"
+        );
+        assert!(report.contains("- modify another repository"), "{report}");
+        assert!(report.contains("- modify a home checkout"), "{report}");
+        assert!(!report.contains("- record local evidence"), "{report}");
     }
 
     #[test]

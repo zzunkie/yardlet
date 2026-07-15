@@ -1162,10 +1162,12 @@ pub(crate) fn ingest_follow_ups(
     ingested
 }
 
-fn follow_up_scope_is_workspace_local(follow_up: &crate::schemas::FollowUpTask) -> bool {
+pub(crate) fn follow_up_scope_is_workspace_local(follow_up: &crate::schemas::FollowUpTask) -> bool {
     follow_up.allowed_scope.iter().all(|scope| {
-        let path = std::path::Path::new(scope.trim());
-        !path.is_absolute()
+        let scope = scope.trim();
+        let path = std::path::Path::new(scope);
+        !scope.starts_with('~')
+            && !path.is_absolute()
             && !path.components().any(|component| {
                 matches!(
                     component,
@@ -2569,6 +2571,12 @@ routing:
                     title: "escape to a sibling repository".into(),
                     reason: "relative path still leaves this workspace".into(),
                     allowed_scope: vec!["../another-repository/src/**".into()],
+                    ..Default::default()
+                },
+                FollowUpTask {
+                    title: "modify a home-directory checkout".into(),
+                    reason: "tilde-prefixed scope is outside this workspace".into(),
+                    allowed_scope: vec!["~/another-repository/src/**".into()],
                     ..Default::default()
                 },
                 FollowUpTask {
