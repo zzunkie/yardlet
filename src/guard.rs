@@ -20,6 +20,8 @@ use crate::schemas::{BillingPolicy, WorkerProfile};
 pub enum Readiness {
     Ready,
     NotReady,
+    /// The worker is configured but explicitly disabled in workers.yaml.
+    Disabled,
     /// Binary is present but its offline `--version` probe failed, so the
     /// resolved CLI or its runtime cannot be confirmed. Yardlet stops rather than
     /// guess (it never risks a billed call to verify auth).
@@ -31,6 +33,7 @@ impl Readiness {
         match self {
             Readiness::Ready => "invocable",
             Readiness::NotReady => "not ready",
+            Readiness::Disabled => "disabled",
             Readiness::Ambiguous => "ambiguous",
         }
     }
@@ -64,6 +67,8 @@ pub enum StageMark {
     Offline,
     /// Gate does not apply (e.g. version when no binary was found).
     Skipped,
+    /// Worker is explicitly disabled in workers.yaml.
+    Disabled,
 }
 
 impl StageMark {
@@ -76,6 +81,7 @@ impl StageMark {
             StageMark::Blocked => "BLOCK",
             StageMark::Offline => "n/a",
             StageMark::Skipped => "-",
+            StageMark::Disabled => "off",
         }
     }
 }
@@ -104,6 +110,14 @@ impl WorkerStatus {
     /// makes a billed call to confirm a subscription login, so it never claims
     /// the login was verified. It only reports what it can prove locally.
     pub fn stages(&self, billing: &BillingPolicy) -> Vec<StatusStage> {
+        if self.readiness == Readiness::Disabled {
+            return vec![StatusStage {
+                label: "enabled",
+                mark: StageMark::Disabled,
+                note: "disabled in .agents/workers.yaml".to_string(),
+            }];
+        }
+
         let binary = match &self.binary_path {
             Some(p) => StatusStage {
                 label: "binary",
@@ -194,6 +208,9 @@ impl WorkerStatus {
                 "not invocable: binary found but unverified (see version gate)".to_string()
             }
             Readiness::NotReady => "not invocable: worker CLI not installed".to_string(),
+            Readiness::Disabled => {
+                "not invocable: worker is disabled in .agents/workers.yaml".to_string()
+            }
         }
     }
 }
@@ -266,6 +283,18 @@ fn fallback_paths(worker_id: &str) -> Vec<PathBuf> {
 pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
     let command = profile.invocation.command.clone();
     let billing_env_present = present_billing_env(&billing.blocked_worker_env_names);
+
+    if !profile.enabled {
+        return WorkerStatus {
+            id: profile.id.clone(),
+            command,
+            binary_path: None,
+            version: None,
+            billing_env_present,
+            readiness: Readiness::Disabled,
+            detail: "disabled in .agents/workers.yaml".to_string(),
+        };
+    }
 
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(p) = find_binary(&command) {
@@ -471,6 +500,30 @@ mod tests {
         // Strict policy blocks only when billing env is actually present.
         assert!(billing_blocked("block", 1));
         assert!(!billing_blocked("block", 0));
+    }
+
+    #[test]
+    fn disabled_worker_is_not_reported_as_invocable() {
+        let profile: WorkerProfile = serde_yaml_ng::from_str(
+            r#"
+id: disabled-cargo
+enabled: false
+invocation:
+  command: cargo
+"#,
+        )
+        .unwrap();
+        let billing = BillingPolicy::default();
+
+        let status = probe(&profile, &billing);
+
+        assert_ne!(status.readiness, Readiness::Ready);
+        assert_eq!(status.readiness.label(), "disabled");
+        assert!(status.invocation_verdict(&billing).contains("disabled"));
+        let stages = status.stages(&billing);
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].label, "enabled");
+        assert_eq!(stages[0].mark, StageMark::Disabled);
     }
 
     #[test]

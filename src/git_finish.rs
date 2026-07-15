@@ -206,6 +206,7 @@ pub(crate) fn recover_owned_run(
     task_id: &str,
     task_state: TaskState,
     ownership: Option<GitFinishOwnership>,
+    preserve_verified: bool,
 ) -> anyhow::Result<GitFinishRecord> {
     finish_owned_run_with_mode(
         ws,
@@ -214,14 +215,23 @@ pub(crate) fn recover_owned_run(
         task_id,
         task_state,
         ownership,
-        FinishMode::AccumulatedHead,
+        FinishMode::AccumulatedHead { preserve_verified },
     )
 }
 
 #[derive(Clone, Copy)]
 enum FinishMode {
     CurrentHead,
-    AccumulatedHead,
+    AccumulatedHead { preserve_verified: bool },
+}
+
+impl FinishMode {
+    fn preserve_verified(self) -> bool {
+        match self {
+            Self::CurrentHead => false,
+            Self::AccumulatedHead { preserve_verified } => preserve_verified,
+        }
+    }
 }
 
 fn finish_owned_run_with_mode(
@@ -233,16 +243,22 @@ fn finish_owned_run_with_mode(
     ownership: Option<GitFinishOwnership>,
     mode: FinishMode,
 ) -> anyhow::Result<GitFinishRecord> {
+    let previous = ws.load_git_finish_record(run_dir).ok();
+    let verified_floor = previous
+        .as_ref()
+        .filter(|record| mode.preserve_verified() && record.status.verified_complete())
+        .cloned();
+    let persist_result =
+        |record| persist_with_verified_floor(ws, run_dir, record, verified_floor.as_ref());
     let policy = match ws.load_config() {
         Ok(config) => config.git_finish,
         Err(_) => {
             let policy = GitFinishPolicy::default();
             let mut record = base_record(run_id, task_id, &policy, ownership.as_ref());
             block(&mut record, "config_unreadable");
-            return persist_and_return(ws, run_dir, record);
+            return persist_result(record);
         }
     };
-    let previous = ws.load_git_finish_record(run_dir).ok();
     let target_changed = previous.as_ref().is_some_and(|record| {
         record.policy.auto_push
             && (record.policy.remote != policy.remote
@@ -259,36 +275,36 @@ fn finish_owned_run_with_mode(
     if ownership_changed {
         let mut blocked_record = base_record(run_id, task_id, &policy, recorded_ownership.as_ref());
         block(&mut blocked_record, "run_ownership_evidence_changed");
-        return persist_and_return(ws, run_dir, blocked_record);
+        return persist_result(blocked_record);
     }
     let mut record = base_record(run_id, task_id, &policy, ownership.as_ref());
     if target_changed {
         block(&mut record, "git_finish_target_changed");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
 
     if !policy.auto_push {
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
     if task_state != TaskState::Done {
         block(&mut record, "task_not_done");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
     if policy.remote.trim().is_empty() {
         block(&mut record, "remote_not_configured");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
     let Some(branch) = policy.target_ref.strip_prefix("refs/heads/") else {
         block(&mut record, "target_ref_must_be_branch");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     };
     if branch.is_empty() || policy.target_ref.contains([' ', ':', '^', '~']) {
         block(&mut record, "target_ref_invalid");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
     if !git_ok(&ws.root, &["check-ref-format", &policy.target_ref]) {
         block(&mut record, "target_ref_invalid");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
     let _lock = match FinishLock::acquire(&ws.root, &policy.remote, &policy.target_ref) {
         Ok(lock) => lock,
@@ -297,52 +313,55 @@ fn finish_owned_run_with_mode(
             // non-durable safety block for this caller; never project an older
             // status as current truth, and never overwrite a concurrent
             // finisher's durable record.
-            return Ok(lock_failure_record(record, reason));
+            return Ok(with_verified_floor(
+                lock_failure_record(record, reason),
+                verified_floor.as_ref(),
+            ));
         }
     };
     let pins_before = match git_security_pins(&ws.root, &policy.remote) {
         Ok(pins) => pins,
         Err(()) => {
             block(&mut record, "remote_not_found");
-            return persist_and_return(ws, run_dir, record);
+            return persist_result(record);
         }
     };
     if pins_before.head.is_empty() {
         block(&mut record, "remote_not_found");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
     let Some(push_destination) = single_push_destination(&pins_before.push_urls) else {
         block(&mut record, "remote_must_have_one_push_destination");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     };
     let current_branch = git_stdout(&ws.root, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
     if current_branch.as_deref().map(str::trim) != Some(branch) {
         block(&mut record, "branch_does_not_match_target_ref");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
     let Some(expected) = record.expected_oid.clone() else {
         block(&mut record, "run_has_no_owned_commit");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     };
     match mode {
         FinishMode::CurrentHead if pins_before.head != expected => {
             block(&mut record, "owned_oid_is_not_head");
-            return persist_and_return(ws, run_dir, record);
+            return persist_result(record);
         }
-        FinishMode::AccumulatedHead
+        FinishMode::AccumulatedHead { .. }
             if !git_ok(
                 &ws.root,
                 &["merge-base", "--is-ancestor", &expected, &pins_before.head],
             ) =>
         {
             block(&mut record, "owned_oid_is_not_in_head_history");
-            return persist_and_return(ws, run_dir, record);
+            return persist_result(record);
         }
         _ => {}
     }
     if !worktree_clean_except_agents(&ws.root) {
         block(&mut record, "worktree_not_clean");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
 
     let remote_before = match remote_oid(&ws.root, &policy.remote, &policy.target_ref) {
@@ -350,29 +369,37 @@ fn finish_owned_run_with_mode(
             record.status = GitFinishStatus::AlreadyApplied;
             record.remote_oid = Some(oid);
             record.reason = "remote_already_matches".to_string();
-            return persist_and_return(ws, run_dir, record);
+            return persist_result(record);
         }
         Ok(Some(oid))
-            if matches!(mode, FinishMode::AccumulatedHead)
+            if matches!(mode, FinishMode::AccumulatedHead { .. })
                 && git_ok(&ws.root, &["merge-base", "--is-ancestor", &expected, &oid]) =>
         {
             record.status = GitFinishStatus::AlreadyApplied;
             record.remote_oid = Some(oid);
             record.reason = "remote_contains_owned_commit".to_string();
-            return persist_and_return(ws, run_dir, record);
+            return persist_result(record);
         }
         Ok(oid) => oid,
         Err(()) => {
             record.status = GitFinishStatus::GitFailed;
             record.reason = "remote_lookup_before_push_failed".to_string();
-            return persist_and_return(ws, run_dir, record);
+            return persist_result(record);
         }
     };
     record.remote_before_oid = remote_before.clone();
 
+    // A Done-projection repair may confirm an earlier verified finish, but it
+    // must never turn that durable fact back into Prepared or perform a second
+    // push. If the remote no longer contains the owned commit, retain the last
+    // verified record and leave any explicit remote repair to a new operation.
+    if let Some(previous) = verified_floor.as_ref() {
+        return Ok(previous.clone());
+    }
+
     if !ownership_proven(&ws.root, &record, remote_before.as_deref()) {
         block(&mut record, "reachable_commits_not_owned_by_run");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
 
     for (index, check) in policy.pre_push_checks.iter().enumerate() {
@@ -386,7 +413,7 @@ fn finish_owned_run_with_mode(
         if !passed {
             record.status = GitFinishStatus::CheckBlocked;
             record.reason = "pre_push_check_failed".to_string();
-            return persist_and_return(ws, run_dir, record);
+            return persist_result(record);
         }
     }
 
@@ -394,33 +421,33 @@ fn finish_owned_run_with_mode(
         Ok(pins) => pins,
         Err(()) => {
             block(&mut record, "git_state_changed_during_checks");
-            return persist_and_return(ws, run_dir, record);
+            return persist_result(record);
         }
     };
     if pins_after.head != pins_before.head {
         block(&mut record, "head_changed_during_checks");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
     if pins_after.fetch_urls != pins_before.fetch_urls
         || pins_after.push_urls != pins_before.push_urls
     {
         block(&mut record, "remote_urls_changed_during_checks");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
     if !worktree_clean_except_agents(&ws.root) {
         block(&mut record, "worktree_changed_during_checks");
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
     match remote_oid(&ws.root, &policy.remote, &policy.target_ref) {
         Ok(oid) if oid == remote_before => {}
         Ok(_) => {
             block(&mut record, "remote_ref_changed_during_checks");
-            return persist_and_return(ws, run_dir, record);
+            return persist_result(record);
         }
         Err(()) => {
             record.status = GitFinishStatus::GitFailed;
             record.reason = "remote_lookup_during_checks_failed".to_string();
-            return persist_and_return(ws, run_dir, record);
+            return persist_result(record);
         }
     }
 
@@ -439,7 +466,7 @@ fn finish_owned_run_with_mode(
     ) {
         record.status = GitFinishStatus::GitFailed;
         record.reason = "push_failed".to_string();
-        return persist_and_return(ws, run_dir, record);
+        return persist_result(record);
     }
     record.push_succeeded = true;
 
@@ -459,7 +486,7 @@ fn finish_owned_run_with_mode(
             record.reason = "remote_lookup_after_push_failed".to_string();
         }
     }
-    persist_and_return(ws, run_dir, record)
+    persist_result(record)
 }
 
 fn single_push_destination(bytes: &[u8]) -> Option<String> {
@@ -683,6 +710,32 @@ fn persist_and_return(
 ) -> anyhow::Result<GitFinishRecord> {
     persist(ws, run_dir, &record)?;
     Ok(record)
+}
+
+fn with_verified_floor(
+    record: GitFinishRecord,
+    verified_floor: Option<&GitFinishRecord>,
+) -> GitFinishRecord {
+    if !record.status.verified_complete() {
+        if let Some(previous) = verified_floor {
+            return previous.clone();
+        }
+    }
+    record
+}
+
+fn persist_with_verified_floor(
+    ws: &Workspace,
+    run_dir: &Path,
+    record: GitFinishRecord,
+    verified_floor: Option<&GitFinishRecord>,
+) -> anyhow::Result<GitFinishRecord> {
+    if !record.status.verified_complete() {
+        if let Some(previous) = verified_floor {
+            return Ok(previous.clone());
+        }
+    }
+    persist_and_return(ws, run_dir, record)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -924,6 +977,7 @@ mod tests {
                 "YARD-001",
                 TaskState::Done,
                 ownership,
+                false,
             )
             .unwrap()
         }
@@ -1745,6 +1799,7 @@ mod tests {
                 "YARD-001",
                 TaskState::Done,
                 Some(proof_a),
+                false,
             )
             .unwrap()
         });
@@ -1756,6 +1811,7 @@ mod tests {
                 "YARD-001",
                 TaskState::Done,
                 Some(proof_b),
+                false,
             )
             .unwrap()
         });
