@@ -1192,7 +1192,8 @@ exit 1
         let invocation = files_below(&fixture.root.join(".agents/runs"), "/native-args.txt");
         assert!(invocation.iter().any(|path| {
             fs::read_to_string(path).is_ok_and(|args| {
-                args.contains("exec resume")
+                args.contains("exec -C")
+                    && args.contains(" resume ")
                     && args.contains(session_ref)
                     && args.trim().ends_with('-')
             })
@@ -1213,6 +1214,121 @@ exit 1
         for run_dir in runs {
             assert_exact_receipt_pair(&run_dir, "YARD-NATIVE");
         }
+    }
+
+    #[test]
+    fn full_access_codex_relative_operations_stay_in_serial_run_worktree() {
+        let fixture = FixtureWorkspace::new("full-access-codex-cwd");
+        write_exact_codex_workers(&fixture, 0);
+        fixture.write_queue(
+            "  - id: YARD-FULL-ACCESS-CWD\n    title: full access stays in serial worktree\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n    model: gpt-5.6-sol\n    fallback_enabled: false\n",
+        );
+        let decoy = fixture.root.join(".agents/cwd-decoy");
+        fs::create_dir_all(&decoy).unwrap();
+        let source = fixture.root.join(".agents/absolute-read-only-source.txt");
+        fs::write(&source, "explicit absolute read-only input\n").unwrap();
+
+        let output = Command::new(&fixture.binary)
+            .args([
+                "run",
+                "--task",
+                "YARD-FULL-ACCESS-CWD",
+                "--execute",
+                "--full-access",
+                "--headless",
+            ])
+            .env("YARD_TEST_DECOY_CWD", &decoy)
+            .env("YARD_TEST_ABSOLUTE_SOURCE", &source)
+            .current_dir(&fixture.root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "full-access fixture failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let run_dir = run_dir_for_task(&fixture.root, "YARD-FULL-ACCESS-CWD");
+        let run = read_yaml(&run_dir.join("run.yaml"));
+        let worktree = PathBuf::from(string(&run, "worktree"));
+        assert!(run["serial_isolated"].as_bool().unwrap());
+        assert!(
+            worktree.exists(),
+            "declared worktree disappeared because the missing Codex -C sent the relative write elsewhere"
+        );
+        assert_eq!(
+            fs::canonicalize(
+                fs::read_to_string(run_dir.join("effective-cwd.txt"))
+                    .unwrap()
+                    .trim()
+            )
+            .unwrap(),
+            fs::canonicalize(&worktree).unwrap(),
+            "Codex tool cwd must equal run.yaml worktree"
+        );
+        assert_eq!(
+            fs::read_to_string(worktree.join("relative-worker.txt")).unwrap(),
+            "explicit absolute read-only input\n"
+        );
+        assert!(
+            !decoy.join("relative-worker.txt").exists(),
+            "missing Codex -C leaked a relative write into the in-workspace decoy"
+        );
+        assert_eq!(
+            fs::read_to_string(&source).unwrap(),
+            "explicit absolute read-only input\n",
+            "the explicit absolute source must remain read-only"
+        );
+    }
+
+    #[test]
+    fn serial_run_rejects_mismatched_worktree_receipt_before_worker_spawn() {
+        let fixture = FixtureWorkspace::new("serial-cwd-attestation");
+        write_exact_codex_workers(&fixture, 0);
+        fixture.write_queue(
+            "  - id: YARD-CWD-ATTEST\n    title: reject mismatched serial cwd receipt\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n    model: gpt-5.6-sol\n    fallback_enabled: false\n",
+        );
+        let hook_dir = fixture.root.join(".agents/hooks/pre-run.d");
+        fs::create_dir_all(&hook_dir).unwrap();
+        let hook = hook_dir.join("00-mismatch-worktree-receipt.sh");
+        fs::write(
+            &hook,
+            r#"#!/bin/sh
+set -eu
+awk '/^worktree: / { print "worktree: ."; next } { print }' "$YARD_RUN_DIR/run.yaml" >"$YARD_RUN_DIR/run.yaml.tmp"
+mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&hook).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&hook, permissions).unwrap();
+
+        let output = command(
+            &fixture.root,
+            &fixture.binary,
+            &[
+                "run",
+                "--task",
+                "YARD-CWD-ATTEST",
+                "--execute",
+                "--full-access",
+                "--headless",
+            ],
+        );
+        assert!(
+            !output.status.success(),
+            "a mismatched run.yaml worktree unexpectedly spawned the worker"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("worker cwd attestation failed")
+                && stderr.contains("run.yaml worktree")
+                && stderr.contains("refusing to spawn"),
+            "cwd mismatch diagnostic was not actionable: {stderr}"
+        );
+        assert_eq!(task_state(&fixture.root, "YARD-CWD-ATTEST"), "queued");
     }
 
     #[test]

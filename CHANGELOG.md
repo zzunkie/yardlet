@@ -12,6 +12,12 @@
 
 ### Fixed
 
+- **Full-access workers stay in their declared run worktree.** Codex fresh and
+  resumed commands now pin their agent root to `run.yaml.worktree`, while
+  serial execution fails closed before spawn when the effective cwd and run
+  receipt differ. Full access still permits explicit absolute reads without
+  redirecting relative shell or filesystem operations to another repository.
+
 - **Worker-authored handoffs survive finalization.** Evaluator checks and the
   compact result summary now go to `evaluator-summary.md` instead of replacing
   the worker's `handoff.md`; integration and non-blocking follow-up notes still
