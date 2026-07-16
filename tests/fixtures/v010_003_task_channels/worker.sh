@@ -14,11 +14,20 @@ if [[ "${1:-}" == "exec" ]]; then
 else
   run_dir="${1:?run directory is required}"
 fi
+if [[ -z "$run_dir" && -d "$PWD/.agents/runs" ]]; then
+  run_yaml="$(find "$PWD/.agents/runs" -mindepth 2 -maxdepth 2 -name run.yaml -print -quit)"
+  if [[ -n "$run_yaml" ]]; then
+    run_dir="${run_yaml%/run.yaml}"
+  fi
+fi
 if [[ -z "$run_dir" ]]; then
   printf 'fixture could not resolve run directory\n' >&2
   exit 65
 fi
 task_id="$(sed -n 's/^# Yardlet task packet: //p' <<<"$packet" | head -n 1)"
+if [[ -z "$task_id" && -f "$run_dir/run.yaml" ]]; then
+  task_id="$(sed -n 's/^task_id: //p' "$run_dir/run.yaml" | head -n 1)"
+fi
 run_id="${run_dir##*/}"
 mkdir -p "$run_dir"
 
@@ -40,7 +49,68 @@ write_question() {
   write_handoff "사용자 선택을 기다립니다."
 }
 
+assert_exact_receipts() {
+  for receipt in "$run_dir/run.yaml" "$run_dir/worker-process.yaml"; do
+    test -f "$receipt"
+    grep -Eq '^worker(_id)?: codex$' "$receipt"
+    grep -q '^model: gpt-5.6-sol$' "$receipt"
+    grep -q '^fallback_enabled: false$' "$receipt"
+    grep -q '^routing_provenance:$' "$receipt"
+  done
+}
+
+if grep -q 'propose exact lineage follow-ups' <<<"$packet"; then
+  printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "compact_summary": "exact lineage follow-ups proposed",\n  "follow_up_tasks": [\n    {"title": "exact lineage remediation", "reason": "fixture remediation", "kind": "implementation", "acceptance": ["receipt parity"]},\n    {"title": "exact lineage review", "reason": "fixture review", "kind": "review", "acceptance": ["receipt parity"]}\n  ]\n}\n' \
+    "$run_id" "$task_id" >"$run_dir/result.json"
+  write_handoff "exact lineage 후속 작업을 제안했습니다."
+  exit 0
+fi
+
+if grep -Eq 'exact lineage (remediation|review)' <<<"$packet"; then
+  assert_exact_receipts
+  if grep -q 'exact lineage review' <<<"$packet"; then
+    control_root="${PWD%%/.agents/worktrees/*}"
+    review_marker="$control_root/.agents/exact-review-ran"
+    if [[ ! -f "$review_marker" ]]; then
+      : >"$review_marker"
+      printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["pre-dispatch receipt inspection"], "passed": true, "failures": []},\n  "verdict": [{"criterion_id": "AC-RECEIPT", "pass": false, "evidence": "fixture requests one remediation"}],\n  "follow_up_tasks": [{"title": "exact lineage remediation after review", "reason": "exercise review-rerun", "kind": "implementation", "acceptance": ["receipt parity"]}],\n  "compact_summary": "pre-dispatch receipt parity observed before remediation"\n}\n' \
+        "$run_id" "$task_id" >"$run_dir/result.json"
+    else
+      printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["pre-dispatch receipt inspection"], "passed": true, "failures": []},\n  "verdict": [{"criterion_id": "AC-RECEIPT", "pass": true, "evidence": "worker read both receipts before body"}],\n  "compact_summary": "pre-dispatch receipt parity observed"\n}\n' \
+        "$run_id" "$task_id" >"$run_dir/result.json"
+    fi
+  else
+    write_done "pre-dispatch receipt parity observed"
+  fi
+  write_handoff "worker 본문에서 dispatch receipt parity를 확인했습니다."
+  exit 0
+fi
+
 case "$task_id" in
+  YARD-TRANSIENT)
+    assert_exact_receipts
+    if [[ " $* " == *" resume "* ]]; then
+      write_done "transient retry receipt parity observed"
+    else
+      printf '{"type":"thread.started","thread_id":"11111111-1111-4111-8111-111111111111"}\n'
+      exit 75
+    fi
+    ;;
+  YARD-EXACT-REDIRECT)
+    assert_exact_receipts
+    if grep -q 'Explicit continuation packet' <<<"$packet"; then
+      write_done "redirect receipt parity observed"
+    else
+      write_handoff "checkpoint before exact redirect"
+      child_pid=''
+      trap '[[ -z "$child_pid" ]] || kill "$child_pid" 2>/dev/null || true; exit 143' TERM INT
+      while true; do
+        sleep 30 &
+        child_pid=$!
+        wait "$child_pid"
+      done
+    fi
+    ;;
   YARD-ASK)
     printf 'ask worker public context before question\n'
     printf 'ask worker diagnostic stream\n' >&2
@@ -85,6 +155,7 @@ case "$task_id" in
     fi
     ;;
   YARD-NATIVE)
+    assert_exact_receipts
     if [[ "$native_adapter" != true ]]; then
       printf 'native fixture requires the codex adapter\n' >&2
       exit 66

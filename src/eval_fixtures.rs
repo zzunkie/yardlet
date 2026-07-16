@@ -243,6 +243,7 @@ fn task(id: &str, state: TaskState, kind: &str) -> Task {
         kind: kind.to_string(),
         preferred_worker: String::new(),
         model: String::new(),
+        fallback_enabled: None,
         effort: String::new(),
         depends_on: Vec::new(),
         skills: Vec::new(),
@@ -255,6 +256,7 @@ fn task(id: &str, state: TaskState, kind: &str) -> Task {
         interaction: None,
         worker_rationale: None,
         provenance: String::new(),
+        routing_provenance: None,
     }
 }
 

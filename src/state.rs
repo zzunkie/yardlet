@@ -2195,6 +2195,7 @@ impl Workspace {
             kind: input.kind,
             preferred_worker: input.preferred_worker,
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: input.depends_on,
             skills: Vec::new(),
@@ -2207,6 +2208,7 @@ impl Workspace {
             interaction: None,
             worker_rationale: Some("added directly by user with yardlet add".to_string()),
             provenance: "user-added".to_string(),
+            routing_provenance: None,
         };
         queue.tasks.push(task.clone());
         self.save_queue_locked(&_lock, &queue)?;
@@ -4528,6 +4530,14 @@ pub fn save_yaml<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
+pub fn save_yaml_atomic<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_str_atomic(path, &yaml::to_string(value)?)
+}
+
+pub(crate) fn save_private_yaml_atomic<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_private_str_atomic(path, &yaml::to_string(value)?)
+}
+
 pub fn save_config_preserving_format(path: &Path, config: &YardConfig) -> Result<bool> {
     let current: YardConfig = load_yaml(path)?;
     let mut edits = Vec::new();
@@ -5126,6 +5136,34 @@ pub fn write_str_atomic(path: &Path, contents: &str) -> Result<()> {
         .unwrap_or("state");
     let tmp = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
     let mut file = fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing {}", tmp.display()))?;
+    fs::rename(&tmp, path)
+        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+    Ok(())
+}
+
+fn write_private_str_atomic(path: &Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("private-state");
+    let tmp = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&tmp)
+        .with_context(|| format!("creating private snapshot {}", tmp.display()))?;
     file.write_all(contents.as_bytes())
         .with_context(|| format!("writing {}", tmp.display()))?;
     file.sync_all()
@@ -6249,6 +6287,7 @@ records:
             kind: "implementation".to_string(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: Vec::new(),
             skills: Vec::new(),
@@ -6261,6 +6300,7 @@ records:
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         });
         ws.save_queue(&queue).unwrap();
 
