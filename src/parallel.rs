@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::packet::{self, PacketInputs};
 use crate::schemas::{RunnableClass, Task, TaskState, WorkQueue, WorkerProfile};
-use crate::state::{self, append_str, write_str, Workspace};
+use crate::state::{self, write_str, Workspace};
 use crate::{evaluator, guard, inspect, routing, run, workers};
 
 fn is_verifier(task: &Task) -> bool {
@@ -740,7 +740,7 @@ pub fn run_batch<F: FnMut(&str)>(
         };
         let next = report.next_state;
         if let Some(note) = &failover_note {
-            if let Err(e) = append_failover_note(&p.run_dir, note) {
+            if let Err(e) = run::append_failover_note(&p.run_dir, note) {
                 on_event(&format!(
                     "{}: failed to append failover note: {e}",
                     p.task.id
@@ -769,15 +769,6 @@ fn record_failover(run_dir: &Path, from: &str, to: &str, reason: &str) {
         &run_dir.join("failover.json"),
         &serde_json::to_string_pretty(&event).unwrap_or_default(),
     );
-}
-
-fn append_failover_note(run_dir: &Path, note: &str) -> Result<()> {
-    let mut md = String::from("\n## Worker failover\n\n");
-    md.push_str(note);
-    md.push('\n');
-    append_str(&run_dir.join("checkpoint.md"), &md)?;
-    append_str(&run_dir.join("handoff.md"), &md)?;
-    Ok(())
 }
 
 pub(crate) enum Integration {
@@ -3267,6 +3258,47 @@ exit 0
 
         sh_git(&wt, &["checkout", "-q", branch]);
         remove_worktree(&root, &wt, branch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parallel_failover_note_only_handoff_stays_core_authored() {
+        // The parallel path appends its failover note through the shared core
+        // helper (run::append_failover_note); a handoff.md holding nothing but
+        // those appended sections must be classified worker_authored=false at
+        // finalization, exactly like the serial path.
+        let root = std::env::temp_dir().join(format!(
+            "yard-parallel-failover-note-only-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Both note shapes the parallel path emits.
+        run::append_failover_note(
+            &root,
+            "worker failover: codex -> claude-code; codex exited without result.json",
+        )
+        .unwrap();
+        run::append_failover_note(
+            &root,
+            "worker failover unavailable after claude-code exited without result.json: \
+             no ready worker",
+        )
+        .unwrap();
+        assert!(root.join("handoff.md").is_file());
+
+        let entries = run::plan_finalization_artifact_entries(&root);
+        let handoff_worker_authored = entries
+            .iter()
+            .find(|(name, _, _)| *name == "handoff.md")
+            .map(|(_, _, worker_authored)| *worker_authored)
+            .expect("missing handoff.md finalization entry");
+        assert!(
+            !handoff_worker_authored,
+            "a note-only handoff.md written by the parallel failover path must be \
+             recorded worker_authored=false"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
