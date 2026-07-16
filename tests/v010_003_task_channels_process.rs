@@ -710,6 +710,34 @@ mod unix {
     }
 
     #[test]
+    fn codex_unsaturated_publisher_preserves_canonical_event_tail() {
+        let fixture = FixtureWorkspace::new("codex-unsaturated-publisher-tail");
+        fixture.write_queue(
+            "  - id: YARD-CODEX-TAIL\n    title: Codex unsaturated publisher tail\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n",
+        );
+
+        fixture.run(&["run", "--task", "YARD-CODEX-TAIL", "--execute"]);
+
+        let channel = channel_dir(&fixture.root, "YARD-CODEX-TAIL");
+        let attempts = yaml_dir(&channel.join("attempts"));
+        assert_eq!(attempts.len(), 1);
+        let attempt_id = string(&attempts[0], "attempt_id");
+        let events = yaml_dir(&channel.join("events"));
+        let messages = events
+            .iter()
+            .filter(|event| {
+                string(event, "event_type") == "worker.message" && event["attempt_id"] == attempt_id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(messages.len(), 64, "canonical message tail was truncated");
+        assert_eq!(
+            string(&messages[63]["payload"], "text"),
+            "canonical tail 64"
+        );
+        assert_eq!(task_state(&fixture.root, "YARD-CODEX-TAIL"), "done");
+    }
+
+    #[test]
     fn running_redirect_records_stop_checkpoint_guidance_and_restart_dedupe() {
         let fixture = FixtureWorkspace::new("running-redirect");
         fixture.write_queue(

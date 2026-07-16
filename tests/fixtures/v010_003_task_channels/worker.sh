@@ -131,6 +131,17 @@ case "$task_id" in
       write_question "native resume backpressure를 재현할까요?"
     fi
     ;;
+  YARD-CODEX-TAIL)
+    if [[ "$native_adapter" != true ]]; then
+      printf 'codex tail fixture requires the codex adapter\n' >&2
+      exit 66
+    fi
+    write_done "Codex unsaturated tail fixture 완료"
+    printf '{"type":"thread.started","thread_id":"11111111-1111-4111-8111-111111111111"}\n'
+    for index in $(seq 1 64); do
+      printf '{"type":"item.completed","item":{"id":"tail_%s","type":"agent_message","text":"canonical tail %s"}}\n' "$index" "$index"
+    done
+    ;;
   YARD-REDIRECT)
     if grep -q 'Explicit continuation packet' <<<"$packet"; then
       printf 'redirected worker public completion\n'
