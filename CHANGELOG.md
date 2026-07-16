@@ -17,6 +17,12 @@
   the worker's `handoff.md`; integration and non-blocking follow-up notes still
   append to the preserved worker handoff.
 
+- **Finalization artifact records classify the real handoff author.** The
+  `handoff.md` artifact entry is no longer hard-coded `worker_authored=false`:
+  a worker-authored handoff is classified `true` and an evaluator-fallback
+  handoff stays `false`, captured before the fallback writer can create the
+  file.
+
 - **Passing reviews remain resolvable when auto-commit is disabled.** A review
   whose structured verdict and validation pass now stays `Partial` for manual
   integration instead of being reclassified as a failed review with no
