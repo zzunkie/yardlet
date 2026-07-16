@@ -665,6 +665,7 @@ mod tests {
             kind: "implementation".into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -677,6 +678,7 @@ mod tests {
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         }
     }
 
@@ -736,6 +738,7 @@ mod tests {
             kind: "implementation".into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -748,6 +751,7 @@ mod tests {
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
 
         let e = evaluate(&dir, "run-x", &t, Some(&[]));
@@ -1169,6 +1173,7 @@ exit 89
             kind: "implementation".into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -1181,6 +1186,7 @@ exit 89
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
         // The worker wrote the canonical queue directly: a fatal violation even
         // though it claimed done — propose -> ingest is the only allowed path.
@@ -1224,6 +1230,7 @@ exit 89
             kind: kind.into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -1236,6 +1243,7 @@ exit 89
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
         t.kind = kind.into();
         // Some(&[]) = git evidence available, nothing forbidden changed (these
@@ -1267,6 +1275,7 @@ exit 89
             kind: "implementation".into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -1279,6 +1288,7 @@ exit 89
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
         // The real on-disk diff shows it actually wrote .env.
         let actual = vec!["src/main.rs".to_string(), ".env".to_string()];
@@ -1431,6 +1441,7 @@ exit 89
             kind: "implementation".into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -1443,6 +1454,7 @@ exit 89
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
         t.kind = "implementation".into();
         // None = no git evidence: the forbidden gate fails closed, so a worker's
@@ -1493,6 +1505,7 @@ exit 89
             kind: String::new(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -1505,6 +1518,7 @@ exit 89
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
 
         let eval = evaluate(&dir, "run-x", &t, Some(&[]));

@@ -17,7 +17,9 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::guard::{self, Readiness};
-use crate::schemas::{BillingPolicy, Task, WorkersFile};
+use crate::schemas::{
+    BillingPolicy, ResolvedWorkerSelection, RoutingProvenance, Task, WorkersFile,
+};
 use crate::state::Workspace;
 
 /// Machine-managed learned overrides (written by `yardlet routing apply`), kept in
@@ -39,11 +41,25 @@ pub fn load_overrides(ws: &Workspace) -> RoutingOverrides {
         .unwrap_or_default()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Resolved {
     pub worker_id: String,
     pub bin: PathBuf,
     pub reason: String,
+    pub model: String,
+    pub fallback_enabled: bool,
+    pub routing_provenance: RoutingProvenance,
+}
+
+impl Resolved {
+    pub fn selection(&self) -> ResolvedWorkerSelection {
+        ResolvedWorkerSelection {
+            worker_id: self.worker_id.clone(),
+            model: self.model.clone(),
+            fallback_enabled: self.fallback_enabled,
+            routing_provenance: self.routing_provenance.clone(),
+        }
+    }
 }
 
 pub fn resolve_worker_for_task(
@@ -53,6 +69,10 @@ pub fn resolve_worker_for_task(
     override_w: Option<&str>,
     task: &Task,
 ) -> Result<Resolved> {
+    let fallback_enabled = task.fallback_enabled.unwrap_or_else(|| {
+        task.preferred_worker.trim().is_empty() || workers.routing.allow_preferred_worker_failover
+    });
+    validate_recorded_lineage(task, override_w, fallback_enabled)?;
     let overrides = load_overrides(ws);
     let required: Vec<String> = task
         .required_capabilities
@@ -93,12 +113,12 @@ pub fn resolve_worker_for_task(
         }
     }
 
-    if candidate.reason == "planner preferred"
+    let resolved = if candidate.reason == "planner preferred"
         && !task.preferred_worker.trim().is_empty()
-        && !workers.routing.allow_preferred_worker_failover
+        && !fallback_enabled
     {
         let pinned = candidate.worker_id.clone();
-        return resolve_order(
+        resolve_order(
             workers,
             billing,
             pinned.clone(),
@@ -109,16 +129,17 @@ pub fn resolve_worker_for_task(
             anyhow!(
                 "preferred worker '{pinned}' is not invocable; cross-worker fallback requires explicit opt-in with routing.allow_preferred_worker_failover"
             )
-        });
-    }
-
-    resolve_candidate(
-        workers,
-        billing,
-        candidate.worker_id,
-        candidate.reason,
-        &required,
-    )
+        })?
+    } else {
+        resolve_candidate(
+            workers,
+            billing,
+            candidate.worker_id,
+            candidate.reason,
+            &required,
+        )?
+    };
+    complete_resolution(workers, task, resolved, fallback_enabled)
 }
 
 pub fn resolve_failover_worker_for_task(
@@ -127,8 +148,11 @@ pub fn resolve_failover_worker_for_task(
     failed_worker: &str,
     task: &Task,
 ) -> Result<Resolved> {
-    if !task.preferred_worker.trim().is_empty() && !workers.routing.allow_preferred_worker_failover
-    {
+    let fallback_enabled = task.fallback_enabled.unwrap_or_else(|| {
+        task.preferred_worker.trim().is_empty() || workers.routing.allow_preferred_worker_failover
+    });
+    validate_recorded_lineage(task, None, fallback_enabled)?;
+    if !fallback_enabled {
         return Err(anyhow!(
             "task pinned preferred worker '{}'; cross-worker failover requires explicit opt-in with routing.allow_preferred_worker_failover",
             task.preferred_worker
@@ -165,7 +189,142 @@ pub fn resolve_failover_worker_for_task(
             "no alternate worker{cap_note} after excluding '{failed_worker}'"
         ));
     }
-    resolve_order(workers, billing, order[0].clone(), "failover", &order)
+    let resolved = resolve_order(workers, billing, order[0].clone(), "failover", &order)?;
+    complete_resolution(workers, task, resolved, fallback_enabled)
+}
+
+fn explicit(value: &str) -> bool {
+    !value.trim().is_empty() && !value.eq_ignore_ascii_case("auto")
+}
+
+fn validate_recorded_lineage(
+    task: &Task,
+    override_w: Option<&str>,
+    fallback_enabled: bool,
+) -> Result<()> {
+    let Some(provenance) = &task.routing_provenance else {
+        return Ok(());
+    };
+    if provenance.governing_task_id.trim().is_empty()
+        || provenance.governing_worker_id.trim().is_empty()
+        || provenance.governing_model.trim().is_empty()
+    {
+        return Err(anyhow!(
+            "task '{}' has incomplete governing routing provenance",
+            task.id
+        ));
+    }
+    if !provenance.governing_fallback_enabled {
+        if task.preferred_worker != provenance.governing_worker_id {
+            return Err(anyhow!(
+                "task '{}' worker '{}' conflicts with governing worker '{}'",
+                task.id,
+                task.preferred_worker,
+                provenance.governing_worker_id
+            ));
+        }
+        if let Some(override_w) = override_w.filter(|value| !value.trim().is_empty()) {
+            if override_w != provenance.governing_worker_id {
+                return Err(anyhow!(
+                    "run override '{}' conflicts with task '{}' governing worker '{}'",
+                    override_w,
+                    task.id,
+                    provenance.governing_worker_id
+                ));
+            }
+        }
+    }
+    if !explicit(&task.model) || task.model != provenance.governing_model {
+        return Err(anyhow!(
+            "task '{}' model '{}' conflicts with governing model '{}'",
+            task.id,
+            task.model,
+            provenance.governing_model
+        ));
+    }
+    if fallback_enabled != provenance.governing_fallback_enabled {
+        return Err(anyhow!(
+            "task '{}' fallback_enabled={} conflicts with governing fallback_enabled={}",
+            task.id,
+            fallback_enabled,
+            provenance.governing_fallback_enabled
+        ));
+    }
+    Ok(())
+}
+
+fn complete_resolution(
+    workers: &WorkersFile,
+    task: &Task,
+    mut resolved: Resolved,
+    fallback_enabled: bool,
+) -> Result<Resolved> {
+    let profile = workers
+        .workers
+        .iter()
+        .find(|profile| profile.id == resolved.worker_id)
+        .ok_or_else(|| anyhow!("resolved worker '{}' is not configured", resolved.worker_id))?;
+    let model = if explicit(&task.model) {
+        task.model.trim().to_string()
+    } else {
+        profile.model.trim().to_string()
+    };
+    let provenance = if let Some(recorded) = &task.routing_provenance {
+        if !recorded.governing_fallback_enabled
+            && resolved.worker_id != recorded.governing_worker_id
+        {
+            return Err(anyhow!(
+                "resolved worker '{}' conflicts with task '{}' governing worker '{}'",
+                resolved.worker_id,
+                task.id,
+                recorded.governing_worker_id
+            ));
+        }
+        if model != recorded.governing_model {
+            return Err(anyhow!(
+                "resolved model '{}' conflicts with task '{}' governing model '{}'",
+                model,
+                task.id,
+                recorded.governing_model
+            ));
+        }
+        recorded.clone()
+    } else {
+        RoutingProvenance {
+            governing_task_id: task.id.clone(),
+            governing_worker_id: resolved.worker_id.clone(),
+            governing_model: model.clone(),
+            governing_fallback_enabled: fallback_enabled,
+            worker_source: resolved.reason.clone(),
+            model_source: if explicit(&task.model) {
+                "task.model".to_string()
+            } else if model.is_empty() {
+                "worker_cli.default".to_string()
+            } else {
+                "worker_profile.model".to_string()
+            },
+            fallback_source: if task.fallback_enabled.is_some() {
+                "task.fallback_enabled".to_string()
+            } else if task.preferred_worker.trim().is_empty() {
+                "routing.unpinned_default".to_string()
+            } else {
+                "workspace.routing.allow_preferred_worker_failover".to_string()
+            },
+            worker_overridden: resolved.reason == "run override",
+            model_overridden: explicit(&task.model),
+            fallback_overridden: task.fallback_enabled.is_some(),
+        }
+    };
+    if task.routing_provenance.is_some() && model.is_empty() {
+        return Err(anyhow!(
+            "task '{}' exact routing lineage resolved an empty model",
+            task.id
+        ));
+    }
+    resolved.model = model;
+    resolved.fallback_enabled = fallback_enabled;
+    resolved.routing_provenance = provenance;
+    Ok(resolved)
 }
 
 fn resolve_candidate(
@@ -226,6 +385,9 @@ fn resolve_order(
                     worker_id: id.clone(),
                     bin,
                     reason,
+                    model: String::new(),
+                    fallback_enabled: false,
+                    routing_provenance: RoutingProvenance::default(),
                 });
             }
         }
@@ -417,6 +579,55 @@ mod tests {
             candidate_for(&w, &ov, None, "", "implementation").0,
             "codex"
         );
+    }
+
+    #[test]
+    fn dispatch_rejects_exact_lineage_model_and_fallback_conflicts() {
+        let workers: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nrouting:\n  default_worker: codex\n  fallback_order: [codex]\nworkers:\n  - id: codex\n    model: gpt-5.6-sol\n    invocation: { command: bash }\n",
+        )
+        .unwrap();
+        let exact = || -> Task {
+            crate::yaml::from_str(
+                "id: YARD-002\ntitle: inherited\npreferred_worker: codex\nmodel: gpt-5.6-sol\nfallback_enabled: false\nrouting_provenance:\n  governing_task_id: YARD-001\n  governing_worker_id: codex\n  governing_model: gpt-5.6-sol\n  governing_fallback_enabled: false\n  worker_source: governing_task.inherited\n  model_source: governing_task.inherited\n  fallback_source: governing_task.inherited\n",
+            )
+            .unwrap()
+        };
+        let root = std::env::temp_dir().join(format!(
+            "yard-routing-exact-dispatch-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let billing = BillingPolicy::default();
+
+        let resolved = resolve_worker_for_task(&ws, &workers, &billing, None, &exact()).unwrap();
+        assert_eq!(resolved.model, "gpt-5.6-sol");
+        assert!(!resolved.fallback_enabled);
+
+        let mut model_conflict = exact();
+        model_conflict.model = "other".into();
+        assert!(
+            resolve_worker_for_task(&ws, &workers, &billing, None, &model_conflict)
+                .unwrap_err()
+                .to_string()
+                .contains("governing model")
+        );
+
+        let mut fallback_conflict = exact();
+        fallback_conflict.fallback_enabled = Some(true);
+        assert!(
+            resolve_worker_for_task(&ws, &workers, &billing, None, &fallback_conflict)
+                .unwrap_err()
+                .to_string()
+                .contains("governing fallback_enabled")
+        );
+
+        let mut both = exact();
+        both.model = "other".into();
+        both.fallback_enabled = Some(true);
+        assert!(resolve_worker_for_task(&ws, &workers, &billing, None, &both).is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

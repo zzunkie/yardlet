@@ -591,6 +591,12 @@ pub(crate) struct RunRecord {
     pub intent_id: String,
     #[serde(default)]
     pub worker: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub fallback_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_provenance: Option<crate::schemas::RoutingProvenance>,
     /// Lifecycle: `prepared`/`running` at spawn, then sealed by `finalize_run`
     /// to the run's terminal outcome (`done`/`failed`/`partial`/`needs_user`/…).
     #[serde(default)]
@@ -636,6 +642,44 @@ pub(crate) struct RunRecord {
     /// Exact commits newly reachable from baseline through integration_oid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned_oids: Vec<String>,
+}
+
+impl RunRecord {
+    fn resolved_selection(&self) -> Option<crate::schemas::ResolvedWorkerSelection> {
+        let routing_provenance = self.routing_provenance.clone()?;
+        if self.worker.trim().is_empty() || self.model.trim().is_empty() {
+            return None;
+        }
+        Some(crate::schemas::ResolvedWorkerSelection {
+            worker_id: self.worker.clone(),
+            model: self.model.clone(),
+            fallback_enabled: self.fallback_enabled,
+            routing_provenance,
+        })
+    }
+}
+
+pub(crate) fn update_run_selection(
+    run_dir: &std::path::Path,
+    selection: &crate::schemas::ResolvedWorkerSelection,
+) -> Result<()> {
+    let path = run_dir.join("run.yaml");
+    let mut record: RunRecord = state::load_yaml(&path)?;
+    record.worker = selection.worker_id.clone();
+    record.model = selection.model.clone();
+    record.fallback_enabled = selection.fallback_enabled;
+    record.routing_provenance = Some(selection.routing_provenance.clone());
+    state::save_yaml_atomic(&path, &record)
+}
+
+pub(crate) fn apply_selection_to_task(
+    task: &mut crate::schemas::Task,
+    selection: &crate::schemas::ResolvedWorkerSelection,
+) {
+    task.preferred_worker = selection.worker_id.clone();
+    task.model = selection.model.clone();
+    task.fallback_enabled = Some(selection.fallback_enabled);
+    task.routing_provenance = Some(selection.routing_provenance.clone());
 }
 
 fn is_unknown_integration_provenance(value: &IntegrationProvenance) -> bool {
@@ -1430,7 +1474,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 .ok_or_else(|| anyhow!("no eligible queued task to run"))?
         }
     };
-    let task = queue.tasks[idx].clone();
+    let mut task = queue.tasks[idx].clone();
 
     // Capability backstop: if this task requires a capability no enabled worker
     // declares, park it Blocked HERE — before any run dir or worker spawn —
@@ -1604,6 +1648,17 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         .as_ref()
         .map(|r| r.worker_id.clone())
         .unwrap_or_else(|_| candidate_id.clone());
+    let resolved_selection = resolved.as_ref().ok().map(|resolved| resolved.selection());
+    if opts.execute {
+        if let Some(selection) = resolved_selection
+            .as_ref()
+            .filter(|selection| !selection.model.trim().is_empty())
+        {
+            apply_selection_to_task(&mut task, selection);
+            queue.tasks[idx] = task.clone();
+            ws.save_queue_locked(&planning_lock, &queue)?;
+        }
+    }
 
     // ---- run directory ---------------------------------------------------
     let base_run_id = format!(
@@ -1698,6 +1753,16 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         task_id: task.id.clone(),
         intent_id: queue.intent_id.clone(),
         worker: worker_id.clone(),
+        model: resolved_selection
+            .as_ref()
+            .map(|selection| selection.model.clone())
+            .unwrap_or_default(),
+        fallback_enabled: resolved_selection
+            .as_ref()
+            .is_some_and(|selection| selection.fallback_enabled),
+        routing_provenance: resolved_selection
+            .as_ref()
+            .map(|selection| selection.routing_provenance.clone()),
         state: if opts.execute { "running" } else { "prepared" }.to_string(),
         started_at: Local::now().to_rfc3339(),
         completed_at: None,
@@ -1725,9 +1790,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         integration_cleanup_complete: false,
         owned_oids: Vec::new(),
     };
-    state::save_yaml(&run_dir.join("run.yaml"), &record)?;
+    state::save_yaml_atomic(&run_dir.join("run.yaml"), &record)?;
     if serial_worktree.is_some() {
-        state::save_yaml(&worker_run_dir.join("run.yaml"), &record)?;
+        state::save_yaml_atomic(&worker_run_dir.join("run.yaml"), &record)?;
         write_str(&workers::packet_path(worker_run_dir), &packet_text)?;
     }
 
@@ -1778,6 +1843,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     }
     let resolved = resolved?; // hard stop if no ready worker
     let mut active_worker_id = worker_id.clone();
+    let mut active_selection = resolved.selection();
     let mut active_reason = resolved.reason;
     let mut active_bin = resolved.bin;
     let profile = find_worker(&workers.workers, &active_worker_id)?;
@@ -1926,8 +1992,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         first_continuation,
         None,
     )?;
-    let mut outcome = match workers::spawn_attempt_with_sink(
+    let mut outcome = match workers::spawn_resolved_attempt_with_sink(
         &eff_profile,
+        &active_selection,
         &active_bin,
         &packet_text,
         worker_run_dir,
@@ -2006,8 +2073,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         )?;
         current_attempt = begun.0;
         current_capture = begun.1;
-        outcome = match workers::spawn_attempt_with_sink(
+        outcome = match workers::spawn_resolved_attempt_with_sink(
             &eff_profile,
+            &active_selection,
             &active_bin,
             cont,
             worker_run_dir,
@@ -2092,10 +2160,15 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 record_failover(&run_dir, &from, &to, &note);
 
                 active_worker_id = to;
+                active_selection = alt.selection();
                 active_reason = format!("failover from {from} ({})", alt.reason);
                 active_bin = alt.bin;
                 let profile = find_worker(&workers.workers, &active_worker_id)?;
                 eff_profile = workers::effective_profile(profile, &task.model, &task.effort);
+                update_run_selection(&run_dir, &active_selection)?;
+                if worker_run_dir != run_dir.as_path() {
+                    update_run_selection(worker_run_dir, &active_selection)?;
+                }
                 env = guard::sanitized_worker_env_for(&billing, &eff_profile.invocation.pass_env)
                     .map_err(|e| anyhow!(e))?;
                 timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
@@ -2140,8 +2213,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 )?;
                 current_attempt = begun.0;
                 current_capture = begun.1;
-                outcome = match workers::spawn_attempt_with_sink(
+                outcome = match workers::spawn_resolved_attempt_with_sink(
                     &eff_profile,
+                    &active_selection,
                     &active_bin,
                     &failover_packet,
                     worker_run_dir,
@@ -4092,6 +4166,7 @@ fn save_task_state_on_latest_queue_locked(
         &[],
         &[],
         None,
+        None,
         cause,
         detail,
         actor,
@@ -4233,6 +4308,7 @@ fn finalize_on_latest_queue_locked(
     state: TaskState,
     intent_allowed_scope: &[String],
     follow_ups: &[crate::schemas::FollowUpTask],
+    governing: Option<&crate::schemas::ResolvedWorkerSelection>,
     workers: Option<&WorkersFile>,
     cause: TransitionCause,
     detail: &str,
@@ -4250,12 +4326,22 @@ fn finalize_on_latest_queue_locked(
     if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == task_id) {
         let from = t.state;
         t.state = state;
-        let ingested = crate::planner::ingest_follow_ups(
-            &mut latest,
-            intent_allowed_scope,
-            follow_ups,
-            Some(ws),
-        );
+        let ingested = if let Some(governing) = governing {
+            crate::planner::ingest_follow_ups_with_governing(
+                &mut latest,
+                intent_allowed_scope,
+                follow_ups,
+                Some(ws),
+                governing,
+            )?
+        } else {
+            crate::planner::ingest_follow_ups(
+                &mut latest,
+                intent_allowed_scope,
+                follow_ups,
+                Some(ws),
+            )
+        };
         reconcile(&mut latest, &ingested);
         ws.save_queue_locked(lock, &latest)?;
         crate::planner::persist_ingested_decision_questions(ws, &latest, &ingested)?;
@@ -4279,12 +4365,22 @@ fn finalize_on_latest_queue_locked(
             .ok_or_else(|| anyhow!("task {task_id} is missing from fallback queue"))?;
         let from = task.state;
         task.state = state;
-        let ingested = crate::planner::ingest_follow_ups(
-            &mut bootstrapped,
-            intent_allowed_scope,
-            follow_ups,
-            Some(ws),
-        );
+        let ingested = if let Some(governing) = governing {
+            crate::planner::ingest_follow_ups_with_governing(
+                &mut bootstrapped,
+                intent_allowed_scope,
+                follow_ups,
+                Some(ws),
+                governing,
+            )?
+        } else {
+            crate::planner::ingest_follow_ups(
+                &mut bootstrapped,
+                intent_allowed_scope,
+                follow_ups,
+                Some(ws),
+            )
+        };
         reconcile(&mut bootstrapped, &ingested);
         ws.save_queue_locked(lock, &bootstrapped)?;
         crate::planner::persist_ingested_decision_questions(ws, &bootstrapped, &ingested)?;
@@ -5451,6 +5547,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     } else {
         Vec::new()
     };
+    let governing_selection = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
+        .ok()
+        .and_then(|record| record.resolved_selection());
     let ingested = finalize_on_latest_queue_locked(
         ws,
         &queue_lock,
@@ -5459,6 +5558,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         next_state,
         &intent_allowed_scope,
         &follow_ups,
+        governing_selection.as_ref(),
         workers.as_ref(),
         TransitionCause::RunOutcome,
         &format!("worker evaluated task as {}", run_outcome_label(next_state)),
@@ -5686,6 +5786,9 @@ fn seal_run_record(
         task_id: task.id.clone(),
         intent_id: intent_id.to_string(),
         worker: worker_id.to_string(),
+        model: task.model.clone(),
+        fallback_enabled: task.fallback_enabled.unwrap_or(false),
+        routing_provenance: task.routing_provenance.clone(),
         state: String::new(),
         started_at: String::new(),
         completed_at: None,
@@ -6643,6 +6746,7 @@ mod tests {
             kind: String::new(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -6659,6 +6763,7 @@ mod tests {
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         }
     }
 
@@ -9986,6 +10091,9 @@ exit 1
                 task_id: task_id.into(),
                 intent_id: "intent-test".into(),
                 worker: "builder".into(),
+                model: String::new(),
+                fallback_enabled: false,
+                routing_provenance: None,
                 state: "done".into(),
                 started_at: Local::now().to_rfc3339(),
                 completed_at: Some(Local::now().to_rfc3339()),
@@ -10736,6 +10844,9 @@ exit 1
                 task_id: "YARD-STAGED".into(),
                 intent_id: "intent-test".into(),
                 worker: "builder".into(),
+                model: String::new(),
+                fallback_enabled: false,
+                routing_provenance: None,
                 state: "running".into(),
                 started_at: Local::now().to_rfc3339(),
                 completed_at: None,
@@ -10883,6 +10994,9 @@ exit 1
                 task_id: task_id.into(),
                 intent_id: "intent-test".into(),
                 worker: "builder".into(),
+                model: String::new(),
+                fallback_enabled: false,
+                routing_provenance: None,
                 state: "running".into(),
                 started_at: Local::now().to_rfc3339(),
                 completed_at: None,
@@ -11227,6 +11341,8 @@ exit 1
                 skills: vec![],
                 depends_on: vec![],
                 preferred_worker: String::new(),
+                model: String::new(),
+                fallback_enabled: None,
                 required_capabilities: vec![],
                 decision_question: String::new(),
                 worker_rationale: None,

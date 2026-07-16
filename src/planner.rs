@@ -71,6 +71,8 @@ struct PlanTask {
     #[serde(default)]
     model: String,
     #[serde(default)]
+    fallback_enabled: Option<bool>,
+    #[serde(default)]
     effort: String,
     #[serde(default)]
     depends_on: Vec<String>,
@@ -233,6 +235,7 @@ pub fn plan_goal(
         kind: "implementation".to_string(),
         preferred_worker: worker.clone(),
         model: String::new(),
+        fallback_enabled: None,
         effort: String::new(),
         depends_on: vec![],
         skills: vec![],
@@ -249,6 +252,7 @@ pub fn plan_goal(
         interaction: None,
         worker_rationale: Some("express goal (yardlet goal)".to_string()),
         provenance: String::new(),
+        routing_provenance: None,
     }];
     // Express goals bypass the planner, so capability routing is explicit (no
     // magic keywords): pass `--requires <capability>` for a hard route, or
@@ -267,6 +271,7 @@ pub fn plan_goal(
             kind: "review".to_string(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec!["YARD-001".to_string()],
             skills: vec![],
@@ -285,6 +290,7 @@ pub fn plan_goal(
             interaction: None,
             worker_rationale: Some("verifier is never the doer".to_string()),
             provenance: String::new(),
+            routing_provenance: None,
         });
     }
 
@@ -905,6 +911,7 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
             // (precedence: planner preferred -> learned rule -> default).
             preferred_worker: pt.preferred_worker.clone(),
             model: pt.model.clone(),
+            fallback_enabled: pt.fallback_enabled,
             effort: pt.effort.clone(),
             depends_on: sanitize_deps(&pt.depends_on, &prior_ids),
             skills: pt.skills.clone(),
@@ -927,6 +934,7 @@ fn append_plan_tasks(queue: &mut WorkQueue, plan: &PlanningResult) -> usize {
             interaction: None,
             worker_rationale: pt.worker_rationale.clone(),
             provenance: String::new(),
+            routing_provenance: None,
         };
         queue.tasks.push(task);
     }
@@ -1029,6 +1037,36 @@ pub(crate) fn ingest_follow_ups(
     follow_ups: &[crate::schemas::FollowUpTask],
     ws: Option<&crate::state::Workspace>,
 ) -> Vec<String> {
+    ingest_follow_ups_inner(queue, _intent_allowed_scope, follow_ups, ws, None)
+        .expect("legacy follow-up ingestion has no governing selection conflicts")
+}
+
+pub(crate) fn ingest_follow_ups_with_governing(
+    queue: &mut WorkQueue,
+    intent_allowed_scope: &[String],
+    follow_ups: &[crate::schemas::FollowUpTask],
+    ws: Option<&crate::state::Workspace>,
+    governing: &crate::schemas::ResolvedWorkerSelection,
+) -> Result<Vec<String>> {
+    let mut staged = queue.clone();
+    let ingested = ingest_follow_ups_inner(
+        &mut staged,
+        intent_allowed_scope,
+        follow_ups,
+        ws,
+        Some(governing),
+    )?;
+    *queue = staged;
+    Ok(ingested)
+}
+
+fn ingest_follow_ups_inner(
+    queue: &mut WorkQueue,
+    _intent_allowed_scope: &[String],
+    follow_ups: &[crate::schemas::FollowUpTask],
+    ws: Option<&crate::state::Workspace>,
+    governing: Option<&crate::schemas::ResolvedWorkerSelection>,
+) -> Result<Vec<String>> {
     let mut next_num = queue
         .tasks
         .iter()
@@ -1090,6 +1128,79 @@ pub(crate) fn ingest_follow_ups(
         // clean resolver). Reserve capabilities for a worker's tool/license need.
         let decision = fu.decision_question.trim();
         let is_decision = !decision.is_empty();
+        let (preferred_worker, model, fallback_enabled, routing_provenance) = if let Some(
+            governing,
+        ) = governing
+        {
+            let requested_worker = fu.preferred_worker.trim();
+            let requested_model = fu.model.trim();
+            let model_explicit =
+                !requested_model.is_empty() && !requested_model.eq_ignore_ascii_case("auto");
+            if governing.worker_id.trim().is_empty() || governing.model.trim().is_empty() {
+                bail!(
+                        "governing routing selection for '{}' is incomplete: worker/model must be non-empty",
+                        governing.routing_provenance.governing_task_id
+                    );
+            }
+            if !requested_worker.is_empty() && requested_worker != governing.worker_id {
+                bail!(
+                        "worker-proposed follow-up '{}' conflicts with governing worker '{}': requested '{}'",
+                        title,
+                        governing.worker_id,
+                        requested_worker
+                    );
+            }
+            if model_explicit && requested_model != governing.model {
+                bail!(
+                        "worker-proposed follow-up '{}' conflicts with governing model '{}': requested '{}'",
+                        title,
+                        governing.model,
+                        requested_model
+                    );
+            }
+            if let Some(requested) = fu.fallback_enabled {
+                if requested != governing.fallback_enabled {
+                    bail!(
+                            "worker-proposed follow-up '{}' conflicts with governing fallback_enabled={}: requested {}",
+                            title,
+                            governing.fallback_enabled,
+                            requested
+                        );
+                }
+            }
+            let mut provenance = governing.routing_provenance.clone();
+            provenance.worker_source = if requested_worker.is_empty() {
+                "governing_task.inherited".to_string()
+            } else {
+                "worker_proposed.explicit_same".to_string()
+            };
+            provenance.model_source = if model_explicit {
+                "worker_proposed.explicit_same".to_string()
+            } else {
+                "governing_task.inherited".to_string()
+            };
+            provenance.fallback_source = if fu.fallback_enabled.is_some() {
+                "worker_proposed.explicit_same".to_string()
+            } else {
+                "governing_task.inherited".to_string()
+            };
+            provenance.worker_overridden = !requested_worker.is_empty();
+            provenance.model_overridden = model_explicit;
+            provenance.fallback_overridden = fu.fallback_enabled.is_some();
+            (
+                governing.worker_id.clone(),
+                governing.model.clone(),
+                Some(governing.fallback_enabled),
+                Some(provenance),
+            )
+        } else {
+            (
+                fu.preferred_worker.clone(),
+                fu.model.clone(),
+                fu.fallback_enabled,
+                None,
+            )
+        };
         queue.tasks.push(Task {
             id: id.clone(),
             title: title.to_string(),
@@ -1101,8 +1212,9 @@ pub(crate) fn ingest_follow_ups(
             priority,
             risk: fu.risk.clone(),
             kind: fu.kind.clone(),
-            preferred_worker: fu.preferred_worker.clone(),
-            model: String::new(),
+            preferred_worker,
+            model,
+            fallback_enabled,
             effort: String::new(),
             depends_on: sanitize_deps(&fu.depends_on, &prior_ids),
             skills: fu.skills.clone(),
@@ -1134,6 +1246,7 @@ pub(crate) fn ingest_follow_ups(
             }),
             worker_rationale: rationale,
             provenance: "worker-proposed".to_string(),
+            routing_provenance,
         });
         // HARD placement: make each named existing task depend on this new one.
         inject_runs_before(queue, &id, &fu.runs_before);
@@ -1159,7 +1272,7 @@ pub(crate) fn ingest_follow_ups(
             }
         }
     }
-    ingested
+    Ok(ingested)
 }
 
 pub(crate) fn follow_up_scope_is_workspace_local(follow_up: &crate::schemas::FollowUpTask) -> bool {
@@ -1537,6 +1650,7 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             // Blank stays blank so routing's configured default_worker applies.
             preferred_worker: t.preferred_worker.clone(),
             model: t.model.clone(),
+            fallback_enabled: t.fallback_enabled,
             effort: t.effort.clone(),
             depends_on: sanitize_deps(&t.depends_on, &prior_ids),
             skills: t.skills.clone(),
@@ -1559,6 +1673,7 @@ fn build_queue(intent_id: &str, plan: &PlanningResult) -> WorkQueue {
             interaction: None,
             worker_rationale: t.worker_rationale.clone(),
             provenance: String::new(),
+            routing_provenance: None,
         };
         tasks.push(task);
     }
@@ -1608,6 +1723,7 @@ fn ensure_review_task(tasks: &mut Vec<Task>) {
         kind: "review".to_string(),
         preferred_worker: String::new(), // routing decides (kind overrides apply)
         model: String::new(),
+        fallback_enabled: None,
         effort: String::new(),
         depends_on,
         skills: vec![],
@@ -1630,6 +1746,7 @@ fn ensure_review_task(tasks: &mut Vec<Task>) {
             "deterministic semantic-verification rung: the verifier is never the doer".to_string(),
         ),
         provenance: String::new(),
+        routing_provenance: None,
     });
 }
 
@@ -1926,6 +2043,7 @@ invocation: { command: codex }
                 kind: String::new(),
                 preferred_worker: String::new(),
                 model: String::new(),
+                fallback_enabled: None,
                 effort: String::new(),
                 depends_on: vec![],
                 skills: vec![],
@@ -1938,6 +2056,7 @@ invocation: { command: codex }
                 interaction: None,
                 worker_rationale: None,
                 provenance: String::new(),
+                routing_provenance: None,
             }
         }
         let wf: WorkersFile = serde_yaml_ng::from_str(
@@ -2470,6 +2589,123 @@ routing:
             .contains("coverage gap"));
         // Total: original + one ingested (blank + dup were not added).
         assert_eq!(queue.tasks.len(), 2);
+    }
+
+    #[test]
+    fn governing_exact_model_follow_up_matrix_inherits_or_accepts_only_same_values() {
+        use crate::schemas::{FollowUpTask, ResolvedWorkerSelection, RoutingProvenance};
+        let plan: PlanningResult = serde_json::from_str(
+            r#"{ "summary": "s", "tasks": [{ "id": "YARD-001", "title": "governing", "risk": "low" }] }"#,
+        )
+        .unwrap();
+        let governing = ResolvedWorkerSelection {
+            worker_id: "codex".into(),
+            model: "gpt-5.6-sol".into(),
+            fallback_enabled: false,
+            routing_provenance: RoutingProvenance {
+                governing_task_id: "YARD-001".into(),
+                governing_worker_id: "codex".into(),
+                governing_model: "gpt-5.6-sol".into(),
+                governing_fallback_enabled: false,
+                ..Default::default()
+            },
+        };
+        let mut queue = build_queue("intent-exact", &plan);
+        let ids = ingest_follow_ups_with_governing(
+            &mut queue,
+            &[],
+            &[
+                FollowUpTask {
+                    title: "same both".into(),
+                    preferred_worker: "codex".into(),
+                    model: "gpt-5.6-sol".into(),
+                    fallback_enabled: Some(false),
+                    ..Default::default()
+                },
+                FollowUpTask {
+                    title: "inherit model".into(),
+                    fallback_enabled: Some(false),
+                    ..Default::default()
+                },
+                FollowUpTask {
+                    title: "inherit fallback".into(),
+                    model: "gpt-5.6-sol".into(),
+                    ..Default::default()
+                },
+                FollowUpTask {
+                    title: "inherit both".into(),
+                    ..Default::default()
+                },
+            ],
+            None,
+            &governing,
+        )
+        .unwrap();
+        assert_eq!(ids.len(), 4);
+        for task in queue.tasks.iter().skip(1) {
+            assert_eq!(task.preferred_worker, "codex");
+            assert_eq!(task.model, "gpt-5.6-sol");
+            assert_eq!(task.fallback_enabled, Some(false));
+            assert_eq!(
+                task.routing_provenance.as_ref().unwrap().governing_task_id,
+                "YARD-001"
+            );
+        }
+    }
+
+    #[test]
+    fn governing_exact_model_follow_up_matrix_rejects_conflicts_atomically() {
+        use crate::schemas::{FollowUpTask, ResolvedWorkerSelection, RoutingProvenance};
+        let plan: PlanningResult = serde_json::from_str(
+            r#"{ "summary": "s", "tasks": [{ "id": "YARD-001", "title": "governing", "risk": "low" }] }"#,
+        )
+        .unwrap();
+        let governing = ResolvedWorkerSelection {
+            worker_id: "codex".into(),
+            model: "gpt-5.6-sol".into(),
+            fallback_enabled: false,
+            routing_provenance: RoutingProvenance {
+                governing_task_id: "YARD-001".into(),
+                governing_worker_id: "codex".into(),
+                governing_model: "gpt-5.6-sol".into(),
+                governing_fallback_enabled: false,
+                ..Default::default()
+            },
+        };
+        for (label, follow_up) in [
+            (
+                "model",
+                FollowUpTask {
+                    title: "model conflict".into(),
+                    model: "other".into(),
+                    ..Default::default()
+                },
+            ),
+            (
+                "fallback_enabled",
+                FollowUpTask {
+                    title: "fallback conflict".into(),
+                    fallback_enabled: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "model",
+                FollowUpTask {
+                    title: "both conflicts".into(),
+                    model: "other".into(),
+                    fallback_enabled: Some(true),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let mut queue = build_queue("intent-exact", &plan);
+            let error =
+                ingest_follow_ups_with_governing(&mut queue, &[], &[follow_up], None, &governing)
+                    .unwrap_err();
+            assert!(error.to_string().contains(label), "{error:#}");
+            assert_eq!(queue.tasks.len(), 1, "conflict must not partially ingest");
+        }
     }
 
     #[test]

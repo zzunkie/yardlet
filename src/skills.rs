@@ -1537,6 +1537,7 @@ mod tests {
             kind: "implementation".into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -1549,6 +1550,7 @@ mod tests {
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         }
     }
 
