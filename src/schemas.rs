@@ -917,6 +917,8 @@ impl ResolvedWorkerSelection {
         } else {
             "workspace.routing.allow_preferred_worker_failover"
         };
+        let policy_authorized_failover =
+            provenance.worker_source == "failover" && self.fallback_enabled;
         if baseline.routing_provenance.is_some()
             || self.worker_id.trim().is_empty()
             || self.model.trim().is_empty()
@@ -941,7 +943,8 @@ impl ResolvedWorkerSelection {
             || provenance.fallback_overridden != baseline.fallback_enabled.is_some()
             || (!baseline.preferred_worker.trim().is_empty()
                 && baseline.preferred_worker != self.worker_id
-                && !provenance.worker_overridden)
+                && !provenance.worker_overridden
+                && !policy_authorized_failover)
             || (baseline_model_is_explicit && baseline.model != self.model)
             || baseline
                 .fallback_enabled
