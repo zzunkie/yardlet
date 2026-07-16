@@ -469,6 +469,7 @@ impl ActivatedQueue {
         &self,
         authorized_runs_before: &std::collections::BTreeMap<String, Vec<String>>,
         authorized_capability_clears: &std::collections::BTreeSet<String>,
+        authorized_selections: &std::collections::BTreeMap<String, ResolvedWorkerSelection>,
     ) -> bool {
         let Some(materialized) = self.materialized_queue.as_ref() else {
             return false;
@@ -529,6 +530,14 @@ impl ActivatedQueue {
                             return false;
                         }
                         runtime.required_capabilities = planned.required_capabilities.clone();
+                    }
+                    if let Some(selection) = authorized_selections.get(&runtime.id) {
+                        let Some(normalized) =
+                            selection.normalized_runtime_overlay(planned, &runtime)
+                        else {
+                            return false;
+                        };
+                        runtime = normalized;
                     }
                     matches!(
                         (
@@ -881,6 +890,73 @@ pub struct ResolvedWorkerSelection {
     pub fallback_enabled: bool,
     #[serde(default)]
     pub routing_provenance: RoutingProvenance,
+}
+
+impl ResolvedWorkerSelection {
+    pub fn from_task(task: &Task) -> Option<Self> {
+        let routing_provenance = task.routing_provenance.clone()?;
+        if task.preferred_worker.trim().is_empty() || task.model.trim().is_empty() {
+            return None;
+        }
+        Some(Self {
+            worker_id: task.preferred_worker.clone(),
+            model: task.model.clone(),
+            fallback_enabled: task.fallback_enabled?,
+            routing_provenance,
+        })
+    }
+
+    pub fn normalized_runtime_overlay(&self, baseline: &Task, runtime: &Task) -> Option<Task> {
+        let provenance = &self.routing_provenance;
+        let baseline_model_is_explicit =
+            !baseline.model.trim().is_empty() && !baseline.model.eq_ignore_ascii_case("auto");
+        let expected_fallback_source = if baseline.fallback_enabled.is_some() {
+            "task.fallback_enabled"
+        } else if baseline.preferred_worker.trim().is_empty() {
+            "routing.unpinned_default"
+        } else {
+            "workspace.routing.allow_preferred_worker_failover"
+        };
+        if baseline.routing_provenance.is_some()
+            || self.worker_id.trim().is_empty()
+            || self.model.trim().is_empty()
+            || runtime.preferred_worker != self.worker_id
+            || runtime.model != self.model
+            || runtime.fallback_enabled != Some(self.fallback_enabled)
+            || runtime.routing_provenance.as_ref() != Some(provenance)
+            || provenance.governing_task_id != baseline.id
+            || provenance.governing_worker_id != self.worker_id
+            || provenance.governing_model != self.model
+            || provenance.governing_fallback_enabled != self.fallback_enabled
+            || provenance.worker_source.trim().is_empty()
+            || provenance.model_source
+                != if baseline_model_is_explicit {
+                    "task.model"
+                } else {
+                    "worker_profile.model"
+                }
+            || provenance.fallback_source != expected_fallback_source
+            || provenance.worker_overridden != (provenance.worker_source == "run override")
+            || provenance.model_overridden != baseline_model_is_explicit
+            || provenance.fallback_overridden != baseline.fallback_enabled.is_some()
+            || (!baseline.preferred_worker.trim().is_empty()
+                && baseline.preferred_worker != self.worker_id
+                && !provenance.worker_overridden)
+            || (baseline_model_is_explicit && baseline.model != self.model)
+            || baseline
+                .fallback_enabled
+                .is_some_and(|fallback| fallback != self.fallback_enabled)
+        {
+            return None;
+        }
+
+        let mut normalized = runtime.clone();
+        normalized.preferred_worker = baseline.preferred_worker.clone();
+        normalized.model = baseline.model.clone();
+        normalized.fallback_enabled = baseline.fallback_enabled;
+        normalized.routing_provenance = baseline.routing_provenance.clone();
+        Some(normalized)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

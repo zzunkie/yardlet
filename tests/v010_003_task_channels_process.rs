@@ -276,6 +276,94 @@ mod unix {
         .unwrap();
     }
 
+    fn confirm_exact_codex_task(fixture: &FixtureWorkspace) {
+        let planner = fixture.root.join(".agents/fixture-bin/exact-planner.sh");
+        fs::write(
+            &planner,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'exact-planner 1.0\n'
+  exit 0
+fi
+run_dir="$1"
+mkdir -p "$run_dir"
+cat >"$run_dir/planning-result.json" <<'JSON'
+{
+  "summary": "confirmed exact dispatch fixture",
+  "rationale": "exercise resolved selection stamping after confirmation",
+  "allowed_scope": ["src/run.rs"],
+  "out_of_scope": [],
+  "acceptance": [{"statement": "confirmed exact dispatch completes"}],
+  "ambiguity": {"score": "low", "open_questions": []},
+  "tasks": [{
+    "id": "YARD-EXACT-CONFIRMED",
+    "title": "exact lineage remediation from confirmed plan",
+    "kind": "implementation",
+    "risk": "low",
+    "preferred_worker": "codex",
+    "model": "auto",
+    "fallback_enabled": false,
+    "effort": "auto",
+    "depends_on": [],
+    "skills": [],
+    "required_capabilities": [],
+    "allowed_scope": ["src/run.rs"],
+    "acceptance": ["confirmed exact dispatch completes"],
+    "worker_rationale": "deterministic exact dispatch fixture"
+  }],
+  "questions_for_user": []
+}
+JSON
+"##,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&planner).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&planner, permissions).unwrap();
+        fs::write(
+            fixture.root.join(".agents/workers.yaml"),
+            format!(
+                "schema_version: 1\nworkers:\n  - id: fixture-planner\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-planner\n  fallback_order: [fixture-planner]\n  planning_gate:\n    primary: fixture-planner\n    fallback: \"\"\n",
+                planner.display()
+            ),
+        )
+        .unwrap();
+
+        fixture.run(&[
+            "new",
+            "confirmed exact dispatch fixture",
+            "--worker",
+            "fixture-planner",
+        ]);
+        let show = fixture.run(&["planning", "show", "--json"]);
+        let projection: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+        let proposal = projection["pending_proposals"][0]["proposal_id"]
+            .as_str()
+            .unwrap();
+        fixture.run(&[
+            "planning",
+            "accept",
+            proposal,
+            "--expected-head",
+            "none",
+            "--action-id",
+            "act-exact-dispatch-accept",
+        ]);
+        let show = fixture.run(&["planning", "show", "--json"]);
+        let projection: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+        let head = projection["session"]["current_head"].as_str().unwrap();
+        fixture.run(&[
+            "planning",
+            "confirm",
+            "--expected-head",
+            head,
+            "--action-id",
+            "act-exact-dispatch-confirm",
+        ]);
+        write_exact_codex_workers(fixture, 0);
+    }
+
     fn run_dirs_for_task(root: &Path, task_id: &str) -> Vec<PathBuf> {
         files_below(&root.join(".agents/runs"), "/run.yaml")
             .into_iter()
@@ -324,6 +412,108 @@ mod unix {
             string(&task["routing_provenance"], "governing_task_id"),
             governing_task_id
         );
+    }
+
+    fn mutate_queue_selection(root: &Path, task_id: &str, field: &str) {
+        let path = root.join(".agents/work-queue.yaml");
+        let mut queue = read_yaml(&path);
+        let task = queue["tasks"]
+            .as_sequence_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|task| string(task, "id") == task_id)
+            .unwrap_or_else(|| panic!("queue task {task_id} not found"));
+        match field {
+            "worker" => task["preferred_worker"] = Value::String("claude-code".into()),
+            "model" => task["model"] = Value::String("fable".into()),
+            "fallback" => task["fallback_enabled"] = Value::Bool(true),
+            "provenance" => {
+                task["routing_provenance"]["model_source"] = Value::String("manual".into())
+            }
+            _ => panic!("unknown selection field {field}"),
+        }
+        fs::write(path, serde_yaml_ng::to_string(&queue).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn confirmed_exact_dispatch_stamps_receipted_selection_and_completes() {
+        let fixture = FixtureWorkspace::new("confirmed-exact-dispatch");
+        confirm_exact_codex_task(&fixture);
+
+        fixture.run(&["run", "--task", "YARD-EXACT-CONFIRMED", "--execute"]);
+
+        assert_eq!(task_state(&fixture.root, "YARD-EXACT-CONFIRMED"), "done");
+        assert_exact_queue_task(
+            &fixture.root,
+            "YARD-EXACT-CONFIRMED",
+            "YARD-EXACT-CONFIRMED",
+        );
+        let run_dir = run_dir_for_task(&fixture.root, "YARD-EXACT-CONFIRMED");
+        assert_exact_receipt_pair(&run_dir, "YARD-EXACT-CONFIRMED");
+        let show = fixture.run(&["planning", "show", "--json"]);
+        let projection: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+        assert_eq!(projection["exact_active_parity"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn confirmed_runtime_addition_stamps_the_same_receipted_exact_selection() {
+        let fixture = FixtureWorkspace::new("confirmed-runtime-exact-dispatch");
+        confirm_exact_codex_task(&fixture);
+        fixture.run(&[
+            "add",
+            "exact lineage remediation runtime addition",
+            "--worker",
+            "codex",
+            "--scope",
+            "src/run.rs",
+        ]);
+        let queue = read_yaml(&fixture.root.join(".agents/work-queue.yaml"));
+        let task_id = queue["tasks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|task| string(task, "title") == "exact lineage remediation runtime addition")
+            .map(|task| string(task, "id").to_string())
+            .expect("runtime-added task must be materialized");
+
+        fixture.run(&["run", "--task", &task_id, "--execute"]);
+
+        assert_eq!(task_state(&fixture.root, &task_id), "done");
+        assert_exact_queue_task(&fixture.root, &task_id, &task_id);
+        let run_dir = run_dir_for_task(&fixture.root, &task_id);
+        assert_exact_receipt_pair(&run_dir, &task_id);
+    }
+
+    #[test]
+    fn manual_selection_mutations_remain_fail_closed_after_receipted_dispatch() {
+        let fixture = FixtureWorkspace::new("confirmed-exact-dispatch-mutation");
+        confirm_exact_codex_task(&fixture);
+        fixture.run(&["run", "--task", "YARD-EXACT-CONFIRMED", "--execute"]);
+        let queue_path = fixture.root.join(".agents/work-queue.yaml");
+        let valid_queue = fs::read_to_string(&queue_path).unwrap();
+
+        for field in ["worker", "model", "fallback", "provenance"] {
+            fs::write(&queue_path, &valid_queue).unwrap();
+            mutate_queue_selection(&fixture.root, "YARD-EXACT-CONFIRMED", field);
+            let tampered = fs::read_to_string(&queue_path).unwrap();
+            let output = command(&fixture.root, &fixture.binary, &["queue"]);
+            assert!(
+                !output.status.success(),
+                "manual {field} mutation unexpectedly passed"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("active_runtime_envelope_mismatch")
+                    || stderr.contains("active_runtime_origin_mismatch"),
+                "manual {field} mutation returned the wrong failure: {stderr}"
+            );
+            assert_eq!(
+                fs::read_to_string(&queue_path).unwrap(),
+                tampered,
+                "manual {field} rejection changed canonical queue bytes"
+            );
+        }
+        fs::write(queue_path, valid_queue).unwrap();
     }
 
     #[test]
