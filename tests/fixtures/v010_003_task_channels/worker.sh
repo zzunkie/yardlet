@@ -46,6 +46,26 @@ case "$task_id" in
     printf 'ask worker diagnostic stream\n' >&2
     write_question "A 또는 B를 선택해 주세요."
     ;;
+  YARD-EMPTY-QUESTION)
+    printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "needs_user",\n  "question_for_user": "   ",\n  "compact_summary": "empty question regression"\n}\n' \
+      "$run_id" "$task_id" >"$run_dir/result.json"
+    write_handoff "빈 질문 회귀 fixture"
+    ;;
+  YARD-FEEDBACK-EXHAUSTED)
+    printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["fixture"], "passed": false, "failures": ["fixture failed"]},\n  "compact_summary": "feedback exhausted regression"\n}\n' \
+      "$run_id" "$task_id" >"$run_dir/result.json"
+    write_handoff "feedback 소진 회귀 fixture"
+    ;;
+  YARD-REVIEW-FAIL)
+    printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["fixture"], "passed": true, "failures": []},\n  "verdict": [{"criterion_id": "AC-001", "pass": false, "evidence": "fixture criterion failed"}],\n  "compact_summary": "review failure regression"\n}\n' \
+      "$run_id" "$task_id" >"$run_dir/result.json"
+    write_handoff "review 실패 회귀 fixture"
+    ;;
+  YARD-REVIEW-PASS)
+    printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["fixture"], "passed": true, "failures": []},\n  "verdict": [{"criterion_id": "AC-001", "pass": true, "evidence": "foundation passes while runtime remains unresolved"}],\n  "domain_artifact": {"runtime_conformity": {"status": "not_pass"}, "free_text": "status fail blocked not_pass"},\n  "compact_summary": "structured review contract regression"\n}\n' \
+      "$run_id" "$task_id" >"$run_dir/result.json"
+    write_handoff "구조화 review 계약 회귀 fixture"
+    ;;
   YARD-DRAIN)
     sleep 1
     printf 'drain worker public progress\n'
