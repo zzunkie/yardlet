@@ -600,7 +600,18 @@ fn decide_state(reported: &str, all_passed: bool, result: Option<&RunResult>) ->
         "done" => TaskState::Failed, // claimed done but evidence is incomplete
         "partial" => TaskState::Partial,
         "blocked" => TaskState::Blocked,
-        "needs_user" => TaskState::NeedsUser,
+        "needs_user"
+            if result
+                .and_then(|result| result.question_for_user.as_deref())
+                .map(str::trim)
+                .is_some_and(|question| !question.is_empty()) =>
+        {
+            TaskState::NeedsUser
+        }
+        // NeedsUser is an actionable hand-off contract, not just a status
+        // label. A blank question is evaluated as a failed worker result so the
+        // run layer can retry it or create a concrete feedback question.
+        "needs_user" => TaskState::Failed,
         "failed" => TaskState::Failed,
         _ => {
             if result.is_none() {
@@ -829,10 +840,28 @@ mod tests {
     }
 
     #[test]
+    fn needs_user_requires_an_actionable_question() {
+        let mut r = dummy_result();
+        r.status = "needs_user".into();
+        r.question_for_user = Some(" \n\t ".into());
+
+        assert_eq!(
+            decide_state("needs_user", true, Some(&r)),
+            TaskState::Failed,
+            "an empty question must not be exposed as NeedsUser"
+        );
+        assert_eq!(
+            decide_state("needs_user", true, None),
+            TaskState::Failed,
+            "NeedsUser without a parsed result cannot carry a question"
+        );
+    }
+
+    #[test]
     fn non_done_states_map_safely() {
         assert_eq!(decide_state("partial", true, None), TaskState::Partial);
         assert_eq!(decide_state("blocked", true, None), TaskState::Blocked);
-        assert_eq!(decide_state("needs_user", true, None), TaskState::NeedsUser);
+        assert_eq!(decide_state("needs_user", true, None), TaskState::Failed);
         assert_eq!(decide_state("failed", true, None), TaskState::Failed);
     }
 
@@ -1182,6 +1211,9 @@ exit 89
         r.task_id = "YARD-9".into();
         r.status = status.into();
         r.verdict = verdict;
+        if status == "needs_user" {
+            r.question_for_user = Some("Which review decision should be made?".into());
+        }
         std::fs::write(dir.join("result.json"), serde_json::to_string(&r).unwrap()).unwrap();
         let mut t = crate::schemas::Task {
             id: "YARD-9".into(),
@@ -1305,6 +1337,54 @@ exit 89
         // a build task needs no verdict
         let e = eval_with("implementation", "done", vec![]);
         assert_eq!(e.next_task_state, TaskState::Done);
+    }
+
+    #[test]
+    fn review_ignores_unknown_nested_domain_statuses() {
+        let dir = temp_path("nested-domain-status");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("handoff.md"), "h").unwrap();
+        std::fs::write(
+            dir.join("result.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "run_id": "run-nested-domain",
+                "task_id": "YARD-REVIEW",
+                "status": "done",
+                "validation": {
+                    "commands_run": ["cargo test"],
+                    "passed": true,
+                    "failures": []
+                },
+                "verdict": [{
+                    "criterion_id": "AC-001",
+                    "pass": true,
+                    "evidence": "foundation passes while runtime conformity remains unresolved"
+                }],
+                "domain_artifact": {
+                    "runtime_conformity": {"status": "not_pass"},
+                    "free_text": "status fail blocked not_pass",
+                    "nested": [{"status": "blocked", "fail": "not_pass"}]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut review = implementation_task("YARD-REVIEW");
+        review.kind = "review".into();
+
+        let evaluation = evaluate(&dir, "run-nested-domain", &review, Some(&[]));
+
+        assert_eq!(evaluation.next_task_state, TaskState::Done);
+        assert!(evaluation
+            .checks
+            .iter()
+            .any(|check| check.name == "review_criteria_pass" && check.passed));
+        assert!(!evaluation
+            .checks
+            .iter()
+            .any(|check| check.fatal && !check.passed));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // Regression: a done result with no validation commands must stay Done.

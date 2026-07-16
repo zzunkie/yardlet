@@ -539,6 +539,11 @@ fn goal_feedback_is_bounded() -> Result<Vec<String>> {
     .context("second feedback cycle")?;
     if crate::run::feedback_next_state(&first) != TaskState::Partial
         || crate::run::feedback_next_state(&second) != TaskState::NeedsUser
+        || second
+            .question_for_user
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(|question| question.is_empty())
         || !second
             .unmet_acceptance
             .iter()
@@ -547,7 +552,8 @@ fn goal_feedback_is_bounded() -> Result<Vec<String>> {
         bail!("goal feedback did not retry once then stop with exact evidence")
     }
     Ok(vec![
-        "cycle 1 retries; cycle 2 reaches needs_user with AC evidence".to_string(),
+        "cycle 1 retries; cycle 2 reaches needs_user with AC evidence and an actionable question"
+            .to_string(),
     ])
 }
 
