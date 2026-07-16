@@ -4902,9 +4902,13 @@ fn feedback_question(task: &crate::schemas::Task, feedback: &FeedbackRecord) -> 
 
 fn review_without_remediation_question(task: &crate::schemas::Task) -> String {
     format!(
-        "`{}` 리뷰가 통과하지 못했고 실행 가능한 수정 작업이 없습니다. 어떤 수정 또는 판정으로 이어갈까요?",
+        "`{}` 리뷰가 통과하지 못했고 실행 가능한 수정 작업이 없습니다. 수정 작업을 큐에 추가한 뒤 리뷰를 재실행하거나 현재 판정을 수동으로 확정해 주세요. 어느 조치로 이어갈까요?",
         task.id
     )
+}
+
+fn review_evaluation_failed(is_review: bool, evaluated_state: TaskState) -> bool {
+    is_review && matches!(evaluated_state, TaskState::Failed | TaskState::Partial)
 }
 
 fn artifact_content_digest(bytes: &[u8]) -> String {
@@ -4993,8 +4997,74 @@ fn record_artifact_created(
         &proposal,
         &path.display().to_string(),
     )?;
+    // ArtifactProposal and the artifact.created payload have no authorship
+    // field yet, so the classification cannot be persisted here; callers keep
+    // it correct for the provenance consumer that will add that field.
     let _ = worker_authored;
     Ok(())
+}
+
+/// Heading of the core-appended failover section. Shared by the writer
+/// (`append_failover_note`) and the authorship classifier so they cannot
+/// drift apart.
+const WORKER_FAILOVER_HEADING: &str = "Worker failover";
+
+/// Was this `handoff.md` authored by the worker?
+///
+/// Existence alone is not proof: `append_failover_note` writes through
+/// `state::append_str`, which creates a missing file, so a handoff.md holding
+/// nothing but core-appended `## Worker failover` sections was created by the
+/// core failover path. Unreadable (non-UTF-8) content keeps the prior
+/// existence-based classification — authorship is only denied when every
+/// section is provably core-appended.
+fn handoff_is_worker_authored(path: &std::path::Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    match std::fs::read_to_string(path) {
+        Ok(content) => !handoff_is_failover_note_only(&content),
+        Err(_) => true,
+    }
+}
+
+/// Does this handoff consist solely of `## Worker failover` sections?
+fn handoff_is_failover_note_only(content: &str) -> bool {
+    let mut in_failover_section = false;
+    let mut saw_failover_section = false;
+    for line in content.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            if heading.trim() != WORKER_FAILOVER_HEADING {
+                return false;
+            }
+            in_failover_section = true;
+            saw_failover_section = true;
+            continue;
+        }
+        if !in_failover_section && !line.trim().is_empty() {
+            return false;
+        }
+    }
+    saw_failover_section
+}
+
+/// Classify the finalization artifacts to record for `run_dir`.
+///
+/// Must run BEFORE `compact::write_evaluator_summary`: that writer creates
+/// `handoff.md` as an evaluator fallback only when the worker did not author
+/// one, so the real author is only readable from the pre-writer run directory.
+/// A handoff.md holding only the core failover note is classified core-authored
+/// even though the file exists — see `handoff_is_worker_authored`.
+pub(crate) fn plan_finalization_artifact_entries(
+    run_dir: &std::path::Path,
+) -> [(&'static str, &'static str, bool); 5] {
+    let handoff_worker_authored = handoff_is_worker_authored(&run_dir.join("handoff.md"));
+    [
+        ("result.json", "worker_result", true),
+        ("evaluation.json", "evaluation", false),
+        ("evaluator-summary.md", "evaluation", false),
+        ("checkpoint.md", "checkpoint", false),
+        ("handoff.md", "handoff", handoff_worker_authored),
+    ]
 }
 
 fn record_finalization_artifacts(
@@ -5003,6 +5073,7 @@ fn record_finalization_artifacts(
     run_dir: &std::path::Path,
     worker_root: &std::path::Path,
     result: Option<&RunResult>,
+    entries: [(&'static str, &'static str, bool); 5],
 ) -> Result<()> {
     let Some(attempt_id) = std::fs::read_to_string(run_dir.join("latest-attempt"))
         .ok()
@@ -5011,12 +5082,7 @@ fn record_finalization_artifacts(
     else {
         return Ok(());
     };
-    for (name, role, worker_authored) in [
-        ("result.json", "worker_result", true),
-        ("evaluation.json", "evaluation", false),
-        ("checkpoint.md", "checkpoint", false),
-        ("handoff.md", "handoff", false),
-    ] {
+    for (name, role, worker_authored) in entries {
         let path = run_dir.join(name);
         let recorded_path = path
             .strip_prefix(&ws.root)
@@ -5278,6 +5344,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         ));
         next_state = TaskState::Done;
     }
+    // Preserve the worker/evaluator outcome before Git integration can turn a
+    // passing Done into a manual-integration Partial. Review remediation is
+    // about failed review evidence, not a later delivery hold.
+    let evaluated_state = next_state;
+    let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
+    let review_failed = review_evaluation_failed(is_review, evaluated_state);
 
     let mut persisted_question = if next_state == TaskState::NeedsUser {
         let (question, actor_kind) = question_to_persist.get_or_insert_with(|| {
@@ -5293,9 +5365,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         None
     };
 
+    // Plan artifact classification before the evaluator writers run: past this
+    // point a missing handoff.md may be filled in by the evaluator fallback.
+    let finalization_entries = plan_finalization_artifact_entries(run_dir);
     if flags.artifacts {
         compact::write_checkpoint(run_dir, task, &eval, result.as_ref(), intent_summary)?;
-        compact::write_handoff(run_dir, task, &eval, result.as_ref())?;
+        compact::write_evaluator_summary(run_dir, task, &eval, result.as_ref())?;
         if let Some(r) = &result {
             append_nonblocking_follow_up_notes(run_dir, r)?;
         }
@@ -5305,7 +5380,14 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         .as_ref()
         .map(|merge| merge.wt_path)
         .unwrap_or(ws.root.as_path());
-    record_finalization_artifacts(ws, &artifact_context, run_dir, worker_root, result.as_ref())?;
+    record_finalization_artifacts(
+        ws,
+        &artifact_context,
+        run_dir,
+        worker_root,
+        result.as_ref(),
+        finalization_entries,
+    )?;
 
     // Harness learning loop (S3): record skills/rules the worker proposed. The
     // worker authored the content; Yardlet (the core) does the writing.
@@ -5598,7 +5680,6 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // not ingest new follow-ups or re-queue a review, which would rewrite the
     // queue graph during a crash-recovery pass.
     let queue_lock = ws.acquire_planning_lock()?;
-    let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
     let mut follow_ups = if flags.follow_ups && next_state != TaskState::NeedsUser {
         result
             .as_ref()
@@ -5671,15 +5752,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // overwrite next_state to Queued/NeedsUser — telemetry must record what the
     // run actually evaluated to (a failed review), not the queue-management
     // decision, or the trust report would not see the failure.
-    let evaluated_state = next_state;
-
     // Review auto-remediation (1c): a review that failed its criteria must not
     // blind-loop on the same unchanged code. Re-queue THIS review to run AFTER the
     // reviewer's proposed remediation (soft priority ordering, no hard dep) so the
     // fix runs first and the review then re-verifies; the persisted feedback cap
     // bounds the cycles across serial, parallel, and resumed drains.
-    if flags.follow_ups && is_review && matches!(next_state, TaskState::Failed | TaskState::Partial)
-    {
+    if flags.follow_ups && review_failed {
         // Sequence behind fixes in the runnable graph (Queued && deps_met),
         // including approval-gated fixes. With no such remediation, surface to
         // the user instead.
@@ -6113,8 +6191,11 @@ fn record_failover(run_dir: &std::path::Path, from: &str, to: &str, reason: &str
     );
 }
 
-fn append_failover_note(run_dir: &std::path::Path, note: &str) -> Result<()> {
-    let mut md = String::from("\n## Worker failover\n\n");
+/// Shared by the serial and parallel failover paths so the appended heading
+/// can never drift from `WORKER_FAILOVER_HEADING` and the authorship
+/// classifier (`handoff_is_worker_authored`).
+pub(crate) fn append_failover_note(run_dir: &std::path::Path, note: &str) -> Result<()> {
+    let mut md = format!("\n## {WORKER_FAILOVER_HEADING}\n\n");
     md.push_str(note);
     md.push('\n');
     append_str(&run_dir.join("checkpoint.md"), &md)?;
@@ -6410,6 +6491,162 @@ mod tests {
             finalization_artifact_causation(&events, attempt_id),
             Some("evt-validation".to_string())
         );
+    }
+
+    fn planned_worker_authored(entries: &[(&'static str, &'static str, bool)], name: &str) -> bool {
+        entries
+            .iter()
+            .find(|(entry_name, _, _)| *entry_name == name)
+            .unwrap_or_else(|| panic!("missing finalization artifact entry {name}"))
+            .2
+    }
+
+    #[test]
+    fn finalization_plan_marks_worker_authored_handoff() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-handoff-worker-authored-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        write_str(&root.join("handoff.md"), "# Worker handoff\n").unwrap();
+
+        let entries = plan_finalization_artifact_entries(&root);
+        assert!(
+            planned_worker_authored(&entries, "handoff.md"),
+            "a handoff.md the worker wrote must be recorded worker_authored=true"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn finalization_plan_marks_evaluator_fallback_handoff() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-handoff-evaluator-fallback-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let entries = plan_finalization_artifact_entries(&root);
+        assert!(
+            !planned_worker_authored(&entries, "handoff.md"),
+            "an evaluator-fallback handoff.md must be recorded worker_authored=false"
+        );
+        assert!(planned_worker_authored(&entries, "result.json"));
+        for core_owned in ["evaluation.json", "evaluator-summary.md", "checkpoint.md"] {
+            assert!(!planned_worker_authored(&entries, core_owned));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn finalization_plan_is_fixed_before_evaluator_fallback_write() {
+        // finalize_run plans the artifact classification BEFORE
+        // compact::write_evaluator_summary can create the fallback handoff.md;
+        // a fallback appearing afterwards must not flip the classification.
+        let root =
+            std::env::temp_dir().join(format!("yard-handoff-plan-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let entries = plan_finalization_artifact_entries(&root);
+        write_str(&root.join("handoff.md"), "# Handoff: fallback copy\n").unwrap();
+        assert!(
+            !planned_worker_authored(&entries, "handoff.md"),
+            "classification captured pre-fallback must stay worker_authored=false"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn finalization_plan_marks_failover_note_only_handoff_core_authored() {
+        // append_failover_note writes through append_str, which creates a
+        // missing handoff.md; a file holding nothing but that core-appended
+        // note must not pass as worker output.
+        let root = std::env::temp_dir().join(format!(
+            "yard-handoff-failover-note-only-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        append_failover_note(
+            &root,
+            "worker failover: codex -> claude-code; codex exited without result.json \
+             after 1/2 resume attempt(s)",
+        )
+        .unwrap();
+        assert!(root.join("handoff.md").is_file());
+
+        let entries = plan_finalization_artifact_entries(&root);
+        assert!(
+            !planned_worker_authored(&entries, "handoff.md"),
+            "a handoff.md created only by the core failover note must be recorded \
+             worker_authored=false"
+        );
+
+        // A second core-appended note keeps the file core-only.
+        append_failover_note(
+            &root,
+            "worker failover unavailable after claude-code exited without result.json: \
+             no ready worker",
+        )
+        .unwrap();
+        let entries = plan_finalization_artifact_entries(&root);
+        assert!(
+            !planned_worker_authored(&entries, "handoff.md"),
+            "stacked failover notes are still core-authored content"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn failover_note_only_detection_requires_provably_core_content() {
+        // Empty or ambiguous content keeps the existence-based classification;
+        // authorship is only denied when every section is the core note.
+        assert!(!handoff_is_failover_note_only(""));
+        assert!(!handoff_is_failover_note_only("# Worker handoff\n"));
+        assert!(handoff_is_failover_note_only(
+            "\n## Worker failover\n\nworker failover: a -> b; no result.json\n"
+        ));
+        // Any other section heading is content beyond the core note.
+        assert!(!handoff_is_failover_note_only(
+            "\n## Worker failover\n\nnote\n\n## Summary\n\nworker text\n"
+        ));
+        // Worker prose before the appended note keeps worker authorship.
+        assert!(!handoff_is_failover_note_only(
+            "did the work\n\n## Worker failover\n\nnote\n"
+        ));
+    }
+
+    #[test]
+    fn finalization_plan_keeps_worker_handoff_with_failover_note_worker_authored() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-handoff-worker-plus-failover-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        write_str(
+            &root.join("handoff.md"),
+            "# Worker handoff\n\nWhat I changed and why.\n",
+        )
+        .unwrap();
+        append_failover_note(
+            &root,
+            "worker failover: codex -> claude-code; codex exited without result.json \
+             after 1/2 resume attempt(s)",
+        )
+        .unwrap();
+
+        let entries = plan_finalization_artifact_entries(&root);
+        assert!(
+            planned_worker_authored(&entries, "handoff.md"),
+            "a worker-authored handoff.md must stay worker_authored=true after the \
+             failover note is appended"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -11702,10 +11939,13 @@ exit 1
         }));
 
         let checkpoint = std::fs::read_to_string(run_dir.join("checkpoint.md")).unwrap();
+        let evaluator_summary =
+            std::fs::read_to_string(run_dir.join("evaluator-summary.md")).unwrap();
         let handoff = std::fs::read_to_string(run_dir.join("handoff.md")).unwrap();
-        for text in [checkpoint, handoff] {
+        for text in [checkpoint, evaluator_summary] {
             assert!(text.contains(question));
         }
+        assert_eq!(handoff, "# Worker handoff\n");
         let _ = std::fs::remove_dir_all(&root);
     }
 

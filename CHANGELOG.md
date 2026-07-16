@@ -12,6 +12,31 @@
 
 ### Fixed
 
+- **Worker-authored handoffs survive finalization.** Evaluator checks and the
+  compact result summary now go to `evaluator-summary.md` instead of replacing
+  the worker's `handoff.md`; integration and non-blocking follow-up notes still
+  append to the preserved worker handoff.
+
+- **Finalization artifact records classify the real handoff author.** The
+  `handoff.md` artifact entry is no longer hard-coded `worker_authored=false`:
+  a worker-authored handoff is classified `true` and an evaluator-fallback
+  handoff stays `false`, captured before the fallback writer can create the
+  file.
+
+- **A failover-note-only handoff no longer passes as worker output.** The
+  failover note is appended with create-if-missing semantics, so a run where
+  the worker never wrote `handoff.md` could leave a core-authored note file
+  classified `worker_authored=true`. Classification now reads the content: a
+  handoff holding only `## Worker failover` sections is recorded
+  `worker_authored=false`, while a worker-authored handoff keeps `true` after
+  the note is appended.
+
+- **Passing reviews remain resolvable when auto-commit is disabled.** A review
+  whose structured verdict and validation pass now stays `Partial` for manual
+  integration instead of being reclassified as a failed review with no
+  remediation. Actual failed verdicts still enter remediation or stop with a
+  concrete, actionable `NeedsUser` question.
+
 - **Receipted preferred-worker failover survives confirmation validation.**
   Confirmed `model: auto` tasks now resolve a fallback worker's own model from
   the immutable task contract, while matching run and terminal process receipts
