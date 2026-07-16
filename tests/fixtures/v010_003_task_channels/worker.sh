@@ -127,9 +127,16 @@ case "$task_id" in
     write_handoff "feedback 소진 회귀 fixture"
     ;;
   YARD-REVIEW-FAIL)
+    printf 'failed review change\n' >review-change.txt
     printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["fixture"], "passed": true, "failures": []},\n  "verdict": [{"criterion_id": "AC-001", "pass": false, "evidence": "fixture criterion failed"}],\n  "compact_summary": "review failure regression"\n}\n' \
       "$run_id" "$task_id" >"$run_dir/result.json"
     write_handoff "review 실패 회귀 fixture"
+    ;;
+  YARD-REVIEW-PASS-MANUAL)
+    printf 'passing review change\n' >review-change.txt
+    printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["fixture"], "passed": true, "failures": []},\n  "verdict": [{"criterion_id": "AC-001", "pass": true, "evidence": "fixture criterion passed"}],\n  "compact_summary": "passing review awaiting manual integration"\n}\n' \
+      "$run_id" "$task_id" >"$run_dir/result.json"
+    write_handoff "통과한 review의 수동 통합 대기 fixture"
     ;;
   YARD-REVIEW-PASS)
     printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["fixture"], "passed": true, "failures": []},\n  "verdict": [{"criterion_id": "AC-001", "pass": true, "evidence": "foundation passes while runtime remains unresolved"}],\n  "domain_artifact": {"runtime_conformity": {"status": "not_pass"}, "free_text": "status fail blocked not_pass"},\n  "compact_summary": "structured review contract regression"\n}\n' \

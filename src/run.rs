@@ -4902,9 +4902,13 @@ fn feedback_question(task: &crate::schemas::Task, feedback: &FeedbackRecord) -> 
 
 fn review_without_remediation_question(task: &crate::schemas::Task) -> String {
     format!(
-        "`{}` 리뷰가 통과하지 못했고 실행 가능한 수정 작업이 없습니다. 어떤 수정 또는 판정으로 이어갈까요?",
+        "`{}` 리뷰가 통과하지 못했고 실행 가능한 수정 작업이 없습니다. 수정 작업을 큐에 추가한 뒤 리뷰를 재실행하거나 현재 판정을 수동으로 확정해 주세요. 어느 조치로 이어갈까요?",
         task.id
     )
+}
+
+fn review_evaluation_failed(is_review: bool, evaluated_state: TaskState) -> bool {
+    is_review && matches!(evaluated_state, TaskState::Failed | TaskState::Partial)
 }
 
 fn artifact_content_digest(bytes: &[u8]) -> String {
@@ -5278,6 +5282,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         ));
         next_state = TaskState::Done;
     }
+    // Preserve the worker/evaluator outcome before Git integration can turn a
+    // passing Done into a manual-integration Partial. Review remediation is
+    // about failed review evidence, not a later delivery hold.
+    let evaluated_state = next_state;
+    let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
+    let review_failed = review_evaluation_failed(is_review, evaluated_state);
 
     let mut persisted_question = if next_state == TaskState::NeedsUser {
         let (question, actor_kind) = question_to_persist.get_or_insert_with(|| {
@@ -5598,7 +5608,6 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // not ingest new follow-ups or re-queue a review, which would rewrite the
     // queue graph during a crash-recovery pass.
     let queue_lock = ws.acquire_planning_lock()?;
-    let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
     let mut follow_ups = if flags.follow_ups && next_state != TaskState::NeedsUser {
         result
             .as_ref()
@@ -5671,15 +5680,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // overwrite next_state to Queued/NeedsUser — telemetry must record what the
     // run actually evaluated to (a failed review), not the queue-management
     // decision, or the trust report would not see the failure.
-    let evaluated_state = next_state;
-
     // Review auto-remediation (1c): a review that failed its criteria must not
     // blind-loop on the same unchanged code. Re-queue THIS review to run AFTER the
     // reviewer's proposed remediation (soft priority ordering, no hard dep) so the
     // fix runs first and the review then re-verifies; the persisted feedback cap
     // bounds the cycles across serial, parallel, and resumed drains.
-    if flags.follow_ups && is_review && matches!(next_state, TaskState::Failed | TaskState::Partial)
-    {
+    if flags.follow_ups && review_failed {
         // Sequence behind fixes in the runnable graph (Queued && deps_met),
         // including approval-gated fixes. With no such remediation, surface to
         // the user instead.
