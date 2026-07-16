@@ -2292,6 +2292,75 @@ exit 1
         fixture.run(&["run", "--task", "YARD-REVIEW-FAIL", "--execute"]);
 
         assert_actionable_needs_user(&fixture, "YARD-REVIEW-FAIL");
+        let run_dir = run_dir_for_task(&fixture.root, "YARD-REVIEW-FAIL");
+        let evaluation: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(run_dir.join("evaluation.json")).unwrap())
+                .unwrap();
+        assert!(evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["name"] == "review_criteria_pass" && check["passed"] == false));
+        let questions = yaml_dir(&channel_dir(&fixture.root, "YARD-REVIEW-FAIL").join("questions"));
+        let question = string(&questions[0], "text");
+        assert!(question.contains("수정 작업을 큐에 추가"));
+        assert!(question.contains("수동으로 확정"));
+    }
+
+    #[test]
+    fn passing_review_with_auto_commit_off_stays_resolvable_partial() {
+        let fixture = FixtureWorkspace::new("passing-review-manual-integration");
+        fixture.write_queue(
+            "  - id: YARD-REVIEW-PASS-MANUAL\n    title: passing review awaiting manual integration\n    state: queued\n    priority: 10\n    kind: review\n    preferred_worker: fixture\n    acceptance: [criterion passes]\n",
+        );
+
+        fixture.run(&["run", "--task", "YARD-REVIEW-PASS-MANUAL", "--execute"]);
+
+        assert_eq!(
+            task_state(&fixture.root, "YARD-REVIEW-PASS-MANUAL"),
+            "partial"
+        );
+        let run_dir = run_dir_for_task(&fixture.root, "YARD-REVIEW-PASS-MANUAL");
+        assert_eq!(
+            fs::read_to_string(run_dir.join("partial-reason"))
+                .unwrap()
+                .trim(),
+            "auto_commit_disabled"
+        );
+        let evaluation: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(run_dir.join("evaluation.json")).unwrap())
+                .unwrap();
+        assert!(evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["name"] == "review_criteria_pass" && check["passed"] == true));
+        assert!(
+            !channel_dir(&fixture.root, "YARD-REVIEW-PASS-MANUAL")
+                .join("questions")
+                .exists(),
+            "passing review must not open a NeedsUser question"
+        );
+
+        let run = read_yaml(&run_dir.join("run.yaml"));
+        let worktree = PathBuf::from(string(&run, "worktree"));
+        fs::copy(
+            worktree.join("review-change.txt"),
+            fixture.root.join("review-change.txt"),
+        )
+        .unwrap();
+        must_succeed(
+            &fixture.root,
+            Path::new("git"),
+            &["add", "review-change.txt"],
+        );
+        must_succeed(
+            &fixture.root,
+            Path::new("git"),
+            &["commit", "-qm", "manually integrate passing review"],
+        );
+        fixture.run(&["resolve", "YARD-REVIEW-PASS-MANUAL", "수동 통합 완료"]);
+        assert_eq!(task_state(&fixture.root, "YARD-REVIEW-PASS-MANUAL"), "done");
     }
 
     #[test]

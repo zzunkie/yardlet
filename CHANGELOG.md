@@ -12,6 +12,12 @@
 
 ### Fixed
 
+- **Passing reviews remain resolvable when auto-commit is disabled.** A review
+  whose structured verdict and validation pass now stays `Partial` for manual
+  integration instead of being reclassified as a failed review with no
+  remediation. Actual failed verdicts still enter remediation or stop with a
+  concrete, actionable `NeedsUser` question.
+
 - **Receipted preferred-worker failover survives confirmation validation.**
   Confirmed `model: auto` tasks now resolve a fallback worker's own model from
   the immutable task contract, while matching run and terminal process receipts
