@@ -214,15 +214,19 @@ fn validate_recorded_lineage(
             task.id
         ));
     }
+    // `fallback_enabled` permits a different worker to be resolved for a run;
+    // it does not permit the recorded task contract to replace its governing
+    // preferred worker. Keep this gate identical to follow-up ingestion while
+    // leaving runtime override/failover below governed by the fallback opt-in.
+    if task.preferred_worker != provenance.governing_worker_id {
+        return Err(anyhow!(
+            "task '{}' worker '{}' conflicts with governing worker '{}'",
+            task.id,
+            task.preferred_worker,
+            provenance.governing_worker_id
+        ));
+    }
     if !provenance.governing_fallback_enabled {
-        if task.preferred_worker != provenance.governing_worker_id {
-            return Err(anyhow!(
-                "task '{}' worker '{}' conflicts with governing worker '{}'",
-                task.id,
-                task.preferred_worker,
-                provenance.governing_worker_id
-            ));
-        }
         if let Some(override_w) = override_w.filter(|value| !value.trim().is_empty()) {
             if override_w != provenance.governing_worker_id {
                 return Err(anyhow!(
@@ -582,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_rejects_exact_lineage_model_and_fallback_conflicts() {
+    fn dispatch_rejects_exact_lineage_worker_model_and_fallback_conflicts() {
         let workers: WorkersFile = crate::yaml::from_str(
             "schema_version: 1\nrouting:\n  default_worker: codex\n  fallback_order: [codex]\nworkers:\n  - id: codex\n    model: gpt-5.6-sol\n    invocation: { command: bash }\n",
         )
@@ -604,6 +608,15 @@ mod tests {
         let resolved = resolve_worker_for_task(&ws, &workers, &billing, None, &exact()).unwrap();
         assert_eq!(resolved.model, "gpt-5.6-sol");
         assert!(!resolved.fallback_enabled);
+
+        let mut worker_conflict = exact();
+        worker_conflict.preferred_worker = "claude-code".into();
+        assert!(
+            resolve_worker_for_task(&ws, &workers, &billing, None, &worker_conflict)
+                .unwrap_err()
+                .to_string()
+                .contains("governing worker")
+        );
 
         let mut model_conflict = exact();
         model_conflict.model = "other".into();
@@ -627,6 +640,29 @@ mod tests {
         both.model = "other".into();
         both.fallback_enabled = Some(true);
         assert!(resolve_worker_for_task(&ws, &workers, &billing, None, &both).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dispatch_rejects_recorded_worker_conflict_when_runtime_failover_is_enabled() {
+        let workers: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nrouting:\n  default_worker: codex\n  fallback_order: [codex, claude-code]\n  allow_preferred_worker_failover: true\nworkers:\n  - id: codex\n    model: gpt-5.6-sol\n    invocation: { command: bash }\n  - id: claude-code\n    model: gpt-5.6-sol\n    invocation: { command: bash }\n",
+        )
+        .unwrap();
+        let task: Task = crate::yaml::from_str(
+            "id: YARD-002\ntitle: tampered inherited worker\npreferred_worker: claude-code\nmodel: gpt-5.6-sol\nfallback_enabled: true\nrouting_provenance:\n  governing_task_id: YARD-001\n  governing_worker_id: codex\n  governing_model: gpt-5.6-sol\n  governing_fallback_enabled: true\n  worker_source: governing_task.inherited\n  model_source: governing_task.inherited\n  fallback_source: governing_task.inherited\n",
+        )
+        .unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "yard-routing-failover-recorded-worker-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+
+        let error = resolve_worker_for_task(&ws, &workers, &BillingPolicy::default(), None, &task)
+            .unwrap_err();
+        assert!(error.to_string().contains("governing worker"), "{error:#}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -4327,13 +4327,30 @@ fn finalize_on_latest_queue_locked(
         let from = t.state;
         t.state = state;
         let ingested = if let Some(governing) = governing {
-            crate::planner::ingest_follow_ups_with_governing(
+            match crate::planner::ingest_follow_ups_with_governing(
                 &mut latest,
                 intent_allowed_scope,
                 follow_ups,
                 Some(ws),
                 governing,
-            )?
+            ) {
+                Ok(ingested) => ingested,
+                Err(error) => {
+                    // Governing ingestion is atomic, so a rejected follow-up
+                    // left `latest` with only the run outcome applied. Preserve
+                    // that durable outcome and its transition before surfacing
+                    // the fail-closed lineage error.
+                    ws.save_queue_locked(lock, &latest)?;
+                    if from != state {
+                        state::append_transition(
+                            ws,
+                            state::transition(task_id, from, state, cause, detail, actor.clone()),
+                        )?;
+                    }
+                    *fallback_queue = latest;
+                    return Err(error);
+                }
+            }
         } else {
             crate::planner::ingest_follow_ups(
                 &mut latest,
@@ -4366,13 +4383,28 @@ fn finalize_on_latest_queue_locked(
         let from = task.state;
         task.state = state;
         let ingested = if let Some(governing) = governing {
-            crate::planner::ingest_follow_ups_with_governing(
+            match crate::planner::ingest_follow_ups_with_governing(
                 &mut bootstrapped,
                 intent_allowed_scope,
                 follow_ups,
                 Some(ws),
                 governing,
-            )?
+            ) {
+                Ok(ingested) => ingested,
+                Err(error) => {
+                    // Match the normal latest-queue path: reject the follow-up
+                    // without losing the governing task's evaluated outcome.
+                    ws.save_queue_locked(lock, &bootstrapped)?;
+                    if from != state {
+                        state::append_transition(
+                            ws,
+                            state::transition(task_id, from, state, cause, detail, actor),
+                        )?;
+                    }
+                    *fallback_queue = bootstrapped;
+                    return Err(error);
+                }
+            }
         } else {
             crate::planner::ingest_follow_ups(
                 &mut bootstrapped,
@@ -11375,6 +11407,69 @@ exit 1
             "no follow-up should be ingested on recovery"
         );
         assert_eq!(q.tasks[0].state, TaskState::Done);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn conflicting_follow_up_does_not_erase_governing_task_state_transition() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-follow-up-conflict-finalize-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let ws = Workspace::at(&root);
+        let mut governing_task = task("YARD-001", TaskState::Running, 10, false);
+        governing_task.preferred_worker = "codex".into();
+        governing_task.model = "gpt-5.6-sol".into();
+        governing_task.fallback_enabled = Some(false);
+        let initial = queue(vec![governing_task]);
+        ws.save_queue(&initial).unwrap();
+
+        let governing = crate::schemas::ResolvedWorkerSelection {
+            worker_id: "codex".into(),
+            model: "gpt-5.6-sol".into(),
+            fallback_enabled: false,
+            routing_provenance: crate::schemas::RoutingProvenance {
+                governing_task_id: "YARD-001".into(),
+                governing_worker_id: "codex".into(),
+                governing_model: "gpt-5.6-sol".into(),
+                governing_fallback_enabled: false,
+                ..Default::default()
+            },
+        };
+        let conflicting = crate::schemas::FollowUpTask {
+            title: "conflicting worker follow-up".into(),
+            preferred_worker: "claude-code".into(),
+            ..Default::default()
+        };
+        let lock = ws.acquire_planning_lock().unwrap();
+        let mut fallback_queue = initial;
+        let error = finalize_on_latest_queue_locked(
+            &ws,
+            &lock,
+            &mut fallback_queue,
+            "YARD-001",
+            TaskState::Done,
+            &[],
+            &[conflicting],
+            Some(&governing),
+            None,
+            TransitionCause::RunOutcome,
+            "worker evaluated task as done",
+            TransitionActor::Worker("run-conflicting-follow-up".into()),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("governing worker"), "{error:#}");
+        let persisted = ws.load_queue().unwrap();
+        assert_eq!(persisted.tasks.len(), 1, "conflict must stay fail-closed");
+        assert_eq!(persisted.tasks[0].state, TaskState::Done);
+        assert_eq!(fallback_queue.tasks[0].state, TaskState::Done);
+        let transition = ws.latest_transition("YARD-001").unwrap();
+        assert_eq!(transition.from, TaskState::Running);
+        assert_eq!(transition.to, TaskState::Done);
+        assert_eq!(transition.cause, TransitionCause::RunOutcome);
         let _ = std::fs::remove_dir_all(&root);
     }
 
