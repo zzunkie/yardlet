@@ -1698,6 +1698,12 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         .map(|r| r.worker_id.clone())
         .unwrap_or_else(|_| candidate_id.clone());
     let resolved_selection = resolved.as_ref().ok().map(|resolved| resolved.selection());
+    // Keep the confirmed/runtime-added contract as the failover policy input.
+    // The in-flight task below is stamped with the first effective selection
+    // for packet/receipt parity; resolving failover from that stamped copy
+    // would incorrectly pin an `auto` task to the first worker's model and
+    // provenance instead of producing a fresh policy-authorized selection.
+    let failover_task = task.clone();
     if opts.execute {
         if let Some(selection) = resolved_selection
             .as_ref()
@@ -2194,7 +2200,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             &workers,
             &billing,
             &active_worker_id,
-            &task,
+            &failover_task,
         ) {
             Ok(alt) => {
                 let from = active_worker_id.clone();
@@ -2211,7 +2217,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 active_reason = format!("failover from {from} ({})", alt.reason);
                 active_bin = alt.bin;
                 let profile = find_worker(&workers.workers, &active_worker_id)?;
-                eff_profile = workers::effective_profile(profile, &task.model, &task.effort);
+                eff_profile = workers::effective_profile(
+                    profile,
+                    &failover_task.model,
+                    &failover_task.effort,
+                );
                 update_run_selection(&run_dir, &active_selection)?;
                 if worker_run_dir != run_dir.as_path() {
                     update_run_selection(worker_run_dir, &active_selection)?;

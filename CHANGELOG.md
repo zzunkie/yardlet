@@ -12,6 +12,12 @@
 
 ### Fixed
 
+- **Receipted preferred-worker failover survives confirmation validation.**
+  Confirmed `model: auto` tasks now resolve a fallback worker's own model from
+  the immutable task contract, while matching run and terminal process receipts
+  authorize the runtime overlay. Manual selection mutations still fail closed,
+  and `yardlet recover` can finalize a completed failover attempt.
+
 - **Serial integration stays bound to trusted evidence.** Worker staging cannot
   replace core-owned cancellation, failover, evaluation, validation, evidence,
   hook, or Git transaction records. Core-staged serial runs use native
