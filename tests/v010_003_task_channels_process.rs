@@ -754,12 +754,18 @@ mod unix {
         let started = wait_until(Duration::from_secs(10), || {
             task_state(&fixture.root, "YARD-REDIRECT") == "running"
                 && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
+                && files_below(&fixture.root.join(".agents/worktrees"), "/handoff.md")
+                    .iter()
+                    .any(|path| {
+                        fs::read_to_string(path)
+                            .is_ok_and(|text| text.contains("checkpoint before redirect"))
+                    })
         });
         if !started {
             let _ = running.kill();
             let output = running.wait_with_output().unwrap();
             panic!(
-                "redirect fixture never reached running\nstdout:\n{}\nstderr:\n{}",
+                "redirect fixture never reached running with a checkpoint handoff\nstdout:\n{}\nstderr:\n{}",
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
