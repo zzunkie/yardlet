@@ -164,6 +164,36 @@ fn normalize_codex_json(
                 end,
             )]
         }
+        ("item.started", Some("file_change")) => vec![normalized_event(
+            ChannelEventType::ToolStarted,
+            serde_json::json!({
+                "name": "file_change",
+                "change_count": item
+                    .get("changes")
+                    .and_then(|value| value.as_array())
+                    .map_or(0, Vec::len),
+                "status": item.get("status").cloned().unwrap_or(serde_json::Value::Null)
+            }),
+            artifact_id,
+            stream,
+            start,
+            end,
+        )],
+        ("item.completed", Some("file_change")) => vec![normalized_event(
+            ChannelEventType::ToolCompleted,
+            serde_json::json!({
+                "name": "file_change",
+                "change_count": item
+                    .get("changes")
+                    .and_then(|value| value.as_array())
+                    .map_or(0, Vec::len),
+                "status": item.get("status").cloned().unwrap_or(serde_json::Value::Null)
+            }),
+            artifact_id,
+            stream,
+            start,
+            end,
+        )],
         ("item.completed", Some("agent_message" | "message")) => item
             .get("text")
             .and_then(|value| value.as_str())
@@ -316,6 +346,76 @@ fn publish_complete_public_lines(
         *consumed += line_len as u64;
     }
     Ok(())
+}
+
+fn codex_public_log_line(line: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(line);
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
+        return line.to_vec();
+    };
+    let item = value.get("item").unwrap_or(&value);
+    if item.get("type").and_then(|value| value.as_str()) != Some("file_change") {
+        return line.to_vec();
+    }
+    let event_type = value
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("item");
+    let status = item
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let change_count = item
+        .get("changes")
+        .and_then(|value| value.as_array())
+        .map_or(0, Vec::len);
+    let newline = if line.ends_with(b"\n") { "\n" } else { "" };
+    format!("[codex {event_type} file_change status={status} changes={change_count}]{newline}")
+        .into_bytes()
+}
+
+fn append_public_output(
+    worker_id: &str,
+    stream: RawStreamKind,
+    bytes: &[u8],
+    pending: &mut Vec<u8>,
+    flush_tail: bool,
+    log: &std::sync::Arc<std::sync::Mutex<Option<std::fs::File>>>,
+) {
+    use std::io::Write;
+
+    if worker_id != "codex" || stream != RawStreamKind::Stdout {
+        if let Ok(mut guard) = log.lock() {
+            if let Some(file) = guard.as_mut() {
+                let _ = file.write_all(bytes);
+                let _ = file.flush();
+            }
+        }
+        return;
+    }
+
+    pending.extend_from_slice(bytes);
+    let mut public = Vec::new();
+    loop {
+        let line_len = pending
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|newline| newline + 1)
+            .or_else(|| (flush_tail && !pending.is_empty()).then_some(pending.len()));
+        let Some(line_len) = line_len else {
+            break;
+        };
+        let line = pending.drain(..line_len).collect::<Vec<_>>();
+        public.extend_from_slice(&codex_public_log_line(&line));
+    }
+    if !public.is_empty() {
+        if let Ok(mut guard) = log.lock() {
+            if let Some(file) = guard.as_mut() {
+                let _ = file.write_all(&public);
+                let _ = file.flush();
+            }
+        }
+    }
 }
 
 /// A model/effort value counts as explicit only when it is set and is not the
@@ -547,6 +647,9 @@ pub struct WorkerOutcome {
     pub exit_ok: bool,
     pub timed_out: bool,
     pub note: String,
+    /// Live public events can be shed under sink backpressure because exact raw
+    /// streams remain authoritative and must never stop draining.
+    pub public_events_dropped: bool,
     /// Exact Codex thread created by this child process. Captured only from
     /// that child's JSONL stdout; never inferred from global session files.
     pub session_id: Option<String>,
@@ -908,6 +1011,42 @@ fn spawn_internal(
             format!("raw_{}_stderr", attempt_id.unwrap_or("unknown")),
         ));
     }
+    const PUBLIC_EVENT_QUEUE_CAPACITY: usize = 64;
+    let public_events_dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_public_publisher = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (reader_event_sink, event_publisher) = match event_sink {
+        Some(sink) if profile.id == "codex" => {
+            let (sender, receiver) =
+                std::sync::mpsc::sync_channel::<NormalizedWorkerEvent>(PUBLIC_EVENT_QUEUE_CAPACITY);
+            let dropped = std::sync::Arc::clone(&public_events_dropped);
+            let publisher_dropped = std::sync::Arc::clone(&public_events_dropped);
+            let publisher_stop = std::sync::Arc::clone(&stop_public_publisher);
+            let reader_sink: AttemptEventSink =
+                std::sync::Arc::new(move |event| match sender.try_send(event) {
+                    Ok(()) => Ok(()),
+                    Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                        dropped.store(true, std::sync::atomic::Ordering::Relaxed);
+                        Ok(())
+                    }
+                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                        Err("public event publisher disconnected".to_string())
+                    }
+                });
+            let publisher = thread::spawn(move || -> std::result::Result<(), String> {
+                while let Ok(event) = receiver.recv() {
+                    if publisher_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        publisher_dropped.store(true, std::sync::atomic::Ordering::Relaxed);
+                        break;
+                    }
+                    sink(event)?;
+                }
+                Ok(())
+            });
+            (Some(reader_sink), Some(publisher))
+        }
+        Some(sink) => (Some(sink), None),
+        None => (None, None),
+    };
     let readers: Vec<_> = sources
         .into_iter()
         .map(
@@ -915,10 +1054,11 @@ fn spawn_internal(
                 let log = std::sync::Arc::clone(&log_file);
                 let captured = std::sync::Arc::clone(&captured_session);
                 let worker_id = profile.id.clone();
-                let event_sink = event_sink.clone();
+                let event_sink = reader_event_sink.clone();
                 thread::spawn(move || -> std::io::Result<()> {
                     let mut buf = [0u8; 4096];
                     let mut pending = Vec::new();
+                    let mut log_pending = Vec::new();
                     let mut public_pending = Vec::new();
                     let mut public_consumed = 0_u64;
                     loop {
@@ -942,18 +1082,20 @@ fn spawn_internal(
                                         sink,
                                     )?;
                                 }
+                                append_public_output(
+                                    &worker_id,
+                                    stream,
+                                    &[],
+                                    &mut log_pending,
+                                    true,
+                                    &log,
+                                );
                                 break;
                             }
                             Err(error) => return Err(error),
                             Ok(n) => {
                                 if capture_session {
                                     capture_codex_thread_id(&mut pending, &buf[..n], &captured);
-                                }
-                                if let Ok(mut guard) = log.lock() {
-                                    if let Some(f) = guard.as_mut() {
-                                        let _ = f.write_all(&buf[..n]);
-                                        let _ = f.flush();
-                                    }
                                 }
                                 if let Some(raw_sink) = &raw_sink {
                                     if let Ok(mut raw) = raw_sink.lock() {
@@ -965,6 +1107,14 @@ fn spawn_internal(
                                         ));
                                     }
                                 }
+                                append_public_output(
+                                    &worker_id,
+                                    stream,
+                                    &buf[..n],
+                                    &mut log_pending,
+                                    false,
+                                    &log,
+                                );
                                 if let Some(sink) = &event_sink {
                                     public_pending.extend_from_slice(&buf[..n]);
                                     publish_complete_public_lines(
@@ -1013,6 +1163,26 @@ fn spawn_internal(
             }
         }
     }
+    // Preserve the bounded completion path only after try_send actually shed
+    // an event. Otherwise disconnect the sender and let the publisher drain
+    // every accepted tail event before join.
+    if public_events_dropped.load(std::sync::atomic::Ordering::Relaxed) {
+        stop_public_publisher.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    drop(reader_event_sink);
+    if let Some(publisher) = event_publisher {
+        match publisher.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                reader_error.get_or_insert_with(|| std::io::Error::other(error));
+            }
+            Err(_) => {
+                reader_error.get_or_insert_with(|| {
+                    std::io::Error::other("public event publisher thread panicked")
+                });
+            }
+        }
+    }
     let _ = std::fs::remove_file(&pid_path);
     let _ = std::fs::remove_file(&provenance_path);
     if let Some(error) = reader_error {
@@ -1027,6 +1197,7 @@ fn spawn_internal(
         exit_ok: status.success() && !timed_out,
         timed_out,
         session_id,
+        public_events_dropped: public_events_dropped.load(std::sync::atomic::Ordering::Relaxed),
         note: if timed_out {
             "worker exceeded wall-clock limit and was stopped".to_string()
         } else {
@@ -1581,6 +1752,212 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
         assert!(events
             .iter()
             .all(|event| !event.payload.to_string().contains("private")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_publisher_drains_unsaturated_tail_before_join() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::{Arc, Mutex};
+
+        let root = std::env::temp_dir().join(format!(
+            "yard-codex-unsaturated-tail-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fake_codex = root.join("codex");
+        std::fs::write(
+            &fake_codex,
+            concat!(
+                "#!/bin/sh\n",
+                "printf '%s\\n' ",
+                "'{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"first\"}}' ",
+                "'{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"tail\"}}'\n"
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&fake_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_codex, permissions).unwrap();
+
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+        )
+        .unwrap();
+        let capture = AttemptCapture {
+            combined_log: root.join("worker-output.log"),
+            stdout_log: root.join("attempts/att_1/stdout.log"),
+            stderr_log: root.join("attempts/att_1/stderr.log"),
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured_events = Arc::clone(&events);
+        let sink: AttemptEventSink = Arc::new(move |event| {
+            // Keep one event in flight until the worker and both raw readers
+            // have exited. The second event remains queued without filling the
+            // 64-slot channel, making join-time tail handling deterministic.
+            std::thread::sleep(Duration::from_millis(300));
+            captured_events.lock().unwrap().push(event);
+            Ok(())
+        });
+
+        let outcome = spawn_attempt_with_sink(
+            &profile,
+            &fake_codex,
+            "packet",
+            &root,
+            &root,
+            &[],
+            &capture,
+            Some(sink),
+            Duration::from_secs(5),
+            false,
+            &[],
+            None,
+            false,
+        )
+        .unwrap();
+
+        let texts = events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|event| event.payload["text"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(texts, ["first", "tail"]);
+        assert!(
+            !outcome.public_events_dropped,
+            "an unsaturated publisher queue must not report shed events"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_resume_cumulative_file_changes_keep_public_log_bounded_and_raw_refs_exact() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::{Arc, Mutex};
+
+        const FRESH: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/v010_003_task_channels/codex-fresh-file-change.jsonl"
+        ));
+        const RESUME: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/v010_003_task_channels/codex-resume-cumulative-file-change.jsonl"
+        ));
+
+        let root = std::env::temp_dir().join(format!(
+            "yard-codex-cumulative-file-change-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+        )
+        .unwrap();
+
+        let run_fixture = |label: &str, raw: &str, resume: bool| {
+            let fake_codex = root.join(format!("codex-{label}"));
+            std::fs::write(&fake_codex, format!("#!/bin/sh\nprintf '%s' '{}'\n", raw)).unwrap();
+            let mut permissions = std::fs::metadata(&fake_codex).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&fake_codex, permissions).unwrap();
+            let capture = AttemptCapture {
+                combined_log: root.join(format!("{label}-worker-output.log")),
+                stdout_log: root.join(format!("attempts/{label}/stdout.log")),
+                stderr_log: root.join(format!("attempts/{label}/stderr.log")),
+            };
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let captured_events = Arc::clone(&events);
+            let sink: AttemptEventSink = Arc::new(move |event| {
+                captured_events.lock().unwrap().push(event);
+                Ok(())
+            });
+            let outcome = spawn_attempt_with_sink(
+                &profile,
+                &fake_codex,
+                "packet",
+                &root,
+                &root,
+                &[],
+                &capture,
+                Some(sink),
+                Duration::from_secs(5),
+                false,
+                &[],
+                resume.then_some("11111111-1111-4111-8111-111111111111"),
+                resume,
+            )
+            .unwrap();
+            assert!(outcome.exit_ok);
+            assert_eq!(std::fs::read(&capture.stdout_log).unwrap(), raw.as_bytes());
+            let events = events.lock().unwrap().clone();
+            (capture, events)
+        };
+
+        let (_fresh_capture, fresh_events) = run_fixture("fresh", FRESH, false);
+        assert!(fresh_events
+            .iter()
+            .any(|event| event.event_type == ChannelEventType::WorkerMessage));
+
+        let (resume_capture, resume_events) = run_fixture("resume", RESUME, true);
+        let raw_lines = RESUME.lines().collect::<Vec<_>>();
+        let file_change_values = raw_lines
+            .iter()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|value| value["item"]["type"] == "file_change")
+            .collect::<Vec<_>>();
+        let final_change_bytes =
+            serde_json::to_vec(&file_change_values.last().unwrap()["item"]["changes"])
+                .unwrap()
+                .len();
+        let non_file_bytes = raw_lines
+            .iter()
+            .filter(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .map(|value| value["item"]["type"] != "file_change")
+                    .unwrap_or(true)
+            })
+            .map(|line| line.len() + 1)
+            .sum::<usize>();
+        // The public log may retain the final cumulative change representation
+        // once, plus at most 128 bytes of status/count overhead per event.
+        let public_log_bound = non_file_bytes + final_change_bytes + file_change_values.len() * 128;
+        let public_log = std::fs::read(&resume_capture.combined_log).unwrap();
+        assert!(
+            public_log.len() <= public_log_bound,
+            "cumulative file_change amplification: public={} bound={public_log_bound}",
+            public_log.len()
+        );
+
+        let file_events = resume_events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type,
+                    ChannelEventType::ToolStarted | ChannelEventType::ToolCompleted
+                ) && event.payload["name"] == "file_change"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(file_events.len(), file_change_values.len());
+        let raw = std::fs::read(&resume_capture.stdout_log).unwrap();
+        for event in file_events {
+            assert_eq!(event.raw_ref.stream, "stdout");
+            let start = event.raw_ref.byte_start as usize;
+            let end = event.raw_ref.byte_end as usize;
+            assert!(start < end && end <= raw.len());
+            assert!(String::from_utf8_lossy(&raw[start..end]).contains("file_change"));
+        }
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

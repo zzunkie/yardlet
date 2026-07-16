@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"11111111-1111-4111-8111-111111111111"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"fresh fixture message"}}
+{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/sample.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/sample.txt","kind":"add"}],"status":"completed"}}
+{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":4}}

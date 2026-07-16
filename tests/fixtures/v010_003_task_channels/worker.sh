@@ -101,6 +101,47 @@ case "$task_id" in
       write_question "native session으로 이어갈까요?"
     fi
     ;;
+  YARD-CODEX-BACKPRESSURE)
+    if [[ "$native_adapter" != true ]]; then
+      printf 'codex backpressure fixture requires the codex adapter\n' >&2
+      exit 66
+    fi
+    if [[ " $* " == *" resume "* ]]; then
+      write_done "Codex resume backpressure fixture 완료"
+      printf '{"type":"thread.started","thread_id":"11111111-1111-4111-8111-111111111111"}\n'
+      printf '{"type":"turn.started"}\n'
+      changes=''
+      for index in $(seq 1 160); do
+        path="/workspace/.agents/skills/issue-20/$(printf '%080d' "$index")/fixture-$index.md"
+        if [[ -n "$changes" ]]; then
+          changes+=','
+        fi
+        changes+="{\"path\":\"$path\",\"kind\":\"update\"}"
+        printf '{"type":"item.started","item":{"id":"item_%s","type":"file_change","changes":[%s],"status":"in_progress"}}\n' "$index" "$changes"
+        printf '{"type":"item.completed","item":{"id":"item_%s","type":"file_change","changes":[%s],"status":"completed"}}\n' "$index" "$changes"
+      done
+      printf '{"type":"item.completed","item":{"id":"item_final","type":"agent_message","text":"resume complete"}}\n'
+      printf '{"type":"turn.completed","usage":{"input_tokens":20,"cached_input_tokens":10,"output_tokens":8}}\n'
+    else
+      printf '{"type":"thread.started","thread_id":"11111111-1111-4111-8111-111111111111"}\n'
+      printf '{"type":"turn.started"}\n'
+      printf '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"fresh backpressure fixture"}}\n'
+      printf '{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/sample.txt","kind":"add"}],"status":"in_progress"}}\n'
+      printf '{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/sample.txt","kind":"add"}],"status":"completed"}}\n'
+      write_question "native resume backpressure를 재현할까요?"
+    fi
+    ;;
+  YARD-CODEX-TAIL)
+    if [[ "$native_adapter" != true ]]; then
+      printf 'codex tail fixture requires the codex adapter\n' >&2
+      exit 66
+    fi
+    write_done "Codex unsaturated tail fixture 완료"
+    printf '{"type":"thread.started","thread_id":"11111111-1111-4111-8111-111111111111"}\n'
+    for index in $(seq 1 64); do
+      printf '{"type":"item.completed","item":{"id":"tail_%s","type":"agent_message","text":"canonical tail %s"}}\n' "$index" "$index"
+    done
+    ;;
   YARD-REDIRECT)
     if grep -q 'Explicit continuation packet' <<<"$packet"; then
       printf 'redirected worker public completion\n'

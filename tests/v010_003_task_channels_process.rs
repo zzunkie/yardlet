@@ -569,6 +569,175 @@ mod unix {
     }
 
     #[test]
+    fn codex_resume_file_change_backpressure_completes_with_bounded_public_log() {
+        let fixture = FixtureWorkspace::new("codex-resume-file-change-backpressure");
+        fixture.write_queue(
+            "  - id: YARD-CODEX-BACKPRESSURE\n    title: Codex resume file change backpressure\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n",
+        );
+
+        fixture.run(&["run", "--task", "YARD-CODEX-BACKPRESSURE", "--execute"]);
+        assert_eq!(
+            task_state(&fixture.root, "YARD-CODEX-BACKPRESSURE"),
+            "needs_user"
+        );
+
+        let mut resumed = Command::new(&fixture.binary)
+            .args([
+                "answer",
+                "resume",
+                "--task",
+                "YARD-CODEX-BACKPRESSURE",
+                "--action-id",
+                "act-codex-backpressure",
+            ])
+            .current_dir(&fixture.root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        assert!(
+            wait_until(Duration::from_secs(10), || {
+                files_below(&fixture.root.join(".agents/runs"), "/result.json")
+                    .iter()
+                    .any(|path| {
+                        fs::read_to_string(path)
+                            .is_ok_and(|raw| raw.contains("Codex resume backpressure fixture 완료"))
+                    })
+            }),
+            "resume fixture never published its successful result"
+        );
+        let result_seen = Instant::now();
+        let exited = wait_until(Duration::from_secs(10), || {
+            resumed.try_wait().unwrap().is_some()
+        });
+        if !exited {
+            let _ = resumed.kill();
+        }
+        let output = resumed.wait_with_output().unwrap();
+        assert!(exited, "Yardlet parent exceeded the 10 second hard timeout");
+        assert!(
+            result_seen.elapsed() < Duration::from_secs(5),
+            "Yardlet parent did not complete within 5 seconds of result.json"
+        );
+        assert!(
+            output.status.success(),
+            "backpressure fixture failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let channel = channel_dir(&fixture.root, "YARD-CODEX-BACKPRESSURE");
+        let attempts = yaml_dir(&channel.join("attempts"));
+        let resumed_attempt = attempts
+            .iter()
+            .find(|attempt| string(attempt, "continuation") == "native_resume")
+            .unwrap();
+        let stdout_path = {
+            let path = PathBuf::from(string(resumed_attempt, "raw_stdout_ref"));
+            if path.is_absolute() {
+                path
+            } else {
+                fixture.root.join(".agents").join(path)
+            }
+        };
+        let raw = fs::read(&stdout_path).unwrap();
+        let raw_lines = String::from_utf8_lossy(&raw)
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let file_change_values = raw_lines
+            .iter()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|value| value["item"]["type"] == "file_change")
+            .collect::<Vec<_>>();
+        assert_eq!(file_change_values.len(), 320);
+        let final_change_bytes =
+            serde_json::to_vec(&file_change_values.last().unwrap()["item"]["changes"])
+                .unwrap()
+                .len();
+        let public_overhead_bound = file_change_values.len() * 128;
+        let non_file_bytes = raw_lines
+            .iter()
+            .filter(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .map(|value| value["item"]["type"] != "file_change")
+                    .unwrap_or(true)
+            })
+            .map(|line| line.len() + 1)
+            .sum::<usize>();
+        let worker_output = files_below(&fixture.root.join(".agents/runs"), "/worker-output.log");
+        assert_eq!(worker_output.len(), 2);
+        let public_len = worker_output
+            .iter()
+            .map(|path| fs::metadata(path).unwrap().len() as usize)
+            .sum::<usize>();
+        let public_bound = final_change_bytes + public_overhead_bound + non_file_bytes + 1024;
+        assert!(
+            public_len <= public_bound,
+            "cumulative file_change amplification: public={public_len} bound={public_bound}"
+        );
+
+        let events = yaml_dir(&channel.join("events"));
+        let resumed_file_events = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    string(event, "event_type"),
+                    "tool.started" | "tool.completed"
+                ) && event["payload"]["name"] == "file_change"
+                    && event["attempt_id"] == resumed_attempt["attempt_id"]
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !resumed_file_events.is_empty() && resumed_file_events.len() < file_change_values.len(),
+            "fixture did not exercise bounded public-event queue backpressure"
+        );
+        let completed = events
+            .iter()
+            .find(|event| {
+                string(event, "event_type") == "worker.completed"
+                    && event["attempt_id"] == resumed_attempt["attempt_id"]
+            })
+            .expect("resumed worker.completed");
+        assert_eq!(completed["payload"]["result"], "succeeded");
+        assert_eq!(task_state(&fixture.root, "YARD-CODEX-BACKPRESSURE"), "done");
+        for event in resumed_file_events {
+            let start = number(&event["raw_ref"], "byte_start") as usize;
+            let end = number(&event["raw_ref"], "byte_end") as usize;
+            assert!(start < end && end <= raw.len());
+            assert!(String::from_utf8_lossy(&raw[start..end]).contains("file_change"));
+        }
+    }
+
+    #[test]
+    fn codex_unsaturated_publisher_preserves_canonical_event_tail() {
+        let fixture = FixtureWorkspace::new("codex-unsaturated-publisher-tail");
+        fixture.write_queue(
+            "  - id: YARD-CODEX-TAIL\n    title: Codex unsaturated publisher tail\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n",
+        );
+
+        fixture.run(&["run", "--task", "YARD-CODEX-TAIL", "--execute"]);
+
+        let channel = channel_dir(&fixture.root, "YARD-CODEX-TAIL");
+        let attempts = yaml_dir(&channel.join("attempts"));
+        assert_eq!(attempts.len(), 1);
+        let attempt_id = string(&attempts[0], "attempt_id");
+        let events = yaml_dir(&channel.join("events"));
+        let messages = events
+            .iter()
+            .filter(|event| {
+                string(event, "event_type") == "worker.message" && event["attempt_id"] == attempt_id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(messages.len(), 64, "canonical message tail was truncated");
+        assert_eq!(
+            string(&messages[63]["payload"], "text"),
+            "canonical tail 64"
+        );
+        assert_eq!(task_state(&fixture.root, "YARD-CODEX-TAIL"), "done");
+    }
+
+    #[test]
     fn running_redirect_records_stop_checkpoint_guidance_and_restart_dedupe() {
         let fixture = FixtureWorkspace::new("running-redirect");
         fixture.write_queue(
@@ -585,12 +754,18 @@ mod unix {
         let started = wait_until(Duration::from_secs(10), || {
             task_state(&fixture.root, "YARD-REDIRECT") == "running"
                 && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
+                && files_below(&fixture.root.join(".agents/worktrees"), "/handoff.md")
+                    .iter()
+                    .any(|path| {
+                        fs::read_to_string(path)
+                            .is_ok_and(|text| text.contains("checkpoint before redirect"))
+                    })
         });
         if !started {
             let _ = running.kill();
             let output = running.wait_with_output().unwrap();
             panic!(
-                "redirect fixture never reached running\nstdout:\n{}\nstderr:\n{}",
+                "redirect fixture never reached running with a checkpoint handoff\nstdout:\n{}\nstderr:\n{}",
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
