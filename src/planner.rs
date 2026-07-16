@@ -1142,6 +1142,10 @@ fn ingest_follow_ups_inner(
                         governing.routing_provenance.governing_task_id
                     );
             }
+            // Runtime fallback may select another ready worker for an attempt,
+            // but it never authorizes a worker-authored follow-up to rewrite
+            // the governing preferred worker stored in the queue. Dispatch
+            // enforces the same recorded-lineage invariant.
             if !requested_worker.is_empty() && requested_worker != governing.worker_id {
                 bail!(
                         "worker-proposed follow-up '{}' conflicts with governing worker '{}': requested '{}'",
@@ -2674,6 +2678,14 @@ routing:
         };
         for (label, follow_up) in [
             (
+                "governing worker",
+                FollowUpTask {
+                    title: "worker conflict".into(),
+                    preferred_worker: "claude-code".into(),
+                    ..Default::default()
+                },
+            ),
+            (
                 "model",
                 FollowUpTask {
                     title: "model conflict".into(),
@@ -2706,6 +2718,44 @@ routing:
             assert!(error.to_string().contains(label), "{error:#}");
             assert_eq!(queue.tasks.len(), 1, "conflict must not partially ingest");
         }
+    }
+
+    #[test]
+    fn governing_follow_up_rejects_worker_conflict_when_runtime_failover_is_enabled() {
+        use crate::schemas::{FollowUpTask, ResolvedWorkerSelection, RoutingProvenance};
+        let plan: PlanningResult = serde_json::from_str(
+            r#"{ "summary": "s", "tasks": [{ "id": "YARD-001", "title": "governing", "risk": "low" }] }"#,
+        )
+        .unwrap();
+        let governing = ResolvedWorkerSelection {
+            worker_id: "codex".into(),
+            model: "gpt-5.6-sol".into(),
+            fallback_enabled: true,
+            routing_provenance: RoutingProvenance {
+                governing_task_id: "YARD-001".into(),
+                governing_worker_id: "codex".into(),
+                governing_model: "gpt-5.6-sol".into(),
+                governing_fallback_enabled: true,
+                ..Default::default()
+            },
+        };
+        let mut queue = build_queue("intent-exact", &plan);
+        let error = ingest_follow_ups_with_governing(
+            &mut queue,
+            &[],
+            &[FollowUpTask {
+                title: "worker conflict with failover".into(),
+                preferred_worker: "claude-code".into(),
+                fallback_enabled: Some(true),
+                ..Default::default()
+            }],
+            None,
+            &governing,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("governing worker"), "{error:#}");
+        assert_eq!(queue.tasks.len(), 1, "conflict must not partially ingest");
     }
 
     #[test]
