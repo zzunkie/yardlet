@@ -5054,7 +5054,7 @@ fn handoff_is_failover_note_only(content: &str) -> bool {
 /// one, so the real author is only readable from the pre-writer run directory.
 /// A handoff.md holding only the core failover note is classified core-authored
 /// even though the file exists — see `handoff_is_worker_authored`.
-fn plan_finalization_artifact_entries(
+pub(crate) fn plan_finalization_artifact_entries(
     run_dir: &std::path::Path,
 ) -> [(&'static str, &'static str, bool); 5] {
     let handoff_worker_authored = handoff_is_worker_authored(&run_dir.join("handoff.md"));
@@ -6191,7 +6191,10 @@ fn record_failover(run_dir: &std::path::Path, from: &str, to: &str, reason: &str
     );
 }
 
-fn append_failover_note(run_dir: &std::path::Path, note: &str) -> Result<()> {
+/// Shared by the serial and parallel failover paths so the appended heading
+/// can never drift from `WORKER_FAILOVER_HEADING` and the authorship
+/// classifier (`handoff_is_worker_authored`).
+pub(crate) fn append_failover_note(run_dir: &std::path::Path, note: &str) -> Result<()> {
     let mut md = format!("\n## {WORKER_FAILOVER_HEADING}\n\n");
     md.push_str(note);
     md.push('\n');
