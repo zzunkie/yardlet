@@ -276,6 +276,237 @@ mod unix {
         .unwrap();
     }
 
+    fn confirm_exact_codex_task(fixture: &FixtureWorkspace) {
+        let planner = fixture.root.join(".agents/fixture-bin/exact-planner.sh");
+        fs::write(
+            &planner,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'exact-planner 1.0\n'
+  exit 0
+fi
+run_dir="$1"
+mkdir -p "$run_dir"
+cat >"$run_dir/planning-result.json" <<'JSON'
+{
+  "summary": "confirmed exact dispatch fixture",
+  "rationale": "exercise resolved selection stamping after confirmation",
+  "allowed_scope": ["src/run.rs"],
+  "out_of_scope": [],
+  "acceptance": [{"statement": "confirmed exact dispatch completes"}],
+  "ambiguity": {"score": "low", "open_questions": []},
+  "tasks": [{
+    "id": "YARD-EXACT-CONFIRMED",
+    "title": "exact lineage remediation from confirmed plan",
+    "kind": "implementation",
+    "risk": "low",
+    "preferred_worker": "codex",
+    "model": "auto",
+    "fallback_enabled": false,
+    "effort": "auto",
+    "depends_on": [],
+    "skills": [],
+    "required_capabilities": [],
+    "allowed_scope": ["src/run.rs"],
+    "acceptance": ["confirmed exact dispatch completes"],
+    "worker_rationale": "deterministic exact dispatch fixture"
+  }],
+  "questions_for_user": []
+}
+JSON
+"##,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&planner).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&planner, permissions).unwrap();
+        fs::write(
+            fixture.root.join(".agents/workers.yaml"),
+            format!(
+                "schema_version: 1\nworkers:\n  - id: fixture-planner\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-planner\n  fallback_order: [fixture-planner]\n  planning_gate:\n    primary: fixture-planner\n    fallback: \"\"\n",
+                planner.display()
+            ),
+        )
+        .unwrap();
+
+        fixture.run(&[
+            "new",
+            "confirmed exact dispatch fixture",
+            "--worker",
+            "fixture-planner",
+        ]);
+        let show = fixture.run(&["planning", "show", "--json"]);
+        let projection: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+        let proposal = projection["pending_proposals"][0]["proposal_id"]
+            .as_str()
+            .unwrap();
+        fixture.run(&[
+            "planning",
+            "accept",
+            proposal,
+            "--expected-head",
+            "none",
+            "--action-id",
+            "act-exact-dispatch-accept",
+        ]);
+        let show = fixture.run(&["planning", "show", "--json"]);
+        let projection: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+        let head = projection["session"]["current_head"].as_str().unwrap();
+        fixture.run(&[
+            "planning",
+            "confirm",
+            "--expected-head",
+            head,
+            "--action-id",
+            "act-exact-dispatch-confirm",
+        ]);
+        write_exact_codex_workers(fixture, 0);
+    }
+
+    fn confirm_policy_failover_task(fixture: &FixtureWorkspace) {
+        let planner = fixture.root.join(".agents/fixture-bin/failover-planner.sh");
+        fs::write(
+            &planner,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'failover-planner 1.0\n'
+  exit 0
+fi
+run_dir="$1"
+mkdir -p "$run_dir"
+cat >"$run_dir/planning-result.json" <<'JSON'
+{
+  "summary": "confirmed policy failover fixture",
+  "rationale": "exercise receipt-bound failover selection after confirmation",
+  "allowed_scope": ["src/run.rs"],
+  "out_of_scope": [],
+  "acceptance": [{"statement": "policy-authorized failover completes"}],
+  "ambiguity": {"score": "low", "open_questions": []},
+  "tasks": [{
+    "id": "YARD-FAILOVER",
+    "title": "policy-authorized worker failover",
+    "kind": "implementation",
+    "risk": "low",
+    "preferred_worker": "fixture-primary",
+    "model": "auto",
+    "effort": "auto",
+    "depends_on": [],
+    "skills": [],
+    "required_capabilities": [],
+    "allowed_scope": ["src/run.rs"],
+    "acceptance": ["policy-authorized failover completes"],
+    "worker_rationale": "deterministic failover fixture"
+  }],
+  "questions_for_user": []
+}
+JSON
+"##,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&planner).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&planner, permissions).unwrap();
+        fs::write(
+            fixture.root.join(".agents/workers.yaml"),
+            format!(
+                "schema_version: 1\nworkers:\n  - id: fixture-planner\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-planner\n  fallback_order: [fixture-planner]\n  planning_gate:\n    primary: fixture-planner\n    fallback: \"\"\n",
+                planner.display()
+            ),
+        )
+        .unwrap();
+
+        fixture.run(&[
+            "new",
+            "confirmed policy failover fixture",
+            "--worker",
+            "fixture-planner",
+        ]);
+        let show = fixture.run(&["planning", "show", "--json"]);
+        let projection: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+        let proposal = projection["pending_proposals"][0]["proposal_id"]
+            .as_str()
+            .unwrap();
+        fixture.run(&[
+            "planning",
+            "accept",
+            proposal,
+            "--expected-head",
+            "none",
+            "--action-id",
+            "act-failover-accept",
+        ]);
+        let show = fixture.run(&["planning", "show", "--json"]);
+        let projection: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+        let head = projection["session"]["current_head"].as_str().unwrap();
+        fixture.run(&[
+            "planning",
+            "confirm",
+            "--expected-head",
+            head,
+            "--action-id",
+            "act-failover-confirm",
+        ]);
+    }
+
+    fn write_policy_failover_workers(fixture: &FixtureWorkspace) {
+        let primary = fixture.root.join(".agents/fixture-bin/no-result-worker.sh");
+        fs::write(
+            &primary,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'no-result-worker 1.0\n'
+  exit 0
+fi
+cat >/dev/null
+printf 'primary intentionally omitted result.json\n' >&2
+"##,
+        )
+        .unwrap();
+        let fallback = fixture.root.join(".agents/fixture-bin/done-worker.sh");
+        fs::write(
+            &fallback,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'done-worker 1.0\n'
+  exit 0
+fi
+run_dir="${1:?run directory is required}"
+cat >/dev/null
+run_id="${run_dir##*/}"
+task_id="$(sed -n 's/^task_id: //p' "$run_dir/run.yaml" | head -n 1)"
+cat >"$run_dir/result.json" <<JSON
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "compact_summary": "policy-authorized failover completed"
+}
+JSON
+printf '# Handoff\n\nPolicy-authorized failover completed.\n' >"$run_dir/handoff.md"
+"##,
+        )
+        .unwrap();
+        for worker in [&primary, &fallback] {
+            let mut permissions = fs::metadata(worker).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(worker, permissions).unwrap();
+        }
+        fs::write(
+            fixture.root.join(".agents/workers.yaml"),
+            format!(
+                "schema_version: 1\nworkers:\n  - id: fixture-primary\n    model: primary-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-fallback\n    model: fallback-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-primary\n  fallback_order: [fixture-fallback]\n  allow_preferred_worker_failover: true\n",
+                primary.display(),
+                fallback.display()
+            ),
+        )
+        .unwrap();
+    }
+
     fn run_dirs_for_task(root: &Path, task_id: &str) -> Vec<PathBuf> {
         files_below(&root.join(".agents/runs"), "/run.yaml")
             .into_iter()
@@ -324,6 +555,290 @@ mod unix {
             string(&task["routing_provenance"], "governing_task_id"),
             governing_task_id
         );
+    }
+
+    fn assert_policy_failover_selection(root: &Path) {
+        let queue = read_yaml(&root.join(".agents/work-queue.yaml"));
+        let task = queue["tasks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|task| string(task, "id") == "YARD-FAILOVER")
+            .expect("failover task missing from queue");
+        assert_eq!(string(task, "preferred_worker"), "fixture-fallback");
+        assert_eq!(string(task, "model"), "fallback-model");
+        assert_eq!(task["fallback_enabled"].as_bool(), Some(true));
+        assert_eq!(
+            string(&task["routing_provenance"], "worker_source"),
+            "failover"
+        );
+        assert_eq!(
+            string(&task["routing_provenance"], "fallback_source"),
+            "workspace.routing.allow_preferred_worker_failover"
+        );
+
+        let run_dir = run_dir_for_task(root, "YARD-FAILOVER");
+        let run = read_yaml(&run_dir.join("run.yaml"));
+        let process = read_yaml(&run_dir.join("worker-process.yaml"));
+        assert_eq!(string(&process, "state"), "exited");
+        for receipt in [&run, &process] {
+            let worker_key = if std::ptr::eq(receipt, &run) {
+                "worker"
+            } else {
+                "worker_id"
+            };
+            assert_eq!(string(receipt, worker_key), "fixture-fallback");
+            assert_eq!(string(receipt, "model"), "fallback-model");
+            assert_eq!(receipt["fallback_enabled"].as_bool(), Some(true));
+            assert_eq!(
+                string(&receipt["routing_provenance"], "worker_source"),
+                "failover"
+            );
+        }
+    }
+
+    fn mutate_queue_selection(root: &Path, task_id: &str, field: &str) {
+        let path = root.join(".agents/work-queue.yaml");
+        let mut queue = read_yaml(&path);
+        let task = queue["tasks"]
+            .as_sequence_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|task| string(task, "id") == task_id)
+            .unwrap_or_else(|| panic!("queue task {task_id} not found"));
+        match field {
+            "worker" => task["preferred_worker"] = Value::String("claude-code".into()),
+            "model" => task["model"] = Value::String("fable".into()),
+            "fallback" => {
+                task["fallback_enabled"] =
+                    Value::Bool(!task["fallback_enabled"].as_bool().unwrap_or(false))
+            }
+            "provenance" => {
+                task["routing_provenance"]["model_source"] = Value::String("manual".into())
+            }
+            _ => panic!("unknown selection field {field}"),
+        }
+        fs::write(path, serde_yaml_ng::to_string(&queue).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn confirmed_exact_dispatch_stamps_receipted_selection_and_completes() {
+        let fixture = FixtureWorkspace::new("confirmed-exact-dispatch");
+        confirm_exact_codex_task(&fixture);
+
+        fixture.run(&["run", "--task", "YARD-EXACT-CONFIRMED", "--execute"]);
+
+        assert_eq!(task_state(&fixture.root, "YARD-EXACT-CONFIRMED"), "done");
+        assert_exact_queue_task(
+            &fixture.root,
+            "YARD-EXACT-CONFIRMED",
+            "YARD-EXACT-CONFIRMED",
+        );
+        let run_dir = run_dir_for_task(&fixture.root, "YARD-EXACT-CONFIRMED");
+        assert_exact_receipt_pair(&run_dir, "YARD-EXACT-CONFIRMED");
+        let show = fixture.run(&["planning", "show", "--json"]);
+        let projection: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+        assert_eq!(projection["exact_active_parity"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn policy_authorized_failover_serial_dispatch_is_receipted_and_mutations_fail_closed() {
+        let fixture = FixtureWorkspace::new("confirmed-policy-failover");
+        confirm_policy_failover_task(&fixture);
+        write_policy_failover_workers(&fixture);
+
+        let output = command(
+            &fixture.root,
+            &fixture.binary,
+            &["run", "--task", "YARD-FAILOVER", "--execute"],
+        );
+        if !output.status.success() {
+            let run_dir = run_dir_for_task(&fixture.root, "YARD-FAILOVER");
+            panic!(
+                "failover dispatch failed\nstderr:\n{}\nqueue:\n{}\nrun:\n{}\nprocess:\n{}",
+                String::from_utf8_lossy(&output.stderr),
+                fs::read_to_string(fixture.root.join(".agents/work-queue.yaml")).unwrap(),
+                fs::read_to_string(run_dir.join("run.yaml")).unwrap(),
+                fs::read_to_string(run_dir.join("worker-process.yaml")).unwrap(),
+            );
+        }
+
+        assert_eq!(task_state(&fixture.root, "YARD-FAILOVER"), "done");
+        assert_policy_failover_selection(&fixture.root);
+        let queue_path = fixture.root.join(".agents/work-queue.yaml");
+        let valid_queue = fs::read_to_string(&queue_path).unwrap();
+        for field in ["worker", "model", "fallback", "provenance"] {
+            fs::write(&queue_path, &valid_queue).unwrap();
+            mutate_queue_selection(&fixture.root, "YARD-FAILOVER", field);
+            let tampered = fs::read_to_string(&queue_path).unwrap();
+            let output = command(&fixture.root, &fixture.binary, &["queue"]);
+            assert!(
+                !output.status.success(),
+                "manual failover {field} mutation unexpectedly passed"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("active_runtime_envelope_mismatch")
+                    || stderr.contains("active_runtime_origin_mismatch"),
+                "manual failover {field} mutation returned the wrong failure: {stderr}"
+            );
+            assert_eq!(
+                fs::read_to_string(&queue_path).unwrap(),
+                tampered,
+                "manual failover {field} rejection changed canonical queue bytes"
+            );
+        }
+        fs::write(queue_path, valid_queue).unwrap();
+    }
+
+    #[test]
+    fn policy_authorized_failover_recover_finalizes_receipted_orphan() {
+        let fixture = FixtureWorkspace::new("confirmed-policy-failover-recover");
+        confirm_policy_failover_task(&fixture);
+        write_policy_failover_workers(&fixture);
+        let config_path = fixture.root.join(".agents/yardlet.yaml");
+        let mut config = read_yaml(&config_path);
+        config["auto_commit"] = Value::Bool(true);
+        fs::write(config_path, serde_yaml_ng::to_string(&config).unwrap()).unwrap();
+        let hooks = fixture.root.join(".agents/hooks/post-run.d");
+        fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("00-pause-before-finalize.sh");
+        fs::write(
+            &hook,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+touch .agents/failover-hook-entered
+for _ in $(seq 1 400); do
+  if [[ -f .agents/failover-hook-release ]]; then
+    touch .agents/failover-hook-exited
+    exit 0
+  fi
+  sleep 0.05
+done
+exit 1
+"##,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&hook).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&hook, permissions).unwrap();
+
+        let mut running = Command::new(&fixture.binary)
+            .args(["run", "--task", "YARD-FAILOVER", "--execute"])
+            .current_dir(&fixture.root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        assert!(
+            wait_until(Duration::from_secs(10), || {
+                if !fixture.root.join(".agents/failover-hook-entered").is_file() {
+                    return false;
+                }
+                let Some(run_dir) = run_dirs_for_task(&fixture.root, "YARD-FAILOVER")
+                    .into_iter()
+                    .max()
+                else {
+                    return false;
+                };
+                run_dir.join("result.json").is_file()
+                    && run_dir.join("worker-process.yaml").is_file()
+                    && string(&read_yaml(&run_dir.join("worker-process.yaml")), "state") == "exited"
+                    && task_state(&fixture.root, "YARD-FAILOVER") == "running"
+            }),
+            "failover worker did not reach the receipted pre-finalize crash window"
+        );
+        running.kill().unwrap();
+        running.wait().unwrap();
+        fs::write(
+            fixture.root.join(".agents/failover-hook-release"),
+            "release\n",
+        )
+        .unwrap();
+        assert!(wait_until(Duration::from_secs(3), || fixture
+            .root
+            .join(".agents/failover-hook-exited")
+            .is_file()));
+
+        let recovered = fixture.run(&["recover"]);
+
+        assert!(
+            !String::from_utf8_lossy(&recovered.stdout).contains("recovery finalize error"),
+            "recover rejected the receipted failover selection: {}",
+            String::from_utf8_lossy(&recovered.stdout)
+        );
+        let recovered_state = task_state(&fixture.root, "YARD-FAILOVER");
+        if recovered_state != "done" {
+            let run_dir = run_dir_for_task(&fixture.root, "YARD-FAILOVER");
+            panic!(
+                "recover left failover task {recovered_state}\nstdout:\n{}\npartial-reason:\n{}\nrun:\n{}",
+                String::from_utf8_lossy(&recovered.stdout),
+                fs::read_to_string(run_dir.join("partial-reason")).unwrap_or_default(),
+                fs::read_to_string(run_dir.join("run.yaml")).unwrap(),
+            );
+        }
+        assert_policy_failover_selection(&fixture.root);
+    }
+
+    #[test]
+    fn confirmed_runtime_addition_stamps_the_same_receipted_exact_selection() {
+        let fixture = FixtureWorkspace::new("confirmed-runtime-exact-dispatch");
+        confirm_exact_codex_task(&fixture);
+        fixture.run(&[
+            "add",
+            "exact lineage remediation runtime addition",
+            "--worker",
+            "codex",
+            "--scope",
+            "src/run.rs",
+        ]);
+        let queue = read_yaml(&fixture.root.join(".agents/work-queue.yaml"));
+        let task_id = queue["tasks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|task| string(task, "title") == "exact lineage remediation runtime addition")
+            .map(|task| string(task, "id").to_string())
+            .expect("runtime-added task must be materialized");
+
+        fixture.run(&["run", "--task", &task_id, "--execute"]);
+
+        assert_eq!(task_state(&fixture.root, &task_id), "done");
+        assert_exact_queue_task(&fixture.root, &task_id, &task_id);
+        let run_dir = run_dir_for_task(&fixture.root, &task_id);
+        assert_exact_receipt_pair(&run_dir, &task_id);
+    }
+
+    #[test]
+    fn manual_selection_mutations_remain_fail_closed_after_receipted_dispatch() {
+        let fixture = FixtureWorkspace::new("confirmed-exact-dispatch-mutation");
+        confirm_exact_codex_task(&fixture);
+        fixture.run(&["run", "--task", "YARD-EXACT-CONFIRMED", "--execute"]);
+        let queue_path = fixture.root.join(".agents/work-queue.yaml");
+        let valid_queue = fs::read_to_string(&queue_path).unwrap();
+
+        for field in ["worker", "model", "fallback", "provenance"] {
+            fs::write(&queue_path, &valid_queue).unwrap();
+            mutate_queue_selection(&fixture.root, "YARD-EXACT-CONFIRMED", field);
+            let tampered = fs::read_to_string(&queue_path).unwrap();
+            let output = command(&fixture.root, &fixture.binary, &["queue"]);
+            assert!(
+                !output.status.success(),
+                "manual {field} mutation unexpectedly passed"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("active_runtime_envelope_mismatch")
+                    || stderr.contains("active_runtime_origin_mismatch"),
+                "manual {field} mutation returned the wrong failure: {stderr}"
+            );
+            assert_eq!(
+                fs::read_to_string(&queue_path).unwrap(),
+                tampered,
+                "manual {field} rejection changed canonical queue bytes"
+            );
+        }
+        fs::write(queue_path, valid_queue).unwrap();
     }
 
     #[test]

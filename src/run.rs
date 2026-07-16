@@ -659,6 +659,55 @@ impl RunRecord {
     }
 }
 
+pub(crate) fn has_receipted_runtime_selection(
+    ws: &Workspace,
+    intent_id: &str,
+    task_id: &str,
+    selection: &crate::schemas::ResolvedWorkerSelection,
+) -> bool {
+    let Ok(entries) = std::fs::read_dir(ws.runs_dir()) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let run_dir = entry.path();
+        let Some(path_run_id) = run_dir.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        if !path_run_id.starts_with("run-") {
+            return false;
+        }
+        let Ok(record) = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")) else {
+            return false;
+        };
+        if record.schema_version != 1
+            || record.run_id != path_run_id
+            || record.task_id != task_id
+            || record.intent_id != intent_id
+            || record.started_at.trim().is_empty()
+            || record.resolved_selection().as_ref() != Some(selection)
+        {
+            return false;
+        }
+        let Ok(process) = workers::load_worker_process_provenance(&run_dir) else {
+            return false;
+        };
+        process.schema_version == 1
+            && process.run_id == record.run_id
+            && !process.attempt_id.trim().is_empty()
+            && process.worker_id == selection.worker_id
+            && process.model == selection.model
+            && process.fallback_enabled == selection.fallback_enabled
+            && process.routing_provenance == selection.routing_provenance
+            && process.pid != 0
+            && !process.process_start_marker.trim().is_empty()
+            && process.state == "exited"
+            && process
+                .completed_at
+                .as_deref()
+                .is_some_and(|completed| !completed.trim().is_empty())
+    })
+}
+
 pub(crate) fn update_run_selection(
     run_dir: &std::path::Path,
     selection: &crate::schemas::ResolvedWorkerSelection,
@@ -1649,14 +1698,18 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         .map(|r| r.worker_id.clone())
         .unwrap_or_else(|_| candidate_id.clone());
     let resolved_selection = resolved.as_ref().ok().map(|resolved| resolved.selection());
+    // Keep the confirmed/runtime-added contract as the failover policy input.
+    // The in-flight task below is stamped with the first effective selection
+    // for packet/receipt parity; resolving failover from that stamped copy
+    // would incorrectly pin an `auto` task to the first worker's model and
+    // provenance instead of producing a fresh policy-authorized selection.
+    let failover_task = task.clone();
     if opts.execute {
         if let Some(selection) = resolved_selection
             .as_ref()
             .filter(|selection| !selection.model.trim().is_empty())
         {
             apply_selection_to_task(&mut task, selection);
-            queue.tasks[idx] = task.clone();
-            ws.save_queue_locked(&planning_lock, &queue)?;
         }
     }
 
@@ -2147,7 +2200,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             &workers,
             &billing,
             &active_worker_id,
-            &task,
+            &failover_task,
         ) {
             Ok(alt) => {
                 let from = active_worker_id.clone();
@@ -2164,7 +2217,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 active_reason = format!("failover from {from} ({})", alt.reason);
                 active_bin = alt.bin;
                 let profile = find_worker(&workers.workers, &active_worker_id)?;
-                eff_profile = workers::effective_profile(profile, &task.model, &task.effort);
+                eff_profile = workers::effective_profile(
+                    profile,
+                    &failover_task.model,
+                    &failover_task.effort,
+                );
                 update_run_selection(&run_dir, &active_selection)?;
                 if worker_run_dir != run_dir.as_path() {
                     update_run_selection(worker_run_dir, &active_selection)?;
@@ -4326,6 +4383,9 @@ fn finalize_on_latest_queue_locked(
     if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == task_id) {
         let from = t.state;
         t.state = state;
+        if let Some(selection) = governing {
+            apply_selection_to_task(t, selection);
+        }
         let ingested = if let Some(governing) = governing {
             match crate::planner::ingest_follow_ups_with_governing(
                 &mut latest,
@@ -4382,6 +4442,9 @@ fn finalize_on_latest_queue_locked(
             .ok_or_else(|| anyhow!("task {task_id} is missing from fallback queue"))?;
         let from = task.state;
         task.state = state;
+        if let Some(selection) = governing {
+            apply_selection_to_task(task, selection);
+        }
         let ingested = if let Some(governing) = governing {
             match crate::planner::ingest_follow_ups_with_governing(
                 &mut bootstrapped,
