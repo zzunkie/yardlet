@@ -23,7 +23,7 @@ use crate::schemas::{
     ChannelEvent, ChannelEventType, ContinuationMode, Conversation, ConversationTurn,
     DraftRevision, EventActor, EventActorKind, FollowUpTask, IntentContract, PlanningActionReceipt,
     PlanningEvent, PlanningProposal, PlanningSession, PreservedFollowUps, Question, QuestionState,
-    RedirectActionOutcome, RedirectActionRequest, ResourceActionReceipt,
+    RedirectActionOutcome, RedirectActionRequest, ResolvedWorkerSelection, ResourceActionReceipt,
     ResourceActionRecoveryReceipt, ResourceIndex, ResourceObservation, ResourceStatus,
     ResourceTaskIndex, RuntimeCapabilityCommit, RuntimeCapabilityReceipt, RuntimeResource,
     RuntimeResourceProposal, RuntimeTaskCommit, RuntimeTaskReceipt, SelectionPolicy, Task,
@@ -1023,11 +1023,23 @@ impl Workspace {
         receipt: &RuntimeTaskReceipt,
         dependency_additions: &[String],
         capability_clear: bool,
+        selection: Option<&ResolvedWorkerSelection>,
     ) -> Result<()> {
         self.validate_runtime_task_receipt_identity(queue, task, receipt)?;
         let mut expected_dependencies = receipt.task.depends_on.clone();
         expected_dependencies.extend(dependency_additions.iter().cloned());
-        let mut normalized = task.task.clone();
+        let mut normalized = if let Some(selection) = selection {
+            selection
+                .normalized_runtime_overlay(&receipt.task, &task.task)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "active_runtime_origin_mismatch: task {} has an invalid dispatch selection overlay",
+                        task.task.id
+                    )
+                })?
+        } else {
+            task.task.clone()
+        };
         normalized.depends_on = receipt.task.depends_on.clone();
         if capability_clear {
             if receipt.task.required_capabilities.is_empty()
@@ -1500,6 +1512,29 @@ impl Workspace {
         Ok(baselines)
     }
 
+    fn receipted_runtime_selections(
+        &self,
+        queue: &ActivatedQueue,
+        baselines: &BTreeMap<String, Task>,
+    ) -> BTreeMap<String, ResolvedWorkerSelection> {
+        queue
+            .tasks
+            .iter()
+            .filter_map(|task| {
+                let baseline = baselines.get(&task.task.id)?;
+                let selection = ResolvedWorkerSelection::from_task(&task.task)?;
+                selection.normalized_runtime_overlay(baseline, &task.task)?;
+                crate::run::has_receipted_runtime_selection(
+                    self,
+                    &queue.intent_id,
+                    &task.task.id,
+                    &selection,
+                )
+                .then(|| (task.task.id.clone(), selection))
+            })
+            .collect()
+    }
+
     fn repair_runtime_capability_commits(&self, queue: &ActivatedQueue) -> Result<()> {
         let queue_digest = Self::runtime_queue_digest(queue)?;
         let baselines = self.runtime_contract_baselines(queue)?;
@@ -1645,6 +1680,7 @@ impl Workspace {
         }
         let mut capability_clears = BTreeSet::new();
         let baselines = self.runtime_contract_baselines(queue)?;
+        let authorized_selections = self.receipted_runtime_selections(queue, &baselines);
         for task in &queue.tasks {
             let Some(planned) = baselines.get(&task.task.id) else {
                 continue;
@@ -1699,6 +1735,7 @@ impl Workspace {
                     .map(Vec::as_slice)
                     .unwrap_or(&[]),
                 capability_clears.contains(&task.task.id),
+                authorized_selections.get(&task.task.id),
             )?;
         }
         let confirmed_runs_before = runs_before
@@ -1708,6 +1745,7 @@ impl Workspace {
         if !queue.runtime_envelope_matches_materialized_with_overlays(
             &confirmed_runs_before,
             &capability_clears,
+            &authorized_selections,
         ) {
             bail!(
                 "active_runtime_envelope_mismatch: current tasks differ from immutable confirmed contracts"
