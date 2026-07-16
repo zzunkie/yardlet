@@ -23,6 +23,14 @@
   handoff stays `false`, captured before the fallback writer can create the
   file.
 
+- **A failover-note-only handoff no longer passes as worker output.** The
+  failover note is appended with create-if-missing semantics, so a run where
+  the worker never wrote `handoff.md` could leave a core-authored note file
+  classified `worker_authored=true`. Classification now reads the content: a
+  handoff holding only `## Worker failover` sections is recorded
+  `worker_authored=false`, while a worker-authored handoff keeps `true` after
+  the note is appended.
+
 - **Passing reviews remain resolvable when auto-commit is disabled.** A review
   whose structured verdict and validation pass now stays `Partial` for manual
   integration instead of being reclassified as a failed review with no

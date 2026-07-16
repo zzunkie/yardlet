@@ -5004,15 +5004,60 @@ fn record_artifact_created(
     Ok(())
 }
 
+/// Heading of the core-appended failover section. Shared by the writer
+/// (`append_failover_note`) and the authorship classifier so they cannot
+/// drift apart.
+const WORKER_FAILOVER_HEADING: &str = "Worker failover";
+
+/// Was this `handoff.md` authored by the worker?
+///
+/// Existence alone is not proof: `append_failover_note` writes through
+/// `state::append_str`, which creates a missing file, so a handoff.md holding
+/// nothing but core-appended `## Worker failover` sections was created by the
+/// core failover path. Unreadable (non-UTF-8) content keeps the prior
+/// existence-based classification — authorship is only denied when every
+/// section is provably core-appended.
+fn handoff_is_worker_authored(path: &std::path::Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    match std::fs::read_to_string(path) {
+        Ok(content) => !handoff_is_failover_note_only(&content),
+        Err(_) => true,
+    }
+}
+
+/// Does this handoff consist solely of `## Worker failover` sections?
+fn handoff_is_failover_note_only(content: &str) -> bool {
+    let mut in_failover_section = false;
+    let mut saw_failover_section = false;
+    for line in content.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            if heading.trim() != WORKER_FAILOVER_HEADING {
+                return false;
+            }
+            in_failover_section = true;
+            saw_failover_section = true;
+            continue;
+        }
+        if !in_failover_section && !line.trim().is_empty() {
+            return false;
+        }
+    }
+    saw_failover_section
+}
+
 /// Classify the finalization artifacts to record for `run_dir`.
 ///
 /// Must run BEFORE `compact::write_evaluator_summary`: that writer creates
 /// `handoff.md` as an evaluator fallback only when the worker did not author
 /// one, so the real author is only readable from the pre-writer run directory.
+/// A handoff.md holding only the core failover note is classified core-authored
+/// even though the file exists — see `handoff_is_worker_authored`.
 fn plan_finalization_artifact_entries(
     run_dir: &std::path::Path,
 ) -> [(&'static str, &'static str, bool); 5] {
-    let handoff_worker_authored = run_dir.join("handoff.md").is_file();
+    let handoff_worker_authored = handoff_is_worker_authored(&run_dir.join("handoff.md"));
     [
         ("result.json", "worker_result", true),
         ("evaluation.json", "evaluation", false),
@@ -6147,7 +6192,7 @@ fn record_failover(run_dir: &std::path::Path, from: &str, to: &str, reason: &str
 }
 
 fn append_failover_note(run_dir: &std::path::Path, note: &str) -> Result<()> {
-    let mut md = String::from("\n## Worker failover\n\n");
+    let mut md = format!("\n## {WORKER_FAILOVER_HEADING}\n\n");
     md.push_str(note);
     md.push('\n');
     append_str(&run_dir.join("checkpoint.md"), &md)?;
@@ -6507,6 +6552,96 @@ mod tests {
         assert!(
             !planned_worker_authored(&entries, "handoff.md"),
             "classification captured pre-fallback must stay worker_authored=false"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn finalization_plan_marks_failover_note_only_handoff_core_authored() {
+        // append_failover_note writes through append_str, which creates a
+        // missing handoff.md; a file holding nothing but that core-appended
+        // note must not pass as worker output.
+        let root = std::env::temp_dir().join(format!(
+            "yard-handoff-failover-note-only-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        append_failover_note(
+            &root,
+            "worker failover: codex -> claude-code; codex exited without result.json \
+             after 1/2 resume attempt(s)",
+        )
+        .unwrap();
+        assert!(root.join("handoff.md").is_file());
+
+        let entries = plan_finalization_artifact_entries(&root);
+        assert!(
+            !planned_worker_authored(&entries, "handoff.md"),
+            "a handoff.md created only by the core failover note must be recorded \
+             worker_authored=false"
+        );
+
+        // A second core-appended note keeps the file core-only.
+        append_failover_note(
+            &root,
+            "worker failover unavailable after claude-code exited without result.json: \
+             no ready worker",
+        )
+        .unwrap();
+        let entries = plan_finalization_artifact_entries(&root);
+        assert!(
+            !planned_worker_authored(&entries, "handoff.md"),
+            "stacked failover notes are still core-authored content"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn failover_note_only_detection_requires_provably_core_content() {
+        // Empty or ambiguous content keeps the existence-based classification;
+        // authorship is only denied when every section is the core note.
+        assert!(!handoff_is_failover_note_only(""));
+        assert!(!handoff_is_failover_note_only("# Worker handoff\n"));
+        assert!(handoff_is_failover_note_only(
+            "\n## Worker failover\n\nworker failover: a -> b; no result.json\n"
+        ));
+        // Any other section heading is content beyond the core note.
+        assert!(!handoff_is_failover_note_only(
+            "\n## Worker failover\n\nnote\n\n## Summary\n\nworker text\n"
+        ));
+        // Worker prose before the appended note keeps worker authorship.
+        assert!(!handoff_is_failover_note_only(
+            "did the work\n\n## Worker failover\n\nnote\n"
+        ));
+    }
+
+    #[test]
+    fn finalization_plan_keeps_worker_handoff_with_failover_note_worker_authored() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-handoff-worker-plus-failover-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        write_str(
+            &root.join("handoff.md"),
+            "# Worker handoff\n\nWhat I changed and why.\n",
+        )
+        .unwrap();
+        append_failover_note(
+            &root,
+            "worker failover: codex -> claude-code; codex exited without result.json \
+             after 1/2 resume attempt(s)",
+        )
+        .unwrap();
+
+        let entries = plan_finalization_artifact_entries(&root);
+        assert!(
+            planned_worker_authored(&entries, "handoff.md"),
+            "a worker-authored handoff.md must stay worker_authored=true after the \
+             failover note is appended"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
