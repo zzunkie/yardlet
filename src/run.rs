@@ -4997,8 +4997,29 @@ fn record_artifact_created(
         &proposal,
         &path.display().to_string(),
     )?;
+    // ArtifactProposal and the artifact.created payload have no authorship
+    // field yet, so the classification cannot be persisted here; callers keep
+    // it correct for the provenance consumer that will add that field.
     let _ = worker_authored;
     Ok(())
+}
+
+/// Classify the finalization artifacts to record for `run_dir`.
+///
+/// Must run BEFORE `compact::write_evaluator_summary`: that writer creates
+/// `handoff.md` as an evaluator fallback only when the worker did not author
+/// one, so the real author is only readable from the pre-writer run directory.
+fn plan_finalization_artifact_entries(
+    run_dir: &std::path::Path,
+) -> [(&'static str, &'static str, bool); 5] {
+    let handoff_worker_authored = run_dir.join("handoff.md").is_file();
+    [
+        ("result.json", "worker_result", true),
+        ("evaluation.json", "evaluation", false),
+        ("evaluator-summary.md", "evaluation", false),
+        ("checkpoint.md", "checkpoint", false),
+        ("handoff.md", "handoff", handoff_worker_authored),
+    ]
 }
 
 fn record_finalization_artifacts(
@@ -5007,6 +5028,7 @@ fn record_finalization_artifacts(
     run_dir: &std::path::Path,
     worker_root: &std::path::Path,
     result: Option<&RunResult>,
+    entries: [(&'static str, &'static str, bool); 5],
 ) -> Result<()> {
     let Some(attempt_id) = std::fs::read_to_string(run_dir.join("latest-attempt"))
         .ok()
@@ -5015,13 +5037,7 @@ fn record_finalization_artifacts(
     else {
         return Ok(());
     };
-    for (name, role, worker_authored) in [
-        ("result.json", "worker_result", true),
-        ("evaluation.json", "evaluation", false),
-        ("evaluator-summary.md", "evaluation", false),
-        ("checkpoint.md", "checkpoint", false),
-        ("handoff.md", "handoff", false),
-    ] {
+    for (name, role, worker_authored) in entries {
         let path = run_dir.join(name);
         let recorded_path = path
             .strip_prefix(&ws.root)
@@ -5304,6 +5320,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         None
     };
 
+    // Plan artifact classification before the evaluator writers run: past this
+    // point a missing handoff.md may be filled in by the evaluator fallback.
+    let finalization_entries = plan_finalization_artifact_entries(run_dir);
     if flags.artifacts {
         compact::write_checkpoint(run_dir, task, &eval, result.as_ref(), intent_summary)?;
         compact::write_evaluator_summary(run_dir, task, &eval, result.as_ref())?;
@@ -5316,7 +5335,14 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         .as_ref()
         .map(|merge| merge.wt_path)
         .unwrap_or(ws.root.as_path());
-    record_finalization_artifacts(ws, &artifact_context, run_dir, worker_root, result.as_ref())?;
+    record_finalization_artifacts(
+        ws,
+        &artifact_context,
+        run_dir,
+        worker_root,
+        result.as_ref(),
+        finalization_entries,
+    )?;
 
     // Harness learning loop (S3): record skills/rules the worker proposed. The
     // worker authored the content; Yardlet (the core) does the writing.
@@ -6417,6 +6443,72 @@ mod tests {
             finalization_artifact_causation(&events, attempt_id),
             Some("evt-validation".to_string())
         );
+    }
+
+    fn planned_worker_authored(entries: &[(&'static str, &'static str, bool)], name: &str) -> bool {
+        entries
+            .iter()
+            .find(|(entry_name, _, _)| *entry_name == name)
+            .unwrap_or_else(|| panic!("missing finalization artifact entry {name}"))
+            .2
+    }
+
+    #[test]
+    fn finalization_plan_marks_worker_authored_handoff() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-handoff-worker-authored-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        write_str(&root.join("handoff.md"), "# Worker handoff\n").unwrap();
+
+        let entries = plan_finalization_artifact_entries(&root);
+        assert!(
+            planned_worker_authored(&entries, "handoff.md"),
+            "a handoff.md the worker wrote must be recorded worker_authored=true"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn finalization_plan_marks_evaluator_fallback_handoff() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-handoff-evaluator-fallback-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let entries = plan_finalization_artifact_entries(&root);
+        assert!(
+            !planned_worker_authored(&entries, "handoff.md"),
+            "an evaluator-fallback handoff.md must be recorded worker_authored=false"
+        );
+        assert!(planned_worker_authored(&entries, "result.json"));
+        for core_owned in ["evaluation.json", "evaluator-summary.md", "checkpoint.md"] {
+            assert!(!planned_worker_authored(&entries, core_owned));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn finalization_plan_is_fixed_before_evaluator_fallback_write() {
+        // finalize_run plans the artifact classification BEFORE
+        // compact::write_evaluator_summary can create the fallback handoff.md;
+        // a fallback appearing afterwards must not flip the classification.
+        let root =
+            std::env::temp_dir().join(format!("yard-handoff-plan-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let entries = plan_finalization_artifact_entries(&root);
+        write_str(&root.join("handoff.md"), "# Handoff: fallback copy\n").unwrap();
+        assert!(
+            !planned_worker_authored(&entries, "handoff.md"),
+            "classification captured pre-fallback must stay worker_authored=false"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
