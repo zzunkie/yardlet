@@ -1038,7 +1038,14 @@ pub(crate) fn finish_worker_attempt(
                     .map(str::trim)
                     .filter(|question| !question.is_empty())
                 {
-                    if let Some(asked) = record_result_question(ws, context, run_dir, question)? {
+                    if let Some(asked) = record_result_question(
+                        ws,
+                        lock,
+                        context,
+                        run_dir,
+                        question,
+                        EventActorKind::Worker,
+                    )? {
                         causation_id = Some(asked.event_id);
                     }
                 }
@@ -1116,9 +1123,11 @@ pub(crate) fn finish_worker_attempt_error(
 
 fn record_result_question(
     ws: &Workspace,
+    lock: Option<&PlanningLock>,
     context: &ChannelRunContext,
     run_dir: &std::path::Path,
     question_text: &str,
+    actor_kind: EventActorKind,
 ) -> Result<Option<ChannelEvent>> {
     let attempt_id = std::fs::read_to_string(run_dir.join("latest-attempt"))
         .with_context(|| format!("reading latest attempt for {}", context.task_id))?;
@@ -1152,17 +1161,21 @@ fn record_result_question(
     } else {
         record_channel_event(
             ws,
-            None,
+            lock,
             context,
             ChannelEventType::QuestionAsked,
             EventActor {
-                kind: EventActorKind::Worker,
-                id: channel
-                    .attempts
-                    .iter()
-                    .find(|attempt| attempt.attempt_id == attempt_id)
-                    .map(|attempt| attempt.worker_id.clone())
-                    .unwrap_or_else(|| "unknown".to_string()),
+                kind: actor_kind,
+                id: if actor_kind == EventActorKind::Worker {
+                    channel
+                        .attempts
+                        .iter()
+                        .find(|attempt| attempt.attempt_id == attempt_id)
+                        .map(|attempt| attempt.worker_id.clone())
+                        .unwrap_or_else(|| "unknown".to_string())
+                } else {
+                    String::new()
+                },
             },
             Some(attempt_id),
             channel.events.last().map(|event| event.event_id.clone()),
@@ -1186,6 +1199,41 @@ fn record_result_question(
     })?;
     ws.load_or_rebuild_task_channel(&context.intent_id, &context.task_id)?;
     Ok(Some(asked))
+}
+
+fn persist_needs_user_question(
+    ws: &Workspace,
+    lock: Option<&PlanningLock>,
+    context: &ChannelRunContext,
+    run_dir: &std::path::Path,
+    question_text: &str,
+    actor_kind: EventActorKind,
+) -> Result<()> {
+    let has_attempt = std::fs::read_to_string(run_dir.join("latest-attempt"))
+        .ok()
+        .is_some_and(|attempt| !attempt.trim().is_empty());
+    if has_attempt {
+        record_result_question(ws, lock, context, run_dir, question_text, actor_kind)?;
+    } else {
+        // Runs created before durable task channels have no attempt identity to
+        // link a typed Question to. Preserve the same non-empty invariant via
+        // the canonical legacy conversation path used by latest_question_for.
+        let run_id = run_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        state::append_conversation_turn(
+            ws,
+            &context.task_id,
+            ConversationTurn {
+                role: TurnRole::Worker,
+                text: question_text.to_string(),
+                run_id: run_id.to_string(),
+                ts: Local::now().to_rfc3339(),
+            },
+        )?;
+    }
+    Ok(())
 }
 
 pub(crate) fn action_attempt_id(action_id: &str) -> String {
@@ -4424,6 +4472,8 @@ pub(crate) struct FeedbackRecord {
     pub failures: Vec<String>,
     pub unmet_acceptance: Vec<String>,
     pub terminal_reason: String,
+    #[serde(default)]
+    pub question_for_user: Option<String>,
 }
 
 fn prior_feedback_cycles(
@@ -4600,7 +4650,7 @@ pub(crate) fn feedback_for_run(
     } else {
         String::new()
     };
-    Some(FeedbackRecord {
+    let mut feedback = FeedbackRecord {
         schema_version: 1,
         run_id: run_id.to_string(),
         task_id: task.id.clone(),
@@ -4611,15 +4661,53 @@ pub(crate) fn feedback_for_run(
         failures,
         unmet_acceptance,
         terminal_reason,
-    })
+        question_for_user: None,
+    };
+    if !feedback.retryable || feedback.cycle > feedback.max_cycles {
+        feedback.question_for_user = Some(feedback_question(task, &feedback));
+    }
+    Some(feedback)
 }
 
 pub(crate) fn feedback_next_state(feedback: &FeedbackRecord) -> TaskState {
     if feedback.retryable && feedback.cycle <= feedback.max_cycles {
         TaskState::Partial
-    } else {
+    } else if feedback
+        .question_for_user
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|question| !question.is_empty())
+    {
         TaskState::NeedsUser
+    } else {
+        TaskState::Failed
     }
+}
+
+fn feedback_question(task: &crate::schemas::Task, feedback: &FeedbackRecord) -> String {
+    let detail = feedback
+        .unmet_acceptance
+        .first()
+        .or_else(|| feedback.failures.first())
+        .map(|detail| detail.trim().chars().take(240).collect::<String>())
+        .filter(|detail| !detail.is_empty());
+    match detail {
+        Some(detail) => format!(
+            "`{}` 작업을 자동으로 완료하지 못했습니다. 확인이 필요한 근거는 `{detail}`입니다. 어떤 방식으로 진행할까요?",
+            task.id
+        ),
+        None => format!(
+            "`{}` 작업을 자동으로 완료하지 못했습니다. 어떤 방식으로 진행할까요?",
+            task.id
+        ),
+    }
+}
+
+fn review_without_remediation_question(task: &crate::schemas::Task) -> String {
+    format!(
+        "`{}` 리뷰가 통과하지 못했고 실행 가능한 수정 작업이 없습니다. 어떤 수정 또는 판정으로 이어갈까요?",
+        task.id
+    )
 }
 
 fn artifact_content_digest(bytes: &[u8]) -> String {
@@ -4945,6 +5033,13 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     let result: Option<RunResult> = std::fs::read_to_string(run_dir.join("result.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok());
+    let mut question_to_persist = result
+        .as_ref()
+        .filter(|result| result.status == "needs_user")
+        .and_then(|result| result.question_for_user.as_deref())
+        .map(str::trim)
+        .filter(|question| !question.is_empty())
+        .map(|question| (question.to_string(), EventActorKind::Worker));
 
     let feedback = feedback_for_run(
         ws,
@@ -4967,9 +5062,16 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                 "feedback cycle {}/{}: failed checks will be injected into the next attempt",
                 f.cycle, f.max_cycles
             ));
-        } else {
-            next_state = TaskState::NeedsUser;
+        } else if next_state == TaskState::NeedsUser {
+            if question_to_persist.is_none() {
+                question_to_persist = f
+                    .question_for_user
+                    .as_ref()
+                    .map(|question| (question.clone(), EventActorKind::System));
+            }
             lines.push(format!("feedback stopped: {}", f.terminal_reason));
+        } else {
+            lines.push("feedback stopped without an actionable question".to_string());
         }
     }
     if flags.repairs_done_projection && next_state != TaskState::Done {
@@ -4980,43 +5082,19 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         next_state = TaskState::Done;
     }
 
-    if let Some(question) = result
-        .as_ref()
-        .filter(|result| result.status == "needs_user")
-        .and_then(|result| result.question_for_user.as_deref())
-        .map(str::trim)
-        .filter(|question| !question.is_empty())
-    {
+    let mut persisted_question = if next_state == TaskState::NeedsUser {
+        let (question, actor_kind) = question_to_persist.get_or_insert_with(|| {
+            (
+                format!("`{}` 작업을 계속하려면 어떤 결정을 내려야 할까요?", task.id),
+                EventActorKind::System,
+            )
+        });
         let channel_context = channel_run_context(ws, &intent_id, &task.id);
-        record_result_question(ws, &channel_context, run_dir, question)?;
-    }
-
-    // Record the worker's user-facing message into the conversation transcript
-    // whenever a run pauses for the user, so the next resume threads the full
-    // exchange back (deduped by run_id).
-    if flags.conversation {
-        if let Some(q) = result
-            .as_ref()
-            .filter(|r| r.status == "needs_user")
-            .and_then(|r| {
-                r.question_for_user
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|q| !q.is_empty())
-            })
-        {
-            let _ = state::append_conversation_turn(
-                ws,
-                &task.id,
-                ConversationTurn {
-                    role: TurnRole::Worker,
-                    text: q.to_string(),
-                    run_id: run_id.to_string(),
-                    ts: Local::now().to_rfc3339(),
-                },
-            );
-        }
-    }
+        persist_needs_user_question(ws, None, &channel_context, run_dir, question, *actor_kind)?;
+        Some(question.clone())
+    } else {
+        None
+    };
 
     if flags.artifacts {
         compact::write_checkpoint(run_dir, task, &eval, result.as_ref(), intent_summary)?;
@@ -5406,6 +5484,19 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         // the user instead.
         let remediation = schedulable_remediation_ids(queue, &ingested);
         if remediation.is_empty() {
+            if persisted_question.is_none() {
+                let question = review_without_remediation_question(task);
+                let channel_context = channel_run_context(ws, &intent_id, &task.id);
+                persist_needs_user_question(
+                    ws,
+                    Some(&queue_lock),
+                    &channel_context,
+                    run_dir,
+                    &question,
+                    EventActorKind::System,
+                )?;
+                persisted_question = Some(question);
+            }
             requeue_review_locked(ws, &queue_lock, queue, &task.id, TaskState::NeedsUser, &[])?;
             next_state = TaskState::NeedsUser;
             lines.push(format!(
@@ -5431,6 +5522,23 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     }
 
     drop(queue_lock);
+
+    // Mirror the canonical question into the legacy conversation transcript so
+    // both continuation paths receive the same actionable prompt.
+    if flags.conversation {
+        if let Some(question) = persisted_question.as_deref() {
+            let _ = state::append_conversation_turn(
+                ws,
+                &task.id,
+                ConversationTurn {
+                    role: TurnRole::Worker,
+                    text: question.to_string(),
+                    run_id: run_id.to_string(),
+                    ts: Local::now().to_rfc3339(),
+                },
+            );
+        }
+    }
 
     if let Some(attempt_id) = std::fs::read_to_string(run_dir.join("latest-attempt"))
         .ok()
@@ -7405,6 +7513,14 @@ mod tests {
         assert_eq!(second.cycle, 2);
         assert_eq!(feedback_next_state(&second), TaskState::NeedsUser);
         assert!(second.terminal_reason.contains("cap exceeded"));
+        assert!(second
+            .question_for_user
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|question| question.ends_with('?')));
+        let mut invalid = second.clone();
+        invalid.question_for_user = Some("   ".into());
+        assert_eq!(feedback_next_state(&invalid), TaskState::Failed);
         let _ = std::fs::remove_dir_all(ws.root);
     }
 

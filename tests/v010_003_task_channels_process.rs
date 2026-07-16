@@ -209,6 +209,28 @@ mod unix {
             .unwrap_or_else(|| panic!("task {task_id} not found"))
     }
 
+    fn assert_actionable_needs_user(fixture: &FixtureWorkspace, task_id: &str) {
+        assert_eq!(task_state(&fixture.root, task_id), "needs_user");
+        let channel = channel_dir(&fixture.root, task_id);
+        let questions = yaml_dir(&channel.join("questions"));
+        assert_eq!(questions.len(), 1, "{task_id} must persist one question");
+        let question = string(&questions[0], "text").trim();
+        assert!(
+            !question.is_empty(),
+            "{task_id} persisted an empty question"
+        );
+        assert!(
+            question.ends_with('?') || question.ends_with('？'),
+            "{task_id} question is not actionable: {question:?}"
+        );
+        assert_eq!(string(&questions[0], "state"), "open");
+        let shown = fixture.run(&["answer", "--task", task_id]);
+        assert!(
+            String::from_utf8_lossy(&shown.stdout).contains(question),
+            "{task_id} question was stored but not retrievable"
+        );
+    }
+
     fn action_attempt_id(action_id: &str) -> String {
         let mut hash = 0xcbf29ce484222325_u64;
         for byte in action_id.as_bytes() {
@@ -1306,6 +1328,68 @@ mod unix {
             "stored redirect attempt did not execute exactly once"
         );
         assert_eq!(task_state(&fixture.root, "YARD-REDIRECT"), "done");
+    }
+
+    #[test]
+    fn issue_23_empty_worker_question_is_replaced_before_needs_user() {
+        let fixture = FixtureWorkspace::new("issue-23-empty-worker-question");
+        fixture.write_queue(
+            "  - id: YARD-EMPTY-QUESTION\n    title: empty worker question\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
+        );
+
+        fixture.run(&["run", "--task", "YARD-EMPTY-QUESTION", "--execute"]);
+
+        assert_actionable_needs_user(&fixture, "YARD-EMPTY-QUESTION");
+    }
+
+    #[test]
+    fn issue_23_feedback_exhaustion_persists_an_actionable_question() {
+        let fixture = FixtureWorkspace::new("issue-23-feedback-question");
+        fixture.write_queue(
+            "  - id: YARD-FEEDBACK-EXHAUSTED\n    title: exhausted feedback\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n    acceptance: [validation passes]\n    goal:\n      condition: validation passes\n      max_feedback_cycles: 0\n      feedback_policy: inject_failed_checks\n",
+        );
+
+        fixture.run(&["run", "--task", "YARD-FEEDBACK-EXHAUSTED", "--execute"]);
+
+        assert_actionable_needs_user(&fixture, "YARD-FEEDBACK-EXHAUSTED");
+    }
+
+    #[test]
+    fn issue_23_review_retransition_persists_an_actionable_question() {
+        let fixture = FixtureWorkspace::new("issue-23-review-question");
+        fixture.write_queue(
+            "  - id: YARD-REVIEW-FAIL\n    title: failed review without remediation\n    state: queued\n    priority: 10\n    kind: review\n    preferred_worker: fixture\n    acceptance: [criterion passes]\n    goal:\n      condition: criterion passes\n      max_feedback_cycles: 1\n      feedback_policy: inject_failed_checks\n",
+        );
+
+        fixture.run(&["run", "--task", "YARD-REVIEW-FAIL", "--execute"]);
+
+        assert_actionable_needs_user(&fixture, "YARD-REVIEW-FAIL");
+    }
+
+    #[test]
+    fn issue_23_nested_domain_status_does_not_fail_a_passing_review() {
+        let fixture = FixtureWorkspace::new("issue-23-nested-domain-status");
+        fixture.write_queue(
+            "  - id: YARD-REVIEW-PASS\n    title: passing review with unresolved domain state\n    state: queued\n    priority: 10\n    kind: review\n    preferred_worker: fixture\n    acceptance: [foundation passes]\n",
+        );
+
+        fixture.run(&["run", "--task", "YARD-REVIEW-PASS", "--execute"]);
+
+        assert_eq!(task_state(&fixture.root, "YARD-REVIEW-PASS"), "done");
+        let evaluation_paths = files_below(&fixture.root.join(".agents/runs"), "/evaluation.json");
+        let evaluation = evaluation_paths
+            .iter()
+            .map(|path| {
+                serde_json::from_str::<serde_json::Value>(&fs::read_to_string(path).unwrap())
+                    .unwrap()
+            })
+            .find(|value| value["task_id"] == "YARD-REVIEW-PASS")
+            .expect("review evaluation");
+        assert!(evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| { check["name"] == "review_criteria_pass" && check["passed"] == true }));
     }
 
     #[test]
