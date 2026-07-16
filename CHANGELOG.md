@@ -12,6 +12,11 @@
 
 ### Fixed
 
+- **Worker-authored handoffs survive finalization.** Evaluator checks and the
+  compact result summary now go to `evaluator-summary.md` instead of replacing
+  the worker's `handoff.md`; integration and non-blocking follow-up notes still
+  append to the preserved worker handoff.
+
 - **Passing reviews remain resolvable when auto-commit is disabled.** A review
   whose structured verdict and validation pass now stays `Partial` for manual
   integration instead of being reclassified as a failed review with no

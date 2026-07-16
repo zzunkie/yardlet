@@ -2327,6 +2327,19 @@ exit 1
                 .trim(),
             "auto_commit_disabled"
         );
+        let handoff = fs::read_to_string(run_dir.join("handoff.md")).unwrap();
+        assert!(
+            handoff.starts_with(
+                "# Handoff\n\nWORKER-HANDOFF-MARKER-ISSUE-31-7E3C 통과한 review의 수동 통합 대기 fixture\n"
+            ),
+            "finalize must preserve the worker-authored handoff verbatim; got:\n{handoff}"
+        );
+        assert!(handoff.contains("Non-blocking follow-up notes"));
+        assert!(handoff.contains("optional review documentation"));
+        assert!(handoff.contains("Git integration paused"));
+        let evaluator_summary = fs::read_to_string(run_dir.join("evaluator-summary.md")).unwrap();
+        assert!(evaluator_summary.contains("Evaluator checks"));
+        assert!(evaluator_summary.contains("review_criteria_pass"));
         let evaluation: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(run_dir.join("evaluation.json")).unwrap())
                 .unwrap();

@@ -84,8 +84,8 @@ pub fn write_checkpoint(
     Ok(())
 }
 
-/// Write `handoff.md` for humans and future workers.
-pub fn write_handoff(
+/// Write the evaluator-owned summary without replacing a worker-authored handoff.
+pub fn write_evaluator_summary(
     run_dir: &Path,
     task: &Task,
     eval: &Evaluation,
@@ -134,7 +134,11 @@ pub fn write_handoff(
         task_state_marker(eval.next_task_state)
     ));
 
-    write_str(&run_dir.join("handoff.md"), &md)?;
+    write_str(&run_dir.join("evaluator-summary.md"), &md)?;
+    let handoff_path = run_dir.join("handoff.md");
+    if !handoff_path.exists() {
+        write_str(&handoff_path, &md)?;
+    }
     Ok(())
 }
 

@@ -5018,6 +5018,7 @@ fn record_finalization_artifacts(
     for (name, role, worker_authored) in [
         ("result.json", "worker_result", true),
         ("evaluation.json", "evaluation", false),
+        ("evaluator-summary.md", "evaluation", false),
         ("checkpoint.md", "checkpoint", false),
         ("handoff.md", "handoff", false),
     ] {
@@ -5305,7 +5306,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
 
     if flags.artifacts {
         compact::write_checkpoint(run_dir, task, &eval, result.as_ref(), intent_summary)?;
-        compact::write_handoff(run_dir, task, &eval, result.as_ref())?;
+        compact::write_evaluator_summary(run_dir, task, &eval, result.as_ref())?;
         if let Some(r) = &result {
             append_nonblocking_follow_up_notes(run_dir, r)?;
         }
@@ -11708,10 +11709,13 @@ exit 1
         }));
 
         let checkpoint = std::fs::read_to_string(run_dir.join("checkpoint.md")).unwrap();
+        let evaluator_summary =
+            std::fs::read_to_string(run_dir.join("evaluator-summary.md")).unwrap();
         let handoff = std::fs::read_to_string(run_dir.join("handoff.md")).unwrap();
-        for text in [checkpoint, handoff] {
+        for text in [checkpoint, evaluator_summary] {
             assert!(text.contains(question));
         }
+        assert_eq!(handoff, "# Worker handoff\n");
         let _ = std::fs::remove_dir_all(&root);
     }
 
