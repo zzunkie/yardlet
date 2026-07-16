@@ -1729,6 +1729,7 @@ mod tests {
             kind: "implementation".into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec!["deploy-check".into()],
@@ -1741,6 +1742,7 @@ mod tests {
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
         let repo = crate::inspect::RepoSummary::default();
         let harness = Harness {
@@ -1916,6 +1918,7 @@ mod tests {
             kind: kind.into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -1928,6 +1931,7 @@ mod tests {
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
         let repo = crate::inspect::RepoSummary::default();
         compile(&PacketInputs {
@@ -1957,6 +1961,7 @@ mod tests {
             kind: "implementation".into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -1969,6 +1974,7 @@ mod tests {
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
         task.approval = Some(crate::yaml::from_str("required: true").unwrap());
         let repo = crate::inspect::RepoSummary::default();
@@ -2014,6 +2020,7 @@ mod tests {
             kind: "implementation".into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec!["YARD-1".into()],
             skills: vec![],
@@ -2026,6 +2033,7 @@ mod tests {
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
         let repo = crate::inspect::RepoSummary::default();
         let p = compile(&PacketInputs {
@@ -2059,6 +2067,7 @@ mod tests {
             kind: "implementation".into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -2075,6 +2084,7 @@ mod tests {
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
         let repo = crate::inspect::RepoSummary::default();
         let p = compile(&PacketInputs {
@@ -2111,6 +2121,7 @@ mod tests {
             kind: "review".into(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: vec![],
             skills: vec![],
@@ -2123,6 +2134,7 @@ mod tests {
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         };
         let repo = crate::inspect::RepoSummary::default();
         let turns = vec![

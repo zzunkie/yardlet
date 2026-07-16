@@ -17,7 +17,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use crate::schemas::{ChannelEventType, Invocation, RawEventRef, WorkerProfile};
+use crate::schemas::{
+    ChannelEventType, Invocation, RawEventRef, ResolvedWorkerSelection, RoutingProvenance,
+    WorkerProfile,
+};
 
 pub(crate) const WORKER_PROCESS_PROVENANCE_FILE: &str = "worker-process.yaml";
 
@@ -27,8 +30,20 @@ pub(crate) struct WorkerProcessProvenance {
     pub run_id: String,
     pub attempt_id: String,
     pub worker_id: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub fallback_enabled: bool,
+    #[serde(default)]
+    pub routing_provenance: RoutingProvenance,
+    #[serde(default)]
     pub pid: u32,
+    #[serde(default)]
     pub process_start_marker: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
 }
 
 pub(crate) fn process_start_marker(pid: u32) -> Option<String> {
@@ -731,6 +746,7 @@ pub fn spawn(
         output_log,
         None,
         None,
+        None,
         timeout,
         full_access,
         images,
@@ -740,6 +756,7 @@ pub fn spawn(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub fn spawn_attempt(
     profile: &WorkerProfile,
     bin: &Path,
@@ -772,6 +789,7 @@ pub fn spawn_attempt(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub fn spawn_attempt_with_sink(
     profile: &WorkerProfile,
     bin: &Path,
@@ -797,6 +815,77 @@ pub fn spawn_attempt_with_sink(
         &capture.combined_log,
         Some(capture),
         event_sink,
+        None,
+        timeout,
+        full_access,
+        images,
+        session,
+        resume,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_resolved_attempt(
+    profile: &WorkerProfile,
+    selection: &ResolvedWorkerSelection,
+    bin: &Path,
+    packet: &str,
+    worker_run_dir: &Path,
+    cwd: &Path,
+    env: &[(String, String)],
+    capture: &AttemptCapture,
+    timeout: Duration,
+    full_access: bool,
+    images: &[String],
+    session: Option<&str>,
+    resume: bool,
+) -> Result<WorkerOutcome> {
+    spawn_resolved_attempt_with_sink(
+        profile,
+        selection,
+        bin,
+        packet,
+        worker_run_dir,
+        cwd,
+        env,
+        capture,
+        None,
+        timeout,
+        full_access,
+        images,
+        session,
+        resume,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_resolved_attempt_with_sink(
+    profile: &WorkerProfile,
+    selection: &ResolvedWorkerSelection,
+    bin: &Path,
+    packet: &str,
+    worker_run_dir: &Path,
+    cwd: &Path,
+    env: &[(String, String)],
+    capture: &AttemptCapture,
+    event_sink: Option<AttemptEventSink>,
+    timeout: Duration,
+    full_access: bool,
+    images: &[String],
+    session: Option<&str>,
+    resume: bool,
+) -> Result<WorkerOutcome> {
+    spawn_internal(
+        profile,
+        bin,
+        packet,
+        worker_run_dir,
+        cwd,
+        env,
+        &capture.combined_log,
+        Some(capture),
+        event_sink,
+        Some(selection),
         timeout,
         full_access,
         images,
@@ -816,6 +905,7 @@ fn spawn_internal(
     output_log: &Path,
     attempt_capture: Option<&AttemptCapture>,
     event_sink: Option<AttemptEventSink>,
+    selection: Option<&ResolvedWorkerSelection>,
     timeout: Duration,
     full_access: bool,
     images: &[String],
@@ -903,46 +993,107 @@ fn spawn_internal(
         None
     };
 
+    let provenance_identity = attempt_capture
+        .map(|capture| -> Result<(String, String)> {
+            let run_id = control_run_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("worker control directory has no run identity"))?;
+            let attempt_id = capture
+                .stdout_log
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("attempt capture path has no attempt identity"))?;
+            Ok((run_id.to_string(), attempt_id.to_string()))
+        })
+        .transpose()?;
+    let provenance_paths = {
+        let canonical = control_run_dir.join(WORKER_PROCESS_PROVENANCE_FILE);
+        let worker = worker_run_dir.join(WORKER_PROCESS_PROVENANCE_FILE);
+        if worker == canonical {
+            vec![canonical]
+        } else {
+            vec![canonical, worker]
+        }
+    };
+    if let (Some((run_id, attempt_id)), Some(selection)) = (provenance_identity.as_ref(), selection)
+    {
+        if selection.worker_id != profile.id || selection.model != profile.model {
+            anyhow::bail!(
+                "dispatch selection/profile mismatch before spawn: selection={}/{} profile={}/{}",
+                selection.worker_id,
+                selection.model,
+                profile.id,
+                profile.model
+            );
+        }
+        let prepared = WorkerProcessProvenance {
+            schema_version: 1,
+            run_id: run_id.clone(),
+            attempt_id: attempt_id.clone(),
+            worker_id: selection.worker_id.clone(),
+            model: selection.model.clone(),
+            fallback_enabled: selection.fallback_enabled,
+            routing_provenance: selection.routing_provenance.clone(),
+            pid: 0,
+            process_start_marker: String::new(),
+            state: "prepared".to_string(),
+            completed_at: None,
+        };
+        for path in &provenance_paths {
+            crate::state::save_private_yaml_atomic(path, &prepared)?;
+        }
+    }
+
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning worker '{}'", bin.display()))?;
 
-    let provenance_path = control_run_dir.join(WORKER_PROCESS_PROVENANCE_FILE);
     let provenance_result = (|| -> Result<()> {
-        let Some(capture) = attempt_capture else {
+        let Some((run_id, attempt_id)) = provenance_identity.as_ref() else {
             return Ok(());
         };
-        let run_id = control_run_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("worker control directory has no run identity"))?;
-        let attempt_id = capture
-            .stdout_log
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("attempt capture path has no attempt identity"))?;
         let process_start_marker = process_start_marker(child.id())
             .ok_or_else(|| anyhow::anyhow!("could not observe spawned worker process identity"))?;
+        let selection = selection
+            .cloned()
+            .unwrap_or_else(|| ResolvedWorkerSelection {
+                worker_id: profile.id.clone(),
+                model: profile.model.clone(),
+                fallback_enabled: false,
+                routing_provenance: RoutingProvenance::default(),
+            });
         let provenance = WorkerProcessProvenance {
             schema_version: 1,
-            run_id: run_id.to_string(),
-            attempt_id: attempt_id.to_string(),
-            worker_id: profile.id.clone(),
+            run_id: run_id.clone(),
+            attempt_id: attempt_id.clone(),
+            worker_id: selection.worker_id,
+            model: selection.model,
+            fallback_enabled: selection.fallback_enabled,
+            routing_provenance: selection.routing_provenance,
             pid: child.id(),
             process_start_marker,
+            state: "running".to_string(),
+            completed_at: None,
         };
-        let mut file = crate::state::create_private_file(&provenance_path)?;
-        file.write_all(crate::yaml::to_string(&provenance)?.as_bytes())?;
-        file.sync_all()?;
+        for path in &provenance_paths {
+            crate::state::save_private_yaml_atomic(path, &provenance)?;
+        }
         Ok(())
     })();
     if let Err(error) = provenance_result {
         let _ = child.kill();
         let _ = child.wait();
-        let _ = std::fs::remove_file(&provenance_path);
+        if let Ok(mut provenance) = load_worker_process_provenance(control_run_dir) {
+            provenance.state = "spawn_failed".to_string();
+            provenance.completed_at = Some(chrono::Local::now().to_rfc3339());
+            for path in &provenance_paths {
+                let _ = crate::state::save_private_yaml_atomic(path, &provenance);
+            }
+        }
         return Err(error).context("recording run-owned worker process provenance");
     }
 
@@ -952,7 +1103,13 @@ fn spawn_internal(
     if let Err(error) = crate::state::write_str_atomic(&pid_path, &child.id().to_string()) {
         let _ = child.kill();
         let _ = child.wait();
-        let _ = std::fs::remove_file(&provenance_path);
+        if let Ok(mut provenance) = load_worker_process_provenance(control_run_dir) {
+            provenance.state = "pid_projection_failed".to_string();
+            provenance.completed_at = Some(chrono::Local::now().to_rfc3339());
+            for path in &provenance_paths {
+                let _ = crate::state::save_private_yaml_atomic(path, &provenance);
+            }
+        }
         return Err(error).context("recording worker PID projection");
     }
 
@@ -1184,7 +1341,19 @@ fn spawn_internal(
         }
     }
     let _ = std::fs::remove_file(&pid_path);
-    let _ = std::fs::remove_file(&provenance_path);
+    if let Ok(mut provenance) = load_worker_process_provenance(control_run_dir) {
+        provenance.state = "exited".to_string();
+        provenance.completed_at = Some(chrono::Local::now().to_rfc3339());
+        for (index, path) in provenance_paths.iter().enumerate() {
+            // The canonical receipt must survive. The worker-side projection is
+            // updated only while its staging run directory still exists: a
+            // worker deleting that directory is an import failure signal, and
+            // receipt finalization must not recreate it and mask the failure.
+            if index == 0 || path.parent().is_some_and(Path::is_dir) {
+                let _ = crate::state::save_private_yaml_atomic(path, &provenance);
+            }
+        }
+    }
     if let Some(error) = reader_error {
         return Err(error).context("preserving attempt raw stream");
     }

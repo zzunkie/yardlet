@@ -264,6 +264,131 @@ mod unix {
         fixture.root.join(".agents/fixture-bin/worker.sh")
     }
 
+    fn write_exact_codex_workers(fixture: &FixtureWorkspace, max_retries: u32) {
+        fs::write(
+            fixture.root.join(".agents/workers.yaml"),
+            format!(
+                "schema_version: 1\nworkers:\n  - id: codex\n    model: gpt-5.6-sol\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: {}\nrouting:\n  default_worker: codex\n  fallback_order: [codex]\n  allow_preferred_worker_failover: false\n",
+                worker_path(fixture).display(),
+                max_retries
+            ),
+        )
+        .unwrap();
+    }
+
+    fn run_dirs_for_task(root: &Path, task_id: &str) -> Vec<PathBuf> {
+        files_below(&root.join(".agents/runs"), "/run.yaml")
+            .into_iter()
+            .filter_map(|path| {
+                (string(&read_yaml(&path), "task_id") == task_id)
+                    .then(|| path.parent().unwrap().to_path_buf())
+            })
+            .collect()
+    }
+
+    fn run_dir_for_task(root: &Path, task_id: &str) -> PathBuf {
+        run_dirs_for_task(root, task_id)
+            .into_iter()
+            .max()
+            .unwrap_or_else(|| panic!("run for {task_id} not found"))
+    }
+
+    fn assert_exact_receipt_pair(run_dir: &Path, governing_task_id: &str) {
+        let run = read_yaml(&run_dir.join("run.yaml"));
+        let process = read_yaml(&run_dir.join("worker-process.yaml"));
+        assert_eq!(string(&run, "worker"), "codex");
+        assert_eq!(string(&process, "worker_id"), "codex");
+        for receipt in [&run, &process] {
+            assert_eq!(string(receipt, "model"), "gpt-5.6-sol");
+            assert_eq!(receipt["fallback_enabled"].as_bool(), Some(false));
+            assert_eq!(
+                string(&receipt["routing_provenance"], "governing_task_id"),
+                governing_task_id
+            );
+        }
+        assert_eq!(string(&process, "state"), "exited");
+    }
+
+    fn assert_exact_queue_task(root: &Path, task_id: &str, governing_task_id: &str) {
+        let queue = read_yaml(&root.join(".agents/work-queue.yaml"));
+        let task = queue["tasks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|task| string(task, "id") == task_id)
+            .unwrap_or_else(|| panic!("queue task {task_id} not found"));
+        assert_eq!(string(task, "preferred_worker"), "codex");
+        assert_eq!(string(task, "model"), "gpt-5.6-sol");
+        assert_eq!(task["fallback_enabled"].as_bool(), Some(false));
+        assert_eq!(
+            string(&task["routing_provenance"], "governing_task_id"),
+            governing_task_id
+        );
+    }
+
+    #[test]
+    fn worker_proposed_follow_ups_inherit_exact_model_and_expose_pre_dispatch_receipts() {
+        let fixture = FixtureWorkspace::new("exact-model-follow-ups");
+        write_exact_codex_workers(&fixture, 0);
+        fixture.write_queue(
+            "  - id: YARD-001\n    title: propose exact lineage follow-ups\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n    model: gpt-5.6-sol\n    fallback_enabled: false\n",
+        );
+
+        fixture.run(&["run", "--task", "YARD-001", "--execute"]);
+
+        let queue = read_yaml(&fixture.root.join(".agents/work-queue.yaml"));
+        let tasks = queue["tasks"].as_sequence().unwrap();
+        assert_eq!(tasks.len(), 3, "fixture must materialize both follow-ups");
+        for task in tasks.iter().filter(|task| string(task, "id") != "YARD-001") {
+            assert_eq!(string(task, "preferred_worker"), "codex");
+            assert_eq!(string(task, "model"), "gpt-5.6-sol");
+            assert_eq!(task["fallback_enabled"].as_bool(), Some(false));
+            assert_eq!(
+                string(&task["routing_provenance"], "governing_task_id"),
+                "YARD-001"
+            );
+        }
+
+        fixture.run(&["run", "--task", "YARD-002", "--execute"]);
+        fixture.run(&["run", "--task", "YARD-003", "--execute"]);
+        assert_eq!(task_state(&fixture.root, "YARD-003"), "queued");
+        let after_review = read_yaml(&fixture.root.join(".agents/work-queue.yaml"));
+        let remediation = after_review["tasks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|task| string(task, "id") == "YARD-004")
+            .expect("failed review must materialize remediation");
+        assert_eq!(string(remediation, "model"), "gpt-5.6-sol");
+        assert_eq!(remediation["fallback_enabled"].as_bool(), Some(false));
+
+        fixture.run(&["run", "--task", "YARD-004", "--execute"]);
+        fixture.run(&["run", "--task", "YARD-003", "--execute"]);
+        assert_eq!(task_state(&fixture.root, "YARD-003"), "done");
+
+        for (task_id, expected_runs) in [
+            ("YARD-001", 1),
+            ("YARD-002", 1),
+            ("YARD-003", 2),
+            ("YARD-004", 1),
+        ] {
+            assert_exact_queue_task(&fixture.root, task_id, "YARD-001");
+            let run_dirs = run_dirs_for_task(&fixture.root, task_id);
+            assert_eq!(run_dirs.len(), expected_runs, "{task_id} run count");
+            for run_dir in run_dirs {
+                assert_exact_receipt_pair(&run_dir, "YARD-001");
+            }
+        }
+        let final_review = run_dir_for_task(&fixture.root, "YARD-003");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &fs::read_to_string(final_review.join("result.json")).unwrap()
+            )
+            .unwrap()["compact_summary"],
+            "pre-dispatch receipt parity observed"
+        );
+    }
+
     #[test]
     fn text_worker_answer_creates_a_new_attempt_and_preserves_both_raw_streams() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -495,8 +620,9 @@ mod unix {
     #[test]
     fn native_resume_preserves_session_ref_and_answer_causality() {
         let fixture = FixtureWorkspace::new("native-resume");
+        write_exact_codex_workers(&fixture, 0);
         fixture.write_queue(
-            "  - id: YARD-NATIVE\n    title: native worker asks then resumes\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n",
+            "  - id: YARD-NATIVE\n    title: native worker asks then resumes\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n    model: gpt-5.6-sol\n    fallback_enabled: false\n",
         );
 
         fixture.run(&["run", "--task", "YARD-NATIVE", "--execute"]);
@@ -566,6 +692,66 @@ mod unix {
             .iter()
             .any(|text| text.contains("native resumed stdout")));
         assert_eq!(task_state(&fixture.root, "YARD-NATIVE"), "done");
+        assert_exact_queue_task(&fixture.root, "YARD-NATIVE", "YARD-NATIVE");
+        let runs = run_dirs_for_task(&fixture.root, "YARD-NATIVE");
+        assert_eq!(runs.len(), 2);
+        for run_dir in runs {
+            assert_exact_receipt_pair(&run_dir, "YARD-NATIVE");
+        }
+    }
+
+    #[test]
+    fn transient_retry_preserves_exact_model_in_both_receipts() {
+        let fixture = FixtureWorkspace::new("exact-transient-retry");
+        write_exact_codex_workers(&fixture, 1);
+        fixture.write_queue(
+            "  - id: YARD-TRANSIENT\n    title: transient retry exact lineage\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n    model: gpt-5.6-sol\n    fallback_enabled: false\n",
+        );
+
+        fixture.run(&["run", "--task", "YARD-TRANSIENT", "--execute"]);
+
+        let run_dir = run_dir_for_task(&fixture.root, "YARD-TRANSIENT");
+        let logs = files_below(&run_dir, ".log")
+            .into_iter()
+            .map(|path| {
+                format!(
+                    "{}:\n{}",
+                    path.display(),
+                    fs::read_to_string(&path).unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            task_state(&fixture.root, "YARD-TRANSIENT"),
+            "done",
+            "evaluation:\n{}\nresult:\n{}\nrun:\n{}\nlogs:\n{}",
+            fs::read_to_string(run_dir.join("evaluation.json")).unwrap_or_default(),
+            fs::read_to_string(run_dir.join("result.json")).unwrap_or_default(),
+            fs::read_to_string(run_dir.join("run.yaml")).unwrap_or_default(),
+            logs
+        );
+        assert_exact_queue_task(&fixture.root, "YARD-TRANSIENT", "YARD-TRANSIENT");
+        let channel = channel_dir(&fixture.root, "YARD-TRANSIENT");
+        let attempts = yaml_dir(&channel.join("attempts"));
+        assert_eq!(attempts.len(), 2);
+        assert!(attempts
+            .iter()
+            .any(|attempt| string(attempt, "continuation") == "native_resume"));
+        assert_exact_receipt_pair(&run_dir, "YARD-TRANSIENT");
+        assert_eq!(
+            string(
+                &read_yaml(&run_dir.join("worker-process.yaml")),
+                "attempt_id"
+            ),
+            string(
+                attempts
+                    .iter()
+                    .find(|attempt| string(attempt, "continuation") == "native_resume")
+                    .unwrap(),
+                "attempt_id"
+            )
+        );
     }
 
     #[test]
@@ -839,6 +1025,58 @@ mod unix {
         assert!(!duplicate.status.success());
         fixture.run(&["queue"]);
         assert_eq!(yaml_dir(&channel.join("attempts")), before_restart);
+    }
+
+    #[test]
+    fn redirect_preserves_exact_model_in_queue_and_both_receipts() {
+        let fixture = FixtureWorkspace::new("exact-model-redirect");
+        write_exact_codex_workers(&fixture, 0);
+        fixture.write_queue(
+            "  - id: YARD-EXACT-REDIRECT\n    title: exact redirect lineage\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n    model: gpt-5.6-sol\n    fallback_enabled: false\n",
+        );
+
+        let mut running = Command::new(&fixture.binary)
+            .args(["run", "--task", "YARD-EXACT-REDIRECT", "--execute"])
+            .current_dir(&fixture.root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = wait_until(Duration::from_secs(10), || {
+            task_state(&fixture.root, "YARD-EXACT-REDIRECT") == "running"
+                && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
+                && files_below(&fixture.root.join(".agents/worktrees"), "/handoff.md")
+                    .iter()
+                    .any(|path| {
+                        fs::read_to_string(path)
+                            .is_ok_and(|text| text.contains("checkpoint before exact redirect"))
+                    })
+        });
+        if !started {
+            let _ = running.kill();
+            let output = running.wait_with_output().unwrap();
+            panic!(
+                "exact redirect fixture never reached running\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        fixture.run(&[
+            "redirect",
+            "YARD-EXACT-REDIRECT",
+            "finish exact redirect",
+            "--action-id",
+            "act-exact-model-redirect",
+        ]);
+        assert!(running.wait_with_output().unwrap().status.success());
+        assert_eq!(task_state(&fixture.root, "YARD-EXACT-REDIRECT"), "done");
+        assert_exact_queue_task(&fixture.root, "YARD-EXACT-REDIRECT", "YARD-EXACT-REDIRECT");
+        let runs = run_dirs_for_task(&fixture.root, "YARD-EXACT-REDIRECT");
+        assert_eq!(runs.len(), 2);
+        for run_dir in runs {
+            assert_exact_receipt_pair(&run_dir, "YARD-EXACT-REDIRECT");
+        }
     }
 
     #[test]

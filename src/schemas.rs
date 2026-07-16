@@ -791,6 +791,11 @@ pub struct Task {
     /// worker profile's model, then the CLI's own default.
     #[serde(default)]
     pub model: String,
+    /// Whether this task may leave its resolved worker lineage after retries.
+    /// `None` preserves legacy workspace policy; worker-proposed descendants of
+    /// an exact lineage always materialize an explicit value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_enabled: Option<bool>,
     /// Optional per-task reasoning effort. Empty or "auto" = worker default.
     /// codex: minimal|low|medium|high.
     #[serde(default)]
@@ -835,6 +840,47 @@ pub struct Task {
     /// current task.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub provenance: String,
+    /// Core-authored provenance for an exact worker/model/fallback lineage.
+    /// A task carrying this receipt is validated again at dispatch so a queue
+    /// edit cannot silently override the governing decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_provenance: Option<RoutingProvenance>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutingProvenance {
+    #[serde(default)]
+    pub governing_task_id: String,
+    #[serde(default)]
+    pub governing_worker_id: String,
+    #[serde(default)]
+    pub governing_model: String,
+    #[serde(default)]
+    pub governing_fallback_enabled: bool,
+    #[serde(default)]
+    pub worker_source: String,
+    #[serde(default)]
+    pub model_source: String,
+    #[serde(default)]
+    pub fallback_source: String,
+    #[serde(default)]
+    pub worker_overridden: bool,
+    #[serde(default)]
+    pub model_overridden: bool,
+    #[serde(default)]
+    pub fallback_overridden: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedWorkerSelection {
+    #[serde(default)]
+    pub worker_id: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub fallback_enabled: bool,
+    #[serde(default)]
+    pub routing_provenance: RoutingProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2160,6 +2206,12 @@ pub struct FollowUpTask {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub preferred_worker: String,
+    /// Optional exact model request. Empty/`auto` inherits the governing run.
+    #[serde(default)]
+    pub model: String,
+    /// Optional fallback request. Omission inherits the governing run.
+    #[serde(default)]
+    pub fallback_enabled: Option<bool>,
     #[serde(default)]
     pub required_capabilities: Vec<String>,
     /// If set, this follow-up is a HUMAN DECISION (a choice/approval only the

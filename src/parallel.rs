@@ -207,6 +207,7 @@ struct Prep {
     reason: String,
     bin: PathBuf,
     profile: WorkerProfile,
+    selection: crate::schemas::ResolvedWorkerSelection,
     run_id: String,
     run_dir: PathBuf,
     wt_path: PathBuf,
@@ -269,7 +270,7 @@ pub fn run_batch<F: FnMut(&str)>(
     // ---- prepare every task up front (deterministic, no workers yet) -----
     let mut preps: Vec<Prep> = Vec::new();
     for &idx in indices {
-        let task = queue.tasks[idx].clone();
+        let mut task = queue.tasks[idx].clone();
         let resolved =
             match routing::resolve_worker_for_task(ws, &workers_file, &billing, None, &task) {
                 Ok(r) => r,
@@ -296,6 +297,11 @@ pub fn run_batch<F: FnMut(&str)>(
         let (run_id, run_dir) = ws.claim_run_dir(&base_run_id)?;
         let session = (resolved.worker_id == "claude-code").then(|| run::gen_session_uuid(&run_id));
         let branch = format!("yard/{}/{}", task.id.to_lowercase(), run_id);
+        let selection = resolved.selection();
+        if !selection.model.trim().is_empty() {
+            run::apply_selection_to_task(&mut task, &selection);
+            queue.tasks[idx] = task.clone();
+        }
         preps.push(Prep {
             branch,
             wt_path: ws.agents_dir().join("worktrees").join(&run_id),
@@ -305,6 +311,7 @@ pub fn run_batch<F: FnMut(&str)>(
             reason: resolved.reason,
             bin: resolved.bin,
             profile: eff_profile,
+            selection,
             run_id,
             run_dir,
             packet_text: String::new(), // compiled below, after the worktree exists
@@ -313,6 +320,28 @@ pub fn run_batch<F: FnMut(&str)>(
     }
     if preps.is_empty() {
         return Err(anyhow!("no runnable task in the batch"));
+    }
+    {
+        let lock = ws.acquire_planning_lock()?;
+        let mut latest = ws.load_queue()?;
+        for prep in &preps {
+            let task = latest
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == prep.task.id)
+                .ok_or_else(|| {
+                    anyhow!("queue_transaction_conflict: task {} vanished", prep.task.id)
+                })?;
+            if task.state != TaskState::Queued {
+                return Err(anyhow!(
+                    "queue_transaction_conflict: task {} is no longer queued",
+                    prep.task.id
+                ));
+            }
+            run::apply_selection_to_task(task, &prep.selection);
+        }
+        ws.save_queue_locked(&lock, &latest)?;
+        queue = latest;
     }
 
     // ---- worktrees + run dirs + packets ----------------------------------
@@ -366,7 +395,7 @@ pub fn run_batch<F: FnMut(&str)>(
             approved: false,
         });
         write_str(&workers::packet_path(&p.run_dir), &p.packet_text)?;
-        state::save_yaml(
+        state::save_yaml_atomic(
             &p.run_dir.join("run.yaml"),
             &run::RunRecord {
                 schema_version: 1,
@@ -374,6 +403,9 @@ pub fn run_batch<F: FnMut(&str)>(
                 task_id: p.task.id.clone(),
                 intent_id: queue.intent_id.clone(),
                 worker: p.worker_id.clone(),
+                model: p.selection.model.clone(),
+                fallback_enabled: p.selection.fallback_enabled,
+                routing_provenance: Some(p.selection.routing_provenance.clone()),
                 state: "running".to_string(),
                 started_at: Local::now().to_rfc3339(),
                 completed_at: None,
@@ -458,13 +490,15 @@ pub fn run_batch<F: FnMut(&str)>(
         let cwd = p.wt_path.clone();
         let worker_run_dir = p.run_dir.clone();
         let capture = attempt_runtime[i].2.clone();
+        let selection = p.selection.clone();
         let timeout = Duration::from_secs(p.profile.limits.max_wall_minutes as u64 * 60);
         let images = images.clone();
         let session = p.session.clone();
         handles.push(std::thread::spawn(move || {
             let started = std::time::Instant::now();
-            let outcome = workers::spawn_attempt(
+            let outcome = workers::spawn_resolved_attempt(
                 &profile,
+                &selection,
                 &bin,
                 &packet_text,
                 &worker_run_dir,
@@ -549,7 +583,9 @@ pub fn run_batch<F: FnMut(&str)>(
                     record_failover(&p.run_dir, &from, &to, &note);
 
                     worker_id = to;
+                    let selection = alt.selection();
                     reason = format!("failover from {from} ({})", alt.reason);
+                    run::update_run_selection(&p.run_dir, &selection)?;
                     let failover_started = std::time::Instant::now();
                     outcome = (|| -> Result<workers::WorkerOutcome> {
                         let profile = run::find_worker(&workers_file.workers, &worker_id)?;
@@ -601,8 +637,9 @@ pub fn run_batch<F: FnMut(&str)>(
                             crate::schemas::ContinuationMode::Fallback,
                             None,
                         )?;
-                        let completed = match workers::spawn_attempt(
+                        let completed = match workers::spawn_resolved_attempt(
                             &eff_profile,
+                            &selection,
                             &alt.bin,
                             &failover_packet,
                             &p.run_dir,
@@ -1789,6 +1826,7 @@ mod tests {
             kind: String::new(),
             preferred_worker: String::new(),
             model: String::new(),
+            fallback_enabled: None,
             effort: String::new(),
             depends_on: deps,
             skills: vec![],
@@ -1801,6 +1839,7 @@ mod tests {
             interaction: None,
             worker_rationale: None,
             provenance: String::new(),
+            routing_provenance: None,
         }
     }
 
