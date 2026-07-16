@@ -1163,7 +1163,12 @@ fn spawn_internal(
             }
         }
     }
-    stop_public_publisher.store(true, std::sync::atomic::Ordering::Relaxed);
+    // Preserve the bounded completion path only after try_send actually shed
+    // an event. Otherwise disconnect the sender and let the publisher drain
+    // every accepted tail event before join.
+    if public_events_dropped.load(std::sync::atomic::Ordering::Relaxed) {
+        stop_public_publisher.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     drop(reader_event_sink);
     if let Some(publisher) = event_publisher {
         match publisher.join() {
@@ -1747,6 +1752,87 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
         assert!(events
             .iter()
             .all(|event| !event.payload.to_string().contains("private")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_publisher_drains_unsaturated_tail_before_join() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::{Arc, Mutex};
+
+        let root = std::env::temp_dir().join(format!(
+            "yard-codex-unsaturated-tail-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fake_codex = root.join("codex");
+        std::fs::write(
+            &fake_codex,
+            concat!(
+                "#!/bin/sh\n",
+                "printf '%s\\n' ",
+                "'{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"first\"}}' ",
+                "'{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"tail\"}}'\n"
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&fake_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_codex, permissions).unwrap();
+
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+        )
+        .unwrap();
+        let capture = AttemptCapture {
+            combined_log: root.join("worker-output.log"),
+            stdout_log: root.join("attempts/att_1/stdout.log"),
+            stderr_log: root.join("attempts/att_1/stderr.log"),
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured_events = Arc::clone(&events);
+        let sink: AttemptEventSink = Arc::new(move |event| {
+            // Keep one event in flight until the worker and both raw readers
+            // have exited. The second event remains queued without filling the
+            // 64-slot channel, making join-time tail handling deterministic.
+            std::thread::sleep(Duration::from_millis(300));
+            captured_events.lock().unwrap().push(event);
+            Ok(())
+        });
+
+        let outcome = spawn_attempt_with_sink(
+            &profile,
+            &fake_codex,
+            "packet",
+            &root,
+            &root,
+            &[],
+            &capture,
+            Some(sink),
+            Duration::from_secs(5),
+            false,
+            &[],
+            None,
+            false,
+        )
+        .unwrap();
+
+        let texts = events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|event| event.payload["text"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(texts, ["first", "tail"]);
+        assert!(
+            !outcome.public_events_dropped,
+            "an unsaturated publisher queue must not report shed events"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(unix)]
