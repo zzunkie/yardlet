@@ -976,57 +976,63 @@ pub(crate) fn finish_worker_attempt(
                 && event.attempt_id.as_deref() == Some(&attempt.attempt_id)
         })
         .map(|event| event.event_id.clone());
-    for (stream, path, artifact_id) in [
-        (
-            workers::RawStreamKind::Stdout,
-            &capture.stdout_log,
-            format!("raw_{}_stdout", attempt.attempt_id),
-        ),
-        (
-            workers::RawStreamKind::Stderr,
-            &capture.stderr_log,
-            format!("raw_{}_stderr", attempt.attempt_id),
-        ),
-    ] {
-        let raw = std::fs::read(path)
-            .with_context(|| format!("reading attempt raw stream {}", path.display()))?;
-        for normalized in
-            workers::normalize_worker_output(&attempt.worker_id, stream, &raw, &artifact_id)
-        {
-            let existing = channel.events.iter().find(|event| {
-                event.attempt_id.as_deref() == Some(&attempt.attempt_id)
-                    && event.event_type == normalized.event_type
-                    && event.raw_ref.as_ref() == Some(&normalized.raw_ref)
-            });
-            let recorded = if let Some(existing) = existing {
-                if existing.payload != normalized.payload {
-                    return Err(anyhow!(
-                        "normalized raw event changed for {} at {}..{}",
-                        normalized.raw_ref.artifact_id,
-                        normalized.raw_ref.byte_start,
-                        normalized.raw_ref.byte_end
-                    ));
-                }
-                existing.clone()
-            } else {
-                let recorded = record_channel_event(
-                    ws,
-                    lock,
-                    context,
-                    normalized.event_type,
-                    EventActor {
-                        kind: EventActorKind::Worker,
-                        id: attempt.worker_id.clone(),
-                    },
-                    Some(&attempt.attempt_id),
-                    causation_id,
-                    normalized.payload,
-                    Some(normalized.raw_ref),
-                )?;
-                channel.events.push(recorded.clone());
-                recorded
-            };
-            causation_id = Some(recorded.event_id);
+    // A saturated live sink deliberately sheds normalized events so raw pipe
+    // readers can keep draining. Replaying the same backlog synchronously here
+    // would reintroduce the completion stall; exact stdout/stderr remain the
+    // authoritative evidence for the shed tail.
+    if !outcome.public_events_dropped {
+        for (stream, path, artifact_id) in [
+            (
+                workers::RawStreamKind::Stdout,
+                &capture.stdout_log,
+                format!("raw_{}_stdout", attempt.attempt_id),
+            ),
+            (
+                workers::RawStreamKind::Stderr,
+                &capture.stderr_log,
+                format!("raw_{}_stderr", attempt.attempt_id),
+            ),
+        ] {
+            let raw = std::fs::read(path)
+                .with_context(|| format!("reading attempt raw stream {}", path.display()))?;
+            for normalized in
+                workers::normalize_worker_output(&attempt.worker_id, stream, &raw, &artifact_id)
+            {
+                let existing = channel.events.iter().find(|event| {
+                    event.attempt_id.as_deref() == Some(&attempt.attempt_id)
+                        && event.event_type == normalized.event_type
+                        && event.raw_ref.as_ref() == Some(&normalized.raw_ref)
+                });
+                let recorded = if let Some(existing) = existing {
+                    if existing.payload != normalized.payload {
+                        return Err(anyhow!(
+                            "normalized raw event changed for {} at {}..{}",
+                            normalized.raw_ref.artifact_id,
+                            normalized.raw_ref.byte_start,
+                            normalized.raw_ref.byte_end
+                        ));
+                    }
+                    existing.clone()
+                } else {
+                    let recorded = record_channel_event(
+                        ws,
+                        lock,
+                        context,
+                        normalized.event_type,
+                        EventActor {
+                            kind: EventActorKind::Worker,
+                            id: attempt.worker_id.clone(),
+                        },
+                        Some(&attempt.attempt_id),
+                        causation_id,
+                        normalized.payload,
+                        Some(normalized.raw_ref),
+                    )?;
+                    channel.events.push(recorded.clone());
+                    recorded
+                };
+                causation_id = Some(recorded.event_id);
+            }
         }
     }
     if worker_attempt_result(run_dir, outcome) == "needs_user" {
