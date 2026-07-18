@@ -659,6 +659,66 @@ impl RunRecord {
     }
 }
 
+/// Fail closed, immediately before a worker spawn, unless the run receipt
+/// (`run.yaml` in `run_dir`) still declares the isolated worktree this run was
+/// prepared with and that worktree canonicalizes to the effective spawn cwd.
+/// A tampered, corrupted, or missing receipt must never redirect a worker's
+/// cwd (issue #34); the serial and parallel spawn paths share this predicate,
+/// each passing the isolation flag its receipts are written with.
+pub(crate) fn attest_worker_cwd(
+    run_dir: &std::path::Path,
+    effective_cwd: &std::path::Path,
+    expect_serial_isolated: bool,
+) -> Result<()> {
+    let receipt_path = run_dir.join("run.yaml");
+    let record: RunRecord = state::load_yaml(&receipt_path).with_context(|| {
+        format!(
+            "worker cwd attestation failed: could not read {}; refusing to spawn. Start a fresh run after restoring the run receipt",
+            receipt_path.display()
+        )
+    })?;
+    if record.serial_isolated != expect_serial_isolated {
+        bail!(
+            "worker cwd attestation failed: run.yaml serial_isolated is {} but this spawn path expects {}; refusing to spawn. Start a fresh run after restoring the run receipt",
+            record.serial_isolated,
+            expect_serial_isolated
+        );
+    }
+    if record.worktree.trim().is_empty() || record.worktree == "." {
+        bail!(
+            "worker cwd attestation failed: run.yaml worktree is not an isolated absolute workspace ({:?}); refusing to spawn. Start a fresh run after restoring the run receipt",
+            record.worktree
+        );
+    }
+    let declared_path = std::path::PathBuf::from(&record.worktree);
+    if !declared_path.is_absolute() {
+        bail!(
+            "worker cwd attestation failed: run.yaml worktree '{}' is not absolute; refusing to spawn. Start a fresh run after restoring the run receipt",
+            declared_path.display()
+        );
+    }
+    let declared = std::fs::canonicalize(&declared_path).with_context(|| {
+        format!(
+            "worker cwd attestation failed: run.yaml worktree '{}' cannot be resolved; refusing to spawn. Start a fresh run after restoring the run receipt",
+            declared_path.display()
+        )
+    })?;
+    let effective = std::fs::canonicalize(effective_cwd).with_context(|| {
+        format!(
+            "worker cwd attestation failed: effective cwd '{}' cannot be resolved; refusing to spawn. Start a fresh run after restoring the run worktree",
+            effective_cwd.display()
+        )
+    })?;
+    if declared != effective {
+        bail!(
+            "worker cwd attestation failed: effective cwd '{}' does not match run.yaml worktree '{}'; refusing to spawn. Start a fresh run after restoring the run receipt",
+            effective.display(),
+            declared.display()
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn has_receipted_runtime_selection(
     ws: &Workspace,
     intent_id: &str,
