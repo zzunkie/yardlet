@@ -785,10 +785,17 @@ pub(crate) fn apply_selection_to_task(
     task: &mut crate::schemas::Task,
     selection: &crate::schemas::ResolvedWorkerSelection,
 ) {
-    task.preferred_worker = selection.worker_id.clone();
-    task.model = selection.model.clone();
-    task.fallback_enabled = Some(selection.fallback_enabled);
-    task.routing_provenance = Some(selection.routing_provenance.clone());
+    // Stamp the governing CONTRACT, not the runtime attempt. A policy-authorized
+    // fallback/failover may run another ready worker for one attempt (recorded in
+    // the run receipt), but stamping that worker over the governing lineage makes
+    // the task fail `validate_recorded_lineage` on the next drain retry — a
+    // permanent dead-end. The lineage invariant keeps these fields identical to
+    // the selection except in exactly that divergence.
+    let provenance = &selection.routing_provenance;
+    task.preferred_worker = provenance.governing_worker_id.clone();
+    task.model = provenance.governing_model.clone();
+    task.fallback_enabled = Some(provenance.governing_fallback_enabled);
+    task.routing_provenance = Some(provenance.clone());
 }
 
 fn is_unknown_integration_provenance(value: &IntegrationProvenance) -> bool {
