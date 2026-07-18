@@ -476,6 +476,15 @@ pub fn run_batch<F: FnMut(&str)>(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // Fail closed before ANY worker spawns: every run receipt must still
+    // declare the isolated worktree its prep created, canonicalized equal to
+    // the spawn cwd. A tampered or corrupted receipt aborts the whole batch
+    // here (issue #34's parallel twin of the serial pre-spawn attestation);
+    // `yardlet recover` reconciles the already-running-marked tasks.
+    for p in &preps {
+        run::attest_worker_cwd(&p.run_dir, &p.wt_path, false)?;
+    }
+
     let (tx, rx) = mpsc::channel::<Finished>();
     let mut handles = Vec::new();
     for (i, p) in preps.iter().enumerate() {
@@ -622,6 +631,11 @@ pub fn run_batch<F: FnMut(&str)>(
                             approved: false,
                         });
                         write_str(&workers::packet_path(&p.run_dir), &failover_packet)?;
+                        // The first worker ran with full access to this run
+                        // dir; re-attest the receipt before the failover
+                        // spawn so a tampered worktree fails closed instead
+                        // of redirecting the second worker's cwd.
+                        run::attest_worker_cwd(&p.run_dir, &p.wt_path, false)?;
                         let session = (worker_id == "claude-code")
                             .then(|| run::gen_session_uuid(&format!("{}-{worker_id}", p.run_id)));
                         let context = run::channel_run_context(ws, &queue.intent_id, &p.task.id);

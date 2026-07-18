@@ -12,6 +12,14 @@
 
 ### Fixed
 
+- **Parallel worker spawns attest their cwd against the run receipt.** Before
+  a parallel batch spawns any worker — and again before a failover worker
+  replaces one that exited without `result.json` — the run's `run.yaml`
+  worktree is canonicalized and compared with the effective spawn cwd. A
+  tampered, corrupted, or missing receipt now fails closed with an actionable
+  diagnostic instead of letting a worker run in the wrong directory,
+  matching the serial spawn path's attestation (issue #34).
+
 - **Worker-authored handoffs survive finalization.** Evaluator checks and the
   compact result summary now go to `evaluator-summary.md` instead of replacing
   the worker's `handoff.md`; integration and non-blocking follow-up notes still

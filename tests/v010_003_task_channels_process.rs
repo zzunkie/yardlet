@@ -1056,6 +1056,62 @@ exit 1
     }
 
     #[test]
+    fn parallel_failover_rejects_tampered_worktree_receipt_before_spawn() {
+        let fixture = FixtureWorkspace::new("parallel-cwd-attestation");
+        // Every fixture worker needs a model: a model-less failover selection
+        // stamps an incomplete governing provenance on the task, which fails
+        // lineage validation on the drain's sequential retry.
+        fs::write(
+            fixture.root.join(".agents/workers.yaml"),
+            format!(
+                "schema_version: 1\nworkers:\n  - id: fixture\n    model: fixture-model\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-ask\n    model: fixture-model\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-drain\n    model: fixture-model\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n",
+                worker_path(&fixture).display(),
+            ),
+        )
+        .unwrap();
+        fixture.write_queue(
+            "  - id: YARD-CWD-TAMPER\n    title: tampered parallel receipt fails closed\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n    fallback_enabled: true\n  - id: YARD-DRAIN\n    title: healthy sibling drains\n    state: queued\n    priority: 20\n    kind: implementation\n    preferred_worker: fixture-drain\n",
+        );
+
+        // No exit-status assertion: after the batch the drain retries the
+        // tampered task sequentially and dies on an adjacent, pre-existing
+        // lineage dead-end (the failover selection stamped on the task
+        // conflicts with its governing worker). The attestation under test
+        // has completed by then.
+        let output = command(
+            &fixture.root,
+            &fixture.binary,
+            &["run", "--auto", "--parallel", "2"],
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(
+                "parallel batch: YARD-CWD-TAMPER via fixture, YARD-DRAIN via fixture-drain"
+            ),
+            "expected a two-task parallel batch:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("worker cwd attestation failed")
+                && stdout.contains("run.yaml worktree")
+                && stdout.contains("refusing to spawn"),
+            "tampered parallel receipt did not fail closed with an actionable diagnostic:\n{stdout}"
+        );
+        assert!(
+            !fixture
+                .root
+                .join(".agents/parallel-cwd-failover-ran")
+                .exists(),
+            "a failover worker spawned despite the tampered parallel receipt"
+        );
+        let tampered_state = task_state(&fixture.root, "YARD-CWD-TAMPER");
+        assert!(
+            tampered_state != "done" && tampered_state != "running",
+            "tampered task must fail closed, got {tampered_state}"
+        );
+        assert_eq!(task_state(&fixture.root, "YARD-DRAIN"), "done");
+    }
+
+    #[test]
     fn parallel_independent_task_records_validation_completion() {
         let fixture = FixtureWorkspace::new("parallel-validation");
         fixture.write_queue(

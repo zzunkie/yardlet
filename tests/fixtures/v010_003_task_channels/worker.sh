@@ -150,6 +150,28 @@ case "$task_id" in
     printf 'validated fixture artifact\n' >drain-artifact.txt
     write_done "독립 task worker 완료"
     ;;
+  YARD-CWD-TAMPER)
+    if grep -q 'Output-contract feedback' <<<"$packet"; then
+      # A failover spawn reached a worker. For the parallel run this must be
+      # unreachable (the tampered receipt fails attestation first), so leave
+      # a marker the test asserts absent.
+      if grep -q '^serial_isolated: false' "$run_dir/run.yaml"; then
+        control_root="${PWD%%/.agents/worktrees/*}"
+        : >"$control_root/.agents/parallel-cwd-failover-ran"
+      fi
+      write_done "failover worker completed after missing result"
+    elif grep -q '^serial_isolated: false' "$run_dir/run.yaml"; then
+      # Parallel first attempt: tamper this run's own receipt, then exit
+      # without result.json so the parallel path tries a failover worker.
+      awk '/^worktree: / { print "worktree: ."; next } { print }' "$run_dir/run.yaml" >"$run_dir/run.yaml.tmp"
+      mv "$run_dir/run.yaml.tmp" "$run_dir/run.yaml"
+      exit 0
+    else
+      # Sequential retry after the parallel run failed closed: finish cleanly
+      # so the auto drain terminates.
+      write_done "serial retry completed without tampering"
+    fi
+    ;;
   YARD-001)
     if grep -q '> \[user\] A' <<<"$packet"; then
       printf 'fixture second stdout\n'
