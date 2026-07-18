@@ -1,0 +1,12 @@
+schema_version: 1
+library: yardlet-managed-builtins
+id: SPW-01
+name: test-driven-development
+layer: core
+slot: C4
+activation: "always"
+source: obra-superpowers
+commit: d884ae04edebef577e82ff7c4e143debd0bbec99
+source_path: skills/test-driven-development/
+license: MIT
+license_blob: abf0390320aa14406af7a520b9b0739fdda9bf08

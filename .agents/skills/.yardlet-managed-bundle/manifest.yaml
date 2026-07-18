@@ -1,0 +1,243 @@
+schema_version: 1
+library: yardlet-managed-builtins
+sources:
+  obra-superpowers:
+    repository: https://github.com/obra/superpowers
+    commit: d884ae04edebef577e82ff7c4e143debd0bbec99
+    license: MIT
+    license_source_path: LICENSE
+    license_blob: abf0390320aa14406af7a520b9b0739fdda9bf08
+    license_bundle_path: licenses/obra-superpowers-MIT.txt
+  anthropics-skills:
+    repository: https://github.com/anthropics/skills
+    commit: 9d2f1ae187231d8199c64b5b762e1bdf2244733d
+    license: Apache-2.0-per-skill
+    license_source_path: skills/<member>/LICENSE.txt
+    license_blob: per-member
+    license_bundle_path: skills/<member>/LICENSE.txt
+members:
+  - id: SPW-01
+    name: test-driven-development
+    layer: core
+    slot: C4
+    activation: always
+    source: obra-superpowers
+    source_path: skills/test-driven-development/
+    license_bundle_path: licenses/obra-superpowers-MIT.txt
+    license_blob: abf0390320aa14406af7a520b9b0739fdda9bf08
+    included:
+      - { source_file: SKILL.md, bundle_file: SKILL.md, upstream_blob: 60d2609ca56c7177a98f462fb71af77844ce92af, mode: exact }
+      - { source_file: testing-anti-patterns.md, bundle_file: testing-anti-patterns.md, upstream_blob: e77ab6b6d65ecfb0d8212a32186bf68d18b5eade, mode: exact }
+    excluded: []
+    adaptation:
+      - 고정 원문이 이미 provider-neutral임을 대조해 추가 변경 없이 채택했다.
+    residual_requirements: []
+
+  - id: SPW-02
+    name: systematic-debugging
+    layer: core
+    slot: C3
+    activation: always
+    source: obra-superpowers
+    source_path: skills/systematic-debugging/
+    license_bundle_path: licenses/obra-superpowers-MIT.txt
+    license_blob: abf0390320aa14406af7a520b9b0739fdda9bf08
+    included:
+      - { source_file: SKILL.md, bundle_file: SKILL.md, upstream_blob: b0eca38b3cf9523ea86c9211e96949c8e69d1d1c, mode: adapted }
+      - { source_file: root-cause-tracing.md, bundle_file: root-cause-tracing.md, upstream_blob: 12ef5222e24e19ab92172b82b69ef1b0c30d9bfa, mode: exact }
+      - { source_file: defense-in-depth.md, bundle_file: defense-in-depth.md, upstream_blob: e2483354dc2b62478a2624e34ca18bc0efe887b2, mode: exact }
+      - { source_file: condition-based-waiting.md, bundle_file: condition-based-waiting.md, upstream_blob: 70994f777c586f7d4c43033aac34c7cf0da6688b, mode: exact }
+      - { source_file: condition-based-waiting-example.ts, bundle_file: condition-based-waiting-example.ts, upstream_blob: 703a06b653160d060bbf46ab5c6e0cd7446bd592, mode: exact }
+      - { source_file: find-polluter.sh, bundle_file: find-polluter.sh, upstream_blob: 1d71c56077dd819f0966cdae353fb142201611c6, mode: exact }
+    excluded:
+      - CREATION-LOG.md
+      - test-academic.md
+      - test-pressure-1.md
+      - test-pressure-2.md
+      - test-pressure-3.md
+    adaptation:
+      - credential environment 출력, key store 열람, signing tool 실행 예시를 안전한 boundary metadata 예시로 교체했다.
+      - 채택된 local skill 이름으로 cross-reference를 고정했다.
+    residual_requirements:
+      - repository-local test commands
+
+  - id: SPW-03
+    name: verification-before-completion
+    layer: core
+    slot: C5
+    activation: always
+    source: obra-superpowers
+    source_path: skills/verification-before-completion/
+    license_bundle_path: licenses/obra-superpowers-MIT.txt
+    license_blob: abf0390320aa14406af7a520b9b0739fdda9bf08
+    included:
+      - { source_file: SKILL.md, bundle_file: SKILL.md, upstream_blob: 2f14076e59e6ce5cd6f88007421a85f0bd772520, mode: exact }
+    excluded: []
+    adaptation:
+      - 고정 원문이 deterministic verification gate와 직접 정합해 변경 없이 채택했다.
+    residual_requirements: []
+
+  - id: SPW-04
+    name: writing-plans
+    layer: core
+    slot: C1
+    activation: always
+    source: obra-superpowers
+    source_path: skills/writing-plans/
+    license_bundle_path: licenses/obra-superpowers-MIT.txt
+    license_blob: abf0390320aa14406af7a520b9b0739fdda9bf08
+    included:
+      - { source_file: SKILL.md, bundle_file: SKILL.md, upstream_blob: b1613eb0578ae4483912bb1f227bd127fa79b577, mode: adapted }
+      - { source_file: plan-document-reviewer-prompt.md, bundle_file: plan-document-reviewer-prompt.md, upstream_blob: 1c12c1d6180395262d7150bdb12a9a90efc9cfa0, mode: adapted }
+    excluded: []
+    adaptation:
+      - project-level planning이 아닌 accepted task 내부 구현 계획으로 재범위화했다.
+      - 미채택 execution skill과 별도 dispatcher 참조를 제거하고 Yardlet review task로 번역했다.
+    residual_requirements: []
+
+  - id: SPW-06
+    name: requesting-code-review
+    layer: core
+    slot: C6
+    activation: always
+    source: obra-superpowers
+    source_path: skills/requesting-code-review/
+    license_bundle_path: licenses/obra-superpowers-MIT.txt
+    license_blob: abf0390320aa14406af7a520b9b0739fdda9bf08
+    included:
+      - { source_file: SKILL.md, bundle_file: SKILL.md, upstream_blob: 4b8aa605fc2ddf12e90840d2e06015d386c0d68d, mode: adapted }
+      - { source_file: code-reviewer.md, bundle_file: code-reviewer.md, upstream_blob: db84ae2a0f91834f93de9cf9f9cf8602bbd78a11, mode: adapted }
+    excluded: []
+    adaptation:
+      - hidden dispatch 절차를 explicit Yardlet queue task(kind review)와 criterion verdict로 번역했다.
+    residual_requirements:
+      - configured review worker cost through the existing queue
+
+  - id: SPW-07
+    name: receiving-code-review
+    layer: overlay
+    slot: review-feedback
+    activation: review feedback received or applied
+    source: obra-superpowers
+    source_path: skills/receiving-code-review/
+    license_bundle_path: licenses/obra-superpowers-MIT.txt
+    license_blob: abf0390320aa14406af7a520b9b0739fdda9bf08
+    included:
+      - { source_file: SKILL.md, bundle_file: SKILL.md, upstream_blob: 4c77a10ee338fb7bddec6f5acf3455c8f2e4465a, mode: exact }
+    excluded: []
+    adaptation:
+      - task-time trigger와 provider-neutral 절차가 고정 원문에 이미 존재해 변경 없이 채택했다.
+    residual_requirements: []
+
+  - id: SPW-08
+    name: finishing-a-development-branch
+    layer: overlay
+    slot: branch-finishing
+    activation: branch completion or integration decision task
+    source: obra-superpowers
+    source_path: skills/finishing-a-development-branch/
+    license_bundle_path: licenses/obra-superpowers-MIT.txt
+    license_blob: abf0390320aa14406af7a520b9b0739fdda9bf08
+    included:
+      - { source_file: SKILL.md, bundle_file: SKILL.md, upstream_blob: 7f5337aaf9efff305db15836412106216dae4756, mode: adapted }
+    excluded: []
+    adaptation:
+      - integration 선택을 NeedsUser로 연결하고 remote write와 pull request 생성을 기존 approval gate 뒤에 뒀다.
+      - 자동 remote write 명령과 harness-owned worktree cleanup 절차를 제거했다.
+    residual_requirements:
+      - explicit user decision before integration
+      - existing approval before remote mutation
+
+  - id: SPW-13
+    name: writing-skills
+    layer: overlay
+    slot: skill-authoring
+    activation: skill creation or improvement task
+    source: obra-superpowers
+    source_path: skills/writing-skills/
+    license_bundle_path: licenses/obra-superpowers-MIT.txt
+    license_blob: abf0390320aa14406af7a520b9b0739fdda9bf08
+    included:
+      - { source_file: SKILL.md, bundle_file: SKILL.md, upstream_blob: 6d3ded6e62ffdaaed7a84b52bc53f66e00e548be, mode: adapted }
+      - { source_file: persuasion-principles.md, bundle_file: persuasion-principles.md, upstream_blob: 9756416a59600b70ecca4044e0919ee7d4a37b21, mode: exact }
+    excluded:
+      - anthropic-best-practices.md
+      - graphviz-conventions.dot
+      - render-graphs.js
+      - testing-skills-with-subagents.md
+      - examples/CLAUDE_MD_TESTING.md
+    adaptation:
+      - required local frontmatter와 directory checklist를 self-contained하게 내장했다.
+      - external documentation, provider-specific runtime, extra dispatcher, rendering tool, package install, remote mutation 표면을 제거했다.
+      - 검증을 기존 skill author, evaluator, apply, review 경로로 번역했다.
+    residual_requirements:
+      - configured skill author, evaluator, and review worker cost through existing Yardlet paths
+
+  - id: ANT-02
+    name: mcp-builder
+    layer: overlay
+    slot: mcp-authoring
+    activation: explicit MCP server creation or improvement task
+    source: anthropics-skills
+    source_path: skills/mcp-builder/
+    license_bundle_path: skills/mcp-builder/LICENSE.txt
+    license_blob: 4f881c52d1f72f4cfb720e339e2d35c3058d01a9
+    included:
+      - { source_file: SKILL.md, bundle_file: SKILL.md, upstream_blob: 8a1a77a47d141967b246adb4da4f91037578ff7d, mode: adapted }
+      - { source_file: LICENSE.txt, bundle_file: LICENSE.txt, upstream_blob: 4f881c52d1f72f4cfb720e339e2d35c3058d01a9, mode: normalized }
+      - { source_file: reference/evaluation.md, bundle_file: reference/evaluation.md, upstream_blob: 87e9bb78840fac113d93b4a27ab5b229a18cf226, mode: adapted }
+      - { source_file: reference/mcp_best_practices.md, bundle_file: reference/mcp_best_practices.md, upstream_blob: b9d343cc3ae89b1fc139dae96bdb2b7e29ba3648, mode: adapted }
+      - { source_file: reference/node_mcp_server.md, bundle_file: reference/node_mcp_server.md, upstream_blob: f6e5df982adc0848bf261c47ab8d65a1e0469391, mode: adapted }
+      - { source_file: reference/python_mcp_server.md, bundle_file: reference/python_mcp_server.md, upstream_blob: cf7ec996d2e6e3655bc75ff6902738d03a37334e, mode: adapted }
+    excluded:
+      - scripts/connections.py
+      - scripts/evaluation.py
+      - scripts/example_evaluation.xml
+      - scripts/requirements.txt
+    adaptation:
+      - moving branch와 implicit fetch 지시를 제거하고 current external docs가 필요할 때 immutable revision을 명시하는 network opt-in으로 바꿨다.
+      - provider SDK와 credential을 요구하던 evaluation 내용을 local deterministic fixtures로 바꿨다.
+      - 포함 reference 전부에서 extra dispatcher와 implicit credential 지시를 제거했다.
+    residual_requirements:
+      - task-time network opt-in only when current external documentation is explicitly required
+
+  - id: ANT-03
+    name: webapp-testing
+    layer: overlay
+    slot: browser-visual-evidence
+    activation: browser or visual verification task
+    source: anthropics-skills
+    source_path: skills/webapp-testing/
+    license_bundle_path: skills/webapp-testing/LICENSE.txt
+    license_blob: 4f881c52d1f72f4cfb720e339e2d35c3058d01a9
+    included:
+      - { source_file: SKILL.md, bundle_file: SKILL.md, upstream_blob: 4726215301db64a0cc4d41fc3219c61f37a30f4a, mode: normalized }
+      - { source_file: LICENSE.txt, bundle_file: LICENSE.txt, upstream_blob: 4f881c52d1f72f4cfb720e339e2d35c3058d01a9, mode: normalized }
+      - { source_file: scripts/with_server.py, bundle_file: scripts/with_server.py, upstream_blob: 431f2eba16b268b7f3e2ae4daae9db41c0289b6d, mode: normalized }
+      - { source_file: examples/console_logging.py, bundle_file: examples/console_logging.py, upstream_blob: 9329b5e232ed53d944bfe95e750070117d31b9ab, mode: normalized }
+      - { source_file: examples/element_discovery.py, bundle_file: examples/element_discovery.py, upstream_blob: 917ba72f52421a1b324f93ae8e38af72010a87b9, mode: normalized }
+      - { source_file: examples/static_html_automation.py, bundle_file: examples/static_html_automation.py, upstream_blob: 90bbedcc08cdb345c74fb938ebad02c0baf56603, mode: normalized }
+    excluded: []
+    adaptation:
+      - 고정 원문이 provider-neutral local Playwright workflow임을 대조해 본문 변경 없이 채택했다.
+      - 배포 text file은 내용 변경 없이 trailing newline만 정규화했다.
+    residual_requirements:
+      - python3 and an already-installed Playwright runtime
+      - existing task-time opt-in before installing missing browser dependencies
+
+  - id: ANT-04
+    name: frontend-design
+    layer: overlay
+    slot: ui-design
+    activation: new UI or material redesign task in a web UI repository
+    source: anthropics-skills
+    source_path: skills/frontend-design/
+    license_bundle_path: skills/frontend-design/LICENSE.txt
+    license_blob: f433b1a53f5b830a205fd2df78e2b34974656c7b
+    included:
+      - { source_file: SKILL.md, bundle_file: SKILL.md, upstream_blob: decdff43d05908b4c1fc2cfd2d80fc5743440934, mode: exact }
+      - { source_file: LICENSE.txt, bundle_file: LICENSE.txt, upstream_blob: f433b1a53f5b830a205fd2df78e2b34974656c7b, mode: exact }
+    excluded: []
+    adaptation:
+      - 고정 원문이 순수 문서형이고 task-time trigger가 명확해 변경 없이 채택했다.
+    residual_requirements: []

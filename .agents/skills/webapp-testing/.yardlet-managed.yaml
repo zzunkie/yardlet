@@ -1,0 +1,12 @@
+schema_version: 1
+library: yardlet-managed-builtins
+id: ANT-03
+name: webapp-testing
+layer: overlay
+slot: browser-visual-evidence
+activation: "browser or visual verification task"
+source: anthropics-skills
+commit: 9d2f1ae187231d8199c64b5b762e1bdf2244733d
+source_path: skills/webapp-testing/
+license: Apache-2.0-per-skill
+license_blob: 4f881c52d1f72f4cfb720e339e2d35c3058d01a9
