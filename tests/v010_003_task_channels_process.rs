@@ -2431,6 +2431,62 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
                     .as_str()
                     .is_some_and(|digest| !digest.is_empty())
         }));
+        for (role, expected) in [
+            ("worker_result", true),
+            ("evaluation", false),
+            ("checkpoint", false),
+            ("handoff", true),
+            ("worker_declared", true),
+        ] {
+            for event in artifact_events
+                .iter()
+                .filter(|event| event["payload"]["role"].as_str() == Some(role))
+            {
+                assert_eq!(
+                    event["payload"]["worker_authored"].as_bool(),
+                    Some(expected),
+                    "artifact.created payload authorship for role {role}: {event:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn evaluator_fallback_handoff_artifact_records_core_authorship() {
+        let fixture = FixtureWorkspace::new("authorship-fallback");
+        fixture.write_queue(
+            "  - id: YARD-AUTH-FALLBACK\n    title: evaluator fallback handoff authorship\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
+        );
+        fixture.run(&["run", "--task", "YARD-AUTH-FALLBACK", "--execute"]);
+
+        let channel = channel_dir(&fixture.root, "YARD-AUTH-FALLBACK");
+        let events = yaml_dir(&channel.join("events"));
+        let authorship_for = |role: &str| {
+            events
+                .iter()
+                .filter(|event| string(event, "event_type") == "artifact.created")
+                .filter(|event| event["payload"]["role"].as_str() == Some(role))
+                .map(|event| {
+                    event["payload"]["worker_authored"]
+                        .as_bool()
+                        .unwrap_or_else(|| panic!("missing worker_authored for {role}: {event:?}"))
+                })
+                .collect::<Vec<_>>()
+        };
+        let handoff = authorship_for("handoff");
+        assert!(
+            !handoff.is_empty(),
+            "the evaluator-fallback run must still record a handoff artifact"
+        );
+        assert!(
+            handoff.iter().all(|authored| !authored),
+            "an evaluator-fallback handoff must be recorded worker_authored=false"
+        );
+        let worker_result = authorship_for("worker_result");
+        assert!(
+            !worker_result.is_empty() && worker_result.iter().all(|authored| *authored),
+            "the worker-written result.json stays worker_authored=true: {worker_result:?}"
+        );
     }
 
     #[test]

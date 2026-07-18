@@ -5066,6 +5066,7 @@ fn record_artifact_created(
         media_type: artifact_media_type(path).to_string(),
         role: artifact_role,
         channel_role: role.to_string(),
+        worker_authored: Some(worker_authored),
     };
     ws.publish_artifact(
         &context.session_id,
@@ -5073,10 +5074,6 @@ fn record_artifact_created(
         &proposal,
         &path.display().to_string(),
     )?;
-    // ArtifactProposal and the artifact.created payload have no authorship
-    // field yet, so the classification cannot be persisted here; callers keep
-    // it correct for the provenance consumer that will add that field.
-    let _ = worker_authored;
     Ok(())
 }
 

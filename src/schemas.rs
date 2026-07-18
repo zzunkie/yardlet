@@ -1751,6 +1751,11 @@ pub struct ArtifactProposal {
     /// run artifacts. Worker proposals leave this empty and use `role`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub channel_role: String,
+    /// Authorship classification: did the worker author the artifact content
+    /// (`true`) or did the core/evaluator generate it (`false`)? `None` means
+    /// unstated; proposals predating this field deserialize to `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_authored: Option<bool>,
 }
 
 impl ArtifactProposal {
@@ -1801,6 +1806,10 @@ pub struct Artifact {
     pub role: ArtifactRole,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub channel_role: String,
+    /// Authorship recorded at publication. `None` on records published before
+    /// the field existed; recovery replays preserve the first canonical record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_authored: Option<bool>,
     pub created_event_id: String,
     pub published_seq: u64,
     pub recorded_at: String,
