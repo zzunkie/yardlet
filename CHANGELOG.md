@@ -30,6 +30,15 @@
   still records the runtime attempt), letting the drain re-resolve the task
   under its recorded lineage.
 
+- **Follow-up ingestion inherits the governing contract lineage, not the
+  runtime failover worker.** A policy-authorized failover run that proposed
+  follow-ups stamped them with the failover attempt's runtime worker while
+  their provenance kept the governing contract, so every later dispatch
+  failed closed with a `conflicts with governing worker` lineage error; a
+  follow-up naming the contract worker itself was rejected at ingest. Both
+  the conflict gate and the inherited stamp now use the recorded governing
+  contract, keeping follow-ups self-consistent and dispatchable.
+
 - **Parallel worker spawns attest their cwd against the run receipt.** Before
   a parallel batch spawns any worker — and again before a failover worker
   replaces one that exited without `result.json` — the run's `run.yaml`

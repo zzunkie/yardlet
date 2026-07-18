@@ -1136,43 +1136,54 @@ fn ingest_follow_ups_inner(
             let requested_model = fu.model.trim();
             let model_explicit =
                 !requested_model.is_empty() && !requested_model.eq_ignore_ascii_case("auto");
-            if governing.worker_id.trim().is_empty() || governing.model.trim().is_empty() {
+            // Inherit and gate against the governing CONTRACT recorded in the
+            // provenance, not the runtime attempt. A policy-authorized failover
+            // selection carries the failover worker as `worker_id` while its
+            // provenance keeps the governing lineage; stamping the runtime
+            // worker would leave the follow-up self-inconsistent and fail
+            // `validate_recorded_lineage` at every dispatch — a permanent
+            // dead-end (and a follow-up naming the contract worker would be
+            // wrongly rejected).
+            let contract = &governing.routing_provenance;
+            if contract.governing_worker_id.trim().is_empty()
+                || contract.governing_model.trim().is_empty()
+            {
                 bail!(
                         "governing routing selection for '{}' is incomplete: worker/model must be non-empty",
-                        governing.routing_provenance.governing_task_id
+                        contract.governing_task_id
                     );
             }
             // Runtime fallback may select another ready worker for an attempt,
             // but it never authorizes a worker-authored follow-up to rewrite
             // the governing preferred worker stored in the queue. Dispatch
             // enforces the same recorded-lineage invariant.
-            if !requested_worker.is_empty() && requested_worker != governing.worker_id {
+            if !requested_worker.is_empty() && requested_worker != contract.governing_worker_id {
                 bail!(
                         "worker-proposed follow-up '{}' conflicts with governing worker '{}': requested '{}'",
                         title,
-                        governing.worker_id,
+                        contract.governing_worker_id,
                         requested_worker
                     );
             }
-            if model_explicit && requested_model != governing.model {
+            if model_explicit && requested_model != contract.governing_model {
                 bail!(
                         "worker-proposed follow-up '{}' conflicts with governing model '{}': requested '{}'",
                         title,
-                        governing.model,
+                        contract.governing_model,
                         requested_model
                     );
             }
             if let Some(requested) = fu.fallback_enabled {
-                if requested != governing.fallback_enabled {
+                if requested != contract.governing_fallback_enabled {
                     bail!(
                             "worker-proposed follow-up '{}' conflicts with governing fallback_enabled={}: requested {}",
                             title,
-                            governing.fallback_enabled,
+                            contract.governing_fallback_enabled,
                             requested
                         );
                 }
             }
-            let mut provenance = governing.routing_provenance.clone();
+            let mut provenance = contract.clone();
             provenance.worker_source = if requested_worker.is_empty() {
                 "governing_task.inherited".to_string()
             } else {
@@ -1192,9 +1203,9 @@ fn ingest_follow_ups_inner(
             provenance.model_overridden = model_explicit;
             provenance.fallback_overridden = fu.fallback_enabled.is_some();
             (
-                governing.worker_id.clone(),
-                governing.model.clone(),
-                Some(governing.fallback_enabled),
+                provenance.governing_worker_id.clone(),
+                provenance.governing_model.clone(),
+                Some(provenance.governing_fallback_enabled),
                 Some(provenance),
             )
         } else {
@@ -2755,6 +2766,106 @@ routing:
         .unwrap_err();
 
         assert!(error.to_string().contains("governing worker"), "{error:#}");
+        assert_eq!(queue.tasks.len(), 1, "conflict must not partially ingest");
+    }
+
+    /// A policy-authorized failover run carries a selection whose RUNTIME
+    /// worker differs from the governing CONTRACT recorded in its provenance.
+    /// Follow-ups must inherit the contract (self-consistent stamp), or they
+    /// hard-error on `validate_recorded_lineage` at dispatch.
+    fn failover_diverged_selection() -> crate::schemas::ResolvedWorkerSelection {
+        use crate::schemas::{ResolvedWorkerSelection, RoutingProvenance};
+        ResolvedWorkerSelection {
+            worker_id: "fixture-fallback".into(),
+            model: "fallback-model".into(),
+            fallback_enabled: true,
+            routing_provenance: RoutingProvenance {
+                governing_task_id: "YARD-001".into(),
+                governing_worker_id: "codex".into(),
+                governing_model: "gpt-5.6-sol".into(),
+                governing_fallback_enabled: true,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn governing_failover_run_stamps_contract_lineage_not_runtime_worker() {
+        use crate::schemas::FollowUpTask;
+        let plan: PlanningResult = serde_json::from_str(
+            r#"{ "summary": "s", "tasks": [{ "id": "YARD-001", "title": "governing", "risk": "low" }] }"#,
+        )
+        .unwrap();
+        let mut queue = build_queue("intent-failover", &plan);
+        let ids = ingest_follow_ups_with_governing(
+            &mut queue,
+            &[],
+            &[FollowUpTask {
+                title: "inherit contract lineage".into(),
+                ..Default::default()
+            }],
+            None,
+            &failover_diverged_selection(),
+        )
+        .unwrap();
+        assert_eq!(ids.len(), 1);
+        let task = queue.tasks.iter().find(|t| t.id == ids[0]).unwrap();
+        assert_eq!(task.preferred_worker, "codex");
+        assert_eq!(task.model, "gpt-5.6-sol");
+        assert_eq!(task.fallback_enabled, Some(true));
+        let provenance = task.routing_provenance.as_ref().unwrap();
+        assert_eq!(provenance.governing_task_id, "YARD-001");
+        assert_eq!(provenance.governing_worker_id, task.preferred_worker);
+        assert_eq!(provenance.governing_model, task.model);
+        assert_eq!(
+            Some(provenance.governing_fallback_enabled),
+            task.fallback_enabled
+        );
+    }
+
+    #[test]
+    fn governing_failover_run_accepts_contract_worker_and_rejects_runtime_worker() {
+        use crate::schemas::FollowUpTask;
+        let plan: PlanningResult = serde_json::from_str(
+            r#"{ "summary": "s", "tasks": [{ "id": "YARD-001", "title": "governing", "risk": "low" }] }"#,
+        )
+        .unwrap();
+        let mut queue = build_queue("intent-failover", &plan);
+        let ids = ingest_follow_ups_with_governing(
+            &mut queue,
+            &[],
+            &[FollowUpTask {
+                title: "explicit contract worker".into(),
+                preferred_worker: "codex".into(),
+                model: "gpt-5.6-sol".into(),
+                fallback_enabled: Some(true),
+                ..Default::default()
+            }],
+            None,
+            &failover_diverged_selection(),
+        )
+        .unwrap();
+        assert_eq!(ids.len(), 1, "contract-same follow-up must not be rejected");
+        let task = queue.tasks.iter().find(|t| t.id == ids[0]).unwrap();
+        assert_eq!(task.preferred_worker, "codex");
+
+        let mut queue = build_queue("intent-failover", &plan);
+        let error = ingest_follow_ups_with_governing(
+            &mut queue,
+            &[],
+            &[FollowUpTask {
+                title: "runtime worker is not the contract".into(),
+                preferred_worker: "fixture-fallback".into(),
+                ..Default::default()
+            }],
+            None,
+            &failover_diverged_selection(),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("governing worker 'codex'"),
+            "{error:#}"
+        );
         assert_eq!(queue.tasks.len(), 1, "conflict must not partially ingest");
     }
 
