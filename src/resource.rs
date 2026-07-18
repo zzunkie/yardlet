@@ -147,10 +147,15 @@ pub(crate) fn ingest_run_proposals(
                 actual_digest
             );
         }
+        // Everything in `result.artifacts` crossed the worker contract, so
+        // authorship is a property of this ingest path, not a claim the
+        // proposal gets to make (or omit, as pre-field workers do).
+        let mut proposal = proposal.clone();
+        proposal.worker_authored = Some(true);
         ws.publish_artifact(
             session_id,
             intent_id,
-            proposal,
+            &proposal,
             &canonical_path.display().to_string(),
         )?;
     }

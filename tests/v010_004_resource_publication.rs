@@ -313,6 +313,57 @@ mod unix {
     }
 
     #[test]
+    fn result_json_artifact_proposals_are_stamped_worker_authored() {
+        let fixture = Fixture::new("authorship-stamp");
+        fixture.must_run(&["run", "--task", "YARD-001", "--execute"]);
+
+        // The fixture's result.json proposals omit `worker_authored`, exactly
+        // like a worker predating the field: authorship must come from the
+        // ingest stamp, never from trusting the proposal.
+        let records = yaml_files(&fixture.root.join(".agents/resources/artifacts"))
+            .iter()
+            .map(|path| read_yaml(path))
+            .filter(|record| {
+                record["proposal_id"]
+                    .as_str()
+                    .is_some_and(|proposal_id| proposal_id.starts_with("proposal-"))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !records.is_empty(),
+            "fixture must publish result.json artifact proposals"
+        );
+        for record in &records {
+            assert_eq!(
+                record["worker_authored"].as_bool(),
+                Some(true),
+                "canonical record must stamp worker_authored=true: {record:?}"
+            );
+        }
+
+        let created = task_channel_events(&fixture.root)
+            .into_iter()
+            .filter(|event| event["type"].as_str() == Some("artifact.created"))
+            .filter(|event| {
+                event["payload"]["proposal_id"]
+                    .as_str()
+                    .is_some_and(|proposal_id| proposal_id.starts_with("proposal-"))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !created.is_empty(),
+            "artifact.created events for result.json proposals must exist"
+        );
+        for event in &created {
+            assert_eq!(
+                event["payload"]["worker_authored"].as_bool(),
+                Some(true),
+                "artifact.created payload must stamp worker_authored=true: {event:?}"
+            );
+        }
+    }
+
+    #[test]
     fn derived_index_rebuild_is_bounded_and_never_changes_canonical_bytes() {
         let fixture = Fixture::new("bounded-index");
         fixture.must_run(&["run", "--task", "YARD-CAP", "--execute"]);
