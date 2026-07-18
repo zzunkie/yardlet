@@ -5766,9 +5766,7 @@ routing:
         assert_eq!(authored.worker_authored, Some(true));
         assert_eq!(fallback.worker_authored, Some(false));
 
-        let channel = ws
-            .load_task_channel("intent_channel", "YARD-001")
-            .unwrap();
+        let channel = ws.load_task_channel("intent_channel", "YARD-001").unwrap();
         let payload_for = |artifact_id: &str| {
             channel
                 .events
