@@ -1483,6 +1483,146 @@ printf '# Handoff\n\nSibling task drained.\n' >"$run_dir/handoff.md"
         assert_eq!(string(&serial_retry, "worker"), "fixture-primary");
     }
 
+    fn write_parallel_nomodel_workers(fixture: &FixtureWorkspace) {
+        let primary = fixture.root.join(".agents/fixture-bin/nomodel-primary.sh");
+        fs::write(
+            &primary,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'nomodel-primary 1.0\n'
+  exit 0
+fi
+run_dir="${1:?run directory is required}"
+cat >/dev/null
+run_id="${run_dir##*/}"
+task_id="$(sed -n 's/^task_id: //p' "$run_dir/run.yaml" | head -n 1)"
+if grep -q '^serial_isolated: false' "$run_dir/run.yaml"; then
+  # Parallel first attempt: stop non-terminal so the same auto drain retries
+  # this task sequentially against the queue the batch prep just re-stamped.
+  cat >"$run_dir/result.json" <<JSON
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "partial",
+  "compact_summary": "parallel attempt paused before completion"
+}
+JSON
+  printf '# Handoff\n\nParallel attempt paused before completion.\n' >"$run_dir/handoff.md"
+  exit 0
+fi
+cat >"$run_dir/result.json" <<JSON
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "compact_summary": "drain retry completed after model-less parallel prep"
+}
+JSON
+printf '# Handoff\n\nDrain retry completed.\n' >"$run_dir/handoff.md"
+"##,
+        )
+        .unwrap();
+        let drain = fixture.root.join(".agents/fixture-bin/nomodel-drain.sh");
+        fs::write(
+            &drain,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'nomodel-drain 1.0\n'
+  exit 0
+fi
+run_dir="${1:?run directory is required}"
+cat >/dev/null
+run_id="${run_dir##*/}"
+task_id="$(sed -n 's/^task_id: //p' "$run_dir/run.yaml" | head -n 1)"
+cat >"$run_dir/result.json" <<JSON
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "compact_summary": "sibling drained"
+}
+JSON
+printf '# Handoff\n\nSibling task drained.\n' >"$run_dir/handoff.md"
+"##,
+        )
+        .unwrap();
+        for worker in [&primary, &drain] {
+            let mut permissions = fs::metadata(worker).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(worker, permissions).unwrap();
+        }
+        // Deliberately model-less workers: their selections resolve with an
+        // empty model, which the parallel prep must not stamp onto the queue.
+        fs::write(
+            fixture.root.join(".agents/workers.yaml"),
+            format!(
+                "schema_version: 1\nworkers:\n  - id: fixture-nomodel\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-drain\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-nomodel\n  fallback_order: [fixture-nomodel]\n",
+                primary.display(),
+                drain.display()
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn parallel_prep_lock_stamp_skips_empty_model_selection() {
+        let fixture = FixtureWorkspace::new("parallel-nomodel-stamp");
+        write_parallel_nomodel_workers(&fixture);
+        fixture.write_queue(
+            "  - id: YARD-NOMODEL\n    title: model-less parallel attempt then drain retry\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture-nomodel\n  - id: YARD-NM-DRAIN\n    title: healthy sibling drains\n    state: queued\n    priority: 20\n    kind: implementation\n    preferred_worker: fixture-drain\n",
+        );
+
+        // Batch prep re-stamps selections onto the queued tasks under the
+        // planning lock. A model-less selection must be skipped there exactly
+        // like the pre-lock stamping path skips it: persisting a provenance
+        // with an empty governing_model makes the drain's sequential retry of
+        // the partial task hard-error on lineage validation.
+        let output = command(
+            &fixture.root,
+            &fixture.binary,
+            &["run", "--auto", "--parallel", "2"],
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stdout.contains(
+                "parallel batch: YARD-NOMODEL via fixture-nomodel, YARD-NM-DRAIN via fixture-drain"
+            ),
+            "expected a two-task parallel batch:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("incomplete governing routing provenance")
+                && !stderr.contains("incomplete governing routing provenance"),
+            "drain retry hit the empty-model provenance dead-end\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            output.status.success(),
+            "auto drain died instead of retrying the partial task\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert_eq!(task_state(&fixture.root, "YARD-NOMODEL"), "done");
+        assert_eq!(task_state(&fixture.root, "YARD-NM-DRAIN"), "done");
+
+        // The guard must skip stamping entirely, not persist a provenance the
+        // next resolve rejects as incomplete.
+        let queue = read_yaml(&fixture.root.join(".agents/work-queue.yaml"));
+        let task = queue["tasks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|task| string(task, "id") == "YARD-NOMODEL")
+            .unwrap();
+        assert!(
+            task["routing_provenance"].is_null(),
+            "a model-less selection was stamped onto the queue task: {:?}",
+            task["routing_provenance"]
+        );
+    }
+
     #[test]
     fn parallel_independent_task_records_validation_completion() {
         let fixture = FixtureWorkspace::new("parallel-validation");
