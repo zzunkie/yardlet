@@ -780,6 +780,179 @@ exit 1
         assert_policy_failover_selection(&fixture.root);
     }
 
+    fn write_follow_up_failover_workers(fixture: &FixtureWorkspace) -> PathBuf {
+        let primary = fixture.root.join(".agents/fixture-bin/lineage-primary.sh");
+        fs::write(
+            &primary,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'lineage-primary 1.0\n'
+  exit 0
+fi
+run_dir="${1:?run directory is required}"
+cat >/dev/null
+run_id="${run_dir##*/}"
+task_id="$(sed -n 's/^task_id: //p' "$run_dir/run.yaml" | head -n 1)"
+cat >"$run_dir/result.json" <<JSON
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "compact_summary": "governed follow-up seeded",
+  "follow_up_tasks": [
+    {"title": "failover lineage probe", "reason": "seed a governed follow-up"}
+  ]
+}
+JSON
+printf '# Handoff\n\nGoverned follow-up seeded.\n' >"$run_dir/handoff.md"
+"##,
+        )
+        .unwrap();
+        let fallback = fixture.root.join(".agents/fixture-bin/lineage-fallback.sh");
+        fs::write(
+            &fallback,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'lineage-fallback 1.0\n'
+  exit 0
+fi
+run_dir="${1:?run directory is required}"
+cat >/dev/null
+run_id="${run_dir##*/}"
+task_id="$(sed -n 's/^task_id: //p' "$run_dir/run.yaml" | head -n 1)"
+if [[ "$task_id" == "YARD-002" ]]; then
+  cat >"$run_dir/result.json" <<JSON
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "compact_summary": "failover run proposes contract-lineage follow-ups",
+  "follow_up_tasks": [
+    {"title": "contract lineage inherited follow-up", "reason": "inherit the governing contract"},
+    {"title": "contract lineage explicit follow-up", "reason": "name the governing contract worker", "preferred_worker": "fixture-primary"}
+  ]
+}
+JSON
+else
+  cat >"$run_dir/result.json" <<JSON
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "compact_summary": "contract-lineage follow-up completed after failover"
+}
+JSON
+fi
+printf '# Handoff\n\nFailover fixture completed.\n' >"$run_dir/handoff.md"
+"##,
+        )
+        .unwrap();
+        for worker in [&primary, &fallback] {
+            let mut permissions = fs::metadata(worker).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(worker, permissions).unwrap();
+        }
+        fs::write(
+            fixture.root.join(".agents/workers.yaml"),
+            format!(
+                "schema_version: 1\nworkers:\n  - id: fixture-primary\n    model: primary-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-fallback\n    model: fallback-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-primary\n  fallback_order: [fixture-fallback]\n  allow_preferred_worker_failover: true\n",
+                primary.display(),
+                fallback.display()
+            ),
+        )
+        .unwrap();
+        primary
+    }
+
+    fn assert_contract_lineage_task(root: &Path, task_id: &str, governing_task_id: &str) {
+        let queue = read_yaml(&root.join(".agents/work-queue.yaml"));
+        let task = queue["tasks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|task| string(task, "id") == task_id)
+            .unwrap_or_else(|| panic!("queue task {task_id} not found"));
+        assert_eq!(string(task, "preferred_worker"), "fixture-primary");
+        assert_eq!(string(task, "model"), "primary-model");
+        assert_eq!(task["fallback_enabled"].as_bool(), Some(true));
+        let provenance = &task["routing_provenance"];
+        assert_eq!(string(provenance, "governing_task_id"), governing_task_id);
+        assert_eq!(string(provenance, "governing_worker_id"), "fixture-primary");
+        assert_eq!(string(provenance, "governing_model"), "primary-model");
+        assert_eq!(
+            provenance["governing_fallback_enabled"].as_bool(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn policy_failover_run_ingests_follow_ups_with_contract_lineage_and_they_dispatch() {
+        let fixture = FixtureWorkspace::new("failover-follow-up-lineage");
+        let primary = write_follow_up_failover_workers(&fixture);
+        fixture.write_queue(
+            "  - id: YARD-001\n    title: seed governed follow-up\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture-primary\n",
+        );
+
+        // Phase A: the contract worker itself proposes a follow-up, so the
+        // follow-up carries a recorded governing lineage with failover allowed.
+        fixture.run(&["run", "--task", "YARD-001", "--execute"]);
+        assert_eq!(task_state(&fixture.root, "YARD-001"), "done");
+        assert_eq!(task_state(&fixture.root, "YARD-002"), "queued");
+        assert_contract_lineage_task(&fixture.root, "YARD-002", "YARD-001");
+
+        // Phase B: the contract worker now exits without result.json, forcing a
+        // policy-authorized failover run that proposes further follow-ups.
+        fs::write(
+            &primary,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'lineage-primary 1.0\n'
+  exit 0
+fi
+cat >/dev/null
+printf 'primary intentionally omitted result.json\n' >&2
+"##,
+        )
+        .unwrap();
+
+        fixture.run(&["run", "--task", "YARD-002", "--execute"]);
+        assert_eq!(task_state(&fixture.root, "YARD-002"), "done");
+        let run = read_yaml(&run_dir_for_task(&fixture.root, "YARD-002").join("run.yaml"));
+        assert_eq!(string(&run, "worker"), "fixture-fallback");
+        assert_eq!(
+            string(&run["routing_provenance"], "governing_worker_id"),
+            "fixture-primary"
+        );
+
+        // Both follow-ups from the failover run carry the self-consistent
+        // governing CONTRACT lineage, not the runtime failover worker.
+        let queue = read_yaml(&fixture.root.join(".agents/work-queue.yaml"));
+        let task_id_by_title = |title: &str| -> String {
+            queue["tasks"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .find(|task| string(task, "title") == title)
+                .map(|task| string(task, "id").to_string())
+                .unwrap_or_else(|| panic!("follow-up {title:?} was not ingested"))
+        };
+        let inherited = task_id_by_title("contract lineage inherited follow-up");
+        let explicit = task_id_by_title("contract lineage explicit follow-up");
+        assert_contract_lineage_task(&fixture.root, &inherited, "YARD-001");
+        assert_contract_lineage_task(&fixture.root, &explicit, "YARD-001");
+
+        // The inherited follow-up must dispatch without a lineage hard-error
+        // and resolve through the same policy-authorized failover.
+        fixture.run(&["run", "--task", &inherited, "--execute"]);
+        assert_eq!(task_state(&fixture.root, &inherited), "done");
+    }
+
     #[test]
     fn confirmed_runtime_addition_stamps_the_same_receipted_exact_selection() {
         let fixture = FixtureWorkspace::new("confirmed-runtime-exact-dispatch");
