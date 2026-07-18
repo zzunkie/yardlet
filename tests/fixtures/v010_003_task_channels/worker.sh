@@ -201,6 +201,34 @@ case "$task_id" in
       write_question "native session으로 이어갈까요?"
     fi
     ;;
+  YARD-FULL-ACCESS-CWD)
+    if [[ "$native_adapter" != true ]]; then
+      printf 'full-access cwd fixture requires the codex adapter\n' >&2
+      exit 66
+    fi
+    agent_cwd=''
+    args=("$@")
+    index=0
+    while (( index < ${#args[@]} )); do
+      case "${args[$index]}" in
+        -C|--cd)
+          ((index += 1))
+          agent_cwd="${args[$index]:-}"
+          ;;
+      esac
+      ((index += 1))
+    done
+    if [[ -z "$agent_cwd" ]]; then
+      agent_cwd="${YARD_TEST_DECOY_CWD:?missing decoy cwd}"
+    fi
+    cd "$agent_cwd"
+    cat "${YARD_TEST_ABSOLUTE_SOURCE:?missing absolute source}" >relative-worker.txt
+    printf '%s\n' "$PWD" >"$run_dir/effective-cwd.txt"
+    write_done "full-access relative operation completed"
+    ;;
+  YARD-CWD-ATTEST)
+    write_done "cwd attestation fixture worker ran"
+    ;;
   YARD-CODEX-BACKPRESSURE)
     if [[ "$native_adapter" != true ]]; then
       printf 'codex backpressure fixture requires the codex adapter\n' >&2
