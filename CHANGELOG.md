@@ -12,6 +12,15 @@
 
 ### Fixed
 
+- **`artifact.created` events persist worker authorship.** Finalization
+  artifacts now record `worker_authored` in the event payload and canonical
+  record: `true` for a worker-written `handoff.md` and worker-declared files,
+  `false` for evaluator/core-generated artifacts such as an evaluator-fallback
+  handoff. The classification was previously computed but dropped before
+  publication. Artifacts published before the field existed replay through
+  recovery without a proposal conflict: authorship is not proposal identity,
+  and the first canonical record is preserved.
+
 - **Selection stamping preserves the governing lineage after parallel
   failover.** Finalization stamped the failover attempt's runtime worker over
   the task's recorded governing worker, so a policy-authorized parallel

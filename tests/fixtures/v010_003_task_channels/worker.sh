@@ -312,6 +312,13 @@ case "$task_id" in
       "$run_id" "$task_id" >"$run_dir/result.json"
     write_handoff "live event and artifact fixture complete"
     ;;
+  YARD-AUTH-FALLBACK)
+    # Writes result.json but intentionally no handoff.md, so the evaluator
+    # fallback authors the handoff and the artifact must record that.
+    printf 'fallback authorship fixture stdout\n'
+    printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "compact_summary": "handoff 없이 완료된 fallback authorship fixture"\n}\n' \
+      "$run_id" "$task_id" >"$run_dir/result.json"
+    ;;
   YARD-REDIRECT-QUESTION)
     if grep -q '> \[user\] resolve current question' <<<"$packet"; then
       printf 'current question resolved\n'

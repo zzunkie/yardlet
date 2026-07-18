@@ -2479,9 +2479,14 @@ impl Workspace {
                 // `source_path` is the physical location used to verify the
                 // publication, not proposal identity. A Git-finish recovery
                 // can replay an already-published worktree artifact from the
-                // integrated workspace root. Preserve the first canonical
-                // record while still failing closed on provenance, logical
-                // path, digest, media type, or role mutations.
+                // integrated workspace root. `worker_authored` is likewise a
+                // classification of the run directory at publication time,
+                // not identity: records published before the field existed
+                // carry no authorship, and a recovery replay may reclassify a
+                // handoff the evaluator has since filled in. Preserve the
+                // first canonical record while still failing closed on
+                // provenance, logical path, digest, media type, or role
+                // mutations.
                 return Ok(existing);
             }
             bail!("artifact_proposal_conflict: {}", proposal.proposal_id);
@@ -2497,6 +2502,20 @@ impl Workspace {
         } else {
             serde_json::Value::String(proposal.channel_role.clone())
         };
+        let mut payload = serde_json::json!({
+            "artifact_id": artifact_id,
+            "proposal_id": proposal.proposal_id,
+            "path": proposal.path,
+            "source_path": source_path,
+            "content_digest": proposal.digest,
+            "media_type": proposal.media_type,
+            "role": event_role,
+            "producer_attempt_id": proposal.attempt_id,
+            "producer_worker_id": proposal.producer.worker_id
+        });
+        if let Some(worker_authored) = proposal.worker_authored {
+            payload["worker_authored"] = serde_json::Value::Bool(worker_authored);
+        }
         let event = self.record_task_event_locked(
             intent_id,
             ChannelEvent {
@@ -2515,17 +2534,7 @@ impl Workspace {
                 correlation_id: format!("cor_{}", task_channel_id(intent_id, &proposal.task_id)),
                 task_id: proposal.task_id.clone(),
                 attempt_id: Some(proposal.attempt_id.clone()),
-                payload: serde_json::json!({
-                    "artifact_id": artifact_id,
-                    "proposal_id": proposal.proposal_id,
-                    "path": proposal.path,
-                    "source_path": source_path,
-                    "content_digest": proposal.digest,
-                    "media_type": proposal.media_type,
-                    "role": event_role,
-                    "producer_attempt_id": proposal.attempt_id,
-                    "producer_worker_id": proposal.producer.worker_id
-                }),
+                payload,
                 raw_ref: None,
             },
         )?;
@@ -2545,6 +2554,7 @@ impl Workspace {
             media_type: proposal.media_type.clone(),
             role: proposal.role,
             channel_role: proposal.channel_role.clone(),
+            worker_authored: proposal.worker_authored,
             created_event_id: event.event_id,
             published_seq: event.seq,
             recorded_at: event.recorded_at,
@@ -5647,6 +5657,7 @@ routing:
             media_type: "text/plain".into(),
             role: crate::schemas::ArtifactRole::File,
             channel_role: "worker_declared".into(),
+            worker_authored: None,
         };
 
         let first = ws
@@ -5699,6 +5710,136 @@ routing:
         );
         assert_eq!(ws.load_artifacts().unwrap().len(), 1);
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn authorship_proposal(
+        attempt_id: &str,
+        suffix: &str,
+        worker_authored: Option<bool>,
+    ) -> ArtifactProposal {
+        ArtifactProposal {
+            proposal_id: format!("proposal_authorship_{suffix}"),
+            task_id: "YARD-001".into(),
+            attempt_id: attempt_id.into(),
+            producer: crate::schemas::ResourceProducer {
+                worker_id: "codex".into(),
+            },
+            causation_id: attempt_id.into(),
+            path: format!("runs/run-authorship/{suffix}.md"),
+            digest: "fnv1a64:0123456789abcdef".into(),
+            media_type: "text/markdown".into(),
+            role: crate::schemas::ArtifactRole::Handoff,
+            channel_role: "handoff".into(),
+            worker_authored,
+        }
+    }
+
+    #[test]
+    fn artifact_publication_persists_worker_authorship_in_payload_and_record() {
+        let dir = temp_root("artifact-authorship-payload");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        let attempt_id = "att_authorship";
+        ws.record_worker_attempt(&prepared_attempt(attempt_id))
+            .unwrap();
+        let mut completed = channel_event(ChannelEventType::WorkerCompleted, Some(attempt_id));
+        completed.payload = serde_json::json!({"worker_id": "codex", "outcome": "succeeded"});
+        ws.record_task_event("intent_channel", completed).unwrap();
+
+        let authored = ws
+            .publish_artifact(
+                "ses_channel",
+                "intent_channel",
+                &authorship_proposal(attempt_id, "worker", Some(true)),
+                "/runs/run-authorship/worker.md",
+            )
+            .unwrap();
+        let fallback = ws
+            .publish_artifact(
+                "ses_channel",
+                "intent_channel",
+                &authorship_proposal(attempt_id, "fallback", Some(false)),
+                "/runs/run-authorship/fallback.md",
+            )
+            .unwrap();
+        assert_eq!(authored.worker_authored, Some(true));
+        assert_eq!(fallback.worker_authored, Some(false));
+
+        let channel = ws
+            .load_task_channel("intent_channel", "YARD-001")
+            .unwrap();
+        let payload_for = |artifact_id: &str| {
+            channel
+                .events
+                .iter()
+                .find(|event| {
+                    event.event_type == ChannelEventType::ArtifactCreated
+                        && event.payload["artifact_id"] == artifact_id
+                })
+                .unwrap_or_else(|| panic!("artifact.created missing for {artifact_id}"))
+                .payload["worker_authored"]
+                .clone()
+        };
+        assert_eq!(
+            payload_for(&authored.artifact_id),
+            serde_json::Value::Bool(true),
+            "worker-authored artifact must record worker_authored=true in its payload"
+        );
+        assert_eq!(
+            payload_for(&fallback.artifact_id),
+            serde_json::Value::Bool(false),
+            "core-authored artifact must record worker_authored=false in its payload"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn artifact_replay_over_pre_authorship_record_passes_without_conflict() {
+        let dir = temp_root("artifact-authorship-replay");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        let attempt_id = "att_pre_authorship";
+        ws.record_worker_attempt(&prepared_attempt(attempt_id))
+            .unwrap();
+        let mut completed = channel_event(ChannelEventType::WorkerCompleted, Some(attempt_id));
+        completed.payload = serde_json::json!({"worker_id": "codex", "outcome": "succeeded"});
+        ws.record_task_event("intent_channel", completed).unwrap();
+
+        // A proposal without authorship serializes exactly like a record
+        // published by a pre-authorship binary: no `worker_authored` key.
+        let pre_field = authorship_proposal(attempt_id, "handoff", None);
+        let first = ws
+            .publish_artifact(
+                "ses_channel",
+                "intent_channel",
+                &pre_field,
+                "/worktree/runs/run-authorship/handoff.md",
+            )
+            .unwrap();
+        assert_eq!(first.worker_authored, None);
+        let record = fs::read_to_string(
+            ws.artifacts_dir()
+                .join(format!("{}.yaml", first.artifact_id)),
+        )
+        .unwrap();
+        assert!(
+            !record.contains("worker_authored"),
+            "pre-authorship record shape must omit the key entirely: {record}"
+        );
+
+        let mut replayed = pre_field.clone();
+        replayed.worker_authored = Some(true);
+        let replay = ws
+            .publish_artifact(
+                "ses_channel",
+                "intent_channel",
+                &replayed,
+                "/workspace/runs/run-authorship/handoff.md",
+            )
+            .expect("recovery replay over a pre-authorship record must not conflict");
+        assert_eq!(replay, first, "the first canonical record is preserved");
+        assert_eq!(ws.load_artifacts().unwrap().len(), 1);
         let _ = fs::remove_dir_all(&dir);
     }
 
