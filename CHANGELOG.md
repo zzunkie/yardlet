@@ -21,6 +21,15 @@
   recovery without a proposal conflict: authorship is not proposal identity,
   and the first canonical record is preserved.
 
+- **`result.json` artifact proposals are stamped `worker_authored=true` at
+  ingest.** Artifacts a worker proposes through the `result.json` `artifacts`
+  array are worker-authored by contract, but ingestion published the
+  proposal's own authorship claim, which pre-field workers omit, so their
+  `artifact.created` payloads and canonical records carried no authorship.
+  Yardlet now stamps the classification on the ingest path instead of
+  trusting the proposal; records published before the field existed still
+  replay through recovery without a proposal conflict.
+
 - **Selection stamping preserves the governing lineage after parallel
   failover.** Finalization stamped the failover attempt's runtime worker over
   the task's recorded governing worker, so a policy-authorized parallel
