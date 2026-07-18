@@ -1791,6 +1791,10 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         .as_ref()
         .map(|owned| owned.worker_run_dir.as_path())
         .unwrap_or(run_dir.as_path());
+    let worker_cwd = serial_worktree
+        .as_ref()
+        .map(|owned| owned.path.as_path())
+        .unwrap_or(ws.root.as_path());
     let run_dir_rel = if serial_worktree.is_some() {
         worker_run_dir.display().to_string()
     } else {
@@ -2015,6 +2019,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             chained: false,
         });
     }
+    if serial_worktree.is_some() {
+        attest_worker_cwd(&run_dir, worker_cwd, true)?;
+    }
 
     // mark running
     let from = queue.tasks[idx].state;
@@ -2074,10 +2081,6 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // are not attributed as worker deliverables.
     let run_excludes = vec![run_dir.clone()];
     let baseline_fp = evaluator::run_fingerprints(&ws.root, &run_excludes);
-    let worker_cwd = serial_worktree
-        .as_ref()
-        .map(|owned| owned.path.as_path())
-        .unwrap_or(ws.root.as_path());
     let run_started = std::time::Instant::now();
     let mut attempt_ordinal = 1_u32;
     let first_attempt_id = prepared_answer_attempt
@@ -2171,6 +2174,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         let cont = "The previous run was interrupted by a connection error before it finished. \
                     Continue from where you left off, complete the task, and write the result file \
                     exactly as specified in the original task packet.";
+        if serial_worktree.is_some() {
+            attest_worker_cwd(&run_dir, worker_cwd, true)?;
+        }
         attempt_ordinal += 1;
         let attempt_id = attempt_id_for_ordinal(&run_id, attempt_ordinal);
         let begun = begin_worker_attempt(
@@ -2315,6 +2321,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                     approved,
                 });
                 write_str(&workers::packet_path(&run_dir), &failover_packet)?;
+                if serial_worktree.is_some() {
+                    attest_worker_cwd(&run_dir, worker_cwd, true)?;
+                }
                 attempt_ordinal += 1;
                 let attempt_id = attempt_id_for_ordinal(&run_id, attempt_ordinal);
                 let begun = begin_worker_attempt(

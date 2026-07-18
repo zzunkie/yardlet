@@ -503,6 +503,8 @@ pub fn build_command(
                 "workspace-write"
             };
             cmd.arg("exec")
+                .arg("-C")
+                .arg(cwd)
                 .arg("--sandbox")
                 .arg(sandbox)
                 .arg("--skip-git-repo-check")
@@ -616,7 +618,10 @@ fn build_resume_command(
     let mut cmd = Command::new(bin);
     match worker_id {
         "codex" => {
-            cmd.arg("exec").arg("resume");
+            // `-C` belongs to `codex exec`, not its `resume` subcommand. Pin
+            // the agent/tool root before resuming so session history cannot
+            // restore a different repository as the effective workspace.
+            cmd.arg("exec").arg("-C").arg(cwd).arg("resume");
             if full_access {
                 cmd.arg("--dangerously-bypass-approvals-and-sandbox");
             }
@@ -966,6 +971,10 @@ fn spawn_internal(
     for (k, v) in env {
         cmd.env(k, v);
     }
+    // Keep environment-based adapters aligned with the OS cwd too. This is
+    // not a security boundary, but avoids a stale inherited PWD pointing
+    // relative worker operations at the Yardlet parent workspace.
+    cmd.env("PWD", cwd);
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -1642,6 +1651,37 @@ image_args: ["-i", "{image}"]
     }
 
     #[test]
+    fn codex_commands_pin_the_agent_root_to_the_process_cwd() {
+        let (bin, run, cwd) = (
+            Path::new("codex"),
+            Path::new("/tmp/run"),
+            Path::new("/tmp/declared-worktree"),
+        );
+        let fresh = build_command("codex", bin, run, cwd, true, "", "", &[]);
+        let fresh_args = args_of(&fresh);
+        assert_eq!(fresh.get_current_dir(), Some(cwd));
+        assert!(fresh_args.windows(2).any(|args| {
+            matches!(args[0].as_str(), "-C" | "--cd") && args[1] == cwd.to_string_lossy()
+        }));
+
+        let resumed = build_resume_command("codex", bin, run, cwd, true, "", &[], Some("SID"));
+        let resumed_args = args_of(&resumed);
+        assert_eq!(resumed.get_current_dir(), Some(cwd));
+        assert!(resumed_args.windows(2).any(|args| {
+            matches!(args[0].as_str(), "-C" | "--cd") && args[1] == cwd.to_string_lossy()
+        }));
+        let resume_index = resumed_args.iter().position(|arg| arg == "resume").unwrap();
+        let cwd_index = resumed_args
+            .iter()
+            .position(|arg| matches!(arg.as_str(), "-C" | "--cd"))
+            .unwrap();
+        assert!(
+            cwd_index < resume_index,
+            "Codex resume accepts -C before its subcommand"
+        );
+    }
+
+    #[test]
     fn claude_permission_toggles_with_full_access() {
         let (bin, run, cwd) = (Path::new("claude"), Path::new("/tmp/r"), Path::new("/tmp"));
         let safe = args_of(&build_command(
@@ -1721,7 +1761,8 @@ image_args: ["-i", "{image}"]
             &[],
             Some("SID"),
         ));
-        assert!(cx.windows(2).any(|w| w[0] == "exec" && w[1] == "resume"));
+        assert_eq!(cx.first().map(String::as_str), Some("exec"));
+        assert!(cx.iter().any(|arg| arg == "resume"));
         assert!(cx.iter().any(|a| a == "SID"));
         assert!(cx
             .iter()
