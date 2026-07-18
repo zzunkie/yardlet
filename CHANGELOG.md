@@ -12,6 +12,15 @@
 
 ### Fixed
 
+- **Selection stamping preserves the governing lineage after parallel
+  failover.** Finalization stamped the failover attempt's runtime worker over
+  the task's recorded governing worker, so a policy-authorized parallel
+  failover that left the task non-terminal made every later drain retry fail
+  closed with a `conflicts with governing worker` lineage error — a permanent
+  dead-end. The stamp now records the governing contract (the run receipt
+  still records the runtime attempt), letting the drain re-resolve the task
+  under its recorded lineage.
+
 - **Parallel worker spawns attest their cwd against the run receipt.** Before
   a parallel batch spawns any worker — and again before a failover worker
   replaces one that exited without `result.json` — the run's `run.yaml`

@@ -1073,11 +1073,10 @@ exit 1
             "  - id: YARD-CWD-TAMPER\n    title: tampered parallel receipt fails closed\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n    fallback_enabled: true\n  - id: YARD-DRAIN\n    title: healthy sibling drains\n    state: queued\n    priority: 20\n    kind: implementation\n    preferred_worker: fixture-drain\n",
         );
 
-        // No exit-status assertion: after the batch the drain retries the
-        // tampered task sequentially and dies on an adjacent, pre-existing
-        // lineage dead-end (the failover selection stamped on the task
-        // conflicts with its governing worker). The attestation under test
-        // has completed by then.
+        // After the batch fails closed, the drain retries the tampered task
+        // sequentially. Selection stamping preserves the governing lineage, so
+        // the retry re-resolves cleanly (a fresh, untampered serial run) and
+        // the auto drain terminates successfully.
         let output = command(
             &fixture.root,
             &fixture.binary,
@@ -1103,12 +1102,212 @@ exit 1
                 .exists(),
             "a failover worker spawned despite the tampered parallel receipt"
         );
-        let tampered_state = task_state(&fixture.root, "YARD-CWD-TAMPER");
         assert!(
-            tampered_state != "done" && tampered_state != "running",
-            "tampered task must fail closed, got {tampered_state}"
+            output.status.success(),
+            "auto drain died instead of retrying the failed-closed task\nstdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
+        // The tampered PARALLEL run failed closed (asserted above); the drain's
+        // sequential retry runs with a fresh, untampered receipt and completes.
+        assert_eq!(task_state(&fixture.root, "YARD-CWD-TAMPER"), "done");
         assert_eq!(task_state(&fixture.root, "YARD-DRAIN"), "done");
+    }
+
+    fn write_parallel_governing_failover_workers(fixture: &FixtureWorkspace) {
+        let primary = fixture
+            .root
+            .join(".agents/fixture-bin/governing-primary.sh");
+        fs::write(
+            &primary,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'governing-primary 1.0\n'
+  exit 0
+fi
+run_dir="${1:?run directory is required}"
+cat >/dev/null
+if grep -q '^serial_isolated: false' "$run_dir/run.yaml"; then
+  # Parallel first attempt: exit without result.json so the batch takes the
+  # policy-authorized failover worker.
+  printf 'primary intentionally omitted result.json\n' >&2
+  exit 0
+fi
+# The drain's sequential retry re-resolved the governing contract back to this
+# worker; finish cleanly so the auto drain terminates.
+run_id="${run_dir##*/}"
+task_id="$(sed -n 's/^task_id: //p' "$run_dir/run.yaml" | head -n 1)"
+cat >"$run_dir/result.json" <<JSON
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "compact_summary": "governing drain retry completed"
+}
+JSON
+printf '# Handoff\n\nGoverning drain retry completed.\n' >"$run_dir/handoff.md"
+"##,
+        )
+        .unwrap();
+        let fallback = fixture
+            .root
+            .join(".agents/fixture-bin/governing-fallback.sh");
+        fs::write(
+            &fallback,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'governing-fallback 1.0\n'
+  exit 0
+fi
+run_dir="${1:?run directory is required}"
+cat >/dev/null
+run_id="${run_dir##*/}"
+task_id="$(sed -n 's/^task_id: //p' "$run_dir/run.yaml" | head -n 1)"
+cat >"$run_dir/result.json" <<JSON
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "partial",
+  "compact_summary": "failover attempt left the task non-terminal"
+}
+JSON
+printf '# Handoff\n\nFailover attempt paused before completion.\n' >"$run_dir/handoff.md"
+"##,
+        )
+        .unwrap();
+        let drain = fixture.root.join(".agents/fixture-bin/governing-drain.sh");
+        fs::write(
+            &drain,
+            r##"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'governing-drain 1.0\n'
+  exit 0
+fi
+run_dir="${1:?run directory is required}"
+cat >/dev/null
+run_id="${run_dir##*/}"
+task_id="$(sed -n 's/^task_id: //p' "$run_dir/run.yaml" | head -n 1)"
+cat >"$run_dir/result.json" <<JSON
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "compact_summary": "sibling drained"
+}
+JSON
+printf '# Handoff\n\nSibling task drained.\n' >"$run_dir/handoff.md"
+"##,
+        )
+        .unwrap();
+        for worker in [&primary, &fallback, &drain] {
+            let mut permissions = fs::metadata(worker).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(worker, permissions).unwrap();
+        }
+        fs::write(
+            fixture.root.join(".agents/workers.yaml"),
+            format!(
+                "schema_version: 1\nworkers:\n  - id: fixture-primary\n    model: primary-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-fallback\n    model: fallback-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-drain\n    model: drain-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-primary\n  fallback_order: [fixture-fallback]\n  allow_preferred_worker_failover: true\n",
+                primary.display(),
+                fallback.display(),
+                drain.display()
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn parallel_failover_drain_retry_re_resolves_governing_lineage() {
+        let fixture = FixtureWorkspace::new("parallel-governing-retry");
+        write_parallel_governing_failover_workers(&fixture);
+        fixture.write_queue(
+            "  - id: YARD-GOV-RETRY\n    title: parallel failover then governing drain retry\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture-primary\n  - id: YARD-PAR-DRAIN\n    title: healthy sibling drains\n    state: queued\n    priority: 20\n    kind: implementation\n    preferred_worker: fixture-drain\n",
+        );
+
+        // Batch -> policy-authorized failover leaves YARD-GOV-RETRY partial ->
+        // the same auto drain retries it sequentially. The retry must
+        // re-resolve the recorded governing contract instead of dying on a
+        // stamped runtime worker that conflicts with the governing lineage.
+        let output = command(
+            &fixture.root,
+            &fixture.binary,
+            &["run", "--auto", "--parallel", "2"],
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stdout.contains(
+                "parallel batch: YARD-GOV-RETRY via fixture-primary, YARD-PAR-DRAIN via fixture-drain"
+            ),
+            "expected a two-task parallel batch:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("worker failover: fixture-primary -> fixture-fallback"),
+            "expected a policy-authorized parallel failover:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("conflicts with governing worker")
+                && !stderr.contains("conflicts with governing worker"),
+            "drain retry hit the stamped-selection lineage dead-end\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            output.status.success(),
+            "auto drain died instead of retrying the failover task\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert_eq!(task_state(&fixture.root, "YARD-GOV-RETRY"), "done");
+        assert_eq!(task_state(&fixture.root, "YARD-PAR-DRAIN"), "done");
+
+        // The queue task keeps the self-consistent governing CONTRACT; the
+        // failover attempt stays a runtime receipt in its run.yaml.
+        let queue = read_yaml(&fixture.root.join(".agents/work-queue.yaml"));
+        let task = queue["tasks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|task| string(task, "id") == "YARD-GOV-RETRY")
+            .unwrap();
+        assert_eq!(string(task, "preferred_worker"), "fixture-primary");
+        assert_eq!(string(task, "model"), "primary-model");
+        assert_eq!(task["fallback_enabled"].as_bool(), Some(true));
+        assert_eq!(
+            string(&task["routing_provenance"], "governing_worker_id"),
+            "fixture-primary"
+        );
+        assert_eq!(
+            string(&task["routing_provenance"], "governing_model"),
+            "primary-model"
+        );
+        assert_eq!(
+            task["routing_provenance"]["governing_fallback_enabled"].as_bool(),
+            Some(true)
+        );
+
+        let runs = run_dirs_for_task(&fixture.root, "YARD-GOV-RETRY");
+        let parallel_run = runs
+            .iter()
+            .find(|dir| dir.join("failover.json").is_file())
+            .expect("parallel failover run not found");
+        let parallel_receipt = read_yaml(&parallel_run.join("run.yaml"));
+        assert_eq!(string(&parallel_receipt, "worker"), "fixture-fallback");
+        assert_eq!(
+            string(
+                &parallel_receipt["routing_provenance"],
+                "governing_worker_id"
+            ),
+            "fixture-primary"
+        );
+        let serial_retry = runs
+            .iter()
+            .filter(|dir| !dir.join("failover.json").is_file())
+            .map(|dir| read_yaml(&dir.join("run.yaml")))
+            .find(|receipt| receipt["serial_isolated"].as_bool() == Some(true))
+            .expect("drain serial retry run not found");
+        assert_eq!(string(&serial_retry, "worker"), "fixture-primary");
     }
 
     #[test]
