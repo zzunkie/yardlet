@@ -12,6 +12,15 @@
 
 ### Fixed
 
+- **Parallel batch prep no longer stamps a model-less selection.** The
+  pre-batch queue re-stamp under the planning lock applied every resolved
+  selection, so a worker profile without a `model:` persisted a routing
+  provenance with an empty `governing_model` on the queued task. If the batch
+  left that task non-terminal, the same auto drain's sequential retry failed
+  closed with `incomplete governing routing provenance`. The locked re-stamp
+  now applies the same non-empty-model guard as the pre-lock stamping path,
+  so the retry re-resolves the task cleanly.
+
 - **`artifact.created` events persist worker authorship.** Finalization
   artifacts now record `worker_authored` in the event payload and canonical
   record: `true` for a worker-written `handoff.md` and worker-declared files,

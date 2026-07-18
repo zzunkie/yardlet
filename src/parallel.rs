@@ -338,7 +338,12 @@ pub fn run_batch<F: FnMut(&str)>(
                     prep.task.id
                 ));
             }
-            run::apply_selection_to_task(task, &prep.selection);
+            // Same guard as the pre-lock stamping above: a model-less selection
+            // must never be persisted, or its empty governing_model provenance
+            // hard-errors lineage validation on the drain's sequential retry.
+            if !prep.selection.model.trim().is_empty() {
+                run::apply_selection_to_task(task, &prep.selection);
+            }
         }
         ws.save_queue_locked(&lock, &latest)?;
         queue = latest;
