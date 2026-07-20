@@ -5,6 +5,7 @@
 //! `intent-contract.yaml` + `work-queue.yaml` from it. Yardlet owns the canonical
 //! files; the worker only authors plan content.
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -328,6 +329,272 @@ fn pending_question(result: &ScoutResult) -> Option<String> {
     }
 }
 
+struct DisposablePlanningScoutWorkspace {
+    root: PathBuf,
+}
+
+#[derive(Debug)]
+struct PlanningScoutActiveSnapshotMutation {
+    before: String,
+    after: String,
+}
+
+impl std::fmt::Display for PlanningScoutActiveSnapshotMutation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "planning scout changed active intent/queue snapshots; result discarded (before {}, after {})",
+            self.before, self.after
+        )
+    }
+}
+
+impl std::error::Error for PlanningScoutActiveSnapshotMutation {}
+
+impl DisposablePlanningScoutWorkspace {
+    fn create(live_root: &Path, run_id: &str) -> Result<Self> {
+        let workspace_key = crate::planning::digest(&live_root.to_string_lossy().as_ref())?;
+        let workspace_key = workspace_key.trim_start_matches("fnv1a64:");
+        let root = std::env::temp_dir().join(format!(
+            "yardlet-planning-{run_id}-{workspace_key}-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            bail!(
+                "planning scout disposable workspace already exists: {}",
+                root.display()
+            );
+        }
+        if let Err(error) = crate::memory::copy_scout_workspace_for_fixture(live_root, &root) {
+            let _ = std::fs::remove_dir_all(&root);
+            return Err(error).with_context(|| {
+                format!(
+                    "creating planning scout disposable workspace {}",
+                    root.display()
+                )
+            });
+        }
+        Ok(Self { root })
+    }
+}
+
+impl Drop for DisposablePlanningScoutWorkspace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn lexical_root_for_member(member: &Path, relative: &Path) -> Option<PathBuf> {
+    let mut root = member.to_path_buf();
+    for _ in relative.components() {
+        if !root.pop() {
+            return None;
+        }
+    }
+    Some(root)
+}
+
+fn live_workspace_path_aliases(
+    profile: &WorkerProfile,
+    bin: &Path,
+    live_root: &Path,
+) -> Vec<String> {
+    let canonical_live =
+        std::fs::canonicalize(live_root).unwrap_or_else(|_| live_root.to_path_buf());
+    let mut aliases = std::collections::BTreeSet::from([
+        live_root.to_string_lossy().to_string(),
+        canonical_live.to_string_lossy().to_string(),
+    ]);
+    for member in [bin, Path::new(&profile.invocation.command)] {
+        if !member.is_absolute() {
+            continue;
+        }
+        let Ok(canonical_member) = std::fs::canonicalize(member) else {
+            continue;
+        };
+        let Ok(relative) = canonical_member.strip_prefix(&canonical_live) else {
+            continue;
+        };
+        if let Some(alias) = lexical_root_for_member(member, relative) {
+            aliases.insert(alias.to_string_lossy().to_string());
+        }
+    }
+    let mut aliases = aliases
+        .into_iter()
+        .filter(|alias| !alias.is_empty())
+        .collect::<Vec<_>>();
+    aliases.sort_by_key(|alias| std::cmp::Reverse(alias.len()));
+    aliases
+}
+
+fn contains_live_workspace_path(value: &str, aliases: &[String]) -> bool {
+    aliases.iter().any(|alias| value.contains(alias))
+}
+
+fn replace_live_paths(value: &mut String, aliases: &[String], disposable_root: &Path) {
+    for alias in aliases {
+        if value.contains(alias) {
+            *value = value.replace(alias, &disposable_root.to_string_lossy());
+        }
+    }
+}
+
+fn isolated_scout_profile(
+    profile: &WorkerProfile,
+    live_aliases: &[String],
+    disposable_root: &Path,
+) -> WorkerProfile {
+    let mut profile = profile.clone();
+    replace_live_paths(
+        &mut profile.invocation.command,
+        live_aliases,
+        disposable_root,
+    );
+    replace_live_paths(&mut profile.model, live_aliases, disposable_root);
+    replace_live_paths(&mut profile.effort, live_aliases, disposable_root);
+    for args in [
+        &mut profile.invocation.args,
+        &mut profile.invocation.sandbox_args,
+        &mut profile.invocation.full_access_args,
+        &mut profile.invocation.image_args,
+        &mut profile.invocation.model_args,
+        &mut profile.invocation.effort_args,
+    ] {
+        for arg in args {
+            replace_live_paths(arg, live_aliases, disposable_root);
+        }
+    }
+    profile
+}
+
+fn isolated_scout_binary(bin: &Path, live_root: &Path, disposable_root: &Path) -> Result<PathBuf> {
+    let canonical_bin = std::fs::canonicalize(bin).unwrap_or_else(|_| bin.to_path_buf());
+    let canonical_live =
+        std::fs::canonicalize(live_root).unwrap_or_else(|_| live_root.to_path_buf());
+    let isolated = if canonical_bin.is_absolute() {
+        match canonical_bin.strip_prefix(&canonical_live) {
+            Ok(relative) => disposable_root.join(relative),
+            Err(_) => canonical_bin,
+        }
+    } else {
+        canonical_bin
+    };
+    if !isolated.is_file() {
+        bail!(
+            "planning scout isolated worker binary is unavailable: {}",
+            isolated.display()
+        );
+    }
+    Ok(isolated)
+}
+
+fn isolated_scout_env(
+    env: Vec<(String, String)>,
+    live_aliases: &[String],
+) -> Vec<(String, String)> {
+    env.into_iter()
+        .filter(|(key, value)| {
+            key != "PWD" && key != "OLDPWD" && !contains_live_workspace_path(value, live_aliases)
+        })
+        .collect()
+}
+
+fn active_snapshot_digest(ws: &Workspace) -> Result<String> {
+    crate::planning::digest(&ws.load_active_snapshot_texts()?)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn invoke_planning_scout(
+    ws: &Workspace,
+    profile: &WorkerProfile,
+    bin: &Path,
+    billing: &crate::schemas::BillingPolicy,
+    session: &PlanningSession,
+    turn: &PlanningTurnCas,
+    policy: &crate::schemas::ResearchPolicy,
+    workspace_skills: &[String],
+    user_library_skills: &[String],
+    topics: &[String],
+) -> Result<(String, Vec<ScoutResult>)> {
+    guard::scout_sandbox_contract(profile).map_err(anyhow::Error::msg)?;
+    let active_before = active_snapshot_digest(ws)?;
+    let base_run_id = format!("scout-{}", Local::now().format("%Y%m%d-%H%M%S"));
+    let (scout_run_id, live_run_dir) = ws.claim_run_dir(&base_run_id)?;
+    let disposable = DisposablePlanningScoutWorkspace::create(&ws.root, &scout_run_id)?;
+    let live_aliases = live_workspace_path_aliases(profile, bin, &ws.root);
+    let disposable_run_dir = disposable.root.join(".yardlet-scout-output");
+    std::fs::create_dir_all(&disposable_run_dir).with_context(|| {
+        format!(
+            "creating planning scout output {}",
+            disposable_run_dir.display()
+        )
+    })?;
+    let scout_packet = packet::compile_scout(&packet::ScoutPacketInputs {
+        intent_id: &session.intent_id,
+        request_digest: &turn.request_digest,
+        topics,
+        policy,
+        workspace_skills,
+        user_library_skills,
+        run_dir_rel: ".yardlet-scout-output",
+    })?;
+    if contains_live_workspace_path(&scout_packet, &live_aliases) {
+        bail!("planning scout packet contains the live workspace path");
+    }
+    write_str(&workers::packet_path(&live_run_dir), &scout_packet)?;
+
+    let isolated_profile = isolated_scout_profile(profile, &live_aliases, &disposable.root);
+    let isolated_bin = isolated_scout_binary(bin, &ws.root, &disposable.root)?;
+    let env = guard::sanitized_worker_env_for(billing, &isolated_profile.invocation.pass_env)
+        .map_err(anyhow::Error::msg)?;
+    let env = isolated_scout_env(env, &live_aliases);
+    let timeout = Duration::from_secs(isolated_profile.limits.max_wall_minutes as u64 * 60);
+    let spawn_result = workers::spawn(
+        &isolated_profile,
+        &isolated_bin,
+        &scout_packet,
+        &disposable_run_dir,
+        &disposable.root,
+        &env,
+        &live_run_dir.join("worker-output.log"),
+        timeout,
+        false,
+        &[],
+        None,
+        false,
+    );
+
+    let active_after = active_snapshot_digest(ws)?;
+    if active_after != active_before {
+        return Err(PlanningScoutActiveSnapshotMutation {
+            before: active_before,
+            after: active_after,
+        }
+        .into());
+    }
+    let outcome = spawn_result?;
+    let result_path = disposable_run_dir.join("scout-result.json");
+    let raw = std::fs::read_to_string(&result_path).with_context(|| {
+        format!(
+            "planning scout did not write {} ({})",
+            result_path.display(),
+            outcome.note
+        )
+    })?;
+    if contains_live_workspace_path(&raw, &live_aliases) {
+        bail!("planning scout result contains the live workspace path");
+    }
+    let results = packet::normalize_scout_output(
+        &raw,
+        &session.intent_id,
+        &turn.request_digest,
+        topics,
+        policy,
+    )?;
+    write_str(&live_run_dir.join("scout-result.json"), &raw)?;
+    Ok((outcome.note, results))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn audit_planning_content(
     ws: &Workspace,
@@ -436,73 +703,41 @@ fn audit_planning_content(
     let mut scout_results = std::collections::BTreeMap::new();
     if !uncached_topics.is_empty() {
         if let Some((profile, bin)) = scout_worker {
-            let base_run_id = format!("scout-{}", Local::now().format("%Y%m%d-%H%M%S"));
-            let (scout_run_id, scout_run_dir) = ws.claim_run_dir(&base_run_id)?;
-            let run_dir_rel = format!(".agents/runs/{scout_run_id}");
-            let scout_packet = packet::compile_scout(&packet::ScoutPacketInputs {
-                intent_id: &session.intent_id,
-                request_digest: &turn.request_digest,
-                topics: &uncached_topics,
-                policy: &policy,
-                workspace_skills: &catalog.workspace,
-                user_library_skills: &catalog.user_library,
-                run_dir_rel: &run_dir_rel,
-            })?;
-            write_str(&workers::packet_path(&scout_run_dir), &scout_packet)?;
-            let env = guard::sanitized_worker_env_for(billing, &profile.invocation.pass_env)
-                .map_err(|error| anyhow!(error))?;
-            let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
-            match workers::spawn(
+            match invoke_planning_scout(
+                ws,
                 profile,
                 bin,
-                &scout_packet,
-                &scout_run_dir,
-                &ws.root,
-                &env,
-                &scout_run_dir.join("worker-output.log"),
-                timeout,
-                false,
-                &[],
-                None,
-                false,
+                billing,
+                session,
+                turn,
+                &policy,
+                &catalog.workspace,
+                &catalog.user_library,
+                &uncached_topics,
             ) {
-                Ok(outcome) => {
-                    lines.push(format!("scout outcome: {}", outcome.note));
-                    let result_path = scout_run_dir.join("scout-result.json");
-                    if let Ok(raw) = std::fs::read_to_string(&result_path) {
-                        match packet::normalize_scout_output(
-                            &raw,
-                            &session.intent_id,
-                            &turn.request_digest,
-                            &uncached_topics,
-                            &policy,
-                        ) {
-                            Ok(results) => {
-                                for result in results {
-                                    scout_results.insert(
-                                        result
-                                            .topic
-                                            .split_whitespace()
-                                            .collect::<Vec<_>>()
-                                            .join(" ")
-                                            .to_lowercase(),
-                                        result,
-                                    );
-                                }
-                            }
-                            Err(error) => {
-                                lines.push(format!("scout result failed closed: {error}"))
-                            }
-                        }
-                    } else {
-                        lines.push(
-                            "scout result missing; normalized to local fail-closed dispositions"
-                                .to_string(),
+                Ok((note, results)) => {
+                    lines.push(format!("scout outcome: {note}"));
+                    for result in results {
+                        scout_results.insert(
+                            result
+                                .topic
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                                .to_lowercase(),
+                            result,
                         );
                     }
                 }
+                Err(error)
+                    if error
+                        .downcast_ref::<PlanningScoutActiveSnapshotMutation>()
+                        .is_some() =>
+                {
+                    return Err(error);
+                }
                 Err(error) => lines.push(format!(
-                    "scout subprocess failed closed without active-state mutation: {error}"
+                    "scout sandbox contract failed closed without active-state mutation: {error}"
                 )),
             }
         } else {
@@ -3126,13 +3361,108 @@ routing:
             })
             .collect::<Vec<_>>();
         assert_eq!(scout_dirs.len(), 1);
-        assert_eq!(
-            std::fs::read_to_string(scout_dirs[0].join("access.txt"))
-                .unwrap()
-                .trim(),
-            "sandboxed"
+        let packet = std::fs::read_to_string(workers::packet_path(&scout_dirs[0])).unwrap();
+        assert!(packet.contains(".yardlet-scout-output/scout-result.json"));
+        assert!(
+            !packet.contains(&root.to_string_lossy().to_string()),
+            "scout packet leaked the live workspace"
         );
+        assert!(scout_dirs[0].join("scout-result.json").is_file());
+        assert!(!scout_dirs[0].join("access.txt").exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scout_active_snapshot_mutation_aborts_before_result_adoption() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let nonce = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let root = std::env::temp_dir().join(format!(
+            "yard-goal-scout-mutation-{}-{nonce}",
+            std::process::id()
+        ));
+        let worker = std::env::temp_dir().join(format!(
+            "yard-goal-scout-mutation-worker-{}-{nonce}.sh",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let ws = Workspace::at(&root);
+        std::fs::write(
+            &worker,
+            format!(
+                r#"#!/bin/sh
+set -eu
+if [ "${{1:-}}" = "--version" ]; then
+  echo "fixture-scout 1.0"
+  exit 0
+fi
+run_dir="$1"
+test "$2" = "sandboxed"
+packet="$(cat)"
+intent_id="$(printf '%s\n' "$packet" | sed -n 's/^intent_id: //p' | head -n 1)"
+request_digest="$(printf '%s\n' "$packet" | sed -n 's/^request_digest: //p' | head -n 1)"
+topic="$(printf '%s\n' "$packet" | sed -n '/^## Topics$/,$p' | sed -n 's/^- //p' | head -n 1)"
+printf 'hard-coded malicious mutation\n' > '{}/.agents/intent-contract.yaml'
+cat > "$run_dir/scout-result.json" <<EOF
+{{"schema_version":1,"intent_id":"$intent_id","request_digest":"$request_digest","cycle":1,"results":[{{"topic":"$topic","sources_consulted":["workspace_skill_catalog","user_skill_library"],"disposition":"record_tool_candidate","gap":{{"kind":"tool_or_resource","missing_capabilities":["quantum_render"]}}}}]}}
+EOF
+"#,
+                root.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&worker).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&worker, permissions).unwrap();
+        std::fs::write(ws.billing_path(), crate::templates::BILLING_POLICY).unwrap();
+        std::fs::write(
+            ws.workers_path(),
+            format!(
+                r#"schema_version: 1
+workers:
+  - id: fixture-scout
+    enabled: true
+    capabilities: []
+    invocation:
+      command: '{}'
+      args: ['{{run_dir}}']
+      sandbox_args: [sandboxed]
+      full_access_args: [full]
+routing:
+  default_worker: fixture-scout
+  planning_gate:
+    primary: fixture-scout
+"#,
+                worker.display()
+            ),
+        )
+        .unwrap();
+
+        let error = match plan_goal_with_report(
+            &ws,
+            "render a bounded fixture",
+            None,
+            Some("fixture-scout"),
+            &["quantum_render".into()],
+        ) {
+            Ok(_) => panic!("active snapshot mutation must abort the planning audit"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("result discarded"), "{error:#}");
+        let adopted = std::fs::read_dir(ws.runs_dir())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path().join("scout-result.json"))
+            .any(|path| path.is_file());
+        assert!(
+            !adopted,
+            "mutated scout result reached the live run evidence"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(&worker);
     }
 
     #[test]

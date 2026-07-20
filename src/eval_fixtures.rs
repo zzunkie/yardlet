@@ -78,6 +78,14 @@ const FIXTURES: &[FixtureDef] = &[
         run: scout_copy_is_read_only,
     },
     FixtureDef {
+        id: "capability-coverage-trigger-matrix",
+        run: capability_coverage_trigger_matrix,
+    },
+    FixtureDef {
+        id: "bounded-capability-scout-contract",
+        run: bounded_capability_scout_contract,
+    },
+    FixtureDef {
         id: "watch-until-path-exists",
         run: watch_until_path_exists,
     },
@@ -651,6 +659,255 @@ fn watch_until_path_exists() -> Result<Vec<String>> {
         bail!("watch did not satisfy the existing path condition")
     }
     Ok(vec![format!("{status} after one observation: {reason}")])
+}
+
+fn capability_input() -> crate::capability_discovery::CapabilityDiscoveryInput {
+    crate::capability_discovery::CapabilityDiscoveryInput {
+        task: Task {
+            skills: vec!["planning-gate".to_string()],
+            required_capabilities: vec!["shell".to_string()],
+            ..task("CAP-001", TaskState::Queued, "implementation")
+        },
+        skill_catalog: crate::skills::SkillCatalogProjection {
+            workspace: vec!["planning-gate".to_string()],
+            user_library: Vec::new(),
+        },
+        worker_readiness: vec![crate::guard::WorkerCapabilityReadiness {
+            worker_id: "fixture-worker".to_string(),
+            readiness: crate::guard::Readiness::Ready,
+            capabilities: vec!["shell".to_string()],
+        }],
+        repo_classification: crate::skills::Classification {
+            presets: vec!["cli-rust".to_string()],
+            evidence: vec!["Cargo.toml".to_string()],
+            conflicts: Vec::new(),
+            no_match: false,
+        },
+        signals: crate::capability_discovery::CapabilityDiscoverySignals {
+            knowledge_freshness: crate::schemas::CoverageFreshness::Fresh,
+            ..Default::default()
+        },
+    }
+}
+
+fn capability_coverage_trigger_matrix() -> Result<Vec<String>> {
+    use crate::schemas::{ScoutHardSignal, ScoutSoftSignal, ScoutTriggerDecision};
+
+    let policy = crate::schemas::ResearchPolicy::default();
+    type Mutation = fn(&mut crate::capability_discovery::CapabilityDiscoveryInput);
+    let hard_cases: [(&str, ScoutHardSignal, Mutation); 7] = [
+        (
+            "explicit_research_request",
+            ScoutHardSignal::ExplicitResearchRequest,
+            |input| input.signals.explicit_research_request = true,
+        ),
+        (
+            "selected_skill_missing",
+            ScoutHardSignal::SelectedSkillMissing,
+            |input| input.task.skills = vec!["absent-skill".to_string()],
+        ),
+        (
+            "no_ready_worker_capability",
+            ScoutHardSignal::NoReadyWorkerCapability,
+            |input| input.task.required_capabilities = vec!["quantum-probe".to_string()],
+        ),
+        (
+            "only_unusable_skill_matches",
+            ScoutHardSignal::OnlyUnusableSkillMatches,
+            |input| input.signals.only_unusable_skill_matches = true,
+        ),
+        (
+            "current_external_fact_dependency",
+            ScoutHardSignal::CurrentExternalFactDependency,
+            |input| input.signals.current_external_fact_dependency = true,
+        ),
+        (
+            "material_external_choice_dependency",
+            ScoutHardSignal::MaterialExternalChoiceDependency,
+            |input| input.signals.material_external_choice_dependency = true,
+        ),
+        (
+            "repeated_typed_failure",
+            ScoutHardSignal::RepeatedTypedFailure,
+            |input| input.signals.typed_failure_count = 2,
+        ),
+    ];
+    for (name, expected, mutate) in hard_cases {
+        let mut input = capability_input();
+        mutate(&mut input);
+        let outcome = crate::capability_discovery::assess(&input, &policy);
+        if outcome.trigger.decision != ScoutTriggerDecision::Scout
+            || outcome.trigger.hard_signals != vec![expected]
+        {
+            bail!(
+                "hard signal {name} diverged: decision={:?}, signals={:?}",
+                outcome.trigger.decision,
+                outcome.trigger.hard_signals
+            );
+        }
+    }
+
+    let zero = capability_input();
+    let zero = crate::capability_discovery::assess(&zero, &policy);
+    if zero.trigger.decision != ScoutTriggerDecision::NoScout
+        || !zero.trigger.soft_signals.is_empty()
+    {
+        bail!("zero-soft boundary diverged: {:?}", zero.trigger);
+    }
+
+    let mut one = capability_input();
+    one.signals.weak_contextual_match = true;
+    let one = crate::capability_discovery::assess(&one, &policy);
+    if one.trigger.decision != ScoutTriggerDecision::Observe
+        || one.trigger.soft_signals != vec![ScoutSoftSignal::WeakContextualMatch]
+    {
+        bail!("one-soft boundary diverged: {:?}", one.trigger);
+    }
+
+    let mut two = capability_input();
+    two.signals.weak_contextual_match = true;
+    two.signals.unfamiliar_domain = true;
+    let two = crate::capability_discovery::assess(&two, &policy);
+    if two.trigger.decision != ScoutTriggerDecision::Scout
+        || two.trigger.soft_signals
+            != vec![
+                ScoutSoftSignal::WeakContextualMatch,
+                ScoutSoftSignal::UnfamiliarDomain,
+            ]
+    {
+        bail!("two-soft boundary diverged: {:?}", two.trigger);
+    }
+
+    // Multiple observations of one category remain one independent signal.
+    let mut dedup = capability_input();
+    dedup.repo_classification.no_match = true;
+    dedup.repo_classification.presets.clear();
+    dedup.repo_classification.conflicts = vec!["a".to_string(), "b".to_string()];
+    let dedup = crate::capability_discovery::assess(&dedup, &policy);
+    if dedup.trigger.decision != ScoutTriggerDecision::Observe
+        || dedup.trigger.soft_signals != vec![ScoutSoftSignal::ClassifierOrPresetGap]
+    {
+        bail!("soft category dedup diverged: {:?}", dedup.trigger);
+    }
+
+    Ok(vec![
+        "7/7 hard signals independently produced scout".to_string(),
+        "soft boundaries were 0=no_scout, 1=observe, 2=scout".to_string(),
+        "repeated observations of one soft category deduplicated before thresholding".to_string(),
+    ])
+}
+
+fn bounded_capability_scout_contract() -> Result<Vec<String>> {
+    use crate::schemas::{ResearchSource, ScoutDisposition};
+
+    let policy = crate::schemas::ResearchPolicy::default();
+    let topics = vec![
+        "alpha topic".to_string(),
+        " alpha   topic ".to_string(),
+        "beta topic".to_string(),
+        "gamma topic".to_string(),
+        "delta topic".to_string(),
+    ];
+    let packet = crate::packet::compile_scout(&crate::packet::ScoutPacketInputs {
+        intent_id: "intent-fixture",
+        request_digest: "digest-fixture",
+        topics: &topics,
+        policy: &policy,
+        workspace_skills: &["planning-gate".to_string()],
+        user_library_skills: &["user-candidate".to_string()],
+        run_dir_rel: ".agents/runs/scout-fixture",
+    })?;
+    if packet.matches("- alpha topic\n").count() != 1
+        || !packet.contains("- beta topic\n")
+        || !packet.contains("- gamma topic\n")
+        || packet.contains("- delta topic\n")
+        || !packet.contains("maximum research cycles: 1")
+        || !packet.contains("maximum topics this cycle: 3")
+        || !packet
+            .contains("workspace_skill_catalog -> user_skill_library -> external_primary_source")
+        || packet.contains("work-queue.yaml")
+    {
+        bail!("compiled scout packet violated dedup, budget, order, or queue isolation");
+    }
+
+    let raw = r#"{
+      "schema_version": 1,
+      "intent_id": "intent-fixture",
+      "request_digest": "digest-fixture",
+      "cycle": 1,
+      "results": [{
+        "topic": "alpha topic",
+        "sources_consulted": ["workspace_skill_catalog", "user_skill_library", "external_primary_source"],
+        "disposition": "adapt_external_skill_candidate",
+        "candidate": {
+          "source": "https://example.invalid/original",
+          "revision": "rev-1",
+          "license": "",
+          "freshness": "2026-07-21",
+          "maintenance": "active",
+          "included_files": ["SKILL.md"],
+          "static_risk": "low",
+          "authority_requirements": ["network"]
+        },
+        "gap": {"kind": "no_gap"}
+      }]
+    }"#;
+    let normalized = crate::packet::normalize_scout_output(
+        raw,
+        "intent-fixture",
+        "digest-fixture",
+        &["alpha topic".to_string()],
+        &policy,
+    )?;
+    if normalized.len() != 1
+        || normalized[0].disposition != ScoutDisposition::ReportNoChange
+        || normalized[0].candidate.is_some()
+    {
+        bail!("incomplete external authority did not fail closed");
+    }
+
+    let reversed = raw.replace(
+        "\"workspace_skill_catalog\", \"user_skill_library\"",
+        "\"user_skill_library\", \"workspace_skill_catalog\"",
+    );
+    if crate::packet::normalize_scout_output(
+        &reversed,
+        "intent-fixture",
+        "digest-fixture",
+        &["alpha topic".to_string()],
+        &policy,
+    )
+    .is_ok()
+    {
+        bail!("reordered sources were accepted");
+    }
+    if crate::packet::normalize_scout_output(
+        raw,
+        "other-intent",
+        "digest-fixture",
+        &["alpha topic".to_string()],
+        &policy,
+    )
+    .is_ok()
+    {
+        bail!("intent mismatch was accepted");
+    }
+    if normalized[0].sources_consulted
+        != vec![
+            ResearchSource::WorkspaceSkillCatalog,
+            ResearchSource::UserSkillLibrary,
+            ResearchSource::ExternalPrimarySource,
+        ]
+    {
+        bail!("normalized source evidence changed order");
+    }
+
+    Ok(vec![
+        "packet enforced 1 cycle, 3 unique topics, and local-first source order".to_string(),
+        "intent mismatch and reordered sources were rejected".to_string(),
+        "incomplete external authority normalized to report_no_change without a candidate"
+            .to_string(),
+    ])
 }
 
 #[cfg(test)]

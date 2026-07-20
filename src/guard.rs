@@ -78,6 +78,75 @@ pub fn capability_readiness_projection(
         .collect()
 }
 
+/// Validate the sandbox declaration used by a planning capability scout.
+///
+/// Built-in adapters have a core-owned sandbox argument shape. A generic
+/// adapter must provide a distinct, non-empty, syntactically checkable
+/// sandbox contract. Yardlet cannot infer a missing flag or guess the meaning
+/// of an unknown placeholder, so those profiles fail closed before scout
+/// spawn. The disposable workspace remains the filesystem isolation boundary.
+pub fn scout_sandbox_contract(profile: &WorkerProfile) -> Result<(), String> {
+    if matches!(profile.id.as_str(), "codex" | "claude-code") {
+        return Ok(());
+    }
+
+    let sandbox = &profile.invocation.sandbox_args;
+    if sandbox.is_empty() || sandbox.iter().any(|arg| arg.trim().is_empty()) {
+        return Err(
+            "generic planning scout sandbox contract failed closed: sandbox_args must be non-empty"
+                .to_string(),
+        );
+    }
+    if !profile.invocation.full_access_args.is_empty()
+        && sandbox == &profile.invocation.full_access_args
+    {
+        return Err(
+            "generic planning scout sandbox contract failed closed: sandbox and full-access arguments are identical"
+                .to_string(),
+        );
+    }
+
+    let mut has_literal_contract = false;
+    for arg in sandbox {
+        let lower = arg.to_ascii_lowercase();
+        if [
+            "dangerously",
+            "bypass",
+            "full-access",
+            "disable-sandbox",
+            "no-sandbox",
+            "unrestricted",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
+        {
+            return Err(
+                "generic planning scout sandbox contract failed closed: sandbox_args contain an elevation marker"
+                    .to_string(),
+            );
+        }
+        let remainder = ["{run_dir}", "{model}", "{effort}", "{image}"]
+            .iter()
+            .fold(arg.to_string(), |value, placeholder| {
+                value.replace(placeholder, "")
+            });
+        if remainder.contains('{') || remainder.contains('}') {
+            return Err(
+                "generic planning scout sandbox contract failed closed: sandbox_args contain an unknown placeholder"
+                    .to_string(),
+            );
+        }
+        has_literal_contract |= !remainder.trim().is_empty();
+    }
+    if !has_literal_contract {
+        return Err(
+            "generic planning scout sandbox contract failed closed: sandbox_args do not declare a sandbox mode"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// The outcome of one readiness gate in the staged worker-status display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageMark {
@@ -605,5 +674,45 @@ invocation:
         assert_eq!(projection[1].readiness, Readiness::NotReady);
         assert_eq!(projection[2].readiness, Readiness::Disabled);
         assert_eq!(projection[0].capabilities, vec!["Shell Tool"]);
+    }
+
+    #[test]
+    fn generic_scout_sandbox_contract_fails_closed_when_missing_or_unverifiable() {
+        let profile = |sandbox_args: &[&str], full_access_args: &[&str]| WorkerProfile {
+            id: "generic-fixture".into(),
+            enabled: true,
+            kind: "cli_worker".into(),
+            role_strengths: vec![],
+            capabilities: vec![],
+            best_for: String::new(),
+            not_for: String::new(),
+            cost_weight: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            billing: crate::schemas::Billing::default(),
+            invocation: crate::schemas::Invocation {
+                command: "bash".into(),
+                supports_noninteractive: true,
+                output_contract: "files".into(),
+                args: vec!["{run_dir}".into()],
+                sandbox_args: sandbox_args.iter().map(|arg| (*arg).into()).collect(),
+                full_access_args: full_access_args.iter().map(|arg| (*arg).into()).collect(),
+                image_args: vec![],
+                model_args: vec![],
+                effort_args: vec![],
+                pass_env: vec![],
+            },
+            limits: crate::schemas::Limits::default(),
+        };
+
+        assert!(scout_sandbox_contract(&profile(&[], &[])).is_err());
+        assert!(scout_sandbox_contract(&profile(&["   "], &[])).is_err());
+        assert!(scout_sandbox_contract(&profile(&["{unknown_mode}"], &[])).is_err());
+        assert!(scout_sandbox_contract(&profile(&["sandboxed"], &["sandboxed"])).is_err());
+        assert!(scout_sandbox_contract(&profile(&["sandboxed"], &["full"])).is_ok());
+
+        let mut builtin = profile(&[], &[]);
+        builtin.id = "codex".into();
+        assert!(scout_sandbox_contract(&builtin).is_ok());
     }
 }
