@@ -1147,14 +1147,34 @@ fn cmd_goal(cwd: &std::path::Path, args: GoalArgs) -> Result<()> {
         println!("Initialized Yardlet workspace (.agents/).");
     }
     let goal = args.goal.join(" ");
-    let n = crate::planner::plan_goal(
+    let report = crate::planner::plan_goal_with_report(
         &ws,
         &goal,
         args.verify.as_deref(),
         args.worker.as_deref(),
         &args.requires,
     )?;
-    println!("Goal queued ({n} task{}).", if n == 1 { "" } else { "s" });
+    println!(
+        "Goal {} ({} task{}).",
+        if report.draft_only {
+            "drafted"
+        } else {
+            "queued"
+        },
+        report.task_count,
+        if report.task_count == 1 { "" } else { "s" }
+    );
+    if report.draft_only {
+        println!(
+            "Capability scouting was required. Execution stopped at visible draft {} in session {}.",
+            report.draft_revision_id, report.session_id
+        );
+        println!(
+            "Next: `yardlet planning show`, then `yardlet planning confirm --expected-head {}`.",
+            report.draft_revision_id
+        );
+        return Ok(());
+    }
     if args.plan_only {
         println!("Next: `yardlet run --auto` to execute.");
         return Ok(());
@@ -1344,6 +1364,32 @@ fn show_planning(ws: &Workspace, json: bool) -> Result<()> {
         println!("Proposal {}", proposal.proposal_id);
         for entry in &proposal.semantic_diff {
             println!("  {}: {} -> {}", entry.field, entry.before, entry.after);
+        }
+    }
+    for audit in &projection.capability_audits {
+        println!(
+            "Capability audit {} (cycle {}/{}, topics <= {})",
+            audit.attempt_id, audit.max_cycles, audit.max_cycles, audit.max_topics_per_cycle
+        );
+        for task in &audit.tasks {
+            let sources = task
+                .sources
+                .iter()
+                .map(|source| format!("{source:?}"))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            println!(
+                "  {} coverage={:?} reason={:?} trigger={:?} sources={} disposition={:?}",
+                task.task_id,
+                task.coverage.status,
+                task.coverage.reason_code,
+                task.trigger.decision,
+                if sources.is_empty() { "none" } else { &sources },
+                task.disposition
+            );
+            if let Some(question) = &task.pending_question {
+                println!("    pending decision: {question}");
+            }
         }
     }
     if let Some(activation) = &projection.activation {

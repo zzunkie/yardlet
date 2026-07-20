@@ -8,17 +8,66 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{Local, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::schemas::{
     ActivatedIntent, ActivatedQueue, ActivatedTask, ActivationReceipt, DraftRevision,
     PlanningActionKind, PlanningActionReceipt, PlanningActionStatus, PlanningDraftContent,
     PlanningEvent, PlanningEventType, PlanningLifecycle, PlanningProposal, PlanningSession,
-    PlanningTurnCas, SemanticDiffEntry, TaskState,
+    PlanningTurnCas, ResearchSource, ScoutDisposition, ScoutResult, ScoutTrigger,
+    SemanticDiffEntry, TaskCapabilityCoverage, TaskState,
 };
 use crate::state::{PlanningLock, Workspace};
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanningTaskCapabilityAudit {
+    pub task_id: String,
+    pub coverage: TaskCapabilityCoverage,
+    pub trigger: ScoutTrigger,
+    #[serde(default)]
+    pub sources: Vec<ResearchSource>,
+    #[serde(default)]
+    pub disposition: ScoutDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_question: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scout_result: Option<ScoutResult>,
+}
+
+/// Immutable, turn-bound evidence attached to a worker proposal by attempt id.
+/// It lives under the planning session and is never copied into active runtime
+/// state; confirmation still promotes only the exact accepted draft content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanningCapabilityAudit {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub intent_id: String,
+    pub request_event_id: String,
+    pub request_digest: String,
+    pub attempt_id: String,
+    pub proposal_content_digest: String,
+    #[serde(default)]
+    pub source_order: Vec<ResearchSource>,
+    pub max_cycles: u32,
+    pub max_topics_per_cycle: usize,
+    #[serde(default)]
+    pub cache_hits: Vec<String>,
+    #[serde(default)]
+    pub tasks: Vec<PlanningTaskCapabilityAudit>,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanningScoutCacheEntry {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub intent_id: String,
+    pub topic_key: String,
+    pub result: ScoutResult,
+    pub recorded_at: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanningProjection {
@@ -31,6 +80,7 @@ pub struct PlanningProjection {
     pub channel_turn_count: usize,
     pub rejected_proposal_count: usize,
     pub undo_count: usize,
+    pub capability_audits: Vec<PlanningCapabilityAudit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,6 +344,27 @@ pub fn begin_user_turn_exact(
     Ok((session, request))
 }
 
+/// Express goals that must pause for scouting own a fresh resumable planning
+/// session rather than becoming a follow-up turn in an unrelated open draft.
+pub fn begin_new_planning_session_exact(
+    ws: &Workspace,
+    message: &str,
+) -> Result<(PlanningSession, PlanningTurnCas)> {
+    if message.trim().is_empty() {
+        bail!("planning message must not be empty");
+    }
+    let _lock = ws.acquire_planning_lock()?;
+    let session = create_session(ws, message)?;
+    let event = ws
+        .load_planning_events(&session.session_id)?
+        .into_iter()
+        .rev()
+        .find(|event| event.event_type == PlanningEventType::UserMessage)
+        .ok_or_else(|| anyhow!("new planning session has no request event"))?;
+    let turn = turn_cas(&event, None)?;
+    Ok((session, turn))
+}
+
 #[cfg(test)]
 pub fn begin_user_turn(ws: &Workspace, message: &str) -> Result<PlanningSession> {
     begin_user_turn_exact(ws, message).map(|(session, _)| session)
@@ -460,6 +531,43 @@ fn semantic_diff(
         .collect()
 }
 
+fn capability_semantic_diff(audit: &PlanningCapabilityAudit) -> Vec<SemanticDiffEntry> {
+    let task_map = |field: &str| -> serde_json::Value {
+        serde_json::Value::Object(
+            audit
+                .tasks
+                .iter()
+                .map(|task| {
+                    let value = match field {
+                        "capability_coverage" => serde_json::to_value(&task.coverage),
+                        "scout_trigger" => serde_json::to_value(&task.trigger),
+                        "scout_sources" => serde_json::to_value(&task.sources),
+                        "scout_disposition" => serde_json::to_value(task.disposition),
+                        "pending_decision" => serde_json::to_value(&task.pending_question),
+                        _ => Ok(serde_json::Value::Null),
+                    }
+                    .unwrap_or(serde_json::Value::Null);
+                    (task.task_id.clone(), value)
+                })
+                .collect(),
+        )
+    };
+    [
+        "capability_coverage",
+        "scout_trigger",
+        "scout_sources",
+        "scout_disposition",
+        "pending_decision",
+    ]
+    .into_iter()
+    .map(|field| SemanticDiffEntry {
+        field: field.to_string(),
+        before: serde_json::Value::Null,
+        after: task_map(field),
+    })
+    .collect()
+}
+
 fn validate_draft(session: &PlanningSession, content: &PlanningDraftContent) -> Result<()> {
     if content.intent.id != session.intent_id {
         bail!("proposal intent id does not match planning session");
@@ -572,6 +680,24 @@ pub(crate) fn record_worker_proposal_exact_locked(
     }
     validate_draft(&session, &content)?;
     let before = current_draft(ws, &session)?;
+    let content_digest = digest(&content)?;
+    let audit = ws.load_planning_capability_audit_for_attempt(&session.session_id, attempt_id)?;
+    if let Some(audit) = audit.as_ref() {
+        if audit.schema_version != 1
+            || audit.session_id != turn.session_id
+            || audit.intent_id != content.intent.id
+            || audit.request_event_id != turn.request_event_id
+            || audit.request_digest != turn.request_digest
+            || audit.proposal_content_digest != content_digest
+        {
+            bail!("planning capability audit does not match exact proposal turn/content");
+        }
+    }
+    let mut proposal_semantic_diff =
+        semantic_diff(before.as_ref().map(|draft| &draft.content), &content);
+    if let Some(audit) = audit.as_ref() {
+        proposal_semantic_diff.extend(capability_semantic_diff(audit));
+    }
     let proposal = PlanningProposal {
         schema_version: 2,
         proposal_id: new_id("prp"),
@@ -582,8 +708,8 @@ pub(crate) fn record_worker_proposal_exact_locked(
         request_event_id: turn.request_event_id.clone(),
         request_digest: turn.request_digest.clone(),
         rationale: rationale.to_string(),
-        content_digest: digest(&content)?,
-        semantic_diff: semantic_diff(before.as_ref().map(|draft| &draft.content), &content),
+        content_digest,
+        semantic_diff: proposal_semantic_diff,
         content,
     };
     ws.save_planning_proposal(&proposal)?;
@@ -1988,6 +2114,7 @@ fn confirm_with_policy_locked(
     Ok(activation)
 }
 
+#[allow(dead_code)] // Legacy exact express helper retained for restart compatibility.
 pub fn activate_express_draft(
     ws: &Workspace,
     goal: &str,
@@ -2032,6 +2159,116 @@ pub fn activate_express_draft(
         &new_id("act_express_confirm"),
         false,
     )
+}
+
+/// Covered express goals keep their historical outer transaction while adding
+/// immutable capability evidence before the proposal is recorded. The audit
+/// builder must be deterministic and no-scout; worker execution belongs to the
+/// resumable draft path, outside this transaction.
+pub fn activate_covered_express_draft<F>(
+    ws: &Workspace,
+    goal: &str,
+    content: PlanningDraftContent,
+    build_audit: F,
+) -> Result<(DraftRevision, ActivationReceipt)>
+where
+    F: FnOnce(
+        &PlanningSession,
+        &PlanningTurnCas,
+        &PlanningDraftContent,
+    ) -> Result<PlanningCapabilityAudit>,
+{
+    let lock = ws.acquire_planning_lock()?;
+    let session = create_session_with_ids(
+        ws,
+        goal,
+        content.intent.id.clone(),
+        content.queue.queue_id.clone(),
+    )?;
+    validate_draft(&session, &content)?;
+    let request_event = ws
+        .load_planning_events(&session.session_id)?
+        .into_iter()
+        .rev()
+        .find(|event| event.event_type == PlanningEventType::UserMessage)
+        .ok_or_else(|| anyhow!("express planning session has no request event"))?;
+    let turn = turn_cas(&request_event, None)?;
+    let audit = build_audit(&session, &turn, &content)?;
+    if audit
+        .tasks
+        .iter()
+        .any(|task| task.trigger.decision == crate::schemas::ScoutTriggerDecision::Scout)
+    {
+        bail!("covered express transaction received a scout-triggering audit");
+    }
+    let proposal = record_worker_proposal_exact_locked(
+        ws,
+        &lock,
+        &turn,
+        "yardlet-core",
+        &audit.attempt_id,
+        "Express goal draft generated deterministically with capability coverage.",
+        "Covered capability audit retained the express activation path.",
+        content,
+    )?;
+    let accepted = accept_proposal_locked(
+        ws,
+        &lock,
+        &proposal.proposal_id,
+        None,
+        &new_id("act_express_accept"),
+    )?;
+    let activation = confirm_with_policy_locked(
+        ws,
+        &lock,
+        &accepted.draft_revision_id,
+        &new_id("act_express_confirm"),
+        false,
+    )?;
+    Ok((accepted, activation))
+}
+
+/// Materialize a deterministic core-authored proposal for an already-recorded
+/// exact turn. Scout-triggering express goals stop after acceptance; covered
+/// goals use the same exact path and immediately retain legacy express
+/// activation behavior.
+pub fn materialize_core_draft(
+    ws: &Workspace,
+    turn: &PlanningTurnCas,
+    attempt_id: &str,
+    content: PlanningDraftContent,
+    confirm_express: bool,
+) -> Result<(DraftRevision, Option<ActivationReceipt>)> {
+    let lock = ws.acquire_planning_lock()?;
+    let proposal = record_worker_proposal_exact_locked(
+        ws,
+        &lock,
+        turn,
+        "yardlet-core",
+        attempt_id,
+        "Express goal draft generated deterministically with capability coverage.",
+        "Capability coverage and any bounded scout disposition are visible before promotion.",
+        content,
+    )?;
+    let accepted = accept_proposal_locked(
+        ws,
+        &lock,
+        &proposal.proposal_id,
+        turn.expected_head.as_deref(),
+        &new_id("act_core_accept"),
+    )?;
+    let activation = if confirm_express {
+        Some(confirm_with_policy_locked(
+            ws,
+            &lock,
+            &accepted.draft_revision_id,
+            &new_id("act_core_confirm"),
+            false,
+        )?)
+    } else {
+        None
+    };
+    Ok((accepted, activation))
 }
 
 fn provenance_present(intent: &ActivatedIntent, queue: &ActivatedQueue) -> bool {
@@ -2282,6 +2519,10 @@ pub fn projection(ws: &Workspace) -> Result<PlanningProjection> {
     }
     let events = ws.load_planning_events(&session.session_id)?;
     let proposals = ws.load_planning_proposals(&session.session_id)?;
+    let proposal_attempts = proposals
+        .iter()
+        .map(|proposal| proposal.attempt_id.clone())
+        .collect::<BTreeSet<_>>();
     let disposed = events
         .iter()
         .filter(|event| {
@@ -2322,6 +2563,11 @@ pub fn projection(ws: &Workspace) -> Result<PlanningProjection> {
         .iter()
         .filter(|event| event.event_type == PlanningEventType::DraftUndo)
         .count();
+    let capability_audits = ws
+        .load_planning_capability_audits(&session.session_id)?
+        .into_iter()
+        .filter(|audit| proposal_attempts.contains(&audit.attempt_id))
+        .collect();
     Ok(PlanningProjection {
         session,
         current_draft,
@@ -2332,6 +2578,7 @@ pub fn projection(ws: &Workspace) -> Result<PlanningProjection> {
         channel_turn_count,
         rejected_proposal_count,
         undo_count,
+        capability_audits,
     })
 }
 
@@ -2412,6 +2659,163 @@ queue:
         crate::state::save_yaml(&ws.planning_action_path(session_id, action_id), &receipt).unwrap();
 
         receipt
+    }
+
+    #[test]
+    fn capability_audit_is_turn_bound_idempotent_and_visible_in_semantic_diff() {
+        let ws = temp_workspace("capability-audit");
+        let (session, turn) = begin_user_turn_exact(&ws, "bounded test").unwrap();
+        let mut content = draft();
+        content.intent.id = session.intent_id.clone();
+        content.queue.intent_id = session.intent_id.clone();
+        content.queue.queue_id = session.queue_id.clone();
+        let audit = PlanningCapabilityAudit {
+            schema_version: 1,
+            session_id: turn.session_id.clone(),
+            intent_id: content.intent.id.clone(),
+            request_event_id: turn.request_event_id.clone(),
+            request_digest: turn.request_digest.clone(),
+            attempt_id: "attempt-capability".into(),
+            proposal_content_digest: digest(&content).unwrap(),
+            source_order: vec![
+                crate::schemas::ResearchSource::WorkspaceSkillCatalog,
+                crate::schemas::ResearchSource::UserSkillLibrary,
+                crate::schemas::ResearchSource::ExternalPrimarySource,
+            ],
+            max_cycles: 1,
+            max_topics_per_cycle: 3,
+            cache_hits: Vec::new(),
+            tasks: vec![PlanningTaskCapabilityAudit {
+                task_id: "YARD-001".into(),
+                coverage: crate::schemas::TaskCapabilityCoverage {
+                    task_id: "YARD-001".into(),
+                    status: crate::schemas::CoverageStatus::Covered,
+                    evidence: vec![crate::schemas::CoverageEvidence {
+                        source: crate::schemas::CoverageEvidenceSource::RepoPreset,
+                        reference: "cli-rust".into(),
+                        detail: "deterministic repository preset".into(),
+                    }],
+                    confidence: crate::schemas::CoverageConfidence::High,
+                    freshness: crate::schemas::CoverageFreshness::Fresh,
+                    reason_code: crate::schemas::CoverageReasonCode::CoverageConfirmed,
+                },
+                trigger: crate::schemas::ScoutTrigger::default(),
+                sources: Vec::new(),
+                disposition: crate::schemas::ScoutDisposition::ReportNoChange,
+                pending_question: None,
+                scout_result: None,
+            }],
+            recorded_at: "2026-07-21T00:00:00Z".into(),
+        };
+
+        ws.save_planning_capability_audit(&audit).unwrap();
+        ws.save_planning_capability_audit(&audit).unwrap();
+        let loaded = ws
+            .load_planning_capability_audit_for_attempt(&turn.session_id, "attempt-capability")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded, audit);
+
+        let proposal = record_worker_proposal(
+            &ws,
+            &turn,
+            "planner",
+            "attempt-capability",
+            "proposal",
+            "rationale",
+            content.clone(),
+        )
+        .unwrap();
+        let fields = proposal
+            .semantic_diff
+            .iter()
+            .map(|entry| entry.field.as_str())
+            .collect::<Vec<_>>();
+        assert!(fields.contains(&"capability_coverage"));
+        assert!(fields.contains(&"scout_trigger"));
+        assert!(fields.contains(&"scout_sources"));
+        assert!(fields.contains(&"scout_disposition"));
+        assert!(fields.contains(&"pending_decision"));
+
+        let restarted = Workspace::at(&ws.root);
+        let replayed = record_worker_proposal(
+            &restarted,
+            &turn,
+            "planner",
+            "attempt-capability",
+            "proposal",
+            "rationale",
+            content,
+        )
+        .unwrap();
+        assert_eq!(replayed.proposal_id, proposal.proposal_id);
+        let projection = projection(&restarted).unwrap();
+        assert_eq!(projection.pending_proposals.len(), 1);
+        assert_eq!(projection.capability_audits.len(), 1);
+        let json = serde_json::to_value(&projection).unwrap();
+        assert_eq!(
+            json["capability_audits"][0]["tasks"][0]["coverage"]["status"],
+            "covered"
+        );
+        assert_eq!(
+            json["capability_audits"][0]["tasks"][0]["trigger"]["decision"],
+            "no_scout"
+        );
+
+        let mut conflicting = audit;
+        conflicting.max_cycles = 2;
+        assert!(ws.save_planning_capability_audit(&conflicting).is_err());
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn scout_cache_is_intent_scoped_and_freshness_bounded() {
+        let ws = temp_workspace("scout-cache");
+        let (session, _) = begin_user_turn_exact(&ws, "bounded test").unwrap();
+        let entry = PlanningScoutCacheEntry {
+            schema_version: 1,
+            session_id: session.session_id.clone(),
+            intent_id: session.intent_id.clone(),
+            topic_key: "missing image tool".into(),
+            result: crate::schemas::ScoutResult {
+                topic: "missing image tool".into(),
+                disposition: crate::schemas::ScoutDisposition::RecordToolCandidate,
+                ..crate::schemas::ScoutResult::default()
+            },
+            recorded_at: "2026-07-21T00:00:00Z".into(),
+        };
+        ws.save_planning_scout_cache(&entry).unwrap();
+        assert!(ws
+            .load_fresh_planning_scout_cache(
+                &session.session_id,
+                &session.intent_id,
+                "missing image tool",
+                "2026-07-21T12:00:00Z",
+                30,
+            )
+            .unwrap()
+            .is_some());
+        assert!(ws
+            .load_fresh_planning_scout_cache(
+                &session.session_id,
+                &session.intent_id,
+                "missing image tool",
+                "2026-09-01T00:00:00Z",
+                30,
+            )
+            .unwrap()
+            .is_none());
+        assert!(ws
+            .load_fresh_planning_scout_cache(
+                &session.session_id,
+                "other-intent",
+                "missing image tool",
+                "2026-07-21T12:00:00Z",
+                30,
+            )
+            .unwrap()
+            .is_none());
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     fn rewrite_action_as_realistic_v1(

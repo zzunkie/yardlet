@@ -12,10 +12,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use chrono::Local;
+use chrono::{DateTime, Local, Utc};
 
 use serde::{Deserialize, Serialize};
 
+use crate::planning::{PlanningCapabilityAudit, PlanningScoutCacheEntry};
 use crate::schemas::{
     ActionReceipt, ActivatedIntent, ActivatedQueue, ActivatedTask, ActivationReceipt,
     ActivationRequirement, Answer, AnswerActionOutcome, AnswerActionRequest, Artifact,
@@ -382,6 +383,15 @@ impl Workspace {
             .join(format!("{action_id}.yaml"))
     }
 
+    pub fn planning_capability_audits_dir(&self, session_id: &str) -> PathBuf {
+        self.planning_session_dir(session_id)
+            .join("capability-audits")
+    }
+
+    pub fn planning_scout_cache_dir(&self, session_id: &str) -> PathBuf {
+        self.planning_session_dir(session_id).join("scout-cache")
+    }
+
     fn checked_planning_action_path(&self, session_id: &str, action_id: &str) -> Result<PathBuf> {
         validate_action_id(action_id)?;
         let actions_dir = self.planning_session_dir(session_id).join("actions");
@@ -589,6 +599,100 @@ impl Workspace {
 
     pub fn load_planning_proposals(&self, session_id: &str) -> Result<Vec<PlanningProposal>> {
         load_yaml_dir(&self.planning_session_dir(session_id).join("proposals"))
+    }
+
+    pub fn save_planning_capability_audit(&self, audit: &PlanningCapabilityAudit) -> Result<()> {
+        if audit.session_id.trim().is_empty() || audit.attempt_id.trim().is_empty() {
+            bail!("planning capability audit requires session and attempt identity");
+        }
+        let key = stable_record_key(&audit.attempt_id);
+        save_immutable_yaml(
+            &self
+                .planning_capability_audits_dir(&audit.session_id)
+                .join(format!("{key}.yaml")),
+            audit,
+        )
+    }
+
+    pub fn load_planning_capability_audits(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<PlanningCapabilityAudit>> {
+        let audits: Vec<PlanningCapabilityAudit> =
+            load_yaml_dir(&self.planning_capability_audits_dir(session_id))?;
+        if audits.iter().any(|audit| audit.session_id != session_id) {
+            bail!("planning capability audit session identity mismatch");
+        }
+        Ok(audits)
+    }
+
+    pub fn load_planning_capability_audit_for_attempt(
+        &self,
+        session_id: &str,
+        attempt_id: &str,
+    ) -> Result<Option<PlanningCapabilityAudit>> {
+        let matches = self
+            .load_planning_capability_audits(session_id)?
+            .into_iter()
+            .filter(|audit| audit.attempt_id == attempt_id)
+            .collect::<Vec<_>>();
+        if matches.len() > 1 {
+            bail!("planning capability audit attempt identity is ambiguous");
+        }
+        Ok(matches.into_iter().next())
+    }
+
+    pub fn save_planning_scout_cache(&self, entry: &PlanningScoutCacheEntry) -> Result<()> {
+        if entry.session_id.trim().is_empty()
+            || entry.intent_id.trim().is_empty()
+            || entry.topic_key.trim().is_empty()
+        {
+            bail!("planning scout cache requires session, intent, and topic identity");
+        }
+        save_immutable_yaml(
+            &self
+                .planning_scout_cache_dir(&entry.session_id)
+                .join(format!("{}.yaml", stable_record_key(&entry.topic_key))),
+            entry,
+        )
+    }
+
+    pub fn load_fresh_planning_scout_cache(
+        &self,
+        session_id: &str,
+        intent_id: &str,
+        topic_key: &str,
+        now: &str,
+        ttl_days: u32,
+    ) -> Result<Option<PlanningScoutCacheEntry>> {
+        let path = self
+            .planning_scout_cache_dir(session_id)
+            .join(format!("{}.yaml", stable_record_key(topic_key)));
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let entry: PlanningScoutCacheEntry = load_yaml(&path)?;
+        if entry.session_id != session_id
+            || entry.intent_id != intent_id
+            || entry.topic_key != topic_key
+        {
+            return Ok(None);
+        }
+        let recorded = entry.recorded_at.parse::<DateTime<Utc>>()?;
+        let now = now.parse::<DateTime<Utc>>()?;
+        let ttl = chrono::Duration::days(i64::from(ttl_days));
+        Ok((now >= recorded && now - recorded <= ttl).then_some(entry))
+    }
+
+    pub fn load_research_policy(&self) -> Result<crate::schemas::ResearchPolicy> {
+        let path = self.agents_dir().join("research-policy.yaml");
+        if path.is_file() {
+            let text =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            return crate::templates::parse_research_policy(&text)
+                .with_context(|| format!("parsing {}", path.display()));
+        }
+        Ok(crate::templates::research_policy())
     }
 
     pub fn save_draft_revision(&self, revision: &DraftRevision) -> Result<()> {
@@ -4553,6 +4657,15 @@ fn load_yaml_dir<T: serde::de::DeserializeOwned>(dir: &Path) -> Result<Vec<T>> {
         .collect::<Vec<_>>();
     paths.sort();
     paths.iter().map(|path| load_yaml(path)).collect()
+}
+
+fn stable_record_key(value: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv1a64-{hash:016x}")
 }
 
 fn save_immutable_yaml<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
