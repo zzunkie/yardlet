@@ -1,0 +1,16 @@
+{
+  "hard_signals": [
+    "explicit_research_request",
+    "selected_skill_missing",
+    "no_ready_worker_capability",
+    "only_unusable_skill_matches",
+    "current_external_fact_dependency",
+    "material_external_choice_dependency",
+    "repeated_typed_failure"
+  ],
+  "soft_boundaries": {
+    "0": "no_scout",
+    "1": "observe",
+    "2": "scout"
+  }
+}
