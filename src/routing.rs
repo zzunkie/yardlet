@@ -10,7 +10,7 @@
 //! -> first ready. Hard capability rules may opt out of fallback when another
 //! worker cannot satisfy the capability.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
@@ -450,6 +450,25 @@ pub(crate) fn norm_cap(s: &str) -> String {
     s.trim().to_lowercase().replace([' ', '-'], "_")
 }
 
+/// The normalized capability set of workers that passed the authoritative
+/// guard readiness probe. An enabled declaration alone is intentionally not
+/// enough for plan-time coverage.
+pub(crate) fn ready_capabilities_from_projection(
+    projection: &[guard::WorkerCapabilityReadiness],
+) -> BTreeSet<String> {
+    projection
+        .iter()
+        .filter(|worker| worker.readiness == Readiness::Ready)
+        .flat_map(|worker| {
+            worker
+                .capabilities
+                .iter()
+                .map(|capability| norm_cap(capability))
+        })
+        .filter(|capability| !capability.is_empty())
+        .collect()
+}
+
 /// The set of capabilities declared by ENABLED workers, normalized. A task's
 /// `required_capabilities` must be a subset of this to be runnable; any other
 /// capability is unsatisfiable (a human decision, or a typo no worker has), and
@@ -582,6 +601,29 @@ mod tests {
         assert_eq!(
             candidate_for(&w, &ov, None, "", "implementation").0,
             "codex"
+        );
+    }
+
+    #[test]
+    fn coverage_capabilities_only_include_guard_ready_workers_and_are_normalized() {
+        let projection = vec![
+            crate::guard::WorkerCapabilityReadiness {
+                worker_id: "ready".into(),
+                readiness: Readiness::Ready,
+                capabilities: vec!["Browser Control".into(), "shell-tool".into()],
+            },
+            crate::guard::WorkerCapabilityReadiness {
+                worker_id: "enabled-but-not-ready".into(),
+                readiness: Readiness::NotReady,
+                capabilities: vec!["image generation".into()],
+            },
+        ];
+        assert_eq!(
+            ready_capabilities_from_projection(&projection),
+            std::collections::BTreeSet::from([
+                "browser_control".to_string(),
+                "shell_tool".to_string(),
+            ])
         );
     }
 

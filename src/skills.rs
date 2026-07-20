@@ -708,6 +708,14 @@ pub struct Library {
     root: Option<PathBuf>,
 }
 
+/// Read-only plan-time projection of the two local skill search layers. The
+/// vectors are sorted and deduplicated by their underlying catalog readers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SkillCatalogProjection {
+    pub workspace: Vec<String>,
+    pub user_library: Vec<String>,
+}
+
 impl Library {
     /// Open the always-available managed library plus an optional valid
     /// external library path.
@@ -787,6 +795,14 @@ pub fn installed(ws: &Workspace) -> Vec<String> {
         .collect();
     out.sort();
     out
+}
+
+/// Snapshot capability-discovery inputs without equipping or writing a skill.
+pub fn capability_catalog_projection(ws: &Workspace, library: &Library) -> SkillCatalogProjection {
+    SkillCatalogProjection {
+        workspace: installed(ws),
+        user_library: library.all_skills(),
+    }
 }
 
 /// Skills the detected presets want but that aren't equipped yet (and that the
@@ -1525,6 +1541,28 @@ mod tests {
             std::fs::read_to_string(&overlay_collision).unwrap(),
             "CUSTOM UI SKILL\n"
         );
+    }
+
+    #[test]
+    fn capability_catalog_projection_is_sorted_deduplicated_and_read_only() {
+        let repo = fixture("capability-catalog", &[("README.md", "")], &[]);
+        let root = PathBuf::from(&repo.root);
+        let workspace_skill = root.join(".agents/skills/local-only/SKILL.md");
+        std::fs::create_dir_all(workspace_skill.parent().unwrap()).unwrap();
+        std::fs::write(&workspace_skill, "local").unwrap();
+        let library_root = root.join("user-library");
+        let user_skill = library_root.join("skills/user-only/SKILL.md");
+        std::fs::create_dir_all(user_skill.parent().unwrap()).unwrap();
+        std::fs::write(&user_skill, "user").unwrap();
+
+        let ws = Workspace::at(&root);
+        let library = Library::open(library_root.to_str().unwrap()).unwrap();
+        let projection = capability_catalog_projection(&ws, &library);
+
+        assert_eq!(projection.workspace, vec!["local-only"]);
+        assert!(projection.user_library.contains(&"user-only".to_string()));
+        assert_eq!(projection.workspace.len(), installed(&ws).len());
+        assert!(!root.join(".agents/skills/user-only").exists());
     }
 
     fn task(title: &str) -> crate::schemas::Task {
