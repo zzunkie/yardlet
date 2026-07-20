@@ -198,6 +198,391 @@ pub struct WorkQueue {
 }
 
 // ---------------------------------------------------------------------------
+// V010-002A deterministic capability coverage and bounded scout policy
+// ---------------------------------------------------------------------------
+
+/// The exhaustive plan-time coverage state for one task. `Missing` is the
+/// conservative default for legacy or partial records: absent evidence never
+/// becomes an implicit claim that the task is covered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CoverageStatus {
+    Covered,
+    Weak,
+    #[default]
+    Missing,
+    Stale,
+    ExternalToolNeeded,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageConfidence {
+    High,
+    Medium,
+    Low,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageFreshness {
+    Fresh,
+    Stale,
+    NotApplicable,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageEvidenceSource {
+    WorkspaceSkillCatalog,
+    UserSkillLibrary,
+    WorkerReadiness,
+    RepoClassification,
+    RepoPreset,
+    KnowledgeFreshness,
+    TypedFailure,
+    NeedsUser,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoverageEvidence {
+    #[serde(default)]
+    pub source: CoverageEvidenceSource,
+    #[serde(default)]
+    pub reference: String,
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// Stable, core-authored reason codes. Display text may evolve without
+/// changing the persisted decision vocabulary.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageReasonCode {
+    CoverageConfirmed,
+    WeakContextualMatch,
+    SelectedSkillMissing,
+    NoReadyWorkerCapability,
+    OnlyUnusableSkillMatches,
+    StaleKnowledge,
+    HumanDecisionRequired,
+    #[default]
+    InsufficientEvidence,
+}
+
+/// A standalone task-keyed record so planning can persist coverage alongside
+/// a draft without changing the already-confirmed runtime `Task` contract.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskCapabilityCoverage {
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default)]
+    pub status: CoverageStatus,
+    #[serde(default)]
+    pub evidence: Vec<CoverageEvidence>,
+    #[serde(default)]
+    pub confidence: CoverageConfidence,
+    #[serde(default)]
+    pub freshness: CoverageFreshness,
+    #[serde(default)]
+    pub reason_code: CoverageReasonCode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoutHardSignal {
+    ExplicitResearchRequest,
+    SelectedSkillMissing,
+    NoReadyWorkerCapability,
+    OnlyUnusableSkillMatches,
+    CurrentExternalFactDependency,
+    MaterialExternalChoiceDependency,
+    RepeatedTypedFailure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoutSoftSignal {
+    ClassifierOrPresetGap,
+    WeakContextualMatch,
+    UnfamiliarDomain,
+    SubthresholdTypedEvidence,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoutTriggerDecision {
+    #[default]
+    NoScout,
+    Observe,
+    Scout,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScoutTrigger {
+    #[serde(default)]
+    pub decision: ScoutTriggerDecision,
+    #[serde(default)]
+    pub hard_signals: Vec<ScoutHardSignal>,
+    #[serde(default)]
+    pub soft_signals: Vec<ScoutSoftSignal>,
+}
+
+/// Human judgment remains a NeedsUser question. Executable tool/resource gaps
+/// remain capability gaps. Neither is encoded as the other.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CapabilityGap {
+    #[default]
+    NoGap,
+    NeedsUser {
+        #[serde(default)]
+        question: String,
+    },
+    ToolOrResource {
+        #[serde(default)]
+        missing_capabilities: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoutDisposition {
+    UseExistingSkill,
+    AdaptExternalSkillCandidate,
+    DraftReusableSkill,
+    RecordToolCandidate,
+    PreserveOneOffEvidence,
+    #[default]
+    ReportNoChange,
+    AskUser,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchSource {
+    WorkspaceSkillCatalog,
+    UserSkillLibrary,
+    ExternalPrimarySource,
+}
+
+fn default_research_sources() -> Vec<ResearchSource> {
+    vec![
+        ResearchSource::WorkspaceSkillCatalog,
+        ResearchSource::UserSkillLibrary,
+        ResearchSource::ExternalPrimarySource,
+    ]
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScoutCandidate {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub revision: String,
+    #[serde(default)]
+    pub license: String,
+    #[serde(default)]
+    pub freshness: String,
+    #[serde(default)]
+    pub maintenance: String,
+    #[serde(default)]
+    pub included_files: Vec<String>,
+    #[serde(default)]
+    pub static_risk: String,
+    #[serde(default)]
+    pub authority_requirements: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScoutResult {
+    #[serde(default)]
+    pub topic: String,
+    #[serde(default)]
+    pub sources_consulted: Vec<ResearchSource>,
+    #[serde(default)]
+    pub disposition: ScoutDisposition,
+    #[serde(default)]
+    pub evidence: Vec<CoverageEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<ScoutCandidate>,
+    #[serde(default)]
+    pub gap: CapabilityGap,
+}
+
+fn default_one() -> u32 {
+    1
+}
+
+fn default_three() -> usize {
+    3
+}
+
+fn default_thirty() -> u32 {
+    30
+}
+
+fn default_two() -> usize {
+    2
+}
+
+fn default_when_needed() -> String {
+    "when_needed".to_string()
+}
+
+fn default_intent_locked() -> String {
+    "intent_locked".to_string()
+}
+
+fn default_normalized_topic() -> String {
+    "normalized_topic".to_string()
+}
+
+fn default_candidate_handling() -> String {
+    "record_as_candidate".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchBudget {
+    #[serde(default = "default_one")]
+    pub max_cycles: u32,
+    #[serde(default = "default_three")]
+    pub max_topics_per_cycle: usize,
+}
+
+impl Default for ResearchBudget {
+    fn default() -> Self {
+        Self {
+            max_cycles: default_one(),
+            max_topics_per_cycle: default_three(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchDedupPolicy {
+    #[serde(default = "default_true")]
+    pub within_intent: bool,
+    #[serde(default = "default_normalized_topic")]
+    pub topic_key: String,
+}
+
+impl Default for ResearchDedupPolicy {
+    fn default() -> Self {
+        Self {
+            within_intent: true,
+            topic_key: default_normalized_topic(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchFreshnessPolicy {
+    #[serde(default = "default_thirty")]
+    pub cache_ttl_days: u32,
+    #[serde(default = "default_true")]
+    pub unknown_is_stale: bool,
+}
+
+impl Default for ResearchFreshnessPolicy {
+    fn default() -> Self {
+        Self {
+            cache_ttl_days: default_thirty(),
+            unknown_is_stale: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchThresholds {
+    #[serde(default = "default_two")]
+    pub soft_signals_to_scout: usize,
+    #[serde(default = "default_two")]
+    pub repeated_failure_hard: usize,
+}
+
+impl Default for ResearchThresholds {
+    fn default() -> Self {
+        Self {
+            soft_signals_to_scout: default_two(),
+            repeated_failure_hard: default_two(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchScopeImpact {
+    #[default]
+    None,
+    PlanningUpdateRequired,
+    ApprovalRequired,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchEventTemplate {
+    #[serde(default)]
+    pub research_question: String,
+    #[serde(default)]
+    pub source_or_anchor: String,
+    #[serde(default)]
+    pub used_for: String,
+    #[serde(default)]
+    pub decision_impact: String,
+    #[serde(default)]
+    pub scope_impact: ResearchScopeImpact,
+    #[serde(default)]
+    pub drift_detected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchPolicy {
+    #[serde(default = "default_one")]
+    pub schema_version: u32,
+    #[serde(default = "default_when_needed")]
+    pub allowed: String,
+    #[serde(default = "default_intent_locked")]
+    pub mode: String,
+    #[serde(default)]
+    pub event_template: ResearchEventTemplate,
+    #[serde(default = "default_candidate_handling")]
+    pub adjacent_idea_handling: String,
+    #[serde(default)]
+    pub budget: ResearchBudget,
+    #[serde(default = "default_research_sources")]
+    pub source_order: Vec<ResearchSource>,
+    #[serde(default)]
+    pub dedup: ResearchDedupPolicy,
+    #[serde(default)]
+    pub freshness: ResearchFreshnessPolicy,
+    #[serde(default)]
+    pub thresholds: ResearchThresholds,
+}
+
+impl Default for ResearchPolicy {
+    fn default() -> Self {
+        Self {
+            schema_version: default_one(),
+            allowed: default_when_needed(),
+            mode: default_intent_locked(),
+            event_template: ResearchEventTemplate::default(),
+            adjacent_idea_handling: default_candidate_handling(),
+            budget: ResearchBudget::default(),
+            source_order: default_research_sources(),
+            dedup: ResearchDedupPolicy::default(),
+            freshness: ResearchFreshnessPolicy::default(),
+            thresholds: ResearchThresholds::default(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // V010-002 conversational planning and exact activation
 // ---------------------------------------------------------------------------
 
@@ -2924,6 +3309,69 @@ impl Default for ValidationResult {
 mod tests {
     use super::*;
     use crate::yaml;
+
+    #[test]
+    fn capability_coverage_round_trips_all_states_and_legacy_defaults_fail_closed() {
+        for status in [
+            CoverageStatus::Covered,
+            CoverageStatus::Weak,
+            CoverageStatus::Missing,
+            CoverageStatus::Stale,
+            CoverageStatus::ExternalToolNeeded,
+        ] {
+            let record = TaskCapabilityCoverage {
+                task_id: "YARD-001".into(),
+                status,
+                evidence: vec![CoverageEvidence {
+                    source: CoverageEvidenceSource::WorkspaceSkillCatalog,
+                    reference: "writing-plans".into(),
+                    detail: "selected skill is installed".into(),
+                }],
+                confidence: CoverageConfidence::High,
+                freshness: CoverageFreshness::Fresh,
+                reason_code: CoverageReasonCode::CoverageConfirmed,
+            };
+            let encoded = yaml::to_string(&record).unwrap();
+            let decoded: TaskCapabilityCoverage = yaml::from_str(&encoded).unwrap();
+            assert_eq!(decoded, record);
+        }
+
+        let legacy: TaskCapabilityCoverage = yaml::from_str("task_id: legacy\n").unwrap();
+        assert_eq!(legacy.status, CoverageStatus::Missing);
+        assert!(legacy.evidence.is_empty());
+        assert_eq!(legacy.confidence, CoverageConfidence::Unknown);
+        assert_eq!(legacy.freshness, CoverageFreshness::Unknown);
+        assert_eq!(legacy.reason_code, CoverageReasonCode::InsufficientEvidence);
+    }
+
+    #[test]
+    fn scout_result_dispositions_round_trip_and_legacy_defaults_are_non_mutating() {
+        for disposition in [
+            ScoutDisposition::UseExistingSkill,
+            ScoutDisposition::AdaptExternalSkillCandidate,
+            ScoutDisposition::DraftReusableSkill,
+            ScoutDisposition::RecordToolCandidate,
+            ScoutDisposition::PreserveOneOffEvidence,
+            ScoutDisposition::ReportNoChange,
+            ScoutDisposition::AskUser,
+        ] {
+            let result = ScoutResult {
+                topic: "capability gap".into(),
+                sources_consulted: vec![ResearchSource::WorkspaceSkillCatalog],
+                disposition,
+                evidence: vec![],
+                candidate: None,
+                gap: CapabilityGap::NoGap,
+            };
+            let encoded = yaml::to_string(&result).unwrap();
+            assert_eq!(yaml::from_str::<ScoutResult>(&encoded).unwrap(), result);
+        }
+
+        let legacy: ScoutResult = yaml::from_str("topic: legacy\n").unwrap();
+        assert_eq!(legacy.disposition, ScoutDisposition::ReportNoChange);
+        assert_eq!(legacy.gap, CapabilityGap::NoGap);
+        assert!(legacy.sources_consulted.is_empty());
+    }
 
     #[test]
     fn parses_seed_style_queue() {

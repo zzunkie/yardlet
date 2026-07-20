@@ -51,6 +51,33 @@ pub struct WorkerStatus {
     pub detail: String,
 }
 
+/// Read-only bridge from the authoritative guard verdict to plan-time
+/// capability coverage. Capabilities stay raw here; routing owns their shared
+/// normalization vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerCapabilityReadiness {
+    pub worker_id: String,
+    pub readiness: Readiness,
+    pub capabilities: Vec<String>,
+}
+
+/// Probe every configured worker through the same offline gates used before
+/// invocation, then pair the verdict with its declared capabilities.
+pub fn capability_readiness_projection(
+    workers: &crate::schemas::WorkersFile,
+    billing: &BillingPolicy,
+) -> Vec<WorkerCapabilityReadiness> {
+    workers
+        .workers
+        .iter()
+        .map(|profile| WorkerCapabilityReadiness {
+            worker_id: profile.id.clone(),
+            readiness: probe(profile, billing).readiness,
+            capabilities: profile.capabilities.clone(),
+        })
+        .collect()
+}
+
 /// The outcome of one readiness gate in the staged worker-status display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageMark {
@@ -564,5 +591,19 @@ invocation:
         assert!(ready_status(present)
             .invocation_verdict(&block)
             .contains("blocked"));
+    }
+
+    #[test]
+    fn capability_readiness_projection_keeps_ready_not_ready_and_disabled_distinct() {
+        let workers: crate::schemas::WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: ready\n    capabilities: [Shell Tool]\n    invocation: { command: bash }\n  - id: absent\n    capabilities: [browser]\n    invocation: { command: yardlet-definitely-missing-command }\n  - id: disabled\n    enabled: false\n    capabilities: [image-generation]\n    invocation: { command: bash }\n",
+        )
+        .unwrap();
+        let projection = capability_readiness_projection(&workers, &BillingPolicy::default());
+        assert_eq!(projection.len(), 3);
+        assert_eq!(projection[0].readiness, Readiness::Ready);
+        assert_eq!(projection[1].readiness, Readiness::NotReady);
+        assert_eq!(projection[2].readiness, Readiness::Disabled);
+        assert_eq!(projection[0].capabilities, vec!["Shell Tool"]);
     }
 }

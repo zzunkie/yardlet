@@ -17,3 +17,27 @@ event_template:
 # An adjacent idea discovered during research becomes a candidate queue item,
 # never a silent expansion of the current task.
 adjacent_idea_handling: record_as_candidate
+
+# Bounded scout defaults. Existing v1 files may omit this section; Yardlet
+# applies the same typed values while loading them.
+budget:
+  max_cycles: 1
+  max_topics_per_cycle: 3
+
+# Search local, user-owned sources before any policy-allowed external source.
+source_order:
+  - workspace_skill_catalog
+  - user_skill_library
+  - external_primary_source
+
+dedup:
+  within_intent: true
+  topic_key: normalized_topic
+
+freshness:
+  cache_ttl_days: 30
+  unknown_is_stale: true
+
+thresholds:
+  soft_signals_to_scout: 2
+  repeated_failure_hard: 2
