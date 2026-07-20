@@ -4,8 +4,165 @@
 //! Codex packets are execution-oriented; Claude Code packets lean toward
 //! planning/review. Both prefer anchors over pasted content to save tokens.
 
+use anyhow::{bail, Result};
+use serde::Deserialize;
+
 use crate::inspect::RepoSummary;
-use crate::schemas::{ConversationTurn, IntentContract, Task, TurnRole};
+use crate::schemas::{
+    ConversationTurn, IntentContract, ResearchPolicy, ResearchSource, ScoutDisposition,
+    ScoutResult, Task, TurnRole,
+};
+
+pub struct ScoutPacketInputs<'a> {
+    pub intent_id: &'a str,
+    pub request_digest: &'a str,
+    pub topics: &'a [String],
+    pub policy: &'a ResearchPolicy,
+    pub workspace_skills: &'a [String],
+    pub user_library_skills: &'a [String],
+    pub run_dir_rel: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScoutWorkerOutput {
+    #[serde(default)]
+    schema_version: u32,
+    #[serde(default)]
+    intent_id: String,
+    #[serde(default)]
+    request_digest: String,
+    #[serde(default)]
+    cycle: u32,
+    #[serde(default)]
+    results: Vec<ScoutResult>,
+}
+
+fn normalized_topic(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+pub fn compile_scout(inputs: &ScoutPacketInputs<'_>) -> Result<String> {
+    if inputs.intent_id.trim().is_empty() || inputs.request_digest.trim().is_empty() {
+        bail!("scout packet requires immutable intent and request identity");
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let topics = inputs
+        .topics
+        .iter()
+        .map(|topic| topic.trim())
+        .filter(|topic| !topic.is_empty())
+        .filter(|topic| seen.insert(normalized_topic(topic)))
+        .take(inputs.policy.budget.max_topics_per_cycle)
+        .collect::<Vec<_>>();
+    if topics.is_empty() {
+        bail!("scout packet requires at least one bounded topic");
+    }
+    let source_order = inputs
+        .policy
+        .source_order
+        .iter()
+        .map(|source| serde_json::to_value(source).unwrap_or_default())
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect::<Vec<_>>()
+        .join(" -> ");
+    let mut packet = String::new();
+    packet.push_str("# Yardlet queue-isolated capability scout\n\n");
+    packet.push_str(&format!("intent_id: {}\n", inputs.intent_id));
+    packet.push_str(&format!("request_digest: {}\n", inputs.request_digest));
+    packet.push_str(&format!(
+        "maximum research cycles: {}\nmaximum topics this cycle: {}\n",
+        inputs.policy.budget.max_cycles, inputs.policy.budget.max_topics_per_cycle
+    ));
+    packet.push_str(&format!("required source order: {source_order}\n\n"));
+    packet.push_str("This is a planning-only scout. It has no live queue contract and must not install, publish, deploy, push, spend money, read secrets, or mutate active intent or queue state. Use local workspace skills first, then the read-only user library, and consult external primary/original sources only when the supplied policy and sandbox permit it.\n\n");
+    packet.push_str("## Local catalogs\n\nWorkspace skills:\n");
+    for skill in inputs.workspace_skills {
+        packet.push_str(&format!("- {skill}\n"));
+    }
+    packet.push_str("User library skills:\n");
+    for skill in inputs.user_library_skills {
+        packet.push_str(&format!("- {skill}\n"));
+    }
+    packet.push_str("\n## Topics\n\n");
+    for topic in topics {
+        packet.push_str(&format!("- {topic}\n"));
+    }
+    packet.push_str(&format!(
+        "\nWrite `{}/scout-result.json` with schema_version, the exact intent_id/request_digest, cycle, and one typed ScoutResult per topic. Every result needs one allowed disposition. External candidates must include source, revision, license, freshness, maintenance, included_files, static_risk, and authority_requirements; unknown fields must fail closed to report_no_change.\n",
+        inputs.run_dir_rel
+    ));
+    Ok(packet)
+}
+
+fn complete_external_candidate(result: &ScoutResult) -> bool {
+    let Some(candidate) = result.candidate.as_ref() else {
+        return false;
+    };
+    !candidate.source.trim().is_empty()
+        && !candidate.revision.trim().is_empty()
+        && !candidate.license.trim().is_empty()
+        && !candidate.freshness.trim().is_empty()
+        && !candidate.maintenance.trim().is_empty()
+        && !candidate.included_files.is_empty()
+        && !candidate.static_risk.trim().is_empty()
+        && !candidate.authority_requirements.is_empty()
+}
+
+pub fn normalize_scout_output(
+    raw: &str,
+    expected_intent_id: &str,
+    expected_request_digest: &str,
+    requested_topics: &[String],
+    policy: &ResearchPolicy,
+) -> Result<Vec<ScoutResult>> {
+    let output: ScoutWorkerOutput = serde_json::from_str(raw)?;
+    if output.schema_version != 1
+        || output.intent_id != expected_intent_id
+        || output.request_digest != expected_request_digest
+        || output.cycle == 0
+        || output.cycle > policy.budget.max_cycles
+    {
+        bail!("scout output violates its intent lock or cycle budget");
+    }
+    if output.results.len() > policy.budget.max_topics_per_cycle {
+        bail!("scout output exceeds topic budget");
+    }
+    let requested = requested_topics
+        .iter()
+        .map(|topic| normalized_topic(topic))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut normalized = Vec::new();
+    for mut result in output.results {
+        let topic = normalized_topic(&result.topic);
+        if topic.is_empty() || !requested.contains(&topic) || !seen.insert(topic) {
+            bail!("scout output contains an unknown or duplicate topic");
+        }
+        if result.sources_consulted.len() > policy.source_order.len()
+            || result
+                .sources_consulted
+                .iter()
+                .zip(&policy.source_order)
+                .any(|(actual, expected)| actual != expected)
+        {
+            bail!("scout output violates required source order");
+        }
+        let external_candidate = result
+            .sources_consulted
+            .contains(&ResearchSource::ExternalPrimarySource)
+            || result.disposition == ScoutDisposition::AdaptExternalSkillCandidate;
+        if external_candidate && !complete_external_candidate(&result) {
+            result.disposition = ScoutDisposition::ReportNoChange;
+            result.candidate = None;
+        }
+        normalized.push(result);
+    }
+    Ok(normalized)
+}
 
 pub struct PacketInputs<'a> {
     pub worker_id: &'a str,
@@ -2218,5 +2375,82 @@ mod tests {
         // a referenced-but-missing image is not attached
         assert!(detect_images("see missing.jpg", &dir).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scout_packet_is_intent_locked_bounded_and_queue_isolated() {
+        let policy = crate::schemas::ResearchPolicy::default();
+        let packet = compile_scout(&ScoutPacketInputs {
+            intent_id: "intent-1",
+            request_digest: "digest-1",
+            topics: &["missing image tool".into(), "missing image tool".into()],
+            policy: &policy,
+            workspace_skills: &["planning-gate".into()],
+            user_library_skills: &["imagegen".into()],
+            run_dir_rel: ".agents/runs/scout-1",
+        })
+        .unwrap();
+        assert!(packet.contains("intent-1"));
+        assert!(packet.contains("maximum research cycles: 1"));
+        assert!(packet.contains("maximum topics this cycle: 3"));
+        assert!(packet
+            .contains("workspace_skill_catalog -> user_skill_library -> external_primary_source"));
+        assert!(packet.contains("scout-result.json"));
+        assert!(!packet.contains("work-queue.yaml"));
+        assert_eq!(packet.matches("missing image tool").count(), 1);
+    }
+
+    #[test]
+    fn scout_output_enforces_source_order_and_fails_closed_on_weak_external_authority() {
+        let policy = crate::schemas::ResearchPolicy::default();
+        let raw = r#"{
+          "schema_version": 1,
+          "intent_id": "intent-1",
+          "request_digest": "digest-1",
+          "cycle": 1,
+          "results": [{
+            "topic": "missing image tool",
+            "sources_consulted": ["workspace_skill_catalog", "user_skill_library", "external_primary_source"],
+            "disposition": "adapt_external_skill_candidate",
+            "candidate": {
+              "source": "https://example.invalid/original",
+              "revision": "abc123",
+              "license": "",
+              "freshness": "2026-07-21",
+              "maintenance": "active",
+              "included_files": ["SKILL.md"],
+              "static_risk": "low",
+              "authority_requirements": ["network"]
+            },
+            "gap": {"kind": "no_gap"}
+          }]
+        }"#;
+        let normalized = normalize_scout_output(
+            raw,
+            "intent-1",
+            "digest-1",
+            &["missing image tool".into()],
+            &policy,
+        )
+        .unwrap();
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(
+            normalized[0].disposition,
+            crate::schemas::ScoutDisposition::ReportNoChange
+        );
+        assert!(normalized[0].candidate.is_none());
+
+        let reordered = raw.replace(
+            "\"workspace_skill_catalog\", \"user_skill_library\"",
+            "\"user_skill_library\", \"workspace_skill_catalog\"",
+        );
+        assert!(normalize_scout_output(
+            &reordered,
+            "intent-1",
+            "digest-1",
+            &["missing image tool".into()],
+            &policy,
+        )
+        .is_err());
     }
 }

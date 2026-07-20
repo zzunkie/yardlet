@@ -8,14 +8,15 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::Local;
+use chrono::{Local, Utc};
 use serde::Deserialize;
 
 use crate::guard::{self, Readiness};
 use crate::inspect;
 use crate::schemas::{
-    IntentContract, PlanningDraftContent, PlanningSession, PlanningTurnCas, SelectionPolicy, Task,
-    TaskGoal, TaskState, WorkQueue, WorkerProfile, WorkersFile,
+    CapabilityGap, CoverageFreshness, IntentContract, PlanningDraftContent, PlanningSession,
+    PlanningTurnCas, ResearchSource, ScoutDisposition, ScoutResult, ScoutTriggerDecision,
+    SelectionPolicy, Task, TaskGoal, TaskState, WorkQueue, WorkerProfile, WorkersFile,
 };
 use crate::state::{self, write_str, PlanningWorkerConfig, Workspace};
 use crate::{packet, workers, yaml};
@@ -207,23 +208,429 @@ pub struct PlanningReport {
     pub semantic_diff_fields: Vec<String>,
 }
 
+fn bounded_research_policy(
+    mut policy: crate::schemas::ResearchPolicy,
+) -> crate::schemas::ResearchPolicy {
+    policy.budget.max_cycles = 1;
+    policy.budget.max_topics_per_cycle = policy.budget.max_topics_per_cycle.clamp(1, 3);
+    let external_allowed = policy.allowed != "never"
+        && policy
+            .source_order
+            .contains(&ResearchSource::ExternalPrimarySource);
+    policy.source_order = vec![
+        ResearchSource::WorkspaceSkillCatalog,
+        ResearchSource::UserSkillLibrary,
+    ];
+    if external_allowed {
+        policy
+            .source_order
+            .push(ResearchSource::ExternalPrimarySource);
+    }
+    policy
+}
+
+fn request_capability_signals(
+    request: &str,
+) -> crate::capability_discovery::CapabilityDiscoverySignals {
+    let lower = request.to_ascii_lowercase();
+    let contains_any = |terms: &[&str]| terms.iter().any(|term| lower.contains(term));
+    let current_external_fact_dependency = contains_any(&[
+        "latest",
+        "current version",
+        "today",
+        "up-to-date",
+        "최신",
+        "현재 버전",
+        "오늘",
+    ]);
+    crate::capability_discovery::CapabilityDiscoverySignals {
+        explicit_research_request: contains_any(&[
+            "research",
+            "survey",
+            "리서치",
+            "조사해",
+            "검색해",
+        ]),
+        current_external_fact_dependency,
+        material_external_choice_dependency: contains_any(&[
+            "recommend",
+            "compare providers",
+            "best tool",
+            "추천",
+            "외부 선택",
+            "도구 비교",
+        ]),
+        weak_contextual_match: contains_any(&["weak-context:", "약한 매치:"]),
+        unfamiliar_domain: contains_any(&["unfamiliar-domain:", "낯선 도메인:"]),
+        knowledge_freshness: if current_external_fact_dependency {
+            CoverageFreshness::Unknown
+        } else {
+            CoverageFreshness::Fresh
+        },
+        ..crate::capability_discovery::CapabilityDiscoverySignals::default()
+    }
+}
+
+fn fallback_scout_result(
+    topic: &str,
+    outcome: &crate::capability_discovery::CapabilityDiscoveryOutcome,
+) -> ScoutResult {
+    let (disposition, pending_gap) = match &outcome.gap {
+        CapabilityGap::NeedsUser { question } => (
+            ScoutDisposition::AskUser,
+            CapabilityGap::NeedsUser {
+                question: question.clone(),
+            },
+        ),
+        CapabilityGap::ToolOrResource {
+            missing_capabilities,
+        } => (
+            ScoutDisposition::RecordToolCandidate,
+            CapabilityGap::ToolOrResource {
+                missing_capabilities: missing_capabilities.clone(),
+            },
+        ),
+        CapabilityGap::NoGap => {
+            let disposition = match outcome.coverage.status {
+                crate::schemas::CoverageStatus::Missing
+                    if outcome.coverage.evidence.iter().any(|evidence| {
+                        evidence.source == crate::schemas::CoverageEvidenceSource::UserSkillLibrary
+                    }) =>
+                {
+                    ScoutDisposition::UseExistingSkill
+                }
+                crate::schemas::CoverageStatus::Missing => ScoutDisposition::DraftReusableSkill,
+                crate::schemas::CoverageStatus::Stale => ScoutDisposition::PreserveOneOffEvidence,
+                _ => ScoutDisposition::ReportNoChange,
+            };
+            (disposition, CapabilityGap::NoGap)
+        }
+    };
+    ScoutResult {
+        topic: topic.to_string(),
+        sources_consulted: vec![
+            ResearchSource::WorkspaceSkillCatalog,
+            ResearchSource::UserSkillLibrary,
+        ],
+        disposition,
+        evidence: outcome.coverage.evidence.clone(),
+        candidate: None,
+        gap: pending_gap,
+    }
+}
+
+fn pending_question(result: &ScoutResult) -> Option<String> {
+    match &result.gap {
+        CapabilityGap::NeedsUser { question } if !question.trim().is_empty() => {
+            Some(question.clone())
+        }
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn audit_planning_content(
+    ws: &Workspace,
+    workers_file: &WorkersFile,
+    billing: &crate::schemas::BillingPolicy,
+    skill_library: &str,
+    request: &str,
+    summary: &crate::inspect::RepoSummary,
+    session: &PlanningSession,
+    turn: &PlanningTurnCas,
+    attempt_id: &str,
+    content: &PlanningDraftContent,
+    scout_worker: Option<(&WorkerProfile, &std::path::Path)>,
+    lines: &mut Vec<String>,
+) -> Result<crate::planning::PlanningCapabilityAudit> {
+    let content_digest = crate::planning::digest(content)?;
+    if let Some(existing) =
+        ws.load_planning_capability_audit_for_attempt(&session.session_id, attempt_id)?
+    {
+        if existing.request_event_id != turn.request_event_id
+            || existing.request_digest != turn.request_digest
+            || existing.proposal_content_digest != content_digest
+        {
+            bail!("persisted planning capability audit conflicts with exact turn/content");
+        }
+        lines.push("reused persisted capability audit and scout result".to_string());
+        return Ok(existing);
+    }
+
+    let policy = bounded_research_policy(ws.load_research_policy()?);
+    let library = crate::skills::Library::open(skill_library)
+        .ok_or_else(|| anyhow!("skill library projection is unavailable"))?;
+    let catalog = crate::skills::capability_catalog_projection(ws, &library);
+    let readiness = guard::capability_readiness_projection(workers_file, billing);
+    let classification = crate::skills::classify_repo(summary, request);
+    let base_signals = request_capability_signals(request);
+    let pending_plan_question = content
+        .intent
+        .open_questions
+        .iter()
+        .find(|question| !question.trim().is_empty())
+        .cloned();
+    let now = Utc::now().to_rfc3339();
+    let mut cache_hits = Vec::new();
+    let mut task_audits = Vec::new();
+    let mut outcomes = Vec::new();
+    let mut uncached_topics = Vec::new();
+
+    for task in &content.queue.tasks {
+        let mut signals = base_signals.clone();
+        if let Some(question) = pending_plan_question.as_ref() {
+            signals.typed_needs_user_count = 1;
+            signals.decision_question = Some(question.clone());
+        }
+        let outcome = crate::capability_discovery::assess(
+            &crate::capability_discovery::CapabilityDiscoveryInput {
+                task: task.clone(),
+                skill_catalog: catalog.clone(),
+                worker_readiness: readiness.clone(),
+                repo_classification: classification.clone(),
+                signals,
+            },
+            &policy,
+        );
+        let topic = task
+            .title
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        let mut task_audit = crate::planning::PlanningTaskCapabilityAudit {
+            task_id: task.id.clone(),
+            coverage: outcome.coverage.clone(),
+            trigger: outcome.trigger.clone(),
+            sources: Vec::new(),
+            disposition: ScoutDisposition::ReportNoChange,
+            pending_question: None,
+            scout_result: None,
+        };
+        if outcome.trigger.decision == ScoutTriggerDecision::Scout {
+            if let Some(cached) = ws.load_fresh_planning_scout_cache(
+                &session.session_id,
+                &session.intent_id,
+                &topic,
+                &now,
+                policy.freshness.cache_ttl_days,
+            )? {
+                cache_hits.push(topic.clone());
+                task_audit.sources = cached.result.sources_consulted.clone();
+                task_audit.disposition = cached.result.disposition;
+                task_audit.pending_question = pending_question(&cached.result);
+                task_audit.scout_result = Some(cached.result);
+            } else if !uncached_topics.contains(&topic)
+                && uncached_topics.len() < policy.budget.max_topics_per_cycle
+            {
+                uncached_topics.push(topic.clone());
+            }
+        } else if let CapabilityGap::NeedsUser { question } = &outcome.gap {
+            task_audit.disposition = ScoutDisposition::AskUser;
+            task_audit.pending_question = Some(question.clone());
+        }
+        task_audits.push(task_audit);
+        outcomes.push((topic, outcome));
+    }
+
+    let mut scout_results = std::collections::BTreeMap::new();
+    if !uncached_topics.is_empty() {
+        if let Some((profile, bin)) = scout_worker {
+            let base_run_id = format!("scout-{}", Local::now().format("%Y%m%d-%H%M%S"));
+            let (scout_run_id, scout_run_dir) = ws.claim_run_dir(&base_run_id)?;
+            let run_dir_rel = format!(".agents/runs/{scout_run_id}");
+            let scout_packet = packet::compile_scout(&packet::ScoutPacketInputs {
+                intent_id: &session.intent_id,
+                request_digest: &turn.request_digest,
+                topics: &uncached_topics,
+                policy: &policy,
+                workspace_skills: &catalog.workspace,
+                user_library_skills: &catalog.user_library,
+                run_dir_rel: &run_dir_rel,
+            })?;
+            write_str(&workers::packet_path(&scout_run_dir), &scout_packet)?;
+            let env = guard::sanitized_worker_env_for(billing, &profile.invocation.pass_env)
+                .map_err(|error| anyhow!(error))?;
+            let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
+            match workers::spawn(
+                profile,
+                bin,
+                &scout_packet,
+                &scout_run_dir,
+                &ws.root,
+                &env,
+                &scout_run_dir.join("worker-output.log"),
+                timeout,
+                false,
+                &[],
+                None,
+                false,
+            ) {
+                Ok(outcome) => {
+                    lines.push(format!("scout outcome: {}", outcome.note));
+                    let result_path = scout_run_dir.join("scout-result.json");
+                    if let Ok(raw) = std::fs::read_to_string(&result_path) {
+                        match packet::normalize_scout_output(
+                            &raw,
+                            &session.intent_id,
+                            &turn.request_digest,
+                            &uncached_topics,
+                            &policy,
+                        ) {
+                            Ok(results) => {
+                                for result in results {
+                                    scout_results.insert(
+                                        result
+                                            .topic
+                                            .split_whitespace()
+                                            .collect::<Vec<_>>()
+                                            .join(" ")
+                                            .to_lowercase(),
+                                        result,
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                lines.push(format!("scout result failed closed: {error}"))
+                            }
+                        }
+                    } else {
+                        lines.push(
+                            "scout result missing; normalized to local fail-closed dispositions"
+                                .to_string(),
+                        );
+                    }
+                }
+                Err(error) => lines.push(format!(
+                    "scout subprocess failed closed without active-state mutation: {error}"
+                )),
+            }
+        } else {
+            lines.push(
+                "no invocable scout worker; recorded deterministic local fail-closed disposition"
+                    .to_string(),
+            );
+        }
+    }
+
+    for (index, (topic, outcome)) in outcomes.iter().enumerate() {
+        if task_audits[index].trigger.decision != ScoutTriggerDecision::Scout
+            || task_audits[index].scout_result.is_some()
+        {
+            continue;
+        }
+        let result = scout_results
+            .get(topic)
+            .cloned()
+            .unwrap_or_else(|| fallback_scout_result(topic, outcome));
+        task_audits[index].sources = result.sources_consulted.clone();
+        task_audits[index].disposition = result.disposition;
+        task_audits[index].pending_question = pending_question(&result);
+        task_audits[index].scout_result = Some(result.clone());
+        if uncached_topics.contains(topic) {
+            let cache = crate::planning::PlanningScoutCacheEntry {
+                schema_version: 1,
+                session_id: session.session_id.clone(),
+                intent_id: session.intent_id.clone(),
+                topic_key: topic.clone(),
+                result,
+                recorded_at: now.clone(),
+            };
+            ws.save_planning_scout_cache(&cache)?;
+        }
+    }
+
+    let audit = crate::planning::PlanningCapabilityAudit {
+        schema_version: 1,
+        session_id: session.session_id.clone(),
+        intent_id: session.intent_id.clone(),
+        request_event_id: turn.request_event_id.clone(),
+        request_digest: turn.request_digest.clone(),
+        attempt_id: attempt_id.to_string(),
+        proposal_content_digest: content_digest,
+        source_order: policy.source_order,
+        max_cycles: policy.budget.max_cycles,
+        max_topics_per_cycle: policy.budget.max_topics_per_cycle,
+        cache_hits,
+        tasks: task_audits,
+        recorded_at: now,
+    };
+    ws.save_planning_capability_audit(&audit)?;
+    Ok(audit)
+}
+
+fn content_requires_scout(
+    ws: &Workspace,
+    workers_file: &WorkersFile,
+    billing: &crate::schemas::BillingPolicy,
+    skill_library: &str,
+    request: &str,
+    summary: &crate::inspect::RepoSummary,
+    content: &PlanningDraftContent,
+) -> Result<bool> {
+    let policy = bounded_research_policy(ws.load_research_policy()?);
+    let library = crate::skills::Library::open(skill_library)
+        .ok_or_else(|| anyhow!("skill library projection is unavailable"))?;
+    let catalog = crate::skills::capability_catalog_projection(ws, &library);
+    let readiness = guard::capability_readiness_projection(workers_file, billing);
+    let classification = crate::skills::classify_repo(summary, request);
+    let base_signals = request_capability_signals(request);
+    let question = content
+        .intent
+        .open_questions
+        .iter()
+        .find(|question| !question.trim().is_empty())
+        .cloned();
+    Ok(content.queue.tasks.iter().any(|task| {
+        let mut signals = base_signals.clone();
+        if let Some(question) = question.as_ref() {
+            signals.typed_needs_user_count = 1;
+            signals.decision_question = Some(question.clone());
+        }
+        crate::capability_discovery::assess(
+            &crate::capability_discovery::CapabilityDiscoveryInput {
+                task: task.clone(),
+                skill_catalog: catalog.clone(),
+                worker_readiness: readiness.clone(),
+                repo_classification: classification.clone(),
+                signals,
+            },
+            &policy,
+        )
+        .trigger
+        .decision
+            == ScoutTriggerDecision::Scout
+    }))
+}
+
 /// Express lane (P2): skip the planning worker entirely and lay down a tiny
 /// deterministic queue for a single goal. Builds task T1 (do the goal) and,
 /// when a verify condition is given, a separate T2 (a reviewer that checks the
 /// condition against the workspace — the verifier is never the doer). No
 /// ambiguity gate (you accepted the goal by typing it). Returns the queue size.
-pub fn plan_goal(
+pub struct GoalPlanningReport {
+    pub task_count: usize,
+    pub draft_only: bool,
+    pub session_id: String,
+    pub draft_revision_id: String,
+}
+
+pub fn plan_goal_with_report(
     ws: &Workspace,
     goal: &str,
     verify: Option<&str>,
     worker_override: Option<&str>,
     required_capabilities: &[String],
-) -> Result<usize> {
+) -> Result<GoalPlanningReport> {
     let goal = goal.trim();
     if goal.is_empty() {
         bail!("describe the goal, e.g. `yardlet goal \"fix the login redirect\"`");
     }
-    let intent_id = format!("intent-{}", Local::now().format("%Y%m%d-%H%M%S"));
+    let intent_id = format!(
+        "intent-{}-{}",
+        Utc::now().format("%Y%m%d-%H%M%S%6f"),
+        std::process::id()
+    );
     let worker = worker_override.unwrap_or("").to_string();
 
     let mut tasks = vec![Task {
@@ -321,16 +728,110 @@ pub fn plan_goal(
         selection_policy: SelectionPolicy::default(),
         tasks,
     };
-    crate::skills::project_task_skills_with_context(
-        ws,
-        &inspect::summarize(&ws.root),
-        &mut queue.tasks,
-        goal,
-    )?;
+    let summary = inspect::summarize(&ws.root);
+    crate::skills::project_task_skills_with_context(ws, &summary, &mut queue.tasks, goal)?;
     let task_count = queue.tasks.len();
-    crate::planning::activate_express_draft(ws, goal, PlanningDraftContent { intent, queue })?;
-    let _ = crate::skills::auto_equip(ws, &inspect::summarize(&ws.root));
-    Ok(task_count)
+    let mut content = PlanningDraftContent { intent, queue };
+    let workers_file = ws.load_workers().unwrap_or(WorkersFile {
+        schema_version: 1,
+        workers: Vec::new(),
+        routing: crate::schemas::Routing::default(),
+    });
+    let billing = ws.load_billing().unwrap_or_default();
+    let skill_library = ws
+        .load_config()
+        .map(|config| config.skill_library)
+        .unwrap_or_default();
+    let requires_scout = content_requires_scout(
+        ws,
+        &workers_file,
+        &billing,
+        &skill_library,
+        goal,
+        &summary,
+        &content,
+    )?;
+    if !requires_scout {
+        let mut lines = Vec::new();
+        let (revision, activation) = crate::planning::activate_covered_express_draft(
+            ws,
+            goal,
+            content,
+            |session, turn, exact_content| {
+                let attempt_id = format!("express-goal-{}", turn.request_event_id);
+                audit_planning_content(
+                    ws,
+                    &workers_file,
+                    &billing,
+                    &skill_library,
+                    goal,
+                    &summary,
+                    session,
+                    turn,
+                    &attempt_id,
+                    exact_content,
+                    None,
+                    &mut lines,
+                )
+            },
+        )?;
+        let _ = crate::skills::auto_equip(ws, &summary);
+        return Ok(GoalPlanningReport {
+            task_count,
+            draft_only: false,
+            session_id: activation.session_id,
+            draft_revision_id: revision.draft_revision_id,
+        });
+    }
+
+    let (session, turn) = crate::planning::begin_new_planning_session_exact(ws, goal)?;
+    content.intent.id = session.intent_id.clone();
+    content.queue.intent_id = session.intent_id.clone();
+    content.queue.queue_id = session.queue_id.clone();
+    let scout_selection = pick_ready_worker(&workers_file, &billing, worker_override)
+        .ok()
+        .map(|(base, bin, _)| {
+            let planning = ws.load_planning_worker_config().unwrap_or_default();
+            (planning_worker_profile(&base, &planning), bin)
+        });
+    let attempt_id = format!("express-goal-{}", turn.request_event_id);
+    let mut lines = Vec::new();
+    let _audit = audit_planning_content(
+        ws,
+        &workers_file,
+        &billing,
+        &skill_library,
+        goal,
+        &summary,
+        &session,
+        &turn,
+        &attempt_id,
+        &content,
+        scout_selection
+            .as_ref()
+            .map(|(profile, bin)| (profile, bin.as_path())),
+        &mut lines,
+    )?;
+    let (revision, _activation) =
+        crate::planning::materialize_core_draft(ws, &turn, &attempt_id, content, false)?;
+    Ok(GoalPlanningReport {
+        task_count,
+        draft_only: true,
+        session_id: session.session_id,
+        draft_revision_id: revision.draft_revision_id,
+    })
+}
+
+#[allow(dead_code)] // Back-compatible library surface retained for colocated callers/tests.
+pub fn plan_goal(
+    ws: &Workspace,
+    goal: &str,
+    verify: Option<&str>,
+    worker_override: Option<&str>,
+    required_capabilities: &[String],
+) -> Result<usize> {
+    plan_goal_with_report(ws, goal, verify, worker_override, required_capabilities)
+        .map(|report| report.task_count)
 }
 
 /// Run the planning gate for a natural-language request.
@@ -670,6 +1171,24 @@ fn plan_core(
         if session.session_id != turn.session_id {
             bail!("planning session and turn CAS identity mismatch");
         }
+        let content = PlanningDraftContent {
+            intent: intent.clone(),
+            queue: queue.clone(),
+        };
+        let _audit = audit_planning_content(
+            ws,
+            workers,
+            billing,
+            &config.skill_library,
+            store_request,
+            &summary,
+            session,
+            turn,
+            &run_id,
+            &content,
+            Some((&profile, &bin)),
+            &mut lines,
+        )?;
         Some(crate::planning::record_worker_proposal(
             ws,
             turn,
@@ -681,10 +1200,7 @@ fn plan_core(
             } else {
                 plan.rationale.trim()
             },
-            PlanningDraftContent {
-                intent: intent.clone(),
-                queue: queue.clone(),
-            },
+            content,
         )?)
     } else {
         state::save_yaml(&ws.intent_path(), &intent)?;
@@ -1572,6 +2088,41 @@ pub fn recover_unconsumed_plan(ws: &Workspace) -> Result<Option<String>> {
         &mut queue.tasks,
         &meta.request,
     )?;
+    let content = PlanningDraftContent { intent, queue };
+    let workers_file = ws.load_workers().unwrap_or(WorkersFile {
+        schema_version: 1,
+        workers: Vec::new(),
+        routing: crate::schemas::Routing::default(),
+    });
+    let billing = ws.load_billing().unwrap_or_default();
+    let skill_library = ws
+        .load_config()
+        .map(|config| config.skill_library)
+        .unwrap_or_default();
+    let scout_selection =
+        pick_ready_worker(&workers_file, &billing, None)
+            .ok()
+            .map(|(base, bin, _)| {
+                let planning = ws.load_planning_worker_config().unwrap_or_default();
+                (planning_worker_profile(&base, &planning), bin)
+            });
+    let mut audit_lines = Vec::new();
+    let _audit = audit_planning_content(
+        ws,
+        &workers_file,
+        &billing,
+        &skill_library,
+        &meta.request,
+        &inspect::summarize(&ws.root),
+        &session,
+        &turn,
+        &run_id,
+        &content,
+        scout_selection
+            .as_ref()
+            .map(|(profile, bin)| (profile, bin.as_path())),
+        &mut audit_lines,
+    )?;
     let proposal = crate::planning::record_worker_proposal_exact_locked(
         ws,
         &lock,
@@ -1584,7 +2135,7 @@ pub fn recover_unconsumed_plan(ws: &Workspace) -> Result<Option<String>> {
         } else {
             plan.rationale.trim()
         },
-        PlanningDraftContent { intent, queue },
+        content,
     )?;
     mark_consumed(&run_dir)?;
     Ok(Some(format!(
@@ -1879,6 +2430,41 @@ fn planning_worker_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn planning_policy_clamps_budget_and_restores_canonical_source_order() {
+        let mut policy = crate::schemas::ResearchPolicy::default();
+        policy.budget.max_cycles = 9;
+        policy.budget.max_topics_per_cycle = 99;
+        policy.source_order = vec![
+            ResearchSource::ExternalPrimarySource,
+            ResearchSource::UserSkillLibrary,
+            ResearchSource::WorkspaceSkillCatalog,
+        ];
+        let bounded = bounded_research_policy(policy);
+        assert_eq!(bounded.budget.max_cycles, 1);
+        assert_eq!(bounded.budget.max_topics_per_cycle, 3);
+        assert_eq!(
+            bounded.source_order,
+            vec![
+                ResearchSource::WorkspaceSkillCatalog,
+                ResearchSource::UserSkillLibrary,
+                ResearchSource::ExternalPrimarySource,
+            ]
+        );
+
+        let local_only = crate::schemas::ResearchPolicy {
+            allowed: "never".into(),
+            ..crate::schemas::ResearchPolicy::default()
+        };
+        assert_eq!(
+            bounded_research_policy(local_only).source_order,
+            vec![
+                ResearchSource::WorkspaceSkillCatalog,
+                ResearchSource::UserSkillLibrary,
+            ]
+        );
+    }
 
     #[test]
     fn planner_inputs_exclude_historical_worker_log_but_keep_harness_anchors() {
@@ -2333,6 +2919,14 @@ routing:
     fn goal_builds_a_two_task_queue_with_a_separate_verifier() {
         let root = std::env::temp_dir().join(format!("yard-goal-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='goal-fixture'\nversion='0.1.0'\n",
+        )
+        .unwrap();
         let ws = Workspace::at(&root);
 
         // No verify: a single implementation task, no ambiguity gate.
@@ -2349,6 +2943,15 @@ routing:
         let intent = ws.load_intent().unwrap().unwrap();
         assert_eq!(intent.ambiguity, "low");
         assert!(!intent_gated(&intent, true));
+        let projection = crate::planning::projection(&ws).unwrap();
+        assert_eq!(
+            projection.capability_audits[0].tasks[0].coverage.status,
+            crate::schemas::CoverageStatus::Covered
+        );
+        assert_eq!(
+            projection.capability_audits[0].tasks[0].trigger.decision,
+            crate::schemas::ScoutTriggerDecision::NoScout
+        );
 
         // With verify: a second reviewer task depends on the first.
         let n = plan_goal(
@@ -2411,9 +3014,123 @@ routing:
         )
         .unwrap();
         assert_eq!(n, 1);
+        assert!(ws.load_queue().unwrap().tasks.is_empty());
+        let projection = crate::planning::projection(&ws).unwrap();
+        assert!(projection.current_draft.is_some());
+        let audit = projection.capability_audits.last().unwrap();
+        assert_eq!(audit.tasks.len(), 1);
         assert_eq!(
-            ws.load_queue().unwrap().tasks[0].required_capabilities,
-            vec!["image_generation".to_string()]
+            audit.tasks[0].coverage.status,
+            crate::schemas::CoverageStatus::ExternalToolNeeded
+        );
+        assert_eq!(
+            audit.tasks[0].trigger.decision,
+            crate::schemas::ScoutTriggerDecision::Scout
+        );
+        assert_eq!(
+            audit.tasks[0].disposition,
+            crate::schemas::ScoutDisposition::RecordToolCandidate
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scout_triggering_goal_runs_one_sandboxed_queue_isolated_scout_and_stops_at_draft() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "yard-goal-scout-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let ws = Workspace::at(&root);
+        let worker = root.join("fixture-scout.sh");
+        std::fs::write(
+            &worker,
+            r#"#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  echo "fixture-scout 1.0"
+  exit 0
+fi
+run_dir="$1"
+access="$2"
+test "$access" = "sandboxed"
+packet="$run_dir/scout-packet-captured.md"
+cat > "$packet"
+! grep -q 'work-queue.yaml' "$packet"
+intent_id="$(sed -n 's/^intent_id: //p' "$packet" | head -n 1)"
+request_digest="$(sed -n 's/^request_digest: //p' "$packet" | head -n 1)"
+topic="$(sed -n '/^## Topics$/,$p' "$packet" | sed -n 's/^- //p' | head -n 1)"
+cat > "$run_dir/scout-result.json" <<EOF
+{"schema_version":1,"intent_id":"$intent_id","request_digest":"$request_digest","cycle":1,"results":[{"topic":"$topic","sources_consulted":["workspace_skill_catalog","user_skill_library"],"disposition":"record_tool_candidate","gap":{"kind":"tool_or_resource","missing_capabilities":["quantum_render"]}}]}
+EOF
+printf '%s\n' "$access" > "$run_dir/access.txt"
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&worker).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&worker, permissions).unwrap();
+        std::fs::write(ws.billing_path(), crate::templates::BILLING_POLICY).unwrap();
+        std::fs::write(
+            ws.workers_path(),
+            format!(
+                r#"schema_version: 1
+workers:
+  - id: fixture-scout
+    enabled: true
+    capabilities: []
+    invocation:
+      command: '{}'
+      args: ['{{run_dir}}']
+      sandbox_args: [sandboxed]
+      full_access_args: [full]
+routing:
+  default_worker: fixture-scout
+  planning_gate:
+    primary: fixture-scout
+"#,
+                worker.display()
+            ),
+        )
+        .unwrap();
+
+        let report = plan_goal_with_report(
+            &ws,
+            "render a bounded fixture",
+            None,
+            Some("fixture-scout"),
+            &["quantum_render".into()],
+        )
+        .unwrap();
+        assert!(report.draft_only);
+        assert!(ws.load_queue().unwrap().tasks.is_empty());
+        let projection = crate::planning::projection(&ws).unwrap();
+        assert_eq!(projection.capability_audits.len(), 1);
+        assert_eq!(
+            projection.capability_audits[0].tasks[0].disposition,
+            ScoutDisposition::RecordToolCandidate
+        );
+        let scout_dirs = std::fs::read_dir(ws.runs_dir())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("scout-"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(scout_dirs.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(scout_dirs[0].join("access.txt"))
+                .unwrap()
+                .trim(),
+            "sandboxed"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
