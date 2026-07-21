@@ -31,6 +31,12 @@ pub struct FixtureReport {
     pub fixtures: Vec<FixtureResult>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FixtureCatalog {
+    pub schema_version: u8,
+    pub fixture_ids: Vec<String>,
+}
+
 struct FixtureDef {
     id: &'static str,
     run: fn() -> Result<Vec<String>>,
@@ -92,14 +98,12 @@ const FIXTURES: &[FixtureDef] = &[
 ];
 
 pub fn run(selected: &[String]) -> Result<FixtureReport> {
+    let executable = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("yardlet"));
+    preflight_required(selected, &executable)?;
+
     let defs: Vec<&FixtureDef> = if selected.is_empty() {
         FIXTURES.iter().collect()
     } else {
-        for id in selected {
-            if !FIXTURES.iter().any(|fixture| fixture.id == id) {
-                bail!("unknown fixture '{id}'");
-            }
-        }
         FIXTURES
             .iter()
             .filter(|fixture| selected.iter().any(|id| id == fixture.id))
@@ -127,6 +131,34 @@ pub fn run(selected: &[String]) -> Result<FixtureReport> {
         })
         .collect();
     report(fixtures)
+}
+
+pub fn catalog() -> FixtureCatalog {
+    FixtureCatalog {
+        schema_version: 1,
+        fixture_ids: FIXTURES
+            .iter()
+            .map(|fixture| fixture.id.to_string())
+            .collect(),
+    }
+}
+
+fn preflight_required(required: &[String], executable: &Path) -> Result<()> {
+    let missing: Vec<&str> = required
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !FIXTURES.iter().any(|fixture| fixture.id == *id))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    bail!(
+        "fixture capability preflight failed for target binary '{}': missing required fixture id(s): {}. The target Yardlet build artifact may be older than the source fixture registry. Run `cargo clean -p yardlet`, rebuild with `cargo build --bin yardlet`, confirm with `{} eval fixtures --list --json`, then retry. Fixture body was not started.",
+        executable.display(),
+        missing.join(", "),
+        executable.display(),
+    )
 }
 
 fn elapsed_ms(started: Instant) -> u64 {
@@ -929,6 +961,16 @@ mod tests {
     }
 
     #[test]
+    fn catalog_exposes_the_registry_without_running_fixtures() {
+        let catalog = catalog();
+        assert_eq!(catalog.schema_version, 1);
+        assert_eq!(catalog.fixture_ids.len(), FIXTURES.len());
+        assert!(catalog
+            .fixture_ids
+            .contains(&"watch-until-path-exists".to_string()));
+    }
+
+    #[test]
     fn failed_fixture_cannot_be_hidden_by_passing_siblings() {
         let report = report(vec![
             FixtureResult {
@@ -958,5 +1000,23 @@ mod tests {
         assert!(human.contains("[PASS] watch-until-path-exists"));
         assert!(json.contains("\"verdict\":\"pass\""));
         assert_eq!(report.passed_count, 1);
+    }
+
+    #[test]
+    fn missing_required_fixture_ids_fail_with_freshness_recovery_instead_of_unknown_fixture() {
+        let error = run(&[
+            "fixture-added-after-build-alpha".to_string(),
+            "fixture-added-after-build-beta".to_string(),
+        ])
+        .unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(message.contains("fixture capability preflight failed"));
+        assert!(message.contains("fixture-added-after-build-alpha"));
+        assert!(message.contains("fixture-added-after-build-beta"));
+        assert!(message.contains("cargo clean -p yardlet"));
+        assert!(message.contains("cargo build --bin yardlet"));
+        assert!(message.contains("older than the source fixture registry"));
+        assert!(!message.contains("unknown fixture"));
     }
 }
