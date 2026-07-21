@@ -492,6 +492,9 @@ pub struct EvalArgs {
 enum EvalCmd {
     /// Run the isolated deterministic mechanism fixture suite.
     Fixtures {
+        /// List supported fixture ids without running fixture bodies.
+        #[arg(long, conflicts_with = "fixtures")]
+        list: bool,
         /// Emit the same verdicts as machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -732,7 +735,23 @@ fn resource_lifecycle_request(
 
 fn cmd_eval(args: EvalArgs) -> Result<()> {
     match args.cmd {
-        EvalCmd::Fixtures { json, fixtures } => {
+        EvalCmd::Fixtures {
+            list,
+            json,
+            fixtures,
+        } => {
+            if list {
+                let catalog = crate::eval_fixtures::catalog();
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&catalog)?);
+                } else {
+                    println!("Supported fixture ids:");
+                    for id in catalog.fixture_ids {
+                        println!("{id}");
+                    }
+                }
+                return Ok(());
+            }
             let report = crate::eval_fixtures::run(&fixtures)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);

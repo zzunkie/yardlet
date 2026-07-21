@@ -28,5 +28,11 @@ Run the complete suite or select fixtures by id:
 ```bash
 yardlet eval fixtures
 yardlet eval fixtures --json
+yardlet eval fixtures --list --json
 yardlet eval fixtures --fixture goal-feedback-is-bounded
 ```
+
+Process fixtures should query the actual target binary with `--list --json`
+and verify every required fixture id before starting any fixture body. A missing
+id fails with the target path plus clean, rebuild, and retry guidance so a stale
+build artifact is not reported as a fixture behavior failure.

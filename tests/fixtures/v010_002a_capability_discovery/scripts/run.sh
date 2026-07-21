@@ -13,6 +13,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FIXTURE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 mkdir -p "$EVIDENCE_DIR"
 
+source "$FIXTURE_ROOT/../support/fixture-binary-preflight.sh"
+preflight_fixture_binary "$YARDLET_BIN" \
+  capability-coverage-trigger-matrix \
+  bounded-capability-scout-contract
+
 fail() {
   printf 'fixture failure: %s\n' "$*" >&2
   exit 1
