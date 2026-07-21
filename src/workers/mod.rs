@@ -18,9 +18,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use crate::schemas::{
-    ChannelEventType, Invocation, RawEventRef, ResolvedWorkerSelection, RoutingProvenance,
-    WorkerProfile,
+    ChannelEventType, Invocation, OutputContractCause, RawEventRef, ResolvedWorkerSelection,
+    RoutingProvenance, WorkerOutputLogSpan, WorkerProfile,
 };
+
+pub const MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES: u64 = 256 * 1024;
 
 pub(crate) const WORKER_PROCESS_PROVENANCE_FILE: &str = "worker-process.yaml";
 
@@ -96,6 +98,52 @@ pub struct AttemptCapture {
     pub combined_log: PathBuf,
     pub stdout_log: PathBuf,
     pub stderr_log: PathBuf,
+}
+
+/// Classify only the exact public-log bytes appended by one resultless attempt.
+/// Patterns are bounded, case-insensitive literals rather than regexes so a
+/// user-owned profile cannot introduce unbounded matching work.
+pub fn classify_output_contract_cause(
+    profile: &WorkerProfile,
+    result_path: &Path,
+    output_log: &Path,
+    span: &WorkerOutputLogSpan,
+) -> Result<Option<OutputContractCause>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    if result_path.is_file() || profile.provider_response_refusal_patterns.is_empty() {
+        return Ok(None);
+    }
+    if span.byte_end < span.byte_start {
+        anyhow::bail!("worker output log span ends before it starts");
+    }
+    let span_len = span.byte_end - span.byte_start;
+    if span_len > MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES {
+        anyhow::bail!(
+            "worker output log span exceeds {} bytes",
+            MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES
+        );
+    }
+    let mut file = std::fs::File::open(output_log)
+        .with_context(|| format!("opening bounded worker output {}", output_log.display()))?;
+    let file_len = file.metadata()?.len();
+    if span.byte_end > file_len {
+        anyhow::bail!(
+            "worker output log span {}..{} exceeds file length {}",
+            span.byte_start,
+            span.byte_end,
+            file_len
+        );
+    }
+    file.seek(SeekFrom::Start(span.byte_start))?;
+    let mut bytes = vec![0; span_len as usize];
+    file.read_exact(&mut bytes)?;
+    let haystack = String::from_utf8_lossy(&bytes).to_lowercase();
+    Ok(profile
+        .provider_response_refusal_patterns
+        .iter()
+        .any(|pattern| haystack.contains(&pattern.to_lowercase()))
+        .then_some(OutputContractCause::ProviderResponseRefused))
 }
 
 fn normalized_event(
@@ -1518,6 +1566,89 @@ fn codex_config_default_model() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_refusal_classification_is_resultless_profile_scoped_and_span_bounded() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-provider-refusal-classifier-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let log = root.join("worker-output.log");
+        std::fs::write(
+            &log,
+            "old request refused\ncurrent PROVIDER DECLINED response\nfuture request refused\n",
+        )
+        .unwrap();
+        let mut profile: WorkerProfile = crate::yaml::from_str(
+            "id: fixture\nprovider_response_refusal_patterns: ['provider declined']\ninvocation: {command: fixture}\n",
+        )
+        .unwrap();
+        let current = WorkerOutputLogSpan {
+            path: "worker-output.log".into(),
+            byte_start: "old request refused\n".len() as u64,
+            byte_end: "old request refused\ncurrent PROVIDER DECLINED response\n".len() as u64,
+        };
+        assert_eq!(
+            classify_output_contract_cause(&profile, &root.join("result.json"), &log, &current)
+                .unwrap(),
+            Some(OutputContractCause::ProviderResponseRefused)
+        );
+
+        profile.provider_response_refusal_patterns = vec!["request refused".into()];
+        assert_eq!(
+            classify_output_contract_cause(&profile, &root.join("result.json"), &log, &current)
+                .unwrap(),
+            None,
+            "matches before and after the current attempt span must be ignored"
+        );
+
+        profile.provider_response_refusal_patterns = vec!["provider declined".into()];
+        std::fs::write(root.join("result.json"), "{}\n").unwrap();
+        assert_eq!(
+            classify_output_contract_cause(&profile, &root.join("result.json"), &log, &current)
+                .unwrap(),
+            None,
+            "a present result disables refusal classification"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn provider_refusal_classification_rejects_invalid_spans() {
+        let root =
+            std::env::temp_dir().join(format!("yard-provider-refusal-span-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let log = root.join("worker-output.log");
+        std::fs::write(&log, "provider declined\n").unwrap();
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: fixture\nprovider_response_refusal_patterns: ['provider declined']\ninvocation: {command: fixture}\n",
+        )
+        .unwrap();
+        for span in [
+            WorkerOutputLogSpan {
+                path: "worker-output.log".into(),
+                byte_start: 10,
+                byte_end: 9,
+            },
+            WorkerOutputLogSpan {
+                path: "worker-output.log".into(),
+                byte_start: 0,
+                byte_end: MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES + 1,
+            },
+        ] {
+            assert!(classify_output_contract_cause(
+                &profile,
+                &root.join("result.json"),
+                &log,
+                &span
+            )
+            .is_err());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn effective_profile_honors_pin_unless_task_is_explicit() {

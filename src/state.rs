@@ -2358,7 +2358,9 @@ impl Workspace {
     }
 
     pub fn load_workers(&self) -> Result<WorkersFile> {
-        load_yaml(&self.workers_path())
+        let workers: WorkersFile = load_yaml(&self.workers_path())?;
+        workers.validate().map_err(anyhow::Error::msg)?;
+        Ok(workers)
     }
 
     /// A task's conversation transcript (empty when the task never paused for

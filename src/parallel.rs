@@ -424,6 +424,7 @@ pub fn run_batch<F: FnMut(&str)>(
                 integration_provenance: run::IntegrationProvenance::ParallelWorkerDirect,
                 integration_cleanup_complete: false,
                 owned_oids: Vec::new(),
+                output_contract_incident: None,
             },
         )?;
         ok.push(p);
