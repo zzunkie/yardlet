@@ -30,6 +30,12 @@ workers:
     # `-c model_reasoning_effort=<model-supported effort>`.
     model: ""
     effort: ""
+    # Optional, case-insensitive LITERAL signatures from this worker/provider.
+    # Yardlet checks only a resultless attempt's own worker-output.log span.
+    # Keep this narrow (max 16 entries, 256 bytes each). A match permits one
+    # same-worker, result-first output-contract recovery, never task rewording.
+    # Example: ["provider declined response"]
+    provider_response_refusal_patterns: []
     role_strengths:
       - image_asset_generation
       - planning_gate
@@ -71,6 +77,9 @@ workers:
     # `--effort <level>`.
     model: ""
     effort: ""
+    # Configure exact public refusal text observed from this CLI/provider.
+    # Empty preserves the legacy resultless retry/failover behavior.
+    provider_response_refusal_patterns: []
     role_strengths:
       - planning_gate
       - ambiguity_reduction

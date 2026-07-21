@@ -19,9 +19,9 @@ use crate::inspect;
 use crate::packet::{self, PacketInputs};
 use crate::schemas::{
     AnswerActionRequest, AttemptState, ChannelEvent, ChannelEventType, ContinuationMode,
-    ConversationTurn, EventActor, EventActorKind, Question, QuestionState, RunResult, TaskState,
-    TransitionActor, TransitionCause, TurnRole, WorkQueue, WorkerAttempt, WorkerProfile,
-    WorkersFile,
+    ConversationTurn, EventActor, EventActorKind, OutputContractCause, OutputContractIncident,
+    Question, QuestionState, RunResult, TaskState, TransitionActor, TransitionCause, TurnRole,
+    WorkQueue, WorkerAttempt, WorkerOutputLogSpan, WorkerProfile, WorkersFile,
 };
 use crate::state::{self, append_str, write_str, PlanningLock, Workspace};
 use crate::ui::i18n::{self, Lang};
@@ -642,6 +642,11 @@ pub(crate) struct RunRecord {
     /// Exact commits newly reachable from baseline through integration_oid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned_oids: Vec<String>,
+    /// Core-classified output-contract failure and its one-shot recovery state.
+    /// Written before the recovery spawn so crash recovery cannot create a
+    /// third attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_contract_incident: Option<OutputContractIncident>,
 }
 
 impl RunRecord {
@@ -657,6 +662,68 @@ impl RunRecord {
             routing_provenance,
         })
     }
+}
+
+fn output_log_len(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+fn output_log_span(run_dir: &std::path::Path, byte_start: u64) -> WorkerOutputLogSpan {
+    WorkerOutputLogSpan {
+        path: "worker-output.log".to_string(),
+        byte_start,
+        byte_end: output_log_len(&run_dir.join("worker-output.log")),
+    }
+}
+
+fn classify_provider_refusal_attempt(
+    profile: &WorkerProfile,
+    run_dir: &std::path::Path,
+    attempt_id: &str,
+    byte_start: u64,
+    lines: &mut Vec<String>,
+) -> Option<OutputContractIncident> {
+    let span = output_log_span(run_dir, byte_start);
+    match workers::classify_output_contract_cause(
+        profile,
+        &run_dir.join("result.json"),
+        &run_dir.join("worker-output.log"),
+        &span,
+    ) {
+        Ok(Some(OutputContractCause::ProviderResponseRefused)) => Some(OutputContractIncident {
+            cause: OutputContractCause::ProviderResponseRefused,
+            worker_id: profile.id.clone(),
+            first_attempt_id: attempt_id.to_string(),
+            first_log_span: span,
+            recovery_consumed: false,
+            terminal_attempt_id: None,
+        }),
+        Ok(None) => None,
+        Err(error) => {
+            lines.push(format!(
+                "provider refusal classification skipped for {attempt_id}: {error}"
+            ));
+            None
+        }
+    }
+}
+
+fn persist_output_contract_incident(
+    run_dir: &std::path::Path,
+    incident: &OutputContractIncident,
+) -> Result<()> {
+    let path = run_dir.join("run.yaml");
+    let mut record: RunRecord = state::load_yaml(&path)?;
+    record.output_contract_incident = Some(incident.clone());
+    state::save_yaml_atomic(&path, &record)
+}
+
+fn load_output_contract_incident(run_dir: &std::path::Path) -> Option<OutputContractIncident> {
+    state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
+        .ok()
+        .and_then(|record| record.output_contract_incident)
 }
 
 /// Fail closed, immediately before a worker spawn, unless the run receipt
@@ -1913,6 +1980,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         },
         integration_cleanup_complete: false,
         owned_oids: Vec::new(),
+        output_contract_incident: None,
     };
     state::save_yaml_atomic(&run_dir.join("run.yaml"), &record)?;
     if serial_worktree.is_some() {
@@ -2115,6 +2183,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         first_continuation,
         None,
     )?;
+    let first_output_log_start = output_log_len(&run_dir.join("worker-output.log"));
     let mut outcome = match workers::spawn_resolved_attempt_with_sink(
         &eff_profile,
         &active_selection,
@@ -2155,6 +2224,13 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         &current_capture,
         &outcome,
     )?;
+    let mut output_contract_incident = classify_provider_refusal_attempt(
+        &eff_profile,
+        &run_dir,
+        &current_attempt.attempt_id,
+        first_output_log_start,
+        &mut lines,
+    );
     if active_worker_id == "codex" && session_id.is_none() {
         session_id = outcome.session_id.clone();
         if session_id.is_none() {
@@ -2171,6 +2247,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let mut resumes = 0u32;
     while session_id.is_some()
         && !cancelled_marker.exists()
+        && output_contract_incident.is_none()
         && is_transient_failure(&outcome, &run_dir)
         && resumes < max_retries
     {
@@ -2199,6 +2276,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         )?;
         current_attempt = begun.0;
         current_capture = begun.1;
+        let resume_output_log_start = output_log_len(&run_dir.join("worker-output.log"));
         outcome = match workers::spawn_resolved_attempt_with_sink(
             &eff_profile,
             &active_selection,
@@ -2235,6 +2313,13 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             &current_capture,
             &outcome,
         )?;
+        output_contract_incident = classify_provider_refusal_attempt(
+            &eff_profile,
+            &run_dir,
+            &current_attempt.attempt_id,
+            resume_output_log_start,
+            &mut lines,
+        );
     }
 
     // User stopped it (Esc): requeue rather than evaluate as a real failure.
@@ -2267,8 +2352,106 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         });
     }
 
+    if let Some(mut incident) = output_contract_incident.take() {
+        // Consume the one-shot budget durably BEFORE spawning. If Yardlet dies
+        // in this crash window, orphan recovery reads this receipt and parks
+        // NeedsUser instead of starting another worker.
+        incident.recovery_consumed = true;
+        persist_output_contract_incident(&run_dir, &incident)?;
+        lines.push(format!(
+            "typed output-contract cause: provider_response_refused; retrying {} once",
+            active_worker_id
+        ));
+        let recovery_packet = packet::compile(&PacketInputs {
+            worker_id: &active_worker_id,
+            task: &task,
+            intent: intent.as_ref(),
+            repo: &summary,
+            run_dir_rel: &run_dir_rel,
+            conversation: &conversation,
+            continuation: Some(packet::provider_refusal_recovery_instruction()),
+            chained_from: None,
+            language: &language,
+            images: &images,
+            role_notes: &role_notes,
+            harness: &harness,
+            approved,
+        });
+        write_str(&workers::packet_path(&run_dir), &recovery_packet)?;
+        if worker_run_dir != run_dir.as_path() {
+            write_str(&workers::packet_path(worker_run_dir), &recovery_packet)?;
+        }
+        if serial_worktree.is_some() {
+            attest_worker_cwd(&run_dir, worker_cwd, true)?;
+        }
+        attempt_ordinal += 1;
+        let attempt_id = attempt_id_for_ordinal(&run_id, attempt_ordinal);
+        session_id = if active_worker_id == "claude-code" {
+            Some(gen_session_uuid(&format!(
+                "{run_id}-output-contract-recovery"
+            )))
+        } else {
+            None
+        };
+        effective_chained = false;
+        let begun = begin_worker_attempt(
+            ws,
+            None,
+            &channel_context,
+            &run_dir,
+            &attempt_id,
+            &active_worker_id,
+            session_id.clone(),
+            ContinuationMode::Retry,
+            None,
+        )?;
+        current_attempt = begun.0;
+        current_capture = begun.1;
+        outcome = match workers::spawn_resolved_attempt_with_sink(
+            &eff_profile,
+            &active_selection,
+            &active_bin,
+            &recovery_packet,
+            worker_run_dir,
+            worker_cwd,
+            &env,
+            &current_capture,
+            Some(live_worker_event_sink(
+                ws,
+                &channel_context,
+                &current_attempt,
+            )),
+            timeout,
+            full_access,
+            &images,
+            session_id.as_deref(),
+            false,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                finish_worker_attempt_error(ws, &channel_context, &current_attempt, &error)?;
+                return Err(error);
+            }
+        };
+        import_worker_run_artifacts(worker_run_dir, &run_dir)?;
+        finish_worker_attempt(
+            ws,
+            None,
+            &channel_context,
+            &run_dir,
+            &current_attempt,
+            &current_capture,
+            &outcome,
+        )?;
+        if !run_dir.join("result.json").is_file() {
+            incident.terminal_attempt_id = Some(current_attempt.attempt_id.clone());
+        }
+        persist_output_contract_incident(&run_dir, &incident)?;
+        output_contract_incident = Some(incident);
+    }
+
     let mut failover_note: Option<String> = None;
-    if !run_dir.join("result.json").exists() {
+    if !run_dir.join("result.json").exists() && output_contract_incident.is_none() {
         match routing::resolve_failover_worker_for_task(
             &workers,
             &billing,
@@ -4170,6 +4353,66 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                         continue;
                     }
                 }
+                let consumed_incident = run.as_ref().and_then(|(_, run_dir)| {
+                    load_output_contract_incident(run_dir)
+                        .filter(|incident| incident.recovery_consumed)
+                });
+                if let (Some((run_id, run_dir)), Some(incident)) = (run.as_ref(), consumed_incident)
+                {
+                    // The one-shot recovery budget was consumed before the
+                    // orchestrator died. Never requeue this resultless orphan:
+                    // doing so would create an unbounded third worker attempt.
+                    if let Some(wt) = run_worktree(run_dir).filter(|w| w.exists()) {
+                        let branch = format!("yard/{}", id.to_lowercase());
+                        crate::parallel::remove_worktree(&ws.root, &wt, &branch);
+                    }
+                    let detail =
+                        "provider_response_refused recovery was already consumed; orphan parked NeedsUser";
+                    let _ = save_task_state_on_latest_queue(
+                        ws,
+                        &mut q,
+                        &id,
+                        TaskState::NeedsUser,
+                        TransitionCause::Recover,
+                        detail,
+                        TransitionActor::System,
+                    );
+                    if let Some(task) = q.tasks.iter().find(|task| task.id == id).cloned() {
+                        let worker =
+                            run_worker(run_dir).unwrap_or_else(|| incident.worker_id.clone());
+                        seal_run_record(
+                            run_dir,
+                            run_id,
+                            &task,
+                            &q.intent_id,
+                            &worker,
+                            TaskState::NeedsUser,
+                            None,
+                        );
+                    }
+                    let question = "provider_response_refused가 감지된 뒤 동일 worker의 1회 output-contract 복구가 소비된 상태에서 실행이 중단되었습니다. worker/provider 응답을 확인한 뒤 이 작업을 어떻게 진행할지 알려주세요.";
+                    let context = channel_run_context(ws, &q.intent_id, &id);
+                    if let Err(error) = persist_needs_user_question(
+                        ws,
+                        None,
+                        &context,
+                        run_dir,
+                        question,
+                        EventActorKind::System,
+                    ) {
+                        msgs.push(format!(
+                            "{id}: could not persist recovery question: {error}"
+                        ));
+                    }
+                    let _ = append_output_contract_incident_note(run_dir, &incident);
+                    let _ = std::fs::remove_file(run_dir.join("worker.pid"));
+                    finished.push(task_state_progress_line(
+                        event_lang,
+                        &id,
+                        TaskState::NeedsUser,
+                    ));
+                    continue;
+                }
                 // Dead with no result: redo from scratch; drop the worktree and
                 // SEAL the stranded run record (it was left stuck `running`) so a
                 // later recovery pass does not re-detect it as an abandoned run.
@@ -5369,6 +5612,11 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     let result: Option<RunResult> = std::fs::read_to_string(run_dir.join("result.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok());
+    let output_contract_incident = load_output_contract_incident(run_dir);
+    let terminal_output_contract_incident =
+        output_contract_incident.as_ref().is_some_and(|incident| {
+            result.is_none() && incident.recovery_consumed && incident.terminal_attempt_id.is_some()
+        });
     let mut question_to_persist = result
         .as_ref()
         .filter(|result| result.status == "needs_user")
@@ -5377,15 +5625,19 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         .filter(|question| !question.is_empty())
         .map(|question| (question.to_string(), EventActorKind::Worker));
 
-    let feedback = feedback_for_run(
-        ws,
-        run_dir,
-        run_id,
-        &intent_id,
-        task,
-        &eval,
-        result.as_ref(),
-    );
+    let feedback = (!terminal_output_contract_incident)
+        .then(|| {
+            feedback_for_run(
+                ws,
+                run_dir,
+                run_id,
+                &intent_id,
+                task,
+                &eval,
+                result.as_ref(),
+            )
+        })
+        .flatten();
     let mut next_state = eval.next_task_state;
     if let Some(f) = &feedback {
         let _ = state::write_str(
@@ -5409,6 +5661,18 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         } else {
             lines.push("feedback stopped without an actionable question".to_string());
         }
+    }
+    if terminal_output_contract_incident {
+        next_state = TaskState::NeedsUser;
+        question_to_persist = Some((
+            "provider_response_refused가 감지되었고 동일 worker의 1회 output-contract 복구도 result.json 없이 종료되었습니다. worker/provider 응답을 확인한 뒤 이 작업을 어떻게 진행할지 알려주세요."
+                .to_string(),
+            EventActorKind::System,
+        ));
+        lines.push(
+            "output-contract recovery exhausted: provider_response_refused; paused for user"
+                .to_string(),
+        );
     }
     if flags.repairs_done_projection && next_state != TaskState::Done {
         lines.push(format!(
@@ -5447,6 +5711,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         if let Some(r) = &result {
             append_nonblocking_follow_up_notes(run_dir, r)?;
         }
+    }
+    if let Some(incident) = &output_contract_incident {
+        append_output_contract_incident_note(run_dir, incident)?;
     }
     let artifact_context = channel_run_context(ws, &intent_id, &task.id);
     let worker_root = merge
@@ -6054,6 +6321,7 @@ fn seal_run_record(
             .unwrap_or(IntegrationProvenance::Unknown),
         integration_cleanup_complete: false,
         owned_oids: Vec::new(),
+        output_contract_incident: None,
     });
     // Never preserve identity or worktree-location fields from the
     // worker-writable projection. These values are all known by the core at
@@ -6273,6 +6541,27 @@ pub(crate) fn append_failover_note(run_dir: &std::path::Path, note: &str) -> Res
     md.push('\n');
     append_str(&run_dir.join("checkpoint.md"), &md)?;
     append_str(&run_dir.join("handoff.md"), &md)?;
+    Ok(())
+}
+
+fn append_output_contract_incident_note(
+    run_dir: &std::path::Path,
+    incident: &OutputContractIncident,
+) -> Result<()> {
+    let terminal = incident
+        .terminal_attempt_id
+        .as_deref()
+        .unwrap_or("recovered");
+    let note = format!(
+        "\n## Output contract recovery\n\n- cause: `provider_response_refused`\n- worker: `{}`\n- first attempt: `{}`\n- recovery consumed: `{}`\n- terminal attempt: `{terminal}`\n- worker-output.log span: `{}..{}`\n",
+        incident.worker_id,
+        incident.first_attempt_id,
+        incident.recovery_consumed,
+        incident.first_log_span.byte_start,
+        incident.first_log_span.byte_end,
+    );
+    append_str(&run_dir.join("checkpoint.md"), &note)?;
+    append_str(&run_dir.join("handoff.md"), &note)?;
     Ok(())
 }
 
@@ -10512,6 +10801,7 @@ exit 1
                 integration_provenance: IntegrationProvenance::SerialCoreStaged,
                 integration_cleanup_complete: false,
                 owned_oids: vec![worker_oid.clone(), integration_oid.clone()],
+                output_contract_incident: None,
             },
         )
         .unwrap();
@@ -11265,6 +11555,7 @@ exit 1
                 integration_provenance: IntegrationProvenance::SerialCoreStaged,
                 integration_cleanup_complete: false,
                 owned_oids: vec![],
+                output_contract_incident: None,
             },
         )
         .unwrap();
@@ -11415,6 +11706,7 @@ exit 1
                 integration_provenance: IntegrationProvenance::SerialCoreStaged,
                 integration_cleanup_complete: false,
                 owned_oids: vec![],
+                output_contract_incident: None,
             },
         )
         .unwrap();

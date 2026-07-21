@@ -703,6 +703,7 @@ invocation:
                 pass_env: vec![],
             },
             limits: crate::schemas::Limits::default(),
+            provider_response_refusal_patterns: vec![],
         };
 
         assert!(scout_sandbox_contract(&profile(&[], &[])).is_err());

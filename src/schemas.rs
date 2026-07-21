@@ -1824,6 +1824,40 @@ pub struct WorkersFile {
     pub routing: Routing,
 }
 
+pub const MAX_PROVIDER_RESPONSE_REFUSAL_PATTERNS: usize = 16;
+pub const MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES: usize = 256;
+
+impl WorkersFile {
+    pub fn validate(&self) -> Result<(), String> {
+        for worker in &self.workers {
+            let patterns = &worker.provider_response_refusal_patterns;
+            if patterns.len() > MAX_PROVIDER_RESPONSE_REFUSAL_PATTERNS {
+                return Err(format!(
+                    "worker '{}' configures {} provider refusal patterns; maximum is {}",
+                    worker.id,
+                    patterns.len(),
+                    MAX_PROVIDER_RESPONSE_REFUSAL_PATTERNS
+                ));
+            }
+            for pattern in patterns {
+                if pattern.trim().is_empty() {
+                    return Err(format!(
+                        "worker '{}' has an empty provider refusal pattern",
+                        worker.id
+                    ));
+                }
+                if pattern.len() > MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES {
+                    return Err(format!(
+                        "worker '{}' provider refusal pattern exceeds {} bytes",
+                        worker.id, MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Routing {
     #[serde(default = "default_codex")]
@@ -1911,6 +1945,35 @@ pub struct WorkerProfile {
     pub invocation: Invocation,
     #[serde(default)]
     pub limits: Limits,
+    /// Bounded, case-insensitive literal signatures emitted by this worker's
+    /// provider when it refuses to produce a response. Consulted only when the
+    /// current attempt wrote no result.json.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_response_refusal_patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputContractCause {
+    ProviderResponseRefused,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerOutputLogSpan {
+    pub path: String,
+    pub byte_start: u64,
+    pub byte_end: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputContractIncident {
+    pub cause: OutputContractCause,
+    pub worker_id: String,
+    pub first_attempt_id: String,
+    pub first_log_span: WorkerOutputLogSpan,
+    pub recovery_consumed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_attempt_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3308,6 +3371,67 @@ impl Default for ValidationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_refusal_patterns_are_backward_compatible_and_bounded() {
+        let legacy: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation: {command: fixture}\n",
+        )
+        .unwrap();
+        assert!(legacy.workers[0]
+            .provider_response_refusal_patterns
+            .is_empty());
+        legacy.validate().unwrap();
+
+        let configured: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    provider_response_refusal_patterns: ['request refused']\n    invocation: {command: fixture}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            configured.workers[0].provider_response_refusal_patterns,
+            ["request refused"]
+        );
+        configured.validate().unwrap();
+
+        for invalid in [
+            "schema_version: 1\nworkers:\n  - id: fixture\n    provider_response_refusal_patterns: ['']\n    invocation: {command: fixture}\n",
+            "schema_version: 1\nworkers:\n  - id: fixture\n    provider_response_refusal_patterns: ['   ']\n    invocation: {command: fixture}\n",
+        ] {
+            let workers: WorkersFile = crate::yaml::from_str(invalid).unwrap();
+            assert!(workers.validate().is_err());
+        }
+
+        let too_many = (0..=MAX_PROVIDER_RESPONSE_REFUSAL_PATTERNS)
+            .map(|index| format!("pattern-{index}"))
+            .collect::<Vec<_>>();
+        let mut workers = legacy.clone();
+        workers.workers[0].provider_response_refusal_patterns = too_many;
+        assert!(workers.validate().is_err());
+
+        workers.workers[0].provider_response_refusal_patterns =
+            vec!["x".repeat(MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES + 1)];
+        assert!(workers.validate().is_err());
+    }
+
+    #[test]
+    fn output_contract_incident_uses_stable_typed_cause() {
+        let incident = OutputContractIncident {
+            cause: OutputContractCause::ProviderResponseRefused,
+            worker_id: "fixture".into(),
+            first_attempt_id: "run-1".into(),
+            first_log_span: WorkerOutputLogSpan {
+                path: "worker-output.log".into(),
+                byte_start: 11,
+                byte_end: 42,
+            },
+            recovery_consumed: true,
+            terminal_attempt_id: Some("run-1-attempt-2".into()),
+        };
+        let encoded = serde_json::to_value(&incident).unwrap();
+        assert_eq!(encoded["cause"], "provider_response_refused");
+        assert_eq!(encoded["first_log_span"]["byte_start"], 11);
+        assert_eq!(encoded["terminal_attempt_id"], "run-1-attempt-2");
+    }
     use crate::yaml;
 
     #[test]

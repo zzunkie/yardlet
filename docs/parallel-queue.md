@@ -101,6 +101,17 @@ Implementation notes (src/parallel.rs):
   Parallel batches do not attempt same-worker session resume first; fan-out runs
   are fresh contexts by design, so the shared guarantee here is the one-shot
   alternate-worker failover, not hot-session continuation.
+- The serial path has one narrower pre-failover case. A worker profile may set
+  `provider_response_refusal_patterns` to bounded, case-insensitive literal
+  signatures. When `result.json` is absent, Yardlet scans only the current
+  attempt's exact `worker-output.log` byte span. A match records the stable
+  cause `provider_response_refused` in `run.yaml`, consumes one same-worker
+  recovery before spawning it, and sends neutral result-first contract
+  guidance without repeating or rewording the refused task. A successful
+  second attempt finalizes normally; another missing result becomes NeedsUser
+  with the typed cause in the handoff. Unmatched resultless attempts keep the
+  existing transient retry and opt-in failover path. Parallel execution keeps
+  its existing one-shot alternate-worker path and single-writer finalization.
 - Integration commits as `yard <yard@localhost>`, excluding `.agents/` from
   the worker's staged changes; merges are `--no-ff` in completion order; a
   conflict aborts cleanly, drops the task to Partial, appends the conflict to

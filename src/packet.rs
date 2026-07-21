@@ -1575,6 +1575,15 @@ const PLANNING_SCHEMA_HINT: &str = r#"```json
 ```
 "#;
 
+/// Neutral output-contract-only guidance. It does not restate or transform the
+/// task content and therefore cannot be used to work around a provider refusal.
+pub(crate) fn provider_refusal_recovery_instruction() -> &'static str {
+    "Output-contract recovery: write result.json first, using the exact schema and the current \
+     run/task ids. If the task cannot be completed, use status needs_user with a concise \
+     question_for_user. Do not repeat, reinterpret, or work around any prior provider message; \
+     report only the structured task status."
+}
+
 const RESULT_SCHEMA_HINT: &str = r#"```json
 {
   "schema_version": 1,
@@ -1621,6 +1630,16 @@ or `follow_up_tasks`.
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_refusal_recovery_instruction_is_neutral_and_result_first() {
+        let instruction = provider_refusal_recovery_instruction();
+        assert!(instruction.contains("result.json first"));
+        assert!(instruction.contains("exact schema"));
+        assert!(instruction.contains("Do not repeat"));
+        assert!(!instruction.contains("provider_response_refused"));
+        assert!(!instruction.contains("refusal"));
+    }
 
     #[test]
     fn detects_korean_and_respects_config() {
