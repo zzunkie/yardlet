@@ -430,7 +430,10 @@ pub(crate) fn seeded_harness_evidence(
     Some((seeded, modified))
 }
 
-const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 18] = [
+const PROVIDER_REFUSAL_CLASSIFICATION_SKIPS_FILE: &str =
+    "provider-refusal-classification-skips.yaml";
+
+const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 19] = [
     "run.yaml",
     "task-packet.md",
     "worker.pid",
@@ -449,6 +452,7 @@ const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 18] = [
     "hooks",
     "attempts",
     "latest-attempt",
+    PROVIDER_REFUSAL_CLASSIFICATION_SKIPS_FILE,
 ];
 
 fn is_main_owned_validation_log_name(name: &str) -> bool {
@@ -678,13 +682,23 @@ fn output_log_span(run_dir: &std::path::Path, byte_start: u64) -> WorkerOutputLo
     }
 }
 
+struct ProviderRefusalAttemptClassification {
+    incident: Option<OutputContractIncident>,
+    skip_notice: Option<String>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct ProviderRefusalClassificationSkips {
+    schema_version: u32,
+    notices: Vec<String>,
+}
+
 fn classify_provider_refusal_attempt(
     profile: &WorkerProfile,
     run_dir: &std::path::Path,
     attempt_id: &str,
     byte_start: u64,
-    lines: &mut Vec<String>,
-) -> Option<OutputContractIncident> {
+) -> ProviderRefusalAttemptClassification {
     let span = output_log_span(run_dir, byte_start);
     match workers::classify_output_contract_cause(
         profile,
@@ -692,22 +706,54 @@ fn classify_provider_refusal_attempt(
         &run_dir.join("worker-output.log"),
         &span,
     ) {
-        Ok(Some(OutputContractCause::ProviderResponseRefused)) => Some(OutputContractIncident {
-            cause: OutputContractCause::ProviderResponseRefused,
-            worker_id: profile.id.clone(),
-            first_attempt_id: attempt_id.to_string(),
-            first_log_span: span,
-            recovery_consumed: false,
-            terminal_attempt_id: None,
-        }),
-        Ok(None) => None,
-        Err(error) => {
-            lines.push(format!(
+        Ok(Some(OutputContractCause::ProviderResponseRefused)) => {
+            ProviderRefusalAttemptClassification {
+                incident: Some(OutputContractIncident {
+                    cause: OutputContractCause::ProviderResponseRefused,
+                    worker_id: profile.id.clone(),
+                    first_attempt_id: attempt_id.to_string(),
+                    first_log_span: span,
+                    recovery_consumed: false,
+                    terminal_attempt_id: None,
+                }),
+                skip_notice: None,
+            }
+        }
+        Ok(None) => ProviderRefusalAttemptClassification {
+            incident: None,
+            skip_notice: None,
+        },
+        Err(error) => ProviderRefusalAttemptClassification {
+            incident: None,
+            skip_notice: Some(format!(
                 "provider refusal classification skipped for {attempt_id}: {error}"
-            ));
-            None
+            )),
+        },
+    }
+}
+
+fn retain_provider_refusal_classification(
+    run_dir: &std::path::Path,
+    classification: ProviderRefusalAttemptClassification,
+    lines: &mut Vec<String>,
+) -> Result<Option<OutputContractIncident>> {
+    if let Some(notice) = classification.skip_notice {
+        lines.push(notice.clone());
+        let path = run_dir.join(PROVIDER_REFUSAL_CLASSIFICATION_SKIPS_FILE);
+        let mut record = if path.is_file() {
+            state::load_yaml::<ProviderRefusalClassificationSkips>(&path)?
+        } else {
+            ProviderRefusalClassificationSkips {
+                schema_version: 1,
+                notices: Vec::new(),
+            }
+        };
+        if !record.notices.contains(&notice) {
+            record.notices.push(notice);
+            state::save_yaml_atomic(&path, &record)?;
         }
     }
+    Ok(classification.incident)
 }
 
 fn persist_output_contract_incident(
@@ -2224,13 +2270,16 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         &current_capture,
         &outcome,
     )?;
-    let mut output_contract_incident = classify_provider_refusal_attempt(
-        &eff_profile,
+    let mut output_contract_incident = retain_provider_refusal_classification(
         &run_dir,
-        &current_attempt.attempt_id,
-        first_output_log_start,
+        classify_provider_refusal_attempt(
+            &eff_profile,
+            &run_dir,
+            &current_attempt.attempt_id,
+            first_output_log_start,
+        ),
         &mut lines,
-    );
+    )?;
     if active_worker_id == "codex" && session_id.is_none() {
         session_id = outcome.session_id.clone();
         if session_id.is_none() {
@@ -2313,13 +2362,16 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             &current_capture,
             &outcome,
         )?;
-        output_contract_incident = classify_provider_refusal_attempt(
-            &eff_profile,
+        output_contract_incident = retain_provider_refusal_classification(
             &run_dir,
-            &current_attempt.attempt_id,
-            resume_output_log_start,
+            classify_provider_refusal_attempt(
+                &eff_profile,
+                &run_dir,
+                &current_attempt.attempt_id,
+                resume_output_log_start,
+            ),
             &mut lines,
-        );
+        )?;
     }
 
     // User stopped it (Esc): requeue rather than evaluate as a real failure.
@@ -5613,6 +5665,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok());
     let output_contract_incident = load_output_contract_incident(run_dir);
+    let provider_refusal_classification_skips =
+        state::load_yaml::<ProviderRefusalClassificationSkips>(
+            &run_dir.join(PROVIDER_REFUSAL_CLASSIFICATION_SKIPS_FILE),
+        )
+        .map(|record| record.notices)
+        .unwrap_or_default();
     let terminal_output_contract_incident =
         output_contract_incident.as_ref().is_some_and(|incident| {
             result.is_none() && incident.recovery_consumed && incident.terminal_attempt_id.is_some()
@@ -5715,6 +5773,10 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     if let Some(incident) = &output_contract_incident {
         append_output_contract_incident_note(run_dir, incident)?;
     }
+    append_provider_refusal_classification_skip_notes(
+        run_dir,
+        &provider_refusal_classification_skips,
+    )?;
     let artifact_context = channel_run_context(ws, &intent_id, &task.id);
     let worker_root = merge
         .as_ref()
@@ -6560,6 +6622,24 @@ fn append_output_contract_incident_note(
         incident.first_log_span.byte_start,
         incident.first_log_span.byte_end,
     );
+    append_str(&run_dir.join("checkpoint.md"), &note)?;
+    append_str(&run_dir.join("handoff.md"), &note)?;
+    Ok(())
+}
+
+fn append_provider_refusal_classification_skip_notes(
+    run_dir: &std::path::Path,
+    notices: &[String],
+) -> Result<()> {
+    if notices.is_empty() {
+        return Ok(());
+    }
+    let mut note = String::from("\n## Provider refusal classification skipped\n\n");
+    for notice in notices {
+        note.push_str("- ");
+        note.push_str(notice);
+        note.push('\n');
+    }
     append_str(&run_dir.join("checkpoint.md"), &note)?;
     append_str(&run_dir.join("handoff.md"), &note)?;
     Ok(())
@@ -7585,6 +7665,7 @@ mod tests {
             "FAILOVER.JSON",
             "Evaluation.Json",
             "VALIDATION.JSON",
+            "PROVIDER-REFUSAL-CLASSIFICATION-SKIPS.YAML",
             "EVIDENCE",
             "Hooks",
             "validation-0.log",

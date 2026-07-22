@@ -47,6 +47,18 @@ mod unix {
             permissions.set_mode(0o755);
             fs::set_permissions(&worker, permissions).unwrap();
 
+            if scenario == "classification_error" {
+                let hook = root.join(".agents/hooks/pre-run.d/seed-worker-output");
+                fs::write(
+                    &hook,
+                    "#!/bin/sh\nset -eu\nprintf 'preexisting worker output\\n' > \"$YARD_RUN_DIR/worker-output.log\"\n",
+                )
+                .unwrap();
+                let mut permissions = fs::metadata(&hook).unwrap().permissions();
+                permissions.set_mode(0o755);
+                fs::set_permissions(&hook, permissions).unwrap();
+            }
+
             fs::write(
                 root.join(".agents/intent-contract.yaml"),
                 "schema_version: 1\nid: intent-provider-refusal\nsummary: provider refusal fixture\nstatus: accepted\n",
@@ -206,6 +218,36 @@ mod unix {
             "2"
         );
         assert_eq!(task_state(&fixture.root), "needs_user");
+    }
+
+    #[test]
+    fn classification_skip_reason_is_preserved_in_summary_checkpoint_and_handoff() {
+        let fixture = Fixture::new("classification-error", "classification_error");
+        let output = must_succeed(
+            &fixture.root,
+            &fixture.binary,
+            &["run", "--task", "YARD-001", "--execute"],
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let notice = stdout
+            .lines()
+            .find(|line| line.starts_with("provider refusal classification skipped for "))
+            .unwrap_or_else(|| {
+                panic!(
+                    "run summary keeps the classification skip notice\nstdout:\n{stdout}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            });
+        assert!(
+            notice.contains("worker output log span ends before it starts"),
+            "{notice}"
+        );
+
+        let run = fixture.latest_run();
+        let checkpoint = fs::read_to_string(run.join("checkpoint.md")).unwrap();
+        let handoff = fs::read_to_string(run.join("handoff.md")).unwrap();
+        assert!(checkpoint.contains(notice), "{checkpoint}");
+        assert!(handoff.contains(notice), "{handoff}");
     }
 
     #[test]
