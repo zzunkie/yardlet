@@ -239,6 +239,40 @@ planning 경로가 실제로 공급하는 신호는 5종이다. `only_unusable_s
 두 배선 모두 planning 입력 표면을 넓히므로 이번 minor 정리 범위 밖이며, 후속
 태스크로 제안했다(YARD-005 result의 follow_up_tasks).
 
+### F2 배선 완료 (2026-07-22, YARD-006)
+
+위 계획대로 두 신호의 production 공급이 배선되어, planning 경로가 실제로
+공급하는 hard signal은 7종 전부가 되었다.
+
+1. **`typed_failure_count`**: `state.rs`의 읽기 전용 history projection
+   `Workspace::typed_run_failure_projection(intent_id)`이 같은 intent의 봉인된
+   run 기록(`run.yaml`의 `failed`/`partial` 상태 + `completed_at`) 중
+   `evaluation.json`에 fatal failed check가 있는 run만 task별로 세어,
+   `audit_planning_content`와 `content_requires_scout`의 신호 조립부에서 task
+   단위로 공급한다. 임계값은 기존 research-policy(`repeated_failure_hard`)가
+   소유하며 core 계약(`capability_discovery::assess`)은 바뀌지 않았다. 판독
+   불가능한 기록은 건너뛰므로 기록이 손상돼도 planning은 계속된다.
+2. **`only_unusable_skill_matches`**: `SkillCatalogProjection`에 typed 판정
+   `workspace_unusable`(`SkillUnusableReason::AccessLevelMismatch` 또는
+   `MissingWorkerCapability`)이 추가됐다. 설치된 skill이 SKILL.md frontmatter로
+   `required_access: full` 또는 `required_capabilities:`를 선언하면 config의
+   `default_access`와 guard-ready capability 집합에 대해 판정되고, 같은
+   조립부에서 task의 선택 skill이 "workspace 매치는 있으나 전부 사용 불가"일
+   때만 신호가 올라간다(사용 가능한 매치가 하나라도 있으면 꺼짐, 매치가 없으면
+   기존 missing-skill 경로 유지).
+
+재현 명령(process fixture의 trigger_matrix scenario가 두 production 케이스를
+포함한다: 설치된 unusable skill 1건과, 같은 intent의 봉인 실패 run 2건을 둔 뒤
+같은 planning session의 다음 turn에서 hard signal이 올라오는 2-turn 케이스):
+
+```bash
+cargo test --test v010_002a_capability_discovery_process \
+  hard_and_soft_trigger_matrix_matches_the_typed_core -- --nocapture
+cargo test planner::tests::planning_audit_supplies -- --nocapture
+cargo test skills::tests::catalog_projection_types_unusable_matches_from_access_and_capability_requirements
+cargo test state::tests::typed_run_failure_projection_counts_only_sealed_typed_failures_of_the_intent
+```
+
 ### F4: active digest 백스톱 확장 결정 = 기각(현 시점)
 
 `load_active_snapshot_texts` 기반 백스톱을 canonical `.agents/` 전체로 확장하는

@@ -79,6 +79,22 @@ print(max((len(set(audit.get("cache_hits", []))) for audit in value["capability_
 PY
 }
 
+json_audit_hard_total() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+signal = sys.argv[2]
+print(sum(
+    1
+    for audit in value["capability_audits"]
+    for task in audit["tasks"]
+    if signal in task["trigger"]["hard_signals"]
+))
+PY
+}
+
 json_digest() {
   python3 - "$1" "$2" <<'PY'
 import hashlib
@@ -265,7 +281,72 @@ case "$SCENARIO" in
     run_planning_case soft-two \
       "fixture:soft_two weak-context: unfamiliar-domain:" scout "" 2
     unset YARDLET_TEST_PLANNING_SIGNAL_MARKERS
-    write_summary "built-in core에서 hard 7종과 soft 0/1/2를 확인하고 실제 planning projection의 직접 입력 경로를 대조함"
+
+    # Production supply: an installed selected skill whose declared
+    # requirements the sandboxed workspace cannot satisfy raises
+    # only_unusable_skill_matches through the real catalog projection.
+    root="$(mktemp -d "$EVIDENCE_DIR/only-unusable.XXXXXX")"
+    setup_workspace "$root"
+    mkdir -p "$root/.agents/skills/fixture-unusable-skill"
+    cat >"$root/.agents/skills/fixture-unusable-skill/SKILL.md" <<'EOF'
+---
+name: fixture-unusable-skill
+description: provider-free fixture skill that requires full access
+required_access: full
+---
+provider-free fixture skill body
+EOF
+    run_in "$root" new "fixture:only_unusable_skill_matches" --worker fixture-worker \
+      >"$EVIDENCE_DIR/only-unusable-new.out"
+    show_json "$root" "$EVIDENCE_DIR/only-unusable.json"
+    assert_audit "$EVIDENCE_DIR/only-unusable.json" scout only_unusable_skill_matches 0
+    [[ "$(json_get "$EVIDENCE_DIR/only-unusable.json" capability_audits.0.tasks.0.coverage.status)" == "stale" ]] || \
+      fail "unusable-match coverage status mismatch"
+    [[ "$(json_get "$EVIDENCE_DIR/only-unusable.json" capability_audits.0.tasks.0.coverage.reason_code)" == "only_unusable_skill_matches" ]] || \
+      fail "unusable-match coverage reason mismatch"
+
+    # Production supply: two sealed typed-failure runs of the same intent
+    # raise repeated_typed_failure on the next planning turn via the
+    # read-only run-history projection.
+    root="$(mktemp -d "$EVIDENCE_DIR/repeated-failure.XXXXXX")"
+    setup_workspace "$root"
+    run_in "$root" new "fixture:repeated_typed_failure" --worker fixture-worker \
+      >"$EVIDENCE_DIR/repeated-failure-new.out"
+    show_json "$root" "$EVIDENCE_DIR/repeated-failure-first.json"
+    assert_audit "$EVIDENCE_DIR/repeated-failure-first.json" no_scout "" 0
+    [[ "$(json_audit_hard_total "$EVIDENCE_DIR/repeated-failure-first.json" repeated_typed_failure)" == "0" ]] || \
+      fail "typed failure signal fired without run history"
+    intent_id="$(json_get "$EVIDENCE_DIR/repeated-failure-first.json" session.intent_id)"
+    [[ "$intent_id" != "none" && -n "$intent_id" ]] || fail "planning session intent id missing"
+    for attempt in 1 2; do
+      failed_run_dir="$root/.agents/runs/run-fixture-typed-failure-$attempt"
+      mkdir -p "$failed_run_dir"
+      cat >"$failed_run_dir/run.yaml" <<EOF
+schema_version: 1
+run_id: run-fixture-typed-failure-$attempt
+task_id: YARD-001
+intent_id: $intent_id
+worker: fixture-worker
+state: failed
+started_at: 2026-07-22T00:0$attempt:00+09:00
+completed_at: 2026-07-22T00:0$attempt:30+09:00
+EOF
+      cat >"$failed_run_dir/evaluation.json" <<EOF
+{"run_id":"run-fixture-typed-failure-$attempt","task_id":"YARD-001","status":"failed","checks":[{"name":"validation","passed":false,"fatal":true,"note":"fixture validation failed"}],"next_task_state":"failed"}
+EOF
+    done
+    proposal="$(json_get "$EVIDENCE_DIR/repeated-failure-first.json" pending_proposals.0.proposal_id)"
+    run_in "$root" planning accept "$proposal" --expected-head none --action-id act-typed-failure-accept \
+      >"$EVIDENCE_DIR/repeated-failure-accept.out"
+    head="$(json_get <(run_in "$root" planning show --json) session.current_head)"
+    run_in "$root" planning answer "fixture:repeated_typed_failure" --expected-head "$head" \
+      --action-id act-typed-failure-answer --worker fixture-worker \
+      >"$EVIDENCE_DIR/repeated-failure-answer.out"
+    show_json "$root" "$EVIDENCE_DIR/repeated-failure-second.json"
+    [[ "$(json_audit_hard_total "$EVIDENCE_DIR/repeated-failure-second.json" repeated_typed_failure)" == "1" ]] || \
+      fail "run-history projection did not raise repeated_typed_failure on the follow-up turn"
+
+    write_summary "built-in core에서 hard 7종과 soft 0/1/2를 확인하고 실제 planning projection의 직접 입력 경로(공급 7종: unusable-match와 run-history typed failure 포함)를 대조함"
     ;;
 
   scout_policy)

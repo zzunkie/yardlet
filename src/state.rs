@@ -1954,6 +1954,77 @@ impl Workspace {
 
         unreachable!("the run directory suffix space is unbounded")
     }
+
+    /// Read-only history projection over sealed run records: per task of one
+    /// intent, how many completed runs ended in a typed failure — a sealed
+    /// `failed`/`partial` state backed by at least one fatal failed evaluator
+    /// check. Supplies `typed_failure_count` to plan-time capability discovery;
+    /// unreadable or partial records are skipped, never an error, so planning
+    /// stays available while history is imperfect.
+    pub fn typed_run_failure_projection(&self, intent_id: &str) -> BTreeMap<String, usize> {
+        #[derive(Default, serde::Deserialize)]
+        struct RunRecordView {
+            #[serde(default)]
+            task_id: String,
+            #[serde(default)]
+            intent_id: String,
+            #[serde(default)]
+            state: String,
+            #[serde(default)]
+            completed_at: Option<String>,
+        }
+        #[derive(Default, serde::Deserialize)]
+        struct EvaluationView {
+            #[serde(default)]
+            checks: Vec<CheckView>,
+        }
+        #[derive(Default, serde::Deserialize)]
+        struct CheckView {
+            #[serde(default)]
+            passed: bool,
+            #[serde(default)]
+            fatal: bool,
+        }
+
+        let mut counts = BTreeMap::new();
+        if intent_id.trim().is_empty() {
+            return counts;
+        }
+        let Ok(entries) = fs::read_dir(self.runs_dir()) else {
+            return counts;
+        };
+        for entry in entries.flatten() {
+            let run_dir = entry.path();
+            let Ok(record) = load_yaml::<RunRecordView>(&run_dir.join("run.yaml")) else {
+                continue;
+            };
+            let sealed = record
+                .completed_at
+                .as_deref()
+                .is_some_and(|at| !at.trim().is_empty());
+            if record.intent_id != intent_id
+                || record.task_id.trim().is_empty()
+                || !sealed
+                || !matches!(record.state.as_str(), "failed" | "partial")
+            {
+                continue;
+            }
+            let typed_failure = fs::read_to_string(run_dir.join("evaluation.json"))
+                .ok()
+                .and_then(|raw| serde_json::from_str::<EvaluationView>(&raw).ok())
+                .is_some_and(|evaluation| {
+                    evaluation
+                        .checks
+                        .iter()
+                        .any(|check| check.fatal && !check.passed)
+                });
+            if typed_failure {
+                *counts.entry(record.task_id).or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
     pub fn checkpoints_dir(&self) -> PathBuf {
         self.agents_dir().join("checkpoints")
     }
@@ -6856,6 +6927,69 @@ records:
         assert_eq!(last.actor, TransitionActor::User);
         assert_eq!(last.detail, "merged by hand");
         assert_eq!(last.intent_id, "intent-live");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn typed_run_failure_projection_counts_only_sealed_typed_failures_of_the_intent() {
+        let dir = temp_root("typed-failure-projection");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+
+        let seed_run = |run_id: &str, intent: &str, task: &str, state: &str, sealed: bool| {
+            let run_dir = ws.runs_dir().join(run_id);
+            fs::create_dir_all(&run_dir).unwrap();
+            let completed = if sealed {
+                "completed_at: 2026-07-22T00:00:30+09:00\n"
+            } else {
+                ""
+            };
+            write_str(
+                &run_dir.join("run.yaml"),
+                &format!(
+                    "schema_version: 1\nrun_id: {run_id}\ntask_id: {task}\nintent_id: {intent}\nworker: fixture\nstate: {state}\nstarted_at: 2026-07-22T00:00:00+09:00\n{completed}"
+                ),
+            )
+            .unwrap();
+            run_dir
+        };
+        let failed_eval = r#"{"run_id":"r","task_id":"t","status":"failed","checks":[{"name":"validation","passed":false,"fatal":true,"note":"cargo test failed"}],"next_task_state":"failed"}"#;
+        let passed_eval = r#"{"run_id":"r","task_id":"t","status":"done","checks":[{"name":"validation","passed":true,"fatal":true,"note":"ok"}],"next_task_state":"done"}"#;
+        let advisory_eval = r#"{"run_id":"r","task_id":"t","status":"failed","checks":[{"name":"validation_ran","passed":false,"fatal":false,"note":"advisory"}],"next_task_state":"failed"}"#;
+
+        // Two sealed typed failures for YARD-001 (failed + feedback-cycle partial).
+        let a = seed_run("run-a", "intent-x", "YARD-001", "failed", true);
+        write_str(&a.join("evaluation.json"), failed_eval).unwrap();
+        let b = seed_run("run-b", "intent-x", "YARD-001", "partial", true);
+        write_str(&b.join("evaluation.json"), failed_eval).unwrap();
+        // One sealed typed failure for a sibling task.
+        let c = seed_run("run-c", "intent-x", "YARD-002", "failed", true);
+        write_str(&c.join("evaluation.json"), failed_eval).unwrap();
+        // Excluded: other intent, unsealed, done state, all-pass evaluation,
+        // advisory-only failure, and missing/corrupt evaluation evidence.
+        let d = seed_run("run-d", "intent-y", "YARD-001", "failed", true);
+        write_str(&d.join("evaluation.json"), failed_eval).unwrap();
+        let e = seed_run("run-e", "intent-x", "YARD-001", "failed", false);
+        write_str(&e.join("evaluation.json"), failed_eval).unwrap();
+        let f = seed_run("run-f", "intent-x", "YARD-001", "done", true);
+        write_str(&f.join("evaluation.json"), failed_eval).unwrap();
+        let g = seed_run("run-g", "intent-x", "YARD-001", "partial", true);
+        write_str(&g.join("evaluation.json"), passed_eval).unwrap();
+        let h = seed_run("run-h", "intent-x", "YARD-001", "failed", true);
+        write_str(&h.join("evaluation.json"), advisory_eval).unwrap();
+        seed_run("run-i", "intent-x", "YARD-001", "failed", true);
+        let j = seed_run("run-j", "intent-x", "YARD-001", "failed", true);
+        write_str(&j.join("evaluation.json"), "{not-json").unwrap();
+
+        let counts = ws.typed_run_failure_projection("intent-x");
+        assert_eq!(counts.get("YARD-001"), Some(&2));
+        assert_eq!(counts.get("YARD-002"), Some(&1));
+        assert_eq!(counts.len(), 2);
+        assert!(ws.typed_run_failure_projection("intent-y").len() == 1);
+        assert!(ws.typed_run_failure_projection("").is_empty());
+        assert!(ws.typed_run_failure_projection("intent-absent").is_empty());
 
         let _ = fs::remove_dir_all(&dir);
     }

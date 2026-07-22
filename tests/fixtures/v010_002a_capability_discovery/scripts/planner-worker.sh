@@ -8,6 +8,7 @@ mkdir -p "$run_dir"
 scenario="base"
 for candidate in \
   explicit_research_request selected_skill_missing no_ready_worker_capability \
+  only_unusable_skill_matches repeated_typed_failure \
   current_external_fact_dependency material_external_choice_dependency \
   soft_zero soft_one soft_two scout_policy restart_after_scout \
   restart_before_confirm active_state_isolation; do
@@ -24,6 +25,9 @@ tasks=''
 case "$scenario" in
   selected_skill_missing)
     skills='["fixture-skill-that-is-not-installed"]'
+    ;;
+  only_unusable_skill_matches)
+    skills='["fixture-unusable-skill"]'
     ;;
   no_ready_worker_capability|restart_after_scout|active_state_isolation)
     capabilities='["nondeterministic_entropy_probe"]'

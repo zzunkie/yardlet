@@ -313,6 +313,22 @@ fn request_capability_signals(
     }
 }
 
+/// Compose the skill catalog projection with the usability contract the
+/// planner already snapshots: the workspace default access level and the
+/// guard-ready capability set. Read-only inputs; no state mutation.
+fn catalog_with_usability(
+    ws: &Workspace,
+    library: &crate::skills::Library,
+    readiness: &[guard::WorkerCapabilityReadiness],
+) -> crate::skills::SkillCatalogProjection {
+    let default_access = ws
+        .load_config()
+        .map(|config| config.default_access)
+        .unwrap_or_else(|_| "sandboxed".to_string());
+    let ready_capabilities = crate::routing::ready_capabilities_from_projection(readiness);
+    crate::skills::capability_catalog_projection(ws, library, &default_access, &ready_capabilities)
+}
+
 fn fallback_scout_result(
     topic: &str,
     outcome: &crate::capability_discovery::CapabilityDiscoveryOutcome,
@@ -668,10 +684,11 @@ fn audit_planning_content(
     let policy = bounded_research_policy(ws.load_research_policy()?);
     let library = crate::skills::Library::open(skill_library)
         .ok_or_else(|| anyhow!("skill library projection is unavailable"))?;
-    let catalog = crate::skills::capability_catalog_projection(ws, &library);
     let readiness = guard::capability_readiness_projection(workers_file, billing);
+    let catalog = catalog_with_usability(ws, &library, &readiness);
     let classification = crate::skills::classify_repo(summary, request);
     let base_signals = request_capability_signals(request, fixture_signal_markers_enabled());
+    let typed_failures = ws.typed_run_failure_projection(&session.intent_id);
     let pending_plan_question = content
         .intent
         .open_questions
@@ -686,6 +703,8 @@ fn audit_planning_content(
 
     for task in &content.queue.tasks {
         let mut signals = base_signals.clone();
+        signals.only_unusable_skill_matches = catalog.only_unusable_matches(&task.skills);
+        signals.typed_failure_count = typed_failures.get(task.id.as_str()).copied().unwrap_or(0);
         if let Some(question) = pending_plan_question.as_ref() {
             signals.typed_needs_user_count = 1;
             signals.decision_question = Some(question.clone());
@@ -849,10 +868,11 @@ fn content_requires_scout(
     let policy = bounded_research_policy(ws.load_research_policy()?);
     let library = crate::skills::Library::open(skill_library)
         .ok_or_else(|| anyhow!("skill library projection is unavailable"))?;
-    let catalog = crate::skills::capability_catalog_projection(ws, &library);
     let readiness = guard::capability_readiness_projection(workers_file, billing);
+    let catalog = catalog_with_usability(ws, &library, &readiness);
     let classification = crate::skills::classify_repo(summary, request);
     let base_signals = request_capability_signals(request, fixture_signal_markers_enabled());
+    let typed_failures = ws.typed_run_failure_projection(&content.queue.intent_id);
     let question = content
         .intent
         .open_questions
@@ -861,6 +881,8 @@ fn content_requires_scout(
         .cloned();
     Ok(content.queue.tasks.iter().any(|task| {
         let mut signals = base_signals.clone();
+        signals.only_unusable_skill_matches = catalog.only_unusable_matches(&task.skills);
+        signals.typed_failure_count = typed_failures.get(task.id.as_str()).copied().unwrap_or(0);
         if let Some(question) = question.as_ref() {
             signals.typed_needs_user_count = 1;
             signals.decision_question = Some(question.clone());
@@ -3549,6 +3571,213 @@ routing:
         let opted = request_capability_signals("weak-context: unfamiliar-domain:", true);
         assert!(opted.weak_contextual_match);
         assert!(opted.unfamiliar_domain);
+    }
+
+    fn audit_fixture_root(tag: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "yard-audit-{tag}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='audit-fixture'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        root
+    }
+
+    fn audit_fixture_content(intent_id: &str, tasks_yaml: &[&str]) -> PlanningDraftContent {
+        PlanningDraftContent {
+            intent: IntentContract {
+                schema_version: 1,
+                id: intent_id.to_string(),
+                source: "user".to_string(),
+                raw_request: "bounded request".to_string(),
+                summary: "bounded request".to_string(),
+                allowed_scope: vec![],
+                out_of_scope: vec![],
+                acceptance: vec![],
+                images: vec![],
+                ambiguity: "low".to_string(),
+                open_questions: vec![],
+                clarifications: vec![],
+                interview_turns: 0,
+                status: "accepted".to_string(),
+            },
+            queue: WorkQueue {
+                schema_version: 1,
+                queue_id: format!("queue-{intent_id}"),
+                intent_id: intent_id.to_string(),
+                selection_policy: SelectionPolicy::default(),
+                tasks: tasks_yaml
+                    .iter()
+                    .map(|yaml| crate::yaml::from_str(yaml).unwrap())
+                    .collect(),
+            },
+        }
+    }
+
+    fn run_audit(
+        ws: &Workspace,
+        session: &crate::schemas::PlanningSession,
+        turn: &crate::schemas::PlanningTurnCas,
+        attempt_id: &str,
+        content: &PlanningDraftContent,
+    ) -> crate::planning::PlanningCapabilityAudit {
+        let workers_file = WorkersFile {
+            schema_version: 1,
+            workers: Vec::new(),
+            routing: crate::schemas::Routing::default(),
+        };
+        let billing = crate::schemas::BillingPolicy::default();
+        let summary = inspect::summarize(&ws.root);
+        let mut lines = Vec::new();
+        audit_planning_content(
+            ws,
+            &workers_file,
+            &billing,
+            "",
+            "bounded request",
+            &summary,
+            session,
+            turn,
+            attempt_id,
+            content,
+            None,
+            &mut lines,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn planning_audit_supplies_only_unusable_skill_matches_from_the_catalog_projection() {
+        let root = audit_fixture_root("unusable");
+        let ws = Workspace::at(&root);
+        for (name, frontmatter) in [
+            ("pinned-skill", "required_access: full\n"),
+            ("plain-skill", ""),
+        ] {
+            let manifest = root.join(".agents/skills").join(name).join("SKILL.md");
+            std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+            std::fs::write(
+                &manifest,
+                format!("---\nname: {name}\n{frontmatter}---\nbody\n"),
+            )
+            .unwrap();
+        }
+
+        let (session, turn) =
+            crate::planning::begin_user_turn_exact(&ws, "bounded request").unwrap();
+        let content = audit_fixture_content(
+            &session.intent_id,
+            &[
+                "id: YARD-001\ntitle: use the pinned skill\nskills: [pinned-skill]\n",
+                "id: YARD-002\ntitle: mixed selection\nskills: [pinned-skill, plain-skill]\n",
+            ],
+        );
+        let audit = run_audit(&ws, &session, &turn, "attempt-unusable", &content);
+
+        // Every workspace match unusable: hard signal via the real projection.
+        assert_eq!(
+            audit.tasks[0].trigger.hard_signals,
+            vec![crate::schemas::ScoutHardSignal::OnlyUnusableSkillMatches]
+        );
+        assert_eq!(
+            audit.tasks[0].trigger.decision,
+            crate::schemas::ScoutTriggerDecision::Scout
+        );
+        assert_eq!(
+            audit.tasks[0].coverage.status,
+            crate::schemas::CoverageStatus::Stale
+        );
+        assert_eq!(
+            audit.tasks[0].coverage.reason_code,
+            crate::schemas::CoverageReasonCode::OnlyUnusableSkillMatches
+        );
+        // A usable match in the same selection keeps the signal off.
+        assert!(audit.tasks[1].trigger.hard_signals.is_empty());
+        assert_eq!(
+            audit.tasks[1].trigger.decision,
+            crate::schemas::ScoutTriggerDecision::NoScout
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn planning_audit_supplies_typed_failure_counts_from_completed_run_history() {
+        let root = audit_fixture_root("typed-failure");
+        let ws = Workspace::at(&root);
+        let (session, turn) =
+            crate::planning::begin_user_turn_exact(&ws, "bounded request").unwrap();
+
+        let seed_failed_run = |run_id: &str, task_id: &str| {
+            let run_dir = ws.runs_dir().join(run_id);
+            std::fs::create_dir_all(&run_dir).unwrap();
+            std::fs::write(
+                run_dir.join("run.yaml"),
+                format!(
+                    "schema_version: 1\nrun_id: {run_id}\ntask_id: {task_id}\nintent_id: {}\nworker: fixture\nstate: failed\nstarted_at: 2026-07-22T00:00:00+09:00\ncompleted_at: 2026-07-22T00:00:30+09:00\n",
+                    session.intent_id
+                ),
+            )
+            .unwrap();
+            std::fs::write(
+                run_dir.join("evaluation.json"),
+                format!(
+                    r#"{{"run_id":"{run_id}","task_id":"{task_id}","status":"failed","checks":[{{"name":"validation","passed":false,"fatal":true,"note":"fixture validation failed"}}],"next_task_state":"failed"}}"#
+                ),
+            )
+            .unwrap();
+        };
+        seed_failed_run("run-typed-1", "YARD-001");
+        seed_failed_run("run-typed-2", "YARD-001");
+        seed_failed_run("run-typed-3", "YARD-003");
+
+        let content = audit_fixture_content(
+            &session.intent_id,
+            &[
+                "id: YARD-001\ntitle: keeps failing\n",
+                "id: YARD-002\ntitle: clean history\n",
+                "id: YARD-003\ntitle: failed once\n",
+            ],
+        );
+        let audit = run_audit(&ws, &session, &turn, "attempt-typed-failure", &content);
+
+        // Two sealed typed failures reach the hard threshold end-to-end.
+        assert_eq!(
+            audit.tasks[0].trigger.hard_signals,
+            vec![crate::schemas::ScoutHardSignal::RepeatedTypedFailure]
+        );
+        assert_eq!(
+            audit.tasks[0].trigger.decision,
+            crate::schemas::ScoutTriggerDecision::Scout
+        );
+        assert!(audit.tasks[0].coverage.evidence.iter().any(|evidence| {
+            evidence.source == crate::schemas::CoverageEvidenceSource::TypedFailure
+                && evidence.reference == "2"
+        }));
+        // No history: untouched.
+        assert!(audit.tasks[1].trigger.hard_signals.is_empty());
+        assert!(audit.tasks[1].trigger.soft_signals.is_empty());
+        assert_eq!(
+            audit.tasks[1].trigger.decision,
+            crate::schemas::ScoutTriggerDecision::NoScout
+        );
+        // One failure stays subthreshold typed evidence (soft, observe).
+        assert!(audit.tasks[2].trigger.hard_signals.is_empty());
+        assert_eq!(
+            audit.tasks[2].trigger.soft_signals,
+            vec![crate::schemas::ScoutSoftSignal::SubthresholdTypedEvidence]
+        );
+        assert_eq!(
+            audit.tasks[2].trigger.decision,
+            crate::schemas::ScoutTriggerDecision::Observe
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]

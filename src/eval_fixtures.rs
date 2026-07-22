@@ -703,6 +703,7 @@ fn capability_input() -> crate::capability_discovery::CapabilityDiscoveryInput {
         skill_catalog: crate::skills::SkillCatalogProjection {
             workspace: vec!["planning-gate".to_string()],
             user_library: Vec::new(),
+            workspace_unusable: Vec::new(),
         },
         worker_readiness: vec![crate::guard::WorkerCapabilityReadiness {
             worker_id: "fixture-worker".to_string(),
