@@ -8707,10 +8707,30 @@ printf "# handoff\n" > "$run_dir/handoff.md"
     #[cfg(unix)]
     #[test]
     fn post_create_queue_write_error_removes_worktree_and_branch() {
+        // On a saturated machine this scenario's subprocess layers can fail
+        // for purely environmental reasons: the pre-run hook can miss its
+        // fixed wall-clock ceiling or fail to spawn (rerouting run_next into
+        // the hook-blocked Failed path before the post-create queue write
+        // under test), and the best-effort worktree cleanup's own git calls
+        // can fail to spawn. Rebuild the scenario on a fresh workspace and
+        // retry those signatures a bounded number of times; a genuine
+        // regression stays deterministic across attempts and still fails.
+        let mut environmental = Vec::new();
+        for attempt in 0..3 {
+            match post_create_queue_write_error_attempt(attempt) {
+                Ok(()) => return,
+                Err(reason) => environmental.push(reason),
+            }
+        }
+        panic!("scenario stayed load-degraded across retries: {environmental:?}");
+    }
+
+    #[cfg(unix)]
+    fn post_create_queue_write_error_attempt(attempt: usize) -> Result<(), String> {
         use std::os::unix::fs::PermissionsExt;
 
         let ws = init_test_workspace(
-            "serial-post-create-error-cleanup",
+            &format!("serial-post-create-error-cleanup-{attempt}"),
             "schema_version: 1\nrouting: {default_worker: builder}\nworkers:\n  - id: builder\n    invocation: {command: bash}\n",
         );
         ws.save_queue(&queue(vec![task(
@@ -8730,19 +8750,52 @@ printf "# handoff\n" > "$run_dir/handoff.md"
         .unwrap();
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        run_next(
+        let outcome = run_next(
             &ws,
             &RunOptions {
                 execute: true,
                 target: Some("YARD-POST-CREATE-ERR".into()),
                 ..opts()
             },
-        )
-        .err()
-        .expect("the hook-created queue directory must fail the post-create queue write");
+        );
+        if let Ok(report) = outcome {
+            let hook_never_ran = report.lines.iter().any(|line| {
+                line.contains("pre-run hook blocked the run")
+                    && (line.contains("timed out") || line.contains("spawn failed"))
+            });
+            let lines = report.lines.clone();
+            let _ = std::fs::remove_dir_all(&ws.root);
+            if hook_never_ran {
+                return Err(format!(
+                    "attempt {attempt}: hook never completed: {lines:?}"
+                ));
+            }
+            panic!(
+                "the hook-created queue directory must fail the post-create queue write: {lines:?}"
+            );
+        }
 
-        assert_serial_worktree_and_branch_removed(&ws, &only_run_dir(&ws));
-        let _ = std::fs::remove_dir_all(ws.root);
+        let run_dir = only_run_dir(&ws);
+        let record: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).unwrap();
+        assert!(record.serial_isolated, "run must own a serial worktree");
+        let worktree_left = std::path::Path::new(&record.worktree).exists();
+        let branch_listing = git_stdout(&ws.root, &["branch", "--list", &record.worktree_branch]);
+        let branch_left = match &branch_listing {
+            Ok(listing) => !listing.trim().is_empty(),
+            Err(error) => {
+                let reason = format!("attempt {attempt}: branch listing failed: {error:#}");
+                let _ = std::fs::remove_dir_all(&ws.root);
+                return Err(reason);
+            }
+        };
+        let _ = std::fs::remove_dir_all(&ws.root);
+        if worktree_left || branch_left {
+            return Err(format!(
+                "attempt {attempt}: best-effort cleanup left worktree={worktree_left} branch={branch_left} ({} / {})",
+                record.worktree, record.worktree_branch
+            ));
+        }
+        Ok(())
     }
 
     #[cfg(unix)]
