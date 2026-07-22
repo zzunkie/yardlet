@@ -207,6 +207,8 @@ case "$SCENARIO" in
     head="$(json_get <(run_in "$root" planning show --json) session.current_head)"
     run_in "$root" planning confirm --expected-head "$head" \
       --action-id act-replan-seed-confirm >"$EVIDENCE_DIR/seed-confirm.out"
+    seed_confirmation="$(sed -n 's/^confirmation_id: //p' "$root/.agents/work-queue.yaml")"
+    [[ -n "$seed_confirmation" ]] || fail "seed confirmation id missing from activated queue"
 
     # A freshly confirmed queue is live, not settled: replan must refuse.
     if run_in "$root" planning replan "fixture:replan_retry" \
@@ -256,7 +258,57 @@ case "$SCENARIO" in
     grep -q 'retry replan fixture task' "$root/.agents/work-queue.yaml" || \
       fail "replanned queue did not adopt the replacement plan"
 
-    write_summary "confirmed intent를 실제 실패 run 2회로 Partial 종결시킨 뒤 planning replan이 같은 intent id 세션을 열고, 그 planning audit이 실제 run 기록에서 repeated_typed_failure를 발화했으며, 대체 계획 confirm까지 같은 intent로 완결됨"
+    # The replan confirm archived the seed drain; the archive must exist at
+    # the canonical intent path AND at the seed confirmation's drain path.
+    archive_dir="$root/.agents/intents/$intent_id"
+    [[ -f "$archive_dir/work-queue.yaml" ]] || \
+      fail "replan confirm did not archive the seed drain"
+    grep -q 'seed replan fixture task' \
+      "$archive_dir/drains/$seed_confirmation/work-queue.yaml" || \
+      fail "seed drain not preserved under its confirmation-scoped archive path"
+    retry_confirmation="$(sed -n 's/^confirmation_id: //p' "$root/.agents/work-queue.yaml")"
+    [[ -n "$retry_confirmation" && "$retry_confirmation" != "$seed_confirmation" ]] || \
+      fail "replan confirm did not mint a fresh confirmation id"
+
+    # Second same-intent replan cycle: the replanned task inherits the
+    # intent's consumed feedback cap, so its next real failing run settles
+    # NeedsUser (goal_feedback_exhausted) — the YARD-008 settled shape replan
+    # still accepts. Replanning + confirming again triggers the second archive
+    # of the same intent id — the exact overwrite the confirmation-scoped
+    # drain snapshots exist to survive.
+    run_in "$root" run --task YARD-001 --execute \
+      >"$EVIDENCE_DIR/run-fail-3.out" 2>&1 || true
+    [[ "$(queue_task_state "$root/.agents/work-queue.yaml" YARD-001)" == "needs_user" ]] || \
+      fail "cap-exhausted rerun did not settle the replanned task needs_user"
+    grep -q 'needs_user_origin: goal_feedback_exhausted' "$root/.agents/work-queue.yaml" || \
+      fail "cap-exhausted rerun did not record the goal_feedback_exhausted origin"
+    run_in "$root" planning replan "fixture:replan_retry" --worker fixture-worker \
+      >"$EVIDENCE_DIR/replan2.out"
+    show_json "$root" "$EVIDENCE_DIR/replan2-show.json"
+    [[ "$(json_get "$EVIDENCE_DIR/replan2-show.json" session.intent_id)" == "$intent_id" ]] || \
+      fail "second replan session did not keep the confirmed intent id"
+    proposal="$(json_get "$EVIDENCE_DIR/replan2-show.json" pending_proposals.0.proposal_id)"
+    run_in "$root" planning accept "$proposal" --expected-head none \
+      --action-id act-replan-retry2-accept >"$EVIDENCE_DIR/replan2-accept.out"
+    head="$(json_get <(run_in "$root" planning show --json) session.current_head)"
+    run_in "$root" planning confirm --expected-head "$head" \
+      --action-id act-replan-retry2-confirm >"$EVIDENCE_DIR/replan2-confirm.out"
+
+    # Both drains of the same intent id survive the second archive: the seed
+    # drain is untouched, the retry drain has its own confirmation-scoped
+    # snapshot, and the canonical single-archive path serves the latest drain.
+    grep -q 'seed replan fixture task' \
+      "$archive_dir/drains/$seed_confirmation/work-queue.yaml" || \
+      fail "second archive lost the seed drain snapshot"
+    grep -q 'retry replan fixture task' \
+      "$archive_dir/drains/$retry_confirmation/work-queue.yaml" || \
+      fail "retry drain not preserved under its confirmation-scoped archive path"
+    grep -q 'retry replan fixture task' "$archive_dir/work-queue.yaml" || \
+      fail "canonical intent archive does not serve the latest drain"
+    [[ -f "$archive_dir/drains/$seed_confirmation/final-report.md" ]] || \
+      fail "seed drain snapshot missing its final report"
+
+    write_summary "confirmed intent를 실제 실패 run 2회로 Partial 종결시킨 뒤 planning replan이 같은 intent id 세션을 열고, 그 planning audit이 실제 run 기록에서 repeated_typed_failure를 발화했으며, 대체 계획 confirm까지 같은 intent로 완결됨; 같은 intent의 2회 confirm(replan)에서 각 drain 아카이브가 confirmation-scoped drains/ 경로에 보존되고 canonical 아카이브는 최신 drain을 유지함"
     ;;
 
   goal_feedback_exhausted_replan)

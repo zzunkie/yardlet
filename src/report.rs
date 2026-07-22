@@ -17,32 +17,73 @@ use crate::yaml;
 /// `.agents/intents/<intent_id>/` so starting fresh work doesn't lose the
 /// record. Also preserves the proposed-but-unrun follow-ups the intent's runs
 /// left behind (`follow-up-tasks.yaml`), so "what to do next" survives a reset
-/// and can be promoted into a fresh intent later. Returns the archived intent
-/// id, or None if there is no intent.
+/// and can be promoted into a fresh intent later. A same-intent replan reuses
+/// the intent id, so the canonical archive would be overwritten by the next
+/// drain: when the live queue carries a confirmation id, the same snapshot is
+/// additionally kept under `drains/<confirmation_id>/` so every confirmed
+/// drain stays recoverable. Returns the archived intent id, or None if there
+/// is no intent.
 pub fn archive_intent(ws: &Workspace) -> Result<Option<String>> {
     let Some(intent) = ws.load_intent()? else {
         return Ok(None);
     };
     let queue = ws.load_queue()?;
-    let dir = ws.agents_dir().join("intents").join(&intent.id);
-    std::fs::create_dir_all(&dir)?;
-    state::save_yaml(&dir.join("intent-contract.yaml"), &intent)?;
-    state::save_yaml(&dir.join("work-queue.yaml"), &queue)?;
     let report = build_final_report(ws).unwrap_or_default();
-    state::write_str(&dir.join("final-report.md"), &report)?;
-
     // Preserve the proposed follow-ups this intent's runs surfaced. Only write
     // the file when there is something to keep, so an empty archive stays clean.
     let follow_ups = collect_proposed_follow_ups(ws, &queue);
-    if !follow_ups.is_empty() {
-        let preserved = PreservedFollowUps {
-            schema_version: 1,
-            intent_id: intent.id.clone(),
-            tasks: follow_ups,
-        };
-        state::save_yaml(&dir.join("follow-up-tasks.yaml"), &preserved)?;
+    let write_snapshot = |dir: &std::path::Path| -> Result<()> {
+        std::fs::create_dir_all(dir)?;
+        state::save_yaml(&dir.join("intent-contract.yaml"), &intent)?;
+        state::save_yaml(&dir.join("work-queue.yaml"), &queue)?;
+        state::write_str(&dir.join("final-report.md"), &report)?;
+        if !follow_ups.is_empty() {
+            let preserved = PreservedFollowUps {
+                schema_version: 1,
+                intent_id: intent.id.clone(),
+                tasks: follow_ups.clone(),
+            };
+            state::save_yaml(&dir.join("follow-up-tasks.yaml"), &preserved)?;
+        }
+        Ok(())
+    };
+
+    let dir = ws.agents_dir().join("intents").join(&intent.id);
+    write_snapshot(&dir)?;
+    // Best-effort drain preservation: a queue that doesn't parse as an
+    // activated snapshot (legacy layout) archives exactly as before.
+    if let Some(confirmation_id) = ws
+        .load_activated_queue()
+        .ok()
+        .flatten()
+        .map(|q| q.confirmation_id)
+        .filter(|id| !id.trim().is_empty())
+    {
+        write_snapshot(&dir.join("drains").join(drain_dir_name(&confirmation_id)))?;
     }
     Ok(Some(intent.id))
+}
+
+/// Confirmation ids are minted path-safe by Yardlet, but they round-trip
+/// through user-editable YAML — keep the derived directory name inside the
+/// intent's archive dir no matter what the file says.
+fn drain_dir_name(confirmation_id: &str) -> String {
+    let name: String = confirmation_id
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if name.chars().all(|c| c == '.') {
+        "drain".to_string()
+    } else {
+        name
+    }
 }
 
 /// Gather every follow-up PROPOSED by this intent's runs (each task's latest
@@ -337,6 +378,148 @@ mod tests {
             interview_turns: 0,
             status: String::new(),
         }
+    }
+
+    fn save_activated_queue(ws: &Workspace, intent_id: &str, confirmation_id: &str, task: Task) {
+        let queue = crate::schemas::ActivatedQueue {
+            schema_version: 1,
+            queue_id: format!("queue-{intent_id}"),
+            intent_id: intent_id.to_string(),
+            activation_required: false,
+            selection_policy: Default::default(),
+            tasks: vec![crate::schemas::ActivatedTask {
+                task,
+                materialized_by_confirmation_id: confirmation_id.to_string(),
+            }],
+            planning_session_id: "ps_fixture".to_string(),
+            confirmation_id: confirmation_id.to_string(),
+            draft_revision_id: String::new(),
+            draft_content_digest: String::new(),
+            materialized_queue_digest: String::new(),
+            materialized_queue: None,
+        };
+        crate::state::save_yaml(&ws.queue_path(), &queue).unwrap();
+    }
+
+    #[test]
+    fn replan_archive_preserves_each_confirmations_drain() {
+        // A same-intent replan drains the same intent id twice. The second
+        // archive must not erase the first drain's record: each confirmed
+        // drain also lands at a confirmation-scoped path under the intent's
+        // archive directory.
+        let ws = temp_ws("replan-drains");
+        crate::state::save_yaml(&ws.intent_path(), &intent("intent-replan")).unwrap();
+        save_activated_queue(
+            &ws,
+            "intent-replan",
+            "cnf_first",
+            seed_task("YARD-001", "first drain task", TaskState::Done),
+        );
+        write_run(
+            &ws,
+            "run-1",
+            "YARD-001",
+            r#"{"schema_version":1,"run_id":"run-1","task_id":"YARD-001","status":"done",
+               "follow_up_tasks":[{"title":"first-drain-follow-up","reason":"from drain one","risk":"low"}]}"#,
+        );
+        assert_eq!(archive_intent(&ws).unwrap().as_deref(), Some("intent-replan"));
+
+        // Replan: a new confirmation re-materializes the queue, runs, drains.
+        save_activated_queue(
+            &ws,
+            "intent-replan",
+            "cnf_second",
+            seed_task("YARD-002", "second drain task", TaskState::Done),
+        );
+        write_run(
+            &ws,
+            "run-2",
+            "YARD-002",
+            r#"{"schema_version":1,"run_id":"run-2","task_id":"YARD-002","status":"done",
+               "follow_up_tasks":[{"title":"second-drain-follow-up","reason":"from drain two","risk":"low"}]}"#,
+        );
+        assert_eq!(archive_intent(&ws).unwrap().as_deref(), Some("intent-replan"));
+
+        let dir = ws.agents_dir().join("intents").join("intent-replan");
+        let first =
+            std::fs::read_to_string(dir.join("drains/cnf_first/work-queue.yaml")).unwrap();
+        assert!(first.contains("first drain task"), "{first}");
+        let first_fu =
+            std::fs::read_to_string(dir.join("drains/cnf_first/follow-up-tasks.yaml")).unwrap();
+        assert!(first_fu.contains("first-drain-follow-up"), "{first_fu}");
+        assert!(dir.join("drains/cnf_first/final-report.md").is_file());
+        let second =
+            std::fs::read_to_string(dir.join("drains/cnf_second/work-queue.yaml")).unwrap();
+        assert!(second.contains("second drain task"), "{second}");
+
+        // The canonical single-archive layout keeps serving existing
+        // consumers (final report browsing, follow-up promotion) with the
+        // latest drain.
+        let canonical = std::fs::read_to_string(dir.join("work-queue.yaml")).unwrap();
+        assert!(canonical.contains("second drain task"), "{canonical}");
+        let preserved = ws
+            .load_preserved_follow_ups("intent-replan")
+            .expect("canonical follow-ups keep resolving by intent id");
+        assert_eq!(preserved.tasks.len(), 1);
+        assert_eq!(preserved.tasks[0].title, "second-drain-follow-up");
+    }
+
+    #[test]
+    fn archive_without_confirmation_keeps_single_canonical_layout() {
+        // Legacy / unconfirmed queues carry no confirmation id; their archive
+        // layout stays exactly as before.
+        let ws = temp_ws("no-confirmation");
+        crate::state::save_yaml(&ws.intent_path(), &intent("intent-plain")).unwrap();
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue
+            .tasks
+            .push(seed_task("YARD-001", "plain", TaskState::Done));
+        ws.save_queue(&queue).unwrap();
+
+        assert_eq!(archive_intent(&ws).unwrap().as_deref(), Some("intent-plain"));
+
+        let dir = ws.agents_dir().join("intents").join("intent-plain");
+        assert!(dir.join("work-queue.yaml").is_file());
+        assert!(
+            !dir.join("drains").exists(),
+            "unconfirmed queues must not grow a drains directory"
+        );
+    }
+
+    #[test]
+    fn rearchiving_the_same_confirmation_reuses_its_drain_snapshot() {
+        // Archiving the same live confirmation twice (e.g. a re-generated
+        // report) refreshes the one drain snapshot instead of piling up dirs.
+        let ws = temp_ws("same-confirmation");
+        crate::state::save_yaml(&ws.intent_path(), &intent("intent-same")).unwrap();
+        save_activated_queue(
+            &ws,
+            "intent-same",
+            "cnf_only",
+            seed_task("YARD-001", "only drain", TaskState::Done),
+        );
+        archive_intent(&ws).unwrap();
+        archive_intent(&ws).unwrap();
+
+        let drains = ws
+            .agents_dir()
+            .join("intents")
+            .join("intent-same")
+            .join("drains");
+        let entries: Vec<String> = std::fs::read_dir(&drains)
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        assert_eq!(entries, vec!["cnf_only".to_string()]);
+    }
+
+    #[test]
+    fn drain_dir_name_stays_inside_the_archive_dir() {
+        assert_eq!(drain_dir_name("cnf_20260722120000_000001"), "cnf_20260722120000_000001");
+        assert_eq!(drain_dir_name("../escape"), "..-escape");
+        assert_eq!(drain_dir_name(".."), "drain");
+        assert_eq!(drain_dir_name("  "), "drain");
     }
 
     #[test]
