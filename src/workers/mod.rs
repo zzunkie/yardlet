@@ -1567,6 +1567,15 @@ fn codex_config_default_model() -> Option<String> {
 mod tests {
     use super::*;
 
+    // A fully loaded machine (full cargo test plus external load) can stall
+    // fork/exec and scheduling of these fixtures' fake workers for many
+    // seconds, and a ceiling hit kills the child mid-output: exit_ok flips
+    // false and the asserted stream truncates. The fakes exit immediately on
+    // their own, so this bound only binds when a child genuinely hangs; an
+    // unloaded run never waits anywhere near this long.
+    #[cfg(unix)]
+    const LOAD_TOLERANT_WORKER_CEILING: Duration = Duration::from_secs(120);
+
     #[test]
     fn provider_refusal_classification_is_resultless_profile_scoped_and_span_bounded() {
         let root = std::env::temp_dir().join(format!(
@@ -1947,7 +1956,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
             &root,
             &[],
             &log,
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WORKER_CEILING,
             false,
             &[],
             None,
@@ -1999,7 +2008,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
             &root,
             &[],
             &root.join("worker-output.log"),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WORKER_CEILING,
             false,
             &[],
             None,
@@ -2154,7 +2163,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
             &[],
             &capture,
             Some(sink),
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WORKER_CEILING,
             false,
             &[],
             None,
@@ -2231,7 +2240,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
                 &[],
                 &capture,
                 Some(sink),
-                Duration::from_secs(5),
+                LOAD_TOLERANT_WORKER_CEILING,
                 false,
                 &[],
                 resume.then_some("11111111-1111-4111-8111-111111111111"),
@@ -2347,7 +2356,7 @@ limits: {max_wall_minutes: 1}
             &root,
             &[],
             &capture,
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WORKER_CEILING,
             false,
             &[],
             None,
@@ -2375,7 +2384,7 @@ limits: {max_wall_minutes: 1}
             &root,
             &[],
             &capture,
-            Duration::from_secs(5),
+            LOAD_TOLERANT_WORKER_CEILING,
             false,
             &[],
             None,
