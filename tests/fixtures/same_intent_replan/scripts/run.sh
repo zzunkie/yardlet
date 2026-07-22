@@ -259,6 +259,100 @@ case "$SCENARIO" in
     write_summary "confirmed intent를 실제 실패 run 2회로 Partial 종결시킨 뒤 planning replan이 같은 intent id 세션을 열고, 그 planning audit이 실제 run 기록에서 repeated_typed_failure를 발화했으며, 대체 계획 confirm까지 같은 intent로 완결됨"
     ;;
 
+  goal_feedback_exhausted_replan)
+    # Leg 1: goal-feedback cap exhaustion types the NeedsUser hold
+    # goal_feedback_exhausted, which unlocks same-intent replan.
+    root="$(mktemp -d "$EVIDENCE_DIR/feedback.XXXXXX")"
+    setup_workspace "$root"
+
+    run_in "$root" new "fixture:feedback_seed" --worker fixture-worker \
+      >"$EVIDENCE_DIR/feedback-new.out"
+    show_json "$root" "$EVIDENCE_DIR/feedback-show.json"
+    intent_id="$(json_get "$EVIDENCE_DIR/feedback-show.json" session.intent_id)"
+    [[ "$intent_id" != "none" && -n "$intent_id" ]] || fail "feedback seed intent id missing"
+    proposal="$(json_get "$EVIDENCE_DIR/feedback-show.json" pending_proposals.0.proposal_id)"
+    run_in "$root" planning accept "$proposal" --expected-head none \
+      --action-id act-feedback-seed-accept >"$EVIDENCE_DIR/feedback-accept.out"
+    head="$(json_get <(run_in "$root" planning show --json) session.current_head)"
+    run_in "$root" planning confirm --expected-head "$head" \
+      --action-id act-feedback-seed-confirm >"$EVIDENCE_DIR/feedback-confirm.out"
+
+    # Attempt 1 stays inside the cap (max_feedback_cycles 1): a Partial retry
+    # hold, and no typed origin marker may exist yet.
+    run_in "$root" run --task YARD-001 --execute \
+      >"$EVIDENCE_DIR/feedback-run-1.out" 2>&1 || true
+    [[ "$(queue_task_state "$root/.agents/work-queue.yaml" YARD-001)" == "partial" ]] || \
+      fail "attempt 1 did not settle the task partial"
+    if grep -q 'needs_user_origin' "$root/.agents/work-queue.yaml"; then
+      fail "typed origin appeared before the feedback cap was exhausted"
+    fi
+
+    # Attempt 2 exceeds the cap: the terminal goal-feedback loop parks the
+    # task NeedsUser and records needs_user_origin: goal_feedback_exhausted.
+    run_in "$root" run --task YARD-001 --execute \
+      >"$EVIDENCE_DIR/feedback-run-2.out" 2>&1 || true
+    [[ "$(queue_task_state "$root/.agents/work-queue.yaml" YARD-001)" == "needs_user" ]] || \
+      fail "attempt 2 did not park the task needs_user"
+    grep -q 'needs_user_origin: goal_feedback_exhausted' "$root/.agents/work-queue.yaml" || \
+      fail "cap-exhausted hold is missing needs_user_origin: goal_feedback_exhausted"
+
+    # Same-intent replan accepts the goal-feedback-exhausted settled queue and
+    # keeps the confirmed intent id.
+    run_in "$root" planning replan "fixture:replan_retry" --worker fixture-worker \
+      >"$EVIDENCE_DIR/feedback-replan.out"
+    show_json "$root" "$EVIDENCE_DIR/feedback-replan-show.json"
+    [[ "$(json_get "$EVIDENCE_DIR/feedback-replan-show.json" session.intent_id)" == "$intent_id" ]] || \
+      fail "replan session did not keep the confirmed intent id"
+
+    # Promote the replacement plan: the requeued task carries no stale marker.
+    proposal="$(json_get "$EVIDENCE_DIR/feedback-replan-show.json" pending_proposals.0.proposal_id)"
+    run_in "$root" planning accept "$proposal" --expected-head none \
+      --action-id act-feedback-retry-accept >"$EVIDENCE_DIR/feedback-replan-accept.out"
+    head="$(json_get <(run_in "$root" planning show --json) session.current_head)"
+    run_in "$root" planning confirm --expected-head "$head" \
+      --action-id act-feedback-retry-confirm >"$EVIDENCE_DIR/feedback-replan-confirm.out"
+    grep -q "^intent_id: $intent_id\$" "$root/.agents/work-queue.yaml" || \
+      fail "replanned queue changed the intent id"
+    [[ "$(queue_task_state "$root/.agents/work-queue.yaml" YARD-001)" == "queued" ]] || \
+      fail "replanned queue did not requeue the task"
+    if grep -q 'needs_user_origin' "$root/.agents/work-queue.yaml"; then
+      fail "replanned queue kept a stale needs_user_origin marker"
+    fi
+
+    # Leg 2: a worker-authored question is a genuine conversation — the hold is
+    # typed worker_question and replan must refuse with the yardlet answer path.
+    qroot="$(mktemp -d "$EVIDENCE_DIR/question.XXXXXX")"
+    setup_workspace "$qroot"
+
+    run_in "$qroot" new "fixture:question_seed" --worker fixture-worker \
+      >"$EVIDENCE_DIR/question-new.out"
+    show_json "$qroot" "$EVIDENCE_DIR/question-show.json"
+    proposal="$(json_get "$EVIDENCE_DIR/question-show.json" pending_proposals.0.proposal_id)"
+    run_in "$qroot" planning accept "$proposal" --expected-head none \
+      --action-id act-question-seed-accept >"$EVIDENCE_DIR/question-accept.out"
+    head="$(json_get <(run_in "$qroot" planning show --json) session.current_head)"
+    run_in "$qroot" planning confirm --expected-head "$head" \
+      --action-id act-question-seed-confirm >"$EVIDENCE_DIR/question-confirm.out"
+
+    run_in "$qroot" run --task YARD-001 --execute \
+      >"$EVIDENCE_DIR/question-run.out" 2>&1 || true
+    [[ "$(queue_task_state "$qroot/.agents/work-queue.yaml" YARD-001)" == "needs_user" ]] || \
+      fail "worker question run did not park the task needs_user"
+    grep -q 'needs_user_origin: worker_question' "$qroot/.agents/work-queue.yaml" || \
+      fail "worker question hold is missing needs_user_origin: worker_question"
+
+    if run_in "$qroot" planning replan "fixture:replan_retry" \
+      >"$EVIDENCE_DIR/question-replan.out" 2>&1; then
+      fail "replan superseded a worker-question hold"
+    fi
+    grep -q 'yardlet answer' "$EVIDENCE_DIR/question-replan.out" || \
+      fail "worker-question replan rejection did not point at yardlet answer"
+    grep -q 'YARD-001' "$EVIDENCE_DIR/question-replan.out" || \
+      fail "worker-question replan rejection did not name the waiting task"
+
+    write_summary "실제 바이너리로 feedback cap 소진이 needs_user_origin: goal_feedback_exhausted를 기록하고 planning replan이 그 종결 큐를 같은 intent id로 수용했으며, worker 질문 NeedsUser 큐에서는 replan이 yardlet answer 안내와 대기 태스크 id를 남기며 거부됨"
+    ;;
+
   *)
     fail "unknown scenario: $SCENARIO"
     ;;
