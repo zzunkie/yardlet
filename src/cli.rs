@@ -396,6 +396,13 @@ enum PlanningCmd {
         #[arg(long)]
         action_id: Option<String>,
     },
+    /// Reopen planning for the settled active intent (same intent id) after a
+    /// failed/partial drain and ask the planning worker for a replacement plan.
+    Replan {
+        message: Vec<String>,
+        #[arg(long)]
+        worker: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -1353,6 +1360,29 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
             );
             Ok(())
         }
+        PlanningCmd::Replan { message, worker } => {
+            let message = message.join(" ");
+            println!("Replanning the active intent: {message}\n");
+            let report = crate::planner::run_planning_replan(&ws, &message, worker.as_deref())?;
+            println!(
+                "planning worker: {}  ·  run: {}",
+                report.worker_id, report.run_id
+            );
+            for line in &report.lines {
+                println!("{line}");
+            }
+            println!("\nSession: {}", report.session_id);
+            println!("Proposal: {}", report.proposal_id);
+            println!("Draft summary: {}", report.intent_summary);
+            println!(
+                "\nProposed {} task(s) for the same intent; the settled active queue is unchanged until explicit confirm.",
+                report.task_count
+            );
+            println!(
+                "\nNext: `yardlet planning show`, then accept and confirm to activate the replacement plan."
+            );
+            Ok(())
+        }
     }
 }
 
@@ -2182,6 +2212,9 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         println!("  see why:   yardlet handoff");
         println!(
             "  retry:     yardlet run --task <id> --execute   (add --full-access if it needs network/installs)"
+        );
+        println!(
+            "  replan:    yardlet planning replan \"<direction>\"   (once the queue is settled — same intent, replacement plan)"
         );
     }
     let deferred: Vec<&str> = snap
