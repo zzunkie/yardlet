@@ -18,13 +18,11 @@ pub const MEMORY_README: &str = include_str!("../templates/agents/memory/README.
 
 /// Parse either the legacy v1 scaffold or the expanded typed policy. Newly
 /// added controls have serde defaults, so existing workspaces migrate on read.
-#[allow(dead_code)] // YARD-002 loads this from the planning orchestration path.
 pub fn parse_research_policy(text: &str) -> anyhow::Result<crate::schemas::ResearchPolicy> {
     crate::yaml::from_str(text)
 }
 
 /// The embedded default is compile-time bundled and validated by unit tests.
-#[allow(dead_code)] // YARD-002 loads this from the planning orchestration path.
 pub fn research_policy() -> crate::schemas::ResearchPolicy {
     parse_research_policy(RESEARCH_POLICY).expect("embedded research policy must be valid")
 }

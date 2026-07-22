@@ -409,7 +409,10 @@ pub fn apply_scout(ws: &Workspace, run_id: &str) -> Result<MemoryCommandReport> 
     ))
 }
 
-fn copy_scout_workspace(source: &Path, target: &Path) -> Result<()> {
+/// Copy a workspace into a disposable scout root, excluding VCS state, build
+/// artifacts, Yardlet runtime records, and symlinks. This is the production
+/// scout-isolation copy; eval fixtures reuse it to prove the copy is inert.
+pub(crate) fn copy_scout_workspace(source: &Path, target: &Path) -> Result<()> {
     std::fs::create_dir_all(target)?;
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
@@ -435,10 +438,6 @@ fn copy_scout_workspace(source: &Path, target: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-pub(crate) fn copy_scout_workspace_for_fixture(source: &Path, target: &Path) -> Result<()> {
-    copy_scout_workspace(source, target)
 }
 
 fn refresh_target(entry: &MemoryEntry) -> MemoryRefreshTarget {
