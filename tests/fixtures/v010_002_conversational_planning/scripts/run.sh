@@ -16,6 +16,10 @@ PLANNER="$ROOT/planner-worker.sh"
 cp "$SCRIPT_DIR/planner-worker.sh" "$PLANNER"
 chmod +x "$PLANNER"
 
+if [[ "$SCENARIO" == "confirmed_auto_runtime_envelope" ]]; then
+  touch "$ROOT/.fixture-confirmed-auto"
+fi
+
 fail() {
   printf 'fixture failure: %s\n' "$*" >&2
   exit 1
@@ -160,6 +164,30 @@ routing:
     primary: fixture-planner
     fallback: ""
 EOF
+
+if [[ "$SCENARIO" == "confirmed_auto_runtime_envelope" ]]; then
+  python3 - "$ROOT/.agents/yardlet.yaml" "$ROOT/.agents/workers.yaml" <<'PY'
+import re
+import sys
+config_path, workers_path = sys.argv[1:]
+config = open(config_path, encoding="utf-8").read()
+config, count = re.subn(r"^max_parallel: \d+$", "max_parallel: 2", config, count=1, flags=re.M)
+if count != 1:
+    raise SystemExit("failed to configure parallel fixture")
+open(config_path, "w", encoding="utf-8").write(config)
+workers = open(workers_path, encoding="utf-8").read()
+workers, count = re.subn(
+    r"^(    kind: cli_worker)$",
+    r"\1\n    model: fixture-model",
+    workers,
+    count=1,
+    flags=re.M,
+)
+if count != 1:
+    raise SystemExit("failed to configure fixture worker model")
+open(workers_path, "w", encoding="utf-8").write(workers)
+PY
+fi
 
 if [[ "$SCENARIO" == "runtime_transition_provenance" ]]; then
   touch "$ROOT/.fixture-two-task"
@@ -1597,6 +1625,65 @@ PY
       [[ "$before" == "$(state_digest "$corrupt_root")" ]] || fail "runtime origin corruption $mode changed canonical state"
     done
     write_summary "confirmed base contract remained immutable while committed receipt-backed additions preserved exact presence/order and defer/revive overlays stayed runnable"
+    ;;
+  confirmed_auto_runtime_envelope)
+    accept_proposal "$p1" none act-confirmed-auto-accept >/dev/null
+    head="$(visible_head)"
+    run_yardlet planning confirm --expected-head "$head" --action-id act-confirmed-auto-confirm >/dev/null
+    (cd "$ROOT" && git init -q && git config user.name fixture && \
+      git config user.email fixture@example.invalid && git add .agents/yardlet.yaml && \
+      git commit -qm baseline)
+
+    task_root="$EVIDENCE_DIR/confirmed-auto-task-control"
+    cp -R "$ROOT" "$task_root"
+    run_in "$task_root" run --task YARD-001 >"$EVIDENCE_DIR/confirmed-auto-task.out" \
+      2>"$EVIDENCE_DIR/confirmed-auto-task.err"
+    grep -q 'selected task YARD-001' "$EVIDENCE_DIR/confirmed-auto-task.out" || \
+      fail "same confirmed queue did not admit the named task control"
+
+    auto_root="$EVIDENCE_DIR/confirmed-auto-direct"
+    cp -R "$ROOT" "$auto_root"
+    run_in "$auto_root" run --auto >"$EVIDENCE_DIR/confirmed-auto-direct.out" \
+      2>"$EVIDENCE_DIR/confirmed-auto-direct.err"
+    [[ -n "$(find "$auto_root/.agents/runs" -name fixture-confirmed-auto-worker-entered -print -quit)" ]] || \
+      fail "fresh confirmed queue auto run did not enter the worker"
+
+    revived_root="$EVIDENCE_DIR/confirmed-auto-revived"
+    cp -R "$ROOT" "$revived_root"
+    run_in "$revived_root" defer YARD-001 "fixture pause" >/dev/null
+    run_in "$revived_root" revive YARD-001 >/dev/null
+    run_in "$revived_root" run --auto >"$EVIDENCE_DIR/confirmed-auto-revived.out" \
+      2>"$EVIDENCE_DIR/confirmed-auto-revived.err"
+    [[ -n "$(find "$revived_root/.agents/runs" -name fixture-confirmed-auto-worker-entered -print -quit)" ]] || \
+      fail "defer/revive confirmed queue auto run did not enter the worker"
+
+    tampered_root="$EVIDENCE_DIR/confirmed-auto-tampered"
+    cp -R "$ROOT" "$tampered_root"
+    python3 - "$tampered_root/.agents/work-queue.yaml" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+current, materialized = text.split("materialized_queue:", 1)
+current, count = re.subn(
+    r"^(\s+title:) confirmed auto runtime fixture$",
+    r"\1 forged runtime title",
+    current,
+    count=1,
+    flags=re.M,
+)
+if count != 1:
+    raise SystemExit("failed to mutate confirmed runtime title")
+open(path, "w", encoding="utf-8").write(current + "materialized_queue:" + materialized)
+PY
+    if run_in "$tampered_root" run --auto >"$EVIDENCE_DIR/confirmed-auto-tampered.out" \
+      2>"$EVIDENCE_DIR/confirmed-auto-tampered.err"; then
+      fail "real runtime contract tamper was admitted by auto"
+    fi
+    grep -q 'active_runtime_envelope_mismatch' "$EVIDENCE_DIR/confirmed-auto-tampered.err" || \
+      fail "real runtime contract tamper did not retain the envelope mismatch reason"
+
+    write_summary "새 confirm과 defer/revive queue의 auto admission은 worker까지 진입하고 named task 대조군은 통과하며 실제 contract 변조는 거부됨"
     ;;
   writer_inventory)
     inventory="$EVIDENCE_DIR/writer-inventory.txt"

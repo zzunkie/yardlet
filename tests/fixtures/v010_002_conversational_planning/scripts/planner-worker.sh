@@ -10,6 +10,27 @@ run_dir="$1"
 packet="$(cat)"
 workspace="$(pwd)"
 if grep -Eq 'Yardlet task packet|You are a hidden Yardlet worker' <<<"$packet"; then
+  if grep -q 'confirmed auto runtime fixture' <<<"$packet"; then
+    mkdir -p "$run_dir"
+    touch "$run_dir/fixture-confirmed-auto-worker-entered"
+    cat >"$run_dir/result.json" <<'EOF'
+{
+  "schema_version": 1,
+  "run_id": "fixture-confirmed-auto",
+  "task_id": "YARD-001",
+  "status": "needs_user",
+  "intent_adherence": {"drift_detected": false, "notes": ""},
+  "changes": {"files_modified": [], "files_created": [], "files_deleted": []},
+  "validation": {"commands_run": [], "passed": true, "failures": []},
+  "question_for_user": "fixture가 auto admission 이후 안전하게 멈춥니다.",
+  "compact_summary": "confirmed auto runtime envelope fixture",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+    exit 0
+  fi
   if grep -q 'first runtime task fails' <<<"$packet"; then
     mkdir -p "$run_dir"
     cat >"$run_dir/result.json" <<'EOF'
@@ -91,8 +112,29 @@ case "$turn" in
     ;;
 esac
 
+if [[ -f "$workspace/.fixture-confirmed-auto" ]]; then
+  title="confirmed auto runtime fixture"
+fi
+
 second_task=""
 first_goal=""
+if [[ -f "$workspace/.fixture-confirmed-auto" ]]; then
+  second_task=', {
+    "id": "YARD-002",
+    "title": "confirmed auto runtime fixture second task",
+    "kind": "implementation",
+    "risk": "low",
+    "preferred_worker": "fixture-planner",
+    "model": "auto",
+    "effort": "auto",
+    "depends_on": [],
+    "skills": [],
+    "required_capabilities": [],
+    "allowed_scope": ["src/state.rs"],
+    "acceptance": ["두 번째 독립 task도 parallel auto admission을 통과한다"],
+    "worker_rationale": "deterministic fixture"
+  }'
+fi
 if [[ -f "$workspace/.fixture-two-task" ]]; then
   title="first runtime task fails"
   first_goal=',
