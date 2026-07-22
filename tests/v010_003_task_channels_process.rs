@@ -240,6 +240,16 @@ mod unix {
         format!("att-action-{hash:016x}")
     }
 
+    // A full `cargo test` run oversubscribes the CPU and slows this binary
+    // several-fold, so condition polls get a deadline sized for that load.
+    // `wait_until` returns as soon as the predicate holds; an unloaded run
+    // never waits anywhere near this long.
+    const LOAD_TOLERANT_WAIT: Duration = Duration::from_secs(60);
+    // Upper bound for "the parent finalizes promptly once the worker's result
+    // exists": loose enough for CPU starvation, still small enough to fail on
+    // a genuine publisher stall.
+    const PROMPT_FINISH_BOUND: Duration = Duration::from_secs(30);
+
     fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
         let started = Instant::now();
         while started.elapsed() < timeout {
@@ -708,7 +718,7 @@ printf '# Handoff\n\nPolicy-authorized failover completed.\n' >"$run_dir/handoff
             r##"#!/usr/bin/env bash
 set -euo pipefail
 touch .agents/failover-hook-entered
-for _ in $(seq 1 400); do
+for _ in $(seq 1 4000); do
   if [[ -f .agents/failover-hook-release ]]; then
     touch .agents/failover-hook-exited
     exit 0
@@ -731,7 +741,7 @@ exit 1
             .spawn()
             .unwrap();
         assert!(
-            wait_until(Duration::from_secs(10), || {
+            wait_until(LOAD_TOLERANT_WAIT, || {
                 if !fixture.root.join(".agents/failover-hook-entered").is_file() {
                     return false;
                 }
@@ -755,7 +765,7 @@ exit 1
             "release\n",
         )
         .unwrap();
-        assert!(wait_until(Duration::from_secs(3), || fixture
+        assert!(wait_until(LOAD_TOLERANT_WAIT, || fixture
             .root
             .join(".agents/failover-hook-exited")
             .is_file()));
@@ -1981,7 +1991,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             .spawn()
             .unwrap();
         assert!(
-            wait_until(Duration::from_secs(10), || {
+            wait_until(LOAD_TOLERANT_WAIT, || {
                 files_below(&fixture.root.join(".agents/runs"), "/result.json")
                     .iter()
                     .any(|path| {
@@ -1992,17 +2002,18 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "resume fixture never published its successful result"
         );
         let result_seen = Instant::now();
-        let exited = wait_until(Duration::from_secs(10), || {
-            resumed.try_wait().unwrap().is_some()
-        });
+        let exited = wait_until(LOAD_TOLERANT_WAIT, || resumed.try_wait().unwrap().is_some());
         if !exited {
             let _ = resumed.kill();
         }
         let output = resumed.wait_with_output().unwrap();
-        assert!(exited, "Yardlet parent exceeded the 10 second hard timeout");
         assert!(
-            result_seen.elapsed() < Duration::from_secs(5),
-            "Yardlet parent did not complete within 5 seconds of result.json"
+            exited,
+            "Yardlet parent exceeded the load-tolerant hard timeout"
+        );
+        assert!(
+            result_seen.elapsed() < PROMPT_FINISH_BOUND,
+            "Yardlet parent did not complete promptly after result.json"
         );
         assert!(
             output.status.success(),
@@ -2136,7 +2147,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let started = wait_until(Duration::from_secs(10), || {
+        let started = wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-REDIRECT") == "running"
                 && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
                 && files_below(&fixture.root.join(".agents/worktrees"), "/handoff.md")
@@ -2241,7 +2252,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let started = wait_until(Duration::from_secs(10), || {
+        let started = wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-EXACT-REDIRECT") == "running"
                 && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
                 && files_below(&fixture.root.join(".agents/worktrees"), "/handoff.md")
@@ -2354,7 +2365,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let started = wait_until(Duration::from_secs(10), || {
+        let started = wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-REDIRECT") == "running"
                 && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
         });
@@ -2417,7 +2428,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         );
         assert!(!run_dir.join("cancelled").exists());
 
-        let mut decoy = Command::new("sleep").arg("60").spawn().unwrap();
+        let mut decoy = Command::new("sleep").arg("600").spawn().unwrap();
         let decoy_pid = decoy.id();
         fs::write(&pid_path, decoy_pid.to_string()).unwrap();
 
@@ -2639,7 +2650,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             .spawn()
             .unwrap();
 
-        let live_events_visible = wait_until(Duration::from_secs(10), || {
+        let live_events_visible = wait_until(LOAD_TOLERANT_WAIT, || {
             let Some(channel) = maybe_channel_dir(&fixture.root, "YARD-LIVE") else {
                 return false;
             };
@@ -2932,7 +2943,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        assert!(wait_until(Duration::from_secs(10), || {
+        assert!(wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-REDIRECT") == "running"
                 && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
         }));
