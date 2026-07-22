@@ -5321,6 +5321,15 @@ pub fn write_str(path: &Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove a state artifact when it exists. Missing files are already in the
+/// requested state and are therefore not an error.
+pub fn remove_file_if_exists(path: &Path) -> Result<()> {
+    if path.is_file() {
+        fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// Create an immutable private evidence file. On Unix the requested mode is
 /// applied at inode creation, so there is no window where raw worker output is
 /// readable by group or other users.

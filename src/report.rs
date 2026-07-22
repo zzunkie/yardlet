@@ -31,19 +31,24 @@ pub fn archive_intent(ws: &Workspace) -> Result<Option<String>> {
     let report = build_final_report(ws).unwrap_or_default();
     // Preserve the proposed follow-ups this intent's runs surfaced. Only write
     // the file when there is something to keep, so an empty archive stays clean.
+    // Reused canonical archive directories must also drop an older file when
+    // the latest drain has no follow-ups.
     let follow_ups = collect_proposed_follow_ups(ws, &queue);
     let write_snapshot = |dir: &std::path::Path| -> Result<()> {
         std::fs::create_dir_all(dir)?;
         state::save_yaml(&dir.join("intent-contract.yaml"), &intent)?;
         state::save_yaml(&dir.join("work-queue.yaml"), &queue)?;
         state::write_str(&dir.join("final-report.md"), &report)?;
-        if !follow_ups.is_empty() {
+        let follow_up_path = dir.join("follow-up-tasks.yaml");
+        if follow_ups.is_empty() {
+            state::remove_file_if_exists(&follow_up_path)?;
+        } else {
             let preserved = PreservedFollowUps {
                 schema_version: 1,
                 intent_id: intent.id.clone(),
                 tasks: follow_ups.clone(),
             };
-            state::save_yaml(&dir.join("follow-up-tasks.yaml"), &preserved)?;
+            state::save_yaml(&follow_up_path, &preserved)?;
         }
         Ok(())
     };
@@ -493,6 +498,62 @@ mod tests {
             .expect("canonical follow-ups keep resolving by intent id");
         assert_eq!(preserved.tasks.len(), 1);
         assert_eq!(preserved.tasks[0].title, "second-drain-follow-up");
+    }
+
+    #[test]
+    fn replan_archive_clears_stale_canonical_follow_ups_when_latest_drain_has_none() {
+        let ws = temp_ws("replan-empty-latest-follow-ups");
+        crate::state::save_yaml(&ws.intent_path(), &intent("intent-replan-empty")).unwrap();
+        save_activated_queue(
+            &ws,
+            "intent-replan-empty",
+            "cnf_first",
+            seed_task("YARD-001", "first drain task", TaskState::Done),
+        );
+        write_run(
+            &ws,
+            "run-first",
+            "YARD-001",
+            r#"{"schema_version":1,"run_id":"run-first","task_id":"YARD-001","status":"done",
+               "follow_up_tasks":[{"title":"first-drain-follow-up","reason":"from drain one","risk":"low"}]}"#,
+        );
+        archive_intent(&ws).unwrap();
+
+        save_activated_queue(
+            &ws,
+            "intent-replan-empty",
+            "cnf_second",
+            seed_task("YARD-002", "second drain task", TaskState::Done),
+        );
+        write_run(
+            &ws,
+            "run-second",
+            "YARD-002",
+            r#"{"schema_version":1,"run_id":"run-second","task_id":"YARD-002","status":"done",
+               "follow_up_tasks":[]}"#,
+        );
+        archive_intent(&ws).unwrap();
+
+        assert!(
+            ws.load_preserved_follow_ups("intent-replan-empty")
+                .is_none(),
+            "the canonical archive must represent the latest drain's empty follow-up set"
+        );
+        let first_snapshot = std::fs::read_to_string(
+            ws.agents_dir()
+                .join("intents/intent-replan-empty/drains/cnf_first/follow-up-tasks.yaml"),
+        )
+        .unwrap();
+        assert!(
+            first_snapshot.contains("first-drain-follow-up"),
+            "the prior drain snapshot must remain recoverable: {first_snapshot}"
+        );
+        assert!(
+            !ws.agents_dir()
+                .join("intents/intent-replan-empty/drains/cnf_second/follow-up-tasks.yaml")
+                .exists(),
+            "an empty latest drain must stay free of a follow-up snapshot"
+        );
     }
 
     #[test]
