@@ -6,7 +6,6 @@
 //! API keys.
 
 mod approvals;
-#[allow(dead_code)] // YARD-002 connects this staged core to planning.
 mod capability_discovery;
 mod cli;
 mod compact;

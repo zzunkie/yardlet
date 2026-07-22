@@ -6,13 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::guard::WorkerCapabilityReadiness;
 use crate::schemas::{
-    BillingPolicy, CapabilityGap, CoverageConfidence, CoverageEvidence, CoverageEvidenceSource,
-    CoverageFreshness, CoverageReasonCode, CoverageStatus, ResearchPolicy, ScoutHardSignal,
-    ScoutResult, ScoutSoftSignal, ScoutTrigger, ScoutTriggerDecision, Task, TaskCapabilityCoverage,
-    WorkersFile,
+    CapabilityGap, CoverageConfidence, CoverageEvidence, CoverageEvidenceSource, CoverageFreshness,
+    CoverageReasonCode, CoverageStatus, ResearchPolicy, ScoutHardSignal, ScoutResult,
+    ScoutSoftSignal, ScoutTrigger, ScoutTriggerDecision, Task, TaskCapabilityCoverage,
 };
-use crate::skills::{Classification, Library, SkillCatalogProjection};
-use crate::state::Workspace;
+use crate::skills::{Classification, SkillCatalogProjection};
 
 /// Typed observations supplied by planning/history projection. Booleans name
 /// independent signals; repeated observations use counts so thresholds remain
@@ -48,17 +46,6 @@ pub struct CapabilityDiscoveryInput {
     pub worker_readiness: Vec<WorkerCapabilityReadiness>,
     pub repo_classification: Classification,
     pub signals: CapabilityDiscoverySignals,
-}
-
-pub struct CapabilityDiscoveryWorkspaceInput<'a> {
-    pub workspace: &'a Workspace,
-    pub library: &'a Library,
-    pub workers: &'a WorkersFile,
-    pub billing: &'a BillingPolicy,
-    pub task: &'a Task,
-    pub repo_classification: &'a Classification,
-    pub signals: CapabilityDiscoverySignals,
-    pub policy: &'a ResearchPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -337,27 +324,6 @@ pub fn assess(
     }
 }
 
-/// Convenience projection for the planning layer: catalog reads and guard
-/// probes happen once, then the same pure assessment function is used.
-pub fn assess_workspace(
-    workspace_input: CapabilityDiscoveryWorkspaceInput<'_>,
-) -> CapabilityDiscoveryOutcome {
-    let input = CapabilityDiscoveryInput {
-        task: workspace_input.task.clone(),
-        skill_catalog: crate::skills::capability_catalog_projection(
-            workspace_input.workspace,
-            workspace_input.library,
-        ),
-        worker_readiness: crate::guard::capability_readiness_projection(
-            workspace_input.workers,
-            workspace_input.billing,
-        ),
-        repo_classification: workspace_input.repo_classification.clone(),
-        signals: workspace_input.signals,
-    };
-    assess(&input, workspace_input.policy)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,19 +590,18 @@ mod tests {
 
         let billing = crate::schemas::BillingPolicy::default();
         let policy = crate::templates::research_policy();
-        let result = assess_workspace(CapabilityDiscoveryWorkspaceInput {
-            workspace: &workspace,
-            library: &library,
-            workers: &workers,
-            billing: &billing,
-            task: &task,
-            repo_classification: &classification,
+        // The same real projections the planner composes feed the pure core.
+        let input = CapabilityDiscoveryInput {
+            task,
+            skill_catalog: crate::skills::capability_catalog_projection(&workspace, &library),
+            worker_readiness: crate::guard::capability_readiness_projection(&workers, &billing),
+            repo_classification: classification,
             signals: CapabilityDiscoverySignals {
                 knowledge_freshness: CoverageFreshness::Fresh,
                 ..Default::default()
             },
-            policy: &policy,
-        });
+        };
+        let result = assess(&input, &policy);
 
         assert_eq!(result.coverage.status, CoverageStatus::ExternalToolNeeded);
         assert!(matches!(

@@ -670,7 +670,7 @@ fn scout_copy_is_read_only() -> Result<Vec<String>> {
     crate::state::write_str(&source.join("project.txt"), "live\n")?;
     std::fs::create_dir_all(source.join(".agents/runs/old"))?;
     crate::state::write_str(&source.join(".agents/runs/old/result.json"), "{}\n")?;
-    crate::memory::copy_scout_workspace_for_fixture(&source, &target)?;
+    crate::memory::copy_scout_workspace(&source, &target)?;
     crate::state::write_str(&target.join("project.txt"), "scout edit\n")?;
     if std::fs::read_to_string(source.join("project.txt"))? != "live\n"
         || target.join(".agents/runs").exists()

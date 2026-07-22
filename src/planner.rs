@@ -230,11 +230,50 @@ fn bounded_research_policy(
     policy
 }
 
+fn is_signal_word_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'
+}
+
+/// ASCII terms match only on identifier-style word boundaries so prose that
+/// merely embeds a term (`research-policy`, `researcher`) raises no signal;
+/// non-ASCII terms (Korean verb stems) keep substring matching because their
+/// conjugations extend the stem directly.
+fn contains_signal_term(lower_request: &str, term: &str) -> bool {
+    if !term.is_ascii() {
+        return lower_request.contains(term);
+    }
+    let mut search_from = 0;
+    while let Some(found) = lower_request[search_from..].find(term) {
+        let begin = search_from + found;
+        let end = begin + term.len();
+        let boundary_before = lower_request[..begin]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !is_signal_word_char(ch));
+        let boundary_after = lower_request[end..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !is_signal_word_char(ch));
+        if boundary_before && boundary_after {
+            return true;
+        }
+        search_from = end;
+    }
+    false
+}
+
+/// Fixture-only signal markers (`weak-context:` etc.) stay out of the
+/// production default path; process fixtures opt in explicitly.
+fn fixture_signal_markers_enabled() -> bool {
+    std::env::var("YARDLET_TEST_PLANNING_SIGNAL_MARKERS").as_deref() == Ok("1")
+}
+
 fn request_capability_signals(
     request: &str,
+    fixture_markers_enabled: bool,
 ) -> crate::capability_discovery::CapabilityDiscoverySignals {
     let lower = request.to_ascii_lowercase();
-    let contains_any = |terms: &[&str]| terms.iter().any(|term| lower.contains(term));
+    let contains_any = |terms: &[&str]| terms.iter().any(|term| contains_signal_term(&lower, term));
     let current_external_fact_dependency = contains_any(&[
         "latest",
         "current version",
@@ -261,8 +300,10 @@ fn request_capability_signals(
             "외부 선택",
             "도구 비교",
         ]),
-        weak_contextual_match: contains_any(&["weak-context:", "약한 매치:"]),
-        unfamiliar_domain: contains_any(&["unfamiliar-domain:", "낯선 도메인:"]),
+        weak_contextual_match: fixture_markers_enabled
+            && contains_any(&["weak-context:", "약한 매치:"]),
+        unfamiliar_domain: fixture_markers_enabled
+            && contains_any(&["unfamiliar-domain:", "낯선 도메인:"]),
         knowledge_freshness: if current_external_fact_dependency {
             CoverageFreshness::Unknown
         } else {
@@ -365,7 +406,7 @@ impl DisposablePlanningScoutWorkspace {
                 root.display()
             );
         }
-        if let Err(error) = crate::memory::copy_scout_workspace_for_fixture(live_root, &root) {
+        if let Err(error) = crate::memory::copy_scout_workspace(live_root, &root) {
             let _ = std::fs::remove_dir_all(&root);
             return Err(error).with_context(|| {
                 format!(
@@ -630,7 +671,7 @@ fn audit_planning_content(
     let catalog = crate::skills::capability_catalog_projection(ws, &library);
     let readiness = guard::capability_readiness_projection(workers_file, billing);
     let classification = crate::skills::classify_repo(summary, request);
-    let base_signals = request_capability_signals(request);
+    let base_signals = request_capability_signals(request, fixture_signal_markers_enabled());
     let pending_plan_question = content
         .intent
         .open_questions
@@ -754,15 +795,17 @@ fn audit_planning_content(
         {
             continue;
         }
-        let result = scout_results
-            .get(topic)
-            .cloned()
-            .unwrap_or_else(|| fallback_scout_result(topic, outcome));
+        let worker_result = scout_results.get(topic).cloned();
+        // Local fallback dispositions are conservative stand-ins, not scout
+        // evidence; caching them would suppress a real scout retry for the
+        // whole intent-scoped TTL window.
+        let cache_scout_evidence = worker_result.is_some() && uncached_topics.contains(topic);
+        let result = worker_result.unwrap_or_else(|| fallback_scout_result(topic, outcome));
         task_audits[index].sources = result.sources_consulted.clone();
         task_audits[index].disposition = result.disposition;
         task_audits[index].pending_question = pending_question(&result);
         task_audits[index].scout_result = Some(result.clone());
-        if uncached_topics.contains(topic) {
+        if cache_scout_evidence {
             let cache = crate::planning::PlanningScoutCacheEntry {
                 schema_version: 1,
                 session_id: session.session_id.clone(),
@@ -809,7 +852,7 @@ fn content_requires_scout(
     let catalog = crate::skills::capability_catalog_projection(ws, &library);
     let readiness = guard::capability_readiness_projection(workers_file, billing);
     let classification = crate::skills::classify_repo(summary, request);
-    let base_signals = request_capability_signals(request);
+    let base_signals = request_capability_signals(request, fixture_signal_markers_enabled());
     let question = content
         .intent
         .open_questions
@@ -3369,6 +3412,14 @@ routing:
         );
         assert!(scout_dirs[0].join("scout-result.json").is_file());
         assert!(!scout_dirs[0].join("access.txt").exists());
+        let cached_entries = std::fs::read_dir(ws.planning_scout_cache_dir(&report.session_id))
+            .unwrap()
+            .flatten()
+            .count();
+        assert_eq!(
+            cached_entries, 1,
+            "worker-provided scout results stay cached for the session"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -3463,6 +3514,119 @@ routing:
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_file(&worker);
+    }
+
+    #[test]
+    fn capability_signals_ignore_embedded_terms_and_fixture_markers_by_default() {
+        let doc_goal = request_capability_signals("restore research-policy docs", false);
+        assert!(
+            !doc_goal.explicit_research_request,
+            "embedded 'research' substring must not raise a hard signal"
+        );
+        assert!(
+            !request_capability_signals("update researcher onboarding notes", false)
+                .explicit_research_request
+        );
+
+        let real = request_capability_signals("research the best tool for yaml parsing", false);
+        assert!(real.explicit_research_request);
+        assert!(real.material_external_choice_dependency);
+        assert!(
+            request_capability_signals("의존성 후보를 조사해줘", false).explicit_research_request
+        );
+        let fresh = request_capability_signals("use the latest provider apis", false);
+        assert!(fresh.current_external_fact_dependency);
+        assert_eq!(fresh.knowledge_freshness, CoverageFreshness::Unknown);
+        assert!(
+            request_capability_signals("keep the guide up-to-date", false)
+                .current_external_fact_dependency
+        );
+
+        let markers =
+            request_capability_signals("weak-context: unfamiliar-domain: 약한 매치:", false);
+        assert!(!markers.weak_contextual_match);
+        assert!(!markers.unfamiliar_domain);
+        let opted = request_capability_signals("weak-context: unfamiliar-domain:", true);
+        assert!(opted.weak_contextual_match);
+        assert!(opted.unfamiliar_domain);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_scout_falls_back_without_caching_the_local_disposition() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "yard-goal-scout-fallback-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let ws = Workspace::at(&root);
+        let worker = root.join("fixture-scout.sh");
+        std::fs::write(
+            &worker,
+            r#"#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  echo "fixture-scout 1.0"
+  exit 0
+fi
+cat > /dev/null
+exit 0
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&worker).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&worker, permissions).unwrap();
+        std::fs::write(ws.billing_path(), crate::templates::BILLING_POLICY).unwrap();
+        std::fs::write(
+            ws.workers_path(),
+            format!(
+                r#"schema_version: 1
+workers:
+  - id: fixture-scout
+    enabled: true
+    capabilities: []
+    invocation:
+      command: '{}'
+      args: ['{{run_dir}}']
+      sandbox_args: [sandboxed]
+      full_access_args: [full]
+routing:
+  default_worker: fixture-scout
+  planning_gate:
+    primary: fixture-scout
+"#,
+                worker.display()
+            ),
+        )
+        .unwrap();
+
+        let report = plan_goal_with_report(
+            &ws,
+            "render a bounded fixture",
+            None,
+            Some("fixture-scout"),
+            &["quantum_render".into()],
+        )
+        .unwrap();
+        assert!(report.draft_only);
+        let projection = crate::planning::projection(&ws).unwrap();
+        assert_eq!(
+            projection.capability_audits[0].tasks[0].disposition,
+            ScoutDisposition::RecordToolCandidate
+        );
+        let cached_entries = std::fs::read_dir(ws.planning_scout_cache_dir(&report.session_id))
+            .map(|entries| entries.flatten().count())
+            .unwrap_or(0);
+        assert_eq!(
+            cached_entries, 0,
+            "local fallback dispositions are stand-ins, not scout evidence, and must not block a retry"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -256,10 +256,15 @@ case "$SCENARIO" in
       "fixture:material_external_choice_dependency recommend" scout material_external_choice_dependency 0
     run_planning_case soft-zero \
       "fixture:soft_zero" no_scout "" 0
+    # Fixture-only markers are inert without this explicit opt-in.
+    run_planning_case soft-one-marker-off \
+      "fixture:soft_one weak-context:" no_scout "" 0
+    export YARDLET_TEST_PLANNING_SIGNAL_MARKERS=1
     run_planning_case soft-one \
       "fixture:soft_one weak-context:" observe "" 1
     run_planning_case soft-two \
       "fixture:soft_two weak-context: unfamiliar-domain:" scout "" 2
+    unset YARDLET_TEST_PLANNING_SIGNAL_MARKERS
     write_summary "built-in core에서 hard 7종과 soft 0/1/2를 확인하고 실제 planning projection의 직접 입력 경로를 대조함"
     ;;
 
