@@ -405,6 +405,44 @@ case "$SCENARIO" in
     write_summary "실제 바이너리로 feedback cap 소진이 needs_user_origin: goal_feedback_exhausted를 기록하고 planning replan이 그 종결 큐를 같은 intent id로 수용했으며, worker 질문 NeedsUser 큐에서는 replan이 yardlet answer 안내와 대기 태스크 id를 남기며 거부됨"
     ;;
 
+  mixed_worker_question_replan)
+    root="$(mktemp -d "$EVIDENCE_DIR/mixed.XXXXXX")"
+    setup_workspace "$root"
+
+    run_in "$root" new "fixture:mixed_question_failure_seed" --worker fixture-worker \
+      >"$EVIDENCE_DIR/mixed-new.out"
+    show_json "$root" "$EVIDENCE_DIR/mixed-show.json"
+    proposal="$(json_get "$EVIDENCE_DIR/mixed-show.json" pending_proposals.0.proposal_id)"
+    run_in "$root" planning accept "$proposal" --expected-head none \
+      --action-id act-mixed-seed-accept >"$EVIDENCE_DIR/mixed-accept.out"
+    head="$(json_get <(run_in "$root" planning show --json) session.current_head)"
+    run_in "$root" planning confirm --expected-head "$head" \
+      --action-id act-mixed-seed-confirm >"$EVIDENCE_DIR/mixed-confirm.out"
+
+    run_in "$root" run --task YARD-001 --execute \
+      >"$EVIDENCE_DIR/mixed-question-run.out" 2>&1 || true
+    [[ "$(queue_task_state "$root/.agents/work-queue.yaml" YARD-001)" == "needs_user" ]] || \
+      fail "mixed queue worker question did not settle needs_user"
+    grep -q 'needs_user_origin: worker_question' "$root/.agents/work-queue.yaml" || \
+      fail "mixed queue worker question is missing its typed origin"
+
+    run_in "$root" run --task YARD-002 --execute \
+      >"$EVIDENCE_DIR/mixed-failure-run.out" 2>&1 || true
+    [[ "$(queue_task_state "$root/.agents/work-queue.yaml" YARD-002)" == "partial" ]] || \
+      fail "mixed queue failure task did not settle partial"
+
+    if run_in "$root" planning replan "fixture:replan_retry" \
+      >"$EVIDENCE_DIR/mixed-replan.out" 2>&1; then
+      fail "replan superseded a worker question in a mixed settled queue"
+    fi
+    grep -q 'yardlet answer' "$EVIDENCE_DIR/mixed-replan.out" || \
+      fail "mixed queue replan rejection did not point at yardlet answer"
+    grep -q 'YARD-001' "$EVIDENCE_DIR/mixed-replan.out" || \
+      fail "mixed queue replan rejection did not name the waiting task"
+
+    write_summary "실제 바이너리로 worker_question NeedsUser와 Partial이 공존하는 settled queue를 만든 뒤 planning replan이 yardlet answer 안내와 대기 태스크 id를 남기며 거부됨"
+    ;;
+
   *)
     fail "unknown scenario: $SCENARIO"
     ;;

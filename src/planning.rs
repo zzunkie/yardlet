@@ -399,32 +399,38 @@ pub fn begin_replan_session_exact(
             "active queue still has live tasks (queued/running); replan applies only to a settled queue"
         );
     }
-    // A settled queue is replan-eligible when the automatic approach itself
-    // failed: a Failed/Partial hold, or a NeedsUser hold the goal-feedback loop
-    // synthesized after exhausting its retries (typed GoalFeedbackExhausted).
     // A worker-authored question (typed WorkerQuestion, or any unmarked legacy
-    // NeedsUser) stays answer-only: the worker is waiting on the user, and
-    // replanning over an open question would discard that conversation.
+    // NeedsUser) stays answer-only even when another task has a replan-eligible
+    // failure hold: the worker is waiting on the user, and replanning over an
+    // open question would discard that conversation.
+    let waiting: Vec<&str> = queue
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.state == TaskState::NeedsUser
+                && task.needs_user_origin()
+                    != Some(crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted)
+        })
+        .map(|task| task.id.as_str())
+        .collect();
+    if !waiting.is_empty() {
+        bail!(
+            "active queue is settled but a worker question is waiting on you ({}); reply with `yardlet answer \"...\" --task <id>` instead of replanning",
+            waiting.join(", ")
+        );
+    }
+
+    // With answer-only holds ruled out, a settled queue is replan-eligible
+    // when the automatic approach itself failed: a Failed/Partial hold, or a
+    // NeedsUser hold synthesized after exhausting goal-feedback retries.
     if !queue.tasks.iter().any(|task| {
         matches!(task.state, TaskState::Failed | TaskState::Partial)
             || (task.state == TaskState::NeedsUser
                 && task.needs_user_origin()
                     == Some(crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted))
     }) {
-        let waiting: Vec<&str> = queue
-            .tasks
-            .iter()
-            .filter(|task| task.state == TaskState::NeedsUser)
-            .map(|task| task.id.as_str())
-            .collect();
-        if waiting.is_empty() {
-            bail!(
-                "active queue settled without failed or partial tasks; nothing to replan — start follow-up work with `yardlet new`"
-            );
-        }
         bail!(
-            "active queue is settled but a worker question is waiting on you ({}); reply with `yardlet answer \"...\" --task <id>` instead of replanning",
-            waiting.join(", ")
+            "active queue settled without failed or partial tasks; nothing to replan — start follow-up work with `yardlet new`"
         );
     }
     if let Some(latest) = ws.load_latest_planning_session()? {
@@ -3674,6 +3680,60 @@ queue:
             .to_string();
         assert!(error.contains("nothing to replan"), "{error}");
         let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn replan_refuses_mixed_settled_queues_with_answer_only_holds() {
+        for case in [
+            "unmarked_plus_failed",
+            "unmarked_plus_goal_feedback_exhausted",
+            "worker_question_plus_partial",
+            "worker_question_plus_goal_feedback_exhausted",
+        ] {
+            let ws = temp_workspace(case);
+            let mut content = draft();
+            let mut second = content.queue.tasks[0].clone();
+            second.id = "YARD-002".to_string();
+            second.title = "second settled task".to_string();
+            content.queue.tasks.push(second);
+            activate_express_draft(&ws, "bounded test", content).unwrap();
+
+            let mut queue = ws.load_queue().unwrap();
+            queue.tasks[0].state = TaskState::NeedsUser;
+            match case {
+                "unmarked_plus_failed" => queue.tasks[1].state = TaskState::Failed,
+                "unmarked_plus_goal_feedback_exhausted" => {
+                    queue.tasks[1].state = TaskState::NeedsUser;
+                    queue.tasks[1].set_needs_user_origin(Some(
+                        crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted,
+                    ));
+                }
+                "worker_question_plus_partial" => {
+                    queue.tasks[0].set_needs_user_origin(Some(
+                        crate::schemas::NeedsUserOrigin::WorkerQuestion,
+                    ));
+                    queue.tasks[1].state = TaskState::Partial;
+                }
+                "worker_question_plus_goal_feedback_exhausted" => {
+                    queue.tasks[0].set_needs_user_origin(Some(
+                        crate::schemas::NeedsUserOrigin::WorkerQuestion,
+                    ));
+                    queue.tasks[1].state = TaskState::NeedsUser;
+                    queue.tasks[1].set_needs_user_origin(Some(
+                        crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted,
+                    ));
+                }
+                _ => unreachable!(),
+            }
+            ws.save_queue(&queue).unwrap();
+
+            let error = begin_replan_session_exact(&ws, "재계획")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("yardlet answer"), "{case}: {error}");
+            assert!(error.contains("YARD-001"), "{case}: {error}");
+            let _ = std::fs::remove_dir_all(&ws.root);
+        }
     }
 
     #[test]
