@@ -1637,8 +1637,7 @@ fn handle_reportlist_key(app: &mut App, code: KeyCode) {
                 (
                     Some(ReportListEnterAction::OpenArchived),
                     Some(
-                        ReportEntry::Archived { dir, .. }
-                        | ReportEntry::ArchivedDrain { dir, .. },
+                        ReportEntry::Archived { dir, .. } | ReportEntry::ArchivedDrain { dir, .. },
                     ),
                 ) => {
                     app.report_text = std::fs::read_to_string(dir.join("final-report.md"))
@@ -3999,7 +3998,10 @@ tasks:
         )
         .unwrap();
         std::fs::write(archive_dir.join("final-report.md"), "# latest drain\n").unwrap();
-        for (cnf, body) in [("cnf_first", "# first drain\n"), ("cnf_second", "# latest drain\n")] {
+        for (cnf, body) in [
+            ("cnf_first", "# first drain\n"),
+            ("cnf_second", "# latest drain\n"),
+        ] {
             let drain_dir = archive_dir.join("drains").join(cnf);
             std::fs::create_dir_all(&drain_dir).unwrap();
             std::fs::write(drain_dir.join("final-report.md"), body).unwrap();

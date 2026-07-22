@@ -69,9 +69,7 @@ pub fn archive_intent(ws: &Workspace) -> Result<Option<String>> {
 /// confirmed drain; browsing lists each so earlier drains stay reachable.
 /// An archive with at most one drain returns nothing — its canonical layout
 /// already serves that drain, and single-drain intents must list unchanged.
-pub fn archived_drain_snapshots(
-    intent_dir: &std::path::Path,
-) -> Vec<(String, std::path::PathBuf)> {
+pub fn archived_drain_snapshots(intent_dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
     let Ok(entries) = std::fs::read_dir(intent_dir.join("drains")) else {
         return Vec::new();
     };
@@ -450,7 +448,10 @@ mod tests {
             r#"{"schema_version":1,"run_id":"run-1","task_id":"YARD-001","status":"done",
                "follow_up_tasks":[{"title":"first-drain-follow-up","reason":"from drain one","risk":"low"}]}"#,
         );
-        assert_eq!(archive_intent(&ws).unwrap().as_deref(), Some("intent-replan"));
+        assert_eq!(
+            archive_intent(&ws).unwrap().as_deref(),
+            Some("intent-replan")
+        );
 
         // Replan: a new confirmation re-materializes the queue, runs, drains.
         save_activated_queue(
@@ -466,11 +467,13 @@ mod tests {
             r#"{"schema_version":1,"run_id":"run-2","task_id":"YARD-002","status":"done",
                "follow_up_tasks":[{"title":"second-drain-follow-up","reason":"from drain two","risk":"low"}]}"#,
         );
-        assert_eq!(archive_intent(&ws).unwrap().as_deref(), Some("intent-replan"));
+        assert_eq!(
+            archive_intent(&ws).unwrap().as_deref(),
+            Some("intent-replan")
+        );
 
         let dir = ws.agents_dir().join("intents").join("intent-replan");
-        let first =
-            std::fs::read_to_string(dir.join("drains/cnf_first/work-queue.yaml")).unwrap();
+        let first = std::fs::read_to_string(dir.join("drains/cnf_first/work-queue.yaml")).unwrap();
         assert!(first.contains("first drain task"), "{first}");
         let first_fu =
             std::fs::read_to_string(dir.join("drains/cnf_first/follow-up-tasks.yaml")).unwrap();
@@ -504,7 +507,10 @@ mod tests {
             .push(seed_task("YARD-001", "plain", TaskState::Done));
         ws.save_queue(&queue).unwrap();
 
-        assert_eq!(archive_intent(&ws).unwrap().as_deref(), Some("intent-plain"));
+        assert_eq!(
+            archive_intent(&ws).unwrap().as_deref(),
+            Some("intent-plain")
+        );
 
         let dir = ws.agents_dir().join("intents").join("intent-plain");
         assert!(dir.join("work-queue.yaml").is_file());
@@ -599,7 +605,10 @@ mod tests {
 
     #[test]
     fn drain_dir_name_stays_inside_the_archive_dir() {
-        assert_eq!(drain_dir_name("cnf_20260722120000_000001"), "cnf_20260722120000_000001");
+        assert_eq!(
+            drain_dir_name("cnf_20260722120000_000001"),
+            "cnf_20260722120000_000001"
+        );
         assert_eq!(drain_dir_name("../escape"), "..-escape");
         assert_eq!(drain_dir_name(".."), "drain");
         assert_eq!(drain_dir_name("  "), "drain");
