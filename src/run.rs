@@ -4595,6 +4595,7 @@ fn save_task_state_on_latest_queue_locked(
         &[],
         None,
         None,
+        None,
         cause,
         detail,
         actor,
@@ -4683,6 +4684,9 @@ fn requeue_review_locked(
         if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == review_id) {
             let from = t.state;
             t.state = state;
+            if state != TaskState::NeedsUser {
+                t.set_needs_user_origin(None);
+            }
             t.priority = front - 10;
             if from != state {
                 pending_transition = Some(state::transition(
@@ -4698,6 +4702,9 @@ fn requeue_review_locked(
     } else if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == review_id) {
         let from = t.state;
         t.state = state;
+        if state != TaskState::NeedsUser {
+            t.set_needs_user_origin(None);
+        }
         if from != state {
             pending_transition = Some(state::transition(
                 review_id,
@@ -4738,6 +4745,7 @@ fn finalize_on_latest_queue_locked(
     follow_ups: &[crate::schemas::FollowUpTask],
     governing: Option<&crate::schemas::ResolvedWorkerSelection>,
     workers: Option<&WorkersFile>,
+    needs_user_origin: Option<crate::schemas::NeedsUserOrigin>,
     cause: TransitionCause,
     detail: &str,
     actor: TransitionActor,
@@ -4754,6 +4762,14 @@ fn finalize_on_latest_queue_locked(
     if let Some(t) = latest.tasks.iter_mut().find(|t| t.id == task_id) {
         let from = t.state;
         t.state = state;
+        // The typed marker mirrors the CURRENT hold only: set on a NeedsUser
+        // settle, cleared on any other transition so a later, unrelated pause
+        // is never misread as feedback-exhausted.
+        t.set_needs_user_origin(if state == TaskState::NeedsUser {
+            needs_user_origin
+        } else {
+            None
+        });
         if let Some(selection) = governing {
             apply_selection_to_task(t, selection);
         }
@@ -5252,6 +5268,25 @@ pub(crate) fn feedback_next_state(feedback: &FeedbackRecord) -> TaskState {
     }
 }
 
+/// Typed origin for a task settling NeedsUser out of run finalization. A
+/// worker-authored question is a genuine conversation (`WorkerQuestion`,
+/// `yardlet answer`-only). A System question synthesized by the terminal
+/// goal-feedback loop marks the approach itself as failed
+/// (`GoalFeedbackExhausted`, same-intent replan eligible). Any other System
+/// pause (provider refusal, fallback question) stays untyped.
+pub(crate) fn needs_user_origin_for_finalize(
+    question_actor: EventActorKind,
+    feedback_terminal_needs_user: bool,
+) -> Option<crate::schemas::NeedsUserOrigin> {
+    match question_actor {
+        EventActorKind::Worker => Some(crate::schemas::NeedsUserOrigin::WorkerQuestion),
+        EventActorKind::System if feedback_terminal_needs_user => {
+            Some(crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted)
+        }
+        _ => None,
+    }
+}
+
 fn feedback_question(task: &crate::schemas::Task, feedback: &FeedbackRecord) -> String {
     let detail = feedback
         .unmet_acceptance
@@ -5746,6 +5781,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     let is_review = matches!(crate::packet::role_for(&task.kind), "reviewer" | "security");
     let review_failed = review_evaluation_failed(is_review, evaluated_state);
 
+    let mut needs_user_origin = None;
     let mut persisted_question = if next_state == TaskState::NeedsUser {
         let (question, actor_kind) = question_to_persist.get_or_insert_with(|| {
             (
@@ -5755,6 +5791,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         });
         let channel_context = channel_run_context(ws, &intent_id, &task.id);
         persist_needs_user_question(ws, None, &channel_context, run_dir, question, *actor_kind)?;
+        needs_user_origin = needs_user_origin_for_finalize(
+            *actor_kind,
+            feedback
+                .as_ref()
+                .is_some_and(|f| feedback_next_state(f) == TaskState::NeedsUser),
+        );
         Some(question.clone())
     } else {
         None
@@ -6138,6 +6180,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         &follow_ups,
         governing_selection.as_ref(),
         workers.as_ref(),
+        needs_user_origin,
         TransitionCause::RunOutcome,
         &format!("worker evaluated task as {}", run_outcome_label(next_state)),
         TransitionActor::Worker(run_id.to_string()),
@@ -12201,6 +12244,7 @@ exit 1
             &[conflicting],
             Some(&governing),
             None,
+            None,
             TransitionCause::RunOutcome,
             "worker evaluated task as done",
             TransitionActor::Worker("run-conflicting-follow-up".into()),
@@ -12216,6 +12260,95 @@ exit 1
         assert_eq!(transition.from, TaskState::Running);
         assert_eq!(transition.to, TaskState::Done);
         assert_eq!(transition.cause, TransitionCause::RunOutcome);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn needs_user_origin_for_finalize_types_feedback_terminal_apart_from_worker_questions() {
+        use crate::schemas::{EventActorKind, NeedsUserOrigin};
+        // A worker-authored question is answer-only, even when the feedback
+        // loop also went terminal on the same run.
+        assert_eq!(
+            needs_user_origin_for_finalize(EventActorKind::Worker, true),
+            Some(NeedsUserOrigin::WorkerQuestion)
+        );
+        assert_eq!(
+            needs_user_origin_for_finalize(EventActorKind::Worker, false),
+            Some(NeedsUserOrigin::WorkerQuestion)
+        );
+        // The goal-feedback loop exhausted its retries and synthesized the
+        // question itself: the approach failed, typed for the replan gate.
+        assert_eq!(
+            needs_user_origin_for_finalize(EventActorKind::System, true),
+            Some(NeedsUserOrigin::GoalFeedbackExhausted)
+        );
+        // Other system pauses (provider refusal, fallback question) stay
+        // untyped and therefore answer-only.
+        assert_eq!(
+            needs_user_origin_for_finalize(EventActorKind::System, false),
+            None
+        );
+    }
+
+    #[test]
+    fn finalize_persists_and_clears_the_needs_user_origin_marker() {
+        use crate::schemas::NeedsUserOrigin;
+        let root = std::env::temp_dir().join(format!(
+            "yard-needs-user-origin-finalize-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let ws = Workspace::at(&root);
+        let initial = queue(vec![task("YARD-001", TaskState::Running, 10, false)]);
+        ws.save_queue(&initial).unwrap();
+
+        let lock = ws.acquire_planning_lock().unwrap();
+        let mut fallback_queue = initial;
+        finalize_on_latest_queue_locked(
+            &ws,
+            &lock,
+            &mut fallback_queue,
+            "YARD-001",
+            TaskState::NeedsUser,
+            &[],
+            &[],
+            None,
+            None,
+            Some(NeedsUserOrigin::GoalFeedbackExhausted),
+            TransitionCause::RunOutcome,
+            "feedback stopped: feedback retry cap exceeded (2)",
+            TransitionActor::System,
+        )
+        .unwrap();
+        let persisted = ws.load_queue().unwrap();
+        assert_eq!(persisted.tasks[0].state, TaskState::NeedsUser);
+        assert_eq!(
+            persisted.tasks[0].needs_user_origin(),
+            Some(NeedsUserOrigin::GoalFeedbackExhausted)
+        );
+
+        // Leaving NeedsUser clears the marker so a later, unrelated pause is
+        // never misread as feedback-exhausted.
+        finalize_on_latest_queue_locked(
+            &ws,
+            &lock,
+            &mut fallback_queue,
+            "YARD-001",
+            TaskState::Queued,
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            TransitionCause::RunOutcome,
+            "answered; task requeued",
+            TransitionActor::System,
+        )
+        .unwrap();
+        let persisted = ws.load_queue().unwrap();
+        assert_eq!(persisted.tasks[0].state, TaskState::Queued);
+        assert_eq!(persisted.tasks[0].needs_user_origin(), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

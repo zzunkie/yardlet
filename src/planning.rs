@@ -366,7 +366,10 @@ pub fn begin_new_planning_session_exact(
 }
 
 /// Explicit same-intent replan: reopen planning for the ACTIVE confirmed
-/// intent after its queue settled with failure holds (Failed/Partial). The
+/// intent after its queue settled with failure holds — Failed/Partial, or a
+/// NeedsUser hold typed `GoalFeedbackExhausted` (the goal-feedback loop ran
+/// out of automatic retries; the approach failed, so replanning is the honest
+/// exit). Worker-authored questions stay `yardlet answer`-only. The
 /// fresh session reuses the confirmed intent and queue ids, so plan-time
 /// capability discovery reads this intent's real run history (typed failures)
 /// instead of starting blind under a fresh intent id. Everything after this —
@@ -396,13 +399,32 @@ pub fn begin_replan_session_exact(
             "active queue still has live tasks (queued/running); replan applies only to a settled queue"
         );
     }
-    if !queue
-        .tasks
-        .iter()
-        .any(|task| matches!(task.state, TaskState::Failed | TaskState::Partial))
-    {
+    // A settled queue is replan-eligible when the automatic approach itself
+    // failed: a Failed/Partial hold, or a NeedsUser hold the goal-feedback loop
+    // synthesized after exhausting its retries (typed GoalFeedbackExhausted).
+    // A worker-authored question (typed WorkerQuestion, or any unmarked legacy
+    // NeedsUser) stays answer-only: the worker is waiting on the user, and
+    // replanning over an open question would discard that conversation.
+    if !queue.tasks.iter().any(|task| {
+        matches!(task.state, TaskState::Failed | TaskState::Partial)
+            || (task.state == TaskState::NeedsUser
+                && task.needs_user_origin()
+                    == Some(crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted))
+    }) {
+        let waiting: Vec<&str> = queue
+            .tasks
+            .iter()
+            .filter(|task| task.state == TaskState::NeedsUser)
+            .map(|task| task.id.as_str())
+            .collect();
+        if waiting.is_empty() {
+            bail!(
+                "active queue settled without failed or partial tasks; nothing to replan — start follow-up work with `yardlet new`"
+            );
+        }
         bail!(
-            "active queue settled without failed or partial tasks; nothing to replan — start follow-up work with `yardlet new`"
+            "active queue is settled but a worker question is waiting on you ({}); reply with `yardlet answer \"...\" --task <id>` instead of replanning",
+            waiting.join(", ")
         );
     }
     if let Some(latest) = ws.load_latest_planning_session()? {
@@ -3599,6 +3621,60 @@ queue:
             .unwrap_err()
             .to_string();
         assert!(error.contains("open planning session"), "{error}");
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn replan_accepts_a_goal_feedback_exhausted_needs_user_settled_queue() {
+        let ws = temp_workspace("replan-feedback-exhausted");
+        activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        let mut queue = ws.load_queue().unwrap();
+        queue.tasks[0].state = TaskState::NeedsUser;
+        queue.tasks[0].set_needs_user_origin(Some(
+            crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted,
+        ));
+        ws.save_queue(&queue).unwrap();
+
+        // The goal-feedback loop gave up on the approach itself, so a
+        // same-intent replan is the honest exit for this settled queue.
+        let (session, turn) = begin_replan_session_exact(&ws, "재계획").unwrap();
+        assert_eq!(session.intent_id, "intent-planning-test");
+        assert_eq!(session.queue_id, "queue-intent-planning-test");
+        assert_eq!(session.lifecycle, PlanningLifecycle::Open);
+        assert_eq!(turn.session_id, session.session_id);
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn replan_refuses_a_worker_question_needs_user_queue_and_names_the_answer_path() {
+        let ws = temp_workspace("replan-worker-question");
+        activate_express_draft(&ws, "bounded test", draft()).unwrap();
+
+        // Unmarked NeedsUser (legacy queues, worker questions): answer-only,
+        // and the refusal must name the `yardlet answer` path and the task.
+        set_active_task_state(&ws, TaskState::NeedsUser);
+        let error = begin_replan_session_exact(&ws, "재계획")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("yardlet answer"), "{error}");
+        assert!(error.contains("YARD-001"), "{error}");
+
+        // An explicit worker-question marker keeps the same answer-only path.
+        let mut queue = ws.load_queue().unwrap();
+        queue.tasks[0]
+            .set_needs_user_origin(Some(crate::schemas::NeedsUserOrigin::WorkerQuestion));
+        ws.save_queue(&queue).unwrap();
+        let error = begin_replan_session_exact(&ws, "재계획")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("yardlet answer"), "{error}");
+
+        // An all-Done queue keeps the follow-up (`yardlet new`) guidance.
+        set_active_task_state(&ws, TaskState::Done);
+        let error = begin_replan_session_exact(&ws, "재계획")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("nothing to replan"), "{error}");
         let _ = std::fs::remove_dir_all(&ws.root);
     }
 
