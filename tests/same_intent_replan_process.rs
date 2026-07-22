@@ -53,4 +53,9 @@ mod unix {
     ) {
         run_scenario("goal_feedback_exhausted_replan");
     }
+
+    #[test]
+    fn mixed_worker_question_and_partial_queue_stays_answer_only() {
+        run_scenario("mixed_worker_question_replan");
+    }
 }
