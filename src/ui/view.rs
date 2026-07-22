@@ -1063,6 +1063,7 @@ fn render_report_list(frame: &mut Frame, app: &App) {
                 let (label, color) = match entry {
                     super::ReportEntry::Current { label } => (label, Color::Cyan),
                     super::ReportEntry::Archived { label, .. } => (label, Color::Gray),
+                    super::ReportEntry::ArchivedDrain { label, .. } => (label, Color::DarkGray),
                     super::ReportEntry::FollowUp { label, .. } => (label, Color::Green),
                 };
                 let style = if is_sel {
