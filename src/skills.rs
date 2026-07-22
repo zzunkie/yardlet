@@ -714,6 +714,100 @@ pub struct Library {
 pub struct SkillCatalogProjection {
     pub workspace: Vec<String>,
     pub user_library: Vec<String>,
+    /// Installed workspace skills whose declared requirements the current
+    /// workspace contract cannot satisfy, with the typed reason.
+    pub workspace_unusable: Vec<UnusableSkillMatch>,
+}
+
+/// Typed reason an installed workspace skill matches a task but cannot be
+/// used as-is under the current workspace contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillUnusableReason {
+    /// The skill declares `required_access: full` while the workspace runs
+    /// workers under a different default access level.
+    AccessLevelMismatch { required: String, active: String },
+    /// The skill declares a required capability no guard-ready worker offers.
+    MissingWorkerCapability { capability: String },
+}
+
+/// One installed skill judged unusable, keyed by its catalog name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnusableSkillMatch {
+    pub name: String,
+    pub reason: SkillUnusableReason,
+}
+
+impl SkillCatalogProjection {
+    /// Typed judgment for one task's skill selection: true only when at least
+    /// one selected skill matches the installed workspace catalog and every
+    /// such match is unusable under the current access/capability contract.
+    /// Selections with no workspace match stay on the missing-skill path.
+    pub fn only_unusable_matches(&self, selected: &[String]) -> bool {
+        let workspace: BTreeSet<String> = self.workspace.iter().map(|name| norm(name)).collect();
+        let unusable: BTreeSet<String> = self
+            .workspace_unusable
+            .iter()
+            .map(|entry| norm(&entry.name))
+            .collect();
+        let matches: Vec<String> = selected
+            .iter()
+            .map(|name| norm(name))
+            .filter(|name| !name.is_empty() && workspace.contains(name))
+            .collect();
+        !matches.is_empty() && matches.iter().all(|name| unusable.contains(name))
+    }
+}
+
+fn norm(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+/// Optional typed requirements a skill may declare in its SKILL.md
+/// frontmatter. Absent or unreadable frontmatter means "no requirements".
+#[derive(Debug, Default, Deserialize)]
+struct SkillRequirementFrontmatter {
+    #[serde(default)]
+    required_access: String,
+    #[serde(default)]
+    required_capabilities: Vec<String>,
+}
+
+fn skill_requirements(manifest: &Path) -> SkillRequirementFrontmatter {
+    let Ok(text) = std::fs::read_to_string(manifest) else {
+        return SkillRequirementFrontmatter::default();
+    };
+    let Some(rest) = text.strip_prefix("---") else {
+        return SkillRequirementFrontmatter::default();
+    };
+    let Some(end) = rest.find("\n---") else {
+        return SkillRequirementFrontmatter::default();
+    };
+    crate::yaml::from_str(&rest[..end]).unwrap_or_default()
+}
+
+fn unusable_reason(
+    requirements: &SkillRequirementFrontmatter,
+    default_access: &str,
+    ready_capabilities: &BTreeSet<String>,
+) -> Option<SkillUnusableReason> {
+    let active = default_access.trim();
+    if requirements
+        .required_access
+        .trim()
+        .eq_ignore_ascii_case("full")
+        && !active.eq_ignore_ascii_case("full")
+    {
+        return Some(SkillUnusableReason::AccessLevelMismatch {
+            required: "full".to_string(),
+            active: active.to_string(),
+        });
+    }
+    requirements
+        .required_capabilities
+        .iter()
+        .map(|capability| crate::routing::norm_cap(capability))
+        .find(|capability| !capability.is_empty() && !ready_capabilities.contains(capability))
+        .map(|capability| SkillUnusableReason::MissingWorkerCapability { capability })
 }
 
 impl Library {
@@ -798,10 +892,35 @@ pub fn installed(ws: &Workspace) -> Vec<String> {
 }
 
 /// Snapshot capability-discovery inputs without equipping or writing a skill.
-pub fn capability_catalog_projection(ws: &Workspace, library: &Library) -> SkillCatalogProjection {
+/// `default_access` and `ready_capabilities` come from the same config/guard
+/// projections the planner already composes; they only judge usability of
+/// installed matches and never mutate the catalog.
+pub fn capability_catalog_projection(
+    ws: &Workspace,
+    library: &Library,
+    default_access: &str,
+    ready_capabilities: &BTreeSet<String>,
+) -> SkillCatalogProjection {
+    let workspace = installed(ws);
+    let workspace_unusable = workspace
+        .iter()
+        .filter_map(|name| {
+            let manifest = ws.agents_dir().join("skills").join(name).join("SKILL.md");
+            unusable_reason(
+                &skill_requirements(&manifest),
+                default_access,
+                ready_capabilities,
+            )
+            .map(|reason| UnusableSkillMatch {
+                name: name.clone(),
+                reason,
+            })
+        })
+        .collect();
     SkillCatalogProjection {
-        workspace: installed(ws),
+        workspace,
         user_library: library.all_skills(),
+        workspace_unusable,
     }
 }
 
@@ -1557,12 +1676,91 @@ mod tests {
 
         let ws = Workspace::at(&root);
         let library = Library::open(library_root.to_str().unwrap()).unwrap();
-        let projection = capability_catalog_projection(&ws, &library);
+        let projection =
+            capability_catalog_projection(&ws, &library, "sandboxed", &BTreeSet::new());
 
         assert_eq!(projection.workspace, vec!["local-only"]);
         assert!(projection.user_library.contains(&"user-only".to_string()));
         assert_eq!(projection.workspace.len(), installed(&ws).len());
+        assert!(projection.workspace_unusable.is_empty());
         assert!(!root.join(".agents/skills/user-only").exists());
+    }
+
+    fn install_skill(root: &Path, name: &str, frontmatter: &str) {
+        let manifest = root.join(".agents/skills").join(name).join("SKILL.md");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        std::fs::write(
+            &manifest,
+            format!("---\nname: {name}\n{frontmatter}---\nbody\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn catalog_projection_types_unusable_matches_from_access_and_capability_requirements() {
+        let repo = fixture("capability-usability", &[("README.md", "")], &[]);
+        let root = PathBuf::from(&repo.root);
+        install_skill(&root, "plain-skill", "");
+        install_skill(&root, "full-access-skill", "required_access: full\n");
+        install_skill(
+            &root,
+            "entropy-skill",
+            "required_capabilities: [Nondeterministic Entropy-Probe]\n",
+        );
+        install_skill(&root, "shell-skill", "required_capabilities: [shell]\n");
+        let ws = Workspace::at(&root);
+        let library = Library::open("").unwrap();
+        let ready: BTreeSet<String> = ["shell".to_string()].into_iter().collect();
+
+        let sandboxed = capability_catalog_projection(&ws, &library, "sandboxed", &ready);
+        assert_eq!(
+            sandboxed.workspace_unusable,
+            vec![
+                UnusableSkillMatch {
+                    name: "entropy-skill".into(),
+                    reason: SkillUnusableReason::MissingWorkerCapability {
+                        capability: "nondeterministic_entropy_probe".into(),
+                    },
+                },
+                UnusableSkillMatch {
+                    name: "full-access-skill".into(),
+                    reason: SkillUnusableReason::AccessLevelMismatch {
+                        required: "full".into(),
+                        active: "sandboxed".into(),
+                    },
+                },
+            ]
+        );
+
+        // Full access resolves the access mismatch but not the capability gap.
+        let full = capability_catalog_projection(&ws, &library, "full", &ready);
+        assert_eq!(full.workspace_unusable.len(), 1);
+        assert_eq!(full.workspace_unusable[0].name, "entropy-skill");
+    }
+
+    #[test]
+    fn only_unusable_matches_requires_every_workspace_match_to_be_unusable() {
+        let projection = SkillCatalogProjection {
+            workspace: vec!["plain-skill".into(), "pinned-skill".into()],
+            user_library: vec!["library-skill".into()],
+            workspace_unusable: vec![UnusableSkillMatch {
+                name: "pinned-skill".into(),
+                reason: SkillUnusableReason::AccessLevelMismatch {
+                    required: "full".into(),
+                    active: "sandboxed".into(),
+                },
+            }],
+        };
+
+        // No selection or no workspace match keeps the missing-skill path.
+        assert!(!projection.only_unusable_matches(&[]));
+        assert!(!projection.only_unusable_matches(&["absent-skill".into()]));
+        assert!(!projection.only_unusable_matches(&["library-skill".into()]));
+        // A usable match anywhere in the selection clears the signal.
+        assert!(!projection.only_unusable_matches(&["plain-skill".into(), "pinned-skill".into()]));
+        // Every workspace match unusable raises it, normalization included.
+        assert!(projection.only_unusable_matches(&["  Pinned-Skill ".into()]));
+        assert!(projection.only_unusable_matches(&["pinned-skill".into(), "absent-skill".into()]));
     }
 
     fn task(title: &str) -> crate::schemas::Task {

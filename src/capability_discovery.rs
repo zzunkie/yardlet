@@ -348,6 +348,7 @@ mod tests {
             skill_catalog: SkillCatalogProjection {
                 workspace: vec!["writing-plans".into()],
                 user_library: vec![],
+                workspace_unusable: vec![],
             },
             worker_readiness: vec![WorkerCapabilityReadiness {
                 worker_id: "codex".into(),
@@ -591,10 +592,18 @@ mod tests {
         let billing = crate::schemas::BillingPolicy::default();
         let policy = crate::templates::research_policy();
         // The same real projections the planner composes feed the pure core.
+        let worker_readiness = crate::guard::capability_readiness_projection(&workers, &billing);
+        let ready_capabilities =
+            crate::routing::ready_capabilities_from_projection(&worker_readiness);
         let input = CapabilityDiscoveryInput {
             task,
-            skill_catalog: crate::skills::capability_catalog_projection(&workspace, &library),
-            worker_readiness: crate::guard::capability_readiness_projection(&workers, &billing),
+            skill_catalog: crate::skills::capability_catalog_projection(
+                &workspace,
+                &library,
+                "sandboxed",
+                &ready_capabilities,
+            ),
+            worker_readiness,
             repo_classification: classification,
             signals: CapabilityDiscoverySignals {
                 knowledge_freshness: CoverageFreshness::Fresh,
