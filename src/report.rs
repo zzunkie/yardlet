@@ -64,6 +64,34 @@ pub fn archive_intent(ws: &Workspace) -> Result<Option<String>> {
     Ok(Some(intent.id))
 }
 
+/// Per-drain snapshots preserved under an archived intent's `drains/`
+/// directory, newest first. A replanned intent archives one snapshot per
+/// confirmed drain; browsing lists each so earlier drains stay reachable.
+/// An archive with at most one drain returns nothing — its canonical layout
+/// already serves that drain, and single-drain intents must list unchanged.
+pub fn archived_drain_snapshots(
+    intent_dir: &std::path::Path,
+) -> Vec<(String, std::path::PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(intent_dir.join("drains")) else {
+        return Vec::new();
+    };
+    let mut drains: Vec<(String, std::path::PathBuf)> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .filter_map(|p| {
+            let id = p.file_name()?.to_str()?.to_string();
+            Some((id, p))
+        })
+        .collect();
+    if drains.len() < 2 {
+        return Vec::new();
+    }
+    // Confirmation ids are timestamped → newest first, like the intent list.
+    drains.sort_by(|a, b| b.0.cmp(&a.0));
+    drains
+}
+
 /// Confirmation ids are minted path-safe by Yardlet, but they round-trip
 /// through user-editable YAML — keep the derived directory name inside the
 /// intent's archive dir no matter what the file says.
@@ -512,6 +540,61 @@ mod tests {
             .filter_map(|e| e.file_name().into_string().ok())
             .collect();
         assert_eq!(entries, vec!["cnf_only".to_string()]);
+    }
+
+    #[test]
+    fn archived_drain_snapshots_lists_replan_drains_newest_first() {
+        // A replanned intent's archive holds one snapshot per confirmed drain;
+        // browsing must surface each of them so earlier drains stay reachable.
+        let ws = temp_ws("list-drains");
+        crate::state::save_yaml(&ws.intent_path(), &intent("intent-replan")).unwrap();
+        save_activated_queue(
+            &ws,
+            "intent-replan",
+            "cnf_first",
+            seed_task("YARD-001", "first drain task", TaskState::Done),
+        );
+        archive_intent(&ws).unwrap();
+        save_activated_queue(
+            &ws,
+            "intent-replan",
+            "cnf_second",
+            seed_task("YARD-002", "second drain task", TaskState::Done),
+        );
+        archive_intent(&ws).unwrap();
+
+        let dir = ws.agents_dir().join("intents").join("intent-replan");
+        let drains = archived_drain_snapshots(&dir);
+        assert_eq!(
+            drains.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["cnf_second", "cnf_first"],
+            "confirmation ids are timestamped \u{2192} newest first"
+        );
+        for (id, path) in &drains {
+            assert_eq!(path, &dir.join("drains").join(id));
+            assert!(path.join("final-report.md").is_file());
+        }
+    }
+
+    #[test]
+    fn archived_drain_snapshots_hides_single_drain_archives() {
+        // With at most one drain the canonical layout already shows that
+        // drain — the browser list must not change for such intents.
+        let ws = temp_ws("single-drain");
+        crate::state::save_yaml(&ws.intent_path(), &intent("intent-single")).unwrap();
+        save_activated_queue(
+            &ws,
+            "intent-single",
+            "cnf_only",
+            seed_task("YARD-001", "only drain", TaskState::Done),
+        );
+        archive_intent(&ws).unwrap();
+
+        let dir = ws.agents_dir().join("intents").join("intent-single");
+        assert!(dir.join("drains/cnf_only").is_dir());
+        assert!(archived_drain_snapshots(&dir).is_empty());
+        // Legacy archives without a drains directory stay empty too.
+        assert!(archived_drain_snapshots(&dir.join("missing")).is_empty());
     }
 
     #[test]

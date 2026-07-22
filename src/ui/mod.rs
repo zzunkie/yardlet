@@ -115,6 +115,12 @@ pub enum ReportEntry {
         label: String,
         dir: std::path::PathBuf,
     },
+    /// One confirmed drain of a replanned intent, nested under its archive
+    /// row; opens that drain's own final report.
+    ArchivedDrain {
+        label: String,
+        dir: std::path::PathBuf,
+    },
     FollowUp {
         label: String,
         intent_id: String,
@@ -1469,6 +1475,12 @@ fn open_reports(app: &mut App) {
                 label: format!("{id} \u{2014} {}", short(&summary, 44)),
                 dir: d.clone(),
             });
+            for (confirmation_id, drain_dir) in crate::report::archived_drain_snapshots(&d) {
+                list.push(ReportEntry::ArchivedDrain {
+                    label: format!("  \u{21b3} drain: {}", short(&confirmation_id, 44)),
+                    dir: drain_dir,
+                });
+            }
             if let Some(preserved) = app.ws.load_preserved_follow_ups(&id) {
                 for (i, fu) in preserved.tasks.into_iter().enumerate() {
                     let title = if fu.title.trim().is_empty() {
@@ -1516,7 +1528,10 @@ fn handle_reportlist_key(app: &mut App, code: KeyCode) {
                 }
                 (
                     Some(ReportListEnterAction::OpenArchived),
-                    Some(ReportEntry::Archived { dir, .. }),
+                    Some(
+                        ReportEntry::Archived { dir, .. }
+                        | ReportEntry::ArchivedDrain { dir, .. },
+                    ),
                 ) => {
                     app.report_text = std::fs::read_to_string(dir.join("final-report.md"))
                         .unwrap_or_else(|_| "(no report)".into());
@@ -1549,7 +1564,9 @@ enum ReportListEnterAction {
 fn reportlist_enter_action(entry: Option<&ReportEntry>) -> Option<ReportListEnterAction> {
     match entry {
         Some(ReportEntry::Current { .. }) => Some(ReportListEnterAction::OpenCurrent),
-        Some(ReportEntry::Archived { .. }) => Some(ReportListEnterAction::OpenArchived),
+        Some(ReportEntry::Archived { .. } | ReportEntry::ArchivedDrain { .. }) => {
+            Some(ReportListEnterAction::OpenArchived)
+        }
         Some(ReportEntry::FollowUp { .. }) => Some(ReportListEnterAction::PromoteFollowUp),
         None => None,
     }
@@ -3668,6 +3685,14 @@ routing:
             reportlist_enter_action(Some(&archived)),
             Some(ReportListEnterAction::OpenArchived)
         );
+        let drain = ReportEntry::ArchivedDrain {
+            label: "drain".to_string(),
+            dir: std::path::PathBuf::from("/tmp/intent-arch/drains/cnf_one"),
+        };
+        assert_eq!(
+            reportlist_enter_action(Some(&drain)),
+            Some(ReportListEnterAction::OpenArchived)
+        );
         assert_eq!(
             reportlist_enter_action(Some(&follow)),
             Some(ReportListEnterAction::PromoteFollowUp)
@@ -3735,6 +3760,92 @@ tasks:
         assert_eq!(queue.tasks.len(), 1);
         assert_eq!(queue.tasks[0].title, "Promote me");
         assert!(matches!(app.screen, Screen::Home));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reports_list_nests_replan_drain_snapshots_and_opens_each_final_report() {
+        let root = std::env::temp_dir().join(format!("yard-history-drains-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let archive_dir = ws.agents_dir().join("intents").join("intent-replan");
+        std::fs::create_dir_all(&archive_dir).unwrap();
+        std::fs::write(
+            archive_dir.join("intent-contract.yaml"),
+            "schema_version: 1\nid: intent-replan\nsummary: Replanned goal\n",
+        )
+        .unwrap();
+        std::fs::write(archive_dir.join("final-report.md"), "# latest drain\n").unwrap();
+        for (cnf, body) in [("cnf_first", "# first drain\n"), ("cnf_second", "# latest drain\n")] {
+            let drain_dir = archive_dir.join("drains").join(cnf);
+            std::fs::create_dir_all(&drain_dir).unwrap();
+            std::fs::write(drain_dir.join("final-report.md"), body).unwrap();
+        }
+
+        let mut app = App::new(ws);
+        open_reports(&mut app);
+
+        let parent_idx = app
+            .reports
+            .iter()
+            .position(|entry| {
+                matches!(entry, ReportEntry::Archived { label, .. } if label.contains("Replanned goal"))
+            })
+            .expect("archived intent row");
+        // Drain snapshots nest directly under their intent's archive row,
+        // newest first.
+        let drain_labels: Vec<&str> = app.reports[parent_idx + 1..]
+            .iter()
+            .map_while(|entry| match entry {
+                ReportEntry::ArchivedDrain { label, .. } => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drain_labels.len(), 2, "one row per confirmed drain");
+        assert!(drain_labels[0].contains("cnf_second"), "{drain_labels:?}");
+        assert!(drain_labels[1].contains("cnf_first"), "{drain_labels:?}");
+
+        app.report_sel = parent_idx + 2;
+        handle_reportlist_key(&mut app, KeyCode::Enter);
+        assert_eq!(app.report_text, "# first drain\n");
+        assert!(app.viewing_archived);
+        assert!(matches!(app.screen, Screen::Completion));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reports_list_keeps_single_drain_intents_unchanged() {
+        let root =
+            std::env::temp_dir().join(format!("yard-history-one-drain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let archive_dir = ws.agents_dir().join("intents").join("intent-single");
+        std::fs::create_dir_all(&archive_dir).unwrap();
+        std::fs::write(
+            archive_dir.join("intent-contract.yaml"),
+            "schema_version: 1\nid: intent-single\nsummary: Single drain goal\n",
+        )
+        .unwrap();
+        std::fs::write(archive_dir.join("final-report.md"), "# only drain\n").unwrap();
+        let drain_dir = archive_dir.join("drains").join("cnf_only");
+        std::fs::create_dir_all(&drain_dir).unwrap();
+        std::fs::write(drain_dir.join("final-report.md"), "# only drain\n").unwrap();
+
+        let mut app = App::new(ws);
+        open_reports(&mut app);
+
+        assert!(app
+            .reports
+            .iter()
+            .any(|entry| matches!(entry, ReportEntry::Archived { label, .. } if label.contains("Single drain goal"))));
+        assert!(
+            !app.reports
+                .iter()
+                .any(|entry| matches!(entry, ReportEntry::ArchivedDrain { .. })),
+            "a single-drain intent must list exactly as before"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
