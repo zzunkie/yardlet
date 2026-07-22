@@ -593,8 +593,24 @@ fn goal_feedback_is_bounded() -> Result<Vec<String>> {
     {
         bail!("goal feedback did not retry once then stop with exact evidence")
     }
+    // The terminal cycle is what finalize types: a System-authored feedback
+    // question marks the approach itself as failed (goal_feedback_exhausted,
+    // same-intent replan eligible), while a worker-authored question stays the
+    // answer-only worker_question conversation.
+    let terminal = crate::run::feedback_next_state(&second) == TaskState::NeedsUser;
+    if crate::run::needs_user_origin_for_finalize(crate::schemas::EventActorKind::System, terminal)
+        != Some(crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted)
+        || crate::run::needs_user_origin_for_finalize(
+            crate::schemas::EventActorKind::Worker,
+            terminal,
+        ) != Some(crate::schemas::NeedsUserOrigin::WorkerQuestion)
+    {
+        bail!("terminal feedback cycle did not map to the typed needs_user origins")
+    }
     Ok(vec![
         "cycle 1 retries; cycle 2 reaches needs_user with AC evidence and an actionable question"
+            .to_string(),
+        "terminal cycle types goal_feedback_exhausted (System) apart from worker_question (Worker)"
             .to_string(),
     ])
 }

@@ -6,8 +6,17 @@ packet="$(cat)"
 mkdir -p "$run_dir"
 
 scenario="seed"
+max_cycles=2
 if grep -q 'fixture:replan_retry' <<<"$packet"; then
   scenario="retry"
+elif grep -q 'fixture:feedback_seed' <<<"$packet"; then
+  # max_feedback_cycles 1: attempt 1 stays a Partial retry hold, attempt 2
+  # exhausts the cap and parks the task NeedsUser typed goal_feedback_exhausted.
+  scenario="feedback"
+  max_cycles=1
+elif grep -q 'fixture:question_seed' <<<"$packet"; then
+  scenario="question"
+  max_cycles=1
 fi
 
 # max_feedback_cycles 2: each failing run inside the cap seals a `partial` run
@@ -32,7 +41,7 @@ cat >"$run_dir/planning-result.json" <<JSON
       "acceptance": ["replan evidence is visible"],
       "goal": {
         "condition": "replan evidence is visible",
-        "max_feedback_cycles": 2,
+        "max_feedback_cycles": $max_cycles,
         "feedback_policy": "inject_failed_checks"
       },
       "worker_rationale": "provider-free replan fixture"

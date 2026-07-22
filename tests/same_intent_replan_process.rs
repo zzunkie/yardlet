@@ -47,4 +47,10 @@ mod unix {
     fn failed_confirmed_intent_replans_under_the_same_intent_id_with_typed_failure_audit() {
         run_scenario("same_intent_replan");
     }
+
+    #[test]
+    fn feedback_cap_exhaustion_types_the_hold_and_unlocks_replan_while_worker_questions_stay_answer_only(
+    ) {
+        run_scenario("goal_feedback_exhausted_replan");
+    }
 }
