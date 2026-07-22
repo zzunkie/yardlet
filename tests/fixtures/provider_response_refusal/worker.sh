@@ -18,6 +18,13 @@ count=$((count + 1))
 printf '%s\n' "$count" > "$count_file"
 cat > "$run_dir/packet-attempt-$count.txt"
 
+if [ "$scenario" = classification_error ]; then
+  workspace_root="$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$run_dir")")")")")")"
+  canonical_run_dir="$workspace_root/.agents/runs/$(basename "$run_dir")"
+  : > "$canonical_run_dir/worker-output.log"
+  exit 0
+fi
+
 if [ "$scenario" = alternate_success ]; then
   run_id="$(basename "$run_dir")"
   cat > "$run_dir/result.json" <<EOF
