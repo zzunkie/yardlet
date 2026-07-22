@@ -1156,6 +1156,19 @@ pub fn run_planning_recorded_turn(
     run_planning_turn(ws, request, worker_override, explicit_images, session, turn)
 }
 
+/// Explicit same-intent replan turn: reopen planning for the settled active
+/// intent (planning::begin_replan_session_exact) and run the ordinary
+/// planning-worker turn inside that session, so the capability audit reads
+/// this intent's real typed-failure run history.
+pub fn run_planning_replan(
+    ws: &Workspace,
+    request: &str,
+    worker_override: Option<&str>,
+) -> Result<PlanningReport> {
+    let (session, turn) = crate::planning::begin_replan_session_exact(ws, request)?;
+    run_planning_turn(ws, request, worker_override, &[], session, turn)
+}
+
 fn run_planning_turn(
     ws: &Workspace,
     request: &str,
@@ -1378,7 +1391,15 @@ fn plan_core(
     let worker_guidance = build_worker_guidance(workers);
     let harness = packet::discover_harness(&ws.root, config.harness_discovery);
     let current_intent = if let Some(session) = planning_session {
-        crate::planning::current_draft(ws, session)?.map(|draft| draft.content.intent)
+        match crate::planning::current_draft(ws, session)?.map(|draft| draft.content.intent) {
+            Some(intent) => Some(intent),
+            // A same-intent replan turn has no draft yet; the confirmed
+            // contract of that intent is the planner's context. Fresh sessions
+            // never match the active intent id, so they stay context-free.
+            None => ws
+                .load_intent()?
+                .filter(|intent| intent.id == session.intent_id),
+        }
     } else {
         planning_intent_context(ws, archive)?
     };
@@ -3776,6 +3797,55 @@ routing:
         assert_eq!(
             audit.tasks[2].trigger.decision,
             crate::schemas::ScoutTriggerDecision::Observe
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn replan_session_audit_fires_repeated_typed_failure_from_the_same_intent_history() {
+        let root = audit_fixture_root("replan-typed-failure");
+        let ws = Workspace::at(&root);
+        let intent_id = "intent-replan-audit";
+        let confirmed = audit_fixture_content(intent_id, &["id: YARD-001\ntitle: keeps failing\n"]);
+        crate::planning::activate_express_draft(&ws, "bounded request", confirmed).unwrap();
+
+        // The confirmed drain settles Failed, backed by two sealed typed-failure
+        // run records of this intent — real files under .agents/runs/.
+        let mut queue = ws.load_queue().unwrap();
+        queue.tasks[0].state = crate::schemas::TaskState::Failed;
+        ws.save_queue(&queue).unwrap();
+        for run_id in ["run-replan-typed-1", "run-replan-typed-2"] {
+            let run_dir = ws.runs_dir().join(run_id);
+            std::fs::create_dir_all(&run_dir).unwrap();
+            std::fs::write(
+                run_dir.join("run.yaml"),
+                format!(
+                    "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: {intent_id}\nworker: fixture\nstate: failed\nstarted_at: 2026-07-22T00:00:00+09:00\ncompleted_at: 2026-07-22T00:00:30+09:00\n"
+                ),
+            )
+            .unwrap();
+            std::fs::write(
+                run_dir.join("evaluation.json"),
+                format!(
+                    r#"{{"run_id":"{run_id}","task_id":"YARD-001","status":"failed","checks":[{{"name":"validation","passed":false,"fatal":true,"note":"fixture validation failed"}}],"next_task_state":"failed"}}"#
+                ),
+            )
+            .unwrap();
+        }
+
+        // The explicit replan session keeps the intent id, so the audit's
+        // run-history projection sees those failures on the replacement plan.
+        let (session, turn) = crate::planning::begin_replan_session_exact(&ws, "재계획").unwrap();
+        assert_eq!(session.intent_id, intent_id);
+        let content = audit_fixture_content(intent_id, &["id: YARD-001\ntitle: retry plan\n"]);
+        let audit = run_audit(&ws, &session, &turn, "attempt-replan-typed", &content);
+        assert_eq!(
+            audit.tasks[0].trigger.hard_signals,
+            vec![crate::schemas::ScoutHardSignal::RepeatedTypedFailure]
+        );
+        assert_eq!(
+            audit.tasks[0].trigger.decision,
+            crate::schemas::ScoutTriggerDecision::Scout
         );
         let _ = std::fs::remove_dir_all(&root);
     }

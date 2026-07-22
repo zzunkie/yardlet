@@ -365,6 +365,70 @@ pub fn begin_new_planning_session_exact(
     Ok((session, turn))
 }
 
+/// Explicit same-intent replan: reopen planning for the ACTIVE confirmed
+/// intent after its queue settled with failure holds (Failed/Partial). The
+/// fresh session reuses the confirmed intent and queue ids, so plan-time
+/// capability discovery reads this intent's real run history (typed failures)
+/// instead of starting blind under a fresh intent id. Everything after this —
+/// proposal, accept, confirm — is the ordinary conversational lifecycle.
+pub fn begin_replan_session_exact(
+    ws: &Workspace,
+    message: &str,
+) -> Result<(PlanningSession, PlanningTurnCas)> {
+    if message.trim().is_empty() {
+        bail!("planning message must not be empty");
+    }
+    let _lock = ws.acquire_planning_lock()?;
+    if validate_active_activation(ws)? != ActivationGate::Confirmed {
+        bail!(
+            "same-intent replan requires a confirmed active intent; plan fresh work with `yardlet new`"
+        );
+    }
+    let intent = ws
+        .load_activated_intent()?
+        .ok_or_else(|| anyhow!("confirmed activation lost its active intent"))?;
+    let queue = ws.load_queue()?;
+    if queue.intent_id != intent.intent.id {
+        bail!("active queue does not belong to the confirmed intent");
+    }
+    if queue.tasks.is_empty() || !queue.drained() {
+        bail!(
+            "active queue still has live tasks (queued/running); replan applies only to a settled queue"
+        );
+    }
+    if !queue
+        .tasks
+        .iter()
+        .any(|task| matches!(task.state, TaskState::Failed | TaskState::Partial))
+    {
+        bail!(
+            "active queue settled without failed or partial tasks; nothing to replan — start follow-up work with `yardlet new`"
+        );
+    }
+    if let Some(latest) = ws.load_latest_planning_session()? {
+        if latest.lifecycle == PlanningLifecycle::Open {
+            bail!(
+                "an open planning session ({}) already exists; continue it with `yardlet planning answer` or resolve it before replanning",
+                latest.session_id
+            );
+        }
+    }
+    let session = create_session_with_ids(
+        ws,
+        message,
+        intent.intent.id.clone(),
+        queue.queue_id.clone(),
+    )?;
+    let event = ws
+        .load_planning_events(&session.session_id)?
+        .into_iter()
+        .rev()
+        .find(|event| event.event_type == PlanningEventType::UserMessage)
+        .ok_or_else(|| anyhow!("replan planning session has no request event"))?;
+    let turn = turn_cas(&event, None)?;
+    Ok((session, turn))
+}
+
 #[cfg(test)]
 pub fn begin_user_turn(ws: &Workspace, message: &str) -> Result<PlanningSession> {
     begin_user_turn_exact(ws, message).map(|(session, _)| session)
@@ -1957,9 +2021,17 @@ fn confirm_with_policy_locked(
         return Err(reject_action(ws, &mut session, action, "stale_head")?);
     }
     let active_queue = ws.load_queue()?;
+    // An explicit same-intent replan session (begin_replan_session_exact) may
+    // supersede its own settled queue: every task is terminal and the user
+    // reopened planning for exactly this intent, so settled holds no longer
+    // block promotion. Only a replan session can be Open with the active
+    // queue's intent id; cross-intent confirms keep the full protection.
+    let same_intent_settled_replan =
+        session.intent_id == active_queue.intent_id && active_queue.drained();
     if active_queue.tasks.iter().any(|task| {
         task.state == TaskState::Running
             || (protect_unfinished_active_queue
+                && !same_intent_settled_replan
                 && matches!(
                     task.state,
                     TaskState::Queued
@@ -3481,5 +3553,121 @@ queue:
             );
             let _ = std::fs::remove_dir_all(&ws.root);
         }
+    }
+
+    fn set_active_task_state(ws: &Workspace, state: TaskState) {
+        let mut queue = ws.load_queue().unwrap();
+        queue.tasks[0].state = state;
+        ws.save_queue(&queue).unwrap();
+    }
+
+    #[test]
+    fn replan_reopens_only_a_failure_settled_confirmed_intent() {
+        let ws = temp_workspace("replan-gate");
+        // No confirmed activation at all: replan has nothing to reopen.
+        let error = begin_replan_session_exact(&ws, "재계획")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("confirmed active intent"), "{error}");
+
+        activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        // Live queue (queued task): replan refuses to supersede running work.
+        let error = begin_replan_session_exact(&ws, "재계획")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("live tasks"), "{error}");
+
+        // Settled without failure holds: nothing to replan.
+        set_active_task_state(&ws, TaskState::Done);
+        let error = begin_replan_session_exact(&ws, "재계획")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("nothing to replan"), "{error}");
+
+        // Failure-settled: the explicit path opens a fresh session that keeps
+        // the confirmed intent and queue identity.
+        set_active_task_state(&ws, TaskState::Failed);
+        let (session, turn) = begin_replan_session_exact(&ws, "재계획").unwrap();
+        assert_eq!(session.intent_id, "intent-planning-test");
+        assert_eq!(session.queue_id, "queue-intent-planning-test");
+        assert_eq!(session.lifecycle, PlanningLifecycle::Open);
+        assert_eq!(turn.expected_head, None);
+        assert_eq!(turn.session_id, session.session_id);
+
+        // A second replan while the first session is still open is ambiguous.
+        let error = begin_replan_session_exact(&ws, "다시 재계획")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("open planning session"), "{error}");
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn same_intent_replan_confirm_supersedes_a_partial_settled_queue() {
+        let ws = temp_workspace("replan-partial-confirm");
+        let first = activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        set_active_task_state(&ws, TaskState::Partial);
+
+        let (_, turn) = begin_replan_session_exact(&ws, "부분 실패 재계획").unwrap();
+        let mut content = draft();
+        content.queue.tasks[0].title = "retry with a narrower scope".to_string();
+        let proposal = record_worker_proposal(
+            &ws,
+            &turn,
+            "fixture-planner",
+            "replan-attempt",
+            "replacement plan",
+            "same-intent replan",
+            content,
+        )
+        .unwrap();
+        let revision =
+            accept_proposal(&ws, &proposal.proposal_id, None, "act-replan-accept").unwrap();
+        let activation = confirm(&ws, &revision.draft_revision_id, "act-replan-confirm").unwrap();
+
+        assert_ne!(activation.confirmation_id, first.confirmation_id);
+        assert_eq!(activation.intent_id, "intent-planning-test");
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        let queue = ws.load_queue().unwrap();
+        assert_eq!(queue.intent_id, "intent-planning-test");
+        assert_eq!(queue.tasks[0].state, TaskState::Queued);
+        assert_eq!(queue.tasks[0].title, "retry with a narrower scope");
+        let _ = std::fs::remove_dir_all(&ws.root);
+    }
+
+    #[test]
+    fn cross_intent_confirm_still_protects_a_partial_settled_queue() {
+        let ws = temp_workspace("replan-cross-intent-protect");
+        activate_express_draft(&ws, "bounded test", draft()).unwrap();
+        set_active_task_state(&ws, TaskState::Partial);
+
+        // A fresh session (new intent id) over the same settled queue keeps
+        // the unfinished-queue protection: partial work is not silently lost.
+        let (session, turn) = begin_user_turn_exact(&ws, "unrelated fresh work").unwrap();
+        assert_ne!(session.intent_id, "intent-planning-test");
+        let mut content = draft();
+        content.intent.id = session.intent_id.clone();
+        content.queue.intent_id = session.intent_id.clone();
+        content.queue.queue_id = session.queue_id.clone();
+        let proposal = record_worker_proposal(
+            &ws,
+            &turn,
+            "fixture-planner",
+            "fresh-attempt",
+            "fresh plan",
+            "unrelated work",
+            content,
+        )
+        .unwrap();
+        let revision =
+            accept_proposal(&ws, &proposal.proposal_id, None, "act-fresh-accept").unwrap();
+        let error = confirm(&ws, &revision.draft_revision_id, "act-fresh-confirm")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("active_queue_not_drained"), "{error}");
+        let _ = std::fs::remove_dir_all(&ws.root);
     }
 }
