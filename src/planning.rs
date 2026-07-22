@@ -3630,9 +3630,8 @@ queue:
         activate_express_draft(&ws, "bounded test", draft()).unwrap();
         let mut queue = ws.load_queue().unwrap();
         queue.tasks[0].state = TaskState::NeedsUser;
-        queue.tasks[0].set_needs_user_origin(Some(
-            crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted,
-        ));
+        queue.tasks[0]
+            .set_needs_user_origin(Some(crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted));
         ws.save_queue(&queue).unwrap();
 
         // The goal-feedback loop gave up on the approach itself, so a
@@ -3661,8 +3660,7 @@ queue:
 
         // An explicit worker-question marker keeps the same answer-only path.
         let mut queue = ws.load_queue().unwrap();
-        queue.tasks[0]
-            .set_needs_user_origin(Some(crate::schemas::NeedsUserOrigin::WorkerQuestion));
+        queue.tasks[0].set_needs_user_origin(Some(crate::schemas::NeedsUserOrigin::WorkerQuestion));
         ws.save_queue(&queue).unwrap();
         let error = begin_replan_session_exact(&ws, "재계획")
             .unwrap_err()
