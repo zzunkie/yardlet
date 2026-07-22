@@ -168,6 +168,9 @@ pub struct App {
     /// When true, NewWork input continues (amends) the current intent instead of
     /// starting a fresh one.
     pub amend: bool,
+    /// When true, NewWork input asks for a replacement direction and reopens
+    /// planning under the same failure-settled intent id.
+    pub replan: bool,
     /// The running auto-drain's pause flag, if any. Set it to stop the drain
     /// gracefully after the current task; cleared when the job ends.
     pub pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -320,6 +323,7 @@ impl App {
             report_text: String::new(),
             trust_text: String::new(),
             amend: false,
+            replan: false,
             pause: None,
             scroll: 0,
             scroll_viewport: None,
@@ -968,8 +972,10 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             app.input_clear();
             app.toast = None;
             app.amend = false;
+            app.replan = false;
             app.screen = Screen::NewWork;
         }
+        KeyCode::Char('P') => handle_home_replan(app),
         KeyCode::Char('r') if !app.is_busy() => start_run(app),
         KeyCode::Char('A') if !app.is_busy() => start_auto(app),
         KeyCode::Char('t') if !app.is_busy() => tidy_workspace(app),
@@ -1087,6 +1093,108 @@ enum HomeEnterAction {
     DeferredHint,
     /// A worker is already running; a new run/answer can't start yet.
     Busy,
+}
+
+/// Why the active queue may or may not be replaced by a same-intent replan.
+/// This mirrors the queue-shape portion of planning's final admission gate;
+/// activation integrity and open-session checks remain enforced there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplanAvailability {
+    Available,
+    LiveQueue,
+    WorkerQuestion,
+    NothingToReplan,
+}
+
+fn same_intent_replan_availability(queue: &crate::schemas::WorkQueue) -> ReplanAvailability {
+    if queue.tasks.is_empty() {
+        return ReplanAvailability::NothingToReplan;
+    }
+    if !queue.drained() {
+        return ReplanAvailability::LiveQueue;
+    }
+    if queue.tasks.iter().any(|task| {
+        matches!(task.state, TaskState::Failed | TaskState::Partial)
+            || (task.state == TaskState::NeedsUser
+                && task.needs_user_origin()
+                    == Some(crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted))
+    }) {
+        return ReplanAvailability::Available;
+    }
+    if queue
+        .tasks
+        .iter()
+        .any(|task| task.state == TaskState::NeedsUser)
+    {
+        ReplanAvailability::WorkerQuestion
+    } else {
+        ReplanAvailability::NothingToReplan
+    }
+}
+
+/// Home/Completion replan key mapping. Kept pure so the queue eligibility,
+/// busy gate, and non-replan keys can be tested without starting a planner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HomeReplanAction {
+    OpenPrompt,
+    AnswerWorkerQuestion,
+    FinishLiveQueue,
+    NothingToReplan,
+    Busy,
+    Noop,
+}
+
+fn home_replan_action(
+    code: KeyCode,
+    availability: ReplanAvailability,
+    busy: bool,
+) -> HomeReplanAction {
+    if code != KeyCode::Char('P') {
+        return HomeReplanAction::Noop;
+    }
+    if busy {
+        return HomeReplanAction::Busy;
+    }
+    match availability {
+        ReplanAvailability::Available => HomeReplanAction::OpenPrompt,
+        ReplanAvailability::WorkerQuestion => HomeReplanAction::AnswerWorkerQuestion,
+        ReplanAvailability::LiveQueue => HomeReplanAction::FinishLiveQueue,
+        ReplanAvailability::NothingToReplan => HomeReplanAction::NothingToReplan,
+    }
+}
+
+fn current_replan_availability(app: &App) -> ReplanAvailability {
+    app.snapshot
+        .as_ref()
+        .map(|snapshot| same_intent_replan_availability(&snapshot.queue))
+        .unwrap_or(ReplanAvailability::NothingToReplan)
+}
+
+fn handle_home_replan(app: &mut App) {
+    match home_replan_action(
+        KeyCode::Char('P'),
+        current_replan_availability(app),
+        app.is_busy(),
+    ) {
+        HomeReplanAction::OpenPrompt => {
+            app.input_clear();
+            app.toast = None;
+            app.amend = false;
+            app.replan = true;
+            app.screen = Screen::NewWork;
+        }
+        HomeReplanAction::AnswerWorkerQuestion => {
+            app.toast = Some((true, app.lang.l().replan_worker_question_hint.into()));
+        }
+        HomeReplanAction::FinishLiveQueue => {
+            app.toast = Some((true, app.lang.l().replan_live_queue_hint.into()));
+        }
+        HomeReplanAction::NothingToReplan => {
+            app.toast = Some((true, app.lang.l().replan_nothing_hint.into()));
+        }
+        HomeReplanAction::Busy => app.toast = Some((true, app.lang.l().busy.into())),
+        HomeReplanAction::Noop => {}
+    }
 }
 
 fn home_enter_action(state: TaskState, approval_pending: bool, busy: bool) -> HomeEnterAction {
@@ -1607,14 +1715,20 @@ fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         return;
     }
     match code {
-        KeyCode::Esc => app.screen = Screen::Home,
+        KeyCode::Esc => {
+            app.amend = false;
+            app.replan = false;
+            app.screen = Screen::Home;
+        }
         // Shift/Alt+Enter inserts a newline (multi-line input); Enter submits.
         KeyCode::Enter if mods.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
             app.input_insert("\n")
         }
         KeyCode::Enter => {
             if !app.input.trim().is_empty() {
-                if app.amend {
+                if app.replan {
+                    start_replan(app);
+                } else if app.amend {
                     start_continue(app);
                 } else {
                     start_planning(app);
@@ -1659,6 +1773,7 @@ fn handle_completion_key(app: &mut App, code: KeyCode) {
             app.input_clear();
             app.toast = None;
             app.amend = false;
+            app.replan = false;
             app.screen = Screen::NewWork;
         }
         // Continue: add follow-up tasks to this intent (amend), keep done work.
@@ -1666,8 +1781,10 @@ fn handle_completion_key(app: &mut App, code: KeyCode) {
             app.input_clear();
             app.toast = None;
             app.amend = true;
+            app.replan = false;
             app.screen = Screen::NewWork;
         }
+        KeyCode::Char('P') => handle_home_replan(app),
         // Redo: requeue every done task so the next drain re-runs them.
         KeyCode::Char('R') => redo_all(app),
         _ => apply_scroll(app, code),
@@ -2166,6 +2283,42 @@ fn start_continue(app: &mut App) {
     };
     app.input_clear();
     app.amend = false;
+}
+
+fn start_replan(app: &mut App) {
+    let ws = app.ws.clone();
+    let request = app.input.trim().to_string();
+    let planner = app
+        .snapshot
+        .as_ref()
+        .map(|s| s.planner.clone())
+        .unwrap_or_else(|| "worker".into());
+    let lbl = app.lang.l();
+    let (planned_via, tasks_word, failed) = (lbl.planned_via, lbl.tasks_word, lbl.planning_failed);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let res = match crate::planner::run_planning_replan(&ws, &request, None) {
+            Ok(r) => JobResult {
+                ok: true,
+                summary: format!(
+                    "{planned_via} {}: {} ({} {tasks_word})",
+                    r.worker_id, r.intent_summary, r.task_count
+                ),
+            },
+            Err(e) => JobResult {
+                ok: false,
+                summary: format!("{failed} {e}"),
+            },
+        };
+        let _ = tx.send(JobMsg::Done(res));
+    });
+    app.job = Job::Running {
+        label: format!("{} {planner}", lbl.run_word),
+        started: Instant::now(),
+        rx,
+    };
+    app.input_clear();
+    app.replan = false;
 }
 
 fn start_run(app: &mut App) {
@@ -3319,6 +3472,75 @@ routing:
             home_enter_action(TaskState::Deferred, false, true),
             DeferredHint
         );
+    }
+
+    #[test]
+    fn home_replan_availability_and_key_action_cover_the_settled_queue_matrix() {
+        use HomeReplanAction::*;
+        use ReplanAvailability::*;
+
+        let mut cap_exhausted: crate::schemas::Task = crate::yaml::from_str(
+            "id: CAP\ntitle: exhausted approach\nstate: needs_user\ninteraction:\n  needs_user_origin: goal_feedback_exhausted\n",
+        )
+        .unwrap();
+        cap_exhausted
+            .set_needs_user_origin(Some(crate::schemas::NeedsUserOrigin::GoalFeedbackExhausted));
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.tasks = vec![cap_exhausted];
+        assert_eq!(same_intent_replan_availability(&queue), Available);
+        assert_eq!(
+            home_replan_action(KeyCode::Char('P'), Available, false),
+            OpenPrompt
+        );
+        assert_eq!(
+            home_replan_action(KeyCode::Char('P'), Available, true),
+            Busy
+        );
+        assert_eq!(
+            home_replan_action(KeyCode::Char('x'), Available, false),
+            Noop
+        );
+
+        let worker_question: crate::schemas::Task = crate::yaml::from_str(
+            "id: ASK\ntitle: open worker question\nstate: needs_user\ninteraction:\n  needs_user_origin: worker_question\n",
+        )
+        .unwrap();
+        queue.tasks = vec![worker_question];
+        assert_eq!(same_intent_replan_availability(&queue), WorkerQuestion);
+        assert_eq!(
+            home_replan_action(KeyCode::Char('P'), WorkerQuestion, false),
+            AnswerWorkerQuestion
+        );
+
+        let live: crate::schemas::Task =
+            crate::yaml::from_str("id: LIVE\ntitle: live work\nstate: queued\n").unwrap();
+        queue.tasks = vec![live];
+        assert_eq!(same_intent_replan_availability(&queue), LiveQueue);
+        assert_eq!(
+            home_replan_action(KeyCode::Char('P'), LiveQueue, false),
+            FinishLiveQueue
+        );
+    }
+
+    #[test]
+    fn home_replan_key_opens_a_same_intent_direction_prompt() {
+        let ws = workspace_with_user_config("replan-key");
+        let task: crate::schemas::Task = crate::yaml::from_str(
+            "id: CAP\ntitle: exhausted approach\nstate: needs_user\ninteraction:\n  needs_user_origin: goal_feedback_exhausted\n",
+        )
+        .unwrap();
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.intent_id = "intent-replan-key".into();
+        queue.tasks = vec![task];
+        ws.save_queue(&queue).unwrap();
+
+        let mut app = App::new(ws.clone());
+        assert!(!handle_home_key(&mut app, KeyCode::Char('P')));
+        assert_eq!(app.screen, Screen::NewWork);
+        assert!(app.replan);
+        assert!(!app.amend);
+
+        let _ = std::fs::remove_dir_all(&ws.root);
     }
 
     #[test]

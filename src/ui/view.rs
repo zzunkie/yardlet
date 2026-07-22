@@ -9,7 +9,9 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::i18n::{self, L};
-use super::{App, Job, Screen, ScrollViewport};
+use super::{
+    same_intent_replan_availability, App, Job, ReplanAvailability, Screen, ScrollViewport,
+};
 use crate::schemas::TaskState;
 use crate::snapshot::Snapshot;
 
@@ -500,6 +502,10 @@ fn render_home(frame: &mut Frame, app: &App) {
                 f.push_str("  ");
                 f.push_str(l.key_approve);
             }
+            if same_intent_replan_availability(&snap.queue) == ReplanAvailability::Available {
+                f.push_str("  ");
+                f.push_str(l.key_replan);
+            }
         }
         f
     };
@@ -907,6 +913,11 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_new_work(frame: &mut Frame, app: &App) {
     let l = app.lang.l();
+    let (title, prompt, footer) = if app.replan {
+        (l.replan_title, l.replan_prompt, l.footer_replan)
+    } else {
+        (l.newwork_title, l.newwork_prompt, l.footer_newwork)
+    };
     let area = safe_area(frame);
     let chunks = Layout::vertical([
         Constraint::Length(3),
@@ -916,7 +927,7 @@ fn render_new_work(frame: &mut Frame, app: &App) {
     .split(area);
 
     frame.render_widget(
-        Paragraph::new(l.newwork_prompt).block(Block::bordered().title(l.newwork_title)),
+        Paragraph::new(prompt).block(Block::bordered().title(title)),
         chunks[0],
     );
     frame.render_widget(
@@ -926,7 +937,7 @@ fn render_new_work(frame: &mut Frame, app: &App) {
         chunks[1],
     );
     place_input_cursor(frame, chunks[1], &app.input, app.input_caret);
-    render_footer(frame, chunks[2], l.footer_newwork);
+    render_footer(frame, chunks[2], footer);
 }
 
 fn render_answer(frame: &mut Frame, app: &mut App) {
@@ -1146,7 +1157,14 @@ fn render_completion(frame: &mut Frame, app: &mut App) {
             .block(Block::bordered().title(l.completion_title)),
         chunks[0],
     );
-    render_footer(frame, chunks[1], l.footer_completion);
+    let mut footer = l.footer_completion.to_string();
+    if app.snapshot.as_ref().is_some_and(|snapshot| {
+        same_intent_replan_availability(&snapshot.queue) == ReplanAvailability::Available
+    }) {
+        footer.push_str("  ");
+        footer.push_str(l.key_replan);
+    }
+    render_footer(frame, chunks[1], &footer);
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, keys: &str) {
