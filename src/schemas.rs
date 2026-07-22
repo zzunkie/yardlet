@@ -1365,6 +1365,35 @@ fn default_feedback_policy() -> String {
     "inject_failed_checks".to_string()
 }
 
+/// Typed origin for a NeedsUser hold, persisted in the task's extensible
+/// `interaction` map (like `deferred_by`). It splits the two ways a task waits
+/// on a human: the goal-feedback loop exhausted its automatic retries and
+/// synthesized the question itself (`GoalFeedbackExhausted`), versus the worker
+/// authoring a real question the user must answer (`WorkerQuestion`). Legacy
+/// queues carry no marker and are treated as worker questions (answer-only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NeedsUserOrigin {
+    GoalFeedbackExhausted,
+    WorkerQuestion,
+}
+
+impl NeedsUserOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GoalFeedbackExhausted => "goal_feedback_exhausted",
+            Self::WorkerQuestion => "worker_question",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "goal_feedback_exhausted" => Some(Self::GoalFeedbackExhausted),
+            "worker_question" => Some(Self::WorkerQuestion),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeferredBy {
     pub group_id: String,
@@ -1414,6 +1443,7 @@ impl Task {
             Some(yaml::Value::Mapping(mut interaction)) => {
                 interaction.remove(yaml::Value::String("deferred_by".to_string()));
                 interaction.remove(yaml::Value::String("remediation_for".to_string()));
+                interaction.remove(yaml::Value::String("needs_user_origin".to_string()));
                 contract.interaction =
                     (!interaction.is_empty()).then_some(yaml::Value::Mapping(interaction));
             }
@@ -1499,6 +1529,39 @@ impl Task {
                 .push(yaml::Value::String(review_id.to_string()));
         }
         self.interaction = Some(yaml::Value::Mapping(root));
+    }
+
+    /// Typed origin of this task's NeedsUser hold. `None` (legacy queues and
+    /// non-feedback pauses) is treated as a worker question by consumers.
+    pub fn needs_user_origin(&self) -> Option<NeedsUserOrigin> {
+        self.interaction
+            .as_ref()?
+            .get("needs_user_origin")?
+            .as_str()
+            .and_then(NeedsUserOrigin::parse)
+    }
+
+    pub fn set_needs_user_origin(&mut self, origin: Option<NeedsUserOrigin>) {
+        let key = yaml::Value::String("needs_user_origin".to_string());
+        match origin {
+            Some(origin) => {
+                let mut root = match self.interaction.take() {
+                    Some(yaml::Value::Mapping(m)) => m,
+                    _ => serde_yaml_ng::Mapping::new(),
+                };
+                root.insert(key, yaml::Value::String(origin.as_str().to_string()));
+                self.interaction = Some(yaml::Value::Mapping(root));
+            }
+            None => match self.interaction.take() {
+                Some(yaml::Value::Mapping(mut root)) => {
+                    root.remove(&key);
+                    self.interaction = (!root.is_empty()).then_some(yaml::Value::Mapping(root));
+                }
+                other => {
+                    self.interaction = other;
+                }
+            },
+        }
     }
 
     pub fn deferred_by(&self) -> Option<DeferredBy> {
@@ -3582,6 +3645,7 @@ interaction:
         runtime.worker_rationale = Some("runtime observation".to_string());
         runtime.set_deferred_by(Some(DeferredBy::new("YARD-001")));
         runtime.add_remediation_for("REVIEW");
+        runtime.set_needs_user_origin(Some(NeedsUserOrigin::GoalFeedbackExhausted));
         assert_eq!(runtime.runtime_contract_digest().unwrap(), planned_digest);
 
         runtime.allowed_scope = vec!["forged/scope".to_string()];
@@ -3593,6 +3657,37 @@ interaction:
             non_mapping.runtime_contract_digest().unwrap(),
             planned_digest
         );
+    }
+
+    #[test]
+    fn needs_user_origin_round_trips_and_clears_without_erasing_other_metadata() {
+        let mut task: Task = yaml::from_str("id: YARD-001\ntitle: t").unwrap();
+        // Legacy/unmarked tasks carry no typed origin.
+        assert_eq!(task.needs_user_origin(), None);
+
+        task.set_needs_user_origin(Some(NeedsUserOrigin::GoalFeedbackExhausted));
+        assert_eq!(
+            task.needs_user_origin(),
+            Some(NeedsUserOrigin::GoalFeedbackExhausted)
+        );
+        // The marker survives the queue file's YAML round-trip.
+        let restored: Task = yaml::from_str(&yaml::to_string(&task).unwrap()).unwrap();
+        assert_eq!(
+            restored.needs_user_origin(),
+            Some(NeedsUserOrigin::GoalFeedbackExhausted)
+        );
+
+        task.set_needs_user_origin(Some(NeedsUserOrigin::WorkerQuestion));
+        assert_eq!(
+            task.needs_user_origin(),
+            Some(NeedsUserOrigin::WorkerQuestion)
+        );
+
+        // Clearing removes only this key; sibling interaction metadata stays.
+        task.set_deferred_by(Some(DeferredBy::new("YARD-001")));
+        task.set_needs_user_origin(None);
+        assert_eq!(task.needs_user_origin(), None);
+        assert!(task.deferred_by().is_some());
     }
 
     #[test]
