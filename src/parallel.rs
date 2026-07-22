@@ -223,6 +223,23 @@ struct Finished {
     wall_seconds: u64,
 }
 
+fn mark_parallel_tasks_running(queue: &mut WorkQueue, task_ids: &[String]) -> Result<()> {
+    for task_id in task_ids {
+        let task = queue
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == *task_id)
+            .ok_or_else(|| anyhow!("queue_transaction_conflict: task {task_id} vanished"))?;
+        if task.state != TaskState::Queued {
+            return Err(anyhow!(
+                "queue_transaction_conflict: task {task_id} is no longer queued"
+            ));
+        }
+        task.state = TaskState::Running;
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct ParallelFailover {
     from: String,
@@ -300,7 +317,6 @@ pub fn run_batch<F: FnMut(&str)>(
         let selection = resolved.selection();
         if !selection.model.trim().is_empty() {
             run::apply_selection_to_task(&mut task, &selection);
-            queue.tasks[idx] = task.clone();
         }
         preps.push(Prep {
             branch,
@@ -320,33 +336,6 @@ pub fn run_batch<F: FnMut(&str)>(
     }
     if preps.is_empty() {
         return Err(anyhow!("no runnable task in the batch"));
-    }
-    {
-        let lock = ws.acquire_planning_lock()?;
-        let mut latest = ws.load_queue()?;
-        for prep in &preps {
-            let task = latest
-                .tasks
-                .iter_mut()
-                .find(|task| task.id == prep.task.id)
-                .ok_or_else(|| {
-                    anyhow!("queue_transaction_conflict: task {} vanished", prep.task.id)
-                })?;
-            if task.state != TaskState::Queued {
-                return Err(anyhow!(
-                    "queue_transaction_conflict: task {} is no longer queued",
-                    prep.task.id
-                ));
-            }
-            // Same guard as the pre-lock stamping above: a model-less selection
-            // must never be persisted, or its empty governing_model provenance
-            // hard-errors lineage validation on the drain's sequential retry.
-            if !prep.selection.model.trim().is_empty() {
-                run::apply_selection_to_task(task, &prep.selection);
-            }
-        }
-        ws.save_queue_locked(&lock, &latest)?;
-        queue = latest;
     }
 
     // ---- worktrees + run dirs + packets ----------------------------------
@@ -437,20 +426,11 @@ pub fn run_batch<F: FnMut(&str)>(
     // ---- mark running (one write), then spawn workers --------------------
     let queue_lock = ws.acquire_planning_lock()?;
     let mut latest = ws.load_queue()?;
-    for p in &preps {
-        let task = latest
-            .tasks
-            .iter_mut()
-            .find(|task| task.id == p.task.id)
-            .ok_or_else(|| anyhow!("queue_transaction_conflict: task {} vanished", p.task.id))?;
-        if task.state != TaskState::Queued {
-            return Err(anyhow!(
-                "queue_transaction_conflict: task {} is no longer queued",
-                p.task.id
-            ));
-        }
-        task.state = TaskState::Running;
-    }
+    let task_ids = preps
+        .iter()
+        .map(|prep| prep.task.id.clone())
+        .collect::<Vec<_>>();
+    mark_parallel_tasks_running(&mut latest, &task_ids)?;
     ws.save_queue_locked(&queue_lock, &latest)?;
     queue = latest;
     drop(queue_lock);
@@ -1885,6 +1865,36 @@ mod tests {
         needs_val.validation = Some(crate::yaml::from_str("commands: [cargo test]").unwrap());
         let q = queue(vec![task("A", TaskState::Queued, 10, vec![]), needs_val]);
         assert_eq!(ready_independent(&q, 10), vec![1, 0]);
+    }
+
+    #[test]
+    fn parallel_admission_changes_only_scheduler_state_before_receipts_exist() {
+        let mut q = queue(vec![
+            task("YARD-001", TaskState::Queued, 10, vec![]),
+            task("YARD-002", TaskState::Queued, 20, vec![]),
+        ]);
+        q.tasks[0].model = "auto".to_string();
+        q.tasks[1].model = "auto".to_string();
+        let before = q
+            .tasks
+            .iter()
+            .map(Task::runtime_contract_digest)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        mark_parallel_tasks_running(&mut q, &["YARD-001".to_string(), "YARD-002".to_string()])
+            .unwrap();
+
+        assert!(q.tasks.iter().all(|task| task.state == TaskState::Running));
+        assert!(q.tasks.iter().all(|task| task.routing_provenance.is_none()));
+        assert_eq!(
+            q.tasks
+                .iter()
+                .map(Task::runtime_contract_digest)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+            before
+        );
     }
 
     #[test]

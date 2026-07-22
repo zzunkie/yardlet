@@ -200,6 +200,11 @@ mod unix {
     }
 
     #[test]
+    fn confirmed_auto_runtime_envelope_matches_named_task_and_defer_revive() {
+        run_scenario("confirmed_auto_runtime_envelope");
+    }
+
+    #[test]
     fn production_queue_writers_are_guarded_by_the_workspace_transaction() {
         run_scenario("writer_inventory");
     }
