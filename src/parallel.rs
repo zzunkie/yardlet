@@ -358,10 +358,15 @@ pub fn run_batch<F: FnMut(&str)>(
         // Harness assets too (small text): skill anchors and role notes are
         // cwd-relative in the packet and must resolve inside the worktree.
         let harness_seed_dir = p.run_dir.join(run::HARNESS_SEED_DIR);
+        let mut harness_copy_warnings: Vec<String> = Vec::new();
         for d in ["rules", "skills", "agents"] {
-            copy_dir(&ws.agents_dir().join(d), &wt_agents.join(d));
-            copy_dir(&ws.agents_dir().join(d), &harness_seed_dir.join(d));
+            harness_copy_warnings.extend(copy_dir(&ws.agents_dir().join(d), &wt_agents.join(d)));
+            harness_copy_warnings.extend(copy_dir(
+                &ws.agents_dir().join(d),
+                &harness_seed_dir.join(d),
+            ));
         }
+        state::save_harness_copy_warnings(&p.run_dir, &harness_copy_warnings)?;
 
         std::fs::create_dir_all(p.run_dir.join("evidence"))?;
         write_str(
@@ -1771,12 +1776,15 @@ pub(crate) fn ensure_worktrees_excluded(root: &Path) {
 /// Symlinks are entries to preserve, never directories to traverse. This is
 /// especially important when a tracked harness symlink in two Git worktrees
 /// resolves to the same external directory.
-pub(crate) fn copy_dir(src: &Path, dst: &Path) {
+/// Returns the copy warnings so run preparation can persist them as run
+/// evidence; they are still echoed to stderr for interactive visibility.
+pub(crate) fn copy_dir(src: &Path, dst: &Path) -> Vec<String> {
     let mut warnings = Vec::new();
     copy_dir_inner(src, dst, &mut warnings);
-    for warning in warnings {
+    for warning in &warnings {
         eprintln!("warning: {warning}");
     }
+    warnings
 }
 
 fn copy_dir_inner(src: &Path, dst: &Path, warnings: &mut Vec<String>) {
@@ -2551,6 +2559,86 @@ exit 0
             crate::yaml::from_str(&std::fs::read_to_string(run_dir.join("run.yaml")).unwrap())
                 .unwrap();
         assert_eq!(run_record["worker"], "builder");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parallel_prepare_persists_harness_copy_warnings_as_run_evidence() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_repo("harness-warning-evidence");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let external_rules = root.join("external-rules");
+        std::fs::create_dir_all(&external_rules).unwrap();
+        symlink(&external_rules, root.join(".agents/rules")).unwrap();
+        let builder = write_test_worker(
+            &root,
+            "builder-worker.sh",
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "builder-worker 1.0"
+  exit 0
+fi
+run_dir="$1"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-WARN",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": [], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "harness 경고 영속화 테스트 worker가 완료했다.",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+cat > "$run_dir/handoff.md" <<EOF
+# Worker handoff
+
+harness 경고 영속화 테스트 worker가 완료했다.
+EOF
+exit 0
+"#,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            yaml_string(&builder)
+        );
+        let ws = setup_workspace(
+            &root,
+            &worker_yaml,
+            vec![task("YARD-WARN", TaskState::Queued, 10, vec![])],
+        );
+        let mut events = Vec::new();
+
+        let states = run_batch(&ws, &[0], false, |s| events.push(s.to_string())).unwrap();
+
+        assert_eq!(states, vec![("YARD-WARN".to_string(), TaskState::Done)]);
+        let run_dirs: Vec<PathBuf> = std::fs::read_dir(ws.runs_dir())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.is_dir())
+            .collect();
+        assert_eq!(run_dirs.len(), 1);
+        let log_path = run_dirs[0].join("evidence/harness-copy-warnings.log");
+        let log = std::fs::read_to_string(&log_path).unwrap_or_else(|error| {
+            panic!(
+                "harness copy warnings must land in {}: {error}",
+                log_path.display()
+            )
+        });
+        assert!(
+            log.contains("skipped non-directory harness root"),
+            "evidence must carry the copy_dir warning text: {log}"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

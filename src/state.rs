@@ -5337,6 +5337,20 @@ pub fn write_str(path: &Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
+/// Run-evidence file (relative to the run dir) recording worktree harness copy
+/// warnings. Absence of the file is itself the "preparation was clean" signal.
+pub(crate) const HARNESS_COPY_WARNINGS_FILE: &str = "evidence/harness-copy-warnings.log";
+
+/// Persist harness-copy warnings as run evidence. No warnings, no file.
+pub(crate) fn save_harness_copy_warnings(run_dir: &Path, warnings: &[String]) -> Result<()> {
+    if warnings.is_empty() {
+        return Ok(());
+    }
+    let mut text = warnings.join("\n");
+    text.push('\n');
+    write_str(&run_dir.join(HARNESS_COPY_WARNINGS_FILE), &text)
+}
+
 /// Remove a state artifact when it exists. Missing files are already in the
 /// requested state and are therefore not an error.
 pub fn remove_file_if_exists(path: &Path) -> Result<()> {
