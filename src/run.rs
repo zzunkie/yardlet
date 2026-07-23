@@ -475,28 +475,6 @@ pub(crate) fn resolved_dependency_output_paths(
     Ok(paths)
 }
 
-pub(crate) fn discard_unchanged_seeded_harness_copy(
-    worktree: &std::path::Path,
-    path: &str,
-) -> Result<()> {
-    git_stdout(worktree, &["reset", "-q", "HEAD", "--", path])?;
-    let tracked = !git_stdout(worktree, &["ls-files", "--", path])?
-        .trim()
-        .is_empty();
-    if tracked {
-        git_stdout(
-            worktree,
-            &["restore", "--source=HEAD", "--worktree", "--", path],
-        )?;
-    } else {
-        let candidate = worktree.join(path);
-        if candidate.is_file() {
-            std::fs::remove_file(candidate)?;
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn seeded_harness_evidence(
     seed_root: &std::path::Path,
     worktree: &std::path::Path,
@@ -588,7 +566,7 @@ fn serial_input_overlay_parity_failure(
     })
 }
 
-fn capture_serial_input_overlays(
+pub(crate) fn capture_serial_input_overlays(
     worktree: &std::path::Path,
     harness_seed_dir: &std::path::Path,
 ) -> Result<Vec<state::SerialInputOverlay>> {
@@ -6129,13 +6107,17 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // tree that will survive finalization. A retained manual-integration
     // worktree is its own destination; otherwise the owning root must still
     // carry the same bytes because these inputs are intentionally excluded
-    // from the worker integration commit.
+    // from the worker integration commit. Serial and parallel worktree runs
+    // share this gate; only their overlay receipt stores differ.
     let mut input_overlay_parity_failure = None;
     if eval.next_task_state == TaskState::Done {
-        if let Some(merge) = merge
-            .as_ref()
-            .filter(|merge| merge.provenance == IntegrationProvenance::SerialCoreStaged)
-        {
+        if let Some(merge) = merge.as_ref().filter(|merge| {
+            matches!(
+                merge.provenance,
+                IntegrationProvenance::SerialCoreStaged
+                    | IntegrationProvenance::ParallelWorkerDirect
+            )
+        }) {
             let has_worker_changes = evidence
                 .as_ref()
                 .is_some_and(|paths| worker_changed_integratable_path(Some(paths)));
@@ -6458,6 +6440,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         &task.id,
                         m.baseline_oid,
                         m.expected_tip_oid,
+                        m.core_input_overlays,
                     )
                 }
                 IntegrationProvenance::Unknown => Ok(crate::parallel::Integration::Conflict(

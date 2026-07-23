@@ -122,7 +122,9 @@ pub enum IntegrationProvenance {
 /// Core-owned receipt proving that a run used the serial staging boundary.
 /// It lives outside the worker-writable canonical run directory so recovery
 /// never has to trust a worker-authored `run.yaml` when selecting the native
-/// Git transaction protocol.
+/// Git transaction protocol. Parallel batch runs record the same receipt shape
+/// in their own `parallel-integration` store so provenance selection keeps
+/// treating a serial receipt as serial-only evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SerialIntegrationReceipt {
     pub schema_version: u32,
@@ -2056,6 +2058,9 @@ impl Workspace {
     fn serial_integration_receipts_dir(&self) -> PathBuf {
         self.checkpoints_dir().join("serial-integration")
     }
+    fn parallel_integration_receipts_dir(&self) -> PathBuf {
+        self.checkpoints_dir().join("parallel-integration")
+    }
     fn integrated_cleanup_receipts_dir(&self) -> PathBuf {
         self.checkpoints_dir().join("integrated-cleanup")
     }
@@ -2121,6 +2126,26 @@ impl Workspace {
         run_id: &str,
     ) -> Result<SerialIntegrationReceipt> {
         load_yaml(&self.serial_integration_receipt_path(run_id)?)
+    }
+    fn parallel_integration_receipt_path(&self, run_id: &str) -> Result<PathBuf> {
+        self.validate_receipt_run_id(run_id)?;
+        Ok(self
+            .parallel_integration_receipts_dir()
+            .join(format!("{run_id}.yaml")))
+    }
+    pub fn save_parallel_integration_receipt(
+        &self,
+        receipt: &SerialIntegrationReceipt,
+    ) -> Result<()> {
+        let path = self.parallel_integration_receipt_path(&receipt.run_id)?;
+        let text = yaml::to_string(receipt)?;
+        write_str_atomic(&path, &text)
+    }
+    pub fn load_parallel_integration_receipt(
+        &self,
+        run_id: &str,
+    ) -> Result<SerialIntegrationReceipt> {
+        load_yaml(&self.parallel_integration_receipt_path(run_id)?)
     }
     pub fn load_resolved_dependency_outputs(
         &self,
