@@ -4704,14 +4704,42 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 // only when neither is a git repo, in which case the evaluator
                 // fails closed.
                 let wt = run_worktree(&run_dir).filter(|w| w.exists());
+                let run_record = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")).ok();
+                // A stranded parallel run mirrors the batch finalize: the
+                // parallel-integration receipt captured before worker spawn
+                // separates dispatcher-owned input overlays from worker
+                // evidence, and a seeded copy without a matching receipt
+                // digest has no provenance, so evidence fails closed (issue
+                // #32). Serial and legacy runs keep the seed-diff path.
+                let parallel_direct = run_record.as_ref().is_some_and(|record| {
+                    !record.serial_isolated
+                        && record.integration_provenance
+                            == IntegrationProvenance::ParallelWorkerDirect
+                });
+                let mut parallel_core_input_overlays: Vec<state::SerialInputOverlay> = Vec::new();
                 let serial_evidence = wt
                     .as_ref()
+                    .filter(|_| !parallel_direct)
                     .and_then(|w| serial_worktree_evidence(ws, w, &run_dir));
-                let evidence = if wt.is_some() {
-                    serial_evidence
+                let evidence = match wt.as_ref() {
+                    Some(w) if parallel_direct => {
+                        match crate::parallel::parallel_worker_evidence(&ws.root, w, &run_dir) {
+                            Ok(worker_evidence) => {
+                                parallel_core_input_overlays = worker_evidence.core_input_overlays;
+                                Some(worker_evidence.paths)
+                            }
+                            Err(error) => {
+                                msgs.push(format!(
+                                    "{id}: change evidence unavailable after harness seed \
+                                     comparison: {error}"
+                                ));
+                                None
+                            }
+                        }
+                    }
+                    Some(_) => serial_evidence
                         .as_ref()
-                        .map(|evidence| evidence.paths.clone())
-                } else {
+                        .map(|evidence| evidence.paths.clone()),
                     // No worktree: the workspace git status is the evidence,
                     // but it also carries Yardlet's OWN canonical-state
                     // writes (it wrote the queue when it marked this task
@@ -4719,12 +4747,12 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                     // attributed to the worker, so drop them rather than
                     // false-fail the canonical-state gate on Yardlet's own
                     // writes.
-                    evaluator::changed_paths(&ws.root).map(|paths| {
+                    None => evaluator::changed_paths(&ws.root).map(|paths| {
                         paths
                             .into_iter()
                             .filter(|p| !evaluator::is_canonical_state_path(p))
                             .collect()
-                    })
+                    }),
                 };
                 // Mark this orphan run finalized so a later pass won't
                 // re-evaluate it (a persistent failure must not loop).
@@ -4736,7 +4764,6 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 // result, merge a Done worktree back (conflict -> Partial,
                 // worktree kept), and commit the state. Recovery flags keep it
                 // to just that — no re-emitted artifacts/telemetry/hooks.
-                let run_record = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")).ok();
                 let branch = run_record
                     .as_ref()
                     .map(|record| record.worktree_branch.clone())
@@ -4757,10 +4784,14 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                     expected_tip_oid: serial_evidence
                         .as_ref()
                         .map(|evidence| evidence.merge_target_oid.as_str()),
-                    core_input_overlays: serial_evidence
-                        .as_ref()
-                        .map(|evidence| evidence.core_input_overlays.as_slice())
-                        .unwrap_or(&[]),
+                    core_input_overlays: if parallel_direct {
+                        parallel_core_input_overlays.as_slice()
+                    } else {
+                        serial_evidence
+                            .as_ref()
+                            .map(|evidence| evidence.core_input_overlays.as_slice())
+                            .unwrap_or(&[])
+                    },
                     provenance: recovery_integration_provenance(
                         ws,
                         run_record.as_ref(),
@@ -13337,6 +13368,221 @@ exit 1
             std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
             "# User dirty edit\n",
             "a repeated recovery pass must not revert the retained overlay"
+        );
+
+        crate::parallel::remove_worktree(&ws.root, &wt, &branch);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// Build a stranded parallel run whose worktree carries a dispatcher-owned
+    /// dirty tracked harness copy, receipted (or mis-receipted) in the
+    /// checkpoints/parallel-integration store exactly as run_batch records it.
+    fn orphaned_parallel_overlay_run(
+        name: &str,
+        task_id: &str,
+        receipt_digest: String,
+    ) -> (Workspace, PathBuf, PathBuf, String, String) {
+        let ws = init_test_workspace(
+            name,
+            "schema_version: 1\nrouting: {default_worker: builder}\nworkers: []\n",
+        );
+        let rule = ws.agents_dir().join("rules/tracked-dirty.md");
+        write_str(&rule, "# Tracked baseline\n").unwrap();
+        git_stdout(&ws.root, &["add", ".agents/rules/tracked-dirty.md"]).unwrap();
+        git_stdout(&ws.root, &["commit", "-q", "-m", "track recovery input"]).unwrap();
+        write_str(&rule, "# User dirty edit\n").unwrap();
+
+        let run_id = format!("run-20990101-000000-{name}");
+        let mut queued_task = task(task_id, TaskState::Running, 10, false);
+        queued_task.kind = "implementation".into();
+        let mut q = queue(vec![queued_task]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        let run_dir = ws.runs_dir().join(&run_id);
+        let harness_seed = run_dir.join(HARNESS_SEED_DIR);
+        std::fs::create_dir_all(harness_seed.join("rules")).unwrap();
+        let baseline = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let branch = format!("yard/{}/{run_id}", task_id.to_lowercase());
+        let wt = ws.agents_dir().join("worktrees").join(&run_id);
+        crate::parallel::create_worktree(&ws.root, &wt, &branch).unwrap();
+        std::fs::create_dir_all(wt.join(".agents/rules")).unwrap();
+        for name in ["intent-contract.yaml", "work-queue.yaml"] {
+            let source = ws.agents_dir().join(name);
+            std::fs::copy(&source, wt.join(".agents").join(name)).unwrap();
+        }
+        std::fs::copy(&rule, wt.join(".agents/rules/tracked-dirty.md")).unwrap();
+        std::fs::copy(&rule, harness_seed.join("rules/tracked-dirty.md")).unwrap();
+        write_str(&wt.join("worker-output.txt"), "recovered worker output\n").unwrap();
+        ws.save_parallel_integration_receipt(&state::SerialIntegrationReceipt {
+            schema_version: 1,
+            run_id: run_id.clone(),
+            task_id: task_id.into(),
+            worktree: wt.display().to_string(),
+            branch: branch.clone(),
+            baseline_oid: baseline.clone(),
+            core_input_overlays: vec![state::SerialInputOverlay {
+                path: ".agents/rules/tracked-dirty.md".into(),
+                content_digest: receipt_digest,
+            }],
+        })
+        .unwrap();
+        assert!(
+            ws.load_serial_integration_receipt(&run_id).is_err(),
+            "the parallel run must not own a serial-integration receipt; recovery \
+             provenance classification depends on that store staying empty"
+        );
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.clone(),
+            task_id: task_id.into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "recover parallel overlay parity".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# recovery parallel overlay\n").unwrap();
+        state::save_yaml(
+            &run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 1,
+                run_id: run_id.clone(),
+                task_id: task_id.into(),
+                intent_id: "intent-test".into(),
+                worker: "builder".into(),
+                model: String::new(),
+                fallback_enabled: false,
+                routing_provenance: None,
+                state: "running".into(),
+                started_at: Local::now().to_rfc3339(),
+                completed_at: None,
+                worktree: wt.display().to_string(),
+                serial_isolated: false,
+                baseline_oid: baseline,
+                worktree_branch: branch.clone(),
+                integration_oid: String::new(),
+                integration_base_oid: String::new(),
+                integration_worker_oid: String::new(),
+                integration_provenance: IntegrationProvenance::ParallelWorkerDirect,
+                integration_cleanup_complete: false,
+                owned_oids: vec![],
+                output_contract_incident: None,
+            },
+        )
+        .unwrap();
+        write_str(&run_dir.join("worker.pid"), "2147483647").unwrap();
+        (ws, run_dir, wt, branch, run_id)
+    }
+
+    #[test]
+    fn recovery_reuses_parallel_core_overlay_parity_and_keeps_validated_bytes() {
+        let task_id = "YARD-PARALLEL-RECOVERY-OVERLAY";
+        let (ws, run_dir, wt, branch, _run_id) = orphaned_parallel_overlay_run(
+            "parallel-overlay-recovery-parity",
+            task_id,
+            state::content_digest(b"# User dirty edit\n"),
+        );
+        let rule = ws.agents_dir().join("rules/tracked-dirty.md");
+
+        write_str(&rule, "# Root changed before recovery\n").unwrap();
+        let messages = recover_orphans(&ws);
+
+        assert_ne!(
+            ws.load_queue().unwrap().tasks[0].state,
+            TaskState::Done,
+            "{messages:?}"
+        );
+        assert!(messages.iter().any(|message| message.contains("recovered")));
+        assert!(
+            std::fs::read_to_string(run_dir.join("partial-reason"))
+                .unwrap()
+                .starts_with(
+                    "serial_input_overlay_parity_mismatch:path=.agents/rules/tracked-dirty.md"
+                ),
+            "{messages:?}"
+        );
+        assert!(!ws.root.join("worker-output.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n"
+        );
+
+        let second = recover_orphans(&ws);
+        assert!(
+            second
+                .iter()
+                .all(|message| !message.contains("recovered YARD-PARALLEL-RECOVERY-OVERLAY")),
+            "the finalized recovery must not be re-applied: {second:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n",
+            "a repeated recovery pass must not revert the retained overlay"
+        );
+
+        crate::parallel::remove_worktree(&ws.root, &wt, &branch);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn recovery_blocks_done_when_parallel_overlay_receipt_digest_mismatches() {
+        let task_id = "YARD-PARALLEL-RECOVERY-FORGED";
+        let (ws, run_dir, wt, branch, _run_id) = orphaned_parallel_overlay_run(
+            "parallel-overlay-recovery-forged",
+            task_id,
+            state::content_digest(b"# Receipt forged\n"),
+        );
+
+        let messages = recover_orphans(&ws);
+
+        assert_ne!(
+            ws.load_queue().unwrap().tasks[0].state,
+            TaskState::Done,
+            "a seeded copy without a matching receipt digest has no provenance \
+             and must block Done: {messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("change evidence unavailable")),
+            "{messages:?}"
+        );
+        let feedback: FeedbackRecord =
+            serde_json::from_str(&std::fs::read_to_string(run_dir.join("feedback.json")).unwrap())
+                .unwrap();
+        assert!(
+            feedback
+                .failures
+                .iter()
+                .any(|failure| failure.contains("forbidden_paths_untouched")),
+            "recovery must fail closed with the typed no-evidence diagnosis: {:?}",
+            feedback.failures
+        );
+        assert!(!ws.root.join("worker-output.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(ws.root.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n",
+            "fail-closed recovery must not rewrite the owning root"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n",
+            "fail-closed recovery must not rewrite the retained worktree"
         );
 
         crate::parallel::remove_worktree(&ws.root, &wt, &branch);
