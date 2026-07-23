@@ -3419,8 +3419,16 @@ exit 0
         std::fs::write(wt.join("feature.txt"), "new\n").unwrap();
         std::fs::create_dir_all(wt.join(".agents")).unwrap();
         std::fs::write(wt.join(".agents/work-queue.yaml"), "copy").unwrap();
-        match integrate_parallel_worktree(&root, &wt, "yard/yard-001", "YARD-001", &baseline, None, &[])
-            .unwrap()
+        match integrate_parallel_worktree(
+            &root,
+            &wt,
+            "yard/yard-001",
+            "YARD-001",
+            &baseline,
+            None,
+            &[],
+        )
+        .unwrap()
         {
             Integration::Merged { oid, .. } => {
                 assert_eq!(oid, sh_git(&root, &["rev-parse", "HEAD"]).trim());
@@ -4284,8 +4292,16 @@ exit 0
                 "main edit",
             ],
         );
-        match integrate_parallel_worktree(&root, &wt, "yard/yard-002", "YARD-002", &baseline, None, &[])
-            .unwrap()
+        match integrate_parallel_worktree(
+            &root,
+            &wt,
+            "yard/yard-002",
+            "YARD-002",
+            &baseline,
+            None,
+            &[],
+        )
+        .unwrap()
         {
             Integration::Conflict(_) => {}
             _ => panic!("expected a conflict"),
@@ -4323,8 +4339,16 @@ exit 0
         let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-009").unwrap();
         std::fs::write(wt.join("other.txt"), "fine\n").unwrap();
-        match integrate_parallel_worktree(&root, &wt, "yard/yard-009", "YARD-009", &baseline, None, &[])
-            .unwrap()
+        match integrate_parallel_worktree(
+            &root,
+            &wt,
+            "yard/yard-009",
+            "YARD-009",
+            &baseline,
+            None,
+            &[],
+        )
+        .unwrap()
         {
             Integration::Conflict(why) => assert!(why.contains("another merge"), "{why}"),
             _ => panic!("expected a conflict report"),
@@ -4344,8 +4368,16 @@ exit 0
         let wt = root.join(".agents/worktrees/yard-003");
         let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-003").unwrap();
-        match integrate_parallel_worktree(&root, &wt, "yard/yard-003", "YARD-003", &baseline, None, &[])
-            .unwrap()
+        match integrate_parallel_worktree(
+            &root,
+            &wt,
+            "yard/yard-003",
+            "YARD-003",
+            &baseline,
+            None,
+            &[],
+        )
+        .unwrap()
         {
             Integration::NoChanges { .. } => {}
             _ => panic!("expected no changes"),
@@ -4360,13 +4392,20 @@ exit 0
         let branch = "yard/yard-nochange/run-nochange-later";
         let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, branch).unwrap();
-        let worker_oid =
-            match integrate_parallel_worktree(&root, &wt, branch, "YARD-NOCHANGE", &baseline, None, &[])
-                .unwrap()
-            {
-                Integration::NoChanges { worker_oid } => worker_oid,
-                _ => panic!("expected no changes"),
-            };
+        let worker_oid = match integrate_parallel_worktree(
+            &root,
+            &wt,
+            branch,
+            "YARD-NOCHANGE",
+            &baseline,
+            None,
+            &[],
+        )
+        .unwrap()
+        {
+            Integration::NoChanges { worker_oid } => worker_oid,
+            _ => panic!("expected no changes"),
+        };
 
         sh_git(&wt, &["checkout", "-q", "--detach"]);
         std::fs::write(wt.join("later.txt"), "later clean commit\n").unwrap();
