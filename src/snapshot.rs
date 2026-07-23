@@ -620,4 +620,74 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(ws.root);
     }
+
+    fn write_prepare_window_run(ws: &Workspace, run_id: &str, started_at: &str) {
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("run.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: SHARED\nintent_id: intent-current\nworker: fixture\nstate: running\nstarted_at: \"{started_at}\"\nworktree: .\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            run_dir.join("worker-process.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\nattempt_id: att-prepare\nworker_id: fixture\npid: 0\nstate: prepared\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn issue_29_fresh_dispatch_prepare_window_is_not_flagged_as_stale() {
+        let (ws, _, _) = reused_task_id_fixture("prepare-window-fresh");
+        let mut queue = ws.load_queue().unwrap();
+        queue.tasks[0].state = TaskState::Running;
+        ws.save_queue(&queue).unwrap();
+
+        write_prepare_window_run(
+            &ws,
+            "run-issue-29-prepare-fresh",
+            &chrono::Local::now().to_rfc3339(),
+        );
+
+        let snapshot = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        assert!(
+            snapshot.recovery_required.is_empty(),
+            "a just-started dispatch still in its prepared/pid=0 window must not be \
+             diagnosed as interrupted: {:?}",
+            snapshot.recovery_required
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn issue_29_stalled_dispatch_preparation_is_still_diagnosed() {
+        let (ws, _, _) = reused_task_id_fixture("prepare-window-stalled");
+        let mut queue = ws.load_queue().unwrap();
+        queue.tasks[0].state = TaskState::Running;
+        ws.save_queue(&queue).unwrap();
+
+        let run_id = "run-issue-29-prepare-stalled";
+        write_prepare_window_run(&ws, run_id, "2026-01-01T00:00:00+00:00");
+
+        let snapshot = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        let diagnostic = snapshot
+            .recovery_required
+            .first()
+            .expect("a dispatch that never left preparation must be diagnosed once stale");
+        assert_eq!(diagnostic.task_id, "SHARED");
+        assert_eq!(diagnostic.run_id, run_id);
+        assert_eq!(diagnostic.effective_state, "interrupted");
+        assert!(
+            diagnostic.reason.contains("dispatch preparation"),
+            "reason should name the stalled prepare window: {}",
+            diagnostic.reason
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
 }
