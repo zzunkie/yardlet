@@ -1,11 +1,38 @@
 #[cfg(unix)]
+#[path = "fixtures/support/process-binary-preflight.rs"]
+mod process_binary_preflight;
+
+#[cfg(unix)]
 mod unix {
+    use super::process_binary_preflight::{preflight_process_binary, CliCapability};
     use serde_yaml_ng::Value;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output, Stdio};
+    use std::sync::OnceLock;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    const REQUIRED_CLI_CAPABILITIES: &[CliCapability] = &[CliCapability {
+        name: "yardlet answer --accept-deviation",
+        probe_args: &["answer", "--help"],
+        marker: "--accept-deviation",
+    }];
+
+    fn require_process_binary_capabilities(binary: &Path) -> Result<(), String> {
+        preflight_process_binary(binary, REQUIRED_CLI_CAPABILITIES)
+    }
+
+    fn yardlet_binary() -> PathBuf {
+        let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
+        static PREFLIGHT: OnceLock<Result<(), String>> = OnceLock::new();
+        if let Err(error) =
+            PREFLIGHT.get_or_init(|| require_process_binary_capabilities(binary.as_path()))
+        {
+            panic!("{error}");
+        }
+        binary
+    }
 
     struct FixtureWorkspace {
         root: PathBuf,
@@ -15,7 +42,7 @@ mod unix {
     impl FixtureWorkspace {
         fn new(label: &str) -> Self {
             let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
+            let binary = yardlet_binary();
             let nonce = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -238,6 +265,54 @@ mod unix {
             hash = hash.wrapping_mul(0x100000001b3);
         }
         format!("att-action-{hash:016x}")
+    }
+
+    #[test]
+    fn stale_cargo_bin_is_rejected_before_process_fixture_body() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "yardlet-v010-003-stale-cargo-bin-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let stale_binary = root.join("yardlet");
+        fs::write(
+            &stale_binary,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+marker="$(cd "$(dirname "$0")" && pwd)/body-started"
+if [[ "${1:-}" == "answer" && "${2:-}" == "--help" ]]; then
+  printf 'Usage: yardlet answer [OPTIONS]\n\nOptions:\n  --task <TASK>\n'
+  exit 0
+fi
+: >"$marker"
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&stale_binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&stale_binary, permissions).unwrap();
+
+        let preflight = require_process_binary_capabilities(&stale_binary);
+        if preflight.is_ok() {
+            let _ = Command::new(&stale_binary).arg("init").status();
+        }
+        let diagnostic = preflight.expect_err("stale CARGO_BIN_EXE passed capability preflight");
+        assert!(diagnostic.contains("process binary capability preflight failed"));
+        assert!(diagnostic.contains(&stale_binary.display().to_string()));
+        assert!(diagnostic.contains("yardlet answer --accept-deviation"));
+        assert!(diagnostic.contains("cargo clean -p yardlet"));
+        assert!(diagnostic.contains("cargo build --bin yardlet"));
+        assert!(diagnostic.contains("then retry"));
+        assert!(
+            !root.join("body-started").exists(),
+            "stale process fixture body started despite failed preflight"
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     // A full `cargo test` run oversubscribes the CPU and slows this binary
@@ -1106,7 +1181,7 @@ printf 'primary intentionally omitted result.json\n' >&2
     #[test]
     fn text_worker_answer_creates_a_new_attempt_and_preserves_both_raw_streams() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
+        let binary = yardlet_binary();
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
