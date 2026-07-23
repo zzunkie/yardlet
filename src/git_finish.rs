@@ -137,6 +137,43 @@ impl GitFinishStatus {
     }
 }
 
+/// Fail closed before a worker is spawned when an enabled Git-finish policy
+/// still names a branch other than the checkout that will receive this run's
+/// integration commit. The same core-owned record used by final Git finish
+/// captures the configured target and the observed checkout ref; no remote
+/// command is reached on this path.
+pub(crate) fn preflight_target_before_spawn(
+    ws: &Workspace,
+    run_dir: &Path,
+    run_id: &str,
+    task_id: &str,
+    policy: &GitFinishPolicy,
+) -> anyhow::Result<()> {
+    if !policy.auto_push {
+        return Ok(());
+    }
+    let checkout_ref = git_stdout(&ws.root, &["symbolic-ref", "--quiet", "HEAD"])
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if checkout_ref.as_deref() == Some(policy.target_ref.as_str()) {
+        return Ok(());
+    }
+
+    let observed = checkout_ref.as_deref().unwrap_or("<detached-or-unborn>");
+    let mut record = base_record(run_id, task_id, policy, None);
+    block(
+        &mut record,
+        &format!("branch_does_not_match_target_ref:checkout_ref={observed}"),
+    );
+    persist(ws, run_dir, &record)?;
+    anyhow::bail!(
+        "branch_does_not_match_target_ref: configured Git finish target_ref '{}' \
+         does not match checkout ref '{}'; update git_finish.target_ref before running",
+        policy.target_ref,
+        observed
+    )
+}
+
 pub fn finish_owned_run(
     ws: &Workspace,
     run_dir: &Path,
