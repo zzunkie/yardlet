@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.10.1 - 2026-07-23
+
+### Added
+
+- **Adaptive capability discovery for planning (V010-002A).** Every plan,
+  re-plan, and express goal now records a typed per-task coverage assessment
+  (`covered | weak | missing | stale | external-tool-needed`) with evidence,
+  confidence, freshness, and stable reason codes. Hard signals — an explicit
+  research request, a missing selected skill, no ready worker for a required
+  tool capability, only deprecated or stale matches, dependence on a current
+  external fact or consequential external choice, or a typed repeated-failure
+  threshold — trigger research alone; two independent soft signals trigger it
+  together, one is only observed. A queue-isolated scout searches the workspace
+  and user library first and permitted external sources after, bounded by an
+  intent-locked, deduplicated, freshness-cached budget (default one research
+  cycle, three topics) declared in `.agents/research-policy.yaml`, and runs in
+  a disposable workspace copy under a fail-closed generic sandbox contract.
+  Every result normalizes to one typed disposition — use an existing skill,
+  adapt an external candidate, draft a new reusable skill, record a tool
+  candidate, retain one-off evidence, report no change, or ask the user — and
+  external candidates with unresolved source, revision, license, freshness, or
+  static-risk requirements fail closed. Findings surface as a visible draft
+  patch before confirmation and survive restart without duplicate scouts.
+
+- **Same-intent replanning for dead-ended queues.** `yardlet planning replan`
+  reopens conversational planning for a settled queue under the same intent
+  id. It is allowed only when the queue ended in typed feedback-cap-exhausted
+  or failed work; a queue holding an open worker question stays answer-only
+  and the rejection message points to `yardlet answer`, and mixed settled
+  queues preserve open worker questions fail-closed. Repeated replans keep
+  every drain's archive snapshot instead of overwriting the intent-id archive,
+  stale follow-up files from earlier drains are removed from the reused
+  canonical archive, the TUI stuck screen offers a replan entry point, and the
+  TUI reports browser can open archived snapshots of past drains.
+
+- **Stale-binary preflight for named fixtures.** Process and eval fixture
+  paths verify that the invoked yardlet binary actually knows the requested
+  fixture ids before running, and fail with an actionable stale-build
+  diagnosis (clean the package cache and rebuild) instead of a misleading
+  `unknown fixture` error when build artifacts lag the source.
+
+- **Typed provider-refusal handling for silent worker exits.** A worker that
+  exits without `result.json` is now classified against per-worker refusal
+  signatures from its output log. A match records a typed cause on the run,
+  retries once with an instruction to write a neutrally-worded result first,
+  and otherwise seals the task at NeedsUser with the typed cause instead of a
+  generic failure. Classification skips record their reason in checkpoint and
+  handoff notes, and orphan recovery does not re-queue a consumed recovery
+  attempt, so a refusal can never spawn an unbounded third attempt.
+
 ## 0.10.0 - 2026-07-18
 
 ### Added
