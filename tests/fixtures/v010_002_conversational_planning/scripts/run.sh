@@ -1509,10 +1509,15 @@ open(path, "w", encoding="utf-8").write(current + "materialized_queue:" + materi
 PY
     run_in "$state_root" planning show --json >"$EVIDENCE_DIR/runtime-state-partial.json"
     [[ "$(json_get "$EVIDENCE_DIR/runtime-state-partial.json" exact_active_parity)" == "true" ]] || fail "allowed Partial state broke parity"
-    run_in "$state_root" resolve YARD-001 >/dev/null
-    run_in "$state_root" planning show --json >"$EVIDENCE_DIR/runtime-state-done.json"
-    [[ "$(json_get "$EVIDENCE_DIR/runtime-state-done.json" exact_active_parity)" == "true" ]] || fail "allowed Done state broke parity"
-    write_summary "activated runtime task는 state-only transition만 허용하고 title/scope/worker/risk 변조는 모든 mutation entry에서 bytes 불변으로 거절됨"
+    before="$(state_digest "$state_root")"
+    if run_in "$state_root" resolve YARD-001 >"$EVIDENCE_DIR/runtime-state-resolve.out" 2>"$EVIDENCE_DIR/runtime-state-resolve.err"; then
+      fail "proof 없는 state-only Partial이 Done으로 공개됨"
+    fi
+    grep -q 'dependency_output_proof_missing:dependency=YARD-001' "$EVIDENCE_DIR/runtime-state-resolve.err" || fail "proof 없는 resolve 진단이 누락됨"
+    [[ "$before" == "$(state_digest "$state_root")" ]] || fail "proof 없는 resolve 거부가 canonical bytes를 변경함"
+    run_in "$state_root" planning show --json >"$EVIDENCE_DIR/runtime-state-still-partial.json"
+    [[ "$(json_get "$EVIDENCE_DIR/runtime-state-still-partial.json" exact_active_parity)" == "true" ]] || fail "거부 후 Partial state parity가 깨짐"
+    write_summary "activated runtime task는 state-only Partial을 허용하지만 proof 없는 Done 공개는 차단하고, title/scope/worker/risk 변조도 모든 mutation entry에서 bytes 불변으로 거절됨"
     ;;
   runtime_origin_contract)
     accept_proposal "$p1" none act-runtime-origin-accept >/dev/null

@@ -3512,6 +3512,36 @@ impl IntentAdherence {
     }
 }
 
+/// Core-owned proof for repository bytes retained from a manually resolved
+/// Partial task. This is intentionally a narrow handoff receipt, not a general
+/// artifact registry: the dependency task and exact source run identify one
+/// immutable set of snapshots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedDependencyOutputs {
+    pub schema_version: u32,
+    pub dependency_task_id: String,
+    pub source_run_id: String,
+    pub outputs: Vec<ResolvedDependencyOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedDependencyOutput {
+    /// Normalized repository-relative destination used in every downstream
+    /// worktree.
+    pub path: String,
+    /// Digest calculated by Yardlet core from snapshot bytes.
+    pub content_digest: String,
+    /// One normal filename under the source run's core-owned snapshot folder.
+    pub snapshot_file: String,
+    pub availability: DependencyOutputAvailability,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyOutputAvailability {
+    CoreSnapshot,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Changes {
     #[serde(default)]

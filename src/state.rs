@@ -22,14 +22,16 @@ use crate::schemas::{
     ActivationRequirement, Answer, AnswerActionOutcome, AnswerActionRequest, Artifact,
     ArtifactProposal, AttemptState, BillingPolicy, ChannelActionKind, ChannelActionStatus,
     ChannelEvent, ChannelEventType, ContinuationMode, Conversation, ConversationTurn,
-    DraftRevision, EventActor, EventActorKind, FollowUpTask, IntentContract, PlanningActionReceipt,
-    PlanningEvent, PlanningProposal, PlanningSession, PreservedFollowUps, Question, QuestionState,
-    RedirectActionOutcome, RedirectActionRequest, ResolvedWorkerSelection, ResourceActionReceipt,
-    ResourceActionRecoveryReceipt, ResourceIndex, ResourceObservation, ResourceStatus,
-    ResourceTaskIndex, RuntimeCapabilityCommit, RuntimeCapabilityReceipt, RuntimeResource,
-    RuntimeResourceProposal, RuntimeTaskCommit, RuntimeTaskReceipt, SelectionPolicy, Task,
-    TaskChannel, TaskChannelIndex, TaskState, TransitionActor, TransitionCause, TransitionLog,
-    TransitionRecord, TurnRole, WorkQueue, WorkerAttempt, WorkersFile, YardConfig,
+    DependencyOutputAvailability, DraftRevision, EventActor, EventActorKind, FollowUpTask,
+    IntentContract, PlanningActionReceipt, PlanningEvent, PlanningProposal, PlanningSession,
+    PreservedFollowUps, Question, QuestionState, RedirectActionOutcome, RedirectActionRequest,
+    ResolvedDependencyOutput, ResolvedDependencyOutputs, ResolvedWorkerSelection,
+    ResourceActionReceipt, ResourceActionRecoveryReceipt, ResourceIndex, ResourceObservation,
+    ResourceStatus, ResourceTaskIndex, RuntimeCapabilityCommit, RuntimeCapabilityReceipt,
+    RuntimeResource, RuntimeResourceProposal, RuntimeTaskCommit, RuntimeTaskReceipt,
+    SelectionPolicy, Task, TaskChannel, TaskChannelIndex, TaskState, TransitionActor,
+    TransitionCause, TransitionLog, TransitionRecord, TurnRole, WorkQueue, WorkerAttempt,
+    WorkersFile, YardConfig,
 };
 use crate::yaml;
 
@@ -2060,6 +2062,23 @@ impl Workspace {
     fn no_change_receipts_dir(&self) -> PathBuf {
         self.checkpoints_dir().join("no-change")
     }
+    fn resolved_dependency_outputs_dir(&self) -> PathBuf {
+        self.checkpoints_dir().join("dependency-outputs")
+    }
+    fn resolved_dependency_output_dir(&self, run_id: &str) -> Result<PathBuf> {
+        self.validate_receipt_run_id(run_id)?;
+        Ok(self.resolved_dependency_outputs_dir().join(run_id))
+    }
+    fn resolved_dependency_output_manifest_path(&self, run_id: &str) -> Result<PathBuf> {
+        Ok(self
+            .resolved_dependency_output_dir(run_id)?
+            .join("manifest.yaml"))
+    }
+    fn resolved_dependency_output_snapshots_dir(&self, run_id: &str) -> Result<PathBuf> {
+        Ok(self
+            .resolved_dependency_output_dir(run_id)?
+            .join("snapshots"))
+    }
     fn no_change_receipt_path(&self, run_id: &str) -> Result<PathBuf> {
         self.validate_receipt_run_id(run_id)?;
         Ok(self.no_change_receipts_dir().join(format!("{run_id}.yaml")))
@@ -2102,6 +2121,18 @@ impl Workspace {
         run_id: &str,
     ) -> Result<SerialIntegrationReceipt> {
         load_yaml(&self.serial_integration_receipt_path(run_id)?)
+    }
+    pub fn load_resolved_dependency_outputs(
+        &self,
+        run_id: &str,
+    ) -> Result<ResolvedDependencyOutputs> {
+        let manifest: ResolvedDependencyOutputs =
+            load_yaml(&self.resolved_dependency_output_manifest_path(run_id)?)
+                .with_context(|| format!("dependency_output_manifest_missing:run={run_id}"))?;
+        if manifest.schema_version != 1 || manifest.source_run_id != run_id {
+            bail!("dependency_output_manifest_mismatch:run={run_id}");
+        }
+        Ok(manifest)
     }
     pub fn save_integrated_cleanup_receipt(
         &self,
@@ -5240,6 +5271,315 @@ pub fn ready_for_completion(queue: &WorkQueue) -> bool {
             .any(|t| matches!(t.state, TaskState::NeedsUser | TaskState::Partial))
 }
 
+fn normalize_dependency_output_path(task_id: &str, raw: &str) -> Result<(String, PathBuf)> {
+    use std::path::Component;
+
+    let path = Path::new(raw);
+    if raw.is_empty()
+        || path.is_absolute()
+        || !path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        bail!("dependency_output_path_invalid:dependency={task_id}:path={raw}");
+    }
+    let normalized = path
+        .components()
+        .fold(PathBuf::new(), |mut result, component| {
+            if let Component::Normal(part) = component {
+                result.push(part);
+            }
+            result
+        });
+    let normalized_text = normalized.to_string_lossy().into_owned();
+    if normalized_text != raw {
+        bail!("dependency_output_path_invalid:dependency={task_id}:path={raw}");
+    }
+    if !crate::evaluator::is_integratable_path(&normalized_text) {
+        bail!("dependency_output_scope_violation:dependency={task_id}:path={raw}");
+    }
+    Ok((normalized_text, normalized))
+}
+
+fn read_dependency_output_bytes(root: &Path, relative: &Path, task_id: &str) -> Result<Vec<u8>> {
+    let display = relative.to_string_lossy();
+    let canonical_root = fs::canonicalize(root).with_context(|| {
+        format!("dependency_output_bytes_missing:dependency={task_id}:path={display}")
+    })?;
+    let mut cursor = root.to_path_buf();
+    for component in relative.components() {
+        cursor.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&cursor).with_context(|| {
+            format!("dependency_output_bytes_missing:dependency={task_id}:path={display}")
+        })?;
+        if metadata.file_type().is_symlink() {
+            bail!("dependency_output_path_invalid:dependency={task_id}:path={display}");
+        }
+    }
+    let canonical = fs::canonicalize(&cursor).with_context(|| {
+        format!("dependency_output_bytes_missing:dependency={task_id}:path={display}")
+    })?;
+    if canonical.strip_prefix(&canonical_root).is_err() {
+        bail!("dependency_output_scope_violation:dependency={task_id}:path={display}");
+    }
+    let metadata = fs::symlink_metadata(&canonical)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        bail!("dependency_output_bytes_missing:dependency={task_id}:path={display}");
+    }
+    fs::read(&canonical).with_context(|| {
+        format!("dependency_output_bytes_missing:dependency={task_id}:path={display}")
+    })
+}
+
+fn persist_resolved_dependency_outputs(
+    ws: &Workspace,
+    task_id: &str,
+    run_id: &str,
+    worktree: &Path,
+    paths: &[String],
+) -> Result<ResolvedDependencyOutputs> {
+    let mut normalized = paths
+        .iter()
+        .map(|path| normalize_dependency_output_path(task_id, path))
+        .collect::<Result<Vec<_>>>()?;
+    normalized.sort_by(|left, right| left.0.cmp(&right.0));
+    normalized.dedup_by(|left, right| left.0 == right.0);
+    if normalized.is_empty() {
+        bail!("dependency_output_proof_missing:dependency={task_id}:no_repository_outputs");
+    }
+
+    let snapshots_dir = ws.resolved_dependency_output_snapshots_dir(run_id)?;
+    fs::create_dir_all(&snapshots_dir)
+        .with_context(|| format!("creating {}", snapshots_dir.display()))?;
+    let mut outputs = Vec::with_capacity(normalized.len());
+    for (index, (path, relative)) in normalized.into_iter().enumerate() {
+        let bytes = read_dependency_output_bytes(worktree, &relative, task_id)?;
+        let expected_digest = content_digest(&bytes);
+        let snapshot_file = format!("{index:04}.bin");
+        let snapshot_path = snapshots_dir.join(&snapshot_file);
+        write_bytes_atomic(&snapshot_path, &bytes)?;
+        let persisted = fs::read(&snapshot_path)
+            .with_context(|| format!("reading dependency snapshot {}", snapshot_path.display()))?;
+        if content_digest(&persisted) != expected_digest {
+            bail!("dependency_output_snapshot_write_mismatch:dependency={task_id}:path={path}");
+        }
+        outputs.push(ResolvedDependencyOutput {
+            path,
+            content_digest: expected_digest,
+            snapshot_file,
+            availability: DependencyOutputAvailability::CoreSnapshot,
+        });
+    }
+    let manifest = ResolvedDependencyOutputs {
+        schema_version: 1,
+        dependency_task_id: task_id.to_string(),
+        source_run_id: run_id.to_string(),
+        outputs,
+    };
+    save_yaml_atomic(
+        &ws.resolved_dependency_output_manifest_path(run_id)?,
+        &manifest,
+    )?;
+    Ok(manifest)
+}
+
+fn dependency_was_manually_resolved(ws: &Workspace, queue: &WorkQueue, task_id: &str) -> bool {
+    ws.latest_transition_for_intent(task_id, &queue.intent_id)
+        .is_some_and(|record| {
+            record.from == TaskState::Partial
+                && record.to == TaskState::Done
+                && record.cause == TransitionCause::Recover
+                && record.actor == TransitionActor::User
+        })
+}
+
+fn latest_dependency_run(
+    ws: &Workspace,
+    queue: &WorkQueue,
+    task_id: &str,
+) -> Option<(String, PathBuf)> {
+    if queue.intent_id.is_empty() {
+        crate::run::latest_run_for(ws, task_id)
+    } else {
+        crate::run::latest_run_for_intent(ws, task_id, &queue.intent_id)
+    }
+}
+
+fn load_verified_dependency_snapshot(
+    ws: &Workspace,
+    manifest: &ResolvedDependencyOutputs,
+    output: &ResolvedDependencyOutput,
+) -> Result<(String, PathBuf, Vec<u8>)> {
+    use std::path::Component;
+
+    let dependency = &manifest.dependency_task_id;
+    let (path, relative) = normalize_dependency_output_path(dependency, &output.path)?;
+    let snapshot = Path::new(&output.snapshot_file);
+    if output.snapshot_file.is_empty()
+        || snapshot.components().count() != 1
+        || !snapshot
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+        || output.availability != DependencyOutputAvailability::CoreSnapshot
+    {
+        bail!("dependency_output_proof_mismatch:dependency={dependency}:path={path}");
+    }
+    let snapshot_path = ws
+        .resolved_dependency_output_snapshots_dir(&manifest.source_run_id)?
+        .join(snapshot);
+    let metadata = fs::symlink_metadata(&snapshot_path).with_context(|| {
+        format!("dependency_output_bytes_missing:dependency={dependency}:path={path}")
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("dependency_output_bytes_missing:dependency={dependency}:path={path}");
+    }
+    let bytes = fs::read(&snapshot_path).with_context(|| {
+        format!("dependency_output_bytes_missing:dependency={dependency}:path={path}")
+    })?;
+    let found = content_digest(&bytes);
+    if found != output.content_digest {
+        bail!(
+            "dependency_output_digest_mismatch:dependency={dependency}:path={path}:expected={}:found={found}",
+            output.content_digest
+        );
+    }
+    Ok((path, relative, bytes))
+}
+
+fn write_dependency_output_target(
+    destination: &Path,
+    dependency: &str,
+    path: &str,
+    relative: &Path,
+    bytes: &[u8],
+    expected_digest: &str,
+) -> Result<()> {
+    let canonical_root = fs::canonicalize(destination).with_context(|| {
+        format!("dependency_output_destination_missing:dependency={dependency}:path={path}")
+    })?;
+    let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+    let mut cursor = destination.to_path_buf();
+    for component in parent.components() {
+        cursor.push(component.as_os_str());
+        match fs::symlink_metadata(&cursor) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                bail!("dependency_output_path_invalid:dependency={dependency}:path={path}");
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&cursor).with_context(|| {
+                    format!(
+                        "materializing dependency output directory {}",
+                        cursor.display()
+                    )
+                })?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        let canonical = fs::canonicalize(&cursor)?;
+        if canonical.strip_prefix(&canonical_root).is_err() {
+            bail!("dependency_output_scope_violation:dependency={dependency}:path={path}");
+        }
+    }
+    let target = destination.join(relative);
+    if let Ok(metadata) = fs::symlink_metadata(&target) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            bail!("dependency_output_path_invalid:dependency={dependency}:path={path}");
+        }
+    }
+    write_bytes_atomic(&target, bytes)?;
+    let found = content_digest(&fs::read(&target)?);
+    if found != expected_digest {
+        bail!(
+            "dependency_output_materialization_mismatch:dependency={dependency}:path={path}:expected={expected_digest}:found={found}"
+        );
+    }
+    Ok(())
+}
+
+/// Verify and materialize every manually resolved dependency into a fresh
+/// worker worktree. The function completes before any worker spawn and trusts
+/// only core-owned snapshot bytes. Normal Done dependencies without a manual
+/// resolution receipt remain ordinary HEAD inputs.
+pub fn materialize_resolved_dependency_outputs(
+    ws: &Workspace,
+    queue: &WorkQueue,
+    task: &Task,
+    destination: &Path,
+) -> Result<Vec<String>> {
+    struct PendingOutput {
+        dependency: String,
+        path: String,
+        relative: PathBuf,
+        digest: String,
+        bytes: Vec<u8>,
+    }
+
+    let mut pending: BTreeMap<String, PendingOutput> = BTreeMap::new();
+    for dependency in &task.depends_on {
+        let manually_resolved = dependency_was_manually_resolved(ws, queue, dependency);
+        let latest = latest_dependency_run(ws, queue, dependency);
+        let Some((run_id, _)) = latest else {
+            if manually_resolved {
+                bail!(
+                    "dependency_output_manifest_missing:dependency={dependency}:path=<latest-run>"
+                );
+            }
+            continue;
+        };
+        let manifest_path = ws.resolved_dependency_output_manifest_path(&run_id)?;
+        if !manifest_path.is_file() {
+            if manually_resolved {
+                bail!(
+                    "dependency_output_manifest_missing:dependency={dependency}:path={}",
+                    manifest_path.display()
+                );
+            }
+            continue;
+        }
+        let manifest = ws.load_resolved_dependency_outputs(&run_id)?;
+        if manifest.dependency_task_id != *dependency || manifest.outputs.is_empty() {
+            bail!("dependency_output_manifest_mismatch:dependency={dependency}:run={run_id}");
+        }
+        for output in &manifest.outputs {
+            let (path, relative, bytes) = load_verified_dependency_snapshot(ws, &manifest, output)?;
+            if let Some(prior) = pending.get(&path) {
+                if prior.digest != output.content_digest {
+                    bail!(
+                        "dependency_output_conflict:dependency={dependency}:path={path}:prior_dependency={}",
+                        prior.dependency
+                    );
+                }
+                continue;
+            }
+            pending.insert(
+                path.clone(),
+                PendingOutput {
+                    dependency: dependency.clone(),
+                    path,
+                    relative,
+                    digest: output.content_digest.clone(),
+                    bytes,
+                },
+            );
+        }
+    }
+
+    let mut materialized = Vec::with_capacity(pending.len());
+    for output in pending.into_values() {
+        write_dependency_output_target(
+            destination,
+            &output.dependency,
+            &output.path,
+            &output.relative,
+            &output.bytes,
+            &output.digest,
+        )?;
+        materialized.push(output.path);
+    }
+    Ok(materialized)
+}
+
 /// Outcome of finalizing a merge-conflict `Partial` to `Done`.
 pub struct ResolveOutcome {
     /// The worktree that was removed, if one was still on disk.
@@ -5248,6 +5588,8 @@ pub struct ResolveOutcome {
     pub cleared_partial_reason: bool,
     /// Queued dependents whose dependencies are now all met.
     pub unblocked: Vec<String>,
+    /// Repository outputs snapshotted by core before the task became Done.
+    pub dependency_outputs: usize,
 }
 
 /// Finalize a task left `Partial` by a merge conflict, once a human has manually
@@ -5259,6 +5601,7 @@ pub struct ResolveOutcome {
 pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<ResolveOutcome> {
     let lock = ws.acquire_planning_lock()?;
     let mut queue = ws.load_queue()?;
+    crate::planning::validate_active_activation(ws)?;
     let Some(idx) = queue.tasks.iter().position(|t| t.id == task_id) else {
         anyhow::bail!("task '{task_id}' not found in the queue");
     };
@@ -5273,8 +5616,39 @@ pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<Re
              worktree you merged by hand"
         ),
     }
+
+    // A manually resolved task may be the only source for downstream bytes.
+    // Capture actual Git evidence into a core-owned snapshot before publishing
+    // Done. A missing legacy run, receipt, worktree, or regular file leaves the
+    // task Partial with a path-specific fail-closed diagnostic.
+    let (run_id, run_dir) = latest_dependency_run(ws, &queue, task_id).ok_or_else(|| {
+        anyhow::anyhow!("dependency_output_proof_missing:dependency={task_id}:latest_run")
+    })?;
+    let manifest_path = ws.resolved_dependency_output_manifest_path(&run_id)?;
+    let manifest = if manifest_path.is_file() {
+        let manifest = ws.load_resolved_dependency_outputs(&run_id)?;
+        if manifest.dependency_task_id != task_id || manifest.outputs.is_empty() {
+            bail!("dependency_output_manifest_mismatch:dependency={task_id}:run={run_id}");
+        }
+        for output in &manifest.outputs {
+            load_verified_dependency_snapshot(ws, &manifest, output)?;
+        }
+        manifest
+    } else {
+        let worktree = crate::run::run_worktree(&run_dir)
+            .filter(|path| path.exists())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "dependency_output_bytes_missing:dependency={task_id}:path=<retained-worktree>"
+                )
+            })?;
+        let paths = crate::run::resolved_dependency_output_paths(ws, &run_dir, &worktree, task_id)?;
+        persist_resolved_dependency_outputs(ws, task_id, &run_id, &worktree, &paths)?
+    };
+
     queue.tasks[idx].state = TaskState::Done;
-    // Yardlet stays the sole queue writer: persist, then record the transition.
+    // Yardlet stays the sole queue writer. The snapshot manifest is durable
+    // before this queue write, so no reader can observe Done without proof.
     ws.save_queue_locked(&lock, &queue)?;
     append_transition(
         ws,
@@ -5324,6 +5698,7 @@ pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<Re
         removed_worktree,
         cleared_partial_reason,
         unblocked,
+        dependency_outputs: manifest.outputs.len(),
     })
 }
 
@@ -5420,6 +5795,10 @@ pub(crate) fn append_private_file(path: &Path) -> Result<fs::File> {
 /// Write a durable state snapshot through a same-directory temporary file so a
 /// crash cannot leave readers with a truncated JSON/YAML record.
 pub fn write_str_atomic(path: &Path, contents: &str) -> Result<()> {
+    write_bytes_atomic(path, contents.as_bytes())
+}
+
+fn write_bytes_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
@@ -5429,7 +5808,7 @@ pub fn write_str_atomic(path: &Path, contents: &str) -> Result<()> {
         .unwrap_or("state");
     let tmp = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
     let mut file = fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
-    file.write_all(contents.as_bytes())
+    file.write_all(contents)
         .with_context(|| format!("writing {}", tmp.display()))?;
     file.sync_all()
         .with_context(|| format!("syncing {}", tmp.display()))?;
@@ -6963,17 +7342,37 @@ records:
         queue.tasks = vec![task_in("YARD-001", "partial"), dependent];
         ws.save_queue(&queue).unwrap();
 
-        // A run left behind by the conflicting merge: a partial-reason marker,
-        // no worktree line (so no git op is needed for the test).
-        let run_dir = ws.runs_dir().join("run-20260710-000000-yard-001");
+        // A run left behind by the conflicting merge. Core has already sealed
+        // its output snapshot, as it may after a crash immediately before the
+        // queue publication.
+        let run_id = "run-20260710-000000-yard-001";
+        let run_dir = ws.runs_dir().join(run_id);
         fs::create_dir_all(&run_dir).unwrap();
-        write_str(&run_dir.join("run.yaml"), "task_id: YARD-001\n").unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-live\nstate: partial\nstarted_at: 2026-07-10T00:00:00Z\n"
+            ),
+        )
+        .unwrap();
         write_str(&run_dir.join("partial-reason"), "merge_conflict").unwrap();
+        let source = dir.join("resolved-source");
+        fs::create_dir_all(&source).unwrap();
+        write_str(&source.join("output.txt"), "resolved bytes\n").unwrap();
+        persist_resolved_dependency_outputs(
+            &ws,
+            "YARD-001",
+            run_id,
+            &source,
+            &["output.txt".into()],
+        )
+        .unwrap();
 
         let outcome = resolve_partial(&ws, "YARD-001", "merged by hand").unwrap();
         assert!(outcome.cleared_partial_reason);
         assert!(outcome.removed_worktree.is_none());
         assert_eq!(outcome.unblocked, vec!["YARD-002".to_string()]);
+        assert_eq!(outcome.dependency_outputs, 1);
 
         // Queue: the Partial is now Done (the dependent stays Queued, ready).
         let q = ws.load_queue().unwrap();
@@ -7072,5 +7471,203 @@ records:
         assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Queued);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_partial_rejects_when_dependency_output_proof_is_missing() {
+        let dir = temp_root("resolve-missing-dependency-output-proof");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+        let mut queue = WorkQueue::empty();
+        queue.tasks = vec![task_in("YARD-LEGACY", "partial")];
+        ws.save_queue(&queue).unwrap();
+
+        let error = resolve_partial(&ws, "YARD-LEGACY", "merged by hand")
+            .err()
+            .expect("a Partial task without durable output proof must stay Partial");
+        assert!(
+            error
+                .to_string()
+                .contains("dependency_output_proof_missing:dependency=YARD-LEGACY"),
+            "{error:#}"
+        );
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Partial);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn dependency_materialization_fixture(
+        name: &str,
+        output_path: &str,
+        snapshot: Option<&[u8]>,
+        expected_digest: &str,
+        write_manifest: bool,
+    ) -> (Workspace, WorkQueue, Task, PathBuf) {
+        let dir = temp_root(name);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let destination = dir.join("fresh-worktree");
+        fs::create_dir_all(&destination).unwrap();
+        let ws = Workspace::at(&dir);
+        let mut queue = WorkQueue::empty();
+        queue.intent_id = "intent-dependency-output".into();
+        let upstream = task_in("YARD-UPSTREAM", "done");
+        let mut downstream = task_in("YARD-DOWNSTREAM", "queued");
+        downstream.depends_on = vec!["YARD-UPSTREAM".into()];
+        queue.tasks = vec![upstream, downstream.clone()];
+        ws.save_queue(&queue).unwrap();
+        append_transition(
+            &ws,
+            transition(
+                "YARD-UPSTREAM",
+                TaskState::Partial,
+                TaskState::Done,
+                TransitionCause::Recover,
+                "manual integration",
+                TransitionActor::User,
+            ),
+        )
+        .unwrap();
+
+        let run_id = "run-20990101-000000-upstream";
+        let run_dir = ws.runs_dir().join(run_id);
+        fs::create_dir_all(&run_dir).unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-UPSTREAM\nintent_id: intent-dependency-output\nstate: partial\nstarted_at: 2099-01-01T00:00:00Z\n"
+            ),
+        )
+        .unwrap();
+        if write_manifest {
+            let snapshots = ws.resolved_dependency_output_snapshots_dir(run_id).unwrap();
+            fs::create_dir_all(&snapshots).unwrap();
+            if let Some(bytes) = snapshot {
+                write_bytes_atomic(&snapshots.join("0000.bin"), bytes).unwrap();
+            }
+            save_yaml_atomic(
+                &ws.resolved_dependency_output_manifest_path(run_id).unwrap(),
+                &ResolvedDependencyOutputs {
+                    schema_version: 1,
+                    dependency_task_id: "YARD-UPSTREAM".into(),
+                    source_run_id: run_id.into(),
+                    outputs: vec![ResolvedDependencyOutput {
+                        path: output_path.into(),
+                        content_digest: expected_digest.into(),
+                        snapshot_file: "0000.bin".into(),
+                        availability: DependencyOutputAvailability::CoreSnapshot,
+                    }],
+                },
+            )
+            .unwrap();
+        }
+        (ws, queue, downstream, destination)
+    }
+
+    #[test]
+    fn downstream_rejects_missing_dependency_output_manifest() {
+        let (ws, queue, task, destination) = dependency_materialization_fixture(
+            "dependency-output-missing-manifest",
+            "output.txt",
+            None,
+            "",
+            false,
+        );
+        let error =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("dependency_output_manifest_missing:dependency=YARD-UPSTREAM"),
+            "{error:#}"
+        );
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn downstream_rejects_dependency_output_path_traversal() {
+        let bytes = b"snapshot\n";
+        let (ws, queue, task, destination) = dependency_materialization_fixture(
+            "dependency-output-path-traversal",
+            "../escape.txt",
+            Some(bytes),
+            &content_digest(bytes),
+            true,
+        );
+        let error =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "dependency_output_path_invalid:dependency=YARD-UPSTREAM:path=../escape.txt"
+            ),
+            "{error:#}"
+        );
+        assert!(!ws.root.join("escape.txt").exists());
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn downstream_rejects_dependency_output_scope_violation() {
+        let bytes = b"snapshot\n";
+        let (ws, queue, task, destination) = dependency_materialization_fixture(
+            "dependency-output-scope-violation",
+            ".agents/work-queue.yaml",
+            Some(bytes),
+            &content_digest(bytes),
+            true,
+        );
+        let error =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "dependency_output_scope_violation:dependency=YARD-UPSTREAM:path=.agents/work-queue.yaml"
+            ),
+            "{error:#}"
+        );
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn downstream_rejects_missing_dependency_output_snapshot_bytes() {
+        let bytes = b"snapshot\n";
+        let (ws, queue, task, destination) = dependency_materialization_fixture(
+            "dependency-output-missing-bytes",
+            "output.txt",
+            None,
+            &content_digest(bytes),
+            true,
+        );
+        let error =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "dependency_output_bytes_missing:dependency=YARD-UPSTREAM:path=output.txt"
+            ),
+            "{error:#}"
+        );
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn downstream_rejects_dependency_output_digest_tamper() {
+        let expected = b"expected\n";
+        let (ws, queue, task, destination) = dependency_materialization_fixture(
+            "dependency-output-digest-tamper",
+            "output.txt",
+            Some(b"tampered\n"),
+            &content_digest(expected),
+            true,
+        );
+        let error =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "dependency_output_digest_mismatch:dependency=YARD-UPSTREAM:path=output.txt"
+            ),
+            "{error:#}"
+        );
+        assert!(!destination.join("output.txt").exists());
+        let _ = fs::remove_dir_all(ws.root);
     }
 }

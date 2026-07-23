@@ -180,6 +180,13 @@ fn prepare_serial_worktree(
         }
         state::save_harness_copy_warnings(run_dir, &harness_copy_warnings)?;
         let core_input_overlays = capture_serial_input_overlays(&path, &harness_seed_dir)?;
+        let queue = ws.load_queue()?;
+        let task = queue
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .ok_or_else(|| anyhow!("task {task_id} disappeared during worktree preparation"))?;
+        state::materialize_resolved_dependency_outputs(ws, &queue, task, &path)?;
         let worker_run_dir = wt_agents.join("runs").join(run_id);
         std::fs::create_dir_all(&worker_run_dir)?;
         Ok(SerialWorktree {
@@ -393,6 +400,79 @@ fn serial_worktree_evidence(
         merge_target_oid: committed.merge_target_oid,
         core_input_overlays,
     })
+}
+
+/// Enumerate dependency outputs for a manual `Partial -> Done` resolution from
+/// the same core-owned Git evidence used by finalization. A missing or
+/// contradictory serial receipt is a hard proof failure: result.json paths are
+/// worker claims and are never substituted for the actual worktree diff.
+pub(crate) fn resolved_dependency_output_paths(
+    ws: &Workspace,
+    run_dir: &std::path::Path,
+    worktree: &std::path::Path,
+    task_id: &str,
+) -> Result<Vec<String>> {
+    let record: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).with_context(|| {
+        format!("dependency_output_proof_missing:dependency={task_id}:run_record")
+    })?;
+    let directory_run_id = run_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if record.task_id != task_id
+        || record.run_id.trim().is_empty()
+        || record.run_id != directory_run_id
+        || record.integration_provenance != IntegrationProvenance::SerialCoreStaged
+    {
+        bail!("dependency_output_proof_missing:dependency={task_id}:unsupported_or_mismatched_run");
+    }
+    let receipt = ws
+        .load_serial_integration_receipt(&record.run_id)
+        .with_context(|| {
+            format!(
+                "dependency_output_proof_missing:dependency={task_id}:serial_integration_receipt"
+            )
+        })?;
+    if receipt.task_id != task_id
+        || receipt.run_id != record.run_id
+        || receipt.worktree != record.worktree
+        || receipt.branch != record.worktree_branch
+        || receipt.baseline_oid != record.baseline_oid
+    {
+        bail!(
+            "dependency_output_proof_mismatch:dependency={task_id}:run={}",
+            record.run_id
+        );
+    }
+    let declared = std::fs::canonicalize(&receipt.worktree).with_context(|| {
+        format!(
+            "dependency_output_bytes_missing:dependency={task_id}:worktree={}",
+            receipt.worktree
+        )
+    })?;
+    let actual = std::fs::canonicalize(worktree).with_context(|| {
+        format!(
+            "dependency_output_bytes_missing:dependency={task_id}:worktree={}",
+            worktree.display()
+        )
+    })?;
+    if declared != actual {
+        bail!("dependency_output_proof_mismatch:dependency={task_id}:worktree");
+    }
+    let evidence = serial_worktree_evidence(ws, worktree, run_dir).ok_or_else(|| {
+        anyhow!("dependency_output_proof_missing:dependency={task_id}:actual_diff")
+    })?;
+    let mut paths = evidence
+        .paths
+        .into_iter()
+        .filter(|path| evaluator::is_integratable_path(path))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        bail!("dependency_output_proof_missing:dependency={task_id}:no_repository_outputs");
+    }
+    Ok(paths)
 }
 
 pub(crate) fn discard_unchanged_seeded_harness_copy(
@@ -10372,6 +10452,187 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         assert!(!ws.root.join(".agents/skills/example/SKILL.md").exists());
 
         crate::parallel::remove_worktree(&ws.root, wt, &record.worktree_branch);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    fn resolved_dependency_output_fixture(name: &str) -> (Workspace, RunReport, PathBuf, PathBuf) {
+        let source = std::env::temp_dir().join(format!(
+            "yard-resolved-dependency-output-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        let spawn_marker = source.join("downstream-spawn.txt");
+        let worker = write_worker_script(
+            &source,
+            "dependency-worker.sh",
+            r##"#!/bin/sh
+run_dir="$1"
+spawn_marker="$2"
+run_id=$(basename "$run_dir")
+packet=$(cat)
+task_id=$(printf "%s" "$packet" | sed -n 's/^# Yardlet task packet: //p' | head -n 1)
+status=done
+case "$task_id" in
+  YARD-UPSTREAM)
+    printf "resolved dependency bytes\n" > dependency-output.txt
+    mkdir -p .agents/skills/resolved-output
+    printf "resolved harness bytes\n" > .agents/skills/resolved-output/SKILL.md
+    ;;
+  YARD-DOWNSTREAM)
+    if test "$(cat dependency-output.txt 2>/dev/null)" = "resolved dependency bytes" \
+       && test "$(cat .agents/skills/resolved-output/SKILL.md 2>/dev/null)" = "resolved harness bytes"
+    then
+      printf "present\n" > "$spawn_marker"
+    else
+      printf "missing\n" > "$spawn_marker"
+      status=failed
+    fi
+    ;;
+esac
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "$status",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": {
+    "files_modified": [],
+    "files_created": ["dependency-output.txt", ".agents/skills/resolved-output/SKILL.md"],
+    "files_deleted": []
+  },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "dependency output fixture",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&worker),
+            shell_literal(&spawn_marker)
+        );
+        let ws = init_test_workspace(name, &worker_yaml);
+        let mut downstream = task("YARD-DOWNSTREAM", TaskState::Queued, 20, false);
+        downstream.depends_on = vec!["YARD-UPSTREAM".into()];
+        let mut q = queue(vec![
+            task("YARD-UPSTREAM", TaskState::Queued, 10, false),
+            downstream,
+        ]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        let upstream = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-UPSTREAM".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+        assert_eq!(upstream.result_state, Some(TaskState::Partial));
+        assert!(!ws.root.join("dependency-output.txt").exists());
+        state::resolve_partial(&ws, "YARD-UPSTREAM", "integrated manually").unwrap();
+
+        let mut config = std::fs::read_to_string(ws.config_path()).unwrap();
+        config.push_str("auto_commit: true\n");
+        write_str(&ws.config_path(), &config).unwrap();
+        (ws, upstream, source, spawn_marker)
+    }
+
+    #[test]
+    fn resolved_auto_commit_off_outputs_reach_dependent_fresh_worktree() {
+        let (ws, _upstream, source, spawn_marker) =
+            resolved_dependency_output_fixture("resolved-dependency-output");
+        let downstream = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-DOWNSTREAM".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&spawn_marker).unwrap(),
+            "present\n",
+            "resolved dependency outputs were absent from the downstream fresh worktree before worker spawn"
+        );
+        assert_eq!(downstream.result_state, Some(TaskState::Done));
+        assert_eq!(
+            std::fs::read_to_string(ws.root.join("dependency-output.txt")).unwrap(),
+            "resolved dependency bytes\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.root.join(".agents/skills/resolved-output/SKILL.md"))
+                .unwrap(),
+            "resolved harness bytes\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn dependency_output_digest_tamper_blocks_serial_worker_spawn() {
+        let (ws, upstream, source, spawn_marker) =
+            resolved_dependency_output_fixture("resolved-dependency-output-tamper");
+        let manifest = ws
+            .load_resolved_dependency_outputs(&upstream.run_id)
+            .unwrap();
+        let ordinary = manifest
+            .outputs
+            .iter()
+            .find(|output| output.path == "dependency-output.txt")
+            .unwrap();
+        let snapshot = ws
+            .checkpoints_dir()
+            .join("dependency-outputs")
+            .join(&upstream.run_id)
+            .join("snapshots")
+            .join(&ordinary.snapshot_file);
+        write_str(&snapshot, "tampered dependency bytes\n").unwrap();
+
+        let error = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-DOWNSTREAM".into()),
+                ..opts()
+            },
+        )
+        .err()
+        .expect("digest tamper must block the downstream before spawn");
+        assert!(
+            error.to_string().contains(
+                "dependency_output_digest_mismatch:dependency=YARD-UPSTREAM:path=dependency-output.txt"
+            ),
+            "{error:#}"
+        );
+        assert!(
+            !spawn_marker.exists(),
+            "the downstream worker spawned before dependency digest verification"
+        );
+        assert_eq!(
+            ws.load_queue()
+                .unwrap()
+                .tasks
+                .iter()
+                .find(|task| task.id == "YARD-DOWNSTREAM")
+                .unwrap()
+                .state,
+            TaskState::Queued
+        );
+
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
     }
