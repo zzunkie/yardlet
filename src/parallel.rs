@@ -2667,8 +2667,7 @@ printf "# handoff\n" > "$run_dir/handoff.md"
 
         let mut events = Vec::new();
         let error = run_batch(&ws, &[1], false, |event| events.push(event.to_string()))
-            .err()
-            .expect("digest tamper must abort the batch before worker spawn");
+            .expect_err("digest tamper must abort the batch before worker spawn");
         assert!(
             error.to_string().contains(
                 "dependency_output_digest_mismatch:dependency=YARD-UPSTREAM:path=dependency-output.txt"
