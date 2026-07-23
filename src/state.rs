@@ -139,10 +139,27 @@ pub struct SerialIntegrationReceipt {
     /// being attributed to, or integrated as, worker-authored changes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub core_input_overlays: Vec<SerialInputOverlay>,
+    /// Resolved dependency outputs the core materialized into the worktree
+    /// before worker spawn (issue #21). A distinct provenance kind from
+    /// `core_input_overlays`: these bytes were authored by an upstream task and
+    /// delivered from core-owned snapshots, so while their digest still matches
+    /// they are validation inputs, never downstream worker evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependency_input_overlays: Vec<DependencyInputOverlay>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SerialInputOverlay {
+    pub path: String,
+    pub content_digest: String,
+}
+
+/// Core-recorded provenance for one resolved dependency output materialized
+/// into a run worktree before worker spawn: which upstream task authored the
+/// bytes, where they were placed, and the exact digest verification read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependencyInputOverlay {
+    pub dependency_task_id: String,
     pub path: String,
     pub content_digest: String,
 }
@@ -166,6 +183,8 @@ pub struct IntegratedCleanupReceipt {
     pub owned_oids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub core_input_overlays: Vec<SerialInputOverlay>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependency_input_overlays: Vec<DependencyInputOverlay>,
 }
 
 /// Core-owned proof that a run produced no Git changes and therefore needs no
@@ -185,6 +204,8 @@ pub struct NoChangeReceipt {
     pub provenance: IntegrationProvenance,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub core_input_overlays: Vec<SerialInputOverlay>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependency_input_overlays: Vec<DependencyInputOverlay>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -5532,13 +5553,16 @@ fn write_dependency_output_target(
 /// Verify and materialize every manually resolved dependency into a fresh
 /// worker worktree. The function completes before any worker spawn and trusts
 /// only core-owned snapshot bytes. Normal Done dependencies without a manual
-/// resolution receipt remain ordinary HEAD inputs.
+/// resolution receipt remain ordinary HEAD inputs. The returned overlays are
+/// the core's own provenance record (dependency, path, digest) for the run's
+/// integration receipt, so downstream evidence can keep upstream bytes out of
+/// worker attribution.
 pub fn materialize_resolved_dependency_outputs(
     ws: &Workspace,
     queue: &WorkQueue,
     task: &Task,
     destination: &Path,
-) -> Result<Vec<String>> {
+) -> Result<Vec<DependencyInputOverlay>> {
     struct PendingOutput {
         dependency: String,
         path: String,
@@ -5607,7 +5631,11 @@ pub fn materialize_resolved_dependency_outputs(
             &output.bytes,
             &output.digest,
         )?;
-        materialized.push(output.path);
+        materialized.push(DependencyInputOverlay {
+            dependency_task_id: output.dependency,
+            path: output.path,
+            content_digest: output.digest,
+        });
     }
     Ok(materialized)
 }
@@ -7747,7 +7775,14 @@ records:
         let inode_before = fs::metadata(&target).unwrap().ino();
         let materialized =
             materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap();
-        assert_eq!(materialized, vec!["output.txt".to_string()]);
+        assert_eq!(
+            materialized,
+            vec![DependencyInputOverlay {
+                dependency_task_id: "YARD-UPSTREAM".into(),
+                path: "output.txt".into(),
+                content_digest: content_digest(bytes),
+            }]
+        );
         assert_eq!(fs::read(&target).unwrap(), bytes);
         assert_eq!(
             fs::metadata(&target).unwrap().ino(),

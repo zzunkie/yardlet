@@ -85,6 +85,7 @@ struct SerialWorktree {
     baseline_oid: String,
     worker_run_dir: PathBuf,
     core_input_overlays: Vec<state::SerialInputOverlay>,
+    dependency_input_overlays: Vec<state::DependencyInputOverlay>,
 }
 
 struct SerialWorktreeErrorCleanup<'a> {
@@ -186,7 +187,8 @@ fn prepare_serial_worktree(
             .iter()
             .find(|task| task.id == task_id)
             .ok_or_else(|| anyhow!("task {task_id} disappeared during worktree preparation"))?;
-        state::materialize_resolved_dependency_outputs(ws, &queue, task, &path)?;
+        let dependency_input_overlays =
+            state::materialize_resolved_dependency_outputs(ws, &queue, task, &path)?;
         let worker_run_dir = wt_agents.join("runs").join(run_id);
         std::fs::create_dir_all(&worker_run_dir)?;
         Ok(SerialWorktree {
@@ -195,6 +197,7 @@ fn prepare_serial_worktree(
             baseline_oid: baseline_oid.clone(),
             worker_run_dir,
             core_input_overlays,
+            dependency_input_overlays,
         })
     })();
     match prepared {
@@ -207,6 +210,7 @@ fn prepare_serial_worktree(
                 branch,
                 baseline_oid,
                 core_input_overlays: owned.core_input_overlays.clone(),
+                dependency_input_overlays: owned.dependency_input_overlays.clone(),
             };
             if let Err(error) = ws.save_serial_integration_receipt(&receipt) {
                 crate::parallel::remove_worktree(&ws.root, &path, &receipt.branch);
@@ -241,6 +245,7 @@ struct SerialWorktreeEvidence {
     paths: Vec<String>,
     merge_target_oid: String,
     core_input_overlays: Vec<state::SerialInputOverlay>,
+    dependency_input_overlays: Vec<state::DependencyInputOverlay>,
 }
 
 fn serial_committed_paths(
@@ -315,6 +320,7 @@ fn serial_worktree_evidence(
             paths,
             merge_target_oid: committed.merge_target_oid,
             core_input_overlays: Vec::new(),
+            dependency_input_overlays: Vec::new(),
         });
     }
 
@@ -395,10 +401,30 @@ fn serial_worktree_evidence(
             .clone();
         core_input_overlays.push(overlay);
     }
+    // Materialized dependency outputs (issue #21) whose exact receipted digest
+    // is still on disk are core-delivered inputs, not downstream worker
+    // evidence. A path the worker committed or rewrote loses that provenance
+    // and stays attributed to the worker.
+    let mut dependency_input_overlays = Vec::new();
+    paths.retain(|path| {
+        let Some(overlay) = receipt
+            .dependency_input_overlays
+            .iter()
+            .find(|overlay| overlay.path == *path)
+        else {
+            return true;
+        };
+        if committed_paths.contains(path) || !dependency_input_overlay_matches(worktree, overlay) {
+            return true;
+        }
+        dependency_input_overlays.push(overlay.clone());
+        false
+    });
     Some(SerialWorktreeEvidence {
         paths,
         merge_target_oid: committed.merge_target_oid,
         core_input_overlays,
+        dependency_input_overlays,
     })
 }
 
@@ -562,6 +588,57 @@ fn serial_input_overlay_parity_failure(
         Some(format!(
             "serial_input_overlay_parity_mismatch:path={}:expected={}:found={found}",
             overlay.path, overlay.content_digest
+        ))
+    })
+}
+
+/// Digest a materialized dependency output inside `root`. Unlike harness input
+/// overlays these may live anywhere integratable in the repository, so only
+/// the traversal/symlink/canonical-state constraints apply.
+fn dependency_input_overlay_digest(
+    root: &std::path::Path,
+    overlay: &state::DependencyInputOverlay,
+) -> Result<String> {
+    let relative = std::path::Path::new(&overlay.path);
+    let normalized = relative
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)));
+    if relative.is_absolute() || !normalized || !evaluator::is_integratable_path(&overlay.path) {
+        bail!("invalid dependency input overlay path");
+    }
+    let path = root.join(relative);
+    let metadata = std::fs::symlink_metadata(&path)
+        .with_context(|| format!("inspecting dependency input overlay {}", overlay.path))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("dependency input overlay is not a regular file");
+    }
+    Ok(state::content_digest(&std::fs::read(&path)?))
+}
+
+pub(crate) fn dependency_input_overlay_matches(
+    root: &std::path::Path,
+    overlay: &state::DependencyInputOverlay,
+) -> bool {
+    dependency_input_overlay_digest(root, overlay)
+        .is_ok_and(|digest| digest == overlay.content_digest)
+}
+
+/// The retained/integration tree must keep the exact dependency-output bytes
+/// validation read. Checked against the worktree only: the bytes come from
+/// core-owned snapshots, so the owning root carries no parity obligation.
+fn dependency_input_overlay_parity_failure(
+    root: &std::path::Path,
+    overlays: &[state::DependencyInputOverlay],
+) -> Option<String> {
+    overlays.iter().find_map(|overlay| {
+        let found = match dependency_input_overlay_digest(root, overlay) {
+            Ok(found) if found == overlay.content_digest => return None,
+            Ok(found) => found,
+            Err(error) => format!("unavailable({error})"),
+        };
+        Some(format!(
+            "dependency_input_overlay_parity_mismatch:path={}:dependency={}:expected={}:found={found}",
+            overlay.path, overlay.dependency_task_id, overlay.content_digest
         ))
     })
 }
@@ -2992,6 +3069,10 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 .as_ref()
                 .map(|evidence| evidence.core_input_overlays.as_slice())
                 .unwrap_or(&[]),
+            dependency_input_overlays: serial_evidence
+                .as_ref()
+                .map(|evidence| evidence.dependency_input_overlays.as_slice())
+                .unwrap_or(&[]),
             provenance: IntegrationProvenance::SerialCoreStaged,
             auto_commit: config.auto_commit,
         }),
@@ -4325,12 +4406,17 @@ fn validate_receipted_serial_input_overlay_parity(
     ws: &Workspace,
     worktree: &std::path::Path,
     overlays: &[state::SerialInputOverlay],
+    dependency_overlays: &[state::DependencyInputOverlay],
 ) -> Result<()> {
     if let Some(reason) = serial_input_overlay_parity_failure(&ws.root, overlays) {
         bail!(reason);
     }
     if worktree.exists() {
         if let Some(reason) = serial_input_overlay_parity_failure(worktree, overlays) {
+            bail!(reason);
+        }
+        if let Some(reason) = dependency_input_overlay_parity_failure(worktree, dependency_overlays)
+        {
             bail!(reason);
         }
     }
@@ -4398,6 +4484,10 @@ fn validate_integrated_cleanup_identity(
                 .core_input_overlays
                 .iter()
                 .any(|overlay| !serial.core_input_overlays.contains(overlay))
+            || receipt
+                .dependency_input_overlays
+                .iter()
+                .any(|overlay| !serial.dependency_input_overlays.contains(overlay))
         {
             return Err(anyhow!("serial and integrated core receipts disagree"));
         }
@@ -4405,6 +4495,7 @@ fn validate_integrated_cleanup_identity(
             ws,
             &worktree,
             &receipt.core_input_overlays,
+            &receipt.dependency_input_overlays,
         )?;
     }
     Ok((
@@ -4464,6 +4555,10 @@ fn validate_no_change_receipt(ws: &Workspace, receipt: &state::NoChangeReceipt) 
                 .core_input_overlays
                 .iter()
                 .any(|overlay| !serial.core_input_overlays.contains(overlay))
+            || receipt
+                .dependency_input_overlays
+                .iter()
+                .any(|overlay| !serial.dependency_input_overlays.contains(overlay))
         {
             return Err(anyhow!("serial and no-change core receipts disagree"));
         }
@@ -4471,6 +4566,7 @@ fn validate_no_change_receipt(ws: &Workspace, receipt: &state::NoChangeReceipt) 
             ws,
             &worktree,
             &receipt.core_input_overlays,
+            &receipt.dependency_input_overlays,
         )?;
     }
     Ok(worktree)
@@ -4717,6 +4813,8 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                             == IntegrationProvenance::ParallelWorkerDirect
                 });
                 let mut parallel_core_input_overlays: Vec<state::SerialInputOverlay> = Vec::new();
+                let mut parallel_dependency_input_overlays: Vec<state::DependencyInputOverlay> =
+                    Vec::new();
                 let serial_evidence = wt
                     .as_ref()
                     .filter(|_| !parallel_direct)
@@ -4726,6 +4824,8 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                         match crate::parallel::parallel_worker_evidence(&ws.root, w, &run_dir) {
                             Ok(worker_evidence) => {
                                 parallel_core_input_overlays = worker_evidence.core_input_overlays;
+                                parallel_dependency_input_overlays =
+                                    worker_evidence.dependency_input_overlays;
                                 Some(worker_evidence.paths)
                             }
                             Err(error) => {
@@ -4790,6 +4890,14 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                         serial_evidence
                             .as_ref()
                             .map(|evidence| evidence.core_input_overlays.as_slice())
+                            .unwrap_or(&[])
+                    },
+                    dependency_input_overlays: if parallel_direct {
+                        parallel_dependency_input_overlays.as_slice()
+                    } else {
+                        serial_evidence
+                            .as_ref()
+                            .map(|evidence| evidence.dependency_input_overlays.as_slice())
                             .unwrap_or(&[])
                     },
                     provenance: recovery_integration_provenance(
@@ -5453,6 +5561,10 @@ pub(crate) struct MergeBack<'a> {
     /// worktree during validation. They are neither worker evidence nor
     /// integration candidates while their exact digest still matches.
     pub core_input_overlays: &'a [state::SerialInputOverlay],
+    /// Resolved dependency outputs the core materialized before worker spawn.
+    /// While their exact digest still matches they are upstream-authored
+    /// validation inputs, not worker evidence (issue #21).
+    pub dependency_input_overlays: &'a [state::DependencyInputOverlay],
     /// Selects the integration protocol. Serial core-staged runs may use their
     /// trusted transaction record; parallel worker-direct runs never load it.
     pub provenance: IntegrationProvenance,
@@ -6159,7 +6271,13 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             let retained_without_integration =
                 !merge.auto_commit && (has_worker_changes || committed_change);
             input_overlay_parity_failure =
-                serial_input_overlay_parity_failure(merge.wt_path, merge.core_input_overlays);
+                serial_input_overlay_parity_failure(merge.wt_path, merge.core_input_overlays)
+                    .or_else(|| {
+                        dependency_input_overlay_parity_failure(
+                            merge.wt_path,
+                            merge.dependency_input_overlays,
+                        )
+                    });
             if input_overlay_parity_failure.is_none() && !retained_without_integration {
                 input_overlay_parity_failure =
                     serial_input_overlay_parity_failure(&ws.root, merge.core_input_overlays);
@@ -6361,6 +6479,19 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             let has_changes = evidence
                 .as_ref()
                 .is_some_and(|paths| worker_changed_integratable_path(Some(paths)));
+            // A consume-only downstream must not go Partial on upstream bytes
+            // alone: receipted dependency-input overlays are core-delivered
+            // inputs, not changes this worker left uncommitted.
+            if next_state == TaskState::Done
+                && !has_changes
+                && !m.dependency_input_overlays.is_empty()
+            {
+                lines.push(format!(
+                    "{}: {} materialized dependency input(s) stay receipted core overlays, not worker changes",
+                    task.id,
+                    m.dependency_input_overlays.len()
+                ));
+            }
             if next_state == TaskState::Done && has_changes {
                 next_state = TaskState::Partial;
                 let _ = state::write_str(&run_dir.join("partial-reason"), "auto_commit_disabled");
@@ -7026,6 +7157,7 @@ fn persist_run_integration(
         provenance: merge.provenance,
         owned_oids: owned_oids.to_vec(),
         core_input_overlays: merge.core_input_overlays.to_vec(),
+        dependency_input_overlays: merge.dependency_input_overlays.to_vec(),
     };
     // The external receipt is the cleanup trust root and must become durable
     // before the worker-writable run record is projected.
@@ -7062,6 +7194,7 @@ fn persist_no_change_receipt(
         worker_oid: worker_oid.to_string(),
         provenance: merge.provenance,
         core_input_overlays: merge.core_input_overlays.to_vec(),
+        dependency_input_overlays: merge.dependency_input_overlays.to_vec(),
     };
     ws.save_no_change_receipt(&receipt)?;
     persist_no_change_projection(run_dir, &receipt, false)?;
@@ -10470,7 +10603,11 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         let _ = std::fs::remove_dir_all(ws.root);
     }
 
-    fn resolved_dependency_output_fixture(name: &str) -> (Workspace, RunReport, PathBuf, PathBuf) {
+    fn resolved_dependency_output_fixture(
+        name: &str,
+        auto_commit_on: bool,
+        downstream_validation: Option<&str>,
+    ) -> (Workspace, RunReport, PathBuf, PathBuf) {
         let source = std::env::temp_dir().join(format!(
             "yard-resolved-dependency-output-{name}-{}",
             std::process::id()
@@ -10488,11 +10625,13 @@ run_id=$(basename "$run_dir")
 packet=$(cat)
 task_id=$(printf "%s" "$packet" | sed -n 's/^# Yardlet task packet: //p' | head -n 1)
 status=done
+created='[]'
 case "$task_id" in
   YARD-UPSTREAM)
     printf "resolved dependency bytes\n" > dependency-output.txt
     mkdir -p .agents/skills/resolved-output
     printf "resolved harness bytes\n" > .agents/skills/resolved-output/SKILL.md
+    created='["dependency-output.txt", ".agents/skills/resolved-output/SKILL.md"]'
     ;;
   YARD-DOWNSTREAM)
     if test "$(cat dependency-output.txt 2>/dev/null)" = "resolved dependency bytes" \
@@ -10514,7 +10653,7 @@ cat > "$run_dir/result.json" <<EOF
   "intent_adherence": { "drift_detected": false, "notes": "" },
   "changes": {
     "files_modified": [],
-    "files_created": ["dependency-output.txt", ".agents/skills/resolved-output/SKILL.md"],
+    "files_created": $created,
     "files_deleted": []
   },
   "validation": { "commands_run": [], "passed": true, "failures": [] },
@@ -10536,6 +10675,16 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         let ws = init_test_workspace(name, &worker_yaml);
         let mut downstream = task("YARD-DOWNSTREAM", TaskState::Queued, 20, false);
         downstream.depends_on = vec!["YARD-UPSTREAM".into()];
+        if let Some(validation) = downstream_validation {
+            downstream.kind = "implementation".into();
+            downstream.validation = Some(
+                crate::yaml::from_str(&format!(
+                    "required: true\ncommands:\n  - {}\n",
+                    serde_json::to_string(validation).unwrap()
+                ))
+                .unwrap(),
+            );
+        }
         let mut q = queue(vec![
             task("YARD-UPSTREAM", TaskState::Queued, 10, false),
             downstream,
@@ -10556,16 +10705,18 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         assert!(!ws.root.join("dependency-output.txt").exists());
         state::resolve_partial(&ws, "YARD-UPSTREAM", "integrated manually").unwrap();
 
-        let mut config = std::fs::read_to_string(ws.config_path()).unwrap();
-        config.push_str("auto_commit: true\n");
-        write_str(&ws.config_path(), &config).unwrap();
+        if auto_commit_on {
+            let mut config = std::fs::read_to_string(ws.config_path()).unwrap();
+            config.push_str("auto_commit: true\n");
+            write_str(&ws.config_path(), &config).unwrap();
+        }
         (ws, upstream, source, spawn_marker)
     }
 
     #[test]
     fn resolved_auto_commit_off_outputs_reach_dependent_fresh_worktree() {
         let (ws, _upstream, source, spawn_marker) =
-            resolved_dependency_output_fixture("resolved-dependency-output");
+            resolved_dependency_output_fixture("resolved-dependency-output", true, None);
         let downstream = run_next(
             &ws,
             &RunOptions {
@@ -10597,9 +10748,150 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
     }
 
     #[test]
+    fn auto_commit_off_consume_only_downstream_stays_done_with_dependency_overlay_receipt() {
+        let (ws, _upstream, source, spawn_marker) =
+            resolved_dependency_output_fixture("resolved-dependency-consume-only", false, None);
+        let downstream = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-DOWNSTREAM".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&spawn_marker).unwrap(),
+            "present\n",
+            "resolved dependency outputs were absent from the downstream fresh worktree"
+        );
+        assert_eq!(
+            downstream.result_state,
+            Some(TaskState::Done),
+            "materialized upstream bytes alone must not demote a consume-only \
+             downstream under auto_commit=false: {:?}",
+            downstream.lines
+        );
+        assert_eq!(
+            ws.load_queue()
+                .unwrap()
+                .tasks
+                .iter()
+                .find(|task| task.id == "YARD-DOWNSTREAM")
+                .unwrap()
+                .state,
+            TaskState::Done
+        );
+        assert!(!downstream.run_dir.join("partial-reason").exists());
+
+        let expected_overlays = vec![
+            state::DependencyInputOverlay {
+                dependency_task_id: "YARD-UPSTREAM".into(),
+                path: ".agents/skills/resolved-output/SKILL.md".into(),
+                content_digest: state::content_digest(b"resolved harness bytes\n"),
+            },
+            state::DependencyInputOverlay {
+                dependency_task_id: "YARD-UPSTREAM".into(),
+                path: "dependency-output.txt".into(),
+                content_digest: state::content_digest(b"resolved dependency bytes\n"),
+            },
+        ];
+        let receipt = ws
+            .load_serial_integration_receipt(&downstream.run_id)
+            .unwrap();
+        assert_eq!(
+            receipt.dependency_input_overlays, expected_overlays,
+            "materialized dependency outputs must be receipted with their own provenance kind"
+        );
+        let no_change = ws.load_no_change_receipt(&downstream.run_id).unwrap();
+        assert_eq!(
+            no_change.dependency_input_overlays, expected_overlays,
+            "the durable no-change receipt must carry the typed consume-only policy evidence"
+        );
+
+        // Evidence separation: the worker reported no changes, so the advisory
+        // disclosure check only passes when the evaluator saw none either.
+        let evaluation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(downstream.run_dir.join("evaluation.json")).unwrap(),
+        )
+        .unwrap();
+        let disclosure = evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "diff_matches_report")
+            .unwrap();
+        assert_eq!(
+            disclosure["passed"], true,
+            "upstream-authored bytes must not be attributed to the downstream worker: {disclosure}"
+        );
+
+        let record: RunRecord = state::load_yaml(&downstream.run_dir.join("run.yaml")).unwrap();
+        assert!(
+            !std::path::Path::new(&record.worktree).exists(),
+            "a consume-only no-change run must clean up its worktree"
+        );
+        assert!(
+            !ws.root.join("dependency-output.txt").exists(),
+            "auto_commit=false must keep upstream bytes out of the owning root"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn dependency_overlay_worktree_tamper_blocks_done_with_typed_diagnosis() {
+        let (ws, _upstream, source, spawn_marker) = resolved_dependency_output_fixture(
+            "resolved-dependency-overlay-tamper",
+            false,
+            Some(
+                "grep -Fxq 'resolved dependency bytes' dependency-output.txt && \
+                 printf 'tampered after validation\\n' > dependency-output.txt",
+            ),
+        );
+        let downstream = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-DOWNSTREAM".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+        let record: RunRecord = state::load_yaml(&downstream.run_dir.join("run.yaml")).unwrap();
+        let wt = std::path::Path::new(&record.worktree);
+        let validation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(downstream.run_dir.join("validation.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&spawn_marker).unwrap(), "present\n");
+        assert_eq!(validation["all_passed"], true);
+        assert!(
+            !matches!(downstream.result_state, Some(TaskState::Done)),
+            "a dependency overlay rewritten after validation must not reach Done: {:?}",
+            downstream.result_state
+        );
+        assert!(
+            std::fs::read_to_string(downstream.run_dir.join("partial-reason"))
+                .unwrap()
+                .starts_with(
+                    "dependency_input_overlay_parity_mismatch:path=dependency-output.txt:dependency=YARD-UPSTREAM"
+                ),
+            "the parity failure must name the dependency overlay provenance"
+        );
+
+        crate::parallel::remove_worktree(&ws.root, wt, &record.worktree_branch);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
     fn dependency_output_digest_tamper_blocks_serial_worker_spawn() {
         let (ws, upstream, source, spawn_marker) =
-            resolved_dependency_output_fixture("resolved-dependency-output-tamper");
+            resolved_dependency_output_fixture("resolved-dependency-output-tamper", true, None);
         let manifest = ws
             .load_resolved_dependency_outputs(&upstream.run_id)
             .unwrap();
@@ -12232,6 +12524,7 @@ exit 1
             branch: branch.clone(),
             baseline_oid: baseline.clone(),
             core_input_overlays: vec![overlay.clone()],
+            dependency_input_overlays: vec![],
         })
         .unwrap();
         ws.save_integrated_cleanup_receipt(&state::IntegratedCleanupReceipt {
@@ -12249,6 +12542,7 @@ exit 1
             provenance: IntegrationProvenance::SerialCoreStaged,
             owned_oids: vec![worker_oid.clone(), integration_oid.clone()],
             core_input_overlays: vec![overlay],
+            dependency_input_overlays: vec![],
         })
         .unwrap();
         state::save_yaml(
@@ -12499,6 +12793,7 @@ exit 1
                 worker_oid: baseline.clone(),
                 provenance: IntegrationProvenance::ParallelWorkerDirect,
                 core_input_overlays: vec![],
+                dependency_input_overlays: vec![],
             })
             .unwrap();
             if cleanup_before_recovery {
@@ -12590,6 +12885,7 @@ exit 1
                 baseline_oid: "trusted-baseline",
                 expected_tip_oid: None,
                 core_input_overlays: &[],
+                dependency_input_overlays: &[],
                 provenance: IntegrationProvenance::SerialCoreStaged,
                 auto_commit: true,
             }),
@@ -12944,6 +13240,7 @@ exit 1
             branch: branch.into(),
             baseline_oid: baseline.clone(),
             core_input_overlays: vec![],
+            dependency_input_overlays: vec![],
         })
         .unwrap();
         std::fs::write(wt.join("staged.txt"), "worker completed\n").unwrap();
@@ -13176,6 +13473,7 @@ exit 1
             branch: branch.clone(),
             baseline_oid: baseline.clone(),
             core_input_overlays: vec![],
+            dependency_input_overlays: vec![],
         })
         .unwrap();
         state::save_yaml(
@@ -13287,6 +13585,7 @@ exit 1
             branch: branch.clone(),
             baseline_oid: baseline.clone(),
             core_input_overlays: vec![overlay],
+            dependency_input_overlays: vec![],
         })
         .unwrap();
         let result = crate::schemas::RunResult {
@@ -13428,6 +13727,7 @@ exit 1
                 path: ".agents/rules/tracked-dirty.md".into(),
                 content_digest: receipt_digest,
             }],
+            dependency_input_overlays: vec![],
         })
         .unwrap();
         assert!(
@@ -14489,6 +14789,7 @@ exit 1
                 baseline_oid: &baseline_oid,
                 expected_tip_oid: None,
                 core_input_overlays: &[],
+                dependency_input_overlays: &[],
                 provenance: IntegrationProvenance::ParallelWorkerDirect,
                 auto_commit: true,
             }),
@@ -14673,6 +14974,7 @@ exit 1
                 baseline_oid: &unrelated_oid,
                 expected_tip_oid: Some(&unrelated_oid),
                 core_input_overlays: &[],
+                dependency_input_overlays: &[],
                 provenance: IntegrationProvenance::ParallelWorkerDirect,
                 auto_commit: true,
             }),
@@ -14848,6 +15150,7 @@ exit 1
             provenance: IntegrationProvenance::ParallelWorkerDirect,
             owned_oids: vec![worker_oid.clone(), integration_oid.clone()],
             core_input_overlays: vec![],
+            dependency_input_overlays: vec![],
         })
         .unwrap();
 
@@ -15117,6 +15420,7 @@ exit 1
                 provenance: IntegrationProvenance::ParallelWorkerDirect,
                 owned_oids: vec![worker_oid.into(), expected_oid.into()],
                 core_input_overlays: vec![],
+                dependency_input_overlays: vec![],
             })
             .unwrap();
             ws.save_git_finish_record(
