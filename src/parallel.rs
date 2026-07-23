@@ -338,6 +338,47 @@ pub fn run_batch<F: FnMut(&str)>(
         return Err(anyhow!("no runnable task in the batch"));
     }
 
+    // Fail closed before any worktree exists or worker spawns when the enabled
+    // Git-finish policy still names a branch other than the owning root's
+    // checkout — the parallel twin of the serial pre-spawn preflight (issue
+    // #36). Every claimed run dir gets the same core-owned SafetyBlocked
+    // record the serial path writes; the batch tasks were never marked
+    // Running, so they stay Queued and retry once the policy is retargeted.
+    let mut retarget_error: Option<anyhow::Error> = None;
+    for p in &preps {
+        if let Err(error) = crate::git_finish::preflight_target_before_spawn(
+            ws,
+            &p.run_dir,
+            &p.run_id,
+            &p.task.id,
+            &config.git_finish,
+        ) {
+            state::save_yaml_atomic(
+                &p.run_dir.join("run.yaml"),
+                &run::RunRecord {
+                    schema_version: 1,
+                    run_id: p.run_id.clone(),
+                    task_id: p.task.id.clone(),
+                    intent_id: queue.intent_id.clone(),
+                    worker: p.worker_id.clone(),
+                    model: p.selection.model.clone(),
+                    fallback_enabled: p.selection.fallback_enabled,
+                    routing_provenance: Some(p.selection.routing_provenance.clone()),
+                    state: "blocked".to_string(),
+                    started_at: Local::now().to_rfc3339(),
+                    completed_at: Some(Local::now().to_rfc3339()),
+                    worktree: ".".to_string(),
+                    ..Default::default()
+                },
+            )?;
+            on_event(&format!("{}: {error}", p.task.id));
+            retarget_error.get_or_insert(error);
+        }
+    }
+    if let Some(error) = retarget_error {
+        return Err(error);
+    }
+
     // ---- worktrees + run dirs + packets ----------------------------------
     let mut ok: Vec<Prep> = Vec::new();
     for mut p in preps {
@@ -2701,6 +2742,173 @@ exit 0
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parallel_batch_stale_git_finish_target_blocks_before_worker_spawn() {
+        let root = temp_repo("stale-target-preflight");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let remote = std::env::temp_dir().join(format!(
+            "yard-par-stale-target-remote-{}.git",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&remote);
+        let init_remote = std::process::Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&remote)
+            .output()
+            .unwrap();
+        assert!(
+            init_remote.status.success(),
+            "git init --bare: {}",
+            String::from_utf8_lossy(&init_remote.stderr)
+        );
+        sh_git(&root, &["branch", "-M", "main"]);
+        sh_git(
+            &root,
+            &["remote", "add", "fixture", remote.to_str().unwrap()],
+        );
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        let stale_target = "refs/heads/codex/yard-101-delivery";
+        let checkout_ref = "refs/heads/main";
+        sh_git(&root, &["push", "-q", "fixture", "HEAD:refs/heads/main"]);
+        sh_git(
+            &root,
+            &["push", "-q", "fixture", &format!("HEAD:{stale_target}")],
+        );
+
+        let spawn_marker = root.join(".agents/worker-spawned");
+        let builder = write_test_worker(
+            &root,
+            "builder-worker.sh",
+            r##"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "builder-worker 1.0"
+  exit 0
+fi
+run_dir="$1"
+spawn_marker="$2"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+touch "$spawn_marker"
+printf "stale target output\n" > stale-output.txt
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-STALE",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": ["stale-output.txt"], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "green worker가 완료했다.",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+exit 0
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            yaml_string(&builder),
+            yaml_string(&spawn_marker)
+        );
+        let mut stale_task = task("YARD-STALE", TaskState::Queued, 10, vec![]);
+        stale_task.allowed_scope = vec!["stale-output.txt".into()];
+        let ws = setup_workspace(&root, &worker_yaml, vec![stale_task]);
+        let mut config = ws.load_config().unwrap();
+        config.auto_commit = true;
+        config.git_finish = crate::schemas::GitFinishPolicy {
+            auto_push: true,
+            remote: "fixture".into(),
+            target_ref: stale_target.into(),
+            pre_push_checks: vec![],
+        };
+        state::save_yaml(&ws.config_path(), &config).unwrap();
+
+        let mut events = Vec::new();
+        let outcome = run_batch(&ws, &[0], false, |s| events.push(s.to_string()));
+
+        if spawn_marker.exists() {
+            panic!(
+                "worker spawned before the stale target_ref was rejected; \
+                 expected a pre-spawn retarget block, got batch outcome {:?}",
+                outcome.map(|states| states
+                    .iter()
+                    .map(|(id, state)| format!("{id}:{state:?}"))
+                    .collect::<Vec<_>>())
+            );
+        }
+        let error = outcome.expect_err("stale target_ref must abort the batch before any spawn");
+        let diagnostic = error.to_string();
+        assert!(
+            diagnostic.contains("branch_does_not_match_target_ref")
+                && diagnostic.contains(stale_target)
+                && diagnostic.contains(checkout_ref),
+            "retarget diagnostic must name the typed reason and both refs: {diagnostic}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.contains("branch_does_not_match_target_ref")),
+            "the retarget diagnostic must surface as a batch event: {events:?}"
+        );
+
+        assert_eq!(
+            ws.load_queue().unwrap().tasks[0].state,
+            TaskState::Queued,
+            "a pre-spawn retarget block must keep the batch task retryable"
+        );
+
+        let run_dirs: Vec<PathBuf> = std::fs::read_dir(ws.runs_dir())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.is_dir())
+            .collect();
+        assert_eq!(
+            run_dirs.len(),
+            1,
+            "expected one blocked run dir: {run_dirs:?}"
+        );
+        let blocked = ws.load_git_finish_record(&run_dirs[0]).unwrap();
+        assert_eq!(
+            blocked.status,
+            crate::git_finish::GitFinishStatus::SafetyBlocked
+        );
+        assert!(
+            blocked
+                .reason
+                .starts_with("branch_does_not_match_target_ref:checkout_ref="),
+            "the core record must carry the serial-path reason shape: {}",
+            blocked.reason
+        );
+        assert_eq!(blocked.policy.target_ref, stale_target);
+        assert!(!blocked.push_invoked);
+        let blocked_run: run::RunRecord = state::load_yaml(&run_dirs[0].join("run.yaml")).unwrap();
+        assert_eq!(blocked_run.state, "blocked");
+        assert!(blocked_run.completed_at.is_some());
+
+        let leftover: Vec<PathBuf> = std::fs::read_dir(root.join(".agents/worktrees"))
+            .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(
+            leftover.is_empty(),
+            "a blocked batch must not leave worktrees behind: {leftover:?}"
+        );
+        assert_eq!(
+            sh_git(&root, &["ls-remote", "--refs", "fixture", stale_target])
+                .split_whitespace()
+                .next(),
+            Some(baseline.as_str()),
+            "the pre-spawn block must not move the stale remote target"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&remote);
     }
 
     #[test]
