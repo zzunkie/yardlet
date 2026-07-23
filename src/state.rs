@@ -5511,6 +5511,13 @@ fn write_dependency_output_target(
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             bail!("dependency_output_path_invalid:dependency={dependency}:path={path}");
         }
+        let found = content_digest(&fs::read(&target)?);
+        if found != expected_digest {
+            bail!(
+                "dependency_output_conflict:dependency={dependency}:path={path}:existing_digest={found}:expected={expected_digest}"
+            );
+        }
+        return Ok(());
     }
     write_bytes_atomic(&target, bytes)?;
     let found = content_digest(&fs::read(&target)?);
@@ -7693,6 +7700,60 @@ records:
             "{error:#}"
         );
         assert!(!destination.join("output.txt").exists());
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn downstream_rejects_existing_destination_digest_conflict() {
+        let bytes = b"snapshot\n";
+        let (ws, queue, task, destination) = dependency_materialization_fixture(
+            "dependency-output-existing-conflict",
+            "output.txt",
+            Some(bytes),
+            &content_digest(bytes),
+            true,
+        );
+        write_str(&destination.join("output.txt"), "local edit\n").unwrap();
+        let error =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("dependency_output_conflict:dependency=YARD-UPSTREAM:path=output.txt"),
+            "{error:#}"
+        );
+        assert_eq!(
+            fs::read(destination.join("output.txt")).unwrap(),
+            b"local edit\n",
+            "a conflicting pre-existing destination must be left untouched"
+        );
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn downstream_accepts_matching_existing_destination_as_noop() {
+        use std::os::unix::fs::MetadataExt;
+
+        let bytes = b"snapshot\n";
+        let (ws, queue, task, destination) = dependency_materialization_fixture(
+            "dependency-output-existing-match",
+            "output.txt",
+            Some(bytes),
+            &content_digest(bytes),
+            true,
+        );
+        let target = destination.join("output.txt");
+        write_str(&target, "snapshot\n").unwrap();
+        let inode_before = fs::metadata(&target).unwrap().ino();
+        let materialized =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap();
+        assert_eq!(materialized, vec!["output.txt".to_string()]);
+        assert_eq!(fs::read(&target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&target).unwrap().ino(),
+            inode_before,
+            "a same-digest pre-existing destination must pass as a no-op, not a rewrite"
+        );
         let _ = fs::remove_dir_all(ws.root);
     }
 }
