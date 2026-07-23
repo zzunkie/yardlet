@@ -3669,10 +3669,43 @@ pub(crate) fn stale_running_reason(
         {
             "recorded worker is dead or its process identity no longer matches"
         }
+        Ok(provenance)
+            if provenance.run_id == record.run_id
+                && provenance.worker_id == record.worker
+                && provenance.pid == 0
+                && provenance.state == "prepared"
+                && provenance.completed_at.is_none() =>
+        {
+            // Dispatch writes this prepared/pid=0 record just before spawning
+            // the worker, so a status taken inside that window is not stale.
+            if within_dispatch_prepare_grace(&record.started_at) {
+                return None;
+            }
+            "worker was never spawned; run stalled in dispatch preparation"
+        }
         Ok(_) => "worker process provenance does not match the active run",
         Err(_) => "worker process provenance is missing or invalid",
     };
     Some(reason.to_string())
+}
+
+/// How long after `started_at` a prepared/pid=0 provenance record is treated as
+/// a live dispatch still spawning its worker rather than a stalled run.
+const DISPATCH_PREPARE_GRACE_SECS: i64 = 120;
+
+/// True while a run is close enough to its recorded start that the prepared
+/// provenance window is plausibly still in flight. An unparseable timestamp
+/// fails closed (no deferral), and the bound is absolute so a corrupt
+/// far-future `started_at` cannot suppress the diagnosis forever.
+fn within_dispatch_prepare_grace(started_at: &str) -> bool {
+    let Ok(started) = chrono::DateTime::parse_from_rfc3339(started_at.trim()) else {
+        return false;
+    };
+    Local::now()
+        .signed_duration_since(started)
+        .num_seconds()
+        .abs()
+        <= DISPATCH_PREPARE_GRACE_SECS
 }
 
 pub(crate) fn verified_worker_pid_for_redirect(
@@ -7116,6 +7149,42 @@ mod tests {
             finalization_artifact_causation(&events, attempt_id),
             Some("evt-validation".to_string())
         );
+    }
+
+    #[test]
+    fn unparseable_started_at_never_defers_the_prepare_window_diagnosis() {
+        let run_id = "run-prepare-grace-unparseable";
+        let run_dir = std::env::temp_dir().join(format!(
+            "yard-prepare-grace-unparseable-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&run_dir);
+        // stale_running_reason keys identity off the directory name.
+        let run_dir = run_dir.join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("run.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\nworker: fixture\nstate: running\nstarted_at: \"not-a-timestamp\"\nworktree: .\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            run_dir.join("worker-process.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\nattempt_id: att-grace\nworker_id: fixture\npid: 0\nstate: prepared\n"
+            ),
+        )
+        .unwrap();
+
+        let reason = stale_running_reason(&run_dir, "YARD-001", "intent-test")
+            .expect("an unverifiable started_at must fail closed, not defer forever");
+        assert!(
+            reason.contains("dispatch preparation"),
+            "reason should name the stalled prepare window: {reason}"
+        );
+
+        let _ = std::fs::remove_dir_all(run_dir.parent().unwrap());
     }
 
     fn planned_worker_authored(entries: &[(&'static str, &'static str, bool)], name: &str) -> bool {
