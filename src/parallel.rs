@@ -2848,9 +2848,16 @@ mod tests {
         path
     }
 
-    #[test]
-    fn dependency_output_digest_tamper_blocks_parallel_worker_spawn() {
-        let root = temp_repo("parallel-dependency-output-tamper");
+    /// Batch workspace with a manually resolved YARD-UPSTREAM whose snapshot
+    /// manifest declares `dependency-output.txt`, plus a spawn-marker worker
+    /// the queued YARD-DOWNSTREAM must never reach when preparation is
+    /// blocked. The caller controls the snapshot bytes vs the manifest digest.
+    fn resolved_dependency_output_batch_fixture(
+        name: &str,
+        snapshot_bytes: &str,
+        manifest_digest: &str,
+    ) -> (PathBuf, Workspace, PathBuf) {
+        let root = temp_repo(name);
         let spawn_marker = root.join(".agents/parallel-worker-spawned");
         let worker = write_test_worker(
             &root,
@@ -2931,7 +2938,7 @@ printf "# handoff\n" > "$run_dir/handoff.md"
             .join(run_id)
             .join("snapshots");
         std::fs::create_dir_all(&snapshots).unwrap();
-        write_str(&snapshots.join("0000.bin"), "tampered\n").unwrap();
+        write_str(&snapshots.join("0000.bin"), snapshot_bytes).unwrap();
         state::save_yaml_atomic(
             &ws.checkpoints_dir()
                 .join("dependency-outputs")
@@ -2943,13 +2950,23 @@ printf "# handoff\n" > "$run_dir/handoff.md"
                 source_run_id: run_id.into(),
                 outputs: vec![crate::schemas::ResolvedDependencyOutput {
                     path: "dependency-output.txt".into(),
-                    content_digest: state::content_digest(b"expected\n"),
+                    content_digest: manifest_digest.into(),
                     snapshot_file: "0000.bin".into(),
                     availability: crate::schemas::DependencyOutputAvailability::CoreSnapshot,
                 }],
             },
         )
         .unwrap();
+        (root, ws, spawn_marker)
+    }
+
+    #[test]
+    fn dependency_output_digest_tamper_blocks_parallel_worker_spawn() {
+        let (root, ws, spawn_marker) = resolved_dependency_output_batch_fixture(
+            "parallel-dependency-output-tamper",
+            "tampered\n",
+            &state::content_digest(b"expected\n"),
+        );
 
         let mut events = Vec::new();
         let error = run_batch(&ws, &[1], false, |event| events.push(event.to_string()))
@@ -2965,6 +2982,64 @@ printf "# handoff\n" > "$run_dir/handoff.md"
         assert!(events.iter().any(
             |event| event.contains("dependency output preparation blocked before worker spawn")
         ));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dependency_output_conflict_blocks_parallel_worker_spawn_and_cleans_worktree() {
+        let (root, ws, spawn_marker) = resolved_dependency_output_batch_fixture(
+            "parallel-dependency-output-conflict",
+            "expected upstream bytes\n",
+            &state::content_digest(b"expected upstream bytes\n"),
+        );
+        // Plant a committed file at the manifest path whose digest differs from
+        // the verified snapshot: the fresh batch worktree carries it at HEAD, so
+        // materialization must fail closed instead of clobbering repo bytes.
+        write_str(
+            &root.join("dependency-output.txt"),
+            "conflicting committed bytes\n",
+        )
+        .unwrap();
+        sh_git(&root, &["add", "dependency-output.txt"]);
+        sh_git(&root, &["commit", "-q", "-m", "conflicting baseline"]);
+
+        let mut events = Vec::new();
+        let error = run_batch(&ws, &[1], false, |event| events.push(event.to_string()))
+            .expect_err("a destination digest conflict must abort the batch before worker spawn");
+        assert!(
+            error.to_string().contains(&format!(
+                "dependency_output_conflict:dependency=YARD-UPSTREAM:path=dependency-output.txt:existing_digest={}:expected={}",
+                state::content_digest(b"conflicting committed bytes\n"),
+                state::content_digest(b"expected upstream bytes\n"),
+            )),
+            "{error:#}"
+        );
+        assert!(
+            !spawn_marker.exists(),
+            "the downstream worker spawned despite the dependency output conflict"
+        );
+        assert_eq!(ws.load_queue().unwrap().tasks[1].state, TaskState::Queued);
+        assert!(events.iter().any(
+            |event| event.contains("dependency output preparation blocked before worker spawn")
+        ));
+        let leftover: Vec<PathBuf> = std::fs::read_dir(root.join(".agents/worktrees"))
+            .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(
+            leftover.is_empty(),
+            "a pre-spawn conflict must clean up the prepared worktree: {leftover:?}"
+        );
+        assert_eq!(
+            sh_git(&root, &["branch", "--list", "yard/yard-downstream/*"]).trim(),
+            "",
+            "the failed preparation must not leave its run branch behind"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("dependency-output.txt")).unwrap(),
+            "conflicting committed bytes\n",
+            "fail-closed must leave the committed conflicting bytes untouched"
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
