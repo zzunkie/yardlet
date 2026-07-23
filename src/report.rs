@@ -292,7 +292,7 @@ pub fn build_final_report(ws: &Workspace) -> Result<String> {
         if let Some(rec) = ws.latest_transition_for_intent(&t.id, &queue.intent_id) {
             md.push_str(&format!("Last transition: {}\n\n", rec.detail.trim()));
         }
-        if let Some((_, dir)) = latest_run_for(ws, &t.id) {
+        if let Some((run_id, dir)) = latest_run_for(ws, &t.id) {
             if let Some(r) = read_result(&dir) {
                 if !r.compact_summary.trim().is_empty() {
                     md.push_str(&format!("{}\n\n", r.compact_summary.trim()));
@@ -329,6 +329,15 @@ pub fn build_final_report(ws: &Workspace) -> Result<String> {
                 {
                     md.push_str(&format!("{}\n\n", finish.user_line()));
                 }
+            }
+            // Worktree preparation left copy warnings behind: keep them visible
+            // in the wrap-up. Clean runs write no evidence file and add nothing.
+            if let Some(count) = crate::snapshot::harness_copy_warning_count(&dir) {
+                md.push_str(&format!(
+                    "Harness copy warnings: {count} warning(s) during worktree preparation \
+                     (run {run_id}, {})\n\n",
+                    crate::state::HARNESS_COPY_WARNINGS_FILE
+                ));
             }
         }
     }
@@ -755,6 +764,47 @@ mod tests {
         assert!(report.contains("- modify another repository"), "{report}");
         assert!(report.contains("- modify a home checkout"), "{report}");
         assert!(!report.contains("- record local evidence"), "{report}");
+    }
+
+    #[test]
+    fn final_report_surfaces_harness_copy_warning_evidence_only_when_present() {
+        let ws = temp_ws("harness-copy-warnings");
+        crate::state::save_yaml(&ws.intent_path(), &intent("intent-harness")).unwrap();
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.intent_id = "intent-harness".to_string();
+        queue
+            .tasks
+            .push(seed_task("YARD-001", "builder", TaskState::Done));
+        ws.save_queue(&queue).unwrap();
+        write_run(
+            &ws,
+            "run-harness",
+            "YARD-001",
+            r#"{"schema_version":1,"run_id":"run-harness","task_id":"YARD-001","status":"done"}"#,
+        );
+
+        let clean = build_final_report(&ws).unwrap();
+        assert!(!clean.contains("Harness copy warnings"), "{clean}");
+
+        let log = ws
+            .runs_dir()
+            .join("run-harness/evidence/harness-copy-warnings.log");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::fs::write(
+            &log,
+            "copy_dir: skipped symlink 'a' -> 'b'\ncopy_dir: skipped symlink 'c' -> 'd'\n",
+        )
+        .unwrap();
+
+        let report = build_final_report(&ws).unwrap();
+        assert!(
+            report.contains("Harness copy warnings: 2 warning(s)"),
+            "{report}"
+        );
+        assert!(
+            report.contains("evidence/harness-copy-warnings.log"),
+            "{report}"
+        );
     }
 
     #[test]
