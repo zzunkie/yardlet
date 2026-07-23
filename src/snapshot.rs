@@ -664,6 +664,69 @@ mod tests {
         let _ = std::fs::remove_dir_all(ws.root);
     }
 
+    fn write_run_without_provenance_file(ws: &Workspace, run_id: &str, started_at: &str) {
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("run.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: SHARED\nintent_id: intent-current\nworker: fixture\nstate: running\nstarted_at: \"{started_at}\"\nworktree: .\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn issue_29_fresh_run_without_provenance_file_is_not_flagged_as_stale() {
+        let (ws, _, _) = reused_task_id_fixture("provenance-pre-window-fresh");
+        let mut queue = ws.load_queue().unwrap();
+        queue.tasks[0].state = TaskState::Running;
+        ws.save_queue(&queue).unwrap();
+
+        write_run_without_provenance_file(
+            &ws,
+            "run-issue-29-provenance-pre-fresh",
+            &chrono::Local::now().to_rfc3339(),
+        );
+
+        let snapshot = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        assert!(
+            snapshot.recovery_required.is_empty(),
+            "a just-started run whose worker-process.yaml is not written yet must not \
+             be diagnosed as interrupted: {:?}",
+            snapshot.recovery_required
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn issue_29_old_run_with_lost_provenance_is_still_diagnosed() {
+        let (ws, _, _) = reused_task_id_fixture("provenance-lost-old");
+        let mut queue = ws.load_queue().unwrap();
+        queue.tasks[0].state = TaskState::Running;
+        ws.save_queue(&queue).unwrap();
+
+        let run_id = "run-issue-29-provenance-lost";
+        write_run_without_provenance_file(&ws, run_id, "2026-01-01T00:00:00+00:00");
+
+        let snapshot = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        let diagnostic = snapshot
+            .recovery_required
+            .first()
+            .expect("a run whose provenance never appeared must be diagnosed once stale");
+        assert_eq!(diagnostic.task_id, "SHARED");
+        assert_eq!(diagnostic.run_id, run_id);
+        assert_eq!(diagnostic.effective_state, "interrupted");
+        assert!(
+            diagnostic.reason.contains("provenance is missing"),
+            "reason should name the lost provenance: {}",
+            diagnostic.reason
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
     #[test]
     fn issue_29_stalled_dispatch_preparation_is_still_diagnosed() {
         let (ws, _, _) = reused_task_id_fixture("prepare-window-stalled");

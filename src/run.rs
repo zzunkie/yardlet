@@ -3689,13 +3689,27 @@ pub(crate) fn stale_running_reason(
             "worker was never spawned; run stalled in dispatch preparation"
         }
         Ok(_) => "worker process provenance does not match the active run",
-        Err(_) => "worker process provenance is missing or invalid",
+        Err(_) => {
+            // Dispatch writes run.yaml before any provenance file exists; a
+            // status taken inside that pre-spawn window is not stale. A file
+            // that exists but fails to parse is damage, not the pre-window,
+            // so only a genuinely absent file defers.
+            if !run_dir
+                .join(workers::WORKER_PROCESS_PROVENANCE_FILE)
+                .exists()
+                && within_dispatch_prepare_grace(&record.started_at)
+            {
+                return None;
+            }
+            "worker process provenance is missing or invalid"
+        }
     };
     Some(reason.to_string())
 }
 
-/// How long after `started_at` a prepared/pid=0 provenance record is treated as
-/// a live dispatch still spawning its worker rather than a stalled run.
+/// How long after `started_at` a run whose provenance still reads prepared/pid=0
+/// (or whose provenance file has not been written yet) is treated as a live
+/// dispatch still spawning its worker rather than a stalled run.
 const DISPATCH_PREPARE_GRACE_SECS: i64 = 120;
 
 /// True while a run is close enough to its recorded start that the prepared
@@ -7187,6 +7201,35 @@ mod tests {
         assert!(
             reason.contains("dispatch preparation"),
             "reason should name the stalled prepare window: {reason}"
+        );
+
+        let _ = std::fs::remove_dir_all(run_dir.parent().unwrap());
+    }
+
+    #[test]
+    fn unparseable_started_at_never_defers_the_missing_provenance_diagnosis() {
+        let run_id = "run-provenance-grace-unparseable";
+        let run_dir = std::env::temp_dir().join(format!(
+            "yard-provenance-grace-unparseable-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&run_dir);
+        // stale_running_reason keys identity off the directory name.
+        let run_dir = run_dir.join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("run.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\nworker: fixture\nstate: running\nstarted_at: \"not-a-timestamp\"\nworktree: .\n"
+            ),
+        )
+        .unwrap();
+
+        let reason = stale_running_reason(&run_dir, "YARD-001", "intent-test")
+            .expect("an unverifiable started_at must fail closed, not defer forever");
+        assert!(
+            reason.contains("provenance is missing"),
+            "reason should name the missing provenance: {reason}"
         );
 
         let _ = std::fs::remove_dir_all(run_dir.parent().unwrap());
