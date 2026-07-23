@@ -299,11 +299,15 @@ fn serial_committed_paths(
 /// a worker may commit its own changes and detach HEAD, so paths committed on
 /// the exact run-owned branch tip after the pinned baseline are unioned after
 /// filtering the unchanged seed copies. The returned OID binds that evidence
-/// to the later integration target.
+/// to the later integration target. When receipt-backed overlay provenance is
+/// what fails (receipt entry missing or its digest no longer matching the
+/// tree), `overlay_failure` carries the path-specific diagnostic while the
+/// return stays `None` so every caller keeps failing closed.
 fn serial_worktree_evidence(
     ws: &Workspace,
     worktree: &std::path::Path,
     run_dir: &std::path::Path,
+    overlay_failure: &mut Option<String>,
 ) -> Option<SerialWorktreeEvidence> {
     let mut paths = evaluator::changed_paths(worktree)?;
     let committed = serial_committed_paths(worktree, run_dir)?;
@@ -385,21 +389,33 @@ fn serial_worktree_evidence(
     let unchanged_seeded_harness = unchanged_seeded_harness
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
-    let receipt = ws.load_serial_integration_receipt(&run_id).ok()?;
     let core_candidates = unchanged_seeded_harness
         .into_iter()
         .filter(|path| !committed_paths.contains(path))
         .collect::<Vec<_>>();
+    let receipt = match ws.load_serial_integration_receipt(&run_id) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            *overlay_failure = Some(format!(
+                "serial_input_overlay_receipt_unavailable:run={run_id}:paths={}:{error}",
+                core_candidates.join(",")
+            ));
+            return None;
+        }
+    };
     let mut core_input_overlays = Vec::new();
     for path in core_candidates {
-        let overlay = receipt
-            .core_input_overlays
-            .iter()
-            .find(|overlay| {
-                overlay.path == path && serial_input_overlay_matches(worktree, overlay)
-            })?
-            .clone();
-        core_input_overlays.push(overlay);
+        let Some(overlay) = receipt.core_input_overlays.iter().find(|overlay| {
+            overlay.path == path && serial_input_overlay_matches(worktree, overlay)
+        }) else {
+            *overlay_failure = Some(serial_core_overlay_evidence_failure(
+                worktree,
+                &receipt.core_input_overlays,
+                &path,
+            ));
+            return None;
+        };
+        core_input_overlays.push(overlay.clone());
     }
     // Materialized dependency outputs (issue #21) whose exact receipted digest
     // is still on disk are core-delivered inputs, not downstream worker
@@ -485,9 +501,14 @@ pub(crate) fn resolved_dependency_output_paths(
     if declared != actual {
         bail!("dependency_output_proof_mismatch:dependency={task_id}:worktree");
     }
-    let evidence = serial_worktree_evidence(ws, worktree, run_dir).ok_or_else(|| {
-        anyhow!("dependency_output_proof_missing:dependency={task_id}:actual_diff")
-    })?;
+    let mut overlay_failure = None;
+    let evidence = serial_worktree_evidence(ws, worktree, run_dir, &mut overlay_failure)
+        .ok_or_else(|| match overlay_failure {
+            Some(reason) => {
+                anyhow!("dependency_output_proof_missing:dependency={task_id}:actual_diff:{reason}")
+            }
+            None => anyhow!("dependency_output_proof_missing:dependency={task_id}:actual_diff"),
+        })?;
     let mut paths = evidence
         .paths
         .into_iter()
@@ -573,6 +594,29 @@ pub(crate) fn serial_input_overlay_matches(
     overlay: &state::SerialInputOverlay,
 ) -> bool {
     serial_input_overlay_digest(root, overlay).is_ok_and(|digest| digest == overlay.content_digest)
+}
+
+/// Overlay-specific diagnostic for a core input overlay that failed its
+/// receipt lookup during evidence collection: either the receipt has no entry
+/// for the path, or the recorded digest no longer matches the bytes in the
+/// tree. Kept distinct from the integration-time parity gate labels so an
+/// evidence-collection failure stays attributable to its exact path.
+fn serial_core_overlay_evidence_failure(
+    root: &std::path::Path,
+    overlays: &[state::SerialInputOverlay],
+    path: &str,
+) -> String {
+    let Some(overlay) = overlays.iter().find(|overlay| overlay.path == path) else {
+        return format!("serial_input_overlay_receipt_missing:path={path}");
+    };
+    let found = match serial_input_overlay_digest(root, overlay) {
+        Ok(found) => found,
+        Err(error) => format!("unavailable({error})"),
+    };
+    format!(
+        "serial_input_overlay_digest_mismatch:path={path}:expected={}:found={found}",
+        overlay.content_digest
+    )
 }
 
 fn serial_input_overlay_parity_failure(
@@ -3009,10 +3053,17 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // the run, so a path the worker re-modified while it was already dirty is
     // still attributed (plain path-set subtraction would miss it). `None` means
     // evidence capture itself failed, in which case the evaluator fails closed
-    // rather than trusting the worker's self-report.
-    let serial_evidence = serial_worktree
-        .as_ref()
-        .and_then(|owned| serial_worktree_evidence(ws, &owned.path, &run_dir));
+    // rather than trusting the worker's self-report; an overlay-provenance
+    // failure additionally leaves its path-specific reason in the run lines.
+    let mut overlay_failure = None;
+    let serial_evidence = serial_worktree.as_ref().and_then(|owned| {
+        serial_worktree_evidence(ws, &owned.path, &run_dir, &mut overlay_failure)
+    });
+    if let Some(reason) = overlay_failure.as_ref() {
+        lines.push(format!(
+            "change evidence unavailable after worker run: {reason}"
+        ));
+    }
     let evidence: Option<Vec<String>> = if serial_worktree.is_some() {
         serial_evidence
             .as_ref()
@@ -4815,10 +4866,16 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 let mut parallel_core_input_overlays: Vec<state::SerialInputOverlay> = Vec::new();
                 let mut parallel_dependency_input_overlays: Vec<state::DependencyInputOverlay> =
                     Vec::new();
+                let mut overlay_failure = None;
                 let serial_evidence = wt
                     .as_ref()
                     .filter(|_| !parallel_direct)
-                    .and_then(|w| serial_worktree_evidence(ws, w, &run_dir));
+                    .and_then(|w| serial_worktree_evidence(ws, w, &run_dir, &mut overlay_failure));
+                if let Some(reason) = overlay_failure.as_ref() {
+                    msgs.push(format!(
+                        "{id}: change evidence unavailable during recovery: {reason}"
+                    ));
+                }
                 let evidence = match wt.as_ref() {
                     Some(w) if parallel_direct => {
                         match crate::parallel::parallel_worker_evidence(&ws.root, w, &run_dir) {
@@ -10522,7 +10579,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         let record: RunRecord = state::load_yaml(&report.run_dir.join("run.yaml")).unwrap();
         let wt = std::path::Path::new(&record.worktree);
 
-        let evidence = serial_worktree_evidence(&ws, wt, &report.run_dir)
+        let evidence = serial_worktree_evidence(&ws, wt, &report.run_dir, &mut None)
             .unwrap()
             .paths;
 
@@ -13954,6 +14011,196 @@ exit 1
             std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
             "# User dirty edit\n",
             "fail-closed recovery must not rewrite the retained worktree"
+        );
+
+        crate::parallel::remove_worktree(&ws.root, &wt, &branch);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// Finished orphan serial run whose harness seed carries one core-seeded
+    /// dirty input, with the receipt's `core_input_overlays` supplied by the
+    /// caller so a tampered or missing entry exercises the overlay-provenance
+    /// failure inside evidence collection.
+    fn orphaned_serial_worktree_with_overlay_receipt(
+        name: &str,
+        receipt_overlays: Vec<state::SerialInputOverlay>,
+    ) -> (Workspace, PathBuf, PathBuf, String) {
+        let ws = init_test_workspace(
+            name,
+            "schema_version: 1\nrouting: {default_worker: builder}\nworkers: []\n",
+        );
+        let rule = ws.agents_dir().join("rules/tracked-dirty.md");
+        write_str(&rule, "# Tracked baseline\n").unwrap();
+        git_stdout(&ws.root, &["add", ".agents/rules/tracked-dirty.md"]).unwrap();
+        git_stdout(
+            &ws.root,
+            &["commit", "-q", "-m", "track overlay evidence input"],
+        )
+        .unwrap();
+        write_str(&rule, "# User dirty edit\n").unwrap();
+
+        let task_id = "YARD-OVERLAY-EVIDENCE";
+        let run_id = format!("run-20990101-000000-{name}");
+        let mut queued_task = task(task_id, TaskState::Running, 10, false);
+        queued_task.kind = "implementation".into();
+        let mut q = queue(vec![queued_task]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        let run_dir = ws.runs_dir().join(&run_id);
+        let canonical_seed = run_dir.join(SERIAL_CANONICAL_SEED_DIR);
+        let harness_seed = run_dir.join(HARNESS_SEED_DIR);
+        std::fs::create_dir_all(&canonical_seed).unwrap();
+        std::fs::create_dir_all(harness_seed.join("rules")).unwrap();
+        let baseline = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let branch = format!("yard/{}/{run_id}", task_id.to_lowercase());
+        let wt = ws.agents_dir().join("worktrees").join(&run_id);
+        crate::parallel::create_worktree(&ws.root, &wt, &branch).unwrap();
+        std::fs::create_dir_all(wt.join(".agents/rules")).unwrap();
+        for name in ["intent-contract.yaml", "work-queue.yaml"] {
+            let source = ws.agents_dir().join(name);
+            std::fs::copy(&source, wt.join(".agents").join(name)).unwrap();
+            std::fs::copy(&source, canonical_seed.join(name)).unwrap();
+        }
+        std::fs::copy(&rule, wt.join(".agents/rules/tracked-dirty.md")).unwrap();
+        std::fs::copy(&rule, harness_seed.join("rules/tracked-dirty.md")).unwrap();
+        write_str(&wt.join("worker-output.txt"), "orphan worker output\n").unwrap();
+        ws.save_serial_integration_receipt(&state::SerialIntegrationReceipt {
+            schema_version: 1,
+            run_id: run_id.clone(),
+            task_id: task_id.into(),
+            worktree: wt.display().to_string(),
+            branch: branch.clone(),
+            baseline_oid: baseline.clone(),
+            core_input_overlays: receipt_overlays,
+            dependency_input_overlays: vec![],
+        })
+        .unwrap();
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.clone(),
+            task_id: task_id.into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "overlay evidence diagnostic fixture".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# overlay evidence fixture\n").unwrap();
+        state::save_yaml(
+            &run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 1,
+                run_id,
+                task_id: task_id.into(),
+                intent_id: "intent-test".into(),
+                worker: "builder".into(),
+                model: String::new(),
+                fallback_enabled: false,
+                routing_provenance: None,
+                state: "running".into(),
+                started_at: Local::now().to_rfc3339(),
+                completed_at: None,
+                worktree: wt.display().to_string(),
+                serial_isolated: true,
+                baseline_oid: baseline,
+                worktree_branch: branch.clone(),
+                integration_oid: String::new(),
+                integration_base_oid: String::new(),
+                integration_worker_oid: String::new(),
+                integration_provenance: IntegrationProvenance::SerialCoreStaged,
+                integration_cleanup_complete: false,
+                owned_oids: vec![],
+                output_contract_incident: None,
+            },
+        )
+        .unwrap();
+        write_str(&run_dir.join("worker.pid"), "2147483647").unwrap();
+
+        (ws, run_dir, wt, branch)
+    }
+
+    #[test]
+    fn overlay_digest_mismatch_fails_evidence_with_path_specific_diagnostic() {
+        let (ws, run_dir, wt, branch) = orphaned_serial_worktree_with_overlay_receipt(
+            "overlay-evidence-digest-mismatch",
+            vec![state::SerialInputOverlay {
+                path: ".agents/rules/tracked-dirty.md".into(),
+                content_digest: state::content_digest(b"# Receipt recorded other bytes\n"),
+            }],
+        );
+
+        let mut overlay_failure = None;
+        assert!(
+            serial_worktree_evidence(&ws, &wt, &run_dir, &mut overlay_failure).is_none(),
+            "a receipt digest mismatch must keep failing closed"
+        );
+        let reason =
+            overlay_failure.expect("the evidence failure must carry an overlay diagnostic");
+        assert!(
+            reason.starts_with(
+                "serial_input_overlay_digest_mismatch:path=.agents/rules/tracked-dirty.md:expected="
+            ),
+            "{reason}"
+        );
+
+        let messages = recover_orphans(&ws);
+        assert_ne!(
+            ws.load_queue().unwrap().tasks[0].state,
+            TaskState::Done,
+            "evidence-less recovery must not reach Done: {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|message| message.contains(
+                "serial_input_overlay_digest_mismatch:path=.agents/rules/tracked-dirty.md"
+            )),
+            "recovery lines must carry the overlay-specific diagnostic: {messages:?}"
+        );
+
+        crate::parallel::remove_worktree(&ws.root, &wt, &branch);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn overlay_receipt_entry_missing_fails_evidence_with_path_specific_diagnostic() {
+        let (ws, run_dir, wt, branch) =
+            orphaned_serial_worktree_with_overlay_receipt("overlay-evidence-entry-missing", vec![]);
+
+        let mut overlay_failure = None;
+        assert!(
+            serial_worktree_evidence(&ws, &wt, &run_dir, &mut overlay_failure).is_none(),
+            "a missing receipt entry must keep failing closed"
+        );
+        assert_eq!(
+            overlay_failure.as_deref(),
+            Some("serial_input_overlay_receipt_missing:path=.agents/rules/tracked-dirty.md")
+        );
+
+        let messages = recover_orphans(&ws);
+        assert_ne!(
+            ws.load_queue().unwrap().tasks[0].state,
+            TaskState::Done,
+            "evidence-less recovery must not reach Done: {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|message| message.contains(
+                "serial_input_overlay_receipt_missing:path=.agents/rules/tracked-dirty.md"
+            )),
+            "recovery lines must carry the overlay-specific diagnostic: {messages:?}"
         );
 
         crate::parallel::remove_worktree(&ws.root, &wt, &branch);
