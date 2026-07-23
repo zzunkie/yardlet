@@ -166,13 +166,18 @@ fn prepare_serial_worktree(
         std::fs::copy(&queue, wt_agents.join("work-queue.yaml"))?;
         std::fs::copy(&queue, canonical_seed_dir.join("work-queue.yaml"))?;
         let harness_seed_dir = run_dir.join(HARNESS_SEED_DIR);
+        let mut harness_copy_warnings: Vec<String> = Vec::new();
         for directory in ["rules", "skills", "agents"] {
-            crate::parallel::copy_dir(&ws.agents_dir().join(directory), &wt_agents.join(directory));
-            crate::parallel::copy_dir(
+            harness_copy_warnings.extend(crate::parallel::copy_dir(
+                &ws.agents_dir().join(directory),
+                &wt_agents.join(directory),
+            ));
+            harness_copy_warnings.extend(crate::parallel::copy_dir(
                 &ws.agents_dir().join(directory),
                 &harness_seed_dir.join(directory),
-            );
+            ));
         }
+        state::save_harness_copy_warnings(run_dir, &harness_copy_warnings)?;
         let worker_run_dir = wt_agents.join("runs").join(run_id);
         std::fs::create_dir_all(&worker_run_dir)?;
         Ok(SerialWorktree {
@@ -8841,6 +8846,84 @@ printf "# handoff\n" > "$run_dir/handoff.md"
             .expect("seed directory creation must fail after worktree creation");
 
         assert_serial_location_removed(&ws, run_id, &branch);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn serial_prepare_persists_harness_copy_warnings_as_run_evidence() {
+        use std::os::unix::fs::symlink;
+
+        let ws = init_test_workspace(
+            "serial-harness-warning-evidence",
+            "schema_version: 1\nrouting: {default_worker: builder}\nworkers: []\n",
+        );
+        ws.save_queue(&queue(vec![task(
+            "YARD-HARNESS-WARN",
+            TaskState::Queued,
+            10,
+            false,
+        )]))
+        .unwrap();
+        let external_rules = ws.root.join("external-rules");
+        std::fs::create_dir_all(&external_rules).unwrap();
+        symlink(&external_rules, ws.agents_dir().join("rules")).unwrap();
+        let run_id = "run-20990101-000000-harness-warn";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+
+        let owned = prepare_serial_worktree(&ws, &run_dir, run_id, "YARD-HARNESS-WARN").unwrap();
+
+        let log_path = run_dir.join("evidence/harness-copy-warnings.log");
+        let log = std::fs::read_to_string(&log_path).unwrap_or_else(|error| {
+            panic!(
+                "harness copy warnings must land in {}: {error}",
+                log_path.display()
+            )
+        });
+        assert!(
+            log.contains("skipped non-directory harness root"),
+            "evidence must carry the copy_dir warning text: {log}"
+        );
+        assert!(
+            log.contains(&ws.agents_dir().join("rules").display().to_string()),
+            "evidence must name the skipped harness source: {log}"
+        );
+
+        crate::parallel::remove_worktree(&ws.root, &owned.path, &owned.branch);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn serial_prepare_without_harness_copy_warnings_writes_no_evidence_file() {
+        let ws = init_test_workspace(
+            "serial-harness-clean-evidence",
+            "schema_version: 1\nrouting: {default_worker: builder}\nworkers: []\n",
+        );
+        ws.save_queue(&queue(vec![task(
+            "YARD-HARNESS-CLEAN",
+            TaskState::Queued,
+            10,
+            false,
+        )]))
+        .unwrap();
+        write_str(&ws.agents_dir().join("rules/clean.md"), "# clean\n").unwrap();
+        let run_id = "run-20990101-000000-harness-clean";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+
+        let owned = prepare_serial_worktree(&ws, &run_dir, run_id, "YARD-HARNESS-CLEAN").unwrap();
+
+        assert!(
+            !run_dir.join("evidence/harness-copy-warnings.log").exists(),
+            "clean preparation must not create the warnings evidence file"
+        );
+        assert!(
+            owned.path.join(".agents/rules/clean.md").is_file(),
+            "clean preparation must still seed harness assets into the worktree"
+        );
+
+        crate::parallel::remove_worktree(&ws.root, &owned.path, &owned.branch);
         let _ = std::fs::remove_dir_all(ws.root);
     }
 
