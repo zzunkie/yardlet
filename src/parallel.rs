@@ -1898,9 +1898,9 @@ fn stage_integratable_changes(
 }
 
 #[derive(Debug)]
-struct ParallelWorkerEvidence {
-    paths: Vec<String>,
-    core_input_overlays: Vec<state::SerialInputOverlay>,
+pub(crate) struct ParallelWorkerEvidence {
+    pub(crate) paths: Vec<String>,
+    pub(crate) core_input_overlays: Vec<state::SerialInputOverlay>,
 }
 
 /// Actual parallel-worktree changes with Yardlet's unchanged seeded harness
@@ -1910,7 +1910,7 @@ struct ParallelWorkerEvidence {
 /// one is proven against the core-owned receipt captured before worker spawn.
 /// A copy without a matching receipt digest fails closed — there is no
 /// provenance separating it from a worker change.
-fn parallel_worker_evidence(
+pub(crate) fn parallel_worker_evidence(
     root: &Path,
     wt: &Path,
     run_dir: &Path,
