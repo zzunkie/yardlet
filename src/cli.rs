@@ -279,6 +279,10 @@ pub struct AnswerArgs {
     /// Drop the worker sandbox when resuming (e.g. to grant the access asked for).
     #[arg(long)]
     full_access: bool,
+    /// Explicitly accept a typed deviation disclosed by the latest run.
+    /// Repeat for multiple exact deviation ids.
+    #[arg(long = "accept-deviation")]
+    accept_deviations: Vec<String>,
     /// Stable idempotency key for retrying the same answer action.
     #[arg(long)]
     action_id: Option<String>,
@@ -1593,7 +1597,13 @@ fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {
         return Ok(());
     }
 
-    run::prepare_answer_action(&ws, &task_id, &reply, action_id)?;
+    run::prepare_answer_action_with_deviations(
+        &ws,
+        &task_id,
+        &reply,
+        action_id,
+        &args.accept_deviations,
+    )?;
 
     println!("You: {reply}\n");
     let report = run::run_next(
@@ -2154,6 +2164,21 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         snap.planner,
     );
     println!("Access: {}", snap.config.default_access);
+    if !snap.recovery_required.is_empty() {
+        println!("\nrecovery required (stale Running projection):");
+        for diagnostic in &snap.recovery_required {
+            let run = if diagnostic.run_id.is_empty() {
+                "(no run)"
+            } else {
+                diagnostic.run_id.as_str()
+            };
+            println!(
+                "  - task {} / run {}: {}",
+                diagnostic.task_id, run, diagnostic.reason
+            );
+        }
+        println!("  recover with:  yardlet recover");
+    }
     if let Some((id, q)) = &snap.pending {
         println!("\n\u{2691} {id} is waiting on you:");
         println!(

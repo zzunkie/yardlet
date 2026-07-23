@@ -1601,6 +1601,16 @@ pub(crate) fn prepare_answer_action(
     reply: &str,
     requested_action_id: Option<String>,
 ) -> Result<bool> {
+    prepare_answer_action_with_deviations(ws, task_id, reply, requested_action_id, &[])
+}
+
+pub(crate) fn prepare_answer_action_with_deviations(
+    ws: &Workspace,
+    task_id: &str,
+    reply: &str,
+    requested_action_id: Option<String>,
+    accepted_deviation_ids: &[String],
+) -> Result<bool> {
     let queue = ws.load_queue()?;
     if queue.intent_id.is_empty() {
         return Ok(false);
@@ -1634,6 +1644,54 @@ pub(crate) fn prepare_answer_action(
         .iter()
         .find(|task| task.id == task_id)
         .ok_or_else(|| anyhow!("task {task_id} not found in queue"))?;
+    let accepted_deviations = if accepted_deviation_ids.is_empty() {
+        Vec::new()
+    } else {
+        let (latest_run_id, latest_run_dir) = latest_run_for(ws, task_id)
+            .ok_or_else(|| anyhow!("task {task_id} has no run with disclosed deviations"))?;
+        let result: RunResult = serde_json::from_str(
+            &std::fs::read_to_string(latest_run_dir.join("result.json"))
+                .context("loading latest deviation disclosure")?,
+        )
+        .context("parsing latest deviation disclosure")?;
+        if result.task_id != task_id || result.run_id != latest_run_id {
+            bail!("deviation_disclosure_identity_mismatch");
+        }
+        let mut selected = Vec::new();
+        for requested in accepted_deviation_ids {
+            let requested = requested.trim();
+            let matches = result
+                .intent_adherence
+                .deviations
+                .iter()
+                .filter(|deviation| deviation.id == requested)
+                .collect::<Vec<_>>();
+            if matches.len() > 1 {
+                bail!(
+                    "deviation_disclosure_ambiguous: latest run disclosed '{}' more than once",
+                    requested
+                );
+            }
+            let deviation = matches.first().copied().ok_or_else(|| {
+                    anyhow!(
+                        "deviation_not_disclosed: latest run for {task_id} did not disclose '{requested}'"
+                    )
+                })?;
+            if deviation.scope.is_empty() {
+                bail!(
+                    "deviation_not_typed: '{}' has no exact scope and cannot be accepted",
+                    deviation.id
+                );
+            }
+            if !selected
+                .iter()
+                .any(|existing: &crate::schemas::IntentDeviation| existing.id == deviation.id)
+            {
+                selected.push(deviation.clone());
+            }
+        }
+        selected
+    };
     let workers_file = ws.load_workers()?;
     let billing = ws.load_billing()?;
     let selected = routing::resolve_worker_for_task(ws, &workers_file, &billing, None, task)?;
@@ -1647,6 +1705,7 @@ pub(crate) fn prepare_answer_action(
         task_id: task_id.to_string(),
         question_id: question.question_id.clone(),
         text: reply.to_string(),
+        accepted_deviations,
         worker_id: selected.worker_id.clone(),
         worker_session_ref: same_worker
             .then(|| producer.worker_session_ref.clone())
@@ -3284,6 +3343,22 @@ fn migrate_stale_gate_to_decision(
 /// the typed start time and filesystem timestamp rather than the directory name:
 /// claim suffixes such as `-10` do not sort correctly against `-9`.
 pub(crate) fn latest_run_for(ws: &Workspace, task_id: &str) -> Option<(String, PathBuf)> {
+    latest_run_for_matching_intent(ws, task_id, None)
+}
+
+pub(crate) fn latest_run_for_intent(
+    ws: &Workspace,
+    task_id: &str,
+    intent_id: &str,
+) -> Option<(String, PathBuf)> {
+    latest_run_for_matching_intent(ws, task_id, Some(intent_id))
+}
+
+fn latest_run_for_matching_intent(
+    ws: &Workspace,
+    task_id: &str,
+    intent_id: Option<&str>,
+) -> Option<(String, PathBuf)> {
     let mut best: Option<(String, std::time::SystemTime, String, PathBuf)> = None;
     for entry in std::fs::read_dir(ws.runs_dir()).ok()?.flatten() {
         let dir = entry.path();
@@ -3296,7 +3371,9 @@ pub(crate) fn latest_run_for(ws: &Workspace, task_id: &str) -> Option<(String, P
         let Ok(record) = state::load_yaml::<RunRecord>(&dir.join("run.yaml")) else {
             continue;
         };
-        if record.task_id != task_id {
+        if record.task_id != task_id
+            || intent_id.is_some_and(|expected| record.intent_id != expected)
+        {
             continue;
         }
         let modified = std::fs::metadata(dir.join("run.yaml"))
@@ -3518,21 +3595,84 @@ fn run_worker(run_dir: &std::path::Path) -> Option<String> {
 /// Yardlet; an orphaned worker (Yardlet quit mid-run) keeps running with the file
 /// in place.
 pub(crate) fn live_worker_pid(run_dir: &std::path::Path) -> Option<u32> {
-    let pid: u32 = std::fs::read_to_string(run_dir.join("worker.pid"))
-        .ok()?
-        .trim()
-        .parse()
-        .ok()?;
-    // Signal 0: existence check only, never delivered.
-    std::process::Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .ok()?
-        .success()
-        .then_some(pid)
+    // Planning runs predate task-run provenance and have no run.yaml. Preserve
+    // their existing liveness projection only for the distinct `plan-*`
+    // namespace; canonical task runs below must prove exact process identity.
+    let path_run_id = run_dir.file_name()?.to_str()?;
+    if path_run_id.starts_with("plan-") && !run_dir.join("run.yaml").exists() {
+        let pid: u32 = std::fs::read_to_string(run_dir.join("worker.pid"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        return std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()?
+            .success()
+            .then_some(pid);
+    }
+    let record: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).ok()?;
+    if record.run_id != path_run_id
+        || record.task_id.trim().is_empty()
+        || record.completed_at.is_some()
+        || !matches!(record.state.as_str(), "prepared" | "running" | "")
+    {
+        return None;
+    }
+    let provenance = workers::load_worker_process_provenance(run_dir).ok()?;
+    if provenance.schema_version != 1
+        || provenance.run_id != record.run_id
+        || provenance.worker_id != record.worker
+        || provenance.pid == 0
+        || provenance.completed_at.is_some()
+        || provenance.state != "running"
+    {
+        return None;
+    }
+    let observed_start = workers::process_start_marker(provenance.pid)?;
+    (observed_start == provenance.process_start_marker).then_some(provenance.pid)
+}
+
+/// Read-only status diagnostic for a canonical Running task. `None` means the
+/// latest current-intent run is finalized or its exact worker identity is
+/// still live. Any returned reason requires explicit recovery, but this helper
+/// never mutates queue or run state.
+pub(crate) fn stale_running_reason(
+    run_dir: &std::path::Path,
+    expected_task_id: &str,
+    expected_intent_id: &str,
+) -> Option<String> {
+    let record: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).ok()?;
+    let path_run_id = run_dir.file_name()?.to_str()?;
+    if record.run_id != path_run_id
+        || record.task_id != expected_task_id
+        || record.intent_id != expected_intent_id
+    {
+        return Some("latest run identity does not match the canonical Running task".to_string());
+    }
+    if record.completed_at.is_some()
+        || !matches!(record.state.as_str(), "prepared" | "running" | "")
+    {
+        return None;
+    }
+    if live_worker_pid(run_dir).is_some() {
+        return None;
+    }
+    let reason = match workers::load_worker_process_provenance(run_dir) {
+        Ok(provenance)
+            if provenance.run_id == record.run_id
+                && provenance.worker_id == record.worker
+                && provenance.pid != 0 =>
+        {
+            "recorded worker is dead or its process identity no longer matches"
+        }
+        Ok(_) => "worker process provenance does not match the active run",
+        Err(_) => "worker process provenance is missing or invalid",
+    };
+    Some(reason.to_string())
 }
 
 pub(crate) fn verified_worker_pid_for_redirect(
@@ -12025,17 +12165,49 @@ exit 1
         .unwrap();
         let run_dir = ws.runs_dir().join("run-20990101-000000-yard-001");
         std::fs::create_dir_all(&run_dir).unwrap();
-        write_str(&run_dir.join("run.yaml"), "task_id: YARD-001\n").unwrap();
-        // Use our own pid: definitely alive.
+        let run_id = run_dir.file_name().unwrap().to_str().unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\nworker: builder\nstate: running\n"
+            ),
+        )
+        .unwrap();
+        // Use our own pid and exact start marker: definitely alive and
+        // provenance-matched.
         write_str(&run_dir.join("worker.pid"), &std::process::id().to_string()).unwrap();
+        state::save_yaml(
+            &run_dir.join(workers::WORKER_PROCESS_PROVENANCE_FILE),
+            &workers::WorkerProcessProvenance {
+                schema_version: 1,
+                run_id: run_id.to_string(),
+                attempt_id: "att-live".into(),
+                worker_id: "builder".into(),
+                model: String::new(),
+                fallback_enabled: false,
+                routing_provenance: Default::default(),
+                pid: std::process::id(),
+                process_start_marker: workers::process_start_marker(std::process::id()).unwrap(),
+                state: "running".into(),
+                completed_at: None,
+            },
+        )
+        .unwrap();
 
         let msgs = recover_orphans(&ws);
         assert!(msgs.iter().any(|m| m.starts_with("adopted:")), "{msgs:?}");
         let q = ws.load_queue().unwrap();
         assert_eq!(q.tasks[0].state, TaskState::Running); // not requeued
 
-        // Once the worker dies (pid file gone), the same task is requeued.
-        std::fs::remove_file(run_dir.join("worker.pid")).unwrap();
+        // A reused/decoy live pid with a different process identity must never
+        // be adopted or signalled.
+        let mut provenance = workers::load_worker_process_provenance(&run_dir).unwrap();
+        provenance.process_start_marker = "different process identity".into();
+        state::save_yaml(
+            &run_dir.join(workers::WORKER_PROCESS_PROVENANCE_FILE),
+            &provenance,
+        )
+        .unwrap();
         let msgs = recover_orphans(&ws);
         assert!(msgs.iter().any(|m| m.contains("requeued")), "{msgs:?}");
         assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Queued);

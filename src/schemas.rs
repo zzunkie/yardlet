@@ -1444,6 +1444,7 @@ impl Task {
                 interaction.remove(yaml::Value::String("deferred_by".to_string()));
                 interaction.remove(yaml::Value::String("remediation_for".to_string()));
                 interaction.remove(yaml::Value::String("needs_user_origin".to_string()));
+                interaction.remove(yaml::Value::String("accepted_deviations".to_string()));
                 contract.interaction =
                     (!interaction.is_empty()).then_some(yaml::Value::Mapping(interaction));
             }
@@ -1562,6 +1563,54 @@ impl Task {
                 }
             },
         }
+    }
+
+    /// Exact deviations a user accepted through a core-owned answer action.
+    /// Worker result files can disclose deviations but cannot populate this
+    /// canonical task metadata.
+    pub fn accepted_deviations(&self) -> Vec<AcceptedDeviation> {
+        self.interaction
+            .as_ref()
+            .and_then(|value| value.get("accepted_deviations"))
+            .cloned()
+            .and_then(|value| serde_yaml_ng::from_value(value).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn accept_deviations(
+        &mut self,
+        deviations: &[IntentDeviation],
+        accepted_by_answer_id: &str,
+    ) {
+        if deviations.is_empty() {
+            return;
+        }
+        let mut accepted = self.accepted_deviations();
+        for deviation in deviations {
+            if deviation.id.trim().is_empty() || deviation.scope.is_empty() {
+                continue;
+            }
+            if !accepted.iter().any(|existing| {
+                existing.id == deviation.id && existing.same_scope(&deviation.scope)
+            }) {
+                accepted.push(AcceptedDeviation {
+                    id: deviation.id.clone(),
+                    scope: deviation.scope.clone(),
+                    accepted_by_answer_id: accepted_by_answer_id.to_string(),
+                });
+            }
+        }
+        let key = yaml::Value::String("accepted_deviations".to_string());
+        let mut root = match self.interaction.take() {
+            Some(yaml::Value::Mapping(mapping)) => mapping,
+            _ => serde_yaml_ng::Mapping::new(),
+        };
+        if accepted.is_empty() {
+            root.remove(&key);
+        } else if let Ok(value) = serde_yaml_ng::to_value(accepted) {
+            root.insert(key, value);
+        }
+        self.interaction = (!root.is_empty()).then_some(yaml::Value::Mapping(root));
     }
 
     pub fn deferred_by(&self) -> Option<DeferredBy> {
@@ -3301,6 +3350,8 @@ pub struct AnswerActionRequest {
     pub task_id: String,
     pub question_id: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted_deviations: Vec<IntentDeviation>,
     pub worker_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_session_ref: Option<String>,
@@ -3396,6 +3447,69 @@ pub struct IntentAdherence {
     pub drift_detected: bool,
     #[serde(default)]
     pub notes: String,
+    /// Typed disclosures let the core distinguish an exact user-accepted
+    /// historical event from a new or differently scoped deviation.
+    #[serde(default)]
+    pub deviations: Vec<IntentDeviation>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntentDeviation {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub scope: Vec<String>,
+    #[serde(default)]
+    pub description: String,
+}
+
+impl IntentDeviation {
+    fn normalized_scope(&self) -> Vec<String> {
+        normalized_deviation_scope(&self.scope)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcceptedDeviation {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub scope: Vec<String>,
+    #[serde(default)]
+    pub accepted_by_answer_id: String,
+}
+
+impl AcceptedDeviation {
+    pub fn same_scope(&self, scope: &[String]) -> bool {
+        normalized_deviation_scope(&self.scope) == normalized_deviation_scope(scope)
+    }
+}
+
+fn normalized_deviation_scope(scope: &[String]) -> Vec<String> {
+    let mut normalized = scope
+        .iter()
+        .map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+impl IntentAdherence {
+    pub fn uncontrolled_deviations<'a>(&'a self, task: &'a Task) -> Vec<&'a IntentDeviation> {
+        let accepted = task.accepted_deviations();
+        self.deviations
+            .iter()
+            .filter(|deviation| {
+                deviation.id.trim().is_empty()
+                    || deviation.normalized_scope().is_empty()
+                    || !accepted
+                        .iter()
+                        .any(|prior| prior.id == deviation.id && prior.same_scope(&deviation.scope))
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -3621,6 +3735,36 @@ tasks:
         assert!(queue.has_active_remediation_for("REVIEW"));
         queue.tasks[0].state = TaskState::NeedsUser;
         assert!(!queue.has_active_remediation_for("REVIEW"));
+    }
+
+    #[test]
+    fn accepted_deviation_round_trips_without_changing_runtime_contract() {
+        let mut task: Task = yaml::from_str(
+            "id: YARD-DEVIATION\ntitle: accepted deviation\nstate: needs_user\nkind: implementation\n",
+        )
+        .unwrap();
+        let before = task.runtime_contract_digest().unwrap();
+        task.accept_deviations(
+            &[IntentDeviation {
+                id: "engine-version-probe".into(),
+                scope: vec![" godot   --version ".into()],
+                description: "read-only probe".into(),
+            }],
+            "ans-explicit",
+        );
+
+        let encoded = yaml::to_string(&task).unwrap();
+        let decoded: Task = yaml::from_str(&encoded).unwrap();
+        let accepted = decoded.accepted_deviations();
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0].id, "engine-version-probe");
+        assert!(accepted[0].same_scope(&["godot --version".into()]));
+        assert_eq!(accepted[0].accepted_by_answer_id, "ans-explicit");
+        assert_eq!(
+            decoded.runtime_contract_digest().unwrap(),
+            before,
+            "scheduler-owned acceptance metadata must not alter immutable runtime envelope"
+        );
     }
 
     #[test]

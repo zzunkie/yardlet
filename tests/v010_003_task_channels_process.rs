@@ -270,6 +270,22 @@ mod unix {
             .is_ok_and(|status| status.success())
     }
 
+    fn process_start_marker(pid: u32) -> Option<String> {
+        let output = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "lstart="])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let marker = String::from_utf8(output.stdout)
+            .ok()?
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        (!marker.is_empty()).then_some(marker)
+    }
+
     fn worker_path(fixture: &FixtureWorkspace) -> PathBuf {
         fixture.root.join(".agents/fixture-bin/worker.sh")
     }
@@ -2475,6 +2491,90 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
     }
 
     #[test]
+    fn issue_29_status_reports_externally_killed_worker_without_mutating_state() {
+        let fixture = FixtureWorkspace::new("issue-29-dead-worker-status");
+        fixture.write_queue(
+            "  - id: YARD-DEAD-WORKER\n    title: externally killed worker status\n    state: running\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
+        );
+
+        let mut worker = Command::new("sleep").arg("599").spawn().unwrap();
+        let worker_pid = worker.id();
+        let marker =
+            process_start_marker(worker_pid).expect("fixture worker identity must be observable");
+        let run_id = "run-20990101-issue-29-dead-worker";
+        let run_dir = fixture.root.join(".agents/runs").join(run_id);
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            run_dir.join("run.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-DEAD-WORKER\nintent_id: intent-channel-process\nworker: fixture\nstate: running\nstarted_at: 2099-01-01T00:00:00Z\nworktree: .\n"
+            ),
+        )
+        .unwrap();
+        fs::write(run_dir.join("worker.pid"), format!("{worker_pid}\n")).unwrap();
+        let provenance = serde_json::json!({
+            "schema_version": 1,
+            "run_id": run_id,
+            "attempt_id": "att-issue-29",
+            "worker_id": "fixture",
+            "pid": worker_pid,
+            "process_start_marker": marker,
+            "state": "running"
+        });
+        fs::write(
+            run_dir.join("worker-process.yaml"),
+            serde_yaml_ng::to_string(&provenance).unwrap(),
+        )
+        .unwrap();
+
+        let live = command(&fixture.root, &fixture.binary, &["status", "--json"]);
+        assert!(live.status.success());
+        let live_json: serde_json::Value = serde_json::from_slice(&live.stdout).unwrap();
+        assert_eq!(
+            live_json["recovery_required"].as_array().unwrap().len(),
+            0,
+            "verified live worker must not be diagnosed as interrupted"
+        );
+
+        worker.kill().unwrap();
+        worker.wait().unwrap();
+        assert!(!process_is_alive(worker_pid));
+
+        let queue_path = fixture.root.join(".agents/work-queue.yaml");
+        let run_path = run_dir.join("run.yaml");
+        let queue_before = fs::read(&queue_path).unwrap();
+        let run_before = fs::read(&run_path).unwrap();
+
+        let text_status = command(&fixture.root, &fixture.binary, &["status"]);
+        let json_status = command(&fixture.root, &fixture.binary, &["status", "--json"]);
+        assert!(text_status.status.success());
+        assert!(json_status.status.success());
+        let text = String::from_utf8_lossy(&text_status.stdout);
+        assert!(text.contains("recovery required"));
+        assert!(text.contains("YARD-DEAD-WORKER"));
+        assert!(text.contains(&run_id));
+        assert!(text.contains("yardlet recover"));
+        let json: serde_json::Value = serde_json::from_slice(&json_status.stdout).unwrap();
+        let diagnostic = &json["recovery_required"][0];
+        assert_eq!(diagnostic["task_id"], "YARD-DEAD-WORKER");
+        assert_eq!(diagnostic["run_id"], run_id);
+        assert_eq!(diagnostic["effective_state"], "interrupted");
+        assert_eq!(diagnostic["action"], "yardlet recover");
+        assert_eq!(json["queue"]["running"], 1);
+        assert_eq!(fs::read(&queue_path).unwrap(), queue_before);
+        assert_eq!(fs::read(&run_path).unwrap(), run_before);
+
+        fixture.run(&["recover"]);
+        assert_eq!(task_state(&fixture.root, "YARD-DEAD-WORKER"), "queued");
+        let recovered = fixture.run(&["status", "--json"]);
+        let recovered_json: serde_json::Value = serde_json::from_slice(&recovered.stdout).unwrap();
+        assert!(recovered_json["recovery_required"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
     fn deleted_derived_index_rebuilds_from_canonical_facts_with_bounded_tail() {
         let fixture = FixtureWorkspace::new("index-rebuild");
         fixture.write_queue(
@@ -3151,6 +3251,139 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             .unwrap()
             .iter()
             .any(|check| { check["name"] == "review_criteria_pass" && check["passed"] == true }));
+    }
+
+    #[test]
+    fn issue_16_explicit_answer_accepts_only_the_exact_disclosed_deviation() {
+        let fixture = FixtureWorkspace::new("issue-16-accepted-deviation");
+        fixture.write_queue(
+            "  - id: YARD-DEVIATION\n    title: accepted deviation retry\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
+        );
+
+        fixture.run(&["run", "--task", "YARD-DEVIATION", "--execute"]);
+        assert_eq!(task_state(&fixture.root, "YARD-DEVIATION"), "needs_user");
+
+        let undisclosed = command(
+            &fixture.root,
+            &fixture.binary,
+            &[
+                "answer",
+                "--task",
+                "YARD-DEVIATION",
+                "--accept-deviation",
+                "different-deviation",
+                "accept something the worker never disclosed",
+            ],
+        );
+        assert!(!undisclosed.status.success());
+        assert!(String::from_utf8_lossy(&undisclosed.stderr).contains("deviation_not_disclosed"));
+        assert_eq!(task_state(&fixture.root, "YARD-DEVIATION"), "needs_user");
+
+        fixture.run(&[
+            "answer",
+            "--task",
+            "YARD-DEVIATION",
+            "--accept-deviation",
+            "engine-version-probe",
+            "exact deviation accepted",
+        ]);
+
+        assert_eq!(task_state(&fixture.root, "YARD-DEVIATION"), "done");
+        let queue = read_yaml(&fixture.root.join(".agents/work-queue.yaml"));
+        let task = queue["tasks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|task| string(task, "id") == "YARD-DEVIATION")
+            .unwrap();
+        let accepted = task["interaction"]["accepted_deviations"]
+            .as_sequence()
+            .expect("core must persist a typed accepted deviation");
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(string(&accepted[0], "id"), "engine-version-probe");
+        assert_eq!(accepted[0]["scope"][0], "godot --version");
+        assert!(
+            !string(&accepted[0], "accepted_by_answer_id").is_empty(),
+            "acceptance must be linked to the immutable answer"
+        );
+        let status = fixture.run(&["status", "--json"]);
+        let projection: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+        assert!(
+            projection["pending"].is_null(),
+            "the accepted retry must not repeat NeedsUser"
+        );
+    }
+
+    #[test]
+    fn issue_33_passing_rereview_ignores_deferred_remediation_history() {
+        for (task_id, answer_continuation) in
+            [("YARD-REVIEW-33", false), ("YARD-REVIEW-33-ANSWER", true)]
+        {
+            let fixture = FixtureWorkspace::new(&format!("issue-33-{task_id}"));
+            fixture.write_queue(&format!(
+                "  - id: {task_id}\n    title: passing review after deferred remediation\n    state: queued\n    priority: 10\n    kind: review\n    preferred_worker: fixture\n    acceptance: [current review passes]\n    goal:\n      condition: current review passes\n      max_feedback_cycles: 2\n      feedback_policy: inject_failed_checks\n"
+            ));
+
+            let first = fixture.run(&["run", "--task", task_id, "--execute"]);
+            assert_eq!(
+                task_state(&fixture.root, task_id),
+                "queued",
+                "first review did not requeue\nstdout:\n{}\nqueue:\n{}",
+                String::from_utf8_lossy(&first.stdout),
+                fs::read_to_string(fixture.root.join(".agents/work-queue.yaml")).unwrap()
+            );
+            let queue = read_yaml(&fixture.root.join(".agents/work-queue.yaml"));
+            let remediation = queue["tasks"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .find(|task| string(task, "title") == format!("{task_id} stale remediation"))
+                .map(|task| string(task, "id").to_string())
+                .expect("failed review must materialize one remediation");
+            fixture.run(&[
+                "defer",
+                &remediation,
+                "canonical schema proved this remediation stale",
+            ]);
+            assert_eq!(task_state(&fixture.root, &remediation), "deferred");
+
+            fixture.run(&["run", "--task", task_id, "--execute"]);
+            if answer_continuation {
+                assert_eq!(task_state(&fixture.root, task_id), "needs_user");
+                fixture.run(&[
+                    "answer",
+                    "--task",
+                    task_id,
+                    "latest passing review is authoritative",
+                ]);
+            }
+
+            assert_eq!(task_state(&fixture.root, task_id), "done");
+            let final_run = run_dir_for_task(&fixture.root, task_id);
+            let evaluation: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(final_run.join("evaluation.json")).unwrap(),
+            )
+            .unwrap();
+            assert!(evaluation["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| {
+                    check["name"] == "review_criteria_pass" && check["passed"] == true
+                }));
+            let status = fixture.run(&["status", "--json"]);
+            let projection: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+            assert!(projection["pending"].is_null());
+            let log = read_yaml(
+                &fixture
+                    .root
+                    .join(".agents/transitions")
+                    .join(format!("{task_id}.yaml")),
+            );
+            let last = log["records"].as_sequence().unwrap().last().unwrap();
+            assert_eq!(string(last, "to"), "done");
+            assert!(!string(last, "detail").contains("review failed"));
+        }
     }
 
     #[test]

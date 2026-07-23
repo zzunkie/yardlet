@@ -132,6 +132,25 @@ case "$task_id" in
       "$run_id" "$task_id" >"$run_dir/result.json"
     write_handoff "review 실패 회귀 fixture"
     ;;
+  YARD-REVIEW-33|YARD-REVIEW-33-ANSWER)
+    control_root="${PWD%%/.agents/worktrees/*}"
+    marker_label="$(printf '%s' "$task_id" | tr '[:upper:]' '[:lower:]')"
+    marker="$control_root/.agents/$marker_label-attempts"
+    attempts=0
+    [[ ! -f "$marker" ]] || attempts="$(wc -l <"$marker" | tr -d ' ')"
+    printf 'attempt\n' >>"$marker"
+    if [[ "$attempts" == "0" ]]; then
+      printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["fixture"], "passed": true, "failures": []},\n  "verdict": [{"criterion_id": "AC-001", "pass": false, "evidence": "first review requests remediation"}],\n  "follow_up_tasks": [{"title": "%s stale remediation", "reason": "issue 33 deferred remediation fixture", "kind": "implementation"}],\n  "compact_summary": "first review failed"\n}\n' \
+        "$run_id" "$task_id" "$task_id" >"$run_dir/result.json"
+      write_handoff "첫 review가 remediation을 제안했습니다."
+    elif [[ "$task_id" == "YARD-REVIEW-33-ANSWER" && "$attempts" == "1" ]]; then
+      write_question "최신 통과 판정을 이어서 확정할까요?"
+    else
+      printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["fixture"], "passed": true, "failures": []},\n  "verdict": [{"criterion_id": "AC-001", "pass": true, "evidence": "current review passes"}],\n  "follow_up_tasks": [],\n  "compact_summary": "current review passed despite terminal remediation history"\n}\n' \
+        "$run_id" "$task_id" >"$run_dir/result.json"
+      write_handoff "현재 review 판정이 통과했습니다."
+    fi
+    ;;
   YARD-REVIEW-PASS-MANUAL)
     printf 'passing review change\n' >review-change.txt
     printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["fixture"], "passed": true, "failures": []},\n  "verdict": [{"criterion_id": "AC-001", "pass": true, "evidence": "fixture criterion passed"}],\n  "follow_up_tasks": [{"title": "optional review documentation", "reason": "non-blocking fixture follow-up", "kind": "implementation"}],\n  "compact_summary": "passing review awaiting manual integration"\n}\n' \
@@ -142,6 +161,20 @@ case "$task_id" in
     printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "done",\n  "validation": {"commands_run": ["fixture"], "passed": true, "failures": []},\n  "verdict": [{"criterion_id": "AC-001", "pass": true, "evidence": "foundation passes while runtime remains unresolved"}],\n  "domain_artifact": {"runtime_conformity": {"status": "not_pass"}, "free_text": "status fail blocked not_pass"},\n  "compact_summary": "structured review contract regression"\n}\n' \
       "$run_id" "$task_id" >"$run_dir/result.json"
     write_handoff "구조화 review 계약 회귀 fixture"
+    ;;
+  YARD-DEVIATION)
+    if grep -q '> \[user\] exact deviation accepted' <<<"$packet"; then
+      status="done"
+      question="null"
+      summary="explicitly accepted historical deviation completed"
+    else
+      status="needs_user"
+      question='"engine-version-probe deviation을 수용할지 명시해 주세요."'
+      summary="exact deviation acceptance required"
+    fi
+    printf '{\n  "schema_version": 1,\n  "run_id": "%s",\n  "task_id": "%s",\n  "status": "%s",\n  "intent_adherence": {"drift_detected": true, "notes": "historical read-only engine probe", "deviations": [{"id": "engine-version-probe", "scope": ["godot --version"], "description": "read-only probe without temporary HOME"}]},\n  "validation": {"commands_run": ["fixture"], "passed": true, "failures": []},\n  "question_for_user": %s,\n  "compact_summary": "%s"\n}\n' \
+      "$run_id" "$task_id" "$status" "$question" "$summary" >"$run_dir/result.json"
+    write_handoff "$summary"
     ;;
   YARD-DRAIN)
     sleep 1
