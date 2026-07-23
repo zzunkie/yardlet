@@ -2128,6 +2128,25 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         });
     }
 
+    if let Err(error) = crate::git_finish::preflight_target_before_spawn(
+        ws,
+        &run_dir,
+        &run_id,
+        &task.id,
+        &config.git_finish,
+    ) {
+        seal_run_record(
+            &run_dir,
+            &run_id,
+            &task,
+            &queue.intent_id,
+            &worker_id,
+            TaskState::Blocked,
+            None,
+        );
+        return Err(error);
+    }
+
     // ---- execute ---------------------------------------------------------
     if task.approval_required() {
         if crate::approvals::is_granted(ws, &task.id) {
@@ -8825,6 +8844,249 @@ fi
             "expected exactly one run directory: {runs:?}"
         );
         runs.pop().unwrap()
+    }
+
+    #[test]
+    fn stale_completed_delivery_target_blocks_new_added_task_before_worker_spawn() {
+        let source = std::env::temp_dir().join(format!(
+            "yard-stale-git-finish-target-source-{}",
+            std::process::id()
+        ));
+        let remote = std::env::temp_dir().join(format!(
+            "yard-stale-git-finish-target-remote-{}.git",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&remote);
+        std::fs::create_dir_all(&source).unwrap();
+        let spawn_marker = source.join("worker-spawned");
+        let builder = write_worker_script(
+            &source,
+            "builder.sh",
+            r##"#!/bin/sh
+run_dir="$1"
+task_id="$2"
+spawn_marker="$3"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+touch "$spawn_marker"
+printf "new task output\n" > stale-target-output.txt
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": ["stale-target-output.txt"], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "green worker result",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", \"YARD-012\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&builder),
+            shell_literal(&spawn_marker)
+        );
+        let ws = init_test_workspace("stale-git-finish-target", &worker_yaml);
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&ws.root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["branch", "-M", "main"]);
+        let init_remote = std::process::Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&remote)
+            .output()
+            .unwrap();
+        assert!(
+            init_remote.status.success(),
+            "git init --bare: {}",
+            String::from_utf8_lossy(&init_remote.stderr)
+        );
+        git(&["remote", "add", "fixture", remote.to_str().unwrap()]);
+        let baseline = git(&["rev-parse", "HEAD"]);
+        let stale_target = "refs/heads/codex/yard-011-delivery";
+        let checkout_branch = "codex/yard-012-new-task";
+        let checkout_ref = format!("refs/heads/{checkout_branch}");
+        git(&["push", "-q", "fixture", "HEAD:refs/heads/main"]);
+        git(&["push", "-q", "fixture", &format!("HEAD:{stale_target}")]);
+        git(&["fetch", "-q", "fixture", "main:refs/remotes/fixture/main"]);
+
+        let mut config = ws.load_config().unwrap();
+        config.auto_commit = true;
+        config.git_finish = crate::schemas::GitFinishPolicy {
+            auto_push: true,
+            remote: "fixture".into(),
+            target_ref: stale_target.into(),
+            pre_push_checks: vec![],
+        };
+        state::save_yaml(&ws.config_path(), &config).unwrap();
+
+        let previous_task_id = "YARD-011";
+        let previous_run_id = "run-20990101-000000-yard-011";
+        let mut previous_task = task(previous_task_id, TaskState::Done, 10, false);
+        previous_task.kind = "implementation".into();
+        let mut q = queue(vec![previous_task]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+        let previous_run_dir = ws.runs_dir().join(previous_run_id);
+        std::fs::create_dir_all(&previous_run_dir).unwrap();
+        write_str(
+            &previous_run_dir.join("result.json"),
+            "{\"status\":\"done\"}",
+        )
+        .unwrap();
+        state::save_yaml(
+            &previous_run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 1,
+                run_id: previous_run_id.into(),
+                task_id: previous_task_id.into(),
+                intent_id: "intent-test".into(),
+                worker: "codex".into(),
+                state: "done".into(),
+                started_at: "2099-01-01T00:00:00+00:00".into(),
+                completed_at: Some("2099-01-01T00:01:00+00:00".into()),
+                integration_oid: baseline.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        ws.save_git_finish_record(
+            &previous_run_dir,
+            &crate::git_finish::GitFinishRecord {
+                schema_version: 2,
+                run_id: previous_run_id.into(),
+                task_id: previous_task_id.into(),
+                attempted_at: "2099-01-01T00:01:00+00:00".into(),
+                status: crate::git_finish::GitFinishStatus::Pushed,
+                policy: crate::git_finish::GitFinishPolicySnapshot {
+                    auto_push: true,
+                    remote: "fixture".into(),
+                    target_ref: stale_target.into(),
+                    pre_push_checks: vec![],
+                },
+                expected_oid: Some(baseline.clone()),
+                baseline_oid: baseline.clone(),
+                owned_oids: vec![baseline.clone()],
+                checks: vec![],
+                push_invoked: true,
+                push_succeeded: true,
+                remote_oid: Some(baseline.clone()),
+                remote_before_oid: Some(baseline.clone()),
+                reason: "remote_verified".into(),
+            },
+        )
+        .unwrap();
+
+        git(&["checkout", "-q", "-b", checkout_branch, "fixture/main"]);
+        let added = ws
+            .append_user_task(crate::state::UserTaskInput {
+                title: "new task after completed delivery".into(),
+                risk: "low".into(),
+                kind: "implementation".into(),
+                preferred_worker: "builder".into(),
+                depends_on: vec![],
+                allowed_scope: vec!["stale-target-output.txt".into()],
+            })
+            .unwrap();
+        assert_eq!(added.id, "YARD-012");
+
+        let outcome = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some(added.id.clone()),
+                ..opts()
+            },
+        );
+        if spawn_marker.exists() {
+            let report = outcome.expect("the current stale-target path finalizes after spawning");
+            let finish = ws.load_git_finish_record(&report.run_dir).unwrap();
+            panic!(
+                "worker spawned before stale target_ref was rejected; \
+                 expected pre-spawn retarget block, got final reason={} and state={:?}",
+                finish.reason, report.result_state
+            );
+        }
+
+        let error = match outcome {
+            Err(error) => error,
+            Ok(report) => panic!(
+                "stale target_ref unexpectedly produced a run report without spawning: {:?}",
+                report.result_state
+            ),
+        };
+        let diagnostic = error.to_string();
+        assert!(
+            diagnostic.contains("branch_does_not_match_target_ref")
+                && diagnostic.contains(stale_target)
+                && diagnostic.contains(&checkout_ref),
+            "retarget diagnostic must name the typed reason and both refs: {diagnostic}"
+        );
+        let mut new_runs = std::fs::read_dir(ws.runs_dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path != &previous_run_dir)
+            .collect::<Vec<_>>();
+        assert_eq!(new_runs.len(), 1, "expected one blocked new-task run");
+        let blocked_run_dir = new_runs.pop().unwrap();
+        let blocked = ws.load_git_finish_record(&blocked_run_dir).unwrap();
+        assert_eq!(
+            blocked.status,
+            crate::git_finish::GitFinishStatus::SafetyBlocked
+        );
+        assert!(blocked
+            .reason
+            .starts_with("branch_does_not_match_target_ref"));
+        assert_eq!(blocked.policy.target_ref, stale_target);
+        assert!(!blocked.push_invoked);
+        let blocked_run: RunRecord = state::load_yaml(&blocked_run_dir.join("run.yaml")).unwrap();
+        assert_eq!(blocked_run.state, "blocked");
+        assert!(blocked_run.completed_at.is_some());
+        assert_eq!(
+            git(&["ls-remote", "--refs", "fixture", stale_target])
+                .split_whitespace()
+                .next(),
+            Some(baseline.as_str())
+        );
+        assert!(
+            git(&["ls-remote", "--refs", "fixture", &checkout_ref]).is_empty(),
+            "pre-spawn block must not create or update the checkout ref"
+        );
+        assert_eq!(
+            ws.load_queue()
+                .unwrap()
+                .tasks
+                .iter()
+                .find(|task| task.id == added.id)
+                .unwrap()
+                .state,
+            TaskState::Queued,
+            "retargeting the workspace policy should make the unchanged task retryable"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&remote);
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     fn assert_serial_worktree_and_branch_removed(ws: &Workspace, run_dir: &std::path::Path) {
