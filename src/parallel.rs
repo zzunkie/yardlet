@@ -408,6 +408,22 @@ pub fn run_batch<F: FnMut(&str)>(
             ));
         }
         state::save_harness_copy_warnings(&p.run_dir, &harness_copy_warnings)?;
+        if let Err(error) =
+            state::materialize_resolved_dependency_outputs(ws, &queue, &p.task, &p.wt_path)
+        {
+            on_event(&format!(
+                "{}: dependency output preparation blocked before worker spawn: {error}",
+                p.task.id
+            ));
+            remove_worktree(&ws.root, &p.wt_path, &p.branch);
+            for prepared in &ok {
+                remove_worktree(&ws.root, &prepared.wt_path, &prepared.branch);
+            }
+            return Err(anyhow!(
+                "{} dependency output preparation blocked before worker spawn: {error}",
+                p.task.id
+            ));
+        }
 
         std::fs::create_dir_all(p.run_dir.join("evidence"))?;
         write_str(
@@ -2544,6 +2560,128 @@ mod tests {
             std::fs::set_permissions(&path, perms).unwrap();
         }
         path
+    }
+
+    #[test]
+    fn dependency_output_digest_tamper_blocks_parallel_worker_spawn() {
+        let root = temp_repo("parallel-dependency-output-tamper");
+        let spawn_marker = root.join(".agents/parallel-worker-spawned");
+        let worker = write_test_worker(
+            &root,
+            "parallel-dependency-worker.sh",
+            r##"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "fixture 1.0"
+  exit 0
+fi
+run_dir="$1"
+spawn_marker="$2"
+run_id=$(basename "$run_dir")
+packet=$(cat)
+task_id=$(printf "%s" "$packet" | sed -n 's/^# Yardlet task packet: //p' | head -n 1)
+touch "$spawn_marker"
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": [], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "worker should not spawn",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            yaml_string(&worker),
+            yaml_string(&spawn_marker)
+        );
+        let ws = setup_workspace(
+            &root,
+            &worker_yaml,
+            vec![
+                task("YARD-UPSTREAM", TaskState::Done, 10, vec![]),
+                task(
+                    "YARD-DOWNSTREAM",
+                    TaskState::Queued,
+                    20,
+                    vec!["YARD-UPSTREAM".into()],
+                ),
+            ],
+        );
+        state::append_transition(
+            &ws,
+            state::transition(
+                "YARD-UPSTREAM",
+                TaskState::Partial,
+                TaskState::Done,
+                crate::schemas::TransitionCause::Recover,
+                "manual integration",
+                crate::schemas::TransitionActor::User,
+            ),
+        )
+        .unwrap();
+        let run_id = "run-20990101-000000-upstream";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-UPSTREAM\nstate: partial\nstarted_at: 2099-01-01T00:00:00Z\n"
+            ),
+        )
+        .unwrap();
+        let snapshots = ws
+            .checkpoints_dir()
+            .join("dependency-outputs")
+            .join(run_id)
+            .join("snapshots");
+        std::fs::create_dir_all(&snapshots).unwrap();
+        write_str(&snapshots.join("0000.bin"), "tampered\n").unwrap();
+        state::save_yaml_atomic(
+            &ws.checkpoints_dir()
+                .join("dependency-outputs")
+                .join(run_id)
+                .join("manifest.yaml"),
+            &crate::schemas::ResolvedDependencyOutputs {
+                schema_version: 1,
+                dependency_task_id: "YARD-UPSTREAM".into(),
+                source_run_id: run_id.into(),
+                outputs: vec![crate::schemas::ResolvedDependencyOutput {
+                    path: "dependency-output.txt".into(),
+                    content_digest: state::content_digest(b"expected\n"),
+                    snapshot_file: "0000.bin".into(),
+                    availability: crate::schemas::DependencyOutputAvailability::CoreSnapshot,
+                }],
+            },
+        )
+        .unwrap();
+
+        let mut events = Vec::new();
+        let error = run_batch(&ws, &[1], false, |event| events.push(event.to_string()))
+            .err()
+            .expect("digest tamper must abort the batch before worker spawn");
+        assert!(
+            error.to_string().contains(
+                "dependency_output_digest_mismatch:dependency=YARD-UPSTREAM:path=dependency-output.txt"
+            ),
+            "{error:#}"
+        );
+        assert!(!spawn_marker.exists());
+        assert_eq!(ws.load_queue().unwrap().tasks[1].state, TaskState::Queued);
+        assert!(events.iter().any(
+            |event| event.contains("dependency output preparation blocked before worker spawn")
+        ));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

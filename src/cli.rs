@@ -1915,6 +1915,10 @@ fn cmd_resolve(cwd: &std::path::Path, args: ResolveArgs) -> Result<()> {
     println!(
         "Resolved {id}: Partial \u{2192} Done. Recorded the transition (you integrated it); no worker re-run."
     );
+    println!(
+        "  Snapshotted {} dependency output(s) with core-calculated path and digest proof.",
+        outcome.dependency_outputs
+    );
     if outcome.cleared_partial_reason {
         println!("  Cleared the merge-conflict marker.");
     }
