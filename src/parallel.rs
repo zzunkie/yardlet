@@ -727,6 +727,7 @@ pub fn run_batch<F: FnMut(&str)>(
                 branch: &p.branch,
                 baseline_oid: &p.baseline_oid,
                 expected_tip_oid: None,
+                core_input_overlays: &[],
                 provenance: run::IntegrationProvenance::ParallelWorkerDirect,
                 auto_commit: true,
             }),
@@ -1221,11 +1222,14 @@ pub(crate) fn integrate_serial_worktree(
     expected_tip_oid: Option<&str>,
 ) -> Result<Integration> {
     let workspace = Workspace::at(root);
-    if workspace.load_serial_integration_receipt(run_id).is_err() {
-        return Ok(Integration::Conflict(
-            "core-owned serial integration receipt is missing or invalid".to_string(),
-        ));
-    }
+    let receipt = match workspace.load_serial_integration_receipt(run_id) {
+        Ok(receipt) => receipt,
+        Err(_) => {
+            return Ok(Integration::Conflict(
+                "core-owned serial integration receipt is missing or invalid".to_string(),
+            ))
+        }
+    };
     if let Some(reason) =
         serial_receipt_conflict(root, wt, run_dir, run_id, branch, task_id, baseline_oid)
     {
@@ -1239,6 +1243,7 @@ pub(crate) fn integrate_serial_worktree(
         baseline_oid,
         expected_tip_oid,
         IntegrationCommitMode::SerialCoreStaged { run_dir, run_id },
+        &receipt.core_input_overlays,
         |_, _, _| Ok(()),
     )
 }
@@ -1262,6 +1267,7 @@ pub(crate) fn integrate_parallel_worktree(
         baseline_oid,
         expected_tip_oid,
         IntegrationCommitMode::ParallelWorkerDirect,
+        &[],
         |_, _, _| Ok(()),
     )
 }
@@ -1278,6 +1284,7 @@ fn integrate_worktree_after_staged<F>(
     baseline_oid: &str,
     expected_tip_oid: Option<&str>,
     commit_mode: IntegrationCommitMode<'_>,
+    core_input_overlays: &[state::SerialInputOverlay],
     after_staged: F,
 ) -> Result<Integration>
 where
@@ -1326,7 +1333,7 @@ where
             )));
         }
     }
-    stage_integratable_changes(wt)?;
+    stage_integratable_changes(wt, core_input_overlays)?;
     let staged = git(wt, &["diff", "--cached", "--name-only"])?;
     after_staged(root, wt, branch)?;
     let transaction_exists = match commit_mode {
@@ -1566,6 +1573,44 @@ fn cleanup_owned_ref(
     true
 }
 
+fn cleanup_core_input_overlays(
+    root: &Path,
+    wt: &Path,
+    provenance: run::IntegrationProvenance,
+) -> Vec<state::SerialInputOverlay> {
+    if provenance != run::IntegrationProvenance::SerialCoreStaged {
+        return Vec::new();
+    }
+    let Some(run_id) = wt.file_name().and_then(|name| name.to_str()) else {
+        return Vec::new();
+    };
+    let workspace = Workspace::at(root);
+    if let Ok(receipt) = workspace.load_integrated_cleanup_receipt(run_id) {
+        if receipt.run_id == run_id
+            && receipt.worktree == wt.display().to_string()
+            && receipt.provenance == provenance
+        {
+            return receipt.core_input_overlays;
+        }
+        return Vec::new();
+    }
+    if let Ok(receipt) = workspace.load_no_change_receipt(run_id) {
+        if receipt.run_id == run_id
+            && receipt.worktree == wt.display().to_string()
+            && receipt.provenance == provenance
+        {
+            return receipt.core_input_overlays;
+        }
+        return Vec::new();
+    }
+    workspace
+        .load_serial_integration_receipt(run_id)
+        .ok()
+        .filter(|receipt| receipt.run_id == run_id && receipt.worktree == wt.display().to_string())
+        .map(|receipt| receipt.core_input_overlays)
+        .unwrap_or_default()
+}
+
 /// Idempotently clean a successfully integrated worktree. Ref deletion is
 /// compare-and-swap against the exact merge second parent, so a concurrently
 /// moved or reused branch is retained rather than mistaken for this run's.
@@ -1616,6 +1661,7 @@ pub(crate) fn cleanup_integrated_worktree(
     }
 
     if wt.exists() {
+        let core_input_overlays = cleanup_core_input_overlays(root, wt, provenance);
         let expected_symbolic = format!("refs/heads/{branch}");
         let symbolic_head = git(wt, &["symbolic-ref", "--quiet", "HEAD"])
             .ok()
@@ -1648,6 +1694,11 @@ pub(crate) fn cleanup_integrated_worktree(
         let retained = changed
             .into_iter()
             .filter(|path| evaluator::is_integratable_path(path))
+            .filter(|path| {
+                !core_input_overlays.iter().any(|overlay| {
+                    overlay.path == *path && run::serial_input_overlay_matches(wt, overlay)
+                })
+            })
             .collect::<Vec<_>>();
         if !retained.is_empty() {
             warnings.push(format!(
@@ -1706,7 +1757,10 @@ pub(crate) fn cleanup_integrated_worktree(
     }
 }
 
-fn stage_integratable_changes(wt: &Path) -> Result<()> {
+fn stage_integratable_changes(
+    wt: &Path,
+    core_input_overlays: &[state::SerialInputOverlay],
+) -> Result<()> {
     let paths = evaluator::changed_paths(wt)
         .ok_or_else(|| anyhow!("could not enumerate worktree changes before integration"))?;
     // Discard worker-controlled index state, then rebuild the staged tree from
@@ -1716,6 +1770,11 @@ fn stage_integratable_changes(wt: &Path) -> Result<()> {
     for path in paths
         .into_iter()
         .filter(|path| evaluator::is_integratable_path(path))
+        .filter(|path| {
+            !core_input_overlays.iter().any(|overlay| {
+                overlay.path == *path && run::serial_input_overlay_matches(wt, overlay)
+            })
+        })
     {
         git(wt, &["add", "-A", "--", &path])?;
     }
@@ -2242,6 +2301,7 @@ mod tests {
                 worktree: wt.display().to_string(),
                 branch: branch.to_string(),
                 baseline_oid: baseline_oid.to_string(),
+                core_input_overlays: vec![],
             })
             .unwrap();
         path
@@ -2858,6 +2918,7 @@ exit 0
             &baseline,
             Some(evidence_oid.as_str()),
             IntegrationCommitMode::ParallelWorkerDirect,
+            &[],
             |root, _, branch| {
                 let old_oid = sh_git(
                     root,

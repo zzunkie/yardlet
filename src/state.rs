@@ -129,6 +129,18 @@ pub struct SerialIntegrationReceipt {
     pub worktree: String,
     pub branch: String,
     pub baseline_oid: String,
+    /// Exact regular-file inputs copied from the owning root into the isolated
+    /// serial worktree even though they differ from its HEAD. The core records
+    /// these before worker spawn so they can remain validation inputs without
+    /// being attributed to, or integrated as, worker-authored changes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub core_input_overlays: Vec<SerialInputOverlay>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerialInputOverlay {
+    pub path: String,
+    pub content_digest: String,
 }
 
 /// Core-owned receipt for one successful merge. Cleanup recovery trusts this
@@ -148,6 +160,8 @@ pub struct IntegratedCleanupReceipt {
     pub integration_oid: String,
     pub provenance: IntegrationProvenance,
     pub owned_oids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub core_input_overlays: Vec<SerialInputOverlay>,
 }
 
 /// Core-owned proof that a run produced no Git changes and therefore needs no
@@ -165,6 +179,8 @@ pub struct NoChangeReceipt {
     pub baseline_oid: String,
     pub worker_oid: String,
     pub provenance: IntegrationProvenance,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub core_input_overlays: Vec<SerialInputOverlay>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -195,6 +211,10 @@ fn stable_digest_bytes(bytes: &[u8]) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
+}
+
+pub(crate) fn content_digest(bytes: &[u8]) -> String {
+    format!("fnv1a64:{}", stable_digest_bytes(bytes))
 }
 
 fn task_channel_id(intent_id: &str, task_id: &str) -> String {
