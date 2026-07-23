@@ -84,6 +84,7 @@ struct SerialWorktree {
     branch: String,
     baseline_oid: String,
     worker_run_dir: PathBuf,
+    core_input_overlays: Vec<state::SerialInputOverlay>,
 }
 
 struct SerialWorktreeErrorCleanup<'a> {
@@ -178,6 +179,7 @@ fn prepare_serial_worktree(
             ));
         }
         state::save_harness_copy_warnings(run_dir, &harness_copy_warnings)?;
+        let core_input_overlays = capture_serial_input_overlays(&path, &harness_seed_dir)?;
         let worker_run_dir = wt_agents.join("runs").join(run_id);
         std::fs::create_dir_all(&worker_run_dir)?;
         Ok(SerialWorktree {
@@ -185,6 +187,7 @@ fn prepare_serial_worktree(
             branch: branch.clone(),
             baseline_oid: baseline_oid.clone(),
             worker_run_dir,
+            core_input_overlays,
         })
     })();
     match prepared {
@@ -196,6 +199,7 @@ fn prepare_serial_worktree(
                 worktree: path.display().to_string(),
                 branch,
                 baseline_oid,
+                core_input_overlays: owned.core_input_overlays.clone(),
             };
             if let Err(error) = ws.save_serial_integration_receipt(&receipt) {
                 crate::parallel::remove_worktree(&ws.root, &path, &receipt.branch);
@@ -229,7 +233,7 @@ struct SerialCommittedEvidence {
 struct SerialWorktreeEvidence {
     paths: Vec<String>,
     merge_target_oid: String,
-    unchanged_seeded_harness: Vec<String>,
+    core_input_overlays: Vec<state::SerialInputOverlay>,
 }
 
 fn serial_committed_paths(
@@ -285,6 +289,7 @@ fn serial_committed_paths(
 /// filtering the unchanged seed copies. The returned OID binds that evidence
 /// to the later integration target.
 fn serial_worktree_evidence(
+    ws: &Workspace,
     worktree: &std::path::Path,
     run_dir: &std::path::Path,
 ) -> Option<SerialWorktreeEvidence> {
@@ -302,7 +307,7 @@ fn serial_worktree_evidence(
         return Some(SerialWorktreeEvidence {
             paths,
             merge_target_oid: committed.merge_target_oid,
-            unchanged_seeded_harness: Vec::new(),
+            core_input_overlays: Vec::new(),
         });
     }
 
@@ -353,24 +358,41 @@ fn serial_worktree_evidence(
             }
         }
     }
+    let committed_paths = committed
+        .paths
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
     paths.extend(committed.paths);
     paths.sort();
     paths.dedup();
+    let run_id = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
+        .ok()?
+        .run_id;
+    let unchanged_seeded_harness = unchanged_seeded_harness
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let receipt = ws.load_serial_integration_receipt(&run_id).ok()?;
+    let core_candidates = unchanged_seeded_harness
+        .into_iter()
+        .filter(|path| !committed_paths.contains(path))
+        .collect::<Vec<_>>();
+    let mut core_input_overlays = Vec::new();
+    for path in core_candidates {
+        let overlay = receipt
+            .core_input_overlays
+            .iter()
+            .find(|overlay| {
+                overlay.path == path && serial_input_overlay_matches(worktree, overlay)
+            })?
+            .clone();
+        core_input_overlays.push(overlay);
+    }
     Some(SerialWorktreeEvidence {
         paths,
         merge_target_oid: committed.merge_target_oid,
-        unchanged_seeded_harness,
+        core_input_overlays,
     })
-}
-
-fn remove_unchanged_seeded_harness_copies(
-    worktree: &std::path::Path,
-    evidence: &SerialWorktreeEvidence,
-) -> Result<()> {
-    for path in &evidence.unchanged_seeded_harness {
-        discard_unchanged_seeded_harness_copy(worktree, path)?;
-    }
-    Ok(())
 }
 
 pub(crate) fn discard_unchanged_seeded_harness_copy(
@@ -433,6 +455,94 @@ pub(crate) fn seeded_harness_evidence(
     let mut modified = std::collections::BTreeSet::new();
     visit(seed_root, seed_root, worktree, &mut seeded, &mut modified)?;
     Some((seeded, modified))
+}
+
+fn serial_input_overlay_digest(
+    root: &std::path::Path,
+    overlay: &state::SerialInputOverlay,
+) -> Result<String> {
+    let relative = std::path::Path::new(&overlay.path);
+    let normalized = relative
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)));
+    let harness_input = [".agents/rules/", ".agents/skills/", ".agents/agents/"]
+        .iter()
+        .any(|prefix| overlay.path.starts_with(prefix));
+    if relative.is_absolute()
+        || !normalized
+        || !harness_input
+        || !evaluator::is_integratable_path(&overlay.path)
+    {
+        bail!("invalid core input overlay path");
+    }
+    let path = root.join(relative);
+    let metadata = std::fs::symlink_metadata(&path)
+        .with_context(|| format!("inspecting core input overlay {}", overlay.path))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("core input overlay is not a regular file");
+    }
+    Ok(state::content_digest(&std::fs::read(&path)?))
+}
+
+pub(crate) fn serial_input_overlay_matches(
+    root: &std::path::Path,
+    overlay: &state::SerialInputOverlay,
+) -> bool {
+    serial_input_overlay_digest(root, overlay).is_ok_and(|digest| digest == overlay.content_digest)
+}
+
+fn serial_input_overlay_parity_failure(
+    root: &std::path::Path,
+    overlays: &[state::SerialInputOverlay],
+) -> Option<String> {
+    overlays.iter().find_map(|overlay| {
+        let found = match serial_input_overlay_digest(root, overlay) {
+            Ok(found) if found == overlay.content_digest => return None,
+            Ok(found) => found,
+            Err(error) => format!("unavailable({error})"),
+        };
+        Some(format!(
+            "serial_input_overlay_parity_mismatch:path={}:expected={}:found={found}",
+            overlay.path, overlay.content_digest
+        ))
+    })
+}
+
+fn capture_serial_input_overlays(
+    worktree: &std::path::Path,
+    harness_seed_dir: &std::path::Path,
+) -> Result<Vec<state::SerialInputOverlay>> {
+    if !harness_seed_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let changed = evaluator::changed_paths(worktree)
+        .ok_or_else(|| anyhow!("could not enumerate copied serial harness inputs"))?;
+    let (seeded, modified) = seeded_harness_evidence(harness_seed_dir, worktree)
+        .ok_or_else(|| anyhow!("could not compare copied serial harness inputs"))?;
+    if !modified.is_empty() {
+        bail!(
+            "copied serial harness input diverged before worker spawn: {}",
+            modified.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
+    let mut overlays = Vec::new();
+    for path in changed
+        .into_iter()
+        .filter(|path| seeded.contains(path) && evaluator::is_integratable_path(path))
+    {
+        let probe = state::SerialInputOverlay {
+            path,
+            content_digest: String::new(),
+        };
+        let content_digest = serial_input_overlay_digest(worktree, &probe)
+            .with_context(|| format!("capturing core input overlay {}", probe.path))?;
+        overlays.push(state::SerialInputOverlay {
+            path: probe.path,
+            content_digest,
+        });
+    }
+    overlays.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(overlays)
 }
 
 const PROVIDER_REFUSAL_CLASSIFICATION_SKIPS_FILE: &str =
@@ -2767,10 +2877,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // rather than trusting the worker's self-report.
     let serial_evidence = serial_worktree
         .as_ref()
-        .and_then(|owned| serial_worktree_evidence(&owned.path, &run_dir));
-    if let (Some(owned), Some(serial_evidence)) = (&serial_worktree, &serial_evidence) {
-        remove_unchanged_seeded_harness_copies(&owned.path, serial_evidence)?;
-    }
+        .and_then(|owned| serial_worktree_evidence(ws, &owned.path, &run_dir));
     let evidence: Option<Vec<String>> = if serial_worktree.is_some() {
         serial_evidence
             .as_ref()
@@ -2823,6 +2930,10 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             expected_tip_oid: serial_evidence
                 .as_ref()
                 .map(|evidence| evidence.merge_target_oid.as_str()),
+            core_input_overlays: serial_evidence
+                .as_ref()
+                .map(|evidence| evidence.core_input_overlays.as_slice())
+                .unwrap_or(&[]),
             provenance: IntegrationProvenance::SerialCoreStaged,
             auto_commit: config.auto_commit,
         }),
@@ -4152,6 +4263,22 @@ fn recovery_integration_provenance(
     }
 }
 
+fn validate_receipted_serial_input_overlay_parity(
+    ws: &Workspace,
+    worktree: &std::path::Path,
+    overlays: &[state::SerialInputOverlay],
+) -> Result<()> {
+    if let Some(reason) = serial_input_overlay_parity_failure(&ws.root, overlays) {
+        bail!(reason);
+    }
+    if worktree.exists() {
+        if let Some(reason) = serial_input_overlay_parity_failure(worktree, overlays) {
+            bail!(reason);
+        }
+    }
+    Ok(())
+}
+
 fn validate_integrated_cleanup_identity(
     ws: &Workspace,
     receipt: &state::IntegratedCleanupReceipt,
@@ -4209,9 +4336,18 @@ fn validate_integrated_cleanup_identity(
             || serial.worktree != receipt.worktree
             || serial.branch != receipt.branch
             || serial.baseline_oid != receipt.baseline_oid
+            || receipt
+                .core_input_overlays
+                .iter()
+                .any(|overlay| !serial.core_input_overlays.contains(overlay))
         {
             return Err(anyhow!("serial and integrated core receipts disagree"));
         }
+        validate_receipted_serial_input_overlay_parity(
+            ws,
+            &worktree,
+            &receipt.core_input_overlays,
+        )?;
     }
     Ok((
         worktree,
@@ -4266,9 +4402,18 @@ fn validate_no_change_receipt(ws: &Workspace, receipt: &state::NoChangeReceipt) 
             || serial.worktree != receipt.worktree
             || serial.branch != receipt.branch
             || serial.baseline_oid != receipt.baseline_oid
+            || receipt
+                .core_input_overlays
+                .iter()
+                .any(|overlay| !serial.core_input_overlays.contains(overlay))
         {
             return Err(anyhow!("serial and no-change core receipts disagree"));
         }
+        validate_receipted_serial_input_overlay_parity(
+            ws,
+            &worktree,
+            &receipt.core_input_overlays,
+        )?;
     }
     Ok(worktree)
 }
@@ -4503,15 +4648,7 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                 let wt = run_worktree(&run_dir).filter(|w| w.exists());
                 let serial_evidence = wt
                     .as_ref()
-                    .and_then(|w| serial_worktree_evidence(w, &run_dir));
-                if let (Some(wt), Some(serial_evidence)) = (&wt, &serial_evidence) {
-                    if let Err(error) = remove_unchanged_seeded_harness_copies(wt, serial_evidence)
-                    {
-                        msgs.push(format!(
-                            "{id}: could not remove unchanged harness seed copies: {error}"
-                        ));
-                    }
-                }
+                    .and_then(|w| serial_worktree_evidence(ws, w, &run_dir));
                 let evidence = if wt.is_some() {
                     serial_evidence
                         .as_ref()
@@ -4562,6 +4699,10 @@ pub(crate) fn recover_orphans(ws: &Workspace) -> Vec<String> {
                     expected_tip_oid: serial_evidence
                         .as_ref()
                         .map(|evidence| evidence.merge_target_oid.as_str()),
+                    core_input_overlays: serial_evidence
+                        .as_ref()
+                        .map(|evidence| evidence.core_input_overlays.as_slice())
+                        .unwrap_or(&[]),
                     provenance: recovery_integration_provenance(
                         ws,
                         run_record.as_ref(),
@@ -5219,6 +5360,10 @@ pub(crate) struct MergeBack<'a> {
     /// present, integration fails closed if the branch moved after evidence
     /// collection. Parallel and legacy runs without this binding pass None.
     pub expected_tip_oid: Option<&'a str>,
+    /// Dispatcher-owned tracked inputs that were present in this serial
+    /// worktree during validation. They are neither worker evidence nor
+    /// integration candidates while their exact digest still matches.
+    pub core_input_overlays: &'a [state::SerialInputOverlay],
     /// Selects the integration protocol. Serial core-staged runs may use their
     /// trusted transaction record; parallel worker-direct runs never load it.
     pub provenance: IntegrationProvenance,
@@ -5900,6 +6045,42 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         }
     }
 
+    // Bind the exact dispatcher-owned input bytes used by validation to the
+    // tree that will survive finalization. A retained manual-integration
+    // worktree is its own destination; otherwise the owning root must still
+    // carry the same bytes because these inputs are intentionally excluded
+    // from the worker integration commit.
+    let mut input_overlay_parity_failure = None;
+    if eval.next_task_state == TaskState::Done {
+        if let Some(merge) = merge
+            .as_ref()
+            .filter(|merge| merge.provenance == IntegrationProvenance::SerialCoreStaged)
+        {
+            let has_worker_changes = evidence
+                .as_ref()
+                .is_some_and(|paths| worker_changed_integratable_path(Some(paths)));
+            let committed_change = merge
+                .expected_tip_oid
+                .filter(|oid| !oid.is_empty())
+                .is_some_and(|oid| oid != merge.baseline_oid);
+            let retained_without_integration =
+                !merge.auto_commit && (has_worker_changes || committed_change);
+            input_overlay_parity_failure =
+                serial_input_overlay_parity_failure(merge.wt_path, merge.core_input_overlays);
+            if input_overlay_parity_failure.is_none() && !retained_without_integration {
+                input_overlay_parity_failure =
+                    serial_input_overlay_parity_failure(&ws.root, merge.core_input_overlays);
+            }
+            if let Some(reason) = input_overlay_parity_failure.as_ref() {
+                eval.checks.push(evaluator::fatal_failure(
+                    "serial_input_overlay_parity",
+                    reason,
+                ));
+                eval.next_task_state = TaskState::Failed;
+            }
+        }
+    }
+
     if flags.artifacts {
         state::write_str(
             &run_dir.join("evaluation.json"),
@@ -5977,6 +6158,13 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             "output-contract recovery exhausted: provider_response_refused; paused for user"
                 .to_string(),
         );
+    }
+    if let Some(reason) = input_overlay_parity_failure.as_ref() {
+        state::write_str(&run_dir.join("partial-reason"), reason)?;
+        lines.push(format!(
+            "{}: serial input overlay parity failed before integration: {reason}",
+            task.id
+        ));
     }
     if flags.repairs_done_projection && next_state != TaskState::Done {
         lines.push(format!(
@@ -6114,35 +6302,50 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         m.wt_path.display()
                     ));
                 } else {
-                    let no_change_receipt = persist_no_change_receipt(
-                        ws,
-                        run_dir,
-                        run_id,
-                        &task.id,
-                        &intent_id,
-                        worker_id,
-                        m,
-                        expected_tip,
-                    )?;
-                    let cleanup = crate::parallel::cleanup_integrated_worktree(
-                        &ws.root,
-                        m.wt_path,
-                        m.branch,
-                        expected_tip,
-                        m.provenance,
-                    );
-                    for warning in cleanup.warnings {
-                        lines.push(format!("{}: {warning}", task.id));
-                    }
-                    persist_no_change_projection(run_dir, &no_change_receipt, cleanup.complete)?;
-                    if !cleanup.complete {
+                    if let Some(reason) =
+                        serial_input_overlay_parity_failure(&ws.root, m.core_input_overlays)
+                    {
                         next_state = TaskState::Partial;
-                        let _ = state::write_str(
-                            &run_dir.join("partial-reason"),
-                            "worktree_cleanup_changed",
-                        );
+                        state::write_str(&run_dir.join("partial-reason"), &reason)?;
+                        lines.push(format!(
+                            "{}: serial input overlay parity failed before cleanup: {reason}",
+                            task.id
+                        ));
                     } else {
-                        git_finish_not_needed = true;
+                        let no_change_receipt = persist_no_change_receipt(
+                            ws,
+                            run_dir,
+                            run_id,
+                            &task.id,
+                            &intent_id,
+                            worker_id,
+                            m,
+                            expected_tip,
+                        )?;
+                        let cleanup = crate::parallel::cleanup_integrated_worktree(
+                            &ws.root,
+                            m.wt_path,
+                            m.branch,
+                            expected_tip,
+                            m.provenance,
+                        );
+                        for warning in cleanup.warnings {
+                            lines.push(format!("{}: {warning}", task.id));
+                        }
+                        persist_no_change_projection(
+                            run_dir,
+                            &no_change_receipt,
+                            cleanup.complete,
+                        )?;
+                        if !cleanup.complete {
+                            next_state = TaskState::Partial;
+                            let _ = state::write_str(
+                                &run_dir.join("partial-reason"),
+                                "worktree_cleanup_changed",
+                            );
+                        } else {
+                            git_finish_not_needed = true;
+                        }
                     }
                 }
             } else {
@@ -6210,18 +6413,29 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         "{}: merged {} into the workspace",
                         task.id, m.branch
                     ));
-                    let cleanup = crate::parallel::cleanup_integrated_worktree(
-                        &ws.root,
-                        m.wt_path,
-                        m.branch,
-                        &worker_oid,
-                        m.provenance,
-                    );
-                    for warning in cleanup.warnings {
-                        lines.push(format!("{}: {warning}", task.id));
-                    }
-                    if cleanup.complete {
-                        persist_integrated_cleanup_projection(run_dir, &cleanup_receipt, true)?;
+                    if let Some(reason) =
+                        serial_input_overlay_parity_failure(&ws.root, m.core_input_overlays)
+                    {
+                        next_state = TaskState::Partial;
+                        state::write_str(&run_dir.join("partial-reason"), &reason)?;
+                        lines.push(format!(
+                            "{}: serial input overlay parity failed after integration: {reason}",
+                            task.id
+                        ));
+                    } else {
+                        let cleanup = crate::parallel::cleanup_integrated_worktree(
+                            &ws.root,
+                            m.wt_path,
+                            m.branch,
+                            &worker_oid,
+                            m.provenance,
+                        );
+                        for warning in cleanup.warnings {
+                            lines.push(format!("{}: {warning}", task.id));
+                        }
+                        if cleanup.complete {
+                            persist_integrated_cleanup_projection(run_dir, &cleanup_receipt, true)?;
+                        }
                     }
                 }
                 Ok(crate::parallel::Integration::NoChanges { worker_oid }) => {
@@ -6235,26 +6449,41 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         m,
                         &worker_oid,
                     )?;
-                    let cleanup = crate::parallel::cleanup_integrated_worktree(
-                        &ws.root,
-                        m.wt_path,
-                        m.branch,
-                        &worker_oid,
-                        m.provenance,
-                    );
-                    for warning in cleanup.warnings {
-                        lines.push(format!("{}: {warning}", task.id));
-                    }
-                    persist_no_change_projection(run_dir, &no_change_receipt, cleanup.complete)?;
-                    if cleanup.complete {
-                        lines.push(format!("{}: no file changes to merge", task.id));
-                        git_finish_not_needed = true;
-                    } else {
+                    if let Some(reason) =
+                        serial_input_overlay_parity_failure(&ws.root, m.core_input_overlays)
+                    {
                         next_state = TaskState::Partial;
-                        let _ = state::write_str(
-                            &run_dir.join("partial-reason"),
-                            "worktree_cleanup_changed",
+                        state::write_str(&run_dir.join("partial-reason"), &reason)?;
+                        lines.push(format!(
+                            "{}: serial input overlay parity failed before cleanup: {reason}",
+                            task.id
+                        ));
+                    } else {
+                        let cleanup = crate::parallel::cleanup_integrated_worktree(
+                            &ws.root,
+                            m.wt_path,
+                            m.branch,
+                            &worker_oid,
+                            m.provenance,
                         );
+                        for warning in cleanup.warnings {
+                            lines.push(format!("{}: {warning}", task.id));
+                        }
+                        persist_no_change_projection(
+                            run_dir,
+                            &no_change_receipt,
+                            cleanup.complete,
+                        )?;
+                        if cleanup.complete {
+                            lines.push(format!("{}: no file changes to merge", task.id));
+                            git_finish_not_needed = true;
+                        } else {
+                            next_state = TaskState::Partial;
+                            let _ = state::write_str(
+                                &run_dir.join("partial-reason"),
+                                "worktree_cleanup_changed",
+                            );
+                        }
                     }
                 }
                 Ok(crate::parallel::Integration::Conflict(why)) => {
@@ -6702,6 +6931,7 @@ fn persist_run_integration(
         integration_oid: oid.to_string(),
         provenance: merge.provenance,
         owned_oids: owned_oids.to_vec(),
+        core_input_overlays: merge.core_input_overlays.to_vec(),
     };
     // The external receipt is the cleanup trust root and must become durable
     // before the worker-writable run record is projected.
@@ -6737,6 +6967,7 @@ fn persist_no_change_receipt(
         baseline_oid: merge.baseline_oid.to_string(),
         worker_oid: worker_oid.to_string(),
         provenance: merge.provenance,
+        core_input_overlays: merge.core_input_overlays.to_vec(),
     };
     ws.save_no_change_receipt(&receipt)?;
     persist_no_change_projection(run_dir, &receipt, false)?;
@@ -9933,13 +10164,17 @@ case "$mode" in
 	    git -c user.name="Worker" -c user.email="worker@example.test" commit -q -m "worker commit"
 	    printf "schema_version: 1\nid: worker-uncommitted\nsummary: forbidden\nstatus: accepted\n" > .agents/intent-contract.yaml
 	    ;;
-  harness-asset)
-    mkdir -p .agents/skills/example
-    printf '%s\n' '---' 'name: example' 'description: fixture' '---' > .agents/skills/example/SKILL.md
-    ;;
-  anchor-probe)
-    test -f "$run_dir/evidence/repo-summary.md" || exit 42
-    ;;
+	  harness-asset)
+	    mkdir -p .agents/skills/example
+	    printf '%s\n' '---' 'name: example' 'description: fixture' '---' > .agents/skills/example/SKILL.md
+	    ;;
+	  core-overlay-input|core-overlay-input-tamper-root)
+	    grep -Fxq '# User dirty edit' .agents/rules/tracked-dirty.md || exit 43
+	    printf "worker deliverable\n" > worker-output.txt
+	    ;;
+	  anchor-probe)
+	    test -f "$run_dir/evidence/repo-summary.md" || exit 42
+	    ;;
 esac
 cat > "$run_dir/result.json" <<EOF
 {
@@ -9972,7 +10207,12 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
             )
             .unwrap();
         }
-        if mode == "preexisting-dirty-tracked-rule" {
+        if matches!(
+            mode,
+            "preexisting-dirty-tracked-rule"
+                | "core-overlay-input"
+                | "core-overlay-input-tamper-root"
+        ) {
             let rule = ws.agents_dir().join("rules/tracked-dirty.md");
             write_str(&rule, "# Tracked baseline\n").unwrap();
             git_stdout(&ws.root, &["add", ".agents/rules/tracked-dirty.md"]).unwrap();
@@ -10007,7 +10247,29 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
             config.push_str("auto_commit: true\n");
             write_str(&ws.config_path(), &config).unwrap();
         }
-        let mut q = queue(vec![task(task_id, TaskState::Queued, 10, false)]);
+        let mut queued = task(task_id, TaskState::Queued, 10, false);
+        if matches!(
+            mode,
+            "core-overlay-input" | "core-overlay-input-tamper-root"
+        ) {
+            queued.kind = "implementation".into();
+            let mut validation =
+                "grep -Fxq '# User dirty edit' .agents/rules/tracked-dirty.md".to_string();
+            if mode == "core-overlay-input-tamper-root" {
+                validation.push_str(&format!(
+                    " && printf '# Root changed after validation\\\\n' > {}",
+                    shell_literal(&ws.agents_dir().join("rules/tracked-dirty.md"))
+                ));
+            }
+            queued.validation = Some(
+                crate::yaml::from_str(&format!(
+                    "required: true\ncommands:\n  - {}\n",
+                    serde_json::to_string(&validation).unwrap()
+                ))
+                .unwrap(),
+            );
+        }
+        let mut q = queue(vec![queued]);
         q.intent_id = "intent-test".into();
         ws.save_queue(&q).unwrap();
         let report = run_next(
@@ -10033,7 +10295,9 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         let record: RunRecord = state::load_yaml(&report.run_dir.join("run.yaml")).unwrap();
         let wt = std::path::Path::new(&record.worktree);
 
-        let evidence = serial_worktree_evidence(wt, &report.run_dir).unwrap().paths;
+        let evidence = serial_worktree_evidence(&ws, wt, &report.run_dir)
+            .unwrap()
+            .paths;
 
         assert!(
             evidence.iter().any(|path| path == "committed.txt"),
@@ -10247,6 +10511,151 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
             let _ = std::fs::remove_dir_all(&source);
             let _ = std::fs::remove_dir_all(ws.root);
         }
+    }
+
+    #[test]
+    fn serial_core_overlay_survives_validation_and_retained_worktree() {
+        let (ws, report, source) = run_serial_worker_commit_case(
+            "serial-core-overlay-retained",
+            "YARD-CORE-OVERLAY-RETAINED",
+            "core-overlay-input",
+            false,
+        );
+        let record: RunRecord = state::load_yaml(&report.run_dir.join("run.yaml")).unwrap();
+        let wt = std::path::Path::new(&record.worktree);
+        let validation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("validation.json")).unwrap(),
+        )
+        .unwrap();
+        let result: crate::schemas::RunResult = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("result.json")).unwrap(),
+        )
+        .unwrap();
+        let receipt = ws.load_serial_integration_receipt(&report.run_id).unwrap();
+        let evaluation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("evaluation.json")).unwrap(),
+        )
+        .unwrap();
+        let disclosure = evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "diff_matches_report")
+            .unwrap();
+
+        assert_eq!(report.result_state, Some(TaskState::Partial));
+        assert_eq!(validation["all_passed"], true);
+        assert!(result.changes.files_modified.is_empty());
+        assert!(result.changes.files_created.is_empty());
+        assert_eq!(
+            receipt.core_input_overlays,
+            vec![state::SerialInputOverlay {
+                path: ".agents/rules/tracked-dirty.md".into(),
+                content_digest: state::content_digest(b"# User dirty edit\n"),
+            }]
+        );
+        assert!(wt.exists(), "auto_commit=false must retain worker output");
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n",
+            "the retained worktree must preserve the exact core-seeded bytes used by validation"
+        );
+        assert!(
+            !disclosure["note"]
+                .as_str()
+                .unwrap()
+                .contains(".agents/rules/tracked-dirty.md"),
+            "the core-seeded input must not be attributed to the worker: {disclosure}"
+        );
+
+        crate::parallel::remove_worktree(&ws.root, wt, &record.worktree_branch);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn serial_core_overlay_is_excluded_from_integration_after_validation() {
+        let (ws, report, source) = run_serial_worker_commit_case(
+            "serial-core-overlay-integrated",
+            "YARD-CORE-OVERLAY-INTEGRATED",
+            "core-overlay-input",
+            true,
+        );
+        let validation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("validation.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(report.result_state, Some(TaskState::Done));
+        assert_eq!(validation["all_passed"], true);
+        assert_eq!(
+            std::fs::read_to_string(ws.agents_dir().join("rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.root.join("worker-output.txt")).unwrap(),
+            "worker deliverable\n"
+        );
+        let integrated_names =
+            git_stdout(&ws.root, &["diff", "--name-only", "HEAD^1", "HEAD"]).unwrap();
+        assert!(integrated_names
+            .lines()
+            .any(|path| path == "worker-output.txt"));
+        assert!(
+            !integrated_names
+                .lines()
+                .any(|path| path == ".agents/rules/tracked-dirty.md"),
+            "the core input overlay must stay outside the worker integration allowlist: {integrated_names}"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn serial_core_overlay_destination_mismatch_blocks_done() {
+        let (ws, report, source) = run_serial_worker_commit_case(
+            "serial-core-overlay-mismatch",
+            "YARD-CORE-OVERLAY-MISMATCH",
+            "core-overlay-input-tamper-root",
+            true,
+        );
+        let record: RunRecord = state::load_yaml(&report.run_dir.join("run.yaml")).unwrap();
+        let wt = std::path::Path::new(&record.worktree);
+        let validation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("validation.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(validation["all_passed"], true);
+        assert!(
+            matches!(
+                report.result_state,
+                Some(TaskState::Partial | TaskState::NeedsUser)
+            ),
+            "the typed parity failure must prevent Done: {:?}",
+            report.result_state
+        );
+        assert!(
+            std::fs::read_to_string(report.run_dir.join("partial-reason"))
+                .unwrap()
+                .starts_with(
+                    "serial_input_overlay_parity_mismatch:path=.agents/rules/tracked-dirty.md"
+                )
+        );
+        assert!(
+            !ws.root.join("worker-output.txt").exists(),
+            "a parity mismatch must block integration before Done"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n",
+            "the validated worktree must be retained without reverting the overlay"
+        );
+
+        crate::parallel::remove_worktree(&ws.root, wt, &record.worktree_branch);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     #[test]
@@ -11482,11 +11891,21 @@ exit 1
         let task_id = "YARD-CLEANUP";
         let branch = format!("yard/{}/{}", task_id.to_lowercase(), run_id);
         let wt = ws.agents_dir().join("worktrees").join(run_id);
+        let rule = ws.agents_dir().join("rules/tracked-dirty.md");
+        write_str(&rule, "# Tracked baseline\n").unwrap();
+        git_stdout(&ws.root, &["add", ".agents/rules/tracked-dirty.md"]).unwrap();
+        git_stdout(&ws.root, &["commit", "-q", "-m", "track cleanup input"]).unwrap();
+        write_str(&rule, "# User dirty edit\n").unwrap();
         let baseline = git_stdout(&ws.root, &["rev-parse", "HEAD"])
             .unwrap()
             .trim()
             .to_string();
         crate::parallel::create_worktree(&ws.root, &wt, &branch).unwrap();
+        write_str(
+            &wt.join(".agents/rules/tracked-dirty.md"),
+            "# User dirty edit\n",
+        )
+        .unwrap();
         write_str(&wt.join("owned.txt"), "owned\n").unwrap();
         git_stdout(&wt, &["add", "owned.txt"]).unwrap();
         git_stdout(&wt, &["commit", "-q", "-m", "owned worker commit"]).unwrap();
@@ -11526,6 +11945,10 @@ exit 1
         ws.save_queue(&q).unwrap();
         let run_dir = ws.runs_dir().join(run_id);
         std::fs::create_dir_all(&run_dir).unwrap();
+        let overlay = state::SerialInputOverlay {
+            path: ".agents/rules/tracked-dirty.md".into(),
+            content_digest: state::content_digest(b"# User dirty edit\n"),
+        };
         ws.save_serial_integration_receipt(&state::SerialIntegrationReceipt {
             schema_version: 1,
             run_id: run_id.into(),
@@ -11533,6 +11956,7 @@ exit 1
             worktree: wt.display().to_string(),
             branch: branch.clone(),
             baseline_oid: baseline.clone(),
+            core_input_overlays: vec![overlay.clone()],
         })
         .unwrap();
         ws.save_integrated_cleanup_receipt(&state::IntegratedCleanupReceipt {
@@ -11549,6 +11973,7 @@ exit 1
             integration_oid: integration_oid.clone(),
             provenance: IntegrationProvenance::SerialCoreStaged,
             owned_oids: vec![worker_oid.clone(), integration_oid.clone()],
+            core_input_overlays: vec![overlay],
         })
         .unwrap();
         state::save_yaml(
@@ -11579,6 +12004,24 @@ exit 1
             },
         )
         .unwrap();
+
+        write_str(&rule, "# Root changed after integration\n").unwrap();
+        let mut parity_messages = Vec::new();
+        reconcile_integrated_cleanups(&ws, &mut parity_messages);
+        assert!(parity_messages.iter().any(|message| {
+            message.contains(
+                "serial_input_overlay_parity_mismatch:path=.agents/rules/tracked-dirty.md",
+            )
+        }));
+        assert!(
+            wt.exists(),
+            "cleanup recovery must retain the validated worktree on parity mismatch"
+        );
+        assert!(!git_stdout(&ws.root, &["branch", "--list", &branch])
+            .unwrap()
+            .trim()
+            .is_empty());
+        write_str(&rule, "# User dirty edit\n").unwrap();
 
         // Exact crash window: Git removed the worktree, but Yardlet had not yet
         // deleted the owned target/transaction refs or marked cleanup complete.
@@ -11780,6 +12223,7 @@ exit 1
                 baseline_oid: baseline.clone(),
                 worker_oid: baseline.clone(),
                 provenance: IntegrationProvenance::ParallelWorkerDirect,
+                core_input_overlays: vec![],
             })
             .unwrap();
             if cleanup_before_recovery {
@@ -11870,6 +12314,7 @@ exit 1
                 branch: "yard/yard-trusted/run-trusted",
                 baseline_oid: "trusted-baseline",
                 expected_tip_oid: None,
+                core_input_overlays: &[],
                 provenance: IntegrationProvenance::SerialCoreStaged,
                 auto_commit: true,
             }),
@@ -12223,6 +12668,7 @@ exit 1
             worktree: wt.display().to_string(),
             branch: branch.into(),
             baseline_oid: baseline.clone(),
+            core_input_overlays: vec![],
         })
         .unwrap();
         std::fs::write(wt.join("staged.txt"), "worker completed\n").unwrap();
@@ -12454,6 +12900,7 @@ exit 1
             worktree: wt.display().to_string(),
             branch: branch.clone(),
             baseline_oid: baseline.clone(),
+            core_input_overlays: vec![],
         })
         .unwrap();
         state::save_yaml(
@@ -12506,6 +12953,149 @@ exit 1
             "a clean canonical seed must pass the forbidden-path gate"
         );
         assert!(!wt.exists(), "a clean recovered worktree should be removed");
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn recovery_reuses_serial_core_overlay_parity_and_keeps_validated_bytes() {
+        let ws = init_test_workspace(
+            "serial-overlay-recovery-parity",
+            "schema_version: 1\nrouting: {default_worker: builder}\nworkers: []\n",
+        );
+        let mut config = std::fs::read_to_string(ws.config_path()).unwrap();
+        config.push_str("auto_commit: true\n");
+        write_str(&ws.config_path(), &config).unwrap();
+        let rule = ws.agents_dir().join("rules/tracked-dirty.md");
+        write_str(&rule, "# Tracked baseline\n").unwrap();
+        git_stdout(&ws.root, &["add", ".agents/rules/tracked-dirty.md"]).unwrap();
+        git_stdout(&ws.root, &["commit", "-q", "-m", "track recovery input"]).unwrap();
+        write_str(&rule, "# User dirty edit\n").unwrap();
+
+        let task_id = "YARD-RECOVERY-OVERLAY";
+        let run_id = "run-20990101-000000-recovery-overlay";
+        let mut queued_task = task(task_id, TaskState::Running, 10, false);
+        queued_task.kind = "implementation".into();
+        let mut q = queue(vec![queued_task]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        let run_dir = ws.runs_dir().join(run_id);
+        let canonical_seed = run_dir.join(SERIAL_CANONICAL_SEED_DIR);
+        let harness_seed = run_dir.join(HARNESS_SEED_DIR);
+        std::fs::create_dir_all(&canonical_seed).unwrap();
+        std::fs::create_dir_all(harness_seed.join("rules")).unwrap();
+        let baseline = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let branch = format!("yard/{}/{run_id}", task_id.to_lowercase());
+        let wt = ws.agents_dir().join("worktrees").join(run_id);
+        crate::parallel::create_worktree(&ws.root, &wt, &branch).unwrap();
+        std::fs::create_dir_all(wt.join(".agents/rules")).unwrap();
+        for name in ["intent-contract.yaml", "work-queue.yaml"] {
+            let source = ws.agents_dir().join(name);
+            std::fs::copy(&source, wt.join(".agents").join(name)).unwrap();
+            std::fs::copy(&source, canonical_seed.join(name)).unwrap();
+        }
+        std::fs::copy(&rule, wt.join(".agents/rules/tracked-dirty.md")).unwrap();
+        std::fs::copy(&rule, harness_seed.join("rules/tracked-dirty.md")).unwrap();
+        write_str(&wt.join("worker-output.txt"), "recovered worker output\n").unwrap();
+        let overlay = state::SerialInputOverlay {
+            path: ".agents/rules/tracked-dirty.md".into(),
+            content_digest: state::content_digest(b"# User dirty edit\n"),
+        };
+        ws.save_serial_integration_receipt(&state::SerialIntegrationReceipt {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            worktree: wt.display().to_string(),
+            branch: branch.clone(),
+            baseline_oid: baseline.clone(),
+            core_input_overlays: vec![overlay],
+        })
+        .unwrap();
+        let result = crate::schemas::RunResult {
+            schema_version: 1,
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: Default::default(),
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: "recover overlay parity".into(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
+        };
+        write_str(
+            &run_dir.join("result.json"),
+            &serde_json::to_string(&result).unwrap(),
+        )
+        .unwrap();
+        write_str(&run_dir.join("handoff.md"), "# recovery overlay\n").unwrap();
+        state::save_yaml(
+            &run_dir.join("run.yaml"),
+            &RunRecord {
+                schema_version: 1,
+                run_id: run_id.into(),
+                task_id: task_id.into(),
+                intent_id: "intent-test".into(),
+                worker: "builder".into(),
+                model: String::new(),
+                fallback_enabled: false,
+                routing_provenance: None,
+                state: "running".into(),
+                started_at: Local::now().to_rfc3339(),
+                completed_at: None,
+                worktree: wt.display().to_string(),
+                serial_isolated: true,
+                baseline_oid: baseline,
+                worktree_branch: branch.clone(),
+                integration_oid: String::new(),
+                integration_base_oid: String::new(),
+                integration_worker_oid: String::new(),
+                integration_provenance: IntegrationProvenance::SerialCoreStaged,
+                integration_cleanup_complete: false,
+                owned_oids: vec![],
+                output_contract_incident: None,
+            },
+        )
+        .unwrap();
+        write_str(&run_dir.join("worker.pid"), "2147483647").unwrap();
+
+        write_str(&rule, "# Root changed before recovery\n").unwrap();
+        let messages = recover_orphans(&ws);
+
+        assert_ne!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+        assert!(messages.iter().any(|message| message.contains("recovered")));
+        assert!(std::fs::read_to_string(run_dir.join("partial-reason"))
+            .unwrap()
+            .starts_with(
+                "serial_input_overlay_parity_mismatch:path=.agents/rules/tracked-dirty.md"
+            ));
+        assert!(!ws.root.join("worker-output.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n"
+        );
+
+        let second = recover_orphans(&ws);
+        assert!(
+            second
+                .iter()
+                .all(|message| !message.contains("recovered YARD-RECOVERY-OVERLAY")),
+            "the finalized recovery must not be re-applied: {second:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n",
+            "a repeated recovery pass must not revert the retained overlay"
+        );
+
+        crate::parallel::remove_worktree(&ws.root, &wt, &branch);
         let _ = std::fs::remove_dir_all(ws.root);
     }
 
@@ -13408,6 +13998,7 @@ exit 1
                 branch: "yard/yard-001",
                 baseline_oid: &baseline_oid,
                 expected_tip_oid: None,
+                core_input_overlays: &[],
                 provenance: IntegrationProvenance::ParallelWorkerDirect,
                 auto_commit: true,
             }),
@@ -13591,6 +14182,7 @@ exit 1
                 branch: &branch,
                 baseline_oid: &unrelated_oid,
                 expected_tip_oid: Some(&unrelated_oid),
+                core_input_overlays: &[],
                 provenance: IntegrationProvenance::ParallelWorkerDirect,
                 auto_commit: true,
             }),
@@ -13765,6 +14357,7 @@ exit 1
             integration_oid: integration_oid.clone(),
             provenance: IntegrationProvenance::ParallelWorkerDirect,
             owned_oids: vec![worker_oid.clone(), integration_oid.clone()],
+            core_input_overlays: vec![],
         })
         .unwrap();
 
@@ -14033,6 +14626,7 @@ exit 1
                 integration_oid: expected_oid.into(),
                 provenance: IntegrationProvenance::ParallelWorkerDirect,
                 owned_oids: vec![worker_oid.into(), expected_oid.into()],
+                core_input_overlays: vec![],
             })
             .unwrap();
             ws.save_git_finish_record(
