@@ -1495,6 +1495,24 @@ fn cmd_queue(cwd: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Status lines surfacing runs that persisted worktree harness-copy warnings.
+/// Empty when no run left the evidence file, so clean status output is
+/// unchanged. Pure projection: reads the snapshot only, never state.
+fn harness_copy_warning_lines(snap: &Snapshot) -> Vec<String> {
+    if snap.harness_copy_warnings.is_empty() {
+        return Vec::new();
+    }
+    let mut lines =
+        vec!["\nharness copy warnings (worktree preparation was incomplete):".to_string()];
+    for w in &snap.harness_copy_warnings {
+        lines.push(format!(
+            "  - task {} / run {}: {} warning(s), see {} in the run directory",
+            w.task_id, w.run_id, w.warning_count, w.evidence
+        ));
+    }
+    lines
+}
+
 fn queue_lines(snap: &Snapshot) -> Vec<String> {
     let next = snap
         .queue
@@ -2179,6 +2197,9 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
         }
         println!("  recover with:  yardlet recover");
     }
+    for line in harness_copy_warning_lines(&snap) {
+        println!("{line}");
+    }
     if let Some((id, q)) = &snap.pending {
         println!("\n\u{2691} {id} is waiting on you:");
         println!(
@@ -2574,6 +2595,43 @@ auto_commit: false
         let output = queue_lines(&current).join("\n");
         assert!(output.contains("CURRENT INTENT REASON"));
         assert!(!output.contains("STALE INTENT REASON"));
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn status_surfaces_harness_copy_warning_evidence_only_when_present() {
+        let (ws, clean, _) = crate::snapshot::reused_task_id_fixture("cli-harness-copy");
+        assert!(
+            harness_copy_warning_lines(&clean).is_empty(),
+            "a workspace without warning evidence must keep status output unchanged"
+        );
+
+        let run_id = "run-cli-harness-copy";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(run_dir.join("evidence")).unwrap();
+        std::fs::write(
+            run_dir.join("run.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: SHARED\nintent_id: intent-current\nworker: fixture\nstate: done\nstarted_at: \"2026-07-23T00:00:00Z\"\ncompleted_at: \"2026-07-23T00:01:00Z\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            run_dir.join("evidence/harness-copy-warnings.log"),
+            "copy_dir: skipped symlink 'a' -> 'b'\n",
+        )
+        .unwrap();
+
+        let snap = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        let lines = harness_copy_warning_lines(&snap).join("\n");
+        assert!(lines.contains("SHARED"), "{lines}");
+        assert!(lines.contains(run_id), "{lines}");
+        assert!(lines.contains("1 warning(s)"), "{lines}");
+        assert!(
+            lines.contains("evidence/harness-copy-warnings.log"),
+            "{lines}"
+        );
 
         let _ = std::fs::remove_dir_all(ws.root);
     }

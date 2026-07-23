@@ -32,6 +32,27 @@ pub struct Snapshot {
     /// Read-only effective-state diagnostics for canonical Running tasks whose
     /// exact worker identity is no longer live.
     pub recovery_required: Vec<RecoveryRequired>,
+    /// Runs (latest per task, current intent) that persisted worktree
+    /// harness-copy warnings as evidence. Absence of the evidence file means
+    /// preparation was clean, so such runs never appear here.
+    pub harness_copy_warnings: Vec<HarnessCopyWarning>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HarnessCopyWarning {
+    pub task_id: String,
+    pub run_id: String,
+    pub warning_count: usize,
+    /// Evidence path relative to the run directory.
+    pub evidence: String,
+}
+
+/// Read-only count of a run's persisted harness-copy warnings; None when the
+/// run left no warnings evidence (preparation was clean).
+pub(crate) fn harness_copy_warning_count(run_dir: &std::path::Path) -> Option<usize> {
+    let text =
+        std::fs::read_to_string(run_dir.join(crate::state::HARNESS_COPY_WARNINGS_FILE)).ok()?;
+    Some(text.lines().filter(|l| !l.trim().is_empty()).count())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -227,6 +248,21 @@ impl Snapshot {
                 )
             })
             .collect();
+        let harness_copy_warnings = queue
+            .tasks
+            .iter()
+            .filter_map(|task| {
+                let (run_id, run_dir) =
+                    crate::run::latest_run_for_intent(ws, &task.id, &queue.intent_id)?;
+                let warning_count = harness_copy_warning_count(&run_dir)?;
+                Some(HarnessCopyWarning {
+                    task_id: task.id.clone(),
+                    run_id,
+                    warning_count,
+                    evidence: crate::state::HARNESS_COPY_WARNINGS_FILE.to_string(),
+                })
+            })
+            .collect();
 
         Ok(Snapshot {
             config,
@@ -240,6 +276,7 @@ impl Snapshot {
             capabilities,
             last_transitions,
             recovery_required,
+            harness_copy_warnings,
         })
     }
 
@@ -293,7 +330,7 @@ impl Snapshot {
     /// JSON view for `yardlet status --json`.
     pub fn to_json(&self) -> serde_json::Value {
         let health = self.health();
-        serde_json::json!({
+        let mut json = serde_json::json!({
             "product": self.config.product,
             "workspace_id": self.config.workspace_id,
             "planner": self.planner,
@@ -321,7 +358,13 @@ impl Snapshot {
             }).collect::<Vec<_>>(),
             "recovery_required": self.recovery_required,
             "workers": self.workers,
-        })
+        });
+        // Only runs that persisted warnings add the key, so a workspace whose
+        // runs prepared cleanly keeps its JSON output byte-identical.
+        if !self.harness_copy_warnings.is_empty() {
+            json["harness_copy_warnings"] = serde_json::json!(self.harness_copy_warnings);
+        }
+        json
     }
 }
 
@@ -617,6 +660,72 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    fn write_done_run_for_current_intent(ws: &Workspace, run_id: &str) -> std::path::PathBuf {
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("run.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: SHARED\nintent_id: intent-current\nworker: fixture\nstate: done\nstarted_at: \"2026-07-23T00:00:00Z\"\ncompleted_at: \"2026-07-23T00:01:00Z\"\n"
+            ),
+        )
+        .unwrap();
+        run_dir
+    }
+
+    #[test]
+    fn harness_copy_warnings_evidence_is_surfaced_in_the_readonly_projection() {
+        let (ws, _, _) = reused_task_id_fixture("harness-copy-warnings");
+        let run_id = "run-harness-copy-warnings";
+        let run_dir = write_done_run_for_current_intent(&ws, run_id);
+        std::fs::create_dir_all(run_dir.join("evidence")).unwrap();
+        std::fs::write(
+            run_dir.join("evidence/harness-copy-warnings.log"),
+            "copy_dir: skipped symlink 'a' -> 'b'\ncopy_dir: skipped symlink 'c' -> 'd'\n",
+        )
+        .unwrap();
+
+        let queue_before = std::fs::read(ws.queue_path()).unwrap();
+        let run_before = std::fs::read(run_dir.join("run.yaml")).unwrap();
+        let snapshot = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+
+        let warning = snapshot
+            .harness_copy_warnings
+            .first()
+            .expect("a run with harness-copy-warnings evidence must be projected");
+        assert_eq!(warning.task_id, "SHARED");
+        assert_eq!(warning.run_id, run_id);
+        assert_eq!(warning.warning_count, 2);
+        assert_eq!(warning.evidence, "evidence/harness-copy-warnings.log");
+
+        let json = snapshot.to_json();
+        assert_eq!(json["harness_copy_warnings"][0]["task_id"], "SHARED");
+        assert_eq!(json["harness_copy_warnings"][0]["run_id"], run_id);
+        assert_eq!(json["harness_copy_warnings"][0]["warning_count"], 2);
+
+        // Read-only projection: surfacing the evidence must not rewrite any
+        // canonical state or run record.
+        assert_eq!(std::fs::read(ws.queue_path()).unwrap(), queue_before);
+        assert_eq!(std::fs::read(run_dir.join("run.yaml")).unwrap(), run_before);
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn runs_without_harness_copy_warnings_leave_the_projection_unchanged() {
+        let (ws, _, _) = reused_task_id_fixture("harness-copy-clean");
+        write_done_run_for_current_intent(&ws, "run-harness-copy-clean");
+
+        let snapshot = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        assert!(snapshot.harness_copy_warnings.is_empty());
+        assert!(
+            snapshot.to_json().get("harness_copy_warnings").is_none(),
+            "a clean run must not grow a new status key"
+        );
 
         let _ = std::fs::remove_dir_all(ws.root);
     }
