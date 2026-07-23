@@ -1767,20 +1767,162 @@ pub(crate) fn ensure_worktrees_excluded(root: &Path) {
 }
 
 /// Best-effort recursive copy for small harness asset dirs (no-op if absent).
+///
+/// Symlinks are entries to preserve, never directories to traverse. This is
+/// especially important when a tracked harness symlink in two Git worktrees
+/// resolves to the same external directory.
 pub(crate) fn copy_dir(src: &Path, dst: &Path) {
-    let Ok(rd) = std::fs::read_dir(src) else {
-        return;
+    let mut warnings = Vec::new();
+    copy_dir_inner(src, dst, &mut warnings);
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
+}
+
+fn copy_dir_inner(src: &Path, dst: &Path, warnings: &mut Vec<String>) {
+    let source_metadata = match std::fs::symlink_metadata(src) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            warnings.push(format!(
+                "could not inspect harness directory {}: {error}",
+                src.display()
+            ));
+            return;
+        }
     };
-    let _ = std::fs::create_dir_all(dst);
-    for e in rd.flatten() {
-        let from = e.path();
-        let to = dst.join(e.file_name());
-        if from.is_dir() {
-            copy_dir(&from, &to);
+    if source_metadata.file_type().is_symlink() || !source_metadata.is_dir() {
+        warnings.push(format!(
+            "skipped non-directory harness root {}",
+            src.display()
+        ));
+        return;
+    }
+    if std::fs::symlink_metadata(dst).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        warnings.push(format!(
+            "skipped harness directory {} because destination {} is a symlink",
+            src.display(),
+            dst.display()
+        ));
+        return;
+    }
+    if let Err(error) = std::fs::create_dir_all(dst) {
+        warnings.push(format!(
+            "could not create harness directory {}: {error}",
+            dst.display()
+        ));
+        return;
+    }
+    let entries = match std::fs::read_dir(src) {
+        Ok(entries) => entries,
+        Err(error) => {
+            warnings.push(format!(
+                "could not read harness directory {}: {error}",
+                src.display()
+            ));
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                warnings.push(format!(
+                    "could not read an entry in harness directory {}: {error}",
+                    src.display()
+                ));
+                continue;
+            }
+        };
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        let metadata = match std::fs::symlink_metadata(&from) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                warnings.push(format!(
+                    "could not inspect harness entry {}: {error}",
+                    from.display()
+                ));
+                continue;
+            }
+        };
+        let result = if metadata.file_type().is_symlink() {
+            copy_symlink(&from, &to)
+        } else if metadata.is_dir() {
+            copy_dir_inner(&from, &to, warnings);
+            continue;
+        } else if metadata.is_file() {
+            copy_regular_file(&from, &to)
         } else {
-            let _ = std::fs::copy(&from, &to);
+            warnings.push(format!(
+                "skipped unsupported harness entry {}",
+                from.display()
+            ));
+            continue;
+        };
+        if let Err(error) = result {
+            warnings.push(format!(
+                "could not copy harness entry {} to {}: {error}",
+                from.display(),
+                to.display()
+            ));
         }
     }
+}
+
+fn copy_regular_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if std::fs::symlink_metadata(dst).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "destination is a symlink",
+        ));
+    }
+    if let (Ok(source), Ok(destination)) = (src.canonicalize(), dst.canonicalize()) {
+        if source == destination {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "source and destination resolve to the same file",
+            ));
+        }
+    }
+    std::fs::copy(src, dst).map(|_| ())
+}
+
+fn copy_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let target = std::fs::read_link(src)?;
+    match std::fs::symlink_metadata(dst) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            if std::fs::read_link(dst)? == target {
+                return Ok(());
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "destination is a different symlink",
+            ));
+        }
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "destination already exists and is not a symlink",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    create_symlink(&target, dst)
+}
+
+#[cfg(unix)]
+fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(not(unix))]
+fn create_symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "preserving harness symlinks is unsupported on this platform",
+    ))
 }
 
 /// Run git in `dir`, returning stdout on success and stderr in the error.
@@ -2108,6 +2250,117 @@ mod tests {
         sh_git(&root, &["add", "base.txt"]);
         sh_git(&root, &["commit", "-q", "-m", "init"]);
         root
+    }
+
+    #[cfg(unix)]
+    fn assert_tracked_external_harness_symlink_is_safe(preparation: &str) {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_repo(&format!("{preparation}-external-harness-symlink"));
+        let external = std::env::temp_dir().join(format!(
+            "yard-par-{preparation}-external-harness-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&external);
+        let external_skill = external.join("example");
+        std::fs::create_dir_all(&external_skill).unwrap();
+        let sentinel = external_skill.join("SKILL.md");
+        let sentinel_bytes = b"# external sentinel\nmust remain intact\n";
+        std::fs::write(&sentinel, sentinel_bytes).unwrap();
+        let sentinel_len = std::fs::metadata(&sentinel).unwrap().len();
+
+        let source_skills = root.join(".agents/skills");
+        std::fs::create_dir_all(&source_skills).unwrap();
+        let source_link = source_skills.join("example");
+        symlink(&external_skill, &source_link).unwrap();
+        sh_git(&root, &["add", ".agents/skills/example"]);
+        sh_git(
+            &root,
+            &["commit", "-q", "-m", "track external harness link"],
+        );
+
+        let run_id = format!("run-{preparation}-symlink");
+        let worktree = root.join(".agents/worktrees").join(&run_id);
+        let branch = format!("yard/{preparation}-symlink/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let worktree_link = worktree.join(".agents/skills/example");
+        assert!(
+            std::fs::symlink_metadata(&worktree_link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "Git fixture must checkout the tracked symlink in the worktree"
+        );
+
+        copy_dir(&source_skills, &worktree.join(".agents/skills"));
+        assert_eq!(
+            std::fs::read(&sentinel).unwrap(),
+            sentinel_bytes,
+            "{preparation} worktree preparation followed a tracked symlink and changed the external sentinel"
+        );
+        assert_eq!(
+            std::fs::metadata(&sentinel).unwrap().len(),
+            sentinel_len,
+            "{preparation} worktree preparation changed the external sentinel length"
+        );
+
+        let seed_skills = root
+            .join(".agents/runs")
+            .join(&run_id)
+            .join(run::HARNESS_SEED_DIR)
+            .join("skills");
+        copy_dir(&source_skills, &seed_skills);
+
+        for link in [&worktree_link, &seed_skills.join("example")] {
+            assert!(
+                std::fs::symlink_metadata(link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                "{} must remain a symlink",
+                link.display()
+            );
+            assert_eq!(std::fs::read_link(link).unwrap(), external_skill);
+        }
+        assert_eq!(std::fs::read(&sentinel).unwrap(), sentinel_bytes);
+        assert_eq!(std::fs::metadata(&sentinel).unwrap().len(), sentinel_len);
+
+        remove_worktree(&root, &worktree, &branch);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&external);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn serial_harness_copy_preserves_tracked_external_symlink_sentinel() {
+        assert_tracked_external_harness_symlink_is_safe("serial");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parallel_harness_copy_preserves_tracked_external_symlink_sentinel() {
+        assert_tracked_external_harness_symlink_is_safe("parallel");
+    }
+
+    #[test]
+    fn harness_copy_preserves_regular_files_and_nested_directories() {
+        let root = temp_repo("regular-harness-copy");
+        let source = root.join("fixture-source");
+        let destination = root.join("fixture-destination");
+        write_str(&source.join("RULE.md"), "# regular\n").unwrap();
+        write_str(&source.join("nested/SKILL.md"), "# nested\n").unwrap();
+
+        copy_dir(&source, &destination);
+
+        assert_eq!(
+            std::fs::read_to_string(destination.join("RULE.md")).unwrap(),
+            "# regular\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.join("nested/SKILL.md")).unwrap(),
+            "# nested\n"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
