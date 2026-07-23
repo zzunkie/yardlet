@@ -10944,6 +10944,77 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
     }
 
     #[test]
+    fn dependency_output_conflict_blocks_serial_worker_spawn_and_cleans_worktree() {
+        let (ws, _upstream, source, spawn_marker) =
+            resolved_dependency_output_fixture("resolved-dependency-output-conflict", true, None);
+        // Plant a committed file at the manifest path whose digest differs from
+        // the verified snapshot: the fresh serial worktree carries it at HEAD,
+        // so materialization must fail closed instead of clobbering repo bytes.
+        write_str(
+            &ws.root.join("dependency-output.txt"),
+            "conflicting committed bytes\n",
+        )
+        .unwrap();
+        git_stdout(&ws.root, &["add", "dependency-output.txt"]).unwrap();
+        git_stdout(&ws.root, &["commit", "-q", "-m", "conflicting baseline"]).unwrap();
+
+        let error = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-DOWNSTREAM".into()),
+                ..opts()
+            },
+        )
+        .err()
+        .expect("a destination digest conflict must block the downstream before spawn");
+        assert!(
+            error.to_string().contains(&format!(
+                "dependency_output_conflict:dependency=YARD-UPSTREAM:path=dependency-output.txt:existing_digest={}:expected={}",
+                state::content_digest(b"conflicting committed bytes\n"),
+                state::content_digest(b"resolved dependency bytes\n"),
+            )),
+            "{error:#}"
+        );
+        assert!(
+            !spawn_marker.exists(),
+            "the downstream worker spawned despite the dependency output conflict"
+        );
+        assert_eq!(
+            ws.load_queue()
+                .unwrap()
+                .tasks
+                .iter()
+                .find(|task| task.id == "YARD-DOWNSTREAM")
+                .unwrap()
+                .state,
+            TaskState::Queued
+        );
+        let leftover: Vec<PathBuf> = std::fs::read_dir(ws.agents_dir().join("worktrees"))
+            .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(
+            leftover.is_empty(),
+            "a pre-spawn conflict must clean up the prepared worktree: {leftover:?}"
+        );
+        assert_eq!(
+            git_stdout(&ws.root, &["branch", "--list", "yard/yard-downstream/*"])
+                .unwrap()
+                .trim(),
+            "",
+            "the failed preparation must not leave its run branch behind"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.root.join("dependency-output.txt")).unwrap(),
+            "conflicting committed bytes\n",
+            "fail-closed must leave the committed conflicting bytes untouched"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
     fn auto_commit_on_blocks_worker_committed_canonical_mutation_before_merge() {
         let (ws, report, source) = run_serial_worker_commit_case(
             "serial-worker-canonical-commit",
