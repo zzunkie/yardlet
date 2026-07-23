@@ -3751,6 +3751,22 @@ impl Workspace {
             &answer,
         )?;
 
+        if !request.accepted_deviations.is_empty() {
+            let mut queue = self.load_queue()?;
+            if queue.intent_id != request.intent_id {
+                bail!("accepted_deviation_intent_mismatch");
+            }
+            let task = queue
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == request.task_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("accepted_deviation_task_missing: {}", request.task_id)
+                })?;
+            task.accept_deviations(&request.accepted_deviations, &request.answer_id);
+            self.save_queue_locked(&_lock, &queue)?;
+        }
+
         let native = request.supports_native_resume
             && request
                 .worker_session_ref
@@ -6158,6 +6174,7 @@ routing:
             task_id: "YARD-001".into(),
             question_id: "qst_1".into(),
             text: "Path A".into(),
+            accepted_deviations: vec![],
             worker_id: "codex".into(),
             worker_session_ref: Some("thread-1".into()),
             supports_native_resume: false,
@@ -6235,6 +6252,7 @@ routing:
                 task_id: "YARD-001".into(),
                 question_id: "qst_unsafe".into(),
                 text: "Continue".into(),
+                accepted_deviations: vec![],
                 worker_id: "generic-text".into(),
                 worker_session_ref: None,
                 supports_native_resume: false,
@@ -6292,6 +6310,7 @@ routing:
             task_id: "YARD-001".into(),
             question_id: "qst_restart".into(),
             text: "Continue".into(),
+            accepted_deviations: vec![],
             worker_id: "generic-text".into(),
             worker_session_ref: None,
             supports_native_resume: false,

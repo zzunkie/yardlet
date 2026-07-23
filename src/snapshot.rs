@@ -29,6 +29,19 @@ pub struct Snapshot {
     /// workers.yaml here, so callers need not re-read it).
     pub capabilities: std::collections::BTreeSet<String>,
     pub last_transitions: BTreeMap<String, TransitionRecord>,
+    /// Read-only effective-state diagnostics for canonical Running tasks whose
+    /// exact worker identity is no longer live.
+    pub recovery_required: Vec<RecoveryRequired>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecoveryRequired {
+    pub task_id: String,
+    pub run_id: String,
+    pub canonical_state: String,
+    pub effective_state: String,
+    pub reason: String,
+    pub action: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -185,6 +198,35 @@ impl Snapshot {
                     .map(|rec| (task.id.clone(), rec))
             })
             .collect();
+        let recovery_required = queue
+            .tasks
+            .iter()
+            .filter(|task| task.state == TaskState::Running)
+            .filter_map(|task| {
+                let Some((run_id, run_dir)) =
+                    crate::run::latest_run_for_intent(ws, &task.id, &queue.intent_id)
+                else {
+                    return Some(RecoveryRequired {
+                        task_id: task.id.clone(),
+                        run_id: String::new(),
+                        canonical_state: "running".to_string(),
+                        effective_state: "interrupted".to_string(),
+                        reason: "canonical task is Running but has no recorded run".to_string(),
+                        action: "yardlet recover".to_string(),
+                    });
+                };
+                crate::run::stale_running_reason(&run_dir, &task.id, &queue.intent_id).map(
+                    |reason| RecoveryRequired {
+                        task_id: task.id.clone(),
+                        run_id,
+                        canonical_state: "running".to_string(),
+                        effective_state: "interrupted".to_string(),
+                        reason,
+                        action: "yardlet recover".to_string(),
+                    },
+                )
+            })
+            .collect();
 
         Ok(Snapshot {
             config,
@@ -197,6 +239,7 @@ impl Snapshot {
             approvals_needed,
             capabilities,
             last_transitions,
+            recovery_required,
         })
     }
 
@@ -276,6 +319,7 @@ impl Snapshot {
                     "last_transition": self.last_transitions.get(&task.id),
                 })
             }).collect::<Vec<_>>(),
+            "recovery_required": self.recovery_required,
             "workers": self.workers,
         })
     }
@@ -454,6 +498,126 @@ mod tests {
             .to_string();
 
         assert!(error.contains("unconfirmed_or_inconsistent"), "{error}");
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn issue_29_dead_worker_is_projected_as_recovery_required_without_writes() {
+        let (ws, _, _) = reused_task_id_fixture("dead-worker-status");
+        let mut queue = ws.load_queue().unwrap();
+        queue.tasks[0].state = TaskState::Running;
+        ws.save_queue(&queue).unwrap();
+
+        let run_id = "run-issue-29-dead-worker";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("run.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: SHARED\nintent_id: intent-current\nworker: fixture\nstate: running\nstarted_at: \"2026-07-23T00:00:00Z\"\nworktree: .\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(run_dir.join("worker.pid"), u32::MAX.to_string()).unwrap();
+        std::fs::write(
+            run_dir.join("worker-process.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\nattempt_id: att-dead\nworker_id: fixture\npid: {}\nprocess_start_marker: definitely-not-live\nstate: running\n",
+                u32::MAX
+            ),
+        )
+        .unwrap();
+
+        let queue_before = std::fs::read(ws.queue_path()).unwrap();
+        let run_before = std::fs::read(run_dir.join("run.yaml")).unwrap();
+        let snapshot = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        let json = snapshot.to_json();
+
+        assert_eq!(json["queue"]["running"], 1);
+        let diagnostic = &json["recovery_required"][0];
+        assert_eq!(diagnostic["task_id"], "SHARED");
+        assert_eq!(diagnostic["run_id"], run_id);
+        assert_eq!(diagnostic["effective_state"], "interrupted");
+        assert_eq!(diagnostic["action"], "yardlet recover");
+        assert_eq!(std::fs::read(ws.queue_path()).unwrap(), queue_before);
+        assert_eq!(std::fs::read(run_dir.join("run.yaml")).unwrap(), run_before);
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn issue_29_newer_historical_run_does_not_mask_live_current_intent_worker() {
+        let (ws, _, _) = reused_task_id_fixture("live-current-worker");
+        let mut queue = ws.load_queue().unwrap();
+        queue.tasks[0].state = TaskState::Running;
+        ws.save_queue(&queue).unwrap();
+
+        let current_run_id = "run-issue-29-live-current";
+        let current_run_dir = ws.runs_dir().join(current_run_id);
+        std::fs::create_dir_all(&current_run_dir).unwrap();
+        std::fs::write(
+            current_run_dir.join("run.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {current_run_id}\ntask_id: SHARED\nintent_id: intent-current\nworker: fixture\nstate: running\nstarted_at: \"2026-07-23T00:00:00Z\"\n"
+            ),
+        )
+        .unwrap();
+        let pid = std::process::id();
+        std::fs::write(current_run_dir.join("worker.pid"), pid.to_string()).unwrap();
+        std::fs::write(
+            current_run_dir.join("worker-process.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {current_run_id}\nattempt_id: att-live\nworker_id: fixture\npid: {pid}\nprocess_start_marker: {}\nstate: running\n",
+                crate::workers::process_start_marker(pid).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let stale_run_id = "run-issue-29-newer-old-intent";
+        let stale_run_dir = ws.runs_dir().join(stale_run_id);
+        std::fs::create_dir_all(&stale_run_dir).unwrap();
+        std::fs::write(
+            stale_run_dir.join("run.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {stale_run_id}\ntask_id: SHARED\nintent_id: intent-old\nworker: fixture\nstate: running\nstarted_at: \"2099-01-01T00:00:00Z\"\n"
+            ),
+        )
+        .unwrap();
+
+        let snapshot = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        assert!(
+            snapshot.recovery_required.is_empty(),
+            "a newer historical run must not mask the verified live worker for the current intent"
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn issue_29_finalized_run_is_not_diagnosed_as_a_dead_worker() {
+        let (ws, _, _) = reused_task_id_fixture("finalized-worker-status");
+        let mut queue = ws.load_queue().unwrap();
+        queue.tasks[0].state = TaskState::Running;
+        ws.save_queue(&queue).unwrap();
+
+        let run_id = "run-issue-29-finalized";
+        let run_dir = ws.runs_dir().join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("run.yaml"),
+            format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: SHARED\nintent_id: intent-current\nworker: fixture\nstate: done\ncompleted_at: \"2026-07-23T00:01:00Z\"\n"
+            ),
+        )
+        .unwrap();
+
+        let snapshot = Snapshot::load_reusing_workers(&ws, Vec::new()).unwrap();
+        assert!(snapshot.recovery_required.is_empty());
+        assert!(snapshot.to_json()["recovery_required"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
         let _ = std::fs::remove_dir_all(ws.root);
     }
 }

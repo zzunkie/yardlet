@@ -111,15 +111,42 @@ pub fn evaluate(
                 )
             },
         ));
-        checks.push(check(
-            "no_uncontrolled_drift",
-            !r.intent_adherence.drift_detected,
+        let uncontrolled = r.intent_adherence.uncontrolled_deviations(task);
+        let typed_disclosures = &r.intent_adherence.deviations;
+        let drift_passed = if typed_disclosures.is_empty() {
+            !r.intent_adherence.drift_detected
+        } else {
+            uncontrolled.is_empty()
+        };
+        let drift_note = if typed_disclosures.is_empty() {
             if r.intent_adherence.drift_detected {
-                format!("worker reported drift: {}", r.intent_adherence.notes)
+                format!(
+                    "worker reported untyped drift that has no exact acceptance identity: {}",
+                    r.intent_adherence.notes
+                )
             } else {
                 "worker reported no scope drift".to_string()
-            },
-        ));
+            }
+        } else if uncontrolled.is_empty() {
+            format!(
+                "all disclosed deviations were explicitly accepted by the user: {}",
+                typed_disclosures
+                    .iter()
+                    .map(|deviation| deviation.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            format!(
+                "worker reported new or unaccepted deviation(s): {}",
+                uncontrolled
+                    .iter()
+                    .map(|deviation| deviation.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        checks.push(check("no_uncontrolled_drift", drift_passed, drift_note));
         // Forbidden-path runs on the ACTUAL on-disk diff (`actual_changes`).
         // A worker's self-report is NOT evidence for a safety guarantee, so when
         // no diff evidence is available the check fails closed (the run cannot
@@ -1395,6 +1422,147 @@ exit 89
             .iter()
             .any(|check| check.fatal && !check.passed));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn issue_16_exact_user_accepted_deviation_is_not_fatal_on_retry() {
+        let dir = temp_path("accepted-prior-deviation");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("handoff.md"), "h").unwrap();
+        std::fs::write(
+            dir.join("result.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "run_id": "run-accepted-deviation",
+                "task_id": "YARD-DEVIATION",
+                "status": "done",
+                "intent_adherence": {
+                    "drift_detected": true,
+                    "notes": "historical read-only engine version probe",
+                    "deviations": [{
+                        "id": "engine-version-probe",
+                        "scope": ["godot --version"],
+                        "description": "read-only engine version probe without temporary HOME"
+                    }]
+                },
+                "validation": {
+                    "commands_run": ["cargo test"],
+                    "passed": true,
+                    "failures": []
+                },
+                "compact_summary": "accepted historical deviation only"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let task: Task = crate::yaml::from_str(
+            r#"
+id: YARD-DEVIATION
+title: accepted deviation retry
+state: running
+kind: implementation
+interaction:
+  accepted_deviations:
+    - id: engine-version-probe
+      scope: [godot --version]
+      accepted_by_answer_id: ans-explicit
+"#,
+        )
+        .unwrap();
+
+        let evaluation = evaluate(&dir, "run-accepted-deviation", &task, Some(&[]));
+
+        assert_eq!(evaluation.next_task_state, TaskState::Done);
+        assert!(evaluation.checks.iter().any(|check| {
+            check.name == "no_uncontrolled_drift"
+                && check.fatal
+                && check.passed
+                && check.note.contains("engine-version-probe")
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn issue_16_new_unscoped_or_worker_claimed_acceptance_remains_fatal() {
+        let cases = [
+            (
+                "different-scope",
+                serde_json::json!({
+                    "id": "engine-version-probe",
+                    "scope": ["godot --version", "HOME=/real/user"],
+                    "description": "same id but broader scope"
+                }),
+                true,
+            ),
+            (
+                "new-id",
+                serde_json::json!({
+                    "id": "project-import",
+                    "scope": ["godot --headless --editor"],
+                    "description": "new operation"
+                }),
+                true,
+            ),
+            (
+                "worker-claimed-acceptance",
+                serde_json::json!({
+                    "id": "project-import",
+                    "scope": ["godot --headless --editor"],
+                    "description": "worker cannot self-accept",
+                    "accepted": true
+                }),
+                false,
+            ),
+        ];
+        for (label, deviation, drift_detected) in cases {
+            let dir = temp_path(label);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("handoff.md"), "h").unwrap();
+            std::fs::write(
+                dir.join("result.json"),
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "schema_version": 1,
+                    "run_id": "run-new-deviation",
+                    "task_id": "YARD-DEVIATION",
+                    "status": "done",
+                    "intent_adherence": {
+                        "drift_detected": drift_detected,
+                        "notes": label,
+                        "deviations": [deviation]
+                    },
+                    "compact_summary": label
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let task: Task = crate::yaml::from_str(
+                r#"
+id: YARD-DEVIATION
+title: accepted deviation retry
+state: running
+kind: implementation
+interaction:
+  accepted_deviations:
+    - id: engine-version-probe
+      scope: [godot --version]
+      accepted_by_answer_id: ans-explicit
+"#,
+            )
+            .unwrap();
+
+            let evaluation = evaluate(&dir, "run-new-deviation", &task, Some(&[]));
+
+            assert_eq!(
+                evaluation.next_task_state,
+                TaskState::Failed,
+                "{label} must remain fatal"
+            );
+            assert!(evaluation
+                .checks
+                .iter()
+                .any(|check| check.name == "no_uncontrolled_drift" && !check.passed));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     // Regression: a done result with no validation commands must stay Done.
