@@ -2627,7 +2627,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         let text = String::from_utf8_lossy(&text_status.stdout);
         assert!(text.contains("recovery required"));
         assert!(text.contains("YARD-DEAD-WORKER"));
-        assert!(text.contains(&run_id));
+        assert!(text.contains(run_id));
         assert!(text.contains("yardlet recover"));
         let json: serde_json::Value = serde_json::from_slice(&json_status.stdout).unwrap();
         let diagnostic = &json["recovery_required"][0];
