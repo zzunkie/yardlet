@@ -408,6 +408,28 @@ pub fn run_batch<F: FnMut(&str)>(
             ));
         }
         state::save_harness_copy_warnings(&p.run_dir, &harness_copy_warnings)?;
+        // Record the dispatcher-owned input overlays (dirty tracked or
+        // untracked harness copies that differ from worktree HEAD) exactly as
+        // the serial path does, so validation and finalization can keep those
+        // bytes without attributing them to the worker (issue #32).
+        let core_input_overlays =
+            match run::capture_serial_input_overlays(&p.wt_path, &harness_seed_dir) {
+                Ok(overlays) => overlays,
+                Err(error) => {
+                    on_event(&format!(
+                        "{}: input overlay capture blocked before worker spawn: {error}",
+                        p.task.id
+                    ));
+                    remove_worktree(&ws.root, &p.wt_path, &p.branch);
+                    for prepared in &ok {
+                        remove_worktree(&ws.root, &prepared.wt_path, &prepared.branch);
+                    }
+                    return Err(anyhow!(
+                        "{} input overlay capture blocked before worker spawn: {error}",
+                        p.task.id
+                    ));
+                }
+            };
         if let Err(error) =
             state::materialize_resolved_dependency_outputs(ws, &queue, &p.task, &p.wt_path)
         {
@@ -421,6 +443,28 @@ pub fn run_batch<F: FnMut(&str)>(
             }
             return Err(anyhow!(
                 "{} dependency output preparation blocked before worker spawn: {error}",
+                p.task.id
+            ));
+        }
+        if let Err(error) = ws.save_parallel_integration_receipt(&state::SerialIntegrationReceipt {
+            schema_version: 1,
+            run_id: p.run_id.clone(),
+            task_id: p.task.id.clone(),
+            worktree: p.wt_path.display().to_string(),
+            branch: p.branch.clone(),
+            baseline_oid: p.baseline_oid.clone(),
+            core_input_overlays,
+        }) {
+            on_event(&format!(
+                "{}: input overlay receipt blocked before worker spawn: {error}",
+                p.task.id
+            ));
+            remove_worktree(&ws.root, &p.wt_path, &p.branch);
+            for prepared in &ok {
+                remove_worktree(&ws.root, &prepared.wt_path, &prepared.branch);
+            }
+            return Err(anyhow!(
+                "{} input overlay receipt blocked before worker spawn: {error}",
                 p.task.id
             ));
         }
@@ -752,16 +796,20 @@ pub fn run_batch<F: FnMut(&str)>(
         // self-report), then — only on a Done run — merges the worktree back;
         // it writes artifacts, the queue state, follow-ups, and telemetry. The
         // single finalization pipeline is shared with the serial path.
-        let evidence = match parallel_worker_evidence(&p.wt_path, &p.run_dir) {
-            Ok(paths) => Some(paths),
-            Err(error) => {
-                on_event(&format!(
-                    "{}: change evidence unavailable after harness seed cleanup: {error}",
-                    p.task.id
-                ));
-                None
-            }
-        };
+        let (evidence, core_input_overlays) =
+            match parallel_worker_evidence(&ws.root, &p.wt_path, &p.run_dir) {
+                Ok(worker_evidence) => (
+                    Some(worker_evidence.paths),
+                    worker_evidence.core_input_overlays,
+                ),
+                Err(error) => {
+                    on_event(&format!(
+                        "{}: change evidence unavailable after harness seed comparison: {error}",
+                        p.task.id
+                    ));
+                    (None, Vec::new())
+                }
+            };
         // A finalize error for one task (e.g. a transient queue-write hiccup)
         // must not abort the whole batch and strand the other already-finished
         // worktrees — log it and move on; `yardlet recover` salvages this one.
@@ -784,7 +832,7 @@ pub fn run_batch<F: FnMut(&str)>(
                 branch: &p.branch,
                 baseline_oid: &p.baseline_oid,
                 expected_tip_oid: None,
-                core_input_overlays: &[],
+                core_input_overlays: &core_input_overlays,
                 provenance: run::IntegrationProvenance::ParallelWorkerDirect,
                 auto_commit: true,
             }),
@@ -1307,7 +1355,9 @@ pub(crate) fn integrate_serial_worktree(
 
 /// Integrate a parallel worker without accepting any run-directory transaction
 /// input. Its evaluated staged tree is committed with immutable Git plumbing
-/// and published to the run-owned branch by exact-tip CAS.
+/// and published to the run-owned branch by exact-tip CAS. Receipted core
+/// input overlays stay outside the staged tree while their digests still
+/// match, exactly as in the serial protocol.
 pub(crate) fn integrate_parallel_worktree(
     root: &Path,
     wt: &Path,
@@ -1315,6 +1365,7 @@ pub(crate) fn integrate_parallel_worktree(
     task_id: &str,
     baseline_oid: &str,
     expected_tip_oid: Option<&str>,
+    core_input_overlays: &[state::SerialInputOverlay],
 ) -> Result<Integration> {
     integrate_worktree_after_staged(
         root,
@@ -1324,7 +1375,7 @@ pub(crate) fn integrate_parallel_worktree(
         baseline_oid,
         expected_tip_oid,
         IntegrationCommitMode::ParallelWorkerDirect,
-        &[],
+        core_input_overlays,
         |_, _, _| Ok(()),
     )
 }
@@ -1635,7 +1686,7 @@ fn cleanup_core_input_overlays(
     wt: &Path,
     provenance: run::IntegrationProvenance,
 ) -> Vec<state::SerialInputOverlay> {
-    if provenance != run::IntegrationProvenance::SerialCoreStaged {
+    if provenance == run::IntegrationProvenance::Unknown {
         return Vec::new();
     }
     let Some(run_id) = wt.file_name().and_then(|name| name.to_str()) else {
@@ -1660,8 +1711,16 @@ fn cleanup_core_input_overlays(
         }
         return Vec::new();
     }
-    workspace
-        .load_serial_integration_receipt(run_id)
+    let receipt = match provenance {
+        run::IntegrationProvenance::SerialCoreStaged => {
+            workspace.load_serial_integration_receipt(run_id)
+        }
+        run::IntegrationProvenance::ParallelWorkerDirect => {
+            workspace.load_parallel_integration_receipt(run_id)
+        }
+        run::IntegrationProvenance::Unknown => return Vec::new(),
+    };
+    receipt
         .ok()
         .filter(|receipt| receipt.run_id == run_id && receipt.worktree == wt.display().to_string())
         .map(|receipt| receipt.core_input_overlays)
@@ -1838,10 +1897,28 @@ fn stage_integratable_changes(
     Ok(())
 }
 
-fn parallel_worker_evidence(wt: &Path, run_dir: &Path) -> Result<Vec<String>> {
+#[derive(Debug)]
+struct ParallelWorkerEvidence {
+    paths: Vec<String>,
+    core_input_overlays: Vec<state::SerialInputOverlay>,
+}
+
+/// Actual parallel-worktree changes with Yardlet's unchanged seeded harness
+/// copies removed. An unchanged copy that differs from worktree HEAD is a
+/// dispatcher-owned input overlay: it must stay in the tree with the exact
+/// bytes validation will read (issue #32), so instead of reverting it, each
+/// one is proven against the core-owned receipt captured before worker spawn.
+/// A copy without a matching receipt digest fails closed — there is no
+/// provenance separating it from a worker change.
+fn parallel_worker_evidence(
+    root: &Path,
+    wt: &Path,
+    run_dir: &Path,
+) -> Result<ParallelWorkerEvidence> {
     let mut paths = evaluator::changed_paths(wt)
         .ok_or_else(|| anyhow!("could not enumerate parallel worktree changes"))?;
     let seed_root = run_dir.join(run::HARNESS_SEED_DIR);
+    let mut core_input_overlays = Vec::new();
     if seed_root.is_dir() {
         let (seeded, modified) = run::seeded_harness_evidence(&seed_root, wt)
             .ok_or_else(|| anyhow!("could not compare harness seed snapshot"))?;
@@ -1856,14 +1933,42 @@ fn parallel_worker_evidence(wt: &Path, run_dir: &Path) -> Result<Vec<String>> {
                 paths.push(path);
             }
         }
-        for path in unchanged {
-            run::discard_unchanged_seeded_harness_copy(wt, &path)?;
+        if !unchanged.is_empty() {
+            let run_id = wt
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| anyhow!("parallel worktree path does not name its run"))?;
+            let receipt = Workspace::at(root).load_parallel_integration_receipt(run_id)?;
+            if receipt.schema_version != 1
+                || receipt.run_id != run_id
+                || receipt.worktree != wt.display().to_string()
+            {
+                return Err(anyhow!(
+                    "parallel integration receipt does not match this run-owned worktree"
+                ));
+            }
+            for path in unchanged {
+                let overlay = receipt
+                    .core_input_overlays
+                    .iter()
+                    .find(|overlay| {
+                        overlay.path == path && run::serial_input_overlay_matches(wt, overlay)
+                    })
+                    .ok_or_else(|| {
+                        anyhow!("no core input overlay receipt covers seeded copy {path}")
+                    })?
+                    .clone();
+                core_input_overlays.push(overlay);
+            }
         }
     }
-    Ok(paths
-        .into_iter()
-        .filter(|path| evaluator::is_integratable_path(path))
-        .collect())
+    Ok(ParallelWorkerEvidence {
+        paths: paths
+            .into_iter()
+            .filter(|path| evaluator::is_integratable_path(path))
+            .collect(),
+        core_input_overlays,
+    })
 }
 
 /// Keep `.agents/worktrees/` out of `git status` in any repo Yardlet runs in,
@@ -2488,41 +2593,100 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn parallel_seed_cleanup_restores_dirty_tracked_harness_to_worktree_head() {
-        let root = temp_repo("parallel-dirty-tracked-harness-seed");
+    fn dirty_tracked_harness_worktree(name: &str) -> (PathBuf, PathBuf, String, PathBuf) {
+        let root = temp_repo(name);
         let tracked = root.join(".agents/rules/tracked-dirty.md");
         write_str(&tracked, "# Tracked baseline\n").unwrap();
         sh_git(&root, &["add", ".agents/rules/tracked-dirty.md"]);
         sh_git(&root, &["commit", "-q", "-m", "track harness fixture"]);
         write_str(&tracked, "# User dirty edit\n").unwrap();
 
-        let wt = root.join(".agents/worktrees/parallel-dirty-seed");
-        let branch = "yard/parallel-dirty-seed/run-test";
-        create_worktree(&root, &wt, branch).unwrap();
-        let run_dir = root.join(".agents/runs/run-parallel-dirty-seed");
-        let seed = run_dir
-            .join(run::HARNESS_SEED_DIR)
-            .join("rules/tracked-dirty.md");
+        let run_id = format!("run-{name}");
+        let wt = root.join(".agents/worktrees").join(&run_id);
+        let branch = format!("yard/{name}/{run_id}");
+        create_worktree(&root, &wt, &branch).unwrap();
+        let run_dir = root.join(".agents/runs").join(&run_id);
         write_str(
             &wt.join(".agents/rules/tracked-dirty.md"),
             "# User dirty edit\n",
         )
         .unwrap();
-        write_str(&seed, "# User dirty edit\n").unwrap();
+        write_str(
+            &run_dir
+                .join(run::HARNESS_SEED_DIR)
+                .join("rules/tracked-dirty.md"),
+            "# User dirty edit\n",
+        )
+        .unwrap();
+        (root, wt, branch, run_dir)
+    }
 
-        let evidence = parallel_worker_evidence(&wt, &run_dir).unwrap();
-        assert!(evidence.is_empty(), "seed copy is not worker evidence");
-        assert_eq!(
-            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
-            "# Tracked baseline\n"
+    #[test]
+    fn parallel_seed_evidence_keeps_receipted_overlay_bytes_in_worktree() {
+        let (root, wt, branch, run_dir) =
+            dirty_tracked_harness_worktree("parallel-dirty-tracked-harness-seed");
+        let run_id = wt.file_name().unwrap().to_str().unwrap().to_string();
+        Workspace::at(&root)
+            .save_parallel_integration_receipt(&state::SerialIntegrationReceipt {
+                schema_version: 1,
+                run_id: run_id.clone(),
+                task_id: "YARD-OVERLAY".into(),
+                worktree: wt.display().to_string(),
+                branch: branch.clone(),
+                baseline_oid: sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string(),
+                core_input_overlays: vec![state::SerialInputOverlay {
+                    path: ".agents/rules/tracked-dirty.md".into(),
+                    content_digest: state::content_digest(b"# User dirty edit\n"),
+                }],
+            })
+            .unwrap();
+
+        let evidence = parallel_worker_evidence(&root, &wt, &run_dir).unwrap();
+        assert!(
+            evidence.paths.is_empty(),
+            "seed copy is not worker evidence: {:?}",
+            evidence.paths
         );
         assert_eq!(
-            std::fs::read_to_string(&tracked).unwrap(),
+            evidence.core_input_overlays,
+            vec![state::SerialInputOverlay {
+                path: ".agents/rules/tracked-dirty.md".into(),
+                content_digest: state::content_digest(b"# User dirty edit\n"),
+            }]
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n",
+            "the overlay bytes validation will read must stay in the worktree"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".agents/rules/tracked-dirty.md")).unwrap(),
             "# User dirty edit\n"
         );
 
-        remove_worktree(&root, &wt, branch);
+        remove_worktree(&root, &wt, &branch);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parallel_seed_evidence_without_overlay_receipt_fails_closed() {
+        let (root, wt, branch, run_dir) =
+            dirty_tracked_harness_worktree("parallel-dirty-harness-no-receipt");
+
+        let error = parallel_worker_evidence(&root, &wt, &run_dir)
+            .expect_err("an unreceipted seeded copy has no provenance and must fail closed");
+        assert!(
+            error.to_string().contains("parallel-integration")
+                || error.to_string().contains("core input overlay"),
+            "{error:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n",
+            "fail-closed evidence must not rewrite the worktree"
+        );
+
+        remove_worktree(&root, &wt, &branch);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2881,6 +3045,197 @@ exit 0
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Shared #32-parallel fixture: a dirty tracked harness rule in the owning
+    /// root is copied into the batch worktree as a dispatcher-owned input
+    /// overlay. The worker proves it saw the overlay bytes, and the task's
+    /// validation command re-reads those exact bytes inside the worktree.
+    fn run_parallel_core_overlay_case(
+        name: &str,
+        task_id: &str,
+        tamper_root: bool,
+    ) -> (PathBuf, Workspace, Vec<(String, TaskState)>, Vec<String>) {
+        let root = temp_repo(name);
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let tracked = root.join(".agents/rules/tracked-dirty.md");
+        write_str(&tracked, "# Tracked baseline\n").unwrap();
+        sh_git(&root, &["add", ".agents/rules/tracked-dirty.md"]);
+        sh_git(&root, &["commit", "-q", "-m", "track harness fixture"]);
+        write_str(&tracked, "# User dirty edit\n").unwrap();
+
+        let worker = write_test_worker(
+            &root,
+            "overlay-worker.sh",
+            r##"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "fixture 1.0"
+  exit 0
+fi
+run_dir="$1"
+task_id="$2"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+grep -Fxq '# User dirty edit' .agents/rules/tracked-dirty.md || exit 43
+printf "worker deliverable\n" > worker-output.txt
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": [], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "overlay worker가 완료했다.",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", {task_id}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            yaml_string(&worker)
+        );
+        let mut queued = task(task_id, TaskState::Queued, 10, vec![]);
+        queued.kind = "implementation".into();
+        let mut validation =
+            "grep -Fxq '# User dirty edit' .agents/rules/tracked-dirty.md".to_string();
+        if tamper_root {
+            validation.push_str(&format!(
+                " && printf '# Root changed after validation\\n' > '{}'",
+                tracked.display()
+            ));
+        }
+        queued.validation = Some(
+            crate::yaml::from_str(&format!(
+                "required: true\ncommands:\n  - {}\n",
+                serde_json::to_string(&validation).unwrap()
+            ))
+            .unwrap(),
+        );
+        let ws = setup_workspace(&root, &worker_yaml, vec![queued]);
+        let mut events = Vec::new();
+        let states = run_batch(&ws, &[0], false, |s| events.push(s.to_string())).unwrap();
+        (root, ws, states, events)
+    }
+
+    fn single_run_dir(ws: &Workspace) -> PathBuf {
+        let run_dirs: Vec<PathBuf> = std::fs::read_dir(ws.runs_dir())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.is_dir())
+            .collect();
+        assert_eq!(run_dirs.len(), 1);
+        run_dirs.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn parallel_core_overlay_survives_validation_and_stays_out_of_integration() {
+        let (root, ws, states, _events) = run_parallel_core_overlay_case(
+            "parallel-core-overlay-validated",
+            "YARD-PAR-OVERLAY",
+            false,
+        );
+        let run_dir = single_run_dir(&ws);
+        let validation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join("validation.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            states,
+            vec![("YARD-PAR-OVERLAY".to_string(), TaskState::Done)],
+            "validation must read the same overlay bytes the worker ran against"
+        );
+        assert_eq!(validation["all_passed"], true);
+        assert_eq!(
+            std::fs::read_to_string(ws.agents_dir().join("rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n",
+            "the owning root keeps its dirty overlay bytes"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("worker-output.txt")).unwrap(),
+            "worker deliverable\n"
+        );
+        let integrated_names = sh_git(&root, &["diff", "--name-only", "HEAD^1", "HEAD"]);
+        assert!(integrated_names
+            .lines()
+            .any(|path| path == "worker-output.txt"));
+        assert!(
+            !integrated_names
+                .lines()
+                .any(|path| path == ".agents/rules/tracked-dirty.md"),
+            "the core input overlay must stay outside the worker integration: {integrated_names}"
+        );
+        let run_id = run_dir.file_name().unwrap().to_str().unwrap().to_string();
+        let receipt = ws.load_parallel_integration_receipt(&run_id).unwrap();
+        assert_eq!(receipt.run_id, run_id);
+        assert_eq!(receipt.task_id, "YARD-PAR-OVERLAY");
+        assert_eq!(
+            receipt.core_input_overlays,
+            vec![state::SerialInputOverlay {
+                path: ".agents/rules/tracked-dirty.md".into(),
+                content_digest: state::content_digest(b"# User dirty edit\n"),
+            }]
+        );
+        assert!(
+            ws.load_serial_integration_receipt(&run_id).is_err(),
+            "a parallel run must not occupy the serial receipt store that recovery keys on"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parallel_core_overlay_root_tamper_blocks_done_with_typed_diagnosis() {
+        let (root, ws, states, _events) = run_parallel_core_overlay_case(
+            "parallel-core-overlay-tamper",
+            "YARD-PAR-OVERLAY-TAMPER",
+            true,
+        );
+        let run_dir = single_run_dir(&ws);
+        let validation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join("validation.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(validation["all_passed"], true);
+        assert!(
+            matches!(
+                states.as_slice(),
+                [(_, TaskState::Partial | TaskState::NeedsUser)]
+            ),
+            "the typed parity failure must prevent Done: {states:?}"
+        );
+        assert!(
+            std::fs::read_to_string(run_dir.join("partial-reason"))
+                .unwrap()
+                .starts_with(
+                    "serial_input_overlay_parity_mismatch:path=.agents/rules/tracked-dirty.md"
+                ),
+            "Done must be blocked by the typed overlay parity diagnosis"
+        );
+        assert!(
+            !root.join("worker-output.txt").exists(),
+            "a parity mismatch must block integration before Done"
+        );
+        let record: serde_json::Value =
+            crate::yaml::from_str(&std::fs::read_to_string(run_dir.join("run.yaml")).unwrap())
+                .unwrap();
+        let wt = PathBuf::from(record["worktree"].as_str().unwrap());
+        assert_eq!(
+            std::fs::read_to_string(wt.join(".agents/rules/tracked-dirty.md")).unwrap(),
+            "# User dirty edit\n",
+            "the validated worktree must be retained without reverting the overlay"
+        );
+
+        remove_worktree(&root, &wt, record["worktree_branch"].as_str().unwrap());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn parallel_batch_stale_git_finish_target_blocks_before_worker_spawn() {
         let root = temp_repo("stale-target-preflight");
@@ -3064,7 +3419,7 @@ exit 0
         std::fs::write(wt.join("feature.txt"), "new\n").unwrap();
         std::fs::create_dir_all(wt.join(".agents")).unwrap();
         std::fs::write(wt.join(".agents/work-queue.yaml"), "copy").unwrap();
-        match integrate_parallel_worktree(&root, &wt, "yard/yard-001", "YARD-001", &baseline, None)
+        match integrate_parallel_worktree(&root, &wt, "yard/yard-001", "YARD-001", &baseline, None, &[])
             .unwrap()
         {
             Integration::Merged { oid, .. } => {
@@ -3107,7 +3462,7 @@ exit 0
         let worker_commit = sh_git(&wt, &["rev-parse", "HEAD"]).trim().to_string();
 
         let first =
-            integrate_parallel_worktree(&root, &wt, branch, "YARD-RECOVER", &baseline, None)
+            integrate_parallel_worktree(&root, &wt, branch, "YARD-RECOVER", &baseline, None, &[])
                 .unwrap();
         let Integration::Merged {
             oid: first_oid,
@@ -3121,7 +3476,7 @@ exit 0
         let commit_count = sh_git(&root, &["rev-list", "--count", "HEAD"]);
 
         let repeated =
-            integrate_parallel_worktree(&root, &wt, branch, "YARD-RECOVER", &baseline, None)
+            integrate_parallel_worktree(&root, &wt, branch, "YARD-RECOVER", &baseline, None, &[])
                 .unwrap();
         let Integration::Merged {
             oid,
@@ -3219,6 +3574,7 @@ exit 0
             "YARD-DRIFT",
             &baseline,
             Some(&evidence_oid),
+            &[],
         )
         .unwrap();
 
@@ -3565,6 +3921,7 @@ exit 0
             "YARD-PARALLEL-FORGE",
             &baseline,
             Some(&baseline),
+            &[],
         )
         .unwrap();
 
@@ -3927,7 +4284,7 @@ exit 0
                 "main edit",
             ],
         );
-        match integrate_parallel_worktree(&root, &wt, "yard/yard-002", "YARD-002", &baseline, None)
+        match integrate_parallel_worktree(&root, &wt, "yard/yard-002", "YARD-002", &baseline, None, &[])
             .unwrap()
         {
             Integration::Conflict(_) => {}
@@ -3966,7 +4323,7 @@ exit 0
         let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-009").unwrap();
         std::fs::write(wt.join("other.txt"), "fine\n").unwrap();
-        match integrate_parallel_worktree(&root, &wt, "yard/yard-009", "YARD-009", &baseline, None)
+        match integrate_parallel_worktree(&root, &wt, "yard/yard-009", "YARD-009", &baseline, None, &[])
             .unwrap()
         {
             Integration::Conflict(why) => assert!(why.contains("another merge"), "{why}"),
@@ -3987,7 +4344,7 @@ exit 0
         let wt = root.join(".agents/worktrees/yard-003");
         let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, "yard/yard-003").unwrap();
-        match integrate_parallel_worktree(&root, &wt, "yard/yard-003", "YARD-003", &baseline, None)
+        match integrate_parallel_worktree(&root, &wt, "yard/yard-003", "YARD-003", &baseline, None, &[])
             .unwrap()
         {
             Integration::NoChanges { .. } => {}
@@ -4004,7 +4361,7 @@ exit 0
         let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
         create_worktree(&root, &wt, branch).unwrap();
         let worker_oid =
-            match integrate_parallel_worktree(&root, &wt, branch, "YARD-NOCHANGE", &baseline, None)
+            match integrate_parallel_worktree(&root, &wt, branch, "YARD-NOCHANGE", &baseline, None, &[])
                 .unwrap()
             {
                 Integration::NoChanges { worker_oid } => worker_oid,
