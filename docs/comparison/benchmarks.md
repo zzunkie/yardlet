@@ -2,6 +2,11 @@
 
 Yardlet v0.9 evaluates mechanisms, not model intelligence.
 
+Local external-benchmark notes are recorded in
+[`docs/comparison/harnessbench-local-runs.md`](harnessbench-local-runs.md).
+Those notes preserve the HarnessBench research and local run results separately
+from the provider-free fixture posture described here.
+
 `yardlet eval fixtures` runs isolated, provider-free fixtures against the same
 core mechanisms used by normal execution. The suite reports an `id`, `verdict`,
 `evidence`, and `duration_ms` for every fixture. Human and `--json` output are
