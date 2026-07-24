@@ -147,6 +147,53 @@ pub enum Job {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StartupStage {
+    Recovery,
+    WorkerProbe,
+}
+
+enum StartupMsg {
+    Progress(StartupStage),
+    Ready {
+        snapshot: Snapshot,
+        recovered: Vec<String>,
+    },
+    Failed(String),
+}
+
+#[derive(Debug)]
+enum BootstrapState {
+    Loading(StartupStage),
+    Ready,
+    Failed(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BootstrapPhase {
+    Loading,
+    Ready,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BootstrapKeyAction {
+    Dispatch,
+    Quit,
+    Retry,
+    Block,
+}
+
+fn bootstrap_key_action(phase: BootstrapPhase, code: KeyCode) -> BootstrapKeyAction {
+    use BootstrapKeyAction::*;
+    match (phase, code) {
+        (BootstrapPhase::Ready, _) => Dispatch,
+        (_, KeyCode::Char('q') | KeyCode::Esc) => Quit,
+        (BootstrapPhase::Failed, KeyCode::Char('g')) => Retry,
+        _ => Block,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScrollViewport {
     pub width: u16,
     pub height: u16,
@@ -156,6 +203,10 @@ pub struct App {
     pub ws: Workspace,
     pub screen: Screen,
     pub snapshot: Option<Snapshot>,
+    bootstrap: BootstrapState,
+    startup_rx: Option<Receiver<StartupMsg>>,
+    startup_started: Instant,
+    startup_just_created: bool,
     pub input: String,
     /// Edit caret as a char index into `input` (text screens). Lets Left/Right/
     /// Home/End move and edit mid-string instead of append-only.
@@ -307,6 +358,80 @@ fn recover_startup_state(ws: &Workspace) -> Result<Vec<String>> {
     Ok(recovered)
 }
 
+fn spawn_startup_job_with<Recover, Load>(
+    ws: Workspace,
+    recover: Recover,
+    load: Load,
+) -> Receiver<StartupMsg>
+where
+    Recover: FnOnce(&Workspace) -> Result<Vec<String>> + Send + 'static,
+    Load: FnOnce(&Workspace) -> Result<Snapshot> + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        if tx
+            .send(StartupMsg::Progress(StartupStage::Recovery))
+            .is_err()
+        {
+            return;
+        }
+        let recovered = match recover(&ws) {
+            Ok(recovered) => recovered,
+            Err(error) => {
+                let _ = tx.send(StartupMsg::Failed(error.to_string()));
+                return;
+            }
+        };
+        if tx
+            .send(StartupMsg::Progress(StartupStage::WorkerProbe))
+            .is_err()
+        {
+            return;
+        }
+        match load(&ws) {
+            Ok(snapshot) => {
+                let _ = tx.send(StartupMsg::Ready {
+                    snapshot,
+                    recovered,
+                });
+            }
+            Err(error) => {
+                let _ = tx.send(StartupMsg::Failed(error.to_string()));
+            }
+        }
+    });
+    rx
+}
+
+fn fixture_recovery_delay() {
+    #[cfg(debug_assertions)]
+    {
+        if std::env::var("YARDLET_PROCESS_FIXTURE").as_deref() != Ok("1") {
+            return;
+        }
+        let delay = std::env::var("YARDLET_FIXTURE_RECOVERY_DELAY_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0)
+            .min(60_000);
+        if delay > 0 {
+            thread::sleep(Duration::from_millis(delay));
+        }
+    }
+}
+
+fn spawn_startup_job(ws: Workspace) -> Receiver<StartupMsg> {
+    spawn_startup_job_with(
+        ws,
+        |workspace| {
+            fixture_recovery_delay();
+            recover_startup_state(workspace)
+        },
+        Snapshot::load,
+    )
+}
+
+#[cfg(test)]
 fn lang_of(snapshot: &Option<Snapshot>) -> i18n::Lang {
     snapshot
         .as_ref()
@@ -315,13 +440,43 @@ fn lang_of(snapshot: &Option<Snapshot>) -> i18n::Lang {
 }
 
 impl App {
+    #[cfg(test)]
     fn new(ws: Workspace) -> App {
         let snapshot = Snapshot::load(&ws).ok();
         let lang = lang_of(&snapshot);
+        Self::build(ws, snapshot, BootstrapState::Ready, false, lang)
+    }
+
+    fn new_bootstrapping(ws: Workspace, just_created: bool) -> App {
+        let lang = ws
+            .load_config()
+            .ok()
+            .map(|config| i18n::detect(&config.language, ""))
+            .unwrap_or(i18n::Lang::En);
+        Self::build(
+            ws,
+            None,
+            BootstrapState::Loading(StartupStage::Recovery),
+            just_created,
+            lang,
+        )
+    }
+
+    fn build(
+        ws: Workspace,
+        snapshot: Option<Snapshot>,
+        bootstrap: BootstrapState,
+        startup_just_created: bool,
+        lang: i18n::Lang,
+    ) -> App {
         App {
             ws,
             screen: Screen::Home,
             snapshot,
+            bootstrap,
+            startup_rx: None,
+            startup_started: Instant::now(),
+            startup_just_created,
             input: String::new(),
             input_caret: 0,
             planning_review: None,
@@ -357,6 +512,72 @@ impl App {
             ime_saved: None,
             ime_checked: Instant::now(),
             lang,
+        }
+    }
+
+    fn bootstrap_phase(&self) -> BootstrapPhase {
+        match self.bootstrap {
+            BootstrapState::Loading(_) => BootstrapPhase::Loading,
+            BootstrapState::Ready => BootstrapPhase::Ready,
+            BootstrapState::Failed(_) => BootstrapPhase::Failed,
+        }
+    }
+
+    fn begin_startup(&mut self, rx: Receiver<StartupMsg>) {
+        self.snapshot = None;
+        self.bootstrap = BootstrapState::Loading(StartupStage::Recovery);
+        self.startup_started = Instant::now();
+        self.startup_rx = Some(rx);
+        self.toast = None;
+    }
+
+    fn apply_startup_msg(&mut self, message: StartupMsg) -> bool {
+        match message {
+            StartupMsg::Progress(stage) => {
+                self.bootstrap = BootstrapState::Loading(stage);
+                false
+            }
+            StartupMsg::Ready {
+                snapshot,
+                recovered,
+            } => {
+                self.lang = i18n::detect(&snapshot.config.language, snapshot.intent_summary());
+                self.snapshot = Some(snapshot);
+                self.bootstrap = BootstrapState::Ready;
+                self.startup_rx = None;
+                if self.startup_just_created {
+                    self.toast = Some((true, self.lang.l().initialized.to_string()));
+                    self.startup_just_created = false;
+                } else if !recovered.is_empty() {
+                    self.toast = Some((true, recovered.join("; ")));
+                }
+                self.refresh_monitor_runs();
+                true
+            }
+            StartupMsg::Failed(error) => {
+                self.snapshot = None;
+                self.bootstrap = BootstrapState::Failed(error);
+                self.startup_rx = None;
+                false
+            }
+        }
+    }
+
+    fn poll_startup(&mut self) {
+        loop {
+            let message = match self.startup_rx.as_ref().map(Receiver::try_recv) {
+                Some(Ok(message)) => message,
+                Some(Err(mpsc::TryRecvError::Empty)) | None => return,
+                Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                    self.apply_startup_msg(StartupMsg::Failed(
+                        "startup job ended without a result".to_string(),
+                    ));
+                    return;
+                }
+            };
+            if self.apply_startup_msg(message) {
+                return;
+            }
         }
     }
 
@@ -636,33 +857,31 @@ impl App {
 }
 
 pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
-    // Preflight before terminal setup, Snapshot construction, or any recovery
-    // side effect. `Snapshot::load` validates too, for later reloads.
-    let recovered = recover_startup_state(ws)?;
     let mut terminal = ratatui::init();
-    let mut app = App::new(ws.clone());
-    // The validated preflight recovered tasks left "running" by an interrupted
-    // session and consumed any planning result paid for but not yet read.
-    if !recovered.is_empty() {
-        app.reload();
-        app.toast = Some((true, recovered.join("; ")));
-    }
-    if just_created {
-        app.toast = Some((true, app.lang.l().initialized.to_string()));
-    }
-    // Enable bracketed paste so pasted text (incl. composed Korean/CJK) arrives
-    // as one Event::Paste instead of being dropped.
-    let _ = execute!(std::io::stdout(), EnableBracketedPaste);
-    // Ask for keyboard disambiguation so Shift/Alt+Enter are reported distinctly
-    // (needed for newline-in-input). Only on terminals that support it.
-    let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
-    if enhanced {
-        let _ = execute!(
-            std::io::stdout(),
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        );
-    }
-    let result = main_loop(&mut terminal, app);
+    let mut app = App::new_bootstrapping(ws.clone(), just_created);
+    let mut enhanced = false;
+    let result = (|| -> Result<bool> {
+        // Draw a fail-closed loading frame before recovery, snapshot validation,
+        // worker probes, IME inspection, or terminal capability queries.
+        terminal.draw(|frame| view::render(frame, &mut app))?;
+
+        let startup = spawn_startup_job(ws.clone());
+        app.begin_startup(startup);
+
+        // Enable bracketed paste so pasted text (incl. composed Korean/CJK)
+        // arrives as one Event::Paste instead of being dropped.
+        let _ = execute!(std::io::stdout(), EnableBracketedPaste);
+        // Ask for keyboard disambiguation so Shift/Alt+Enter are reported
+        // distinctly. This query is intentionally after the first frame.
+        enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
+        if enhanced {
+            let _ = execute!(
+                std::io::stdout(),
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            );
+        }
+        main_loop(&mut terminal, app)
+    })();
     if enhanced {
         let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }
@@ -723,6 +942,8 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
     let launched_mtime = binary_mtime();
     let mut last_update_check = Instant::now();
     loop {
+        app.poll_startup();
+
         // Notice an in-place upgrade (cargo install while running): the file
         // at our own path got a new mtime. Cheap stat, every ~5s.
         if !app.update_available && last_update_check.elapsed() >= Duration::from_secs(5) {
@@ -884,6 +1105,17 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
             Screen::PlanningReview if app.planning_review_editing => key.code,
             _ => dekorean(key.code, key.modifiers.contains(KeyModifiers::SHIFT)),
         };
+
+        match bootstrap_key_action(app.bootstrap_phase(), code) {
+            BootstrapKeyAction::Dispatch => {}
+            BootstrapKeyAction::Quit => break,
+            BootstrapKeyAction::Retry => {
+                let startup = spawn_startup_job(app.ws.clone());
+                app.begin_startup(startup);
+                continue;
+            }
+            BootstrapKeyAction::Block => continue,
+        }
 
         match app.screen {
             Screen::Home => {
@@ -3618,6 +3850,212 @@ routing:
         std::fs::write(ws.workers_path(), WORKERS_WITH_COMMENTS).unwrap();
         std::fs::write(ws.billing_path(), crate::templates::BILLING_POLICY).unwrap();
         ws
+    }
+
+    fn cached_snapshot(ws: &Workspace) -> Snapshot {
+        let workers = ws
+            .load_workers()
+            .unwrap()
+            .workers
+            .into_iter()
+            .map(|worker| crate::snapshot::WorkerLine {
+                id: worker.id,
+                readiness: "invocable".into(),
+                version: Some("fixture 1.0".into()),
+                billing_env_present: 0,
+                billing_blocked: false,
+                model: worker.model,
+                detail: "injected".into(),
+                enabled: true,
+            })
+            .collect();
+        Snapshot::load_reusing_workers(ws, workers).unwrap()
+    }
+
+    #[cfg(unix)]
+    fn write_version_probe(path: &std::path::Path, version: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(
+            path,
+            format!(
+                "#!/bin/sh\nif [ \"${{1:-}}\" = \"--version\" ]; then\n  printf '%s\\n' '{}'\n  exit 0\nfi\nexit 1\n",
+                version
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_refresh_reprobes_worker_readiness_after_cached_reload() {
+        let ws = workspace_with_user_config("explicit-refresh-probe");
+        let probe = ws.root.join("fixture-worker");
+        write_version_probe(&probe, "fixture 1.0");
+        std::fs::write(
+            ws.workers_path(),
+            format!(
+                "schema_version: 1\nworkers:\n  - id: fixture\n    enabled: true\n    invocation:\n      command: {}\nrouting: {{}}\n",
+                probe.display()
+            ),
+        )
+        .unwrap();
+
+        let mut app = App::new(ws.clone());
+        assert_eq!(
+            app.snapshot.as_ref().unwrap().workers[0].version.as_deref(),
+            Some("fixture 1.0")
+        );
+
+        write_version_probe(&probe, "fixture 2.0");
+        app.reload();
+        assert_eq!(
+            app.snapshot.as_ref().unwrap().workers[0].version.as_deref(),
+            Some("fixture 1.0"),
+            "cheap reload must keep the cached readiness result"
+        );
+
+        app.reload_full();
+        assert_eq!(
+            app.snapshot.as_ref().unwrap().workers[0].version.as_deref(),
+            Some("fixture 2.0"),
+            "explicit refresh must run a fresh readiness probe"
+        );
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn bootstrap_key_gate_blocks_all_canonical_actions_until_ready() {
+        use BootstrapKeyAction::*;
+
+        for code in [
+            KeyCode::Char('n'),
+            KeyCode::Char('r'),
+            KeyCode::Char('A'),
+            KeyCode::Char('t'),
+            KeyCode::Char('d'),
+            KeyCode::Char('v'),
+            KeyCode::Char('p'),
+            KeyCode::Char('a'),
+            KeyCode::Char('s'),
+            KeyCode::Char('l'),
+            KeyCode::Char('f'),
+            KeyCode::Enter,
+            KeyCode::Char(' '),
+        ] {
+            assert_eq!(
+                bootstrap_key_action(BootstrapPhase::Loading, code),
+                Block,
+                "{code:?} must not reach a handler while startup is loading"
+            );
+            assert_eq!(
+                bootstrap_key_action(BootstrapPhase::Failed, code),
+                Block,
+                "{code:?} must not reach a handler after startup failed"
+            );
+            assert_eq!(
+                bootstrap_key_action(BootstrapPhase::Ready, code),
+                Dispatch,
+                "{code:?} should preserve normal behavior after startup"
+            );
+        }
+        assert_eq!(
+            bootstrap_key_action(BootstrapPhase::Loading, KeyCode::Char('q')),
+            Quit
+        );
+        assert_eq!(
+            bootstrap_key_action(BootstrapPhase::Failed, KeyCode::Char('g')),
+            Retry
+        );
+        assert_eq!(
+            bootstrap_key_action(BootstrapPhase::Loading, KeyCode::Char('g')),
+            Block
+        );
+    }
+
+    #[test]
+    fn startup_job_orders_recovery_before_worker_probe_and_returns_latest_snapshot() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let ws = workspace_with_user_config("startup-job-order");
+        let recovered = Arc::new(AtomicBool::new(false));
+        let observed = recovered.clone();
+        let rx = spawn_startup_job_with(
+            ws.clone(),
+            move |_workspace| {
+                recovered.store(true, Ordering::SeqCst);
+                Ok(vec!["recovered fixture".into()])
+            },
+            move |workspace| {
+                assert!(
+                    observed.load(Ordering::SeqCst),
+                    "snapshot probe started before recovery completed"
+                );
+                Ok(cached_snapshot(workspace))
+            },
+        );
+
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            StartupMsg::Progress(StartupStage::Recovery)
+        ));
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            StartupMsg::Progress(StartupStage::WorkerProbe)
+        ));
+        match rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+            StartupMsg::Ready {
+                snapshot,
+                recovered,
+            } => {
+                assert_eq!(snapshot.workers.len(), 2);
+                assert_eq!(recovered, vec!["recovered fixture"]);
+            }
+            _ => panic!("startup did not return a ready snapshot"),
+        }
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn startup_failure_stays_fail_closed_and_a_retry_can_become_ready() {
+        let ws = workspace_with_user_config("startup-retry");
+        let mut app = App::new_bootstrapping(ws.clone(), false);
+        let failed = spawn_startup_job_with(
+            ws.clone(),
+            |_workspace| anyhow::bail!("fixture validation rejected"),
+            |_workspace| unreachable!("probe must not run after recovery failure"),
+        );
+        app.begin_startup(failed);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while app.bootstrap_phase() == BootstrapPhase::Loading && Instant::now() < deadline {
+            app.poll_startup();
+            std::thread::yield_now();
+        }
+        assert_eq!(app.bootstrap_phase(), BootstrapPhase::Failed);
+        assert!(app.snapshot.is_none());
+        assert!(matches!(
+            &app.bootstrap,
+            BootstrapState::Failed(message) if message.contains("fixture validation rejected")
+        ));
+
+        let ready = spawn_startup_job_with(
+            ws.clone(),
+            |_workspace| Ok(Vec::new()),
+            |workspace| Ok(cached_snapshot(workspace)),
+        );
+        app.begin_startup(ready);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while app.bootstrap_phase() == BootstrapPhase::Loading && Instant::now() < deadline {
+            app.poll_startup();
+            std::thread::yield_now();
+        }
+        assert_eq!(app.bootstrap_phase(), BootstrapPhase::Ready);
+        assert!(app.snapshot.is_some());
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     fn write_answer_run(
