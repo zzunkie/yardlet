@@ -709,7 +709,7 @@ impl App {
             .filter(|intent_id| !intent_id.is_empty())
         {
             if let Ok(channel) = self.ws.load_task_channel(intent_id, &task_id) {
-                let projected = channel_projection_lines(&channel);
+                let projected = channel_projection_lines(&channel, self.lang.l());
                 let has_public_progress = channel.events.iter().any(|event| {
                     !matches!(
                         event.event_type,
@@ -910,7 +910,7 @@ fn title_for(app: &App) -> String {
     if app.is_busy() {
         match &app.progress {
             Some(p) => format!("Yardlet \u{00b7} {}", clip(p)),
-            None => "Yardlet \u{00b7} running".to_string(),
+            None => format!("Yardlet \u{00b7} {}", app.lang.l().run_word),
         }
     } else {
         match app.snapshot.as_ref().map(|s| s.intent_summary()) {
@@ -998,9 +998,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
                         if finished.is_none() {
                             finished = Some(JobResult {
                                 ok: false,
-                                summary: "background job died unexpectedly; \
-                                          state will be recovered"
-                                    .to_string(),
+                                summary: app.lang.l().background_job_failed.to_string(),
                             });
                         }
                         break;
@@ -1589,7 +1587,7 @@ fn defer_selected_task(app: &mut App) {
             return;
         }
         _ => {
-            app.toast = Some((true, format!("{id}: cannot defer this state")));
+            app.toast = Some((true, format!("{id}: {}", app.lang.l().cannot_defer_state)));
             return;
         }
     }
@@ -1625,9 +1623,16 @@ fn defer_selected_task(app: &mut App) {
                 );
             }
             app.reload();
-            app.toast = Some((true, format!("Deferred {}", outcome.deferred.join(", "))));
+            app.toast = Some((
+                true,
+                format!(
+                    "{} {}",
+                    app.lang.l().deferred_tasks,
+                    outcome.deferred.join(", ")
+                ),
+            ));
         }
-        Err(e) => app.toast = Some((false, e)),
+        Err(e) => app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed))),
     }
 }
 
@@ -1643,7 +1648,7 @@ fn revive_selected_task(app: &mut App) {
             return;
         }
         _ => {
-            app.toast = Some((true, format!("{id}: only deferred tasks can be revived")));
+            app.toast = Some((true, format!("{id}: {}", app.lang.l().cannot_revive_state)));
             return;
         }
     }
@@ -1679,9 +1684,16 @@ fn revive_selected_task(app: &mut App) {
                 );
             }
             app.reload();
-            app.toast = Some((true, format!("Revived {}", outcome.revived.join(", "))));
+            app.toast = Some((
+                true,
+                format!(
+                    "{} {}",
+                    app.lang.l().revived_tasks,
+                    outcome.revived.join(", ")
+                ),
+            ));
         }
-        Err(e) => app.toast = Some((false, e)),
+        Err(e) => app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed))),
     }
 }
 
@@ -1689,16 +1701,20 @@ fn tidy_workspace(app: &mut App) {
     match app.ws.tidy() {
         Ok(report) => {
             app.reload_full();
+            let l = app.lang.l();
             app.toast = Some((
                 true,
                 format!(
-                    "tidy: {} migrated, {} deferred{}",
+                    "{}: {} {}, {} {}{}",
+                    l.tidy_word,
                     report.migrated_decisions.len(),
+                    l.migrated_word,
                     report.deferred.len(),
+                    l.s_deferred,
                     report
                         .archived_intent
                         .as_ref()
-                        .map(|id| format!(", archived {id}"))
+                        .map(|id| format!(", {} {id}", l.archived_word))
                         .unwrap_or_default()
                 ),
             ));
@@ -1806,8 +1822,9 @@ fn open_reports(app: &mut App) {
         .as_ref()
         .map(|s| s.intent_summary().to_string())
         .unwrap_or_default();
+    let l = app.lang.l();
     list.push(ReportEntry::Current {
-        label: format!("current \u{2014} {}", short(&cur, 50)),
+        label: format!("{} \u{2014} {}", l.current_word, short(&cur, 50)),
     });
     if let Ok(rd) = std::fs::read_dir(app.ws.agents_dir().join("intents")) {
         let mut dirs: Vec<std::path::PathBuf> = rd
@@ -1839,14 +1856,18 @@ fn open_reports(app: &mut App) {
             });
             for (confirmation_id, drain_dir) in crate::report::archived_drain_snapshots(&d) {
                 list.push(ReportEntry::ArchivedDrain {
-                    label: format!("  \u{21b3} drain: {}", short(&confirmation_id, 44)),
+                    label: format!(
+                        "  \u{21b3} {}: {}",
+                        l.drain_word,
+                        short(&confirmation_id, 44)
+                    ),
                     dir: drain_dir,
                 });
             }
             if let Some(preserved) = app.ws.load_preserved_follow_ups(&id) {
                 for (i, fu) in preserved.tasks.into_iter().enumerate() {
                     let title = if fu.title.trim().is_empty() {
-                        format!("follow-up {}", i + 1)
+                        format!("{} {}", l.follow_up_word, i + 1)
                     } else {
                         fu.title.trim().to_string()
                     };
@@ -1856,7 +1877,12 @@ fn open_reports(app: &mut App) {
                         format!(" \u{00b7} {}", short(&fu.reason, 38))
                     };
                     list.push(ReportEntry::FollowUp {
-                        label: format!("  \u{21b3} follow-up: {}{}", short(&title, 44), reason),
+                        label: format!(
+                            "  \u{21b3} {}: {}{}",
+                            l.follow_up_word,
+                            short(&title, 44),
+                            reason
+                        ),
                         intent_id: id.clone(),
                         task: Box::new(fu),
                     });
@@ -1895,7 +1921,7 @@ fn handle_reportlist_key(app: &mut App, code: KeyCode) {
                     ),
                 ) => {
                     app.report_text = std::fs::read_to_string(dir.join("final-report.md"))
-                        .unwrap_or_else(|_| "(no report)".into());
+                        .unwrap_or_else(|_| app.lang.l().report_empty.into());
                     app.viewing_archived = true;
                     app.scroll = 0;
                     app.screen = Screen::Completion;
@@ -2055,33 +2081,34 @@ fn handle_intent_key(app: &mut App, code: KeyCode) {
 /// one-line summary; this is the whole goal, scope, acceptance, and any
 /// interview clarifications).
 fn build_intent_view(app: &App) -> String {
+    let l = app.lang.l();
     let Ok(Some(i)) = app.ws.load_intent() else {
-        return "No intent yet — press n to describe new work.".to_string();
+        return l.no_intent.to_string();
     };
     let mut s = String::new();
-    s.push_str("# Goal\n\n");
+    s.push_str(&format!("# {}\n\n", l.planning_goal));
     s.push_str(if i.summary.trim().is_empty() {
-        "(none)"
+        l.planning_none
     } else {
         i.summary.trim()
     });
     s.push_str("\n\n");
     if !i.allowed_scope.is_empty() {
-        s.push_str("## Allowed scope\n\n");
+        s.push_str(&format!("## {}\n\n", l.planning_allowed_scope));
         for x in &i.allowed_scope {
             s.push_str(&format!("- {x}\n"));
         }
         s.push('\n');
     }
     if !i.out_of_scope.is_empty() {
-        s.push_str("## Out of scope\n\n");
+        s.push_str(&format!("## {}\n\n", l.planning_out_of_scope));
         for x in &i.out_of_scope {
             s.push_str(&format!("- {x}\n"));
         }
         s.push('\n');
     }
     if !i.acceptance.is_empty() {
-        s.push_str("## Acceptance\n\n");
+        s.push_str(&format!("## {}\n\n", l.planning_acceptance));
         for a in &i.acceptance {
             if let Some(t) = a.as_str() {
                 s.push_str(&format!("- {t}\n"));
@@ -2090,7 +2117,7 @@ fn build_intent_view(app: &App) -> String {
         s.push('\n');
     }
     if !i.clarifications.is_empty() {
-        s.push_str("## Interview\n\n");
+        s.push_str(&format!("## {}\n\n", l.conversation_title));
         for c in &i.clarifications {
             s.push_str(c);
             s.push_str("\n\n");
@@ -2117,7 +2144,7 @@ fn handle_trust_key(app: &mut App, code: KeyCode) {
 /// block `yardlet trust` prints, so the TUI and CLI never diverge.
 fn build_trust_view(app: &App) -> String {
     crate::trust::report_text(&app.ws)
-        .unwrap_or_else(|e| format!("Could not build the trust report: {e}"))
+        .unwrap_or_else(|e| format!("{} {e}", app.lang.l().trust_report_failed))
 }
 
 fn apply_scroll(app: &mut App, code: KeyCode) {
@@ -2222,12 +2249,12 @@ fn open_settings(app: &mut App) {
     if let Some(wf) = wf {
         for w in wf.workers {
             fields.push(field(
-                format!("{} model", w.id),
+                format!("{} {}", w.id, l.model_word),
                 format!("model:{}", w.id),
                 w.model,
             ));
             fields.push(field(
-                format!("{} effort", w.id),
+                format!("{} {}", w.id, l.effort_word),
                 format!("effort:{}", w.id),
                 w.effort,
             ));
@@ -2740,7 +2767,7 @@ fn start_planning(app: &mut App) {
         .snapshot
         .as_ref()
         .map(|s| s.planner.clone())
-        .unwrap_or_else(|| "worker".into());
+        .unwrap_or_else(|| app.lang.l().worker_word.into());
     let lbl = app.lang.l();
     let (planned_via, tasks_word, failed) = (lbl.planned_via, lbl.tasks_word, lbl.planning_failed);
     let (tx, rx) = mpsc::channel();
@@ -2779,7 +2806,7 @@ fn start_continue(app: &mut App) {
         .snapshot
         .as_ref()
         .map(|s| s.planner.clone())
-        .unwrap_or_else(|| "worker".into());
+        .unwrap_or_else(|| app.lang.l().worker_word.into());
     let lbl = app.lang.l();
     let (planned_via, tasks_word, failed) = (lbl.planned_via, lbl.tasks_word, lbl.planning_failed);
     let (tx, rx) = mpsc::channel();
@@ -2819,7 +2846,7 @@ fn start_replan(app: &mut App) {
         .snapshot
         .as_ref()
         .map(|s| s.planner.clone())
-        .unwrap_or_else(|| "worker".into());
+        .unwrap_or_else(|| app.lang.l().worker_word.into());
     let lbl = app.lang.l();
     let (planned_via, tasks_word, failed) = (lbl.planned_via, lbl.tasks_word, lbl.planning_failed);
     let (tx, rx) = mpsc::channel();
@@ -3177,7 +3204,7 @@ fn hold_batch(app: &mut App, ids: Vec<String>) {
     for id in &ids {
         match queue.defer_task(id, false, app.lang.l().approval_batch_hold_reason) {
             Ok(outcome) => held.extend(outcome.deferred),
-            Err(e) => app.toast = Some((false, e)),
+            Err(e) => app.toast = Some((false, format!("{} {e}", app.lang.l().run_failed))),
         }
     }
     if let Err(e) = app.ws.save_queue_locked(&lock, &queue) {
@@ -3235,10 +3262,11 @@ fn start_auto(app: &mut App) {
         }) {
             Ok(lines) => {
                 let last = lines.last().cloned().unwrap_or_default();
-                JobResult {
-                    ok: last.starts_with("done"),
-                    summary: last,
-                }
+                let ok = ws
+                    .load_queue()
+                    .map(|queue| queue_ready_for_completion(&queue))
+                    .unwrap_or(false);
+                JobResult { ok, summary: last }
             }
             Err(e) => JobResult {
                 ok: false,
@@ -3250,7 +3278,7 @@ fn start_auto(app: &mut App) {
     app.progress = None;
     app.pause = Some(pause_job);
     app.job = Job::Running {
-        label: format!("{} (auto)", lbl.run_word),
+        label: format!("{} ({})", lbl.run_word, lbl.auto_word),
         started: Instant::now(),
         rx,
     };
@@ -3386,7 +3414,7 @@ fn current_intent_id(app: &App) -> Option<&str> {
         .filter(|id| !id.is_empty())
 }
 
-fn channel_projection_lines(channel: &crate::schemas::TaskChannel) -> Vec<String> {
+fn channel_projection_lines(channel: &crate::schemas::TaskChannel, l: &i18n::L) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current_attempt: Option<&str> = None;
     for event in &channel.events {
@@ -3398,78 +3426,91 @@ fn channel_projection_lines(channel: &crate::schemas::TaskChannel) -> Vec<String
                     .iter()
                     .find(|attempt| attempt.attempt_id == attempt_id)
                     .map(|attempt| attempt.worker_id.as_str())
-                    .unwrap_or("unknown");
-                lines.push(format!("--- attempt {attempt_id} · {worker} ---"));
+                    .unwrap_or(l.unknown_word);
+                lines.push(format!(
+                    "--- {} {attempt_id} · {worker} ---",
+                    l.planning_attempt
+                ));
             }
         }
         let text = match event.event_type {
-            crate::schemas::ChannelEventType::WorkerStarted => Some("worker started".to_string()),
+            crate::schemas::ChannelEventType::WorkerStarted => {
+                Some(l.channel_worker_started.to_string())
+            }
             crate::schemas::ChannelEventType::WorkerMessage => event
                 .payload
                 .get("text")
                 .and_then(|value| value.as_str())
                 .map(str::to_string),
             crate::schemas::ChannelEventType::ToolStarted => Some(format!(
-                "tool started: {}",
+                "{}: {}",
+                l.channel_tool_started,
                 event
                     .payload
                     .get("name")
                     .or_else(|| event.payload.get("command"))
                     .and_then(|value| value.as_str())
-                    .unwrap_or("tool")
+                    .unwrap_or(l.unknown_word)
             )),
             crate::schemas::ChannelEventType::ToolCompleted => Some(format!(
-                "tool completed: {}",
+                "{}: {}",
+                l.channel_tool_completed,
                 event
                     .payload
                     .get("name")
                     .or_else(|| event.payload.get("command"))
                     .and_then(|value| value.as_str())
-                    .unwrap_or("tool")
+                    .unwrap_or(l.unknown_word)
             )),
             crate::schemas::ChannelEventType::QuestionAsked => event
                 .payload
                 .get("text")
                 .and_then(|value| value.as_str())
-                .map(|text| format!("question: {text}")),
+                .map(|text| format!("{}: {text}", l.channel_question)),
             crate::schemas::ChannelEventType::UserAnswered => event
                 .payload
                 .get("text")
                 .and_then(|value| value.as_str())
-                .map(|text| format!("user: {text}")),
+                .map(|text| format!("{}: {text}", l.channel_user)),
             crate::schemas::ChannelEventType::WorkerCheckpoint => {
-                Some("worker checkpoint recorded".to_string())
+                Some(l.channel_checkpoint.to_string())
             }
             crate::schemas::ChannelEventType::WorkerCompleted => Some(format!(
-                "worker completed: {}",
+                "{}: {}",
+                l.channel_worker_completed,
                 event
                     .payload
                     .get("result")
                     .and_then(|value| value.as_str())
-                    .unwrap_or("unknown")
+                    .unwrap_or(l.unknown_word)
             )),
-            crate::schemas::ChannelEventType::CompletionRecorded => Some(format!(
-                "task completed: {}",
-                event
+            crate::schemas::ChannelEventType::CompletionRecorded => {
+                let state = event
                     .payload
                     .get("task_state")
                     .and_then(|value| value.as_str())
-                    .unwrap_or("unknown")
-            )),
+                    .unwrap_or(l.unknown_word);
+                Some(format!(
+                    "{}: {}",
+                    l.channel_task_completed,
+                    i18n::recorded_state_label(l, state)
+                ))
+            }
             crate::schemas::ChannelEventType::ValidationStarted => {
-                Some("validation started".to_string())
+                Some(l.channel_validation_started.to_string())
             }
             crate::schemas::ChannelEventType::ValidationCompleted => Some(format!(
-                "validation completed: {}",
+                "{}: {}",
+                l.channel_validation_completed,
                 if event
                     .payload
                     .get("passed")
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false)
                 {
-                    "passed"
+                    l.passed_word
                 } else {
-                    "failed"
+                    l.s_failed
                 }
             )),
             _ => None,
@@ -3604,7 +3645,7 @@ fn build_answer_context(app: &App, target_id: &str, question: &str) -> String {
     let mut has_detail = false;
     if let Some(intent_id) = current_intent_id(app) {
         if let Ok(channel) = app.ws.load_task_channel(intent_id, target_id) {
-            let lines = channel_projection_lines(&channel);
+            let lines = channel_projection_lines(&channel, l);
             if !lines.is_empty() {
                 context.push_str(&format!(
                     "## {}\n\n{}\n\n",
@@ -3761,7 +3802,7 @@ fn load_handoff_for_task(app: &App, task_id: &str) -> String {
             }
         }
     }
-    format!("No handoff for {task_id} yet — run it first.")
+    format!("{task_id}: {}", app.lang.l().no_task_handoff)
 }
 
 fn load_latest_handoff(app: &App) -> String {
@@ -3787,8 +3828,8 @@ fn load_latest_handoff(app: &App) -> String {
     }
     match newest {
         Some((_, dir)) => std::fs::read_to_string(dir.join("handoff.md"))
-            .unwrap_or_else(|_| "Latest run has no handoff yet.".into()),
-        None => "No handoff yet. Run a task first.".into(),
+            .unwrap_or_else(|_| app.lang.l().latest_handoff_failed.into()),
+        None => app.lang.l().no_latest_handoff.into(),
     }
 }
 
@@ -4383,6 +4424,110 @@ routing:
             assert_eq!(outcome, i18n::task_state_label(i18n::Lang::Ko.l(), state));
             assert!(!outcome.contains("internal english tail"));
         }
+    }
+
+    #[test]
+    fn channel_projection_localizes_chrome_and_preserves_payloads_and_identifiers() {
+        let event = |seq, event_type, payload| crate::schemas::ChannelEvent {
+            schema_version: 1,
+            event_id: format!("evt-{seq}"),
+            session_id: "ses-keep".into(),
+            seq,
+            event_type,
+            recorded_at: "2026-07-24T00:00:00Z".into(),
+            actor: crate::schemas::EventActor {
+                kind: crate::schemas::EventActorKind::Worker,
+                id: "worker-keep".into(),
+            },
+            action_id: None,
+            causation_id: None,
+            correlation_id: "cor-keep".into(),
+            task_id: "YARD-KEEP".into(),
+            attempt_id: None,
+            payload,
+            raw_ref: None,
+        };
+        let channel = crate::schemas::TaskChannel {
+            schema_version: 1,
+            channel_id: "chn-keep".into(),
+            session_id: "ses-keep".into(),
+            intent_id: "intent-keep".into(),
+            task_id: "YARD-KEEP".into(),
+            highest_seq: 5,
+            attempts: Vec::new(),
+            questions: Vec::new(),
+            answers: Vec::new(),
+            events: vec![
+                event(
+                    1,
+                    crate::schemas::ChannelEventType::WorkerMessage,
+                    serde_json::json!({"text": "WORKER CONTENT KEEP"}),
+                ),
+                event(
+                    2,
+                    crate::schemas::ChannelEventType::ToolStarted,
+                    serde_json::json!({"command": "/tmp/KEEP --model MODEL-KEEP"}),
+                ),
+                event(
+                    3,
+                    crate::schemas::ChannelEventType::QuestionAsked,
+                    serde_json::json!({"text": "USER QUESTION KEEP"}),
+                ),
+                event(
+                    4,
+                    crate::schemas::ChannelEventType::UserAnswered,
+                    serde_json::json!({"text": "USER ANSWER KEEP"}),
+                ),
+                event(
+                    5,
+                    crate::schemas::ChannelEventType::CompletionRecorded,
+                    serde_json::json!({"task_state": "done"}),
+                ),
+            ],
+            replay_errors: Vec::new(),
+        };
+
+        let en = channel_projection_lines(&channel, i18n::Lang::En.l()).join("\n");
+        let ko = channel_projection_lines(&channel, i18n::Lang::Ko.l()).join("\n");
+        for original in [
+            "WORKER CONTENT KEEP",
+            "/tmp/KEEP --model MODEL-KEEP",
+            "USER QUESTION KEEP",
+            "USER ANSWER KEEP",
+        ] {
+            assert!(en.contains(original), "{en}");
+            assert!(ko.contains(original), "{ko}");
+        }
+        assert!(en.contains("tool started: /tmp/KEEP --model MODEL-KEEP"));
+        assert!(en.contains("question: USER QUESTION KEEP"));
+        assert!(en.contains("user: USER ANSWER KEEP"));
+        assert!(en.contains("task completed: done"));
+        assert!(ko.contains("도구 시작: /tmp/KEEP --model MODEL-KEEP"));
+        assert!(ko.contains("질문: USER QUESTION KEEP"));
+        assert!(ko.contains("사용자: USER ANSWER KEEP"));
+        assert!(ko.contains("태스크 완료: 완료"));
+        for leak in [
+            "tool started:",
+            "question:",
+            "user:",
+            "task completed:",
+            "done",
+        ] {
+            assert!(!ko.contains(leak), "Korean projection leaked {leak}: {ko}");
+        }
+    }
+
+    #[test]
+    fn report_current_label_follows_selected_language() {
+        let ws = workspace_with_user_config("report-label-language");
+        let mut app = App::new(ws.clone());
+        app.lang = i18n::Lang::Ko;
+        open_reports(&mut app);
+        assert!(matches!(
+            app.reports.first(),
+            Some(ReportEntry::Current { label }) if label.starts_with("현재 ")
+        ));
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     #[test]

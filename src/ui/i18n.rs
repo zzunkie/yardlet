@@ -90,17 +90,159 @@ pub fn runnable_class_label(l: &L, class: RunnableClass) -> &'static str {
     }
 }
 
+/// Typed progress emitted by the run engine. Identifiers and diagnostic
+/// details are interpolated verbatim; only Yardlet-authored chrome changes.
+pub enum RunProgress<'a> {
+    Ambiguity { turn: u32, cap: u32 },
+    Paused,
+    WaitingForWorker(&'a str),
+    WorkerLongRunning(&'a str),
+    MergeConflict(&'a str),
+    ParallelOff(&'a str),
+    ParallelSequential(&'a str),
+    NeedsUserMany(&'a str),
+    Stuck(&'a str),
+    WaitingGated(&'a str),
+    DrainedWithDeferred(&'a [&'a str]),
+    DrainedComplete,
+    ApprovalRetrySkipped(&'a str),
+    Running(&'a str),
+    Blocked(&'a str),
+    NeedsUser(&'a str),
+    PartialContinue(&'a str),
+    FailedRetry(&'a str),
+}
+
+pub fn run_progress(lang: Lang, event: RunProgress<'_>) -> String {
+    match (lang, event) {
+        (Lang::En, RunProgress::Ambiguity { turn, cap }) => format!(
+            "stopped: the plan is still guessing (ambiguity high, interview turn {turn}/{cap}); answer its questions or accept the ambiguity"
+        ),
+        (Lang::Ko, RunProgress::Ambiguity { turn, cap }) => format!(
+            "정지: 플랜의 모호성이 아직 높음 (인터뷰 {turn}/{cap}); 질문에 답하거나 모호성을 수락하세요"
+        ),
+        (Lang::En, RunProgress::Paused) => {
+            "paused: stopped after the current task; run auto again to resume".to_string()
+        }
+        (Lang::Ko, RunProgress::Paused) => {
+            "일시정지: 현재 태스크 완료 후 멈춤; 다시 자동 실행하면 재개됩니다".to_string()
+        }
+        (Lang::En, RunProgress::WaitingForWorker(id)) => {
+            format!("waiting for {id}'s worker from a previous session\u{2026}")
+        }
+        (Lang::Ko, RunProgress::WaitingForWorker(id)) => {
+            format!("이전 세션의 {id} 워커를 기다리는 중\u{2026}")
+        }
+        (Lang::En, RunProgress::WorkerLongRunning(id)) => format!(
+            "stopped: {id} has run for 30+ minutes; stop its worker or keep waiting, then run auto again"
+        ),
+        (Lang::Ko, RunProgress::WorkerLongRunning(id)) => format!(
+            "정지: {id}가 30분 넘게 실행 중; 워커를 정지하거나 계속 기다린 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, RunProgress::MergeConflict(id)) => format!(
+            "stopped: {id} has a merge conflict; resolve it (see handoff), then run auto again"
+        ),
+        (Lang::Ko, RunProgress::MergeConflict(id)) => format!(
+            "정지: {id}에 병합 충돌이 있음; 핸드오프를 보고 해결한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, RunProgress::ParallelOff(reason)) => {
+            format!("parallel off ({reason}); running sequentially")
+        }
+        (Lang::Ko, RunProgress::ParallelOff(reason)) => {
+            format!("병렬 실행 꺼짐 ({reason}); 순차 실행합니다")
+        }
+        (Lang::En, RunProgress::ParallelSequential(summary)) => {
+            format!("parallel sequential: {summary}")
+        }
+        (Lang::Ko, RunProgress::ParallelSequential(summary)) => {
+            format!("병렬화 없이 순차 실행: {summary}")
+        }
+        (Lang::En, RunProgress::NeedsUserMany(ids)) => format!(
+            "stopped: {ids} need you; answer or resolve them, then run auto again"
+        ),
+        (Lang::Ko, RunProgress::NeedsUserMany(ids)) => format!(
+            "정지: {ids}에 사용자 응답 필요; 답하거나 해결한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, RunProgress::Stuck(tasks)) => format!(
+            "stopped: {tasks}; the blocking task will not complete, so fix, defer, or re-scope it"
+        ),
+        (Lang::Ko, RunProgress::Stuck(tasks)) => format!(
+            "정지: {tasks}; 선행 태스크가 완료될 수 없으므로 수정, 보류 또는 범위 조정이 필요합니다"
+        ),
+        (Lang::En, RunProgress::WaitingGated(ids)) => {
+            format!("stopped: {ids} waiting on approval or dependencies")
+        }
+        (Lang::Ko, RunProgress::WaitingGated(ids)) => {
+            format!("정지: {ids} 승인 또는 의존성 대기 중")
+        }
+        (Lang::En, RunProgress::DrainedWithDeferred(ids)) => format!(
+            "done: queue drained; {} set aside: {}; revive any to continue",
+            ids.len(),
+            ids.join(", ")
+        ),
+        (Lang::Ko, RunProgress::DrainedWithDeferred(ids)) => format!(
+            "완료: 큐 비움; {}개 보류: {}; 계속하려면 태스크를 되살리세요",
+            ids.len(),
+            ids.join(", ")
+        ),
+        (Lang::En, RunProgress::DrainedComplete) => {
+            "done: queue drained, all tasks complete".to_string()
+        }
+        (Lang::Ko, RunProgress::DrainedComplete) => {
+            "완료: 큐를 비웠고 모든 태스크가 끝났습니다".to_string()
+        }
+        (Lang::En, RunProgress::ApprovalRetrySkipped(id)) => {
+            format!("{id} requires approval; skipped retry and continued runnable work")
+        }
+        (Lang::Ko, RunProgress::ApprovalRetrySkipped(id)) => {
+            format!("{id} 승인 필요; 재시도를 건너뛰고 실행 가능한 작업을 계속합니다")
+        }
+        (Lang::En, RunProgress::Running(id)) => format!("running {id}\u{2026}"),
+        (Lang::Ko, RunProgress::Running(id)) => format!("{id} 실행 중\u{2026}"),
+        (Lang::En, RunProgress::Blocked(id)) => {
+            format!("stopped: {id} blocked; resolve it, then run again")
+        }
+        (Lang::Ko, RunProgress::Blocked(id)) => {
+            format!("정지: {id} 막힘; 해결한 뒤 다시 실행하세요")
+        }
+        (Lang::En, RunProgress::NeedsUser(id)) => {
+            format!("stopped: {id} needs you; answer it, then run again")
+        }
+        (Lang::Ko, RunProgress::NeedsUser(id)) => {
+            format!("정지: {id}에 사용자 응답 필요; 답한 뒤 다시 실행하세요")
+        }
+        (Lang::En, RunProgress::PartialContinue(id)) => {
+            format!("{id} is partial; continuing from its checkpoint")
+        }
+        (Lang::Ko, RunProgress::PartialContinue(id)) => {
+            format!("{id} 부분완료; 체크포인트에서 계속합니다")
+        }
+        (Lang::En, RunProgress::FailedRetry(id)) => format!("{id} failed; retrying"),
+        (Lang::Ko, RunProgress::FailedRetry(id)) => format!("{id} 실패; 재시도합니다"),
+    }
+}
+
 /// Label table. Every user-visible TUI string lives here.
 pub struct L {
     pub subtitle: &'static str,
     pub workspace: &'static str,
     pub workers_word: &'static str,
+    pub worker_word: &'static str,
+    pub task_word: &'static str,
     pub ready_word: &'static str,
     pub planner: &'static str,
     pub access_word: &'static str,
     pub parallel_word: &'static str,
     pub ime_word: &'static str,
     pub language_word: &'static str,
+    pub default_word: &'static str,
+    pub current_word: &'static str,
+    pub follow_up_word: &'static str,
+    pub drain_word: &'static str,
+    pub model_word: &'static str,
+    pub effort_word: &'static str,
+    pub unknown_word: &'static str,
+    pub auto_word: &'static str,
     pub intent: &'static str,
     pub status: &'static str,
     pub s_running: &'static str,
@@ -193,6 +335,8 @@ pub struct L {
     pub startup_recovery: &'static str,
     pub startup_probe: &'static str,
     pub startup_failed: &'static str,
+    pub background_job_failed: &'static str,
+    pub no_workspace_state: &'static str,
     pub footer_startup_loading: &'static str,
     pub footer_startup_failed: &'static str,
     pub newwork_title: &'static str,
@@ -225,6 +369,8 @@ pub struct L {
     pub footer_completion: &'static str,
     pub reports_title: &'static str,
     pub footer_reports: &'static str,
+    pub reports_empty: &'static str,
+    pub report_empty: &'static str,
     pub history_promoted: &'static str,
     pub history_promote_failed: &'static str,
     pub archive_failed: &'static str,
@@ -276,18 +422,51 @@ pub struct L {
     pub run_failed: &'static str,
     pub resumed_via: &'static str,
     pub answer_failed: &'static str,
+    pub trust_report_failed: &'static str,
+    pub no_intent: &'static str,
+    pub no_task_handoff: &'static str,
+    pub no_latest_handoff: &'static str,
+    pub latest_handoff_failed: &'static str,
+    pub cannot_defer_state: &'static str,
+    pub deferred_tasks: &'static str,
+    pub cannot_revive_state: &'static str,
+    pub revived_tasks: &'static str,
+    pub tidy_word: &'static str,
+    pub migrated_word: &'static str,
+    pub archived_word: &'static str,
+    pub channel_worker_started: &'static str,
+    pub channel_tool_started: &'static str,
+    pub channel_tool_completed: &'static str,
+    pub channel_question: &'static str,
+    pub channel_user: &'static str,
+    pub channel_checkpoint: &'static str,
+    pub channel_worker_completed: &'static str,
+    pub channel_task_completed: &'static str,
+    pub channel_validation_started: &'static str,
+    pub channel_validation_completed: &'static str,
+    pub passed_word: &'static str,
 }
 
 pub const EN: L = L {
     subtitle: "Local AI Workbench",
     workspace: "Workspace: ",
     workers_word: "Workers",
+    worker_word: "worker",
+    task_word: "task",
     ready_word: "invocable",
     planner: "Planner",
     access_word: "Access",
     parallel_word: "Parallel tasks",
     ime_word: "Auto IME switch",
     language_word: "Language",
+    default_word: "default",
+    current_word: "current",
+    follow_up_word: "follow-up",
+    drain_word: "drain",
+    model_word: "model",
+    effort_word: "effort",
+    unknown_word: "unknown",
+    auto_word: "auto",
     intent: "Intent: ",
     status: "Status: ",
     s_running: "running",
@@ -372,6 +551,8 @@ pub const EN: L = L {
     startup_recovery: "Validating activation and recovering interrupted work",
     startup_probe: "Checking worker readiness",
     startup_failed: "Startup failed:",
+    background_job_failed: "Background job ended unexpectedly; state will be recovered",
+    no_workspace_state: "No workspace state loaded.",
     footer_startup_loading: "startup in progress  q quit",
     footer_startup_failed: "g retry  q quit",
     newwork_title: " New Work ",
@@ -404,6 +585,8 @@ pub const EN: L = L {
     footer_completion: "n new  c continue  R redo  \u{2191}/\u{2193} scroll  q back",
     reports_title: " Reports ",
     footer_reports: "\u{2191}/\u{2193} select  Enter open  q back",
+    reports_empty: "(no reports yet)",
+    report_empty: "(no report)",
     history_promoted: "promoted follow-up",
     history_promote_failed: "Could not promote follow-up:",
     archive_failed: "Could not archive and clear live work:",
@@ -453,18 +636,51 @@ pub const EN: L = L {
     run_failed: "Run failed:",
     resumed_via: "resumed via",
     answer_failed: "Answer/resume failed:",
+    trust_report_failed: "Could not build the trust report:",
+    no_intent: "No intent yet; press n to describe new work.",
+    no_task_handoff: "No handoff for this task yet; run it first.",
+    no_latest_handoff: "No handoff yet. Run a task first.",
+    latest_handoff_failed: "Latest run has no handoff yet.",
+    cannot_defer_state: "cannot defer this state",
+    deferred_tasks: "Deferred",
+    cannot_revive_state: "only deferred tasks can be revived",
+    revived_tasks: "Revived",
+    tidy_word: "tidy",
+    migrated_word: "migrated",
+    archived_word: "archived",
+    channel_worker_started: "worker started",
+    channel_tool_started: "tool started",
+    channel_tool_completed: "tool completed",
+    channel_question: "question",
+    channel_user: "user",
+    channel_checkpoint: "worker checkpoint recorded",
+    channel_worker_completed: "worker completed",
+    channel_task_completed: "task completed",
+    channel_validation_started: "validation started",
+    channel_validation_completed: "validation completed",
+    passed_word: "passed",
 };
 
 pub const KO: L = L {
     subtitle: "로컬 AI 워크벤치",
     workspace: "워크스페이스: ",
     workers_word: "워커",
+    worker_word: "워커",
+    task_word: "태스크",
     ready_word: "호출가능",
     planner: "플래너",
     access_word: "권한",
     parallel_word: "병렬 작업 수",
     ime_word: "한/영 자동 전환",
     language_word: "언어",
+    default_word: "기본",
+    current_word: "현재",
+    follow_up_word: "후속작업",
+    drain_word: "실행 기록",
+    model_word: "모델",
+    effort_word: "추론 강도",
+    unknown_word: "알 수 없음",
+    auto_word: "자동",
     intent: "목표: ",
     status: "상태: ",
     s_running: "실행",
@@ -549,6 +765,8 @@ pub const KO: L = L {
     startup_recovery: "활성화 검증 및 중단 작업 복구 중",
     startup_probe: "워커 준비 상태 확인 중",
     startup_failed: "시작 실패:",
+    background_job_failed: "백그라운드 작업이 예기치 않게 종료됨; 상태를 복구합니다",
+    no_workspace_state: "워크스페이스 상태를 불러오지 못했습니다.",
     footer_startup_loading: "시작 준비 중  q 종료",
     footer_startup_failed: "g 재시도  q 종료",
     newwork_title: " 새 작업 ",
@@ -581,6 +799,8 @@ pub const KO: L = L {
     footer_completion: "n 새작업  c 이어서  R 재작업  \u{2191}/\u{2193} 스크롤  q 뒤로",
     reports_title: " 보고 / 이력 ",
     footer_reports: "\u{2191}/\u{2193} 선택  Enter 열기  q 뒤로",
+    reports_empty: "(보고 없음)",
+    report_empty: "(보고 없음)",
     history_promoted: "후속작업 승격됨",
     history_promote_failed: "후속작업 승격 실패:",
     archive_failed: "라이브 작업 아카이브/초기화 실패:",
@@ -630,6 +850,29 @@ pub const KO: L = L {
     run_failed: "실행 실패:",
     resumed_via: "재개 ·",
     answer_failed: "응답/재개 실패:",
+    trust_report_failed: "신뢰 보고서 생성 실패:",
+    no_intent: "아직 목표가 없습니다. n을 눌러 새 작업을 설명하세요.",
+    no_task_handoff: "이 태스크의 핸드오프가 아직 없습니다. 먼저 실행하세요.",
+    no_latest_handoff: "핸드오프가 아직 없습니다. 먼저 태스크를 실행하세요.",
+    latest_handoff_failed: "최근 실행에 핸드오프가 없습니다.",
+    cannot_defer_state: "이 상태는 보류할 수 없음",
+    deferred_tasks: "보류됨",
+    cannot_revive_state: "보류된 태스크만 되살릴 수 있음",
+    revived_tasks: "되살림",
+    tidy_word: "정리",
+    migrated_word: "이전됨",
+    archived_word: "보관됨",
+    channel_worker_started: "워커 시작",
+    channel_tool_started: "도구 시작",
+    channel_tool_completed: "도구 완료",
+    channel_question: "질문",
+    channel_user: "사용자",
+    channel_checkpoint: "워커 체크포인트 기록",
+    channel_worker_completed: "워커 완료",
+    channel_task_completed: "태스크 완료",
+    channel_validation_started: "검증 시작",
+    channel_validation_completed: "검증 완료",
+    passed_word: "통과",
 };
 
 #[cfg(test)]
@@ -679,5 +922,96 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn task_state_formatter_covers_every_variant_in_both_languages() {
+        let states = [
+            TaskState::Running,
+            TaskState::Done,
+            TaskState::Failed,
+            TaskState::Blocked,
+            TaskState::NeedsUser,
+            TaskState::Partial,
+            TaskState::Deferred,
+            TaskState::Queued,
+        ];
+        let expected_en = [
+            "running",
+            "done",
+            "failed",
+            "blocked",
+            "needs-you",
+            "partial",
+            "deferred",
+            "queued",
+        ];
+        let expected_ko = [
+            "실행",
+            "완료",
+            "실패",
+            "막힘",
+            "응답대기",
+            "부분완료",
+            "보류",
+            "대기",
+        ];
+
+        for ((state, en), ko) in states.into_iter().zip(expected_en).zip(expected_ko) {
+            assert_eq!(task_state_label(Lang::En.l(), state), en);
+            assert_eq!(task_state_label(Lang::Ko.l(), state), ko);
+        }
+    }
+
+    #[test]
+    fn locale_tables_have_nonempty_fields_for_every_primary_screen() {
+        for lang in [Lang::En, Lang::Ko] {
+            let l = lang.l();
+            let primary_screen_fields = [
+                l.subtitle,
+                l.queue_word,
+                l.footer_home,
+                l.planning_review_title,
+                l.footer_planning_review,
+                l.monitor_title,
+                l.footer_monitor,
+                l.task_word,
+                l.worker_word,
+                l.completion_title,
+                l.footer_completion,
+                l.settings_title,
+                l.footer_settings,
+                l.default_word,
+                l.model_word,
+                l.effort_word,
+                l.reports_title,
+                l.reports_empty,
+                l.run_failed,
+                l.startup_failed,
+            ];
+            assert!(
+                primary_screen_fields
+                    .iter()
+                    .all(|field| !field.trim().is_empty()),
+                "{lang:?} has an empty primary-screen i18n field"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_run_progress_localizes_chrome_but_preserves_dynamic_content() {
+        let id = "YARD-KEEP";
+        let detail = "/tmp/KEEP --model MODEL-KEEP";
+        let en_running = run_progress(Lang::En, RunProgress::Running(id));
+        let ko_running = run_progress(Lang::Ko, RunProgress::Running(id));
+        assert_eq!(en_running, "running YARD-KEEP\u{2026}");
+        assert_eq!(ko_running, "YARD-KEEP 실행 중\u{2026}");
+
+        let en_detail = run_progress(Lang::En, RunProgress::ParallelOff(detail));
+        let ko_detail = run_progress(Lang::Ko, RunProgress::ParallelOff(detail));
+        assert!(en_detail.contains(detail));
+        assert!(ko_detail.contains(detail));
+        assert!(en_detail.starts_with("parallel off"));
+        assert!(ko_detail.starts_with("병렬 실행 꺼짐"));
     }
 }
