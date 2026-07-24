@@ -192,6 +192,19 @@ impl Snapshot {
         Self::load_inner(ws, None)
     }
 
+    /// Load with an injected offline worker probe. Startup fixtures use this
+    /// seam to exercise slow or failed readiness without spawning a real CLI.
+    #[cfg(test)]
+    pub(crate) fn load_with_probe(
+        ws: &Workspace,
+        probe: impl FnMut(
+            &crate::schemas::WorkerProfile,
+            &crate::schemas::BillingPolicy,
+        ) -> crate::guard::WorkerStatus,
+    ) -> Result<Snapshot> {
+        Self::load_inner_with_probe(ws, None, probe)
+    }
+
     /// Reload the cheap state (yaml files) while reusing a previous worker
     /// probe. `load` spawns each worker CLI with `--version`, which blocks the
     /// caller for ~100ms — too slow for the TUI's once-a-second refresh.
@@ -200,6 +213,17 @@ impl Snapshot {
     }
 
     fn load_inner(ws: &Workspace, cached_workers: Option<Vec<WorkerLine>>) -> Result<Snapshot> {
+        Self::load_inner_with_probe(ws, cached_workers, guard::probe)
+    }
+
+    fn load_inner_with_probe(
+        ws: &Workspace,
+        cached_workers: Option<Vec<WorkerLine>>,
+        mut probe: impl FnMut(
+            &crate::schemas::WorkerProfile,
+            &crate::schemas::BillingPolicy,
+        ) -> crate::guard::WorkerStatus,
+    ) -> Result<Snapshot> {
         // A snapshot is a trusted projection used by both status and every TUI
         // action. Never expose canonical state until its activation provenance
         // and immutable runtime envelope have passed the shared fail-closed gate.
@@ -244,7 +268,7 @@ impl Snapshot {
                         ..c.clone()
                     };
                 }
-                let s = guard::probe(p, &billing);
+                let s = probe(p, &billing);
                 let present = s.billing_env_present.len();
                 WorkerLine {
                     id: s.id,
@@ -597,12 +621,63 @@ queue:
 mod tests {
     use super::*;
     use crate::schemas::{TaskState, TransitionActor, TransitionCause};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn home_footer_task(id: &str, state: TaskState) -> Task {
         let mut task: Task =
             crate::yaml::from_str(&format!("id: {id}\ntitle: Home footer {id}\n")).unwrap();
         task.state = state;
         task
+    }
+
+    #[test]
+    fn snapshot_worker_probe_can_be_injected_without_spawning_a_cli() {
+        let root =
+            std::env::temp_dir().join(format!("yard-snapshot-probe-seam-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        std::fs::create_dir_all(ws.agents_dir()).unwrap();
+        std::fs::write(
+            ws.config_path(),
+            r#"schema_version: 1
+product: yardlet
+workspace_id: snapshot-probe-seam
+created_at: "2026-07-24T00:00:00Z"
+state_dir: .agents
+default_interface: tui
+canonical_queue: work-queue.yaml
+current_intent: ""
+"#,
+        )
+        .unwrap();
+        std::fs::write(ws.billing_path(), crate::templates::BILLING_POLICY).unwrap();
+        std::fs::write(
+            ws.workers_path(),
+            "schema_version: 1\nworkers:\n  - id: slow\n    enabled: true\n    invocation:\n      command: never-spawn-this\nrouting: {}\n",
+        )
+        .unwrap();
+        ws.save_queue(&WorkQueue::empty()).unwrap();
+
+        let calls = AtomicUsize::new(0);
+        let snapshot = Snapshot::load_with_probe(&ws, |profile, _billing| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            crate::guard::WorkerStatus {
+                id: profile.id.clone(),
+                command: profile.invocation.command.clone(),
+                binary_path: Some("/fixture/slow".into()),
+                version: Some("fixture 1.0".into()),
+                billing_env_present: Vec::new(),
+                readiness: crate::guard::Readiness::Ready,
+                detail: "injected readiness".into(),
+            }
+        })
+        .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(snapshot.workers.len(), 1);
+        assert_eq!(snapshot.workers[0].readiness, "invocable");
+        assert_eq!(snapshot.workers[0].version.as_deref(), Some("fixture 1.0"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

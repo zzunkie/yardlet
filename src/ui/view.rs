@@ -10,7 +10,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::i18n::{self, L};
 use super::{
-    same_intent_replan_availability, App, Job, ReplanAvailability, Screen, ScrollViewport,
+    same_intent_replan_availability, App, BootstrapState, Job, ReplanAvailability, Screen,
+    ScrollViewport, StartupStage,
 };
 use crate::schemas::TaskState;
 use crate::snapshot::{HomeFooterAvailability, Snapshot};
@@ -437,6 +438,10 @@ fn inline_spans(s: &str) -> Vec<Span<'static>> {
 fn render_home(frame: &mut Frame, app: &App) {
     let l = app.lang.l();
     let area = safe_area(frame);
+    if !matches!(&app.bootstrap, BootstrapState::Ready) {
+        render_bootstrap(frame, app, area);
+        return;
+    }
     let chunks = Layout::vertical([
         Constraint::Length(5),
         Constraint::Min(4),
@@ -506,6 +511,55 @@ fn render_home(frame: &mut Frame, app: &App) {
         home_footer(l, availability, answerable, approvable, replannable)
     };
     render_footer(frame, chunks[4], &footer);
+}
+
+fn render_bootstrap(frame: &mut Frame, app: &App, area: Rect) {
+    let l = app.lang.l();
+    let chunks = Layout::vertical([Constraint::Min(5), Constraint::Length(3)]).split(area);
+    let body = match &app.bootstrap {
+        BootstrapState::Loading(stage) => {
+            let frame_idx =
+                (app.startup_started.elapsed().as_millis() / 120) as usize % SPINNER.len();
+            let detail = match stage {
+                StartupStage::Recovery => l.startup_recovery,
+                StartupStage::WorkerProbe => l.startup_probe,
+            };
+            vec![
+                Line::from(Span::styled(
+                    l.startup_loading,
+                    Style::default().fg(Color::Cyan).bold(),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {} ", SPINNER[frame_idx]),
+                        Style::default().fg(Color::Yellow).bold(),
+                    ),
+                    Span::styled(detail, Style::default().fg(Color::Yellow)),
+                ]),
+            ]
+        }
+        BootstrapState::Failed(error) => vec![
+            Line::from(Span::styled(
+                l.startup_failed,
+                Style::default().fg(Color::Red).bold(),
+            )),
+            Line::from(""),
+            Line::from(error.clone()),
+        ],
+        BootstrapState::Ready => Vec::new(),
+    };
+    frame.render_widget(
+        Paragraph::new(body)
+            .wrap(Wrap { trim: true })
+            .block(Block::bordered().title(" Yardlet ")),
+        chunks[0],
+    );
+    let footer = match &app.bootstrap {
+        BootstrapState::Failed(_) => l.footer_startup_failed,
+        _ => l.footer_startup_loading,
+    };
+    render_footer(frame, chunks[1], footer);
 }
 
 /// Assemble the idle Home footer from localized fragments and a read-only
@@ -1368,6 +1422,26 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn bootstrap_loading_and_failure_frames_show_safe_progress_and_retry() {
+        let root =
+            std::env::temp_dir().join(format!("yard-bootstrap-render-{}", std::process::id()));
+        let mut app = App::new_bootstrapping(crate::state::Workspace::at(&root), false);
+
+        let loading = rendered_home(&app);
+        assert!(loading.contains("Starting Yardlet safely"));
+        assert!(loading.contains("Validating activation and recovering interrupted work"));
+        assert!(loading.contains("startup in progress  q quit"));
+        assert!(!loading.contains("r run"));
+
+        app.bootstrap = BootstrapState::Failed("activation fixture mismatch".into());
+        let failed = rendered_home(&app);
+        assert!(failed.contains("Startup failed:"));
+        assert!(failed.contains("activation fixture mismatch"));
+        assert!(failed.contains("g retry  q quit"));
+        assert!(!failed.contains("r run"));
     }
 
     #[test]
