@@ -8,6 +8,7 @@
 pub(crate) mod i18n;
 mod ime;
 mod planning_review;
+mod text_input;
 mod view;
 
 use std::sync::mpsc::{self, Receiver};
@@ -211,6 +212,8 @@ pub struct App {
     /// Edit caret as a char index into `input` (text screens). Lets Left/Right/
     /// Home/End move and edit mid-string instead of append-only.
     pub input_caret: usize,
+    /// Whether the terminal reports modified Enter keys unambiguously.
+    keyboard_enhancement: bool,
     /// Latest surface-neutral planning projection shown on PlanningReview.
     /// The UI never edits this value or canonical files directly; every action
     /// is dispatched back through `planning`.
@@ -479,6 +482,7 @@ impl App {
             startup_just_created,
             input: String::new(),
             input_caret: 0,
+            keyboard_enhancement: false,
             planning_review: None,
             planning_review_text: String::new(),
             planning_review_editing: false,
@@ -797,10 +801,22 @@ impl App {
         }
     }
     fn caret_home(&mut self) {
-        self.input_caret = 0;
+        let chars: Vec<char> = self.input.chars().collect();
+        let caret = self.input_caret.min(chars.len());
+        self.input_caret = chars[..caret]
+            .iter()
+            .rposition(|&c| c == '\n')
+            .map(|index| index + 1)
+            .unwrap_or(0);
     }
     fn caret_end(&mut self) {
-        self.input_caret = self.input_len_chars();
+        let chars: Vec<char> = self.input.chars().collect();
+        let caret = self.input_caret.min(chars.len());
+        self.input_caret = chars[caret..]
+            .iter()
+            .position(|&c| c == '\n')
+            .map(|offset| caret + offset)
+            .unwrap_or(chars.len());
     }
     /// Move the caret up one line in the multi-line input, keeping the column
     /// (clamped to the previous line's length). On the first line, jump to the
@@ -871,15 +887,17 @@ pub fn run(ws: &Workspace, just_created: bool) -> Result<()> {
         // Enable bracketed paste so pasted text (incl. composed Korean/CJK)
         // arrives as one Event::Paste instead of being dropped.
         let _ = execute!(std::io::stdout(), EnableBracketedPaste);
-        // Ask for keyboard disambiguation so Shift/Alt+Enter are reported
-        // distinctly. This query is intentionally after the first frame.
-        enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false);
-        if enhanced {
-            let _ = execute!(
+        // Ask for unambiguous modified-key events so Ctrl+Enter can be an
+        // optional submit chord. This query is intentionally after the first
+        // frame. Treat enhancement as enabled only when the push succeeds.
+        if terminal::supports_keyboard_enhancement().unwrap_or(false) {
+            enhanced = execute!(
                 std::io::stdout(),
                 PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-            );
+            )
+            .is_ok();
         }
+        app.keyboard_enhancement = enhanced;
         main_loop(&mut terminal, app)
     })();
     if enhanced {
@@ -1074,12 +1092,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
         // Pasted text (a reliable path for Korean/CJK that raw-mode IME mangles)
         // goes straight into the active input field.
         if let Event::Paste(text) = &event {
-            if !app.is_busy()
-                && (matches!(app.screen, Screen::NewWork | Screen::Answer)
-                    || (app.screen == Screen::PlanningReview && app.planning_review_editing))
-            {
-                app.input_insert(text);
-            }
+            handle_input_paste(&mut app, text);
             continue;
         }
         let Event::Key(key) = event else {
@@ -1987,23 +2000,23 @@ fn promote_history_follow_up(
 }
 
 fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
+    use text_input::TextInputAction;
+
     if app.is_busy() {
         if code == KeyCode::Esc {
             app.screen = Screen::Home;
         }
         return;
     }
-    match code {
-        KeyCode::Esc => {
+    match text_input::action_for_key(code, mods, app.keyboard_enhancement) {
+        TextInputAction::Noop => {}
+        TextInputAction::Cancel => {
+            app.input_clear();
             app.amend = false;
             app.replan = false;
             app.screen = Screen::Home;
         }
-        // Shift/Alt+Enter inserts a newline (multi-line input); Enter submits.
-        KeyCode::Enter if mods.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
-            app.input_insert("\n")
-        }
-        KeyCode::Enter => {
+        TextInputAction::Submit => {
             if !app.input.trim().is_empty() {
                 if app.replan {
                     start_replan(app);
@@ -2015,16 +2028,25 @@ fn handle_new_work_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
                 app.screen = Screen::Home;
             }
         }
-        KeyCode::Backspace => app.input_backspace(),
-        KeyCode::Delete => app.input_delete(),
-        KeyCode::Left => app.caret_left(),
-        KeyCode::Right => app.caret_right(),
-        KeyCode::Home => app.caret_home(),
-        KeyCode::End => app.caret_end(),
-        KeyCode::Up => app.caret_up(),
-        KeyCode::Down => app.caret_down(),
-        KeyCode::Char(c) => app.input_insert(&c.to_string()),
-        _ => {}
+        TextInputAction::InsertNewline => app.input_insert("\n"),
+        TextInputAction::Insert(c) => app.input_insert(&c.to_string()),
+        TextInputAction::Backspace => app.input_backspace(),
+        TextInputAction::Delete => app.input_delete(),
+        TextInputAction::CaretLeft => app.caret_left(),
+        TextInputAction::CaretRight => app.caret_right(),
+        TextInputAction::CaretHome => app.caret_home(),
+        TextInputAction::CaretEnd => app.caret_end(),
+        TextInputAction::CaretUp => app.caret_up(),
+        TextInputAction::CaretDown => app.caret_down(),
+    }
+}
+
+fn handle_input_paste(app: &mut App, text: &str) {
+    if !app.is_busy()
+        && (matches!(app.screen, Screen::NewWork | Screen::Answer)
+            || (app.screen == Screen::PlanningReview && app.planning_review_editing))
+    {
+        app.input_insert(text);
     }
 }
 
@@ -2615,7 +2637,12 @@ fn start_planning_revision(app: &mut App) {
 fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     use planning_review::ReviewAction;
 
-    match planning_review::action_for_key(code, modifiers, review_gate(app)) {
+    match planning_review::action_for_key_with_enhancement(
+        code,
+        modifiers,
+        app.keyboard_enhancement,
+        review_gate(app),
+    ) {
         ReviewAction::Noop => {}
         ReviewAction::Back => {
             app.input_clear();
@@ -4187,6 +4214,117 @@ routing:
         app.input_caret = 2; // col 2 on "가나다"
         app.caret_down(); // -> "xy", clamped to its length 2
         assert_eq!(app.input_caret, 6);
+    }
+
+    #[test]
+    fn home_end_move_to_current_line_boundaries() {
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-caret-line-boundary-test"));
+        let mut app = App::new(ws);
+        app.input_insert("첫줄\n가나다\n끝");
+        app.input_caret = 5;
+
+        app.caret_home();
+        assert_eq!(app.input_caret, 3, "Home must stay on the middle line");
+        app.caret_end();
+        assert_eq!(app.input_caret, 6, "End must stay on the middle line");
+    }
+
+    #[test]
+    fn new_work_enter_is_newline_and_control_s_does_not_insert_text() {
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-new-work-key-test"));
+        let mut app = App::new(ws);
+        app.screen = Screen::NewWork;
+
+        handle_new_work_key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.input, "\n");
+        assert_eq!(app.screen, Screen::NewWork);
+
+        app.input_clear();
+        handle_new_work_key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(app.input.is_empty(), "Ctrl+S must never insert a literal s");
+        assert_eq!(app.screen, Screen::NewWork);
+        assert!(matches!(app.job, Job::Idle));
+
+        handle_new_work_key(&mut app, KeyCode::Enter, KeyModifiers::CONTROL);
+        assert_eq!(
+            app.input, "\n",
+            "without enhancement, modified Enter remains a newline"
+        );
+        app.input_clear();
+        app.keyboard_enhancement = true;
+        handle_new_work_key(&mut app, KeyCode::Enter, KeyModifiers::CONTROL);
+        assert!(
+            app.input.is_empty(),
+            "enhanced Ctrl+Enter must reach empty-submit rejection"
+        );
+        assert!(matches!(app.job, Job::Idle));
+    }
+
+    #[test]
+    fn new_work_escape_discards_the_draft_without_touching_other_state() {
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-new-work-cancel-test"));
+        let mut app = App::new(ws);
+        app.screen = Screen::NewWork;
+        app.replan = true;
+        app.input_insert("취소할\n요청");
+
+        handle_new_work_key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+
+        assert_eq!(app.screen, Screen::Home);
+        assert!(app.input.is_empty());
+        assert_eq!(app.input_caret, 0);
+        assert!(!app.amend);
+        assert!(!app.replan);
+    }
+
+    #[test]
+    fn bracketed_paste_preserves_hangul_lines_for_mid_buffer_editing() {
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-multiline-paste-test"));
+        let mut app = App::new(ws);
+        app.screen = Screen::PlanningReview;
+        handle_input_paste(&mut app, "무시");
+        assert!(app.input.is_empty(), "review mode is read-only before e");
+
+        app.planning_review_editing = true;
+        handle_input_paste(&mut app, "첫째\n둘째\n셋");
+        assert_eq!(app.input, "첫째\n둘째\n셋");
+        assert_eq!(app.input_caret, 7);
+
+        app.caret_up();
+        assert_eq!(app.input_caret, 4);
+        app.input_insert("가");
+        app.input_delete();
+        assert_eq!(app.input, "첫째\n둘가\n셋");
+        assert_eq!(app.input_caret, 5);
+
+        app.caret_down();
+        app.input_backspace();
+        assert_eq!(app.input, "첫째\n둘가\n");
+        assert_eq!(app.input_caret, 6);
+    }
+
+    #[test]
+    fn planning_revision_escape_clears_only_the_editing_draft() {
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-revision-cancel-test"));
+        let mut app = App::new(ws);
+        app.screen = Screen::PlanningReview;
+        app.planning_review_editing = true;
+        app.input_insert(" \n ");
+
+        handle_planning_review_key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(app.planning_review_editing);
+        assert_eq!(app.input, " \n ");
+        assert!(matches!(app.job, Job::Idle));
+
+        app.input_clear();
+        app.input_insert("버릴\n수정 요청");
+
+        handle_planning_review_key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+
+        assert_eq!(app.screen, Screen::PlanningReview);
+        assert!(!app.planning_review_editing);
+        assert!(app.input.is_empty());
+        assert_eq!(app.input_caret, 0);
     }
 
     #[test]

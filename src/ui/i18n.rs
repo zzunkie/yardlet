@@ -560,8 +560,8 @@ pub const EN: L = L {
     replan_title: " Replan This Intent ",
     replan_prompt: "Describe the replacement direction. Yardlet keeps the same intent id and proposes a new plan for this failure-settled queue.",
     request_title: " Request ",
-    footer_newwork: "Enter plan   Esc cancel",
-    footer_replan: "Enter start same-intent replan   Esc cancel",
+    footer_newwork: "Enter newline   Ctrl+S submit   Ctrl+Enter submit (when supported)   Esc cancel",
+    footer_replan: "Enter newline   Ctrl+S start same-intent replan   Ctrl+Enter submit (when supported)   Esc cancel",
     asking_word: "is asking",
     no_question: "(no recorded question \u{2014} see the handoff)",
     answer_context_title: " Answer context ",
@@ -624,7 +624,7 @@ pub const EN: L = L {
     planning_revision_title: " Revision request ",
     footer_planning_review: "\u{2191}/\u{2193}/PgUp/PgDn scroll  a accept  r reject  e revise  c confirm  g refresh  Esc/q back",
     footer_planning_review_busy: "planning revision...  Esc/q back",
-    footer_planning_revision: "Shift/Alt+Enter newline  Enter send revision  Esc cancel",
+    footer_planning_revision: "Enter newline   Ctrl+S send revision   Ctrl+Enter submit (when supported)   Esc cancel",
     planning_review_failed: "Planning review failed:",
     planning_accepted: "Proposal accepted as visible draft",
     planning_rejected: "Proposal rejected",
@@ -774,8 +774,8 @@ pub const KO: L = L {
     replan_title: " 같은 목표 재계획 ",
     replan_prompt: "대체 방향을 설명하세요. 같은 intent id를 유지하고 실패 종결 큐의 새 계획을 제안합니다.",
     request_title: " 요청 ",
-    footer_newwork: "Enter 계획   Esc 취소",
-    footer_replan: "Enter same-intent 재계획 시작   Esc 취소",
+    footer_newwork: "Enter 줄바꿈   Ctrl+S 전송   Ctrl+Enter 전송(지원 터미널)   Esc 취소",
+    footer_replan: "Enter 줄바꿈   Ctrl+S same-intent 재계획 시작   Ctrl+Enter 전송(지원 터미널)   Esc 취소",
     asking_word: "질문",
     no_question: "(기록된 질문 없음 — 핸드오프 참고)",
     answer_context_title: " 답변 문맥 ",
@@ -838,7 +838,7 @@ pub const KO: L = L {
     planning_revision_title: " 수정 요청 ",
     footer_planning_review: "\u{2191}/\u{2193}/PgUp/PgDn 스크롤  a 수락  r 거절  e 수정  c 확정  g 새로고침  Esc/q 뒤로",
     footer_planning_review_busy: "플랜 수정 중...  Esc/q 뒤로",
-    footer_planning_revision: "Shift/Alt+Enter 줄바꿈  Enter 수정 요청 전송  Esc 취소",
+    footer_planning_revision: "Enter 줄바꿈   Ctrl+S 수정 요청 전송   Ctrl+Enter 전송(지원 터미널)   Esc 취소",
     planning_review_failed: "플랜 검토 실패:",
     planning_accepted: "제안을 표시 초안으로 수락함",
     planning_rejected: "제안을 거절함",
@@ -1013,5 +1013,23 @@ mod tests {
         assert!(ko_detail.contains(detail));
         assert!(en_detail.starts_with("parallel off"));
         assert!(ko_detail.starts_with("병렬 실행 꺼짐"));
+    }
+
+    #[test]
+    fn planner_input_footers_match_the_multiline_submit_contract() {
+        for lang in [Lang::En, Lang::Ko] {
+            let l = lang.l();
+            for footer in [
+                l.footer_newwork,
+                l.footer_replan,
+                l.footer_planning_revision,
+            ] {
+                assert!(footer.contains("Enter"), "{lang:?}: {footer}");
+                assert!(footer.contains("Ctrl+S"), "{lang:?}: {footer}");
+                assert!(footer.contains("Ctrl+Enter"), "{lang:?}: {footer}");
+                assert!(footer.contains("Esc"), "{lang:?}: {footer}");
+                assert!(!footer.contains("Shift/Alt"), "{lang:?}: {footer}");
+            }
+        }
     }
 }
