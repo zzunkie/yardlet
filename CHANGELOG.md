@@ -1,5 +1,93 @@
 # Changelog
 
+## 0.10.2 - 2026-07-24
+
+### Fixed
+
+- **Scaffold writes no longer pass through symlinks.** `yardlet init` and the
+  automatic `ensure_initialized` path checked scaffold destinations with a
+  link-following `exists()`, so a dangling symlink counted as absent and the
+  write went through the link, creating or truncating the file it pointed at
+  outside the workspace (`--force` could truncate a live target). Scaffold
+  writes now inspect the destination with `symlink_metadata` and always skip a
+  symlink — dangling or not, forced or not — with a persisted warning instead
+  of writing through it.
+
+- **Worktree harness seeding no longer follows symlinks (#37).** Copying
+  harness assets into a run worktree treats symlinked sources and destinations
+  as non-copyable, records each skip as a durable copy warning on the run
+  evidence, and surfaces those warnings in `status` and `report` projections
+  instead of silently damaging files outside the worktree.
+
+- **Stale Git-finish target can no longer be inherited by a new delivery
+  (#36).** When auto-push is enabled and the configured `git_finish.target_ref`
+  does not match the current checkout ref, the run is now safety-blocked
+  before the worker spawns — before approval is consumed and before the
+  Running transition — and the task stays Queued with a diagnostic naming the
+  exact checkout ref to retarget to. Previously a fully green task ran to
+  completion and only failed at push time with
+  `branch_does_not_match_target_ref`, landing as Partial. Both the serial run
+  loop and parallel `run_batch` enforce the same pre-spawn preflight, and the
+  exact-OID, no-force push boundary is unchanged.
+
+- **Retained serial worktrees keep the exact bytes that validation saw
+  (#32).** Dispatcher-staged dirty inputs from the owning root were restored
+  to the git baseline during cleanup when they were absent from the worker's
+  result-declared changes, so the retained tree diverged from the validated
+  tree and generated pins went stale. Staged inputs now carry typed core
+  provenance (path plus content digest) recorded in the durable receipt before
+  the worker spawns; the pre-validation restore is gone; overlays are excluded
+  from worker-authored evidence only on an exact digest match; and a fatal
+  parity check compares the validated tree against the retained or integration
+  target before Done is recorded, failing closed with a typed reason on any
+  divergence. The parallel worktree path had the same pre-validation restore
+  and now uses the same overlay provenance, recovery finalize threads it
+  through parallel runs, and evidence failures emit overlay-specific
+  diagnostics naming the exact path.
+
+- **Manually resolved outputs now reach downstream tasks with
+  `auto_commit: false` (#21).** Resolving a Partial task derives its actual
+  changed paths from the integration receipt and git evidence (not the
+  worker's self-report), re-verifies the bytes, and writes a durable manifest
+  plus content snapshots before the queue publishes Done. Downstream worktree
+  preparation — serial and parallel — materializes every resolved dependency
+  output at the same normalized repository-relative path with the same digest
+  before the worker spawns. A resolve that cannot produce proof is refused,
+  and missing manifests, missing snapshot bytes, digest tampering, path
+  traversal, symlink destinations, cross-dependency same-path conflicts, and
+  divergent pre-existing files at a destination all block the downstream run
+  with a typed diagnostic naming the dependency and path.
+
+- **Runtime state convergence fixes (#33, #29, #16).** A passing review with a
+  deferred remediation is no longer forced to NeedsUser; `status` reports an
+  externally killed worker without mutating state, with guards against
+  false positives during the dispatch preparation window before the worker
+  process exists; and `yardlet answer --accept-deviation` accepts exactly the
+  disclosed typed deviation and nothing broader.
+
+- Two process tests were order-dependent on state leaked by earlier tests in
+  the same suite; the suite is hermetic again in both parallel and
+  single-threaded runs.
+
+### Added
+
+- **`yardlet resolve <task> --no-outputs`.** A state-only Partial (for
+  example, one produced by a validation failure alone) previously had no
+  closure path because resolve refuses to publish Done without output proof.
+  The new opt-in flag records an explicit no-outputs manifest — distinguishing
+  "proven absent" from "never recorded" — and is itself refused with a typed
+  diagnostic if any repository output is detected, pointing back to plain
+  resolve. The default resolve path is unchanged and still fails closed.
+
+- **Explicit transitive-dependency contract.** A resolved task's manifest
+  records only the outputs it authored; consumed upstream outputs are not
+  passed through. A downstream task that needs an upstream's bytes must
+  declare a direct `depends_on` on that upstream: worktree preparation
+  detects a consumed-but-undeclared upstream from core receipts and blocks
+  before spawn with
+  `transitive_dependency_undeclared:...:explicit_depends_on_required`, unless
+  the exact bytes are already present at the destination.
+
 ## 0.10.1 - 2026-07-23
 
 ### Added
