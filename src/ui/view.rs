@@ -40,6 +40,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     match app.screen {
         Screen::Home => render_home(frame, app),
         Screen::NewWork => render_new_work(frame, app),
+        Screen::PlanningReview => render_planning_review(frame, app),
         Screen::Answer => render_answer(frame, app),
         Screen::Settings => render_settings(frame, app),
         Screen::Monitor => render_monitor(frame, app),
@@ -969,6 +970,49 @@ fn render_new_work(frame: &mut Frame, app: &App) {
     );
     place_input_cursor(frame, chunks[1], &app.input, app.input_caret);
     render_footer(frame, chunks[2], footer);
+}
+
+fn render_planning_review(frame: &mut Frame, app: &mut App) {
+    let l = app.lang.l();
+    let area = safe_area(frame);
+    let input_height = if app.planning_review_editing { 6 } else { 0 };
+    let chunks = Layout::vertical([
+        Constraint::Min(6),
+        Constraint::Length(input_height),
+        Constraint::Length(3),
+        Constraint::Length(3),
+    ])
+    .split(area);
+    let viewport = scroll_viewport(chunks[0]);
+    app.scroll_viewport = Some(viewport);
+    app.scroll = app
+        .scroll
+        .min(max_scroll_offset(&app.planning_review_text, viewport));
+    frame.render_widget(
+        Paragraph::new(md_lines(&app.planning_review_text))
+            .wrap(Wrap { trim: false })
+            .scroll((app.scroll, 0))
+            .block(Block::bordered().title(l.planning_review_title)),
+        chunks[0],
+    );
+    if app.planning_review_editing {
+        frame.render_widget(
+            Paragraph::new(app.input.as_str())
+                .wrap(Wrap { trim: false })
+                .block(Block::bordered().title(l.planning_revision_title)),
+            chunks[1],
+        );
+        place_input_cursor(frame, chunks[1], &app.input, app.input_caret);
+    }
+    render_status(frame, chunks[2], app);
+    let footer = if app.is_busy() {
+        l.footer_planning_review_busy
+    } else if app.planning_review_editing {
+        l.footer_planning_revision
+    } else {
+        l.footer_planning_review
+    };
+    render_footer(frame, chunks[3], footer);
 }
 
 fn render_answer(frame: &mut Frame, app: &mut App) {

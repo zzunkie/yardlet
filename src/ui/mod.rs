@@ -7,6 +7,7 @@
 
 pub(crate) mod i18n;
 mod ime;
+mod planning_review;
 mod view;
 
 use std::sync::mpsc::{self, Receiver};
@@ -30,6 +31,7 @@ use crate::state::{self, Workspace};
 pub enum Screen {
     Home,
     NewWork,
+    PlanningReview,
     Answer,
     Handoff,
     Intent,
@@ -132,6 +134,7 @@ pub enum ReportEntry {
 pub enum JobMsg {
     Progress(String),
     Done(JobResult),
+    PlanningDone(JobResult),
 }
 
 pub enum Job {
@@ -157,6 +160,12 @@ pub struct App {
     /// Edit caret as a char index into `input` (text screens). Lets Left/Right/
     /// Home/End move and edit mid-string instead of append-only.
     pub input_caret: usize,
+    /// Latest surface-neutral planning projection shown on PlanningReview.
+    /// The UI never edits this value or canonical files directly; every action
+    /// is dispatched back through `planning`.
+    pub planning_review: Option<crate::planning::PlanningProjection>,
+    pub planning_review_text: String,
+    pub planning_review_editing: bool,
     pub job: Job,
     pub toast: Option<(bool, String)>,
     pub progress: Option<String>,
@@ -315,6 +324,9 @@ impl App {
             snapshot,
             input: String::new(),
             input_caret: 0,
+            planning_review: None,
+            planning_review_text: String::new(),
+            planning_review_editing: false,
             job: Job::Idle,
             toast: None,
             progress: None,
@@ -365,7 +377,9 @@ impl App {
             return;
         }
         self.ime_checked = Instant::now();
-        if matches!(self.screen, Screen::NewWork | Screen::Answer) {
+        if matches!(self.screen, Screen::NewWork | Screen::Answer)
+            || (self.screen == Screen::PlanningReview && self.planning_review_editing)
+        {
             // Text input: give the user their IME back.
             if let Some(id) = self.ime_saved.take() {
                 let _ = ime::select_by_id(&id);
@@ -746,10 +760,15 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
         if let Job::Running { rx, .. } = &app.job {
             let mut latest_progress = None;
             let mut finished = None;
+            let mut planning_finished = false;
             loop {
                 match rx.try_recv() {
                     Ok(JobMsg::Progress(s)) => latest_progress = Some(s),
                     Ok(JobMsg::Done(r)) => finished = Some(r),
+                    Ok(JobMsg::PlanningDone(r)) => {
+                        planning_finished = r.ok;
+                        finished = Some(r);
+                    }
                     Err(mpsc::TryRecvError::Empty) => break,
                     // The job thread died without reporting (panic): fail the
                     // job instead of spinning busy forever. Any orphaned
@@ -772,12 +791,9 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
                 app.progress = Some(p);
             }
             let job_done = finished.is_some();
-            if let Some(r) = finished {
-                app.toast = Some((r.ok, r.summary));
-                app.job = Job::Idle;
-                app.progress = None;
-                app.pause = None;
-            }
+            let opened_planning_review = finished
+                .map(|result| finish_background_job(&mut app, result, planning_finished))
+                .unwrap_or(false);
             // Refresh the queue snapshot — but throttled. Snapshot::load probes
             // worker readiness (spawns `--version`), so reloading every ~120ms
             // tick blocks the event loop. Reload on a transition, on finish, and
@@ -789,6 +805,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
             // When a job finishes and the whole queue is done, surface the
             // intent-level final report and let the user pick what's next.
             if job_done
+                && !opened_planning_review
                 && app
                     .snapshot
                     .as_ref()
@@ -838,7 +855,10 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
         // Pasted text (a reliable path for Korean/CJK that raw-mode IME mangles)
         // goes straight into the active input field.
         if let Event::Paste(text) = &event {
-            if !app.is_busy() && matches!(app.screen, Screen::NewWork | Screen::Answer) {
+            if !app.is_busy()
+                && (matches!(app.screen, Screen::NewWork | Screen::Answer)
+                    || (app.screen == Screen::PlanningReview && app.planning_review_editing))
+            {
                 app.input_insert(text);
             }
             continue;
@@ -861,6 +881,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
         // keep the raw character.
         let code = match app.screen {
             Screen::NewWork | Screen::Answer | Screen::Settings => key.code,
+            Screen::PlanningReview if app.planning_review_editing => key.code,
             _ => dekorean(key.code, key.modifiers.contains(KeyModifiers::SHIFT)),
         };
 
@@ -871,6 +892,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
                 }
             }
             Screen::NewWork => handle_new_work_key(&mut app, key.code, key.modifiers),
+            Screen::PlanningReview => handle_planning_review_key(&mut app, key.code, key.modifiers),
             Screen::Answer => handle_answer_key(&mut app, key.code, key.modifiers),
             Screen::Settings => handle_settings_key(&mut app, key.code),
             Screen::Completion => handle_completion_key(&mut app, code),
@@ -1880,6 +1902,7 @@ fn apply_scroll(app: &mut App, code: KeyCode) {
 fn scroll_text(app: &App) -> Option<&str> {
     match app.screen {
         Screen::Answer => Some(&app.answer_context),
+        Screen::PlanningReview => Some(&app.planning_review_text),
         Screen::Handoff => Some(&app.handoff_text),
         Screen::Intent => Some(&app.intent_text),
         Screen::Trust => Some(&app.trust_text),
@@ -2177,6 +2200,271 @@ fn toggle_language(app: &mut App) {
     app.reload();
 }
 
+fn refresh_planning_review(app: &mut App) -> Result<()> {
+    let projection = crate::planning::projection(&app.ws)?;
+    app.planning_review_text = planning_review::format_projection(&projection, app.lang.l());
+    app.planning_review = Some(projection);
+    Ok(())
+}
+
+fn open_planning_review(app: &mut App) -> bool {
+    match refresh_planning_review(app) {
+        Ok(()) => {
+            app.input_clear();
+            app.planning_review_editing = false;
+            app.scroll = 0;
+            app.scroll_viewport = None;
+            app.screen = Screen::PlanningReview;
+            true
+        }
+        Err(error) => {
+            app.toast = Some((
+                false,
+                format!("{} {error}", app.lang.l().planning_review_failed),
+            ));
+            false
+        }
+    }
+}
+
+fn finish_background_job(app: &mut App, result: JobResult, planning_finished: bool) -> bool {
+    let open_review = planning_finished && result.ok;
+    app.toast = Some((result.ok, result.summary));
+    app.job = Job::Idle;
+    app.progress = None;
+    app.pause = None;
+    if open_review {
+        // A projection error is itself handled here and must not fall through
+        // to the unrelated queue-completion screen, which would hide it.
+        let _ = open_planning_review(app);
+        true
+    } else {
+        false
+    }
+}
+
+fn planning_action_id(action: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "tui-{action}-{}-{}-{}",
+        chrono::Utc::now().format("%Y%m%d%H%M%S%6f"),
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn review_gate(app: &App) -> planning_review::ReviewGate {
+    let projection = app.planning_review.as_ref();
+    planning_review::ReviewGate {
+        busy: app.is_busy(),
+        editing: app.planning_review_editing,
+        has_pending_proposal: projection.is_some_and(|p| !p.pending_proposals.is_empty()),
+        has_visible_head: projection
+            .is_some_and(|p| p.session.current_head.is_some() && p.current_draft.is_some()),
+        confirmed: projection.is_some_and(|p| p.activation.is_some()),
+    }
+}
+
+fn finish_planning_review_action(app: &mut App, result: Result<String>) {
+    match result {
+        Ok(message) => match refresh_planning_review(app) {
+            Ok(()) => {
+                app.reload();
+                app.toast = Some((true, message));
+            }
+            Err(error) => {
+                app.toast = Some((
+                    false,
+                    format!("{} {error}", app.lang.l().planning_review_failed),
+                ));
+            }
+        },
+        Err(error) => {
+            // Re-read after stale/duplicate/core errors so the screen does not
+            // keep offering an action against a projection known to be old.
+            let _ = refresh_planning_review(app);
+            app.toast = Some((
+                false,
+                format!("{} {error}", app.lang.l().planning_review_failed),
+            ));
+        }
+    }
+}
+
+fn start_planning_revision(app: &mut App) {
+    let request = app.input.trim().to_string();
+    if request.is_empty() {
+        return;
+    }
+    let expected_head = app
+        .planning_review
+        .as_ref()
+        .and_then(|projection| projection.session.current_head.clone());
+    let ws = app.ws.clone();
+    let action_id = planning_action_id("revision");
+    let lbl = app.lang.l();
+    let (planned_via, tasks_word, failed) = (lbl.planned_via, lbl.tasks_word, lbl.planning_failed);
+    let planner_label = lbl.planner.to_string();
+    let (tx, rx) = mpsc::channel();
+    let worker_request = request.clone();
+    thread::spawn(move || {
+        let res = planning_review::record_revision_turn(
+            &ws,
+            &worker_request,
+            expected_head.as_deref(),
+            &action_id,
+        )
+        .and_then(|(session, turn)| {
+            crate::planner::run_planning_recorded_turn(
+                &ws,
+                &worker_request,
+                None,
+                &[],
+                session,
+                turn,
+            )
+        });
+        let result = match res {
+            Ok(report) => JobResult {
+                ok: true,
+                summary: format!(
+                    "{planned_via} {}: {} ({} {tasks_word})",
+                    report.worker_id, report.intent_summary, report.task_count
+                ),
+            },
+            Err(error) => JobResult {
+                ok: false,
+                summary: format!("{failed} {error}"),
+            },
+        };
+        let _ = tx.send(if result.ok {
+            JobMsg::PlanningDone(result)
+        } else {
+            JobMsg::Done(result)
+        });
+    });
+    app.input_clear();
+    app.planning_review_editing = false;
+    app.job = Job::Running {
+        label: planner_label,
+        started: Instant::now(),
+        rx,
+    };
+}
+
+fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+    use planning_review::ReviewAction;
+
+    match planning_review::action_for_key(code, modifiers, review_gate(app)) {
+        ReviewAction::Noop => {}
+        ReviewAction::Back => {
+            app.input_clear();
+            app.planning_review_editing = false;
+            app.screen = Screen::Home;
+        }
+        ReviewAction::ScrollUp => apply_scroll(app, KeyCode::Up),
+        ReviewAction::ScrollDown => apply_scroll(app, KeyCode::Down),
+        ReviewAction::PageUp => apply_scroll(app, KeyCode::PageUp),
+        ReviewAction::PageDown => apply_scroll(app, KeyCode::PageDown),
+        ReviewAction::BeginEdit => {
+            app.input_clear();
+            app.planning_review_editing = true;
+            app.toast = None;
+        }
+        ReviewAction::CancelEdit => {
+            app.input_clear();
+            app.planning_review_editing = false;
+        }
+        ReviewAction::SubmitRevision => start_planning_revision(app),
+        ReviewAction::InsertNewline => app.input_insert("\n"),
+        ReviewAction::Insert(c) => app.input_insert(&c.to_string()),
+        ReviewAction::Backspace => app.input_backspace(),
+        ReviewAction::Delete => app.input_delete(),
+        ReviewAction::CaretLeft => app.caret_left(),
+        ReviewAction::CaretRight => app.caret_right(),
+        ReviewAction::CaretHome => app.caret_home(),
+        ReviewAction::CaretEnd => app.caret_end(),
+        ReviewAction::CaretUp => app.caret_up(),
+        ReviewAction::CaretDown => app.caret_down(),
+        ReviewAction::Refresh => {
+            if let Err(error) = refresh_planning_review(app) {
+                app.toast = Some((
+                    false,
+                    format!("{} {error}", app.lang.l().planning_review_failed),
+                ));
+            }
+        }
+        ReviewAction::Accept => {
+            let target = app.planning_review.as_ref().and_then(|projection| {
+                projection.pending_proposals.last().map(|proposal| {
+                    (
+                        proposal.proposal_id.clone(),
+                        projection.session.current_head.clone(),
+                    )
+                })
+            });
+            let Some((proposal_id, expected_head)) = target else {
+                return;
+            };
+            let result = crate::planning::accept_proposal(
+                &app.ws,
+                &proposal_id,
+                expected_head.as_deref(),
+                &planning_action_id("accept"),
+            )
+            .map(|revision| {
+                format!(
+                    "{}: {}",
+                    app.lang.l().planning_accepted,
+                    revision.draft_revision_id
+                )
+            });
+            finish_planning_review_action(app, result);
+        }
+        ReviewAction::Reject => {
+            let target = app.planning_review.as_ref().and_then(|projection| {
+                projection.pending_proposals.last().map(|proposal| {
+                    (
+                        proposal.proposal_id.clone(),
+                        projection.session.current_head.clone(),
+                    )
+                })
+            });
+            let Some((proposal_id, expected_head)) = target else {
+                return;
+            };
+            let result = crate::planning::reject_proposal(
+                &app.ws,
+                &proposal_id,
+                expected_head.as_deref(),
+                &planning_action_id("reject"),
+            )
+            .map(|()| format!("{}: {proposal_id}", app.lang.l().planning_rejected));
+            finish_planning_review_action(app, result);
+        }
+        ReviewAction::Confirm => {
+            let expected_head = app
+                .planning_review
+                .as_ref()
+                .and_then(|projection| projection.session.current_head.clone());
+            let Some(expected_head) = expected_head else {
+                return;
+            };
+            let result =
+                crate::planning::confirm(&app.ws, &expected_head, &planning_action_id("confirm"))
+                    .map(|activation| {
+                        format!(
+                            "{}: {}",
+                            app.lang.l().planning_confirmed,
+                            activation.confirmation_id
+                        )
+                    });
+            finish_planning_review_action(app, result);
+        }
+    }
+}
+
 fn handle_answer_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
     if app.is_busy() {
         if code == KeyCode::Esc {
@@ -2238,7 +2526,11 @@ fn start_planning(app: &mut App) {
                 summary: format!("{failed} {e}"),
             },
         };
-        let _ = tx.send(JobMsg::Done(res));
+        let _ = tx.send(if res.ok {
+            JobMsg::PlanningDone(res)
+        } else {
+            JobMsg::Done(res)
+        });
     });
     app.job = Job::Running {
         label: format!("{} {planner}", lbl.run_word),
@@ -2273,7 +2565,11 @@ fn start_continue(app: &mut App) {
                 summary: format!("{failed} {e}"),
             },
         };
-        let _ = tx.send(JobMsg::Done(res));
+        let _ = tx.send(if res.ok {
+            JobMsg::PlanningDone(res)
+        } else {
+            JobMsg::Done(res)
+        });
     });
     app.job = Job::Running {
         label: format!("{} {planner}", lbl.run_word),
@@ -2309,7 +2605,11 @@ fn start_replan(app: &mut App) {
                 summary: format!("{failed} {e}"),
             },
         };
-        let _ = tx.send(JobMsg::Done(res));
+        let _ = tx.send(if res.ok {
+            JobMsg::PlanningDone(res)
+        } else {
+            JobMsg::Done(res)
+        });
     });
     app.job = Job::Running {
         label: format!("{} {planner}", lbl.run_word),
@@ -3132,7 +3432,11 @@ fn start_interview(app: &mut App) {
                 summary: format!("{failed} {e}"),
             },
         };
-        let _ = tx.send(JobMsg::Done(res));
+        let _ = tx.send(if res.ok {
+            JobMsg::PlanningDone(res)
+        } else {
+            JobMsg::Done(res)
+        });
     });
     app.job = Job::Running {
         label: planner_label,
