@@ -200,18 +200,32 @@ fn json_text(value: &serde_json::Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
+/// A pending proposal is *stale* when the visible head it was authored against
+/// (`proposal.expected_head`) no longer matches the session's current visible
+/// head. Accepting such a proposal fails the core CAS check in
+/// `crate::planning::accept_proposal` (which rejects when the proposal's
+/// authored head differs from the head the accept targets), so the review
+/// screen marks it stale before the user presses accept. This is a read-only
+/// mirror of the core rule; it changes no CAS behavior.
+pub(super) fn proposal_is_stale(current_head: Option<&str>, proposal: &PlanningProposal) -> bool {
+    proposal.expected_head.as_deref() != current_head
+}
+
 /// Render one pending proposal. When several are pending, `ordinal` carries the
 /// 1-based position and total so the header reads `[k/n]`, and `is_target` adds
 /// the accept/reject target marker to the header. For a single pending proposal
 /// both are omitted so the original single-pending rendering is unchanged.
+/// `is_stale` appends the stale marker whenever accepting the proposal would
+/// fail the core CAS check, regardless of how many proposals are pending.
 fn push_proposal(
     out: &mut String,
     proposal: &PlanningProposal,
     ordinal: Option<(usize, usize)>,
     is_target: bool,
+    is_stale: bool,
     l: &L,
 ) {
-    let header_suffix = match ordinal {
+    let ordinal_suffix = match ordinal {
         Some((index, total)) => {
             let marker = if is_target {
                 format!("  \u{25c0} {}", l.planning_target_marker)
@@ -222,11 +236,17 @@ fn push_proposal(
         }
         None => String::new(),
     };
+    let stale_suffix = if is_stale {
+        format!("  \u{26a0} {}", l.planning_stale_marker)
+    } else {
+        String::new()
+    };
     out.push_str(&format!(
-        "## {} {}{}\n\n{}: {}\n{}: {}\n{}: {}\n\n",
+        "## {} {}{}{}\n\n{}: {}\n{}: {}\n{}: {}\n\n",
         l.planning_proposal,
         proposal.proposal_id,
-        header_suffix,
+        ordinal_suffix,
+        stale_suffix,
         l.planning_attempt,
         proposal.attempt_id,
         l.planning_expected_head,
@@ -292,12 +312,23 @@ pub(super) fn format_projection(projection: &PlanningProjection, target: usize, 
     }
     out.push_str(&format!("## {}\n\n", l.planning_pending_proposals));
     let pending = &projection.pending_proposals;
+    // Staleness is judged against the current visible head: a proposal whose
+    // authored head no longer matches it can never be accepted (the core CAS
+    // check rejects it), so the header flags it regardless of pending count.
+    let current_head = projection.session.current_head.as_deref();
     match pending.len() {
         0 => {
             out.push_str(l.planning_no_pending_proposal);
             out.push('\n');
         }
-        1 => push_proposal(&mut out, &pending[0], None, true, l),
+        1 => push_proposal(
+            &mut out,
+            &pending[0],
+            None,
+            true,
+            proposal_is_stale(current_head, &pending[0]),
+            l,
+        ),
         total => {
             // Clamp defensively: the caller tracks the target separately, so a
             // shrunk projection must never point past the end.
@@ -315,6 +346,7 @@ pub(super) fn format_projection(projection: &PlanningProjection, target: usize, 
                     proposal,
                     Some((index + 1, total)),
                     index == target,
+                    proposal_is_stale(current_head, proposal),
                     l,
                 );
             }
@@ -643,6 +675,130 @@ queue:
             mc > clamped.find(&id1).unwrap(),
             "clamped target marks the last\n{clamped}"
         );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn proposal_is_stale_mirrors_the_core_head_mismatch_rule() {
+        let (ws, projection) = proposal_projection();
+        let proposal = projection.pending_proposals[0].clone();
+        // Authored against no head; while the visible head is also none the
+        // accept would succeed, so it is not stale.
+        assert!(proposal.expected_head.is_none());
+        assert!(!super::proposal_is_stale(None, &proposal));
+        // Once the visible head advances past the authored head the accept can
+        // no longer land, so the predicate reports stale.
+        assert!(super::proposal_is_stale(Some("drv_new"), &proposal));
+
+        // A proposal authored against a specific head is fresh only against that
+        // exact head and stale against any other head, including none.
+        let mut authored = proposal.clone();
+        authored.expected_head = Some("drv_1".to_string());
+        assert!(!super::proposal_is_stale(Some("drv_1"), &authored));
+        assert!(super::proposal_is_stale(Some("drv_2"), &authored));
+        assert!(super::proposal_is_stale(None, &authored));
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn stale_pending_proposal_is_marked_and_matches_the_core_cas_rule() {
+        let (ws, first) = proposal_projection();
+        second_proposal(&ws, &first, "attempt-stale-a", "Second search plan");
+        let two = crate::planning::projection(&ws).unwrap();
+        assert_eq!(two.pending_proposals.len(), 2);
+        let l = crate::ui::i18n::Lang::En.l();
+        let stale = l.planning_stale_marker;
+
+        // Both proposals were authored against the same (empty) visible head, so
+        // neither accept is stale yet: no stale marker is rendered.
+        let fresh_text = format_projection(&two, 0, l);
+        assert_eq!(
+            fresh_text.matches(stale).count(),
+            0,
+            "no stale marker while every proposal matches the head\n{fresh_text}"
+        );
+
+        // Accept the older proposal so the visible head advances. The other
+        // proposal stays pending but was authored against the now-superseded
+        // head, so accepting it would hit the core stale_head CAS rejection.
+        let older_id = two.pending_proposals[0].proposal_id.clone();
+        let accepted =
+            crate::planning::accept_proposal(&ws, &older_id, None, "accept-advance-head").unwrap();
+
+        // Author a brand-new proposal against the advanced head; it is fresh.
+        let (_session, turn) = crate::planning::record_answer_exact(
+            &ws,
+            "add one more query task",
+            Some(&accepted.draft_revision_id),
+            "turn-after-accept",
+        )
+        .unwrap();
+        let mut fresh_content = accepted.content.clone();
+        fresh_content.intent.summary = "Fresh search plan".to_string();
+        let fresh = crate::planning::record_worker_proposal(
+            &ws,
+            &turn,
+            "planner",
+            "attempt-fresh",
+            "A proposal against the current head.",
+            "Keep it aligned with the visible head.",
+            fresh_content,
+        )
+        .unwrap();
+
+        let projection = crate::planning::projection(&ws).unwrap();
+        assert_eq!(projection.pending_proposals.len(), 2);
+        let current_head = projection.session.current_head.clone();
+        let stale_id = projection
+            .pending_proposals
+            .iter()
+            .find(|p| p.expected_head != current_head)
+            .expect("one pending proposal is stale")
+            .proposal_id
+            .clone();
+        let fresh_id = fresh.proposal_id.clone();
+        assert_ne!(stale_id, fresh_id);
+
+        // The stale marker appears exactly once and sits on the stale proposal's
+        // header (after its id, before the fresh proposal's id).
+        let text = format_projection(&projection, 0, l);
+        assert_eq!(
+            text.matches(stale).count(),
+            1,
+            "exactly one stale marker\n{text}"
+        );
+        let m = text.find(stale).expect("stale marker present");
+        let s = text.find(&stale_id).expect("stale id present");
+        let f = text.find(&fresh_id).expect("fresh id present");
+        assert!(
+            s < m && m < f,
+            "stale marker marks the stale proposal, not the fresh one\n{text}"
+        );
+
+        // Parity with the core CAS rule: the predicate flags exactly the
+        // proposal the core rejects. Accepting the stale proposal against the
+        // current visible head fails with stale_head and never touches the
+        // active snapshot, while the fresh proposal is not flagged stale.
+        assert!(super::proposal_is_stale(current_head.as_deref(), {
+            projection
+                .pending_proposals
+                .iter()
+                .find(|p| p.proposal_id == stale_id)
+                .unwrap()
+        }));
+        assert!(!super::proposal_is_stale(current_head.as_deref(), &fresh));
+        let before = ws.load_active_snapshot_texts().unwrap();
+        let err = crate::planning::accept_proposal(
+            &ws,
+            &stale_id,
+            current_head.as_deref(),
+            "accept-stale-parity",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("stale_head"), "{err}");
+        assert_eq!(ws.load_active_snapshot_texts().unwrap(), before);
 
         let _ = std::fs::remove_dir_all(ws.root);
     }
