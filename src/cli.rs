@@ -261,6 +261,12 @@ pub struct ResolveArgs {
     task: String,
     /// How you resolved it (recorded on the transition; e.g. "merged by hand").
     reason: Vec<String>,
+    /// Finalize a state-only Partial that produced no repository outputs
+    /// (e.g. it went Partial on failed checks alone). Records durable
+    /// "no outputs" proof instead of snapshots; refused when Git evidence
+    /// still detects outputs, which go through the ordinary resolve.
+    #[arg(long)]
+    no_outputs: bool,
 }
 
 #[derive(Args)]
@@ -1906,19 +1912,54 @@ fn cmd_resolve(cwd: &std::path::Path, args: ResolveArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     let id = args.task.clone();
     let reason = args.reason.join(" ");
-    let detail = if reason.trim().is_empty() {
-        "merge conflict resolved by hand; task integrated".to_string()
-    } else {
+    let detail = if !reason.trim().is_empty() {
         reason.trim().to_string()
+    } else if args.no_outputs {
+        "state-only partial resolved by hand; no repository outputs".to_string()
+    } else {
+        "merge conflict resolved by hand; task integrated".to_string()
     };
-    let outcome = crate::state::resolve_partial(&ws, &id, &detail)?;
+    let outcome = if args.no_outputs {
+        crate::state::resolve_partial_no_outputs(&ws, &id, &detail).map_err(|error| {
+            if format!("{error:#}").contains("outputs_detected") {
+                error.context(format!(
+                    "repository outputs were detected for {id}; integrate them and run \
+                     `yardlet resolve {id}` without --no-outputs"
+                ))
+            } else {
+                error
+            }
+        })?
+    } else {
+        crate::state::resolve_partial(&ws, &id, &detail).map_err(|error| {
+            let rendered = format!("{error:#}");
+            if rendered.contains("dependency_output_proof_missing")
+                || rendered.contains("path=<retained-worktree>")
+            {
+                error.context(format!(
+                    "no dependency output proof could be captured for {id}; if this Partial \
+                     genuinely produced no repository outputs (state-only), finalize it with \
+                     `yardlet resolve {id} --no-outputs`"
+                ))
+            } else {
+                error
+            }
+        })?
+    };
     println!(
         "Resolved {id}: Partial \u{2192} Done. Recorded the transition (you integrated it); no worker re-run."
     );
-    println!(
-        "  Snapshotted {} dependency output(s) with core-calculated path and digest proof.",
-        outcome.dependency_outputs
-    );
+    if args.no_outputs {
+        println!(
+            "  Recorded durable no-output proof: this task produced no repository outputs, \
+             and downstream tasks will read that as proven absence."
+        );
+    } else {
+        println!(
+            "  Snapshotted {} dependency output(s) with core-calculated path and digest proof.",
+            outcome.dependency_outputs
+        );
+    }
     if outcome.cleared_partial_reason {
         println!("  Cleared the merge-conflict marker.");
     }
