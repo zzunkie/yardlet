@@ -394,6 +394,9 @@ pub struct L {
     pub planning_multiple_pending: &'static str,
     pub planning_select_hint: &'static str,
     pub planning_target_marker: &'static str,
+    /// Header marker for a pending proposal whose authored head no longer
+    /// matches the visible head, so accepting it would fail the core CAS check.
+    pub planning_stale_marker: &'static str,
     pub planning_proposal: &'static str,
     pub planning_attempt: &'static str,
     pub planning_expected_head: &'static str,
@@ -612,6 +615,7 @@ pub const EN: L = L {
     planning_multiple_pending: "Multiple proposals pending",
     planning_select_hint: "Tab switches the target",
     planning_target_marker: "accept/reject target",
+    planning_stale_marker: "stale: newer head accepted",
     planning_proposal: "Proposal",
     planning_attempt: "Attempt",
     planning_expected_head: "Expected head",
@@ -829,6 +833,7 @@ pub const KO: L = L {
     planning_multiple_pending: "여러 제안이 검토 대기 중",
     planning_select_hint: "Tab으로 대상 전환",
     planning_target_marker: "accept/reject 대상",
+    planning_stale_marker: "만료: 이후 헤드가 수락됨",
     planning_proposal: "제안",
     planning_attempt: "시도",
     planning_expected_head: "기준 헤드",
