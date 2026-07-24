@@ -246,6 +246,20 @@ session. From the Home screen:
 Korean keyboard layouts work without switching back to English: the Hangul jamo
 are mapped to the same shortcuts.
 
+In the New Work and plan revision input boxes:
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Insert a newline. This does not depend on Shift or Alt detection. |
+| `Ctrl+S` | Submit the request in every supported terminal. Empty input is not submitted. |
+| `Ctrl+Enter` | Submit when the terminal supports keyboard enhancement and can distinguish the chord. |
+| `Home` / `End` | Move to the start / end of the current line. |
+| `↑` / `↓` / `←` / `→` | Move the caret between and within lines. |
+| `Backspace` / `Delete` | Delete before / at the caret. |
+| `Esc` | Cancel and discard the input draft. |
+
+Bracketed paste preserves pasted newlines and Korean/CJK text.
+
 ## Commands
 
 | Command | Purpose |

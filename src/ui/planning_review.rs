@@ -40,9 +40,19 @@ pub(super) enum ReviewAction {
     Refresh,
 }
 
+#[cfg(test)]
 pub(super) fn action_for_key(
     code: KeyCode,
     modifiers: KeyModifiers,
+    gate: ReviewGate,
+) -> ReviewAction {
+    action_for_key_with_enhancement(code, modifiers, false, gate)
+}
+
+pub(super) fn action_for_key_with_enhancement(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    keyboard_enhancement: bool,
     gate: ReviewGate,
 ) -> ReviewAction {
     if gate.busy {
@@ -52,24 +62,20 @@ pub(super) fn action_for_key(
         };
     }
     if gate.editing {
-        return match code {
-            KeyCode::Esc => ReviewAction::CancelEdit,
-            KeyCode::Enter if modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
-                ReviewAction::InsertNewline
-            }
-            KeyCode::Enter => ReviewAction::SubmitRevision,
-            KeyCode::Backspace => ReviewAction::Backspace,
-            KeyCode::Delete => ReviewAction::Delete,
-            KeyCode::Left => ReviewAction::CaretLeft,
-            KeyCode::Right => ReviewAction::CaretRight,
-            KeyCode::Home => ReviewAction::CaretHome,
-            KeyCode::End => ReviewAction::CaretEnd,
-            KeyCode::Up => ReviewAction::CaretUp,
-            KeyCode::Down => ReviewAction::CaretDown,
-            KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
-                ReviewAction::Insert(c)
-            }
-            _ => ReviewAction::Noop,
+        return match super::text_input::action_for_key(code, modifiers, keyboard_enhancement) {
+            super::text_input::TextInputAction::Noop => ReviewAction::Noop,
+            super::text_input::TextInputAction::Cancel => ReviewAction::CancelEdit,
+            super::text_input::TextInputAction::Submit => ReviewAction::SubmitRevision,
+            super::text_input::TextInputAction::InsertNewline => ReviewAction::InsertNewline,
+            super::text_input::TextInputAction::Insert(c) => ReviewAction::Insert(c),
+            super::text_input::TextInputAction::Backspace => ReviewAction::Backspace,
+            super::text_input::TextInputAction::Delete => ReviewAction::Delete,
+            super::text_input::TextInputAction::CaretLeft => ReviewAction::CaretLeft,
+            super::text_input::TextInputAction::CaretRight => ReviewAction::CaretRight,
+            super::text_input::TextInputAction::CaretHome => ReviewAction::CaretHome,
+            super::text_input::TextInputAction::CaretEnd => ReviewAction::CaretEnd,
+            super::text_input::TextInputAction::CaretUp => ReviewAction::CaretUp,
+            super::text_input::TextInputAction::CaretDown => ReviewAction::CaretDown,
         };
     }
     match code {
@@ -278,7 +284,10 @@ pub(super) fn record_revision_turn(
 mod tests {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
-    use super::{action_for_key, format_projection, ReviewAction, ReviewGate};
+    use super::{
+        action_for_key, action_for_key_with_enhancement, format_projection, ReviewAction,
+        ReviewGate,
+    };
 
     fn proposal_projection() -> (crate::state::Workspace, crate::planning::PlanningProjection) {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -437,7 +446,7 @@ queue:
     }
 
     #[test]
-    fn edit_mode_maps_only_editing_and_navigation_actions() {
+    fn edit_mode_uses_terminal_independent_multiline_keys() {
         let editing = ReviewGate {
             busy: false,
             editing: true,
@@ -447,11 +456,23 @@ queue:
         };
         assert_eq!(
             action_for_key(KeyCode::Enter, KeyModifiers::NONE, editing),
-            ReviewAction::SubmitRevision
+            ReviewAction::InsertNewline
         );
         assert_eq!(
             action_for_key(KeyCode::Enter, KeyModifiers::SHIFT, editing),
             ReviewAction::InsertNewline
+        );
+        assert_eq!(
+            action_for_key(KeyCode::Char('s'), KeyModifiers::CONTROL, editing),
+            ReviewAction::SubmitRevision
+        );
+        assert_eq!(
+            action_for_key_with_enhancement(KeyCode::Enter, KeyModifiers::CONTROL, false, editing,),
+            ReviewAction::InsertNewline
+        );
+        assert_eq!(
+            action_for_key_with_enhancement(KeyCode::Enter, KeyModifiers::CONTROL, true, editing,),
+            ReviewAction::SubmitRevision
         );
         assert_eq!(
             action_for_key(KeyCode::Esc, KeyModifiers::NONE, editing),
