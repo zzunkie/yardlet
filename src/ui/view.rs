@@ -172,10 +172,13 @@ fn render_monitor(frame: &mut Frame, app: &App) {
             Line::from(vec![
                 Span::styled(h.run_name.clone(), Style::default().fg(Color::DarkGray)),
                 Span::raw("   "),
-                Span::styled(format!("task {}", h.task_id), Style::default().bold()),
+                Span::styled(
+                    format!("{} {}", l.task_word, h.task_id),
+                    Style::default().bold(),
+                ),
                 Span::raw("   "),
                 Span::styled(
-                    format!("worker {}", h.worker),
+                    format!("{} {}", l.worker_word, h.worker),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::raw("   "),
@@ -218,7 +221,7 @@ fn render_settings(frame: &mut Frame, app: &App) {
             .map(|(i, f)| {
                 let selected = i == d.sel;
                 let val = if f.value.is_empty() {
-                    "(default)".to_string()
+                    format!("({})", l.default_word)
                 } else {
                     f.value.clone()
                 };
@@ -240,7 +243,13 @@ fn render_settings(frame: &mut Frame, app: &App) {
                     let shown: Vec<&str> = f
                         .options
                         .iter()
-                        .map(|o| if o.is_empty() { "default" } else { o.as_str() })
+                        .map(|o| {
+                            if o.is_empty() {
+                                l.default_word
+                            } else {
+                                o.as_str()
+                            }
+                        })
                         .collect();
                     format!("({})", shown.join(" | "))
                 };
@@ -460,8 +469,8 @@ fn render_home(frame: &mut Frame, app: &App) {
             render_workers(frame, chunks[2], snap, l, wsel);
         }
         None => {
-            let p = Paragraph::new("No workspace state loaded.")
-                .block(Block::bordered().title(" Yardlet "));
+            let p =
+                Paragraph::new(l.no_workspace_state).block(Block::bordered().title(" Yardlet "));
             frame.render_widget(p, chunks[0]);
         }
     }
@@ -1084,7 +1093,7 @@ fn render_answer(frame: &mut Frame, app: &mut App) {
         .answer_target
         .clone()
         .or_else(|| app.snapshot.as_ref().and_then(|s| s.pending.clone()))
-        .unwrap_or_else(|| ("(none)".into(), String::new()));
+        .unwrap_or_else(|| (l.planning_none.into(), String::new()));
     let q_body = if question.is_empty() {
         l.no_question.to_string()
     } else {
@@ -1189,7 +1198,7 @@ fn render_report_list(frame: &mut Frame, app: &App) {
     let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
     let items: Vec<ListItem> = if app.reports.is_empty() {
         vec![ListItem::new(Line::from(Span::styled(
-            "(no reports yet)",
+            l.reports_empty,
             Style::default().fg(Color::DarkGray),
         )))]
     } else {
@@ -1409,10 +1418,14 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    fn rendered_home(app: &App) -> String {
-        let backend = TestBackend::new(220, 22);
+    fn rendered_with(
+        width: u16,
+        height: u16,
+        draw: impl FnOnce(&mut ratatui::Frame<'_>),
+    ) -> String {
+        let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_home(frame, app)).unwrap();
+        terminal.draw(draw).unwrap();
         let buffer = terminal.backend().buffer();
         (0..buffer.area.height)
             .map(|y| {
@@ -1422,6 +1435,77 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn rendered_home(app: &App) -> String {
+        rendered_with(220, 22, |frame| render_home(frame, app))
+    }
+
+    #[test]
+    fn korean_monitor_settings_and_reports_render_localized_chrome() {
+        let root = std::env::temp_dir().join(format!("yard-i18n-surfaces-{}", std::process::id()));
+        let mut app = App::new(crate::state::Workspace::at(&root));
+        app.lang = i18n::Lang::Ko;
+        app.monitor.header = Some(crate::ui::MonitorHeader {
+            run_name: "run-keep".into(),
+            task_id: "YARD-KEEP".into(),
+            worker: "worker-keep".into(),
+            recorded_state: "running".into(),
+        });
+        let monitor = rendered_with(120, 12, |frame| render_monitor(frame, &app));
+        let monitor_compact = monitor.replace(' ', "");
+        assert!(monitor_compact.contains("태스크YARD-KEEP"), "{monitor}");
+        assert!(monitor_compact.contains("워커worker-keep"), "{monitor}");
+        assert!(!monitor.contains("task YARD-KEEP"), "{monitor}");
+        assert!(!monitor.contains("worker worker-keep"), "{monitor}");
+
+        app.settings = Some(crate::ui::SettingsDraft {
+            fields: vec![crate::ui::Field {
+                label: "모델".into(),
+                key: "model:worker-keep".into(),
+                value: String::new(),
+                options: vec![String::new(), "model-keep".into()],
+            }],
+            sel: 0,
+        });
+        let settings = rendered_with(120, 10, |frame| render_settings(frame, &app));
+        assert!(settings.replace(' ', "").contains("기본"), "{settings}");
+        assert!(settings.contains("model-keep"), "{settings}");
+        assert!(!settings.contains("default"), "{settings}");
+
+        app.reports.clear();
+        let reports = rendered_with(120, 10, |frame| render_report_list(frame, &app));
+        assert!(reports.replace(' ', "").contains("보고없음"), "{reports}");
+        assert!(!reports.contains("no reports yet"), "{reports}");
+
+        app.report_text = "WORKER REPORT KEEP · /tmp/KEEP · MODEL-KEEP".into();
+        let completion_ko = rendered_with(120, 10, |frame| render_completion(frame, &mut app));
+        assert!(
+            completion_ko.replace(' ', "").contains("최종보고"),
+            "{completion_ko}"
+        );
+        assert!(
+            completion_ko.contains("WORKER REPORT KEEP"),
+            "{completion_ko}"
+        );
+        assert!(completion_ko.contains("/tmp/KEEP"), "{completion_ko}");
+        assert!(completion_ko.contains("MODEL-KEEP"), "{completion_ko}");
+        assert!(!completion_ko.contains("Final report"), "{completion_ko}");
+
+        app.lang = i18n::Lang::En;
+        let completion_en = rendered_with(120, 10, |frame| render_completion(frame, &mut app));
+        assert!(completion_en.contains("Final report"), "{completion_en}");
+        assert!(!completion_en.contains("최종"), "{completion_en}");
+
+        app.lang = i18n::Lang::Ko;
+        app.snapshot = None;
+        let home = rendered_home(&app);
+        assert!(
+            home.replace(' ', "")
+                .contains("워크스페이스상태를불러오지못했습니다."),
+            "{home}"
+        );
+        assert!(!home.contains("No workspace state loaded."), "{home}");
     }
 
     #[test]

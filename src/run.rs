@@ -3318,25 +3318,23 @@ fn worker_changed_integratable_path(evidence: Option<&[String]>) -> bool {
 /// `yardlet ...` form. A stop message that hardcoded one surface's command would
 /// read wrong on the other, so the engine stays neutral and just says WHAT to do.
 pub(crate) mod gate_msg {
+    use crate::ui::i18n::{self, Lang, RunProgress};
+
     /// A task paused for the user's answer.
-    pub fn needs_user(id: &str) -> String {
-        format!("stopped: {id} needs you \u{2014} answer it, then run again")
+    pub fn needs_user(lang: Lang, id: &str) -> String {
+        i18n::run_progress(lang, RunProgress::NeedsUser(id))
     }
     /// A task is blocked and needs a human to resolve it.
-    pub fn blocked(id: &str) -> String {
-        format!("stopped: {id} blocked \u{2014} resolve it, then run again")
+    pub fn blocked(lang: Lang, id: &str) -> String {
+        i18n::run_progress(lang, RunProgress::Blocked(id))
     }
     /// The queue drained with some tasks set aside (deferred).
-    pub fn drained_with_deferred(ids: &[&str]) -> String {
-        format!(
-            "done: queue drained \u{2014} {} set aside: {}; revive any to continue",
-            ids.len(),
-            ids.join(", ")
-        )
+    pub fn drained_with_deferred(lang: Lang, ids: &[&str]) -> String {
+        i18n::run_progress(lang, RunProgress::DrainedWithDeferred(ids))
     }
     /// The queue fully drained, nothing left.
-    pub fn drained_complete() -> String {
-        "done: queue drained, all tasks complete".to_string()
+    pub fn drained_complete(lang: Lang) -> String {
+        i18n::run_progress(lang, RunProgress::DrainedComplete)
     }
 }
 
@@ -3397,11 +3395,12 @@ pub fn run_auto<F: FnMut(&str)>(
         let gate_on = ws.load_config().map(|c| c.ambiguity_gate).unwrap_or(true);
         if let Ok(Some(i)) = ws.load_intent() {
             if crate::planner::intent_gated(&i, gate_on) {
-                emit(format!(
-                    "stopped: the plan is still guessing (ambiguity high, interview turn \
-                     {}/{}) \u{2014} answer its questions (a) or run with --accept-ambiguity",
-                    i.interview_turns,
-                    crate::planner::INTERVIEW_CAP
+                emit(i18n::run_progress(
+                    event_lang,
+                    i18n::RunProgress::Ambiguity {
+                        turn: i.interview_turns,
+                        cap: crate::planner::INTERVIEW_CAP,
+                    },
                 ));
                 for q in i.open_questions.iter().take(5) {
                     emit(format!("  ? {q}"));
@@ -3419,7 +3418,7 @@ pub fn run_auto<F: FnMut(&str)>(
             .map(|p| p.load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(false)
         {
-            emit("paused: stopped after the current task (run auto again to resume)".to_string());
+            emit(i18n::run_progress(event_lang, i18n::RunProgress::Paused));
             break;
         }
         let queue = ws.load_queue()?;
@@ -3442,14 +3441,15 @@ pub fn run_auto<F: FnMut(&str)>(
                 let n = waits.entry(task_id.clone()).or_default();
                 *n += 1;
                 if *n == 1 {
-                    emit(format!(
-                        "waiting for {task_id}'s worker from a previous session\u{2026}"
+                    emit(i18n::run_progress(
+                        event_lang,
+                        i18n::RunProgress::WaitingForWorker(&task_id),
                     ));
                 }
                 if *n > 360 {
-                    emit(format!(
-                        "stopped: {task_id} has run for 30+ minutes \u{2014} kill its worker \
-                         or keep waiting, then run auto again"
+                    emit(i18n::run_progress(
+                        event_lang,
+                        i18n::RunProgress::WorkerLongRunning(&task_id),
                     ));
                     break;
                 }
@@ -3465,10 +3465,9 @@ pub fn run_auto<F: FnMut(&str)>(
         // auto-continued from its checkpoint (retry path below, attempts-capped).
         if let Some(t) = queue.tasks.iter().find(|t| t.state == TaskState::Partial) {
             if partial_is_conflict(ws, &t.id) {
-                emit(format!(
-                    "stopped: {} has a merge conflict \u{2014} resolve it (see handoff), then \
-                     run auto again",
-                    t.id
+                emit(i18n::run_progress(
+                    event_lang,
+                    i18n::RunProgress::MergeConflict(&t.id),
                 ));
                 break;
             }
@@ -3498,13 +3497,20 @@ pub fn run_auto<F: FnMut(&str)>(
                     }
                     Err(why) => {
                         if !parallel_warned {
-                            emit(format!("parallel off ({why}); running sequentially"));
+                            emit(i18n::run_progress(
+                                event_lang,
+                                i18n::RunProgress::ParallelOff(&why),
+                            ));
                             parallel_warned = true;
                         }
                     }
                 }
             } else if !parallel_warned && !assessment.reasons.is_empty() {
-                emit(format!("parallel sequential: {}", assessment.summary()));
+                let summary = assessment.summary();
+                emit(i18n::run_progress(
+                    event_lang,
+                    i18n::RunProgress::ParallelSequential(&summary),
+                ));
                 parallel_warned = true;
             }
         }
@@ -3581,25 +3587,27 @@ pub fn run_auto<F: FnMut(&str)>(
                             }
                         }
                         if !needs_you.is_empty() {
-                            emit(format!(
-                            "stopped: {} need you \u{2014} answer (a) or resolve, then run auto again",
-                            needs_you.join(", ")
-                        ));
+                            let ids = needs_you.join(", ");
+                            emit(i18n::run_progress(
+                                event_lang,
+                                i18n::RunProgress::NeedsUserMany(&ids),
+                            ));
                         } else if !stuck.is_empty() {
-                            emit(format!(
-                            "stopped: {} \u{2014} the blocking task will not complete; fix, defer, \
-                             or re-scope it",
-                            stuck.join("; ")
-                        ));
+                            let tasks = stuck.join("; ");
+                            emit(i18n::run_progress(
+                                event_lang,
+                                i18n::RunProgress::Stuck(&tasks),
+                            ));
                         } else if !waiting.is_empty() {
-                            emit(format!(
-                                "stopped: {} waiting on approval or dependencies",
-                                waiting.join(", ")
+                            let ids = waiting.join(", ");
+                            emit(i18n::run_progress(
+                                event_lang,
+                                i18n::RunProgress::WaitingGated(&ids),
                             ));
                         } else if !deferred_tasks.is_empty() {
-                            emit(gate_msg::drained_with_deferred(&deferred_tasks));
+                            emit(gate_msg::drained_with_deferred(event_lang, &deferred_tasks));
                         } else {
-                            emit(gate_msg::drained_complete());
+                            emit(gate_msg::drained_complete(event_lang));
                         }
                         break;
                     }
@@ -3625,8 +3633,9 @@ pub fn run_auto<F: FnMut(&str)>(
                 TransitionActor::System,
             )?;
             chain = None;
-            emit(format!(
-                "{task_id} requires approval; skipped retry and continued runnable work"
+            emit(i18n::run_progress(
+                event_lang,
+                i18n::RunProgress::ApprovalRetrySkipped(&task_id),
             ));
             continue;
         }
@@ -3644,7 +3653,10 @@ pub fn run_auto<F: FnMut(&str)>(
                         .is_some_and(|t| t.depends_on.contains(&c.prev_task_id))
             })
             .cloned();
-        emit(format!("running {task_id}\u{2026}"));
+        emit(i18n::run_progress(
+            event_lang,
+            i18n::RunProgress::Running(&task_id),
+        ));
         let report = run_next(
             ws,
             &RunOptions {
@@ -3679,11 +3691,11 @@ pub fn run_auto<F: FnMut(&str)>(
             // it did it is resolved-not-pending, so move on like Done/Queued.
             TaskState::Done | TaskState::Queued | TaskState::Deferred => continue,
             TaskState::Blocked => {
-                emit(gate_msg::blocked(&report.task_id));
+                emit(gate_msg::blocked(event_lang, &report.task_id));
                 break;
             }
             TaskState::NeedsUser => {
-                emit(gate_msg::needs_user(&report.task_id));
+                emit(gate_msg::needs_user(event_lang, &report.task_id));
                 if continues_auto_drain(state) {
                     continue;
                 }
@@ -3692,16 +3704,19 @@ pub fn run_auto<F: FnMut(&str)>(
             TaskState::Partial => {
                 // Loop back: the conflict check halts, a self-report continues
                 // from its checkpoint, and the feedback ledger bounds it all.
-                emit(format!(
-                    "{} is partial \u{2014} continuing from its checkpoint",
-                    report.task_id
+                emit(i18n::run_progress(
+                    event_lang,
+                    i18n::RunProgress::PartialContinue(&report.task_id),
                 ));
                 continue;
             }
             TaskState::Failed => {
                 // Likely transient (e.g. a dropped connection); loop to retry it,
                 // bounded by the persisted feedback cap.
-                emit(format!("{} failed; retrying", report.task_id));
+                emit(i18n::run_progress(
+                    event_lang,
+                    i18n::RunProgress::FailedRetry(&report.task_id),
+                ));
                 continue;
             }
             TaskState::Running => break,
@@ -8300,10 +8315,10 @@ mod tests {
         // AC-004: engine-streamed guidance names WHAT to do, never a `yardlet ...`
         // command literal (each surface renders its own affordance).
         let msgs = [
-            gate_msg::needs_user("YARD-007"),
-            gate_msg::blocked("YARD-008"),
-            gate_msg::drained_with_deferred(&["YARD-009", "YARD-010"]),
-            gate_msg::drained_complete(),
+            gate_msg::needs_user(Lang::En, "YARD-007"),
+            gate_msg::blocked(Lang::En, "YARD-008"),
+            gate_msg::drained_with_deferred(Lang::En, &["YARD-009", "YARD-010"]),
+            gate_msg::drained_complete(Lang::En),
         ];
         for m in &msgs {
             assert!(
@@ -8311,9 +8326,9 @@ mod tests {
                 "gate message leaked a command literal: {m:?}"
             );
         }
-        assert!(gate_msg::needs_user("YARD-007").contains("YARD-007"));
-        assert!(gate_msg::blocked("YARD-008").contains("YARD-008"));
-        let def = gate_msg::drained_with_deferred(&["YARD-009", "YARD-010"]);
+        assert!(gate_msg::needs_user(Lang::En, "YARD-007").contains("YARD-007"));
+        assert!(gate_msg::blocked(Lang::En, "YARD-008").contains("YARD-008"));
+        let def = gate_msg::drained_with_deferred(Lang::En, &["YARD-009", "YARD-010"]);
         assert!(def.contains("YARD-009") && def.contains("YARD-010"));
     }
 
@@ -8361,6 +8376,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn korean_auto_drain_localizes_completion_chrome_and_preserves_task_ids() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-korean-auto-drain-i18n-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let mut done = task("YARD-KEEP", TaskState::Done, 10, false);
+        done.title = "한국어 완료 작업".into();
+        let mut q = queue(vec![done]);
+        q.intent_id = "intent-korean-i18n".into();
+        ws.save_queue(&q).unwrap();
+
+        let lines = run_auto(&ws, false, None, Some(1), true, |_| {}).unwrap();
+        let last = lines.last().expect("drain completion line");
+        assert!(last.contains("완료:"), "{last}");
+        assert!(last.contains("큐"), "{last}");
+        assert!(!last.contains("done:"), "{last}");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
