@@ -2954,6 +2954,7 @@ printf "# handoff\n" > "$run_dir/handoff.md"
                     snapshot_file: "0000.bin".into(),
                     availability: crate::schemas::DependencyOutputAvailability::CoreSnapshot,
                 }],
+                no_outputs_reason: None,
             },
         )
         .unwrap();
@@ -3540,6 +3541,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
                     snapshot_file: "0000.bin".into(),
                     availability: DependencyOutputAvailability::CoreSnapshot,
                 }],
+                no_outputs_reason: None,
             },
         )
         .unwrap();

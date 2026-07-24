@@ -522,6 +522,63 @@ pub(crate) fn resolved_dependency_output_paths(
     Ok(paths)
 }
 
+/// Best-effort Git evidence that a Partial run's retained worktree still holds
+/// repository outputs: uncommitted or untracked working-tree changes, plus
+/// commits past the run's recorded baseline. Used by the opt-in no-output
+/// resolve to refuse finalizing a Partial whose outputs are actually
+/// detectable when receipt-grade serial evidence is unavailable. Returns
+/// `None` when no Git evidence exists at all — the caller decides whether the
+/// attested opt-in may proceed without it.
+pub(crate) fn detectable_repository_outputs(
+    run_dir: &std::path::Path,
+    worktree: &std::path::Path,
+) -> Option<Vec<String>> {
+    let mut paths = std::collections::BTreeSet::new();
+    let mut evidence = false;
+    if let Some(changed) = evaluator::changed_paths(worktree) {
+        evidence = true;
+        paths.extend(changed);
+    }
+    if let Ok(record) = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")) {
+        if !record.baseline_oid.is_empty() {
+            if let Some(committed) = committed_paths_since(worktree, &record.baseline_oid) {
+                evidence = true;
+                paths.extend(committed);
+            }
+        }
+    }
+    if !evidence {
+        return None;
+    }
+    Some(
+        paths
+            .into_iter()
+            .filter(|path| evaluator::is_integratable_path(path))
+            .collect(),
+    )
+}
+
+fn committed_paths_since(worktree: &std::path::Path, baseline: &str) -> Option<Vec<String>> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["diff", "--name-only", "-z", &format!("{baseline}..HEAD")])
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
 pub(crate) fn seeded_harness_evidence(
     seed_root: &std::path::Path,
     worktree: &std::path::Path,
@@ -10994,6 +11051,141 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
                 .unwrap()
                 .state,
             TaskState::Queued
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn no_output_resolved_state_only_partial_unblocks_downstream_without_overlays() {
+        // YARD-014 decision A, process leg: a real worker run that goes Partial
+        // with zero repository outputs has no proof for the default resolve
+        // (fail-closed), while `resolve --no-outputs` records durable absence
+        // and lets the dependent run reach its worker with zero overlays.
+        let source = std::env::temp_dir().join(format!(
+            "yard-no-output-resolve-source-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        let spawn_marker = source.join("downstream-spawn.txt");
+        let worker = write_worker_script(
+            &source,
+            "no-output-worker.sh",
+            r##"#!/bin/sh
+run_dir="$1"
+spawn_marker="$2"
+run_id=$(basename "$run_dir")
+packet=$(cat)
+task_id=$(printf "%s" "$packet" | sed -n 's/^# Yardlet task packet: //p' | head -n 1)
+status=done
+case "$task_id" in
+  YARD-UPSTREAM)
+    status=partial
+    ;;
+  YARD-DOWNSTREAM)
+    printf "spawned\n" > "$spawn_marker"
+    ;;
+esac
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "$status",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": [], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "state-only partial fixture",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&worker),
+            shell_literal(&spawn_marker)
+        );
+        let ws = init_test_workspace("no-output-resolve-process", &worker_yaml);
+        let mut downstream = task("YARD-DOWNSTREAM", TaskState::Queued, 20, false);
+        downstream.depends_on = vec!["YARD-UPSTREAM".into()];
+        let mut q = queue(vec![
+            task("YARD-UPSTREAM", TaskState::Queued, 10, false),
+            downstream,
+        ]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        let upstream = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-UPSTREAM".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+        assert_eq!(upstream.result_state, Some(TaskState::Partial));
+
+        let error = state::resolve_partial(&ws, "YARD-UPSTREAM", "manual check").unwrap_err();
+        assert!(
+            format!("{error:#}")
+                .contains("dependency_output_proof_missing:dependency=YARD-UPSTREAM"),
+            "{error:#}"
+        );
+        assert_eq!(
+            ws.load_queue()
+                .unwrap()
+                .tasks
+                .iter()
+                .find(|task| task.id == "YARD-UPSTREAM")
+                .unwrap()
+                .state,
+            TaskState::Partial
+        );
+
+        let outcome = state::resolve_partial_no_outputs(
+            &ws,
+            "YARD-UPSTREAM",
+            "state-only partial; nothing to integrate",
+        )
+        .unwrap();
+        assert_eq!(outcome.dependency_outputs, 0);
+        let manifest = ws
+            .load_resolved_dependency_outputs(&upstream.run_id)
+            .unwrap();
+        assert!(
+            manifest.no_outputs_proven(),
+            "the no-output resolve must leave a durable absence proof: {manifest:?}"
+        );
+
+        let downstream = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-DOWNSTREAM".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&spawn_marker).unwrap(),
+            "spawned\n",
+            "a proven no-output dependency must not block the downstream spawn"
+        );
+        assert_eq!(downstream.result_state, Some(TaskState::Done));
+        let receipt = ws
+            .load_serial_integration_receipt(&downstream.run_id)
+            .unwrap();
+        assert!(
+            receipt.dependency_input_overlays.is_empty(),
+            "a proven no-output dependency must contribute zero overlays"
         );
 
         let _ = std::fs::remove_dir_all(&source);

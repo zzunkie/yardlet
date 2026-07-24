@@ -2178,6 +2178,11 @@ impl Workspace {
         if manifest.schema_version != 1 || manifest.source_run_id != run_id {
             bail!("dependency_output_manifest_mismatch:run={run_id}");
         }
+        // A no-output reason next to snapshot outputs (or a blank reason) is a
+        // contradictory proof record, not a usable manifest.
+        if manifest.no_outputs_reason.is_some() && !manifest.no_outputs_proven() {
+            bail!("dependency_output_manifest_mismatch:run={run_id}");
+        }
         Ok(manifest)
     }
     pub fn save_integrated_cleanup_receipt(
@@ -5421,6 +5426,35 @@ fn persist_resolved_dependency_outputs(
         dependency_task_id: task_id.to_string(),
         source_run_id: run_id.to_string(),
         outputs,
+        no_outputs_reason: None,
+    };
+    save_yaml_atomic(
+        &ws.resolved_dependency_output_manifest_path(run_id)?,
+        &manifest,
+    )?;
+    Ok(manifest)
+}
+
+/// Durable "proven absent" record for a manual no-output resolve: an empty
+/// manifest whose attested reason marks the absence as proven, so downstream
+/// materialization can tell "no record" (missing manifest, fail-closed) apart
+/// from "absence proven" (typed pass). Same single write path as snapshots.
+fn persist_no_output_resolution(
+    ws: &Workspace,
+    task_id: &str,
+    run_id: &str,
+    reason: &str,
+) -> Result<ResolvedDependencyOutputs> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        bail!("no_output_resolve_rejected:dependency={task_id}:reason_required");
+    }
+    let manifest = ResolvedDependencyOutputs {
+        schema_version: 1,
+        dependency_task_id: task_id.to_string(),
+        source_run_id: run_id.to_string(),
+        outputs: Vec::new(),
+        no_outputs_reason: Some(reason.to_string()),
     };
     save_yaml_atomic(
         &ws.resolved_dependency_output_manifest_path(run_id)?,
@@ -5594,7 +5628,16 @@ pub fn materialize_resolved_dependency_outputs(
             continue;
         }
         let manifest = ws.load_resolved_dependency_outputs(&run_id)?;
-        if manifest.dependency_task_id != *dependency || manifest.outputs.is_empty() {
+        if manifest.dependency_task_id != *dependency {
+            bail!("dependency_output_manifest_mismatch:dependency={dependency}:run={run_id}");
+        }
+        if manifest.no_outputs_proven() {
+            // Typed "absence proven" record from a no-output resolve: nothing
+            // to materialize. Distinct from a missing manifest, which stays
+            // fail-closed above.
+            continue;
+        }
+        if manifest.outputs.is_empty() {
             bail!("dependency_output_manifest_mismatch:dependency={dependency}:run={run_id}");
         }
         for output in &manifest.outputs {
@@ -5641,6 +5684,7 @@ pub fn materialize_resolved_dependency_outputs(
 }
 
 /// Outcome of finalizing a merge-conflict `Partial` to `Done`.
+#[derive(Debug)]
 pub struct ResolveOutcome {
     /// The worktree that was removed, if one was still on disk.
     pub removed_worktree: Option<PathBuf>,
@@ -5659,6 +5703,31 @@ pub struct ResolveOutcome {
 /// worktree. No worker is re-invoked: the work is already integrated, so this is
 /// pure bookkeeping. Errors if the task is missing or not `Partial`.
 pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<ResolveOutcome> {
+    finalize_partial(ws, task_id, detail, false)
+}
+
+/// Opt-in variant of [`resolve_partial`] for a state-only Partial that
+/// genuinely produced no repository outputs (e.g. it went Partial on failed
+/// checks alone). Instead of snapshotting outputs it records a durable
+/// "no outputs" manifest, so downstream materialization can tell "absence
+/// proven" apart from "no record". Refused with a typed diagnostic whenever
+/// repository outputs are still detectable (existing manifest snapshots,
+/// receipt-grade serial evidence, or direct Git evidence in the retained
+/// worktree) — those must go through the ordinary resolve.
+pub fn resolve_partial_no_outputs(
+    ws: &Workspace,
+    task_id: &str,
+    detail: &str,
+) -> Result<ResolveOutcome> {
+    finalize_partial(ws, task_id, detail, true)
+}
+
+fn finalize_partial(
+    ws: &Workspace,
+    task_id: &str,
+    detail: &str,
+    no_outputs: bool,
+) -> Result<ResolveOutcome> {
     let lock = ws.acquire_planning_lock()?;
     let mut queue = ws.load_queue()?;
     crate::planning::validate_active_activation(ws)?;
@@ -5687,13 +5756,57 @@ pub fn resolve_partial(ws: &Workspace, task_id: &str, detail: &str) -> Result<Re
     let manifest_path = ws.resolved_dependency_output_manifest_path(&run_id)?;
     let manifest = if manifest_path.is_file() {
         let manifest = ws.load_resolved_dependency_outputs(&run_id)?;
-        if manifest.dependency_task_id != task_id || manifest.outputs.is_empty() {
+        if manifest.dependency_task_id != task_id {
             bail!("dependency_output_manifest_mismatch:dependency={task_id}:run={run_id}");
         }
-        for output in &manifest.outputs {
-            load_verified_dependency_snapshot(ws, &manifest, output)?;
+        if manifest.no_outputs_proven() {
+            if !no_outputs {
+                // A durable "absence proven" record is not output proof: the
+                // default resolve keeps its fail-closed diagnostic; only the
+                // explicit opt-in may finish (a crash-window retry lands here).
+                bail!("dependency_output_proof_missing:dependency={task_id}:no_repository_outputs");
+            }
+            manifest
+        } else if manifest.outputs.is_empty() {
+            bail!("dependency_output_manifest_mismatch:dependency={task_id}:run={run_id}");
+        } else if no_outputs {
+            bail!(
+                "no_output_resolve_rejected:dependency={task_id}:outputs_detected:count={}",
+                manifest.outputs.len()
+            );
+        } else {
+            for output in &manifest.outputs {
+                load_verified_dependency_snapshot(ws, &manifest, output)?;
+            }
+            manifest
         }
-        manifest
+    } else if no_outputs {
+        // Refuse the opt-in whenever repository outputs are still detectable:
+        // prefer receipt-grade serial evidence, then direct Git evidence from
+        // the retained worktree. Only *detected* outputs refuse — absent
+        // evidence stays resolvable, that is the escape hatch being added.
+        if let Some(worktree) = crate::run::run_worktree(&run_dir).filter(|path| path.exists()) {
+            match crate::run::resolved_dependency_output_paths(ws, &run_dir, &worktree, task_id) {
+                Ok(paths) => bail!(
+                    "no_output_resolve_rejected:dependency={task_id}:outputs_detected:count={}",
+                    paths.len()
+                ),
+                Err(error) if format!("{error:#}").contains(":no_repository_outputs") => {}
+                Err(_) => {
+                    if let Some(paths) =
+                        crate::run::detectable_repository_outputs(&run_dir, &worktree)
+                    {
+                        if !paths.is_empty() {
+                            bail!(
+                                "no_output_resolve_rejected:dependency={task_id}:outputs_detected:count={}",
+                                paths.len()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        persist_no_output_resolution(ws, task_id, &run_id, detail)?
     } else {
         let worktree = crate::run::run_worktree(&run_dir)
             .filter(|path| path.exists())
@@ -7557,6 +7670,238 @@ records:
         let _ = fs::remove_dir_all(&dir);
     }
 
+    fn state_only_partial_fixture(name: &str) -> (Workspace, String, PathBuf) {
+        let dir = temp_root(name);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let ws = Workspace::at(&dir);
+        let mut queue = WorkQueue::empty();
+        queue.intent_id = "intent-live".to_string();
+        queue.tasks = vec![task_in("YARD-STATE", "partial")];
+        ws.save_queue(&queue).unwrap();
+
+        let run_id = "run-20260724-000000-yard-state".to_string();
+        let run_dir = ws.runs_dir().join(&run_id);
+        fs::create_dir_all(&run_dir).unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-STATE\nintent_id: intent-live\nstate: partial\nstarted_at: 2026-07-24T00:00:00Z\n"
+            ),
+        )
+        .unwrap();
+        (ws, run_id, run_dir)
+    }
+
+    #[test]
+    fn no_output_resolve_finalizes_a_state_only_partial_with_durable_proof() {
+        // YARD-014 decision A: a Partial with no repository outputs has no
+        // proof to snapshot, so the default resolve stays fail-closed while the
+        // explicit opt-in records durable "absence proven" and publishes Done.
+        let (ws, run_id, _run_dir) = state_only_partial_fixture("no-output-resolve-done");
+
+        let error = resolve_partial(&ws, "YARD-STATE", "merged by hand").unwrap_err();
+        assert!(
+            format!("{error:#}").contains(
+                "dependency_output_bytes_missing:dependency=YARD-STATE:path=<retained-worktree>"
+            ),
+            "{error:#}"
+        );
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Partial);
+
+        let outcome =
+            resolve_partial_no_outputs(&ws, "YARD-STATE", "state-only partial; nothing to merge")
+                .unwrap();
+        assert_eq!(outcome.dependency_outputs, 0);
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+
+        let manifest = ws.load_resolved_dependency_outputs(&run_id).unwrap();
+        assert!(manifest.no_outputs_proven());
+        assert!(manifest.outputs.is_empty());
+        assert_eq!(
+            manifest.no_outputs_reason.as_deref(),
+            Some("state-only partial; nothing to merge")
+        );
+
+        let last = ws.latest_transition("YARD-STATE").unwrap();
+        assert_eq!(last.from, TaskState::Partial);
+        assert_eq!(last.to, TaskState::Done);
+        assert_eq!(last.cause, TransitionCause::Recover);
+        assert_eq!(last.actor, TransitionActor::User);
+
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn no_output_resolve_rejects_manifest_snapshot_outputs() {
+        // The opt-in must not swallow a Partial whose outputs are already
+        // proven: detected outputs refuse --no-outputs and the ordinary
+        // resolve keeps working.
+        let (ws, run_id, _run_dir) = state_only_partial_fixture("no-output-resolve-has-outputs");
+        let source = ws.root.join("resolved-source");
+        fs::create_dir_all(&source).unwrap();
+        write_str(&source.join("output.txt"), "real bytes\n").unwrap();
+        persist_resolved_dependency_outputs(
+            &ws,
+            "YARD-STATE",
+            &run_id,
+            &source,
+            &["output.txt".into()],
+        )
+        .unwrap();
+
+        let error = resolve_partial_no_outputs(&ws, "YARD-STATE", "no outputs").unwrap_err();
+        assert!(
+            format!("{error:#}")
+                .contains("no_output_resolve_rejected:dependency=YARD-STATE:outputs_detected"),
+            "{error:#}"
+        );
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Partial);
+
+        resolve_partial(&ws, "YARD-STATE", "merged by hand").unwrap();
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn no_output_resolve_rejects_detected_worktree_git_evidence() {
+        // A retained worktree whose Git evidence still shows repository outputs
+        // (here an untracked file) must refuse --no-outputs even when
+        // receipt-grade serial evidence is unavailable.
+        let (ws, _run_id, run_dir) = state_only_partial_fixture("no-output-resolve-worktree");
+        let worktree = ws.root.join("retained-worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&worktree)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?} failed");
+        };
+        git(&["init", "-q"]);
+        write_str(&worktree.join("leftover.rs"), "fn main() {}\n").unwrap();
+        let mut run_yaml = fs::read_to_string(run_dir.join("run.yaml")).unwrap();
+        run_yaml.push_str(&format!("worktree: {}\n", worktree.display()));
+        write_str(&run_dir.join("run.yaml"), &run_yaml).unwrap();
+
+        let error = resolve_partial_no_outputs(&ws, "YARD-STATE", "no outputs").unwrap_err();
+        assert!(
+            format!("{error:#}")
+                .contains("no_output_resolve_rejected:dependency=YARD-STATE:outputs_detected"),
+            "{error:#}"
+        );
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Partial);
+
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn default_resolve_stays_fail_closed_on_a_no_output_manifest() {
+        // Crash window: the no-output manifest is durable but the queue write
+        // never happened. The default resolve still refuses with the existing
+        // typed diagnostic; only the explicit opt-in finishes the retry.
+        let (ws, run_id, _run_dir) = state_only_partial_fixture("no-output-resolve-retry");
+        save_yaml_atomic(
+            &ws.resolved_dependency_output_manifest_path(&run_id)
+                .unwrap(),
+            &ResolvedDependencyOutputs {
+                schema_version: 1,
+                dependency_task_id: "YARD-STATE".into(),
+                source_run_id: run_id.clone(),
+                outputs: vec![],
+                no_outputs_reason: Some("validation-only partial".into()),
+            },
+        )
+        .unwrap();
+
+        let error = resolve_partial(&ws, "YARD-STATE", "merged by hand").unwrap_err();
+        assert!(
+            format!("{error:#}").contains(
+                "dependency_output_proof_missing:dependency=YARD-STATE:no_repository_outputs"
+            ),
+            "{error:#}"
+        );
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Partial);
+
+        let outcome = resolve_partial_no_outputs(&ws, "YARD-STATE", "retry").unwrap();
+        assert_eq!(outcome.dependency_outputs, 0);
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+        // The durable proof written before the crash is kept as-is.
+        assert_eq!(
+            ws.load_resolved_dependency_outputs(&run_id)
+                .unwrap()
+                .no_outputs_reason
+                .as_deref(),
+            Some("validation-only partial")
+        );
+
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn downstream_passes_proven_no_output_dependency_with_zero_overlays() {
+        // Requirement 4: a durable no-output proof passes downstream
+        // materialization with zero overlays — a typed judgment distinct from
+        // a missing manifest, which stays fail-closed.
+        let (ws, queue, task, destination) = dependency_materialization_fixture(
+            "dependency-no-output-proof-pass",
+            "unused.txt",
+            None,
+            "",
+            false,
+        );
+        save_yaml_atomic(
+            &ws.resolved_dependency_output_manifest_path("run-20990101-000000-upstream")
+                .unwrap(),
+            &ResolvedDependencyOutputs {
+                schema_version: 1,
+                dependency_task_id: "YARD-UPSTREAM".into(),
+                source_run_id: "run-20990101-000000-upstream".into(),
+                outputs: vec![],
+                no_outputs_reason: Some("state-only partial resolved with --no-outputs".into()),
+            },
+        )
+        .unwrap();
+
+        let materialized =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap();
+        assert!(
+            materialized.is_empty(),
+            "a proven no-output dependency must contribute zero overlays"
+        );
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn downstream_rejects_contradictory_no_output_manifest() {
+        // outputs + no_outputs_reason together is a contradictory proof record,
+        // not a usable manifest: fail closed as a manifest mismatch.
+        let bytes = b"snapshot\n";
+        let (ws, queue, task, destination) = dependency_materialization_fixture(
+            "dependency-no-output-contradiction",
+            "output.txt",
+            Some(bytes),
+            &content_digest(bytes),
+            true,
+        );
+        let manifest_path = ws
+            .resolved_dependency_output_manifest_path("run-20990101-000000-upstream")
+            .unwrap();
+        let mut manifest: ResolvedDependencyOutputs = load_yaml(&manifest_path).unwrap();
+        manifest.no_outputs_reason = Some("claimed absent".into());
+        save_yaml_atomic(&manifest_path, &manifest).unwrap();
+
+        let error =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("dependency_output_manifest_mismatch"),
+            "{error:#}"
+        );
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
     fn dependency_materialization_fixture(
         name: &str,
         output_path: &str,
@@ -7618,6 +7963,7 @@ records:
                         snapshot_file: "0000.bin".into(),
                         availability: DependencyOutputAvailability::CoreSnapshot,
                     }],
+                    no_outputs_reason: None,
                 },
             )
             .unwrap();

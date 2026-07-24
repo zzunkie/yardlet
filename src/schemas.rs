@@ -3522,6 +3522,26 @@ pub struct ResolvedDependencyOutputs {
     pub dependency_task_id: String,
     pub source_run_id: String,
     pub outputs: Vec<ResolvedDependencyOutput>,
+    /// Present only for a manual no-output resolve: `outputs` must then be
+    /// empty, and the manifest itself is the durable proof that the dependency
+    /// produced no repository outputs. Downstream materialization reads this as
+    /// "absence proven" — a typed judgment distinct from a missing manifest,
+    /// which stays fail-closed as "no record at all".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_outputs_reason: Option<String>,
+}
+
+impl ResolvedDependencyOutputs {
+    /// True when this manifest durably proves "no repository outputs" (empty
+    /// outputs plus a non-blank attested reason), as opposed to an ordinary
+    /// snapshot manifest or a contradictory record.
+    pub fn no_outputs_proven(&self) -> bool {
+        self.outputs.is_empty()
+            && self
+                .no_outputs_reason
+                .as_deref()
+                .is_some_and(|reason| !reason.trim().is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
