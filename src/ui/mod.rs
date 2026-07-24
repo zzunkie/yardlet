@@ -155,7 +155,7 @@ enum StartupStage {
 enum StartupMsg {
     Progress(StartupStage),
     Ready {
-        snapshot: Snapshot,
+        snapshot: Box<Snapshot>,
         recovered: Vec<String>,
     },
     Failed(String),
@@ -391,7 +391,7 @@ where
         match load(&ws) {
             Ok(snapshot) => {
                 let _ = tx.send(StartupMsg::Ready {
-                    snapshot,
+                    snapshot: Box::new(snapshot),
                     recovered,
                 });
             }
@@ -542,7 +542,7 @@ impl App {
                 recovered,
             } => {
                 self.lang = i18n::detect(&snapshot.config.language, snapshot.intent_summary());
-                self.snapshot = Some(snapshot);
+                self.snapshot = Some(*snapshot);
                 self.bootstrap = BootstrapState::Ready;
                 self.startup_rx = None;
                 if self.startup_just_created {
