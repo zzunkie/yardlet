@@ -220,6 +220,10 @@ pub struct App {
     pub planning_review: Option<crate::planning::PlanningProjection>,
     pub planning_review_text: String,
     pub planning_review_editing: bool,
+    /// Which pending proposal accept/reject acts on, as an index into the
+    /// projection's `pending_proposals`. Only user-visible when several are
+    /// pending; Tab/Shift+Tab cycle it. Clamped whenever the projection reloads.
+    pub planning_review_target: usize,
     pub job: Job,
     pub toast: Option<(bool, String)>,
     pub progress: Option<String>,
@@ -486,6 +490,7 @@ impl App {
             planning_review: None,
             planning_review_text: String::new(),
             planning_review_editing: false,
+            planning_review_target: 0,
             job: Job::Idle,
             toast: None,
             progress: None,
@@ -2483,12 +2488,35 @@ fn toggle_language(app: &mut App) {
 
 fn refresh_planning_review(app: &mut App) -> Result<()> {
     let projection = crate::planning::projection(&app.ws)?;
-    app.planning_review_text = planning_review::format_projection(&projection, app.lang.l());
+    // Keep the accept/reject target inside the pending set. A reload can shrink
+    // it (a proposal was accepted/rejected/superseded), so clamp before render.
+    app.planning_review_target = match projection.pending_proposals.len() {
+        0 => 0,
+        len => app.planning_review_target.min(len - 1),
+    };
+    app.planning_review_text =
+        planning_review::format_projection(&projection, app.planning_review_target, app.lang.l());
     app.planning_review = Some(projection);
     Ok(())
 }
 
+/// Re-render only the review text from the cached projection (no disk reload),
+/// used after the target moves so the on-screen marker follows without racing a
+/// concurrent external change into the middle of a selection.
+fn rerender_planning_review_text(app: &mut App) {
+    let text = app.planning_review.as_ref().map(|projection| {
+        planning_review::format_projection(projection, app.planning_review_target, app.lang.l())
+    });
+    if let Some(text) = text {
+        app.planning_review_text = text;
+    }
+}
+
 fn open_planning_review(app: &mut App) -> bool {
+    // Default the accept/reject target to the newest pending proposal (the prior
+    // "act on the latest" behavior); refresh clamps usize::MAX down to the last
+    // index. This keeps the single-pending flow and CAS behavior unchanged.
+    app.planning_review_target = usize::MAX;
     match refresh_planning_review(app) {
         Ok(()) => {
             app.input_clear();
@@ -2544,6 +2572,7 @@ fn review_gate(app: &App) -> planning_review::ReviewGate {
         has_visible_head: projection
             .is_some_and(|p| p.session.current_head.is_some() && p.current_draft.is_some()),
         confirmed: projection.is_some_and(|p| p.activation.is_some()),
+        pending_count: projection.map_or(0, |p| p.pending_proposals.len()),
     }
 }
 
@@ -2637,12 +2666,13 @@ fn start_planning_revision(app: &mut App) {
 fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     use planning_review::ReviewAction;
 
-    match planning_review::action_for_key_with_enhancement(
+    let action = planning_review::action_for_key_with_enhancement(
         code,
         modifiers,
         app.keyboard_enhancement,
         review_gate(app),
-    ) {
+    );
+    match action {
         ReviewAction::Noop => {}
         ReviewAction::Back => {
             app.input_clear();
@@ -2681,14 +2711,33 @@ fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifi
                 ));
             }
         }
+        ReviewAction::SelectNext | ReviewAction::SelectPrev => {
+            if let Some(len) = app
+                .planning_review
+                .as_ref()
+                .map(|projection| projection.pending_proposals.len())
+                .filter(|len| *len > 1)
+            {
+                let step = if action == ReviewAction::SelectNext {
+                    1
+                } else {
+                    len - 1
+                };
+                app.planning_review_target = (app.planning_review_target + step) % len;
+                rerender_planning_review_text(app);
+            }
+        }
         ReviewAction::Accept => {
             let target = app.planning_review.as_ref().and_then(|projection| {
-                projection.pending_proposals.last().map(|proposal| {
-                    (
-                        proposal.proposal_id.clone(),
-                        projection.session.current_head.clone(),
-                    )
-                })
+                projection
+                    .pending_proposals
+                    .get(app.planning_review_target)
+                    .map(|proposal| {
+                        (
+                            proposal.proposal_id.clone(),
+                            projection.session.current_head.clone(),
+                        )
+                    })
             });
             let Some((proposal_id, expected_head)) = target else {
                 return;
@@ -2710,12 +2759,15 @@ fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifi
         }
         ReviewAction::Reject => {
             let target = app.planning_review.as_ref().and_then(|projection| {
-                projection.pending_proposals.last().map(|proposal| {
-                    (
-                        proposal.proposal_id.clone(),
-                        projection.session.current_head.clone(),
-                    )
-                })
+                projection
+                    .pending_proposals
+                    .get(app.planning_review_target)
+                    .map(|proposal| {
+                        (
+                            proposal.proposal_id.clone(),
+                            projection.session.current_head.clone(),
+                        )
+                    })
             });
             let Some((proposal_id, expected_head)) = target else {
                 return;
