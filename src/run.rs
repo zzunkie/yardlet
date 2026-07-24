@@ -522,6 +522,98 @@ pub(crate) fn resolved_dependency_output_paths(
     Ok(paths)
 }
 
+/// Fallback proof source for a manually resolved Partial whose retained
+/// worktree is already cleaned up (#47): the integration merge landed in the
+/// owning root, only the push was blocked, and post-integration cleanup
+/// removed the worktree. Derives the task's output paths from the committed
+/// integration evidence instead. Fail-closed unless the run record carries
+/// serial provenance, a matching receipt, and an integration commit that is an
+/// ancestor of the owning root HEAD. Without committed integration evidence
+/// the pre-#47 diagnostic is preserved so state-only Partials keep their
+/// `--no-outputs` hint.
+pub(crate) fn integrated_dependency_output_paths(
+    ws: &Workspace,
+    run_dir: &std::path::Path,
+    task_id: &str,
+) -> Result<(String, Vec<String>)> {
+    let record: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).with_context(|| {
+        format!("dependency_output_proof_missing:dependency={task_id}:run_record")
+    })?;
+    let directory_run_id = run_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if record.task_id != task_id
+        || record.run_id.trim().is_empty()
+        || record.run_id != directory_run_id
+    {
+        bail!("dependency_output_proof_missing:dependency={task_id}:unsupported_or_mismatched_run");
+    }
+    if record.integration_provenance != IntegrationProvenance::SerialCoreStaged
+        || record.integration_oid.trim().is_empty()
+        || record.baseline_oid.trim().is_empty()
+    {
+        bail!("dependency_output_bytes_missing:dependency={task_id}:path=<retained-worktree>");
+    }
+    let receipt = ws
+        .load_serial_integration_receipt(&record.run_id)
+        .with_context(|| {
+            format!(
+                "dependency_output_proof_missing:dependency={task_id}:serial_integration_receipt"
+            )
+        })?;
+    if receipt.task_id != task_id
+        || receipt.run_id != record.run_id
+        || receipt.baseline_oid != record.baseline_oid
+    {
+        bail!(
+            "dependency_output_proof_mismatch:dependency={task_id}:run={}",
+            record.run_id
+        );
+    }
+    let ancestor = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&ws.root)
+        .args([
+            "merge-base",
+            "--is-ancestor",
+            &record.integration_oid,
+            "HEAD",
+        ])
+        .status()
+        .with_context(|| {
+            format!("dependency_output_proof_missing:dependency={task_id}:integration_not_in_head")
+        })?;
+    if !ancestor.success() {
+        bail!("dependency_output_proof_missing:dependency={task_id}:integration_not_in_head");
+    }
+    let range = format!("{}..{}", record.baseline_oid, record.integration_oid);
+    let diff = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&ws.root)
+        .args(["diff", "--name-only", &range])
+        .output()
+        .with_context(|| {
+            format!("dependency_output_proof_missing:dependency={task_id}:integration_diff")
+        })?;
+    if !diff.status.success() {
+        bail!("dependency_output_proof_missing:dependency={task_id}:integration_diff");
+    }
+    let mut paths = String::from_utf8_lossy(&diff.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|path| evaluator::is_integratable_path(path))
+        .map(String::from)
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        bail!("dependency_output_proof_missing:dependency={task_id}:no_repository_outputs");
+    }
+    Ok((record.integration_oid.clone(), paths))
+}
+
 /// Best-effort Git evidence that a Partial run's retained worktree still holds
 /// repository outputs: uncommitted or untracked working-tree changes, plus
 /// commits past the run's recorded baseline. Used by the opt-in no-output

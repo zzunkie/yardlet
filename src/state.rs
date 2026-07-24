@@ -5352,6 +5352,55 @@ fn normalize_dependency_output_path(task_id: &str, raw: &str) -> Result<(String,
     Ok((normalized_text, normalized))
 }
 
+/// Where a resolve-time output snapshot reads its bytes from: the retained
+/// worktree when it still exists, or the run's integration commit in the
+/// owning root after cleanup removed the worktree (#47).
+enum DependencyOutputBytes<'a> {
+    Worktree(&'a Path),
+    IntegrationCommit { root: &'a Path, commit: &'a str },
+}
+
+/// Read one output's bytes from the integration commit tree. Only plain blobs
+/// qualify: a symlink, gitlink, or subtree entry is never snapshot material,
+/// mirroring the symlink/regular-file checks of the worktree reader.
+fn read_dependency_output_bytes_from_commit(
+    root: &Path,
+    commit: &str,
+    relative: &Path,
+    task_id: &str,
+) -> Result<Vec<u8>> {
+    let display = relative.to_string_lossy();
+    let spec = display.replace('\\', "/");
+    let entry = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-tree", commit, "--", &spec])
+        .output()
+        .with_context(|| {
+            format!("dependency_output_bytes_missing:dependency={task_id}:path={display}")
+        })?;
+    if !entry.status.success() {
+        bail!("dependency_output_bytes_missing:dependency={task_id}:path={display}");
+    }
+    let listing = String::from_utf8_lossy(&entry.stdout);
+    let mode = listing.split_whitespace().next().unwrap_or_default();
+    if !matches!(mode, "100644" | "100755") {
+        bail!("dependency_output_path_invalid:dependency={task_id}:path={display}");
+    }
+    let blob = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["show", &format!("{commit}:{spec}")])
+        .output()
+        .with_context(|| {
+            format!("dependency_output_bytes_missing:dependency={task_id}:path={display}")
+        })?;
+    if !blob.status.success() {
+        bail!("dependency_output_bytes_missing:dependency={task_id}:path={display}");
+    }
+    Ok(blob.stdout)
+}
+
 fn read_dependency_output_bytes(root: &Path, relative: &Path, task_id: &str) -> Result<Vec<u8>> {
     let display = relative.to_string_lossy();
     let canonical_root = fs::canonicalize(root).with_context(|| {
@@ -5396,7 +5445,7 @@ fn persist_resolved_dependency_outputs(
     ws: &Workspace,
     task_id: &str,
     run_id: &str,
-    worktree: &Path,
+    source: DependencyOutputBytes<'_>,
     paths: &[String],
 ) -> Result<ResolvedDependencyOutputs> {
     let mut normalized = paths
@@ -5414,7 +5463,14 @@ fn persist_resolved_dependency_outputs(
         .with_context(|| format!("creating {}", snapshots_dir.display()))?;
     let mut outputs = Vec::with_capacity(normalized.len());
     for (index, (path, relative)) in normalized.into_iter().enumerate() {
-        let bytes = read_dependency_output_bytes(worktree, &relative, task_id)?;
+        let bytes = match &source {
+            DependencyOutputBytes::Worktree(worktree) => {
+                read_dependency_output_bytes(worktree, &relative, task_id)?
+            }
+            DependencyOutputBytes::IntegrationCommit { root, commit } => {
+                read_dependency_output_bytes_from_commit(root, commit, &relative, task_id)?
+            }
+        };
         let expected_digest = content_digest(&bytes);
         let snapshot_file = format!("{index:04}.bin");
         let snapshot_path = snapshots_dir.join(&snapshot_file);
@@ -5865,15 +5921,36 @@ fn finalize_partial(
         }
         persist_no_output_resolution(ws, task_id, &run_id, detail)?
     } else {
-        let worktree = crate::run::run_worktree(&run_dir)
-            .filter(|path| path.exists())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "dependency_output_bytes_missing:dependency={task_id}:path=<retained-worktree>"
-                )
-            })?;
-        let paths = crate::run::resolved_dependency_output_paths(ws, &run_dir, &worktree, task_id)?;
-        persist_resolved_dependency_outputs(ws, task_id, &run_id, &worktree, &paths)?
+        match crate::run::run_worktree(&run_dir).filter(|path| path.exists()) {
+            Some(worktree) => {
+                let paths =
+                    crate::run::resolved_dependency_output_paths(ws, &run_dir, &worktree, task_id)?;
+                persist_resolved_dependency_outputs(
+                    ws,
+                    task_id,
+                    &run_id,
+                    DependencyOutputBytes::Worktree(&worktree),
+                    &paths,
+                )?
+            }
+            None => {
+                // #47: the integration merge landed and cleanup already
+                // removed the retained worktree — capture proof from the
+                // committed integration evidence instead of dead-ending.
+                let (commit, paths) =
+                    crate::run::integrated_dependency_output_paths(ws, &run_dir, task_id)?;
+                persist_resolved_dependency_outputs(
+                    ws,
+                    task_id,
+                    &run_id,
+                    DependencyOutputBytes::IntegrationCommit {
+                        root: &ws.root,
+                        commit: &commit,
+                    },
+                    &paths,
+                )?
+            }
+        }
     };
 
     queue.tasks[idx].state = TaskState::Done;
@@ -7593,7 +7670,7 @@ records:
             &ws,
             "YARD-001",
             run_id,
-            &source,
+            DependencyOutputBytes::Worktree(&source),
             &["output.txt".into()],
         )
         .unwrap();
@@ -7789,6 +7866,158 @@ records:
     }
 
     #[test]
+    fn resolve_captures_proof_from_integration_commit_when_worktree_is_cleaned() {
+        // #47: integration merged into the owning root, only the push was
+        // blocked, and post-integration cleanup already removed the retained
+        // worktree. Resolve must fall back to the committed integration
+        // evidence instead of dead-ending on the missing worktree.
+        let dir = temp_root("resolve-integrated-commit-proof");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?} failed");
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "test"]);
+        write_str(&dir.join("src.txt"), "baseline\n").unwrap();
+        git(&["add", "src.txt"]);
+        git(&["commit", "-qm", "baseline"]);
+        let baseline = git(&["rev-parse", "HEAD"]);
+        fs::create_dir_all(dir.join("docs")).unwrap();
+        write_str(&dir.join("docs/note.md"), "footer contract\n").unwrap();
+        git(&["add", "docs/note.md"]);
+        git(&["commit", "-qm", "integration"]);
+        let integration = git(&["rev-parse", "HEAD"]);
+
+        let ws = Workspace::at(&dir);
+        let mut queue = WorkQueue::empty();
+        queue.intent_id = "intent-live".to_string();
+        queue.tasks = vec![task_in("YARD-STATE", "partial")];
+        ws.save_queue(&queue).unwrap();
+
+        let run_id = "run-20260724-000000-yard-state".to_string();
+        let run_dir = ws.runs_dir().join(&run_id);
+        fs::create_dir_all(&run_dir).unwrap();
+        let gone_worktree = dir.join(STATE_DIR).join("worktrees").join(&run_id);
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-STATE\nintent_id: intent-live\nstate: partial\nstarted_at: 2026-07-24T00:00:00Z\nbaseline_oid: {baseline}\nintegration_oid: {integration}\nintegration_provenance: serial_core_staged\nworktree: {}\nworktree_branch: yard/yard-state/{run_id}\n",
+                gone_worktree.display()
+            ),
+        )
+        .unwrap();
+        ws.save_serial_integration_receipt(&SerialIntegrationReceipt {
+            schema_version: 1,
+            run_id: run_id.clone(),
+            task_id: "YARD-STATE".to_string(),
+            worktree: gone_worktree.display().to_string(),
+            branch: format!("yard/yard-state/{run_id}"),
+            baseline_oid: baseline.clone(),
+            core_input_overlays: Vec::new(),
+            dependency_input_overlays: Vec::new(),
+        })
+        .unwrap();
+
+        let outcome = resolve_partial(&ws, "YARD-STATE", "merged; worktree cleaned").unwrap();
+        assert_eq!(outcome.dependency_outputs, 1);
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+
+        let manifest = ws.load_resolved_dependency_outputs(&run_id).unwrap();
+        assert_eq!(manifest.outputs.len(), 1);
+        assert_eq!(manifest.outputs[0].path, "docs/note.md");
+        assert_eq!(
+            manifest.outputs[0].content_digest,
+            content_digest(b"footer contract\n")
+        );
+        let snapshot = ws
+            .resolved_dependency_output_snapshots_dir(&run_id)
+            .unwrap()
+            .join(&manifest.outputs[0].snapshot_file);
+        assert_eq!(fs::read(snapshot).unwrap(), b"footer contract\n");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_from_integration_commit_rejects_a_commit_outside_head() {
+        // The fallback must not trust a recorded integration commit that never
+        // landed in the owning root history (e.g. the merge was undone).
+        let dir = temp_root("resolve-integrated-commit-not-ancestor");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?} failed");
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "test"]);
+        write_str(&dir.join("src.txt"), "baseline\n").unwrap();
+        git(&["add", "src.txt"]);
+        git(&["commit", "-qm", "baseline"]);
+        let baseline = git(&["rev-parse", "HEAD"]);
+        write_str(&dir.join("src.txt"), "abandoned\n").unwrap();
+        git(&["add", "src.txt"]);
+        git(&["commit", "-qm", "abandoned integration"]);
+        let integration = git(&["rev-parse", "HEAD"]);
+        git(&["reset", "-q", "--hard", &baseline]);
+
+        let ws = Workspace::at(&dir);
+        let mut queue = WorkQueue::empty();
+        queue.intent_id = "intent-live".to_string();
+        queue.tasks = vec![task_in("YARD-STATE", "partial")];
+        ws.save_queue(&queue).unwrap();
+
+        let run_id = "run-20260724-000001-yard-state".to_string();
+        let run_dir = ws.runs_dir().join(&run_id);
+        fs::create_dir_all(&run_dir).unwrap();
+        let gone_worktree = dir.join(STATE_DIR).join("worktrees").join(&run_id);
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-STATE\nintent_id: intent-live\nstate: partial\nstarted_at: 2026-07-24T00:00:00Z\nbaseline_oid: {baseline}\nintegration_oid: {integration}\nintegration_provenance: serial_core_staged\nworktree: {}\nworktree_branch: yard/yard-state/{run_id}\n",
+                gone_worktree.display()
+            ),
+        )
+        .unwrap();
+        ws.save_serial_integration_receipt(&SerialIntegrationReceipt {
+            schema_version: 1,
+            run_id: run_id.clone(),
+            task_id: "YARD-STATE".to_string(),
+            worktree: gone_worktree.display().to_string(),
+            branch: format!("yard/yard-state/{run_id}"),
+            baseline_oid: baseline.clone(),
+            core_input_overlays: Vec::new(),
+            dependency_input_overlays: Vec::new(),
+        })
+        .unwrap();
+
+        let error = resolve_partial(&ws, "YARD-STATE", "merged by hand").unwrap_err();
+        assert!(
+            format!("{error:#}").contains(
+                "dependency_output_proof_missing:dependency=YARD-STATE:integration_not_in_head"
+            ),
+            "{error:#}"
+        );
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Partial);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn no_output_resolve_rejects_manifest_snapshot_outputs() {
         // The opt-in must not swallow a Partial whose outputs are already
         // proven: detected outputs refuse --no-outputs and the ordinary
@@ -7801,7 +8030,7 @@ records:
             &ws,
             "YARD-STATE",
             &run_id,
-            &source,
+            DependencyOutputBytes::Worktree(&source),
             &["output.txt".into()],
         )
         .unwrap();
