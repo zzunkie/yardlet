@@ -11,6 +11,10 @@ pub(super) struct ReviewGate {
     pub has_pending_proposal: bool,
     pub has_visible_head: bool,
     pub confirmed: bool,
+    /// How many proposals are awaiting accept/reject. When more than one, the
+    /// review screen exposes Tab/Shift+Tab to move the accept/reject target so
+    /// the user never acts on an ambiguous "latest" proposal by surprise.
+    pub pending_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +42,10 @@ pub(super) enum ReviewAction {
     Reject,
     Confirm,
     Refresh,
+    /// Move the accept/reject target to the next pending proposal (Tab).
+    SelectNext,
+    /// Move the accept/reject target to the previous pending proposal (Shift+Tab).
+    SelectPrev,
 }
 
 #[cfg(test)]
@@ -87,6 +95,10 @@ pub(super) fn action_for_key_with_enhancement(
         KeyCode::Char('e') if !gate.confirmed => ReviewAction::BeginEdit,
         KeyCode::Char('a') if gate.has_pending_proposal && !gate.confirmed => ReviewAction::Accept,
         KeyCode::Char('r') if gate.has_pending_proposal && !gate.confirmed => ReviewAction::Reject,
+        // Target selection is only meaningful when the choice is ambiguous, i.e.
+        // more than one proposal is pending. With one (or none) Tab is inert.
+        KeyCode::Tab if gate.pending_count > 1 && !gate.confirmed => ReviewAction::SelectNext,
+        KeyCode::BackTab if gate.pending_count > 1 && !gate.confirmed => ReviewAction::SelectPrev,
         KeyCode::Char('c')
             if !gate.has_pending_proposal && gate.has_visible_head && !gate.confirmed =>
         {
@@ -188,11 +200,33 @@ fn json_text(value: &serde_json::Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
-fn push_proposal(out: &mut String, proposal: &PlanningProposal, l: &L) {
+/// Render one pending proposal. When several are pending, `ordinal` carries the
+/// 1-based position and total so the header reads `[k/n]`, and `is_target` adds
+/// the accept/reject target marker to the header. For a single pending proposal
+/// both are omitted so the original single-pending rendering is unchanged.
+fn push_proposal(
+    out: &mut String,
+    proposal: &PlanningProposal,
+    ordinal: Option<(usize, usize)>,
+    is_target: bool,
+    l: &L,
+) {
+    let header_suffix = match ordinal {
+        Some((index, total)) => {
+            let marker = if is_target {
+                format!("  \u{25c0} {}", l.planning_target_marker)
+            } else {
+                String::new()
+            };
+            format!(" [{index}/{total}]{marker}")
+        }
+        None => String::new(),
+    };
     out.push_str(&format!(
-        "## {} {}\n\n{}: {}\n{}: {}\n{}: {}\n\n",
+        "## {} {}{}\n\n{}: {}\n{}: {}\n{}: {}\n\n",
         l.planning_proposal,
         proposal.proposal_id,
+        header_suffix,
         l.planning_attempt,
         proposal.attempt_id,
         l.planning_expected_head,
@@ -219,7 +253,7 @@ fn push_proposal(out: &mut String, proposal: &PlanningProposal, l: &L) {
     }
 }
 
-pub(super) fn format_projection(projection: &PlanningProjection, l: &L) -> String {
+pub(super) fn format_projection(projection: &PlanningProjection, target: usize, l: &L) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "{}: {}\n\n",
@@ -257,12 +291,33 @@ pub(super) fn format_projection(projection: &PlanningProjection, l: &L) -> Strin
         out.push_str("\n\n");
     }
     out.push_str(&format!("## {}\n\n", l.planning_pending_proposals));
-    if projection.pending_proposals.is_empty() {
-        out.push_str(l.planning_no_pending_proposal);
-        out.push('\n');
-    } else {
-        for proposal in &projection.pending_proposals {
-            push_proposal(&mut out, proposal, l);
+    let pending = &projection.pending_proposals;
+    match pending.len() {
+        0 => {
+            out.push_str(l.planning_no_pending_proposal);
+            out.push('\n');
+        }
+        1 => push_proposal(&mut out, &pending[0], None, true, l),
+        total => {
+            // Clamp defensively: the caller tracks the target separately, so a
+            // shrunk projection must never point past the end.
+            let target = target.min(total - 1);
+            out.push_str(&format!(
+                "> {} ({}/{}) \u{00b7} {}\n\n",
+                l.planning_multiple_pending,
+                target + 1,
+                total,
+                l.planning_select_hint
+            ));
+            for (index, proposal) in pending.iter().enumerate() {
+                push_proposal(
+                    &mut out,
+                    proposal,
+                    Some((index + 1, total)),
+                    index == target,
+                    l,
+                );
+            }
         }
     }
     out.trim_end().to_string()
@@ -391,10 +446,16 @@ queue:
             has_pending_proposal: true,
             has_visible_head: false,
             confirmed: false,
+            pending_count: 1,
         };
         assert_eq!(
             action_for_key(KeyCode::Char('a'), KeyModifiers::NONE, proposal),
             ReviewAction::Accept
+        );
+        // With a single pending proposal there is no ambiguity, so Tab is inert.
+        assert_eq!(
+            action_for_key(KeyCode::Tab, KeyModifiers::NONE, proposal),
+            ReviewAction::Noop
         );
         assert_eq!(
             action_for_key(KeyCode::Char('c'), KeyModifiers::NONE, proposal),
@@ -424,6 +485,7 @@ queue:
             has_pending_proposal: true,
             has_visible_head: true,
             confirmed: false,
+            pending_count: 2,
         };
         assert_eq!(
             action_for_key(KeyCode::Char('a'), KeyModifiers::NONE, busy),
@@ -431,6 +493,12 @@ queue:
         );
         assert_eq!(
             action_for_key(KeyCode::Char('e'), KeyModifiers::NONE, busy),
+            ReviewAction::Noop
+        );
+        // Target selection also fails closed while a worker runs, even with
+        // several pending proposals.
+        assert_eq!(
+            action_for_key(KeyCode::Tab, KeyModifiers::NONE, busy),
             ReviewAction::Noop
         );
 
@@ -443,6 +511,11 @@ queue:
             action_for_key(KeyCode::Char('c'), KeyModifiers::NONE, confirmed),
             ReviewAction::Noop
         );
+        // Once confirmed, the plan is settled; Tab must not offer selection.
+        assert_eq!(
+            action_for_key(KeyCode::Tab, KeyModifiers::NONE, confirmed),
+            ReviewAction::Noop
+        );
     }
 
     #[test]
@@ -453,6 +526,7 @@ queue:
             has_pending_proposal: false,
             has_visible_head: true,
             confirmed: false,
+            pending_count: 0,
         };
         assert_eq!(
             action_for_key(KeyCode::Enter, KeyModifiers::NONE, editing),
@@ -487,7 +561,8 @@ queue:
     #[test]
     fn projection_text_contains_every_review_surface() {
         let (ws, projection) = proposal_projection();
-        let text = format_projection(&projection, crate::ui::i18n::Lang::En.l());
+        let l = crate::ui::i18n::Lang::En.l();
+        let text = format_projection(&projection, 0, l);
 
         for expected in [
             "add searchable orders",
@@ -510,8 +585,95 @@ queue:
         ] {
             assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
         }
+        // A single pending proposal is unambiguous: no target marker, no
+        // ordinal, no multi-pending banner. This keeps the normal flow's
+        // rendering byte-for-byte the same as before selection existed.
+        assert!(!text.contains(l.planning_target_marker), "{text}");
+        assert!(!text.contains(l.planning_multiple_pending), "{text}");
+        assert!(!text.contains("[1/1]"), "{text}");
 
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn multiple_pending_marks_and_moves_the_accept_reject_target() {
+        let (ws, first) = proposal_projection();
+        second_proposal(&ws, &first, "attempt-second-target", "Newer search plan");
+        let projection = crate::planning::projection(&ws).unwrap();
+        assert_eq!(projection.pending_proposals.len(), 2);
+        let l = crate::ui::i18n::Lang::En.l();
+        let id0 = projection.pending_proposals[0].proposal_id.clone();
+        let id1 = projection.pending_proposals[1].proposal_id.clone();
+        let marker = l.planning_target_marker;
+
+        // Both proposals are always listed with their position, and the
+        // multi-pending banner names the current target.
+        let at_first = format_projection(&projection, 0, l);
+        assert!(at_first.contains(l.planning_multiple_pending), "{at_first}");
+        assert!(
+            at_first.contains(&id0) && at_first.contains(&id1),
+            "{at_first}"
+        );
+        assert!(
+            at_first.contains("[1/2]") && at_first.contains("[2/2]"),
+            "{at_first}"
+        );
+
+        // Target index 0: the marker sits on the first proposal (before id1).
+        let m0 = at_first.find(marker).expect("marker present");
+        let p0 = at_first.find(&id0).unwrap();
+        let p1 = at_first.find(&id1).unwrap();
+        assert!(
+            p0 < m0 && m0 < p1,
+            "target 0 marks the first proposal\n{at_first}"
+        );
+        assert_eq!(at_first.matches(marker).count(), 1, "exactly one target");
+
+        // Target index 1: the marker moves onto the second proposal.
+        let at_second = format_projection(&projection, 1, l);
+        let m1 = at_second.find(marker).expect("marker present");
+        let p1b = at_second.find(&id1).unwrap();
+        assert!(m1 > p1b, "target 1 marks the second proposal\n{at_second}");
+        assert_eq!(at_second.matches(marker).count(), 1, "exactly one target");
+
+        // An out-of-range target clamps to the last proposal instead of panicking.
+        let clamped = format_projection(&projection, 99, l);
+        let mc = clamped.find(marker).expect("marker present");
+        assert!(
+            mc > clamped.find(&id1).unwrap(),
+            "clamped target marks the last\n{clamped}"
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn multiple_pending_offers_pure_target_selection_keys() {
+        let two_pending = ReviewGate {
+            busy: false,
+            editing: false,
+            has_pending_proposal: true,
+            has_visible_head: false,
+            confirmed: false,
+            pending_count: 2,
+        };
+        assert_eq!(
+            action_for_key(KeyCode::Tab, KeyModifiers::NONE, two_pending),
+            ReviewAction::SelectNext
+        );
+        assert_eq!(
+            action_for_key(KeyCode::BackTab, KeyModifiers::NONE, two_pending),
+            ReviewAction::SelectPrev
+        );
+        // Accept/reject stay available alongside selection.
+        assert_eq!(
+            action_for_key(KeyCode::Char('a'), KeyModifiers::NONE, two_pending),
+            ReviewAction::Accept
+        );
+        assert_eq!(
+            action_for_key(KeyCode::Char('r'), KeyModifiers::NONE, two_pending),
+            ReviewAction::Reject
+        );
     }
 
     #[test]
@@ -576,6 +738,96 @@ queue:
             app.planning_review.as_ref().unwrap().session.current_head,
             cached.session.current_head
         );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn isolated_review_selects_then_accepts_the_targeted_pending_proposal() {
+        let (ws, first) = proposal_projection();
+        second_proposal(&ws, &first, "attempt-second-accept", "Second search plan");
+        let before = ws.load_active_snapshot_texts().unwrap();
+        let mut app = crate::ui::App::new(ws.clone());
+        crate::ui::open_planning_review(&mut app);
+
+        // Two proposals pending; the newest is the default accept/reject target.
+        let opened = app.planning_review.as_ref().unwrap();
+        assert_eq!(opened.pending_proposals.len(), 2);
+        assert_eq!(app.planning_review_target, 1);
+        let older_id = opened.pending_proposals[0].proposal_id.clone();
+        let newer_id = opened.pending_proposals[1].proposal_id.clone();
+
+        // Tab cycles the target to the older proposal and the on-screen marker
+        // follows it (older id, then marker, then newer id).
+        crate::ui::handle_planning_review_key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(app.planning_review_target, 0);
+        let marker = app.lang.l().planning_target_marker;
+        let text = app.planning_review_text.clone();
+        let m = text.find(marker).expect("target marker rendered");
+        assert!(
+            text.find(&older_id).unwrap() < m && m < text.find(&newer_id).unwrap(),
+            "marker should sit on the selected (older) proposal:\n{text}"
+        );
+
+        // Accept acts on the selected (older) proposal, not the latest one.
+        crate::ui::handle_planning_review_key(&mut app, KeyCode::Char('a'), KeyModifiers::NONE);
+        let after = app.planning_review.as_ref().unwrap();
+        assert!(
+            after
+                .pending_proposals
+                .iter()
+                .all(|p| p.proposal_id != older_id),
+            "the selected proposal was disposed"
+        );
+        assert!(
+            after
+                .pending_proposals
+                .iter()
+                .any(|p| p.proposal_id == newer_id),
+            "the unselected proposal is still pending"
+        );
+        // Core CAS safety: accepting a proposal only moves the visible draft
+        // head; the active intent/queue snapshot is never touched here.
+        assert_eq!(ws.load_active_snapshot_texts().unwrap(), before);
+        assert!(app.toast.as_ref().is_some_and(|(ok, _)| *ok));
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn isolated_review_rejects_only_the_selected_pending_proposal() {
+        let (ws, first) = proposal_projection();
+        second_proposal(&ws, &first, "attempt-second-reject", "Second search plan");
+        let before = ws.load_active_snapshot_texts().unwrap();
+        let mut app = crate::ui::App::new(ws.clone());
+        crate::ui::open_planning_review(&mut app);
+
+        let opened = app.planning_review.as_ref().unwrap();
+        assert_eq!(opened.pending_proposals.len(), 2);
+        let older_id = opened.pending_proposals[0].proposal_id.clone();
+        let newer_id = opened.pending_proposals[1].proposal_id.clone();
+        // Default target is the newest proposal; reject it and only it.
+        assert_eq!(app.planning_review_target, 1);
+
+        crate::ui::handle_planning_review_key(&mut app, KeyCode::Char('r'), KeyModifiers::NONE);
+        let after = app.planning_review.as_ref().unwrap();
+        assert!(
+            after
+                .pending_proposals
+                .iter()
+                .all(|p| p.proposal_id != newer_id),
+            "the selected (newest) proposal was rejected"
+        );
+        assert!(
+            after
+                .pending_proposals
+                .iter()
+                .any(|p| p.proposal_id == older_id),
+            "the unselected proposal survives the reject"
+        );
+        // Reject moves neither the visible head nor the active snapshot.
+        assert!(after.session.current_head.is_none());
+        assert_eq!(ws.load_active_snapshot_texts().unwrap(), before);
 
         let _ = std::fs::remove_dir_all(ws.root);
     }
