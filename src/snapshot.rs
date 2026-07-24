@@ -15,6 +15,9 @@ pub struct Snapshot {
     pub config: YardConfig,
     pub intent: Option<IntentContract>,
     pub queue: WorkQueue,
+    /// Read-only content gates for the idle Home footer. Computed with the
+    /// snapshot/reload, never by the render loop.
+    pub home_footer: HomeFooterAvailability,
     pub workers: Vec<WorkerLine>,
     /// The configured planning worker (routing primary).
     pub planner: String,
@@ -36,6 +39,95 @@ pub struct Snapshot {
     /// harness-copy warnings as evidence. Absence of the evidence file means
     /// preparation was clean, so such runs never appear here.
     pub harness_copy_warnings: Vec<HarnessCopyWarning>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HomeFooterAvailability {
+    pub tidy: bool,
+    pub defer: bool,
+    pub revive: bool,
+    pub monitor: bool,
+    pub handoff: bool,
+    pub trust: bool,
+}
+
+impl HomeFooterAvailability {
+    fn load(
+        ws: &Workspace,
+        queue: &WorkQueue,
+        has_intent: bool,
+        capabilities: &std::collections::BTreeSet<String>,
+        approvals_needed: &[String],
+    ) -> Self {
+        let mut availability = Self::from_queue(queue, has_intent, capabilities, approvals_needed);
+
+        if let Ok(entries) = std::fs::read_dir(ws.runs_dir()) {
+            for entry in entries.flatten() {
+                let run_dir = entry.path();
+                if !run_dir.is_dir() {
+                    continue;
+                }
+                // This matches the Monitor's fallback: any persisted run dir
+                // gives it a target, even when no task is currently Running.
+                availability.monitor = true;
+                if run_dir.join("handoff.md").is_file() {
+                    availability.handoff = true;
+                }
+            }
+        }
+        availability.trust = !crate::telemetry::read_runs(ws).is_empty()
+            || !ws.load_all_transition_logs().is_empty();
+        availability
+    }
+
+    fn from_queue(
+        queue: &WorkQueue,
+        has_intent: bool,
+        capabilities: &std::collections::BTreeSet<String>,
+        approvals_needed: &[String],
+    ) -> Self {
+        let defer = queue.tasks.iter().any(|task| {
+            matches!(
+                task.state,
+                TaskState::Queued
+                    | TaskState::NeedsUser
+                    | TaskState::Partial
+                    | TaskState::Failed
+                    | TaskState::Blocked
+            )
+        });
+        let revive = queue
+            .tasks
+            .iter()
+            .any(|task| task.state == TaskState::Deferred);
+        let tidy_task = queue.tasks.iter().any(|task| match task.state {
+            TaskState::Blocked if !task.required_capabilities.is_empty() => {
+                !crate::routing::unsatisfiable_capabilities(
+                    &task.required_capabilities,
+                    capabilities,
+                )
+                .is_empty()
+            }
+            TaskState::Queued => {
+                let approved =
+                    task.approval_required() && !approvals_needed.iter().any(|id| id == &task.id);
+                matches!(
+                    queue.runnable_class(task, approved, capabilities),
+                    RunnableClass::WaitingDependency
+                        | RunnableClass::WaitingApproval
+                        | RunnableClass::WaitingCapability
+                )
+            }
+            _ => false,
+        });
+
+        Self {
+            tidy: tidy_task || (has_intent && crate::state::ready_for_completion(queue)),
+            defer,
+            revive,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,7 +285,7 @@ impl Snapshot {
         // Approval is only "needed" for a task that could still run: a Done or
         // Deferred (or Blocked/Running) task keeps its approval flag but must not
         // light up the status bar. Only pending, runnable-next states count.
-        let approvals_needed = queue
+        let approvals_needed: Vec<String> = queue
             .tasks
             .iter()
             .filter(|t| {
@@ -263,11 +355,19 @@ impl Snapshot {
                 })
             })
             .collect();
+        let home_footer = HomeFooterAvailability::load(
+            ws,
+            &queue,
+            intent.is_some(),
+            &capabilities,
+            &approvals_needed,
+        );
 
         Ok(Snapshot {
             config,
             intent,
             queue,
+            home_footer,
             workers,
             planner,
             pending,
@@ -497,6 +597,117 @@ queue:
 mod tests {
     use super::*;
     use crate::schemas::{TaskState, TransitionActor, TransitionCause};
+
+    fn home_footer_task(id: &str, state: TaskState) -> Task {
+        let mut task: Task =
+            crate::yaml::from_str(&format!("id: {id}\ntitle: Home footer {id}\n")).unwrap();
+        task.state = state;
+        task
+    }
+
+    #[test]
+    fn home_footer_queue_availability_covers_empty_terminal_and_mixed_states() {
+        let capabilities = std::collections::BTreeSet::new();
+        let mut queue = WorkQueue::empty();
+
+        let empty = HomeFooterAvailability::from_queue(&queue, false, &capabilities, &[]);
+        assert_eq!(empty, HomeFooterAvailability::default());
+
+        queue.tasks = vec![
+            home_footer_task("DONE", TaskState::Done),
+            home_footer_task("RUNNING", TaskState::Running),
+            home_footer_task("DEFERRED", TaskState::Deferred),
+        ];
+        let terminal = HomeFooterAvailability::from_queue(&queue, false, &capabilities, &[]);
+        assert!(!terminal.defer);
+        assert!(terminal.revive);
+        assert!(!terminal.tidy);
+
+        queue
+            .tasks
+            .push(home_footer_task("QUEUED", TaskState::Queued));
+        let mixed = HomeFooterAvailability::from_queue(&queue, false, &capabilities, &[]);
+        assert!(mixed.defer);
+        assert!(mixed.revive);
+        assert!(!mixed.tidy);
+    }
+
+    #[test]
+    fn home_footer_tidy_availability_matches_queue_cleanup_boundaries() {
+        let mut capabilities = std::collections::BTreeSet::new();
+        let mut queue = WorkQueue::empty();
+        queue.tasks = vec![home_footer_task("READY", TaskState::Queued)];
+        assert!(!HomeFooterAvailability::from_queue(&queue, false, &capabilities, &[]).tidy);
+
+        let mut waiting = home_footer_task("WAITING", TaskState::Queued);
+        waiting.depends_on = vec!["HELD".to_string()];
+        queue.tasks = vec![waiting, home_footer_task("HELD", TaskState::Deferred)];
+        assert!(HomeFooterAvailability::from_queue(&queue, false, &capabilities, &[]).tidy);
+
+        queue.tasks = vec![home_footer_task("DONE", TaskState::Done)];
+        assert!(!HomeFooterAvailability::from_queue(&queue, false, &capabilities, &[]).tidy);
+        assert!(HomeFooterAvailability::from_queue(&queue, true, &capabilities, &[]).tidy);
+
+        let mut blocked = home_footer_task("BLOCKED", TaskState::Blocked);
+        blocked.required_capabilities = vec!["image_generation".to_string()];
+        queue.tasks = vec![blocked];
+        assert!(HomeFooterAvailability::from_queue(&queue, false, &capabilities, &[]).tidy);
+        capabilities.insert("image_generation".to_string());
+        assert!(!HomeFooterAvailability::from_queue(&queue, false, &capabilities, &[]).tidy);
+    }
+
+    #[test]
+    fn home_footer_workspace_evidence_gates_monitor_handoff_and_trust() {
+        let root =
+            std::env::temp_dir().join(format!("yard-home-footer-evidence-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = Workspace::at(&root);
+        let queue = WorkQueue::empty();
+        let capabilities = std::collections::BTreeSet::new();
+        let availability = HomeFooterAvailability::load(&ws, &queue, false, &capabilities, &[]);
+        assert!(!availability.monitor);
+        assert!(!availability.handoff);
+        assert!(!availability.trust);
+
+        let run_dir = ws.runs_dir().join("run-home-footer");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let availability = HomeFooterAvailability::load(&ws, &queue, false, &capabilities, &[]);
+        assert!(availability.monitor);
+        assert!(!availability.handoff);
+        assert!(!availability.trust);
+
+        std::fs::write(run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        let availability = HomeFooterAvailability::load(&ws, &queue, false, &capabilities, &[]);
+        assert!(availability.monitor);
+        assert!(availability.handoff);
+        assert!(!availability.trust);
+
+        let telemetry = crate::telemetry::log_path(&ws);
+        std::fs::create_dir_all(telemetry.parent().unwrap()).unwrap();
+        std::fs::write(
+            &telemetry,
+            "{\"ts\":\"\",\"task_id\":\"TASK\",\"worker\":\"codex\"}\n",
+        )
+        .unwrap();
+        assert!(HomeFooterAvailability::load(&ws, &queue, false, &capabilities, &[]).trust);
+
+        std::fs::remove_file(telemetry).unwrap();
+        crate::state::append_transition(
+            &ws,
+            crate::state::transition(
+                "TASK",
+                TaskState::Queued,
+                TaskState::Done,
+                TransitionCause::RunOutcome,
+                "finished",
+                TransitionActor::System,
+            ),
+        )
+        .unwrap();
+        assert!(HomeFooterAvailability::load(&ws, &queue, false, &capabilities, &[]).trust);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn live_projection_uses_only_the_queue_intent_transition() {

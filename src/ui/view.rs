@@ -13,7 +13,7 @@ use super::{
     same_intent_replan_availability, App, Job, ReplanAvailability, Screen, ScrollViewport,
 };
 use crate::schemas::TaskState;
-use crate::snapshot::Snapshot;
+use crate::snapshot::{HomeFooterAvailability, Snapshot};
 
 const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
 
@@ -484,9 +484,8 @@ fn render_home(frame: &mut Frame, app: &App) {
             l.footer_home_busy_nodrain.to_string()
         }
     } else {
-        // Only show answer/approve keys when there's actually something to do.
-        let mut f = l.footer_home.to_string();
-        if let Some(snap) = &app.snapshot {
+        let (availability, answerable, approvable, replannable) = if let Some(snap) = &app.snapshot
+        {
             let answerable = snap.pending.is_some()
                 || snap.gate.is_some()
                 || snap
@@ -494,22 +493,54 @@ fn render_home(frame: &mut Frame, app: &App) {
                     .tasks
                     .iter()
                     .any(|t| !matches!(t.state, TaskState::Running | TaskState::Done));
-            if answerable {
-                f.push_str("  ");
-                f.push_str(l.key_answer);
-            }
-            if !snap.approvals_needed.is_empty() {
-                f.push_str("  ");
-                f.push_str(l.key_approve);
-            }
-            if same_intent_replan_availability(&snap.queue) == ReplanAvailability::Available {
-                f.push_str("  ");
-                f.push_str(l.key_replan);
-            }
-        }
-        f
+            (
+                snap.home_footer,
+                answerable,
+                !snap.approvals_needed.is_empty(),
+                same_intent_replan_availability(&snap.queue) == ReplanAvailability::Available,
+            )
+        } else {
+            (HomeFooterAvailability::default(), false, false, false)
+        };
+        home_footer(l, availability, answerable, approvable, replannable)
     };
     render_footer(frame, chunks[4], &footer);
+}
+
+/// Assemble the idle Home footer from localized fragments and a read-only
+/// availability projection. Stable ordering lives here, independent of
+/// terminal rendering and workspace I/O.
+fn home_footer(
+    l: &L,
+    availability: HomeFooterAvailability,
+    answerable: bool,
+    approvable: bool,
+    replannable: bool,
+) -> String {
+    let mut fragments = vec![l.footer_home];
+    for (available, fragment) in [
+        (availability.tidy, l.key_tidy),
+        (availability.defer, l.key_defer),
+        (availability.revive, l.key_revive),
+        (availability.monitor, l.key_monitor),
+        (availability.handoff, l.key_handoff),
+        (availability.trust, l.key_trust),
+    ] {
+        if available {
+            fragments.push(fragment);
+        }
+    }
+    fragments.push(l.key_quit);
+    if answerable {
+        fragments.push(l.key_answer);
+    }
+    if approvable {
+        fragments.push(l.key_approve);
+    }
+    if replannable {
+        fragments.push(l.key_replan);
+    }
+    fragments.join("  ")
 }
 
 /// The intent summary as ONE line for the fixed-height header: amend adds
@@ -1279,6 +1310,168 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+
+    fn rendered_home(app: &App) -> String {
+        let backend = TestBackend::new(220, 22);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render_home(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn home_footer_hides_content_keys_when_workspace_has_none() {
+        let root =
+            std::env::temp_dir().join(format!("yard-home-footer-empty-{}", std::process::id()));
+        let app = App::new(crate::state::Workspace::at(&root));
+        let output = rendered_home(&app);
+
+        for hint in [
+            "t tidy",
+            "d defer",
+            "v revive",
+            "m monitor",
+            "h handoff",
+            "T trust",
+        ] {
+            assert!(!output.contains(hint), "unexpected Home hint: {hint}");
+        }
+    }
+
+    #[test]
+    fn home_footer_each_content_key_follows_its_own_availability() {
+        let cases = [
+            (
+                HomeFooterAvailability {
+                    tidy: true,
+                    ..HomeFooterAvailability::default()
+                },
+                "t tidy",
+                "t 정리",
+            ),
+            (
+                HomeFooterAvailability {
+                    defer: true,
+                    ..HomeFooterAvailability::default()
+                },
+                "d defer",
+                "d 보류",
+            ),
+            (
+                HomeFooterAvailability {
+                    revive: true,
+                    ..HomeFooterAvailability::default()
+                },
+                "v revive",
+                "v 되살림",
+            ),
+            (
+                HomeFooterAvailability {
+                    monitor: true,
+                    ..HomeFooterAvailability::default()
+                },
+                "m monitor",
+                "m 모니터",
+            ),
+            (
+                HomeFooterAvailability {
+                    handoff: true,
+                    ..HomeFooterAvailability::default()
+                },
+                "h handoff",
+                "h 핸드오프",
+            ),
+            (
+                HomeFooterAvailability {
+                    trust: true,
+                    ..HomeFooterAvailability::default()
+                },
+                "T trust",
+                "T 신뢰",
+            ),
+        ];
+
+        for (availability, en_hint, ko_hint) in cases {
+            let en = home_footer(i18n::Lang::En.l(), availability, false, false, false);
+            let ko = home_footer(i18n::Lang::Ko.l(), availability, false, false, false);
+            assert!(en.contains(en_hint), "missing English hint: {en_hint}");
+            assert!(ko.contains(ko_hint), "missing Korean hint: {ko_hint}");
+            for other in [
+                "t tidy",
+                "d defer",
+                "v revive",
+                "m monitor",
+                "h handoff",
+                "T trust",
+            ] {
+                if other != en_hint {
+                    assert!(!en.contains(other), "unexpected English hint: {other}");
+                }
+            }
+            for other in [
+                "t 정리",
+                "d 보류",
+                "v 되살림",
+                "m 모니터",
+                "h 핸드오프",
+                "T 신뢰",
+            ] {
+                if other != ko_hint {
+                    assert!(!ko.contains(other), "unexpected Korean hint: {other}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn home_footer_all_active_has_stable_en_ko_order_and_context_keys() {
+        let availability = HomeFooterAvailability {
+            tidy: true,
+            defer: true,
+            revive: true,
+            monitor: true,
+            handoff: true,
+            trust: true,
+        };
+        assert_eq!(
+            home_footer(i18n::Lang::En.l(), availability, true, true, true),
+            "\u{2191}\u{2193} select  Enter action  n new  r run  A auto  t tidy  d defer  v revive  m monitor  h handoff  T trust  q quit  a answer  p approve  P replan"
+        );
+        assert_eq!(
+            home_footer(i18n::Lang::Ko.l(), availability, true, true, true),
+            "\u{2191}\u{2193} 선택  Enter 행동  n 새작업  r 실행  A 자동  t 정리  d 보류  v 되살림  m 모니터  h 핸드오프  T 신뢰  q 종료  a 답변  p 승인  P 재계획"
+        );
+    }
+
+    #[test]
+    fn home_footer_busy_and_nodrain_variants_remain_unchanged() {
+        let root =
+            std::env::temp_dir().join(format!("yard-home-footer-busy-{}", std::process::id()));
+        let mut app = App::new(crate::state::Workspace::at(&root));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        app.job = Job::Running {
+            label: "single".to_string(),
+            started: std::time::Instant::now(),
+            rx,
+        };
+
+        let nodrain = rendered_home(&app);
+        assert!(nodrain.contains("running...  Esc stop"));
+        assert!(!nodrain.contains("p pause"));
+
+        app.pause = Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            false,
+        )));
+        let pausable = rendered_home(&app);
+        assert!(pausable.contains("running...  p pause  Esc stop"));
+    }
 
     fn rendered_queue(snapshot: &Snapshot) -> String {
         let backend = TestBackend::new(160, 8);
