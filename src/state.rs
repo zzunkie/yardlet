@@ -5382,6 +5382,16 @@ fn read_dependency_output_bytes(root: &Path, relative: &Path, task_id: &str) -> 
     })
 }
 
+/// Persist the resolve-time output manifest for a manually integrated task.
+///
+/// Contract (issue #21 / YARD-017 decision): the manifest records ONLY the
+/// outputs this task authored. Upstream bytes it merely consumed — its
+/// receipted `dependency_input_overlays` — are excluded from the Git evidence
+/// by `crate::run::resolved_dependency_output_paths` and are never passed
+/// through here. A transitive consumer (C reading A's bytes across A -> B -> C)
+/// must declare its own explicit `depends_on` on that upstream;
+/// `materialize_resolved_dependency_outputs` fails closed with a typed
+/// `transitive_dependency_undeclared` diagnostic when that gap is detectable.
 fn persist_resolved_dependency_outputs(
     ws: &Workspace,
     task_id: &str,
@@ -5591,6 +5601,15 @@ fn write_dependency_output_target(
 /// the core's own provenance record (dependency, path, digest) for the run's
 /// integration receipt, so downstream evidence can keep upstream bytes out of
 /// worker attribution.
+///
+/// No-passthrough contract (YARD-017 decision): a resolved dependency's
+/// manifest carries only the outputs that dependency authored. When the
+/// dependency's own integration receipt shows it consumed overlay bytes from
+/// an upstream this task does not declare in `depends_on` — and the
+/// destination does not already hold those bytes at the exact receipted
+/// digest — materialization fails closed with a typed
+/// `transitive_dependency_undeclared` diagnostic before any write. Declaring
+/// an explicit `depends_on` on that upstream is the supported fix.
 pub fn materialize_resolved_dependency_outputs(
     ws: &Workspace,
     queue: &WorkQueue,
@@ -5630,6 +5649,44 @@ pub fn materialize_resolved_dependency_outputs(
         let manifest = ws.load_resolved_dependency_outputs(&run_id)?;
         if manifest.dependency_task_id != *dependency {
             bail!("dependency_output_manifest_mismatch:dependency={dependency}:run={run_id}");
+        }
+        // No-passthrough contract: the manifest holds only outputs this
+        // dependency authored, so upstream overlay bytes it consumed reach a
+        // transitive reader only through that reader's own `depends_on`. The
+        // dependency's core-owned integration receipt makes the gap
+        // deterministic — an undeclared upstream whose exact receipted bytes
+        // are also absent from the destination fails closed before any write.
+        let receipt = ws
+            .load_serial_integration_receipt(&run_id)
+            .or_else(|_| ws.load_parallel_integration_receipt(&run_id));
+        if let Ok(receipt) = receipt {
+            if receipt.run_id == run_id && receipt.task_id == *dependency {
+                for overlay in &receipt.dependency_input_overlays {
+                    let upstream = &overlay.dependency_task_id;
+                    if task.depends_on.iter().any(|declared| declared == upstream) {
+                        continue;
+                    }
+                    let (path, relative) =
+                        normalize_dependency_output_path(upstream, &overlay.path)?;
+                    let target = destination.join(&relative);
+                    let already_present = match fs::symlink_metadata(&target) {
+                        Ok(metadata)
+                            if metadata.is_file() && !metadata.file_type().is_symlink() =>
+                        {
+                            fs::read(&target)
+                                .map(|bytes| content_digest(&bytes) == overlay.content_digest)
+                                .unwrap_or(false)
+                        }
+                        _ => false,
+                    };
+                    if already_present {
+                        continue;
+                    }
+                    bail!(
+                        "transitive_dependency_undeclared:dependency={dependency}:upstream={upstream}:path={path}:explicit_depends_on_required"
+                    );
+                }
+            }
         }
         if manifest.no_outputs_proven() {
             // Typed "absence proven" record from a no-output resolve: nothing
@@ -7657,8 +7714,7 @@ records:
         ws.save_queue(&queue).unwrap();
 
         let error = resolve_partial(&ws, "YARD-LEGACY", "merged by hand")
-            .err()
-            .expect("a Partial task without durable output proof must stay Partial");
+            .expect_err("a Partial task without durable output proof must stay Partial");
         assert!(
             error
                 .to_string()
@@ -8135,6 +8191,173 @@ records:
             inode_before,
             "a same-digest pre-existing destination must pass as a no-op, not a rewrite"
         );
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    /// A -> B -> C regression fixture (YARD-017): A was manually resolved with
+    /// an output manifest, B consumed A's bytes as a receipted dependency
+    /// input overlay and was itself resolved with only its own authored
+    /// output, and C is the downstream task under materialization with the
+    /// given `depends_on` declaration.
+    fn transitive_dependency_chain_fixture(
+        name: &str,
+        depends_on: &[&str],
+    ) -> (Workspace, WorkQueue, Task, PathBuf, Vec<u8>, Vec<u8>) {
+        let dir = temp_root(name);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(STATE_DIR)).unwrap();
+        let destination = dir.join("fresh-worktree");
+        fs::create_dir_all(&destination).unwrap();
+        let ws = Workspace::at(&dir);
+
+        let a_bytes = b"a authored bytes\n".to_vec();
+        let b_bytes = b"b authored bytes\n".to_vec();
+
+        let mut queue = WorkQueue::empty();
+        queue.intent_id = "intent-transitive-chain".into();
+        let task_a = task_in("YARD-A", "done");
+        let mut task_b = task_in("YARD-B", "done");
+        task_b.depends_on = vec!["YARD-A".into()];
+        let mut task_c = task_in("YARD-C", "queued");
+        task_c.depends_on = depends_on.iter().map(|id| id.to_string()).collect();
+        queue.tasks = vec![task_a, task_b, task_c.clone()];
+        ws.save_queue(&queue).unwrap();
+
+        for (task_id, run_id, bytes, path) in [
+            (
+                "YARD-A",
+                "run-20990101-000000-chain-a",
+                &a_bytes,
+                "notes/a.md",
+            ),
+            (
+                "YARD-B",
+                "run-20990101-000100-chain-b",
+                &b_bytes,
+                "notes/b.md",
+            ),
+        ] {
+            let run_dir = ws.runs_dir().join(run_id);
+            fs::create_dir_all(&run_dir).unwrap();
+            write_str(
+                &run_dir.join("run.yaml"),
+                &format!(
+                    "schema_version: 1\nrun_id: {run_id}\ntask_id: {task_id}\nintent_id: intent-transitive-chain\nstate: partial\nstarted_at: 2099-01-01T00:00:00Z\n"
+                ),
+            )
+            .unwrap();
+            let snapshots = ws.resolved_dependency_output_snapshots_dir(run_id).unwrap();
+            fs::create_dir_all(&snapshots).unwrap();
+            write_bytes_atomic(&snapshots.join("0000.bin"), bytes).unwrap();
+            save_yaml_atomic(
+                &ws.resolved_dependency_output_manifest_path(run_id).unwrap(),
+                &ResolvedDependencyOutputs {
+                    schema_version: 1,
+                    dependency_task_id: task_id.into(),
+                    source_run_id: run_id.into(),
+                    outputs: vec![ResolvedDependencyOutput {
+                        path: path.into(),
+                        content_digest: content_digest(bytes),
+                        snapshot_file: "0000.bin".into(),
+                        availability: DependencyOutputAvailability::CoreSnapshot,
+                    }],
+                    no_outputs_reason: None,
+                },
+            )
+            .unwrap();
+        }
+
+        // B's core-owned integration receipt records that its run consumed
+        // A's bytes as a materialized dependency input overlay.
+        ws.save_serial_integration_receipt(&SerialIntegrationReceipt {
+            schema_version: 1,
+            run_id: "run-20990101-000100-chain-b".into(),
+            task_id: "YARD-B".into(),
+            worktree: String::new(),
+            branch: String::new(),
+            baseline_oid: String::new(),
+            core_input_overlays: vec![],
+            dependency_input_overlays: vec![DependencyInputOverlay {
+                dependency_task_id: "YARD-A".into(),
+                path: "notes/a.md".into(),
+                content_digest: content_digest(&a_bytes),
+            }],
+        })
+        .unwrap();
+
+        (ws, queue, task_c, destination, a_bytes, b_bytes)
+    }
+
+    #[test]
+    fn transitive_chain_blocks_undeclared_upstream_with_typed_diagnostic() {
+        // C depends only on B while B's receipt proves it consumed A's bytes:
+        // no passthrough exists, so materialization must fail closed with the
+        // dependency, upstream, and path named — before any write.
+        let (ws, queue, task, destination, _a_bytes, _b_bytes) =
+            transitive_dependency_chain_fixture("transitive-chain-undeclared", &["YARD-B"]);
+        let error =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "transitive_dependency_undeclared:dependency=YARD-B:upstream=YARD-A:path=notes/a.md:explicit_depends_on_required"
+            ),
+            "{error:#}"
+        );
+        assert!(
+            !destination.join("notes").exists(),
+            "the fail-closed block must land before any dependency write"
+        );
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn transitive_chain_declared_upstream_delivers_identical_bytes() {
+        // C declaring an explicit depends_on on A is the supported contract:
+        // both A's and B's snapshot bytes arrive byte-identical.
+        let (ws, queue, task, destination, a_bytes, b_bytes) =
+            transitive_dependency_chain_fixture("transitive-chain-declared", &["YARD-B", "YARD-A"]);
+        let materialized =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap();
+        assert_eq!(fs::read(destination.join("notes/a.md")).unwrap(), a_bytes);
+        assert_eq!(fs::read(destination.join("notes/b.md")).unwrap(), b_bytes);
+        assert_eq!(
+            materialized,
+            vec![
+                DependencyInputOverlay {
+                    dependency_task_id: "YARD-A".into(),
+                    path: "notes/a.md".into(),
+                    content_digest: content_digest(&a_bytes),
+                },
+                DependencyInputOverlay {
+                    dependency_task_id: "YARD-B".into(),
+                    path: "notes/b.md".into(),
+                    content_digest: content_digest(&b_bytes),
+                },
+            ]
+        );
+        let _ = fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn transitive_chain_passes_when_upstream_bytes_already_present() {
+        // The undeclared-upstream block is about missing bytes, not paperwork:
+        // when the destination already holds A's exact receipted bytes (e.g.
+        // the upstream work landed in HEAD later), C may proceed undeclared.
+        let (ws, queue, task, destination, a_bytes, b_bytes) =
+            transitive_dependency_chain_fixture("transitive-chain-present", &["YARD-B"]);
+        fs::create_dir_all(destination.join("notes")).unwrap();
+        write_bytes_atomic(&destination.join("notes/a.md"), &a_bytes).unwrap();
+        let materialized =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap();
+        assert_eq!(
+            materialized,
+            vec![DependencyInputOverlay {
+                dependency_task_id: "YARD-B".into(),
+                path: "notes/b.md".into(),
+                content_digest: content_digest(&b_bytes),
+            }]
+        );
+        assert_eq!(fs::read(destination.join("notes/a.md")).unwrap(), a_bytes);
         let _ = fs::remove_dir_all(ws.root);
     }
 }
