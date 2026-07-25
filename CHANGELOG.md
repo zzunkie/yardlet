@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.10.3 - 2026-07-25
+
+### Added
+
+- **Plan review inside the TUI.** A finished planning, continue, or replan turn
+  now opens a review screen instead of returning to Home with the proposal
+  invisible. The screen shows the session conversation, the visible head, the
+  full draft (goal, scope, acceptance, tasks with dependencies and their own
+  scope), and each pending proposal with its semantic diff. Accept, reject,
+  request a revision, and confirm are all reachable there; a revision records a
+  turn in the same session and produces a replacement proposal without touching
+  the active intent or queue, and confirm still activates only the exact visible
+  head through the existing core check. Multiple pending proposals name their
+  accept/reject target explicitly, and a proposal made stale by a newer head is
+  marked as such.
+
+- **A safe first frame within one second.** Startup no longer blocks on
+  recovery, planning-activation validation, or worker readiness probes: the TUI
+  paints a loading frame immediately and completes those steps in the
+  background, gating every action that needs canonical state until they finish
+  and surfacing progress or failure on screen. Measured at 25ms with an 11s
+  recovery delay and 11s worker probes injected.
+
+- **Terminal-independent multi-line input.** In the planner, plan-revision, and
+  Answer inputs, Enter inserts a newline and Ctrl+S submits (Ctrl+Enter also
+  submits where the terminal reports it), so composing a multi-line request no
+  longer depends on the terminal supporting Shift+Enter. Multi-line paste and
+  cursor editing between lines are preserved.
+
+### Fixed
+
+- **Resolve no longer dead-ends after post-integration cleanup.** A Partial
+  whose integration merge had landed but whose push was blocked lost its only
+  closure path once cleanup removed the retained worktree: proof capture
+  followed the receipt to the deleted directory and bailed, while
+  `--no-outputs` was correctly refused because the committed outputs were still
+  detectable. Resolve now falls back to the committed integration evidence,
+  taking paths from the recorded baseline-to-integration diff and bytes from the
+  integration commit tree, and requires that commit to be an ancestor of the
+  owning root's HEAD.
+
+- **A resolved dependency's stale snapshot no longer blocks downstream work.**
+  Once a dependency's outputs reached HEAD through normal integration and later
+  commits legitimately changed the same paths, materialization found the newer
+  bytes and failed the digest guard with `dependency_output_conflict` before
+  worker spawn, with no path forward on any retry. The snapshot is now
+  recognized as stale provenance and skipped when the dependency run's
+  integration commit is an ancestor of the worktree HEAD. The guard still
+  applies whenever that work is absent from the history, which is the case it
+  was written for.
+
+- **TUI strings follow the selected language consistently.** Chrome, status,
+  progress, completion, and error-prefix text authored by Yardlet now routes
+  through the localization tables in both Korean and English, including
+  previously leaking dynamic labels (`done:`, task and worker labels, and every
+  TaskState variant). A static audit test fails the build if a forbidden literal
+  reappears in production code.
+
+- **Home key hints follow the workspace state again.** The footer lists only
+  keys with something to act on, restoring the state-aware guide that had
+  eroded as content-dependent keys were added without gating.
+
+- Review-screen shortcuts now apply the Korean-jamo fallback while a Korean IME
+  is active with `auto_ime` disabled.
+
 ## 0.10.2 - 2026-07-24
 
 ### Fixed
