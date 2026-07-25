@@ -324,11 +324,8 @@ pub fn build_final_report(ws: &Workspace) -> Result<String> {
                     md.push_str(&format!("{}\n\n", rep.trim()));
                 }
             }
-            if let Ok(raw) = std::fs::read_to_string(dir.join("git-finish.json")) {
-                if let Ok(finish) = serde_json::from_str::<crate::git_finish::GitFinishRecord>(&raw)
-                {
-                    md.push_str(&format!("{}\n\n", finish.user_line()));
-                }
+            if let Ok(finish) = ws.load_git_finish_record(&dir) {
+                md.push_str(&format!("{}\n\n", finish.user_line()));
             }
             // Worktree preparation left copy warnings behind: keep them visible
             // in the wrap-up. Clean runs write no evidence file and add nothing.
@@ -730,6 +727,68 @@ mod tests {
 
         assert!(report.contains("unfinished (held:"), "{report}");
         assert!(!report.contains("complete (held:"), "{report}");
+    }
+
+    #[test]
+    fn ac_005_verified_open_pull_request_renders_as_completed_delivery() {
+        let record = crate::git_finish::GitFinishRecord {
+            schema_version: 3,
+            run_id: "run-test".into(),
+            task_id: "YARD-001".into(),
+            attempted_at: String::new(),
+            status: crate::git_finish::GitFinishStatus::PullRequestOpen,
+            policy: crate::git_finish::GitFinishPolicySnapshot {
+                auto_push: true,
+                delivery: crate::schemas::GitFinishDelivery::Auto,
+                remote: "origin".into(),
+                target_ref: "refs/heads/main".into(),
+                pre_push_checks: vec![],
+            },
+            expected_oid: Some("abc".into()),
+            baseline_oid: "def".into(),
+            owned_oids: vec!["abc".into()],
+            checks: vec![],
+            push_invoked: true,
+            push_succeeded: true,
+            remote_oid: Some("abc".into()),
+            remote_before_oid: Some("def".into()),
+            head_ref: Some("refs/heads/yardlet/runs/run-test".into()),
+            pull_request_number: Some(41),
+            pull_request_state: Some("open".into()),
+            reason: "pull_request_verified".into(),
+        };
+
+        let line = record.user_line();
+
+        assert!(record.status.verified_complete());
+        assert!(line.contains("pull request #41"));
+        assert!(line.contains("open and verified"));
+
+        let ws = temp_ws("untrusted-pr-projection");
+        crate::state::save_yaml(&ws.intent_path(), &intent("intent-pr-projection")).unwrap();
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue
+            .tasks
+            .push(seed_task("YARD-001", "finish", TaskState::Done));
+        ws.save_queue(&queue).unwrap();
+        write_run(
+            &ws,
+            "run-test",
+            "YARD-001",
+            r#"{"schema_version":1,"run_id":"run-test","task_id":"YARD-001","status":"done"}"#,
+        );
+        std::fs::write(
+            ws.runs_dir().join("run-test/git-finish.json"),
+            serde_json::to_string_pretty(&record).unwrap(),
+        )
+        .unwrap();
+
+        let report = build_final_report(&ws).unwrap();
+
+        assert!(
+            !report.contains("pull request #41"),
+            "a worker-writable projection must not establish delivery truth: {report}"
+        );
     }
 
     #[test]

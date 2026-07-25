@@ -103,11 +103,24 @@ pub struct YardConfig {
     /// OFF by default, since it writes to the user's git history.
     #[serde(default)]
     pub auto_commit: bool,
-    /// User-owned, default-off policy for finishing an owned Yardlet merge by
-    /// pushing its exact OID to one explicit branch ref. Legacy configs omit
-    /// this block and therefore deserialize to a disabled policy.
+    /// User-owned, default-off policy for finishing an owned Yardlet merge.
+    /// Legacy configs omit this block and therefore deserialize to a disabled
+    /// direct-delivery policy.
     #[serde(default)]
     pub git_finish: GitFinishPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitFinishDelivery {
+    /// Preserve the original exact-OID push contract. The remote and target
+    /// branch must be configured explicitly.
+    #[default]
+    Direct,
+    /// Discover and cross-check a GitHub upstream, then select exact-OID direct
+    /// push only when the default branch is confirmed unprotected. Otherwise
+    /// deliver the same OID through a run-owned branch and one verified PR.
+    Auto,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -115,6 +128,10 @@ pub struct GitFinishPolicy {
     /// No remote command is run unless this is explicitly true.
     #[serde(default)]
     pub auto_push: bool,
+    /// Delivery selection. Missing means `direct`, preserving every legacy
+    /// `auto_push` configuration.
+    #[serde(default)]
+    pub delivery: GitFinishDelivery,
     /// Git remote name only. URLs are never copied into run records.
     #[serde(default)]
     pub remote: String,
@@ -3598,6 +3615,36 @@ impl Default for ValidationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ac_001_git_finish_auto_delivery_is_opt_in_and_legacy_auto_push_stays_direct() {
+        let legacy: GitFinishPolicy = yaml::from_str(
+            r#"
+auto_push: true
+remote: origin
+target_ref: refs/heads/main
+"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.delivery, GitFinishDelivery::Direct);
+
+        let automatic: GitFinishPolicy = yaml::from_str(
+            r#"
+auto_push: true
+delivery: auto
+"#,
+        )
+        .unwrap();
+        assert_eq!(automatic.delivery, GitFinishDelivery::Auto);
+
+        let serialized = yaml::to_string(&automatic).unwrap();
+        assert!(serialized.contains("delivery: auto"));
+
+        let template: YardConfig =
+            yaml::from_str(include_str!("../templates/agents/yardlet.yaml")).unwrap();
+        assert!(!template.git_finish.auto_push);
+        assert_eq!(template.git_finish.delivery, GitFinishDelivery::Direct);
+    }
 
     #[test]
     fn worker_refusal_patterns_are_backward_compatible_and_bounded() {

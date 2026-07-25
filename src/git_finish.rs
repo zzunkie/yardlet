@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
-use crate::schemas::{GitFinishPolicy, TaskState};
+use crate::schemas::{GitFinishDelivery, GitFinishPolicy, TaskState};
 use crate::state::Workspace;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +28,7 @@ pub enum GitFinishStatus {
     Prepared,
     Pushed,
     AlreadyApplied,
+    PullRequestOpen,
     CheckBlocked,
     SafetyBlocked,
     GitFailed,
@@ -38,7 +39,11 @@ impl GitFinishStatus {
     pub fn verified_complete(self) -> bool {
         matches!(
             self,
-            Self::Pushed | Self::AlreadyApplied | Self::Disabled | Self::NotNeeded
+            Self::Pushed
+                | Self::AlreadyApplied
+                | Self::PullRequestOpen
+                | Self::Disabled
+                | Self::NotNeeded
         )
     }
 
@@ -60,6 +65,8 @@ pub struct GitFinishOwnership {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitFinishPolicySnapshot {
     pub auto_push: bool,
+    #[serde(default)]
+    pub delivery: GitFinishDelivery,
     pub remote: String,
     pub target_ref: String,
     pub pre_push_checks: Vec<String>,
@@ -92,6 +99,12 @@ pub struct GitFinishRecord {
     pub remote_oid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_before_oid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_state: Option<String>,
     pub reason: String,
 }
 
@@ -109,6 +122,14 @@ impl GitFinishRecord {
                 "git finish: already applied and verified {} {}",
                 self.policy.remote, self.policy.target_ref
             ),
+            GitFinishStatus::PullRequestOpen => format!(
+                "git finish: pull request #{} open and verified {} -> {}",
+                self.pull_request_number
+                    .map(|number| number.to_string())
+                    .unwrap_or_else(|| "?".to_string()),
+                self.head_ref.as_deref().unwrap_or("<unknown-head>"),
+                self.policy.target_ref
+            ),
             GitFinishStatus::CheckBlocked => "git finish: blocked by pre-push check".to_string(),
             GitFinishStatus::SafetyBlocked => {
                 format!("git finish: safety blocked ({})", self.reason)
@@ -118,6 +139,31 @@ impl GitFinishRecord {
                 "git finish: remote verification mismatch".to_string()
             }
         }
+    }
+
+    pub(crate) fn validate_authority(&self) -> Result<(), &'static str> {
+        if !self.policy.remote.is_empty() && !remote_name_is_safe(&self.policy.remote) {
+            return Err("Git finish authority requires a remote name, never a URL or credential");
+        }
+        if !self.policy.target_ref.is_empty() && !branch_ref_label_is_safe(&self.policy.target_ref)
+        {
+            return Err("Git finish authority target ref is invalid");
+        }
+        if self.status == GitFinishStatus::PullRequestOpen {
+            let verified = self.policy.delivery == GitFinishDelivery::Auto
+                && self
+                    .head_ref
+                    .as_deref()
+                    .is_some_and(|head| head.starts_with("refs/heads/yardlet/runs/"))
+                && self.pull_request_number.is_some_and(|number| number > 0)
+                && self.pull_request_state.as_deref() == Some("open")
+                && self.expected_oid.is_some()
+                && self.remote_oid == self.expected_oid;
+            if !verified {
+                return Err("Git finish authority has an unverified pull request open record");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -129,12 +175,424 @@ impl GitFinishStatus {
             Self::Prepared => "prepared",
             Self::Pushed => "pushed",
             Self::AlreadyApplied => "already_applied",
+            Self::PullRequestOpen => "pull_request_open",
             Self::CheckBlocked => "check_blocked",
             Self::SafetyBlocked => "safety_blocked",
             Self::GitFailed => "git_failed",
             Self::RemoteMismatch => "remote_mismatch",
         }
     }
+
+    pub fn telemetry_verified_complete(value: &str) -> bool {
+        value.is_empty()
+            || matches!(
+                value,
+                "disabled" | "not_needed" | "pushed" | "already_applied" | "pull_request_open"
+            )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeliveryRoute {
+    Direct,
+    PullRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiscoveredGitHubRepository {
+    remote: String,
+    repository: String,
+    base_ref: String,
+    route: DeliveryRoute,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitHubRepositoryMetadata {
+    name_with_owner: String,
+    default_branch: String,
+    viewer_permission: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PullRequestMetadata {
+    number: u64,
+    head_ref: String,
+    base_ref: String,
+    head_oid: String,
+    state: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DiscoveryError {
+    reason: &'static str,
+}
+
+trait GitHubClient {
+    fn authenticate(&self) -> Result<(), &'static str>;
+    fn repository_metadata(
+        &self,
+        repository: &str,
+    ) -> Result<GitHubRepositoryMetadata, &'static str>;
+    fn branch_protected(&self, repository: &str, branch: &str) -> Result<bool, &'static str>;
+    fn open_pull_requests(
+        &self,
+        repository: &str,
+        head: &str,
+        base: &str,
+    ) -> Result<Vec<PullRequestMetadata>, &'static str>;
+    fn create_pull_request(
+        &self,
+        repository: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<(), &'static str>;
+}
+
+struct GhCli;
+
+impl GhCli {
+    fn output(args: &[&str]) -> Result<std::process::Output, &'static str> {
+        Command::new("gh").args(args).output().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "gh_not_installed"
+            } else {
+                "gh_command_failed"
+            }
+        })
+    }
+}
+
+impl GitHubClient for GhCli {
+    fn authenticate(&self) -> Result<(), &'static str> {
+        let output = Self::output(&["auth", "status", "--hostname", "github.com"])?;
+        output
+            .status
+            .success()
+            .then_some(())
+            .ok_or("gh_not_authenticated")
+    }
+
+    fn repository_metadata(
+        &self,
+        repository: &str,
+    ) -> Result<GitHubRepositoryMetadata, &'static str> {
+        #[derive(Deserialize)]
+        struct Permissions {
+            push: bool,
+        }
+        #[derive(Deserialize)]
+        struct Response {
+            full_name: String,
+            default_branch: String,
+            permissions: Permissions,
+        }
+        let endpoint = format!("repos/{repository}");
+        let output = Self::output(&["api", &endpoint])?;
+        if !output.status.success() {
+            return Err("github_repository_metadata_unavailable");
+        }
+        let response: Response = serde_json::from_slice(&output.stdout)
+            .map_err(|_| "github_repository_metadata_invalid")?;
+        Ok(GitHubRepositoryMetadata {
+            name_with_owner: response.full_name,
+            default_branch: response.default_branch,
+            viewer_permission: if response.permissions.push {
+                "WRITE".to_string()
+            } else {
+                "READ".to_string()
+            },
+        })
+    }
+
+    fn branch_protected(&self, repository: &str, branch: &str) -> Result<bool, &'static str> {
+        #[derive(Deserialize)]
+        struct Response {
+            protected: bool,
+        }
+        let endpoint = format!(
+            "repos/{repository}/branches/{}",
+            percent_encode_component(branch)
+        );
+        let output = Self::output(&["api", &endpoint])?;
+        if !output.status.success() {
+            return Err("github_default_branch_metadata_unavailable");
+        }
+        serde_json::from_slice::<Response>(&output.stdout)
+            .map(|response| response.protected)
+            .map_err(|_| "github_default_branch_metadata_invalid")
+    }
+
+    fn open_pull_requests(
+        &self,
+        repository: &str,
+        head: &str,
+        base: &str,
+    ) -> Result<Vec<PullRequestMetadata>, &'static str> {
+        #[derive(Deserialize)]
+        struct RefInfo {
+            #[serde(rename = "ref")]
+            name: String,
+            sha: String,
+        }
+        #[derive(Deserialize)]
+        struct Response {
+            number: u64,
+            state: String,
+            head: RefInfo,
+            base: RefInfo,
+        }
+        let owner = repository
+            .split_once('/')
+            .map(|(owner, _)| owner)
+            .ok_or("github_repository_identity_invalid")?;
+        let endpoint = format!("repos/{repository}/pulls");
+        let head_filter = format!("{owner}:{head}");
+        let output = Self::output(&[
+            "api",
+            "--method",
+            "GET",
+            &endpoint,
+            "-f",
+            "state=open",
+            "-f",
+            &format!("head={head_filter}"),
+            "-f",
+            &format!("base={base}"),
+        ])?;
+        if !output.status.success() {
+            return Err("pull_request_lookup_failed");
+        }
+        let responses: Vec<Response> =
+            serde_json::from_slice(&output.stdout).map_err(|_| "pull_request_metadata_invalid")?;
+        Ok(responses
+            .into_iter()
+            .map(|response| PullRequestMetadata {
+                number: response.number,
+                head_ref: response.head.name,
+                base_ref: response.base.name,
+                head_oid: response.head.sha,
+                state: response.state,
+            })
+            .collect())
+    }
+
+    fn create_pull_request(
+        &self,
+        repository: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<(), &'static str> {
+        let endpoint = format!("repos/{repository}/pulls");
+        let output = Self::output(&[
+            "api",
+            "--method",
+            "POST",
+            &endpoint,
+            "-f",
+            &format!("head={head}"),
+            "-f",
+            &format!("base={base}"),
+            "-f",
+            &format!("title={title}"),
+            "-f",
+            &format!("body={body}"),
+        ])?;
+        output
+            .status
+            .success()
+            .then_some(())
+            .ok_or("pull_request_create_failed")
+    }
+}
+
+fn percent_encode_component(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn github_repository_from_remote_url(url: &str) -> Option<String> {
+    let trimmed = url.trim().trim_end_matches('/');
+    let path = if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("ssh://git@github.com/") {
+        rest
+    } else {
+        trimmed.strip_prefix("https://github.com/")?
+    };
+    let repository = path.strip_suffix(".git").unwrap_or(path);
+    let (owner, name) = repository.split_once('/')?;
+    if owner.is_empty()
+        || name.is_empty()
+        || name.contains('/')
+        || !owner
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return None;
+    }
+    Some(format!("{owner}/{name}"))
+}
+
+fn discover_github_repository(
+    root: &Path,
+    policy: &GitFinishPolicy,
+    github: &dyn GitHubClient,
+) -> Result<DiscoveredGitHubRepository, DiscoveryError> {
+    let upstream = git_stdout(root, &["rev-parse", "--symbolic-full-name", "@{upstream}"])
+        .map(|value| value.trim().to_string())
+        .filter(|value| value.starts_with("refs/remotes/"))
+        .ok_or(DiscoveryError {
+            reason: "upstream_not_configured",
+        })?;
+    let remotes = git_stdout(root, &["remote"])
+        .ok_or(DiscoveryError {
+            reason: "remote_list_unavailable",
+        })?
+        .lines()
+        .map(str::trim)
+        .filter(|remote| !remote.is_empty())
+        .filter_map(|remote| {
+            upstream
+                .strip_prefix(&format!("refs/remotes/{remote}/"))
+                .filter(|branch| !branch.is_empty())
+                .map(|branch| (remote.to_string(), branch.to_string()))
+        })
+        .collect::<Vec<_>>();
+    if remotes.len() != 1 {
+        return Err(DiscoveryError {
+            reason: "upstream_remote_ambiguous",
+        });
+    }
+    let (remote, upstream_branch) = &remotes[0];
+    if !policy.remote.trim().is_empty() && policy.remote != *remote {
+        return Err(DiscoveryError {
+            reason: "configured_remote_conflicts_with_upstream",
+        });
+    }
+    let raw_remote_urls_text = git_stdout(
+        root,
+        &["config", "--get-all", &format!("remote.{remote}.url")],
+    )
+    .ok_or(DiscoveryError {
+        reason: "remote_url_unavailable",
+    })?;
+    let raw_remote_urls = raw_remote_urls_text
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if raw_remote_urls.len() != 1 {
+        return Err(DiscoveryError {
+            reason: "remote_url_ambiguous",
+        });
+    }
+    let repository =
+        github_repository_from_remote_url(raw_remote_urls[0]).ok_or(DiscoveryError {
+            reason: "remote_provider_not_github",
+        })?;
+    github
+        .authenticate()
+        .map_err(|reason| DiscoveryError { reason })?;
+    let metadata = github
+        .repository_metadata(&repository)
+        .map_err(|reason| DiscoveryError { reason })?;
+    if !metadata.name_with_owner.eq_ignore_ascii_case(&repository) {
+        return Err(DiscoveryError {
+            reason: "github_repository_identity_mismatch",
+        });
+    }
+    if metadata.default_branch.trim().is_empty() || metadata.default_branch != *upstream_branch {
+        return Err(DiscoveryError {
+            reason: "github_default_branch_mismatch",
+        });
+    }
+    let base_ref = format!("refs/heads/{}", metadata.default_branch);
+    if !policy.target_ref.trim().is_empty() && policy.target_ref != base_ref {
+        return Err(DiscoveryError {
+            reason: "configured_target_conflicts_with_github_default",
+        });
+    }
+    if !matches!(
+        metadata.viewer_permission.as_str(),
+        "WRITE" | "MAINTAIN" | "ADMIN"
+    ) {
+        return Err(DiscoveryError {
+            reason: "github_push_permission_insufficient",
+        });
+    }
+    let protected = github
+        .branch_protected(&repository, &metadata.default_branch)
+        .map_err(|reason| DiscoveryError { reason })?;
+    let route = if protected {
+        DeliveryRoute::PullRequest
+    } else {
+        DeliveryRoute::Direct
+    };
+    Ok(DiscoveredGitHubRepository {
+        remote: remote.clone(),
+        repository,
+        base_ref,
+        route,
+    })
+}
+
+fn deterministic_head_ref(run_id: &str) -> Option<String> {
+    if run_id.trim().is_empty() || run_id.contains([' ', ':', '^', '~']) {
+        return None;
+    }
+    let head_ref = format!("refs/heads/yardlet/runs/{run_id}");
+    (!head_ref.ends_with('/') && git_ref_component_safe(run_id)).then_some(head_ref)
+}
+
+fn git_ref_component_safe(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && !value.starts_with('.')
+        && !value.ends_with('.')
+        && !value.contains("..")
+        && !value.contains("@{")
+}
+
+fn remote_name_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains("://")
+        && !value.contains('@')
+        && !value.contains(':')
+        && !value.contains('\\')
+        && value
+            .bytes()
+            .all(|byte| !byte.is_ascii_whitespace() && !byte.is_ascii_control())
+}
+
+fn branch_ref_label_is_safe(value: &str) -> bool {
+    let Some(branch) = value.strip_prefix("refs/heads/") else {
+        return false;
+    };
+    !branch.is_empty()
+        && !branch.starts_with('/')
+        && !branch.ends_with('/')
+        && !branch.ends_with('.')
+        && !branch.contains("..")
+        && !branch.contains("@{")
+        && !branch
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        && !branch.contains([':', '^', '~', '?', '*', '[', '\\'])
 }
 
 /// Fail closed before a worker is spawned when an enabled Git-finish policy
@@ -152,10 +610,26 @@ pub(crate) fn preflight_target_before_spawn(
     if !policy.auto_push {
         return Ok(());
     }
+    let effective_target = if policy.delivery == GitFinishDelivery::Auto {
+        match discover_github_repository(&ws.root, policy, &GhCli) {
+            Ok(discovered) => discovered.base_ref,
+            Err(error) => {
+                let mut record = base_record(run_id, task_id, policy, None);
+                block(&mut record, error.reason);
+                persist(ws, run_dir, &record)?;
+                anyhow::bail!(
+                    "GitHub Git finish discovery failed before worker spawn: {}",
+                    error.reason
+                );
+            }
+        }
+    } else {
+        policy.target_ref.clone()
+    };
     let checkout_ref = git_stdout(&ws.root, &["symbolic-ref", "--quiet", "HEAD"])
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    if checkout_ref.as_deref() == Some(policy.target_ref.as_str()) {
+    if checkout_ref.as_deref() == Some(effective_target.as_str()) {
         return Ok(());
     }
 
@@ -169,7 +643,7 @@ pub(crate) fn preflight_target_before_spawn(
     anyhow::bail!(
         "branch_does_not_match_target_ref: configured Git finish target_ref '{}' \
          does not match checkout ref '{}'; update git_finish.target_ref before running",
-        policy.target_ref,
+        effective_target,
         observed
     )
 }
@@ -182,14 +656,41 @@ pub fn finish_owned_run(
     task_state: TaskState,
     ownership: Option<GitFinishOwnership>,
 ) -> anyhow::Result<GitFinishRecord> {
-    finish_owned_run_with_mode(
-        ws,
-        run_dir,
-        run_id,
-        task_id,
-        task_state,
-        ownership,
+    finish_owned_run_with_mode_and_github(
+        FinishOwnedInput {
+            ws,
+            run_dir,
+            run_id,
+            task_id,
+            task_state,
+            ownership,
+        },
         FinishMode::CurrentHead,
+        &GhCli,
+    )
+}
+
+#[cfg(test)]
+fn finish_owned_run_with_github(
+    ws: &Workspace,
+    run_dir: &Path,
+    run_id: &str,
+    task_id: &str,
+    task_state: TaskState,
+    ownership: Option<GitFinishOwnership>,
+    github: &dyn GitHubClient,
+) -> anyhow::Result<GitFinishRecord> {
+    finish_owned_run_with_mode_and_github(
+        FinishOwnedInput {
+            ws,
+            run_dir,
+            run_id,
+            task_id,
+            task_state,
+            ownership,
+        },
+        FinishMode::CurrentHead,
+        github,
     )
 }
 
@@ -245,14 +746,17 @@ pub(crate) fn recover_owned_run(
     ownership: Option<GitFinishOwnership>,
     preserve_verified: bool,
 ) -> anyhow::Result<GitFinishRecord> {
-    finish_owned_run_with_mode(
-        ws,
-        run_dir,
-        run_id,
-        task_id,
-        task_state,
-        ownership,
+    finish_owned_run_with_mode_and_github(
+        FinishOwnedInput {
+            ws,
+            run_dir,
+            run_id,
+            task_id,
+            task_state,
+            ownership,
+        },
         FinishMode::AccumulatedHead { preserve_verified },
+        &GhCli,
     )
 }
 
@@ -271,15 +775,28 @@ impl FinishMode {
     }
 }
 
-fn finish_owned_run_with_mode(
-    ws: &Workspace,
-    run_dir: &Path,
-    run_id: &str,
-    task_id: &str,
+struct FinishOwnedInput<'a> {
+    ws: &'a Workspace,
+    run_dir: &'a Path,
+    run_id: &'a str,
+    task_id: &'a str,
     task_state: TaskState,
     ownership: Option<GitFinishOwnership>,
+}
+
+fn finish_owned_run_with_mode_and_github(
+    input: FinishOwnedInput<'_>,
     mode: FinishMode,
+    github: &dyn GitHubClient,
 ) -> anyhow::Result<GitFinishRecord> {
+    let FinishOwnedInput {
+        ws,
+        run_dir,
+        run_id,
+        task_id,
+        task_state,
+        ownership,
+    } = input;
     let previous = ws.load_git_finish_record(run_dir).ok();
     let verified_floor = previous
         .as_ref()
@@ -287,7 +804,7 @@ fn finish_owned_run_with_mode(
         .cloned();
     let persist_result =
         |record| persist_with_verified_floor(ws, run_dir, record, verified_floor.as_ref());
-    let policy = match ws.load_config() {
+    let configured_policy = match ws.load_config() {
         Ok(config) => config.git_finish,
         Err(_) => {
             let policy = GitFinishPolicy::default();
@@ -296,9 +813,29 @@ fn finish_owned_run_with_mode(
             return persist_result(record);
         }
     };
+    let discovery =
+        if configured_policy.auto_push && configured_policy.delivery == GitFinishDelivery::Auto {
+            match discover_github_repository(&ws.root, &configured_policy, github) {
+                Ok(discovered) => Some(discovered),
+                Err(error) => {
+                    let mut record =
+                        base_record(run_id, task_id, &configured_policy, ownership.as_ref());
+                    block(&mut record, error.reason);
+                    return persist_result(record);
+                }
+            }
+        } else {
+            None
+        };
+    let mut policy = configured_policy;
+    if let Some(discovered) = discovery.as_ref() {
+        policy.remote.clone_from(&discovered.remote);
+        policy.target_ref.clone_from(&discovered.base_ref);
+    }
     let target_changed = previous.as_ref().is_some_and(|record| {
         record.policy.auto_push
-            && (record.policy.remote != policy.remote
+            && (record.policy.delivery != policy.delivery
+                || record.policy.remote != policy.remote
                 || record.policy.target_ref != policy.target_ref)
     });
     let recorded_ownership = previous.as_ref().and_then(record_ownership);
@@ -488,6 +1025,151 @@ fn finish_owned_run_with_mode(
         }
     }
 
+    if discovery
+        .as_ref()
+        .is_some_and(|discovered| discovered.route == DeliveryRoute::PullRequest)
+    {
+        let discovered = discovery.as_ref().expect("route checked above");
+        let Some(head_ref) = deterministic_head_ref(run_id) else {
+            block(&mut record, "run_head_ref_invalid");
+            return persist_result(record);
+        };
+        if !git_ok(&ws.root, &["check-ref-format", &head_ref]) {
+            block(&mut record, "run_head_ref_invalid");
+            return persist_result(record);
+        }
+        let head_branch = head_ref
+            .strip_prefix("refs/heads/")
+            .expect("deterministic head is a branch ref");
+        let head_before = match remote_oid(&ws.root, &policy.remote, &head_ref) {
+            Ok(Some(oid)) if oid == expected => Some(oid),
+            Ok(Some(oid)) => {
+                record.status = GitFinishStatus::RemoteMismatch;
+                record.remote_oid = Some(oid);
+                record.head_ref = Some(head_ref);
+                record.reason = "run_head_ref_oid_conflict".to_string();
+                return persist_result(record);
+            }
+            Ok(None) => None,
+            Err(()) => {
+                record.status = GitFinishStatus::GitFailed;
+                record.reason = "run_head_lookup_before_push_failed".to_string();
+                return persist_result(record);
+            }
+        };
+        record.head_ref = Some(head_ref.clone());
+
+        // Persist before the first possible remote mutation. Recovery can
+        // compare the deterministic head ref with expected_oid after a crash
+        // and skip a push that already landed.
+        record.status = GitFinishStatus::Prepared;
+        record.reason = "ready_to_push_run_head".to_string();
+        persist(ws, run_dir, &record)?;
+
+        if head_before.is_none() {
+            record.push_invoked = true;
+            let refspec = format!("{expected}:{head_ref}");
+            if !git_ok(
+                &ws.root,
+                &["push", "--porcelain", "--", &push_destination, &refspec],
+            ) {
+                record.status = GitFinishStatus::GitFailed;
+                record.reason = "run_head_push_failed".to_string();
+                return persist_result(record);
+            }
+            record.push_succeeded = true;
+        }
+        match remote_oid(&ws.root, &policy.remote, &head_ref) {
+            Ok(Some(oid)) if oid == expected => {
+                record.remote_oid = Some(oid);
+            }
+            Ok(oid) => {
+                record.status = GitFinishStatus::RemoteMismatch;
+                record.remote_oid = oid;
+                record.reason = "run_head_oid_does_not_match_expected".to_string();
+                return persist_result(record);
+            }
+            Err(()) => {
+                record.status = GitFinishStatus::GitFailed;
+                record.reason = "run_head_lookup_after_push_failed".to_string();
+                return persist_result(record);
+            }
+        }
+
+        // PR creation has its own durable gate after independent head
+        // verification. If the process exits after creation, recovery queries
+        // the same head/base pair and reuses the open PR.
+        record.status = GitFinishStatus::Prepared;
+        record.reason = "ready_to_create_or_reuse_pull_request".to_string();
+        persist(ws, run_dir, &record)?;
+        let mut pull_requests =
+            match github.open_pull_requests(&discovered.repository, head_branch, branch) {
+                Ok(pull_requests) => pull_requests,
+                Err(reason) => {
+                    record.status = GitFinishStatus::GitFailed;
+                    record.reason = reason.to_string();
+                    return persist_result(record);
+                }
+            };
+        let reused = !pull_requests.is_empty();
+        if pull_requests.is_empty() {
+            let title = format!("Yardlet run {run_id}: {task_id}");
+            let body = format!(
+                "Yardlet run `{run_id}` delivered the core-verified commit for task `{task_id}`."
+            );
+            if let Err(reason) = github.create_pull_request(
+                &discovered.repository,
+                head_branch,
+                branch,
+                &title,
+                &body,
+            ) {
+                record.status = GitFinishStatus::GitFailed;
+                record.reason = reason.to_string();
+                return persist_result(record);
+            }
+            pull_requests =
+                match github.open_pull_requests(&discovered.repository, head_branch, branch) {
+                    Ok(pull_requests) => pull_requests,
+                    Err(reason) => {
+                        record.status = GitFinishStatus::GitFailed;
+                        record.reason = reason.to_string();
+                        return persist_result(record);
+                    }
+                };
+        }
+        if pull_requests.len() != 1 {
+            record.status = GitFinishStatus::RemoteMismatch;
+            record.reason = if pull_requests.is_empty() {
+                "pull_request_not_open_after_create"
+            } else {
+                "multiple_open_pull_requests_for_run_head"
+            }
+            .to_string();
+            return persist_result(record);
+        }
+        let pull_request = pull_requests.remove(0);
+        if !pull_request.state.eq_ignore_ascii_case("open")
+            || pull_request.head_ref != head_branch
+            || pull_request.base_ref != branch
+            || pull_request.head_oid != expected
+        {
+            record.status = GitFinishStatus::RemoteMismatch;
+            record.reason = "pull_request_verification_mismatch".to_string();
+            return persist_result(record);
+        }
+        record.status = GitFinishStatus::PullRequestOpen;
+        record.pull_request_number = Some(pull_request.number);
+        record.pull_request_state = Some("open".to_string());
+        record.reason = if reused {
+            "pull_request_reused_and_verified"
+        } else {
+            "pull_request_created_and_verified"
+        }
+        .to_string();
+        return persist_result(record);
+    }
+
     // This durable write is a hard gate. If Yardlet cannot record that it is
     // about to mutate the remote, the error reaches the completion path and no
     // push subprocess is started.
@@ -543,15 +1225,24 @@ fn base_record(
     ownership: Option<&GitFinishOwnership>,
 ) -> GitFinishRecord {
     GitFinishRecord {
-        schema_version: 2,
+        schema_version: 3,
         run_id: run_id.to_string(),
         task_id: task_id.to_string(),
         attempted_at: Local::now().to_rfc3339(),
         status: GitFinishStatus::Disabled,
         policy: GitFinishPolicySnapshot {
             auto_push: policy.auto_push,
-            remote: policy.remote.clone(),
-            target_ref: policy.target_ref.clone(),
+            delivery: policy.delivery,
+            remote: if remote_name_is_safe(&policy.remote) {
+                policy.remote.clone()
+            } else {
+                String::new()
+            },
+            target_ref: if branch_ref_label_is_safe(&policy.target_ref) {
+                policy.target_ref.clone()
+            } else {
+                String::new()
+            },
             pre_push_checks: policy
                 .pre_push_checks
                 .iter()
@@ -571,6 +1262,9 @@ fn base_record(
         push_succeeded: false,
         remote_oid: None,
         remote_before_oid: None,
+        head_ref: None,
+        pull_request_number: None,
+        pull_request_state: None,
         reason: "policy_disabled".to_string(),
     }
 }
@@ -900,8 +1594,9 @@ fn shell_ok(root: &Path, command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schemas::{GitFinishCheck, GitFinishPolicy};
+    use crate::schemas::{GitFinishCheck, GitFinishDelivery, GitFinishPolicy};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
 
     static NEXT: AtomicU64 = AtomicU64::new(1);
 
@@ -954,11 +1649,52 @@ mod tests {
             let mut cfg = self.ws.load_config().unwrap();
             cfg.git_finish = GitFinishPolicy {
                 auto_push: true,
+                delivery: GitFinishDelivery::Direct,
                 remote: "fixture".to_string(),
                 target_ref: "refs/heads/main".to_string(),
                 pre_push_checks: checks,
             };
             crate::state::save_yaml(&self.ws.config_path(), &cfg).unwrap();
+        }
+
+        fn configure_auto(&self) {
+            let mut cfg = self.ws.load_config().unwrap();
+            cfg.git_finish = GitFinishPolicy {
+                auto_push: true,
+                delivery: GitFinishDelivery::Auto,
+                remote: String::new(),
+                target_ref: String::new(),
+                pre_push_checks: vec![],
+            };
+            crate::state::save_yaml(&self.ws.config_path(), &cfg).unwrap();
+            cmd(
+                &self.root,
+                &["branch", "--set-upstream-to=fixture/main", "main"],
+            );
+            cmd(
+                &self.root,
+                &[
+                    "config",
+                    "remote.fixture.url",
+                    "https://github.com/acme/project.git",
+                ],
+            );
+            cmd(
+                &self.root,
+                &[
+                    "config",
+                    &format!("url.{}.insteadOf", self.remote.display()),
+                    "https://github.com/acme/project.git",
+                ],
+            );
+            cmd(
+                &self.root,
+                &[
+                    "config",
+                    &format!("url.{}.pushInsteadOf", self.remote.display()),
+                    "https://github.com/acme/project.git",
+                ],
+            );
         }
 
         fn commit(&self, text: &str) -> String {
@@ -1058,6 +1794,225 @@ mod tests {
         }
     }
 
+    struct FakeGithub {
+        protected: bool,
+        prs: Mutex<Vec<PullRequestMetadata>>,
+        create_count: AtomicU64,
+        expected_oid: Mutex<String>,
+        prepared_probe: Mutex<Option<(Workspace, PathBuf)>>,
+        prepared_seen_before_create: Mutex<bool>,
+    }
+
+    impl FakeGithub {
+        fn new(protected: bool) -> Self {
+            Self {
+                protected,
+                prs: Mutex::new(vec![]),
+                create_count: AtomicU64::new(0),
+                expected_oid: Mutex::new(String::new()),
+                prepared_probe: Mutex::new(None),
+                prepared_seen_before_create: Mutex::new(false),
+            }
+        }
+
+        fn expect_create_after_prepared(&self, expected_oid: &str, ws: &Workspace, run_dir: &Path) {
+            *self.expected_oid.lock().unwrap() = expected_oid.to_string();
+            *self.prepared_probe.lock().unwrap() = Some((ws.clone(), run_dir.to_path_buf()));
+        }
+    }
+
+    impl GitHubClient for FakeGithub {
+        fn authenticate(&self) -> Result<(), &'static str> {
+            Ok(())
+        }
+
+        fn repository_metadata(
+            &self,
+            _repository: &str,
+        ) -> Result<GitHubRepositoryMetadata, &'static str> {
+            Ok(GitHubRepositoryMetadata {
+                name_with_owner: "acme/project".into(),
+                default_branch: "main".into(),
+                viewer_permission: "WRITE".into(),
+            })
+        }
+
+        fn branch_protected(&self, _repository: &str, _branch: &str) -> Result<bool, &'static str> {
+            Ok(self.protected)
+        }
+
+        fn open_pull_requests(
+            &self,
+            _repository: &str,
+            _head: &str,
+            _base: &str,
+        ) -> Result<Vec<PullRequestMetadata>, &'static str> {
+            Ok(self.prs.lock().unwrap().clone())
+        }
+
+        fn create_pull_request(
+            &self,
+            _repository: &str,
+            head: &str,
+            base: &str,
+            _title: &str,
+            _body: &str,
+        ) -> Result<(), &'static str> {
+            if let Some((ws, run_dir)) = self.prepared_probe.lock().unwrap().as_ref() {
+                let record = ws.load_git_finish_record(run_dir).unwrap();
+                *self.prepared_seen_before_create.lock().unwrap() = record.status
+                    == GitFinishStatus::Prepared
+                    && record.remote_oid.as_deref()
+                        == Some(self.expected_oid.lock().unwrap().as_str());
+            }
+            self.create_count.fetch_add(1, Ordering::SeqCst);
+            self.prs.lock().unwrap().push(PullRequestMetadata {
+                number: 41,
+                head_ref: head.to_string(),
+                base_ref: base.to_string(),
+                head_oid: self.expected_oid.lock().unwrap().clone(),
+                state: "OPEN".into(),
+            });
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn ac_002_auto_delivery_cross_checks_upstream_remote_and_github_metadata() {
+        let f = Fixture::new("auto-discovery");
+        f.configure_auto();
+        let policy = f.ws.load_config().unwrap().git_finish;
+        let github = FakeGithub::new(false);
+
+        let discovered = discover_github_repository(&f.root, &policy, &github).unwrap();
+
+        assert_eq!(discovered.remote, "fixture");
+        assert_eq!(discovered.repository, "acme/project");
+        assert_eq!(discovered.base_ref, "refs/heads/main");
+        assert_eq!(discovered.route, DeliveryRoute::Direct);
+
+        let mut conflicting = policy;
+        conflicting.remote = "other".into();
+        assert_eq!(
+            discover_github_repository(&f.root, &conflicting, &github)
+                .unwrap_err()
+                .reason,
+            "configured_remote_conflicts_with_upstream"
+        );
+    }
+
+    #[test]
+    fn auto_delivery_rejects_multiple_remote_repository_identities() {
+        let f = Fixture::new("auto-ambiguous-remote-url");
+        f.configure_auto();
+        cmd(
+            &f.root,
+            &[
+                "config",
+                "--add",
+                "remote.fixture.url",
+                "https://github.com/other/project.git",
+            ],
+        );
+        let policy = f.ws.load_config().unwrap().git_finish;
+        let github = FakeGithub::new(false);
+
+        let error = discover_github_repository(&f.root, &policy, &github).unwrap_err();
+
+        assert_eq!(error.reason, "remote_url_ambiguous");
+    }
+
+    #[test]
+    fn ac_003_protected_target_pushes_exact_oid_only_to_deterministic_run_head() {
+        let f = Fixture::new("auto-pr-head");
+        f.configure_auto();
+        let oid = f.commit("owned");
+        let github = FakeGithub::new(true);
+        github.expect_create_after_prepared(&oid, &f.ws, &f.run_dir);
+
+        let record = finish_owned_run_with_github(
+            &f.ws,
+            &f.run_dir,
+            "run-test",
+            "YARD-001",
+            TaskState::Done,
+            Some(f.ownership(oid.clone())),
+            &github,
+        )
+        .unwrap();
+
+        assert_eq!(record.status, GitFinishStatus::PullRequestOpen);
+        assert_eq!(
+            remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),
+            Some(f.initial_oid.clone())
+        );
+        let head_ref = deterministic_head_ref("run-test").unwrap();
+        assert_eq!(record.head_ref.as_deref(), Some(head_ref.as_str()));
+        assert_eq!(
+            remote_oid(&f.root, "fixture", &head_ref).unwrap(),
+            Some(oid)
+        );
+    }
+
+    #[test]
+    fn ac_004_pr_create_is_prepared_first_then_reused_and_independently_verified() {
+        let f = Fixture::new("auto-pr-recovery");
+        f.configure_auto();
+        let oid = f.commit("owned");
+        let proof = f.ownership(oid.clone());
+        let github = FakeGithub::new(true);
+        github.expect_create_after_prepared(&oid, &f.ws, &f.run_dir);
+
+        let first = finish_owned_run_with_github(
+            &f.ws,
+            &f.run_dir,
+            "run-test",
+            "YARD-001",
+            TaskState::Done,
+            Some(proof.clone()),
+            &github,
+        )
+        .unwrap();
+        let repeated = finish_owned_run_with_mode_and_github(
+            FinishOwnedInput {
+                ws: &f.ws,
+                run_dir: &f.run_dir,
+                run_id: "run-test",
+                task_id: "YARD-001",
+                task_state: TaskState::Done,
+                ownership: Some(proof),
+            },
+            FinishMode::AccumulatedHead {
+                preserve_verified: false,
+            },
+            &github,
+        )
+        .unwrap();
+
+        assert!(*github.prepared_seen_before_create.lock().unwrap());
+        assert_eq!(github.create_count.load(Ordering::SeqCst), 1);
+        assert_eq!(first.status, GitFinishStatus::PullRequestOpen);
+        assert_eq!(repeated.status, GitFinishStatus::PullRequestOpen);
+        assert_eq!(repeated.pull_request_number, Some(41));
+        assert_eq!(repeated.pull_request_state.as_deref(), Some("open"));
+        assert!(!repeated.push_invoked);
+
+        github.prs.lock().unwrap()[0].head_oid = "0".repeat(40);
+        let mismatched = finish_owned_run_with_github(
+            &f.ws,
+            &f.run_dir,
+            "run-test",
+            "YARD-001",
+            TaskState::Done,
+            Some(f.ownership(oid)),
+            &github,
+        )
+        .unwrap();
+        assert_eq!(mismatched.status, GitFinishStatus::RemoteMismatch);
+        assert_eq!(mismatched.reason, "pull_request_verification_mismatch");
+        assert!(!mismatched.status.verified_complete());
+    }
+
     #[test]
     fn legacy_config_defaults_to_no_remote_mutation() {
         let f = Fixture::new("default-off");
@@ -1088,23 +2043,33 @@ mod tests {
 
     #[test]
     fn only_verified_or_disabled_statuses_are_complete() {
-        for status in [
+        let incomplete = [
             GitFinishStatus::Prepared,
             GitFinishStatus::CheckBlocked,
             GitFinishStatus::SafetyBlocked,
             GitFinishStatus::GitFailed,
             GitFinishStatus::RemoteMismatch,
-        ] {
+        ];
+        for status in incomplete {
             assert!(!status.verified_complete(), "{status:?}");
+            assert!(!GitFinishStatus::telemetry_verified_complete(
+                status.as_str()
+            ));
         }
-        for status in [
+        let complete = [
             GitFinishStatus::Disabled,
             GitFinishStatus::NotNeeded,
             GitFinishStatus::Pushed,
             GitFinishStatus::AlreadyApplied,
-        ] {
+            GitFinishStatus::PullRequestOpen,
+        ];
+        for status in complete {
             assert!(status.verified_complete(), "{status:?}");
+            assert!(GitFinishStatus::telemetry_verified_complete(
+                status.as_str()
+            ));
         }
+        assert!(GitFinishStatus::telemetry_verified_complete(""));
     }
 
     #[test]
