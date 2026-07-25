@@ -430,12 +430,14 @@ worktree는 검사를 위해 보존됩니다). 기본은 꺼져 있고, Settings
 
 자동 push는 사용자가 소유하는 별도의 완료 정책이며 기본은 꺼져 있습니다.
 `yardlet init`은 명시적으로 비활성화된 블록을 작성하고, 이 블록이 없는 기존
-워크스페이스도 비활성 상태를 유지합니다. 이름이 있는 remote, 완전한 branch ref,
-그리고 통과해야 할 순서대로 검사를 설정합니다.
+워크스페이스도 비활성 상태를 유지합니다. 기본 `direct` 배송은 기존 exact-OID push
+계약을 보존합니다. 이름이 있는 remote, 완전한 branch ref, 그리고 통과해야 할 순서대로
+검사를 설정합니다.
 
 ```yaml
 git_finish:
   auto_push: false
+  delivery: direct
   remote: safe-remote
   target_ref: refs/heads/main
   pre_push_checks:
@@ -452,6 +454,39 @@ push 가능한 것은 아닙니다. Yardlet은 worktree 기준점과 해당 run�
 다른 세션 또는 로컬 자동화가 출처 불명 commit을 끼워 넣으면 push 전에 fail-closed로
 중단합니다.
 
+GitHub 저장소의 기본 브랜치가 direct push를 거부할 수 있다면 자동 배송에
+옵트인합니다.
+
+```yaml
+git_finish:
+  auto_push: true
+  delivery: auto
+  remote: ""
+  target_ref: ""
+  pre_push_checks:
+    - name: tests
+      command: cargo test
+```
+
+자동 배송에는 현재 브랜치의 모호하지 않은 단일 upstream, 하나의 GitHub 저장소를
+식별하는 upstream raw remote URL, 설치되어 있고 `github.com`에 인증된 GitHub CLI
+`gh`가 필요합니다. Yardlet은 upstream remote와 branch를 GitHub의 repository identity
+및 default-branch metadata와 교차 확인합니다. 비어 있지 않은 선택적 `remote`와
+`target_ref` 값은 assertion으로 동작하며 발견 결과와 일치해야 합니다. upstream이
+없거나 모호한 경우, remote URL이 여러 개인 경우, GitHub가 아닌 provider, 없거나
+인증되지 않은 `gh`, 불충분한 push 권한, 사용할 수 없는 metadata, identity 불일치는
+모두 원격 변경 전에 fail-closed합니다. 이 모드는 GitLab, Bitbucket 및 다른 hosting
+provider를 지원하지 않습니다.
+
+GitHub가 push 권한과 보호되지 않은 default branch를 확인하면 자동 배송은 기존
+exact-OID direct 경로를 사용합니다. 보호된 branch에서는 결정적인
+`refs/heads/yardlet/runs/<run-id>` head를 대신 사용합니다. Yardlet은 예상 OID를 보호된
+base ref에 push하지 않습니다. 예상 OID를 run 소유 head에 non-force push하고 remote
+head OID를 독립 검증한 뒤, 같은 head와 base의 열린 PR 하나가 있으면 재사용하거나 PR
+하나를 만들고 별도로 조회합니다. 완료로 인정하려면 PR이 예상 head OID와 base ref를
+유지한 open 상태여야 합니다. 자동 merge, 승인 대기, merge된 branch 삭제, PR
+auto-merge는 수행하지 않습니다.
+
 같은 Git common directory, remote, target ref를 마무리하는 실행은 제한 시간이 있는
 로컬 lock으로 직렬화됩니다. lock을 잡은 동안 현재 branch와 `HEAD`가 target 및 소유
 OID와 일치하고, push 목적지가 하나이며, `.agents/` 밖에 변경이 없어야 합니다. 그다음
@@ -463,18 +498,19 @@ force-with-lease, ref 삭제, history rewrite 경로는 없습니다. 그 뒤 Ya
 `git ls-remote --refs` 조회를 실행하고 remote OID가 고정된 예상 OID와 같을 때만 성공을
 보고합니다. 같은 마무리를 반복하면 추가 push 없이 `already_applied`로 수렴합니다.
 
-`auto_push: true`일 때는 `pushed`, 독립 검증된 `already_applied`, core가 검증한 무변경
-`not_needed`만 작업을 완료합니다. 그 밖의 모든 마무리 상태는 작업, 봉인된
-`run.yaml`, telemetry, 최종 리포트와 Trust 집계에서 미완료 `Partial`로 투영됩니다.
-기본 비활성 정책에서는 `disabled`가 필수 마무리가 아니므로 일반 작업 완료 방식은
-달라지지 않습니다.
+`auto_push: true`일 때는 `pushed`, 독립 검증된 `already_applied`, 검증된
+`pull_request_open`, core가 검증한 무변경 `not_needed`만 작업을 완료합니다. 그 밖의
+모든 마무리 상태는 작업, 봉인된 `run.yaml`, telemetry, 최종 리포트와 Trust 집계에서
+미완료 `Partial`로 투영됩니다. 기본 비활성 정책에서는 `disabled`가 필수 마무리가
+아니므로 일반 작업 완료 방식은 달라지지 않습니다.
 
 | 기록 상태 | 사용자에게 보이는 의미 |
 |---|---|
 | `pushed` | 정확한 OID가 push되고 독립적으로 검증됐습니다. |
 | `already_applied` | remote에 이미 정확한 OID가 있어 push를 실행하지 않았습니다. |
+| `pull_request_open` | run 소유 head OID와 열린 PR 하나의 head 및 base가 독립적으로 검증됐습니다. |
 | `not_needed` | core가 이 run에 Git 변경이 없음을 검증해 push를 실행하지 않았습니다. |
-| `prepared` | 내구 pre-push 기록은 있지만 remote 결과가 아직 확정되지 않았으며 `recover`가 대조합니다. |
+| `prepared` | head push 전과 PR 생성 전에 각각 내구 기록이 있으며 `recover`가 현재 remote와 PR 상태를 대조합니다. |
 | `check_blocked` / `safety_blocked` | 설정 검사, 소유권 증명, lock 또는 동시 상태 게이트가 차단했으며 명시적 해결 전까지 Partial입니다. |
 | `git_failed` | Git 조회 또는 push 명령이 실패했으며 Partial로 남고 remote 성공을 주장하지 않습니다. |
 | `remote_mismatch` | push는 성공을 반환했지만 독립 검증이 불일치하므로 Partial 해결 전에 remote를 확인해야 합니다. |
@@ -483,19 +519,22 @@ force-with-lease, ref 삭제, history rewrite 경로는 없습니다. 그 뒤 Ya
 모든 결과의 권위 기록은 `.agents/checkpoints/git-finish/<run-id>.json`에 저장되며,
 대응하는 `.agents/runs/<run-id>/git-finish.json`은 사용자가 보는 projection입니다. 이
 결과는 run telemetry와 최종 리포트에도 투영됩니다. 기록에는 remote 이름, target ref,
-기준점, run 소유 및 예상 OID, push 전후 remote OID, 검사 결과, push 플래그, 사유,
-시각이 포함됩니다. remote URL, 검사 명령문이나 출력, credential, 환경값은 저장하지
+기준점, run 소유 및 예상 OID, push 전후 remote OID, 해당하는 경우 run head ref, PR
+번호와 open 상태, 검사 결과, push 플래그, 사유, 시각이 포함됩니다. repository
+identity, remote URL, PR URL, 검사 명령문이나 출력, credential, 환경값은 저장하지
 않습니다.
 
-Yardlet은 push를 호출하기 전에 `prepared`를 기록합니다. 중단 후 `yardlet recover`는
-같은 target lock 아래에서 소유권 기록을 다시 읽고 remote를 확인합니다. remote가 이미
-예상 OID라면 추가 push 없이 `already_applied`로 수렴합니다. 아직 기준점과 같다면 같은
-exact-OID push를 재시도할 수 있습니다. 그 밖의 remote 또는 로컬 상태는 fail-closed로
-중단합니다. remote 검증은 끝났지만 queue, `run.yaml` 또는 telemetry 봉인이 끊겼다면
-검증된 결과를 멱등하게 다시 투영합니다. 다른 차단·실패 상태는 조용히 재시도하거나
-완료로 승격하지 않고, 사용자가 명시적으로 해결할 때까지 Partial로 남습니다. 프로젝트
-도그푸딩과 테스트에는 local bare remote를 사용하세요. 이 계약은 Yardlet이 자신의 공개
-`origin`에 push한다고 주장하지 않습니다.
+Yardlet은 base 또는 run-head push를 호출하기 전에 `prepared`를 기록하고, head 검증
+뒤 PR 생성 전에도 다시 기록합니다. 중단 후 `yardlet recover`는 같은 target lock
+아래에서 소유권 기록을 다시 읽고 remote를 확인합니다. direct 배송은 base가 이미 예상
+OID를 포함하면 추가 push 없이 `already_applied`로 수렴합니다. PR 배송은 이미 적용된
+head push를 건너뛰고 같은 head와 base의 기존 open PR을 재사용한 뒤 head OID, base ref,
+open 상태를 독립적으로 다시 확인합니다. 충돌하는 head, 중복 PR, 불일치 PR, 그 밖의
+모호한 remote 또는 로컬 상태는 fail-closed합니다. remote 검증은 끝났지만 queue,
+`run.yaml` 또는 telemetry 봉인이 끊겼다면 검증된 결과를 멱등하게 다시 투영합니다.
+다른 차단·실패 상태는 완료로 승격하지 않고 사용자가 명시적으로 해결할 때까지
+Partial로 남습니다. 프로젝트 도그푸딩과 테스트에는 local bare remote를 사용하세요.
+이 계약은 Yardlet이 자신의 공개 `origin`에 push한다고 주장하지 않습니다.
 
 ## 크래시 안전성
 

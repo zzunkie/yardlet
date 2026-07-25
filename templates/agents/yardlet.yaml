@@ -1,0 +1,32 @@
+# Reference shape for the dynamic `.agents/yardlet.yaml` written by
+# `yardlet init`. Workspace identity and timestamps are generated at runtime.
+schema_version: 1
+product: yardlet
+workspace_id: generated-at-init
+created_at: generated-at-init
+state_dir: .agents
+default_interface: tui
+canonical_queue: .agents/work-queue.yaml
+current_intent: .agents/intent-contract.yaml
+language: auto
+default_access: sandboxed
+max_parallel: 1
+auto_ime: true
+ambiguity_gate: true
+harness_discovery: true
+skill_library: ""
+auto_equip: true
+auto_skill: true
+auto_rule: true
+auto_prune: true
+hooks: true
+auto_commit: false
+git_finish:
+  # Remote delivery stays disabled until the user opts in.
+  auto_push: false
+  # `direct` preserves legacy explicit-target semantics. Set `auto` only for a
+  # GitHub checkout with an upstream and an installed, authenticated `gh`.
+  delivery: direct
+  remote: ""
+  target_ref: ""
+  pre_push_checks: []

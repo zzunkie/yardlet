@@ -3685,6 +3685,7 @@ exit 0
         config.auto_commit = true;
         config.git_finish = crate::schemas::GitFinishPolicy {
             auto_push: true,
+            delivery: crate::schemas::GitFinishDelivery::Direct,
             remote: "fixture".into(),
             target_ref: stale_target.into(),
             pre_push_checks: vec![],

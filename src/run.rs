@@ -8138,6 +8138,7 @@ mod tests {
             status,
             policy: crate::git_finish::GitFinishPolicySnapshot {
                 auto_push: true,
+                delivery: crate::schemas::GitFinishDelivery::Direct,
                 remote: "fixture".into(),
                 target_ref: "refs/heads/main".into(),
                 pre_push_checks: vec![],
@@ -8150,6 +8151,9 @@ mod tests {
             push_succeeded: false,
             remote_oid: None,
             remote_before_oid: None,
+            head_ref: None,
+            pull_request_number: None,
+            pull_request_state: None,
             reason: String::new(),
         };
         for status in [
@@ -8169,6 +8173,7 @@ mod tests {
             crate::git_finish::GitFinishStatus::NotNeeded,
             crate::git_finish::GitFinishStatus::Pushed,
             crate::git_finish::GitFinishStatus::AlreadyApplied,
+            crate::git_finish::GitFinishStatus::PullRequestOpen,
         ] {
             assert_eq!(
                 state_after_git_finish(TaskState::Done, &make(status)),
@@ -8230,6 +8235,7 @@ mod tests {
                     status: crate::git_finish::GitFinishStatus::CheckBlocked,
                     policy: crate::git_finish::GitFinishPolicySnapshot {
                         auto_push: true,
+                        delivery: crate::schemas::GitFinishDelivery::Direct,
                         remote: format!("fixture-{index}"),
                         target_ref: target_ref.into(),
                         pre_push_checks: vec![],
@@ -8242,6 +8248,9 @@ mod tests {
                     push_succeeded: false,
                     remote_oid: None,
                     remote_before_oid: None,
+                    head_ref: None,
+                    pull_request_number: None,
+                    pull_request_state: None,
                     reason: "historical fixture".into(),
                 },
             )
@@ -8306,6 +8315,7 @@ mod tests {
                     status: crate::git_finish::GitFinishStatus::Pushed,
                     policy: crate::git_finish::GitFinishPolicySnapshot {
                         auto_push: true,
+                        delivery: crate::schemas::GitFinishDelivery::Direct,
                         remote: "fixture".into(),
                         target_ref: "refs/heads/main".into(),
                         pre_push_checks: vec![],
@@ -8318,6 +8328,9 @@ mod tests {
                     push_succeeded: true,
                     remote_oid: Some(format!("integration-{index}")),
                     remote_before_oid: Some(format!("baseline-{index}")),
+                    head_ref: None,
+                    pull_request_number: None,
+                    pull_request_state: None,
                     reason: "remote_verified".into(),
                 },
             )
@@ -8675,6 +8688,9 @@ mod tests {
             push_succeeded: false,
             remote_oid: None,
             remote_before_oid: Some(baseline_oid.into()),
+            head_ref: None,
+            pull_request_number: None,
+            pull_request_state: None,
             reason: "ready_to_push".into(),
         }
     }
@@ -9169,6 +9185,7 @@ mod tests {
         let config_policy = ws.load_config().unwrap().git_finish;
         let trusted_policy = crate::git_finish::GitFinishPolicySnapshot {
             auto_push: config_policy.auto_push,
+            delivery: config_policy.delivery,
             remote: config_policy.remote,
             target_ref: config_policy.target_ref,
             pre_push_checks: vec![],
@@ -9215,6 +9232,7 @@ mod tests {
             forged_run_id,
             crate::git_finish::GitFinishPolicySnapshot {
                 auto_push: true,
+                delivery: crate::schemas::GitFinishDelivery::Direct,
                 remote: "attacker".into(),
                 target_ref: "refs/heads/main".into(),
                 pre_push_checks: vec![],
@@ -9270,6 +9288,7 @@ mod tests {
             run_id,
             crate::git_finish::GitFinishPolicySnapshot {
                 auto_push: true,
+                delivery: crate::schemas::GitFinishDelivery::Direct,
                 remote: "attacker".into(),
                 target_ref: "refs/heads/main".into(),
                 pre_push_checks: vec![],
@@ -9323,6 +9342,7 @@ mod tests {
         let config_policy = ws.load_config().unwrap().git_finish;
         let snapshot = crate::git_finish::GitFinishPolicySnapshot {
             auto_push: config_policy.auto_push,
+            delivery: config_policy.delivery,
             remote: config_policy.remote,
             target_ref: config_policy.target_ref,
             pre_push_checks: vec![],
@@ -9337,6 +9357,7 @@ mod tests {
             run_id,
             crate::git_finish::GitFinishPolicySnapshot {
                 auto_push: true,
+                delivery: crate::schemas::GitFinishDelivery::Direct,
                 remote: "attacker".into(),
                 target_ref: "refs/heads/main".into(),
                 pre_push_checks: vec![],
@@ -9663,6 +9684,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         config.auto_commit = true;
         config.git_finish = crate::schemas::GitFinishPolicy {
             auto_push: true,
+            delivery: crate::schemas::GitFinishDelivery::Direct,
             remote: "fixture".into(),
             target_ref: stale_target.into(),
             pre_push_checks: vec![],
@@ -9709,6 +9731,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
                 status: crate::git_finish::GitFinishStatus::Pushed,
                 policy: crate::git_finish::GitFinishPolicySnapshot {
                     auto_push: true,
+                    delivery: crate::schemas::GitFinishDelivery::Direct,
                     remote: "fixture".into(),
                     target_ref: stale_target.into(),
                     pre_push_checks: vec![],
@@ -9721,6 +9744,9 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
                 push_succeeded: true,
                 remote_oid: Some(baseline.clone()),
                 remote_before_oid: Some(baseline.clone()),
+                head_ref: None,
+                pull_request_number: None,
+                pull_request_state: None,
                 reason: "remote_verified".into(),
             },
         )
@@ -15370,6 +15396,7 @@ exit 1
         let mut config = ws.load_config().unwrap();
         config.git_finish = crate::schemas::GitFinishPolicy {
             auto_push: true,
+            delivery: crate::schemas::GitFinishDelivery::Direct,
             remote: "fixture".into(),
             target_ref: "refs/heads/main".into(),
             pre_push_checks: vec![crate::schemas::GitFinishCheck {
@@ -15532,6 +15559,7 @@ exit 1
         let mut config = ws.load_config().unwrap();
         config.git_finish = crate::schemas::GitFinishPolicy {
             auto_push: true,
+            delivery: crate::schemas::GitFinishDelivery::Direct,
             remote: "fixture".into(),
             target_ref: "refs/heads/main".into(),
             pre_push_checks: vec![],
@@ -15600,6 +15628,7 @@ exit 1
             status: crate::git_finish::GitFinishStatus::Pushed,
             policy: crate::git_finish::GitFinishPolicySnapshot {
                 auto_push: true,
+                delivery: crate::schemas::GitFinishDelivery::Direct,
                 remote: "fixture".into(),
                 target_ref: "refs/heads/main".into(),
                 pre_push_checks: vec![],
@@ -15612,6 +15641,9 @@ exit 1
             push_succeeded: true,
             remote_oid: Some(unrelated_oid.clone()),
             remote_before_oid: Some(remote_baseline.clone()),
+            head_ref: None,
+            pull_request_number: None,
+            pull_request_state: None,
             reason: "worker forged verified status".into(),
         };
         write_str(
@@ -15737,6 +15769,7 @@ exit 1
         let mut config = ws.load_config().unwrap();
         config.git_finish = crate::schemas::GitFinishPolicy {
             auto_push: true,
+            delivery: crate::schemas::GitFinishDelivery::Direct,
             remote: "fixture".into(),
             target_ref: "refs/heads/main".into(),
             pre_push_checks: vec![],
@@ -15836,6 +15869,7 @@ exit 1
                     status: crate::git_finish::GitFinishStatus::Pushed,
                     policy: crate::git_finish::GitFinishPolicySnapshot {
                         auto_push: true,
+                        delivery: crate::schemas::GitFinishDelivery::Direct,
                         remote: "fixture".into(),
                         target_ref: "refs/heads/main".into(),
                         pre_push_checks: vec![],
@@ -15848,6 +15882,9 @@ exit 1
                     push_succeeded: true,
                     remote_oid: Some(integration_oid.clone()),
                     remote_before_oid: Some(baseline_oid),
+                    head_ref: None,
+                    pull_request_number: None,
+                    pull_request_state: None,
                     reason: "remote_verified".into(),
                 },
             )
@@ -15952,6 +15989,7 @@ exit 1
         let mut config = ws.load_config().unwrap();
         config.git_finish = crate::schemas::GitFinishPolicy {
             auto_push: true,
+            delivery: crate::schemas::GitFinishDelivery::Direct,
             remote: "fixture".into(),
             target_ref: "refs/heads/main".into(),
             pre_push_checks: vec![],
@@ -15999,6 +16037,7 @@ exit 1
 
         let policy_snapshot = crate::git_finish::GitFinishPolicySnapshot {
             auto_push: true,
+            delivery: crate::schemas::GitFinishDelivery::Direct,
             remote: "fixture".into(),
             target_ref: "refs/heads/main".into(),
             pre_push_checks: vec![],
@@ -16107,6 +16146,9 @@ exit 1
                     push_succeeded: false,
                     remote_oid: None,
                     remote_before_oid: Some(baseline.clone()),
+                    head_ref: None,
+                    pull_request_number: None,
+                    pull_request_state: None,
                     reason: "pre_recovery".into(),
                 },
             )
