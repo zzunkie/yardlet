@@ -201,9 +201,16 @@ enum DeliveryRoute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DiscoveredGitHubRepository {
     remote: String,
+    host: String,
     repository: String,
     base_ref: String,
     route: DeliveryRoute,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitHubRemoteIdentity {
+    host: String,
+    repository: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,20 +235,28 @@ struct DiscoveryError {
 }
 
 trait GitHubClient {
-    fn authenticate(&self) -> Result<(), &'static str>;
+    fn authenticate(&self, host: &str) -> Result<(), &'static str>;
     fn repository_metadata(
         &self,
+        host: &str,
         repository: &str,
     ) -> Result<GitHubRepositoryMetadata, &'static str>;
-    fn branch_protected(&self, repository: &str, branch: &str) -> Result<bool, &'static str>;
+    fn branch_protected(
+        &self,
+        host: &str,
+        repository: &str,
+        branch: &str,
+    ) -> Result<bool, &'static str>;
     fn open_pull_requests(
         &self,
+        host: &str,
         repository: &str,
         head: &str,
         base: &str,
     ) -> Result<Vec<PullRequestMetadata>, &'static str>;
     fn create_pull_request(
         &self,
+        host: &str,
         repository: &str,
         head: &str,
         base: &str,
@@ -265,8 +280,8 @@ impl GhCli {
 }
 
 impl GitHubClient for GhCli {
-    fn authenticate(&self) -> Result<(), &'static str> {
-        let output = Self::output(&["auth", "status", "--hostname", "github.com"])?;
+    fn authenticate(&self, host: &str) -> Result<(), &'static str> {
+        let output = Self::output(&["auth", "status", "--hostname", host])?;
         output
             .status
             .success()
@@ -276,6 +291,7 @@ impl GitHubClient for GhCli {
 
     fn repository_metadata(
         &self,
+        host: &str,
         repository: &str,
     ) -> Result<GitHubRepositoryMetadata, &'static str> {
         #[derive(Deserialize)]
@@ -289,7 +305,7 @@ impl GitHubClient for GhCli {
             permissions: Permissions,
         }
         let endpoint = format!("repos/{repository}");
-        let output = Self::output(&["api", &endpoint])?;
+        let output = Self::output(&["api", "--hostname", host, &endpoint])?;
         if !output.status.success() {
             return Err("github_repository_metadata_unavailable");
         }
@@ -306,7 +322,12 @@ impl GitHubClient for GhCli {
         })
     }
 
-    fn branch_protected(&self, repository: &str, branch: &str) -> Result<bool, &'static str> {
+    fn branch_protected(
+        &self,
+        host: &str,
+        repository: &str,
+        branch: &str,
+    ) -> Result<bool, &'static str> {
         #[derive(Deserialize)]
         struct Response {
             protected: bool,
@@ -315,7 +336,7 @@ impl GitHubClient for GhCli {
             "repos/{repository}/branches/{}",
             percent_encode_component(branch)
         );
-        let output = Self::output(&["api", &endpoint])?;
+        let output = Self::output(&["api", "--hostname", host, &endpoint])?;
         if !output.status.success() {
             return Err("github_default_branch_metadata_unavailable");
         }
@@ -326,6 +347,7 @@ impl GitHubClient for GhCli {
 
     fn open_pull_requests(
         &self,
+        host: &str,
         repository: &str,
         head: &str,
         base: &str,
@@ -351,6 +373,8 @@ impl GitHubClient for GhCli {
         let head_filter = format!("{owner}:{head}");
         let output = Self::output(&[
             "api",
+            "--hostname",
+            host,
             "--method",
             "GET",
             &endpoint,
@@ -380,6 +404,7 @@ impl GitHubClient for GhCli {
 
     fn create_pull_request(
         &self,
+        host: &str,
         repository: &str,
         head: &str,
         base: &str,
@@ -389,6 +414,8 @@ impl GitHubClient for GhCli {
         let endpoint = format!("repos/{repository}/pulls");
         let output = Self::output(&[
             "api",
+            "--hostname",
+            host,
             "--method",
             "POST",
             &endpoint,
@@ -421,15 +448,18 @@ fn percent_encode_component(value: &str) -> String {
     encoded
 }
 
-fn github_repository_from_remote_url(url: &str) -> Option<String> {
+fn github_remote_identity_from_url(url: &str) -> Option<GitHubRemoteIdentity> {
     let trimmed = url.trim().trim_end_matches('/');
-    let path = if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
-        rest
-    } else if let Some(rest) = trimmed.strip_prefix("ssh://git@github.com/") {
-        rest
+    let (host, path) = if let Some(rest) = trimmed.strip_prefix("git@") {
+        rest.split_once(':')?
+    } else if let Some(rest) = trimmed.strip_prefix("ssh://git@") {
+        rest.split_once('/')?
     } else {
-        trimmed.strip_prefix("https://github.com/")?
+        trimmed.strip_prefix("https://")?.split_once('/')?
     };
+    if !github_host_safe(host) {
+        return None;
+    }
     let repository = path.strip_suffix(".git").unwrap_or(path);
     let (owner, name) = repository.split_once('/')?;
     if owner.is_empty()
@@ -444,7 +474,20 @@ fn github_repository_from_remote_url(url: &str) -> Option<String> {
     {
         return None;
     }
-    Some(format!("{owner}/{name}"))
+    Some(GitHubRemoteIdentity {
+        host: host.to_ascii_lowercase(),
+        repository: format!("{owner}/{name}"),
+    })
+}
+
+fn github_host_safe(host: &str) -> bool {
+    !host.is_empty()
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-'])
+        && !host.contains("..")
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
 }
 
 fn discover_github_repository(
@@ -500,17 +543,19 @@ fn discover_github_repository(
             reason: "remote_url_ambiguous",
         });
     }
-    let repository =
-        github_repository_from_remote_url(raw_remote_urls[0]).ok_or(DiscoveryError {
-            reason: "remote_provider_not_github",
-        })?;
+    let identity = github_remote_identity_from_url(raw_remote_urls[0]).ok_or(DiscoveryError {
+        reason: "remote_provider_not_github",
+    })?;
     github
-        .authenticate()
+        .authenticate(&identity.host)
         .map_err(|reason| DiscoveryError { reason })?;
     let metadata = github
-        .repository_metadata(&repository)
+        .repository_metadata(&identity.host, &identity.repository)
         .map_err(|reason| DiscoveryError { reason })?;
-    if !metadata.name_with_owner.eq_ignore_ascii_case(&repository) {
+    if !metadata
+        .name_with_owner
+        .eq_ignore_ascii_case(&identity.repository)
+    {
         return Err(DiscoveryError {
             reason: "github_repository_identity_mismatch",
         });
@@ -535,7 +580,11 @@ fn discover_github_repository(
         });
     }
     let protected = github
-        .branch_protected(&repository, &metadata.default_branch)
+        .branch_protected(
+            &identity.host,
+            &identity.repository,
+            &metadata.default_branch,
+        )
         .map_err(|reason| DiscoveryError { reason })?;
     let route = if protected {
         DeliveryRoute::PullRequest
@@ -544,7 +593,8 @@ fn discover_github_repository(
     };
     Ok(DiscoveredGitHubRepository {
         remote: remote.clone(),
-        repository,
+        host: identity.host,
+        repository: identity.repository,
         base_ref,
         route,
     })
@@ -1102,15 +1152,19 @@ fn finish_owned_run_with_mode_and_github(
         record.status = GitFinishStatus::Prepared;
         record.reason = "ready_to_create_or_reuse_pull_request".to_string();
         persist(ws, run_dir, &record)?;
-        let mut pull_requests =
-            match github.open_pull_requests(&discovered.repository, head_branch, branch) {
-                Ok(pull_requests) => pull_requests,
-                Err(reason) => {
-                    record.status = GitFinishStatus::GitFailed;
-                    record.reason = reason.to_string();
-                    return persist_result(record);
-                }
-            };
+        let mut pull_requests = match github.open_pull_requests(
+            &discovered.host,
+            &discovered.repository,
+            head_branch,
+            branch,
+        ) {
+            Ok(pull_requests) => pull_requests,
+            Err(reason) => {
+                record.status = GitFinishStatus::GitFailed;
+                record.reason = reason.to_string();
+                return persist_result(record);
+            }
+        };
         let reused = !pull_requests.is_empty();
         if pull_requests.is_empty() {
             let title = format!("Yardlet run {run_id}: {task_id}");
@@ -1118,6 +1172,7 @@ fn finish_owned_run_with_mode_and_github(
                 "Yardlet run `{run_id}` delivered the core-verified commit for task `{task_id}`."
             );
             if let Err(reason) = github.create_pull_request(
+                &discovered.host,
                 &discovered.repository,
                 head_branch,
                 branch,
@@ -1128,15 +1183,19 @@ fn finish_owned_run_with_mode_and_github(
                 record.reason = reason.to_string();
                 return persist_result(record);
             }
-            pull_requests =
-                match github.open_pull_requests(&discovered.repository, head_branch, branch) {
-                    Ok(pull_requests) => pull_requests,
-                    Err(reason) => {
-                        record.status = GitFinishStatus::GitFailed;
-                        record.reason = reason.to_string();
-                        return persist_result(record);
-                    }
-                };
+            pull_requests = match github.open_pull_requests(
+                &discovered.host,
+                &discovered.repository,
+                head_branch,
+                branch,
+            ) {
+                Ok(pull_requests) => pull_requests,
+                Err(reason) => {
+                    record.status = GitFinishStatus::GitFailed;
+                    record.reason = reason.to_string();
+                    return persist_result(record);
+                }
+            };
         }
         if pull_requests.len() != 1 {
             record.status = GitFinishStatus::RemoteMismatch;
@@ -1796,6 +1855,7 @@ mod tests {
 
     struct FakeGithub {
         protected: bool,
+        hosts: Mutex<Vec<String>>,
         prs: Mutex<Vec<PullRequestMetadata>>,
         create_count: AtomicU64,
         expected_oid: Mutex<String>,
@@ -1807,6 +1867,7 @@ mod tests {
         fn new(protected: bool) -> Self {
             Self {
                 protected,
+                hosts: Mutex::new(vec![]),
                 prs: Mutex::new(vec![]),
                 create_count: AtomicU64::new(0),
                 expected_oid: Mutex::new(String::new()),
@@ -1819,17 +1880,24 @@ mod tests {
             *self.expected_oid.lock().unwrap() = expected_oid.to_string();
             *self.prepared_probe.lock().unwrap() = Some((ws.clone(), run_dir.to_path_buf()));
         }
+
+        fn record_host(&self, host: &str) {
+            self.hosts.lock().unwrap().push(host.to_string());
+        }
     }
 
     impl GitHubClient for FakeGithub {
-        fn authenticate(&self) -> Result<(), &'static str> {
+        fn authenticate(&self, host: &str) -> Result<(), &'static str> {
+            self.record_host(host);
             Ok(())
         }
 
         fn repository_metadata(
             &self,
+            host: &str,
             _repository: &str,
         ) -> Result<GitHubRepositoryMetadata, &'static str> {
+            self.record_host(host);
             Ok(GitHubRepositoryMetadata {
                 name_with_owner: "acme/project".into(),
                 default_branch: "main".into(),
@@ -1837,27 +1905,37 @@ mod tests {
             })
         }
 
-        fn branch_protected(&self, _repository: &str, _branch: &str) -> Result<bool, &'static str> {
+        fn branch_protected(
+            &self,
+            host: &str,
+            _repository: &str,
+            _branch: &str,
+        ) -> Result<bool, &'static str> {
+            self.record_host(host);
             Ok(self.protected)
         }
 
         fn open_pull_requests(
             &self,
+            host: &str,
             _repository: &str,
             _head: &str,
             _base: &str,
         ) -> Result<Vec<PullRequestMetadata>, &'static str> {
+            self.record_host(host);
             Ok(self.prs.lock().unwrap().clone())
         }
 
         fn create_pull_request(
             &self,
+            host: &str,
             _repository: &str,
             head: &str,
             base: &str,
             _title: &str,
             _body: &str,
         ) -> Result<(), &'static str> {
+            self.record_host(host);
             if let Some((ws, run_dir)) = self.prepared_probe.lock().unwrap().as_ref() {
                 let record = ws.load_git_finish_record(run_dir).unwrap();
                 *self.prepared_seen_before_create.lock().unwrap() = record.status
@@ -1878,6 +1956,36 @@ mod tests {
     }
 
     #[test]
+    fn github_remote_identity_derives_enterprise_host_and_rejects_ambiguous_urls() {
+        for (url, expected_host) in [
+            (
+                "https://ghe.example.test/acme/project.git",
+                "ghe.example.test",
+            ),
+            (
+                "ssh://git@ghe.example.test/acme/project.git",
+                "ghe.example.test",
+            ),
+            ("git@ghe.example.test:acme/project.git", "ghe.example.test"),
+        ] {
+            let identity = github_remote_identity_from_url(url).expect("GitHub remote identity");
+            assert_eq!(identity.host, expected_host);
+            assert_eq!(identity.repository, "acme/project");
+        }
+        for url in [
+            "https://user@ghe.example.test/acme/project.git",
+            "https://ghe.example.test:8443/acme/project.git",
+            "https://ghe.example.test/acme/project/extra.git",
+            "file:///tmp/project.git",
+        ] {
+            assert!(
+                github_remote_identity_from_url(url).is_none(),
+                "ambiguous remote host must fail closed: {url}"
+            );
+        }
+    }
+
+    #[test]
     fn ac_002_auto_delivery_cross_checks_upstream_remote_and_github_metadata() {
         let f = Fixture::new("auto-discovery");
         f.configure_auto();
@@ -1887,9 +1995,14 @@ mod tests {
         let discovered = discover_github_repository(&f.root, &policy, &github).unwrap();
 
         assert_eq!(discovered.remote, "fixture");
+        assert_eq!(discovered.host, "github.com");
         assert_eq!(discovered.repository, "acme/project");
         assert_eq!(discovered.base_ref, "refs/heads/main");
         assert_eq!(discovered.route, DeliveryRoute::Direct);
+        assert_eq!(
+            github.hosts.lock().unwrap().as_slice(),
+            ["github.com", "github.com", "github.com"]
+        );
 
         let mut conflicting = policy;
         conflicting.remote = "other".into();

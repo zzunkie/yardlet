@@ -7029,6 +7029,11 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     {
         let _ = std::fs::remove_file(run_dir.join("partial-reason"));
     }
+    // Capture the delivery-projected terminal outcome before review queue
+    // management can schedule another attempt. Telemetry describes this run's
+    // completed evaluation and Git finish, not the scheduler state of the task's
+    // next attempt.
+    let telemetry_state = next_state;
 
     // Update the queue: set state AND ingest any follow-up tasks the worker
     // proposed (propose -> ingest). Yardlet stays the sole queue writer — both
@@ -7227,7 +7232,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     .as_ref()
                     .map(|r| r.status.clone())
                     .unwrap_or_else(|| "no-result".to_string()),
-                eval_state: format!("{evaluated_state:?}"),
+                eval_state: telemetry_eval_state(telemetry_state),
                 wall_seconds,
                 user_override,
                 skills: task.skills.clone(),
@@ -7280,6 +7285,10 @@ fn state_after_git_finish(
     } else {
         state
     }
+}
+
+fn telemetry_eval_state(state: TaskState) -> String {
+    format!("{state:?}")
 }
 
 /// Snake-case label for a run's terminal outcome, matching the queue's
@@ -8127,6 +8136,12 @@ mod tests {
         );
     }
     use crate::schemas::{SelectionPolicy, Task, WorkQueue};
+
+    #[test]
+    fn telemetry_serializes_the_final_git_finish_projection() {
+        assert_eq!(telemetry_eval_state(TaskState::Partial), "Partial");
+        assert_eq!(telemetry_eval_state(TaskState::Done), "Done");
+    }
 
     #[test]
     fn auto_push_projects_only_remote_verified_finish_to_done() {
