@@ -44,8 +44,8 @@ public issue.
 - Product behavior: typed code in `src/` plus executable tests.
 - Public usage: `README.md`; `README.ko.md` mirrors its user-facing meaning.
 - Contributor process: `CONTRIBUTING.md`, this file, and `.github/` templates.
-- Release history: `CHANGELOG.md`, package version, signed-off release commit,
-  version tag, GitHub Release, and crates.io.
+- Release history: `CHANGELOG.md`, package version, release commit, version tag,
+  GitHub Release, and crates.io.
 - Reusable agent harness: `.agents/rules/`, `.agents/skills/`, and
   `.agents/agents/`.
 - Generated workspace state: Yardlet's typed state mechanism, never a
