@@ -40,6 +40,27 @@ cp "$SCRIPT_DIR/worker-sentinel.sh" "$NO_GH_DIR/worker-sentinel"
 chmod +x "$WRAPPER_DIR/git" "$WRAPPER_DIR/gh" "$WRAPPER_DIR/worker-sentinel"
 chmod +x "$NO_GH_DIR/git" "$NO_GH_DIR/worker-sentinel"
 
+# "gh is not installed" must not depend on where the host keeps the GitHub CLI.
+# Ubuntu ships /usr/bin/gh, which sits inside SAFE_SYSTEM_PATH, so leaving that
+# directory on PATH lets the real gh answer and the scenario reports
+# gh_not_authenticated instead. Mirror the safe system path without gh so the
+# PATH lookup genuinely fails on every host.
+NO_GH_SYSTEM_PATH="$ROOT/no-gh-system"
+mkdir -p "$NO_GH_SYSTEM_PATH"
+for system_dir in /usr/bin /bin; do
+  [ -d "$system_dir" ] || continue
+  for entry in "$system_dir"/*; do
+    entry_name="${entry##*/}"
+    [ "$entry_name" = "gh" ] && continue
+    [ -e "$NO_GH_SYSTEM_PATH/$entry_name" ] && continue
+    ln -s "$entry" "$NO_GH_SYSTEM_PATH/$entry_name" 2>/dev/null || true
+  done
+done
+if PATH="$NO_GH_SYSTEM_PATH" command -v gh >/dev/null 2>&1; then
+  printf 'fixture failure: %s\n' "no-gh system mirror still resolves gh" >&2
+  exit 1
+fi
+
 fail() {
   printf 'fixture failure: %s\n' "$*" >&2
   exit 1
@@ -319,12 +340,13 @@ run_yardlet() {
   local crash_mode="${4:-normal}"
   local event="${5:-$scenario/no-event}"
   local path_dir="${6:-$WRAPPER_DIR}"
+  local system_path="${7:-$SAFE_SYSTEM_PATH}"
   local expected expected_host
   expected="$(head_oid "$scenario/clone")"
   expected_host="$(cat "$scenario/expected-host")"
   (
     cd "$scenario/clone"
-    PATH="$path_dir:$SAFE_SYSTEM_PATH" \
+    PATH="$path_dir:$system_path" \
       YARDLET_FIXTURE_REAL_GIT="$REAL_GIT" \
       YARDLET_FIXTURE_GIT_LOG="$scenario/git.log" \
       YARDLET_FIXTURE_GH_LOG="$scenario/gh.log" \
@@ -536,6 +558,7 @@ run_failure_case() {
   local expected_reason="$3"
   local path_dir="${4:-$WRAPPER_DIR}"
   local policy_remote="${5:-origin}"
+  local system_path="${6:-$SAFE_SYSTEM_PATH}"
   local scenario ws baseline expected
   scenario="$(new_workspace "failure-$name")"
   ws="$scenario/clone"
@@ -544,7 +567,7 @@ run_failure_case() {
   write_integrated_run "$ws" "$baseline" "$expected"
   write_config "$ws" "$policy_remote"
   run_yardlet "$scenario" "$gh_mode" true normal "$scenario/no-event" "$path_dir" \
-    >"$scenario/recover.log" 2>&1
+    "$system_path" >"$scenario/recover.log" 2>&1
   assert_eq "$(grep -c '^PUSH_SUCCESS' "$scenario/git.log" || true)" 0 "$name external Git mutation"
   assert_eq "$(grep -c 'PR_CREATE_SUCCESS' "$scenario/gh.log" || true)" 0 "$name external PR mutation"
   assert_failure_projection "$scenario" "$expected_reason"
@@ -575,7 +598,7 @@ run_crash_case before_head_push
 run_crash_case after_head_push
 run_crash_case before_pr_create
 run_crash_case after_pr_create
-run_failure_case gh-missing normal gh_not_installed "$NO_GH_DIR"
+run_failure_case gh-missing normal gh_not_installed "$NO_GH_DIR" origin "$NO_GH_SYSTEM_PATH"
 run_failure_case gh-unauthenticated unauthenticated gh_not_authenticated
 run_failure_case remote-mismatch normal configured_remote_conflicts_with_upstream "$WRAPPER_DIR" other
 run_failure_case default-branch-mismatch default_branch_mismatch github_default_branch_mismatch
