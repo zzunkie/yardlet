@@ -1115,12 +1115,13 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
         // On shortcut screens, map Korean 2-beolsik jamo to the QWERTY key
         // that produces them, so shortcuts still work with the IME on
         // (pressing m with 한글 active arrives as 'ㅡ'). Text-input screens
-        // keep the raw character.
-        let code = match app.screen {
-            Screen::NewWork | Screen::Answer | Screen::Settings => key.code,
-            Screen::PlanningReview if app.planning_review_editing => key.code,
-            _ => dekorean(key.code, key.modifiers.contains(KeyModifiers::SHIFT)),
-        };
+        // (and the planning-review edit buffer) keep the raw character.
+        let code = dispatch_code(
+            app.screen,
+            app.planning_review_editing,
+            key.code,
+            key.modifiers.contains(KeyModifiers::SHIFT),
+        );
 
         match bootstrap_key_action(app.bootstrap_phase(), code) {
             BootstrapKeyAction::Dispatch => {}
@@ -1140,7 +1141,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
                 }
             }
             Screen::NewWork => handle_new_work_key(&mut app, key.code, key.modifiers),
-            Screen::PlanningReview => handle_planning_review_key(&mut app, key.code, key.modifiers),
+            Screen::PlanningReview => handle_planning_review_key(&mut app, code, key.modifiers),
             Screen::Answer => handle_answer_key(&mut app, key.code, key.modifiers),
             Screen::Settings => handle_settings_key(&mut app, key.code),
             Screen::Completion => handle_completion_key(&mut app, code),
@@ -1176,6 +1177,26 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
         let _ = ime::select_by_id(&id);
     }
     Ok(app.want_restart)
+}
+
+/// The effective key code to dispatch on `screen`. Text-input screens (and the
+/// planning-review *edit* buffer, `planning_review_editing`) keep the raw
+/// character so multi-line Korean input survives verbatim; every other
+/// (shortcut) screen gets the [`dekorean`] fallback so a/r/c/e/g/q still fire
+/// while the Korean IME is active and `auto_ime` never switched the OS input
+/// source to ASCII. Pure so the screen → raw/mapped decision is unit-tested
+/// without a live event loop.
+fn dispatch_code(
+    screen: Screen,
+    planning_review_editing: bool,
+    code: KeyCode,
+    shifted: bool,
+) -> KeyCode {
+    match screen {
+        Screen::NewWork | Screen::Answer | Screen::Settings => code,
+        Screen::PlanningReview if planning_review_editing => code,
+        _ => dekorean(code, shifted),
+    }
 }
 
 /// Map a Korean 2-beolsik jamo back to the QWERTY key that produces it, so
@@ -5403,6 +5424,133 @@ tasks:
         // Non-jamo input passes through untouched.
         assert_eq!(dekorean(KeyCode::Char('m'), false), KeyCode::Char('m'));
         assert_eq!(dekorean(KeyCode::Enter, false), KeyCode::Enter);
+    }
+
+    #[test]
+    fn dispatch_code_dekoreans_review_shortcuts_but_keeps_edit_buffer_raw() {
+        // Review (non-editing) is a shortcut screen: with the Korean IME active
+        // and auto_ime=false (the OS input source was never switched to ASCII),
+        // 'a' arrives as 'ㅁ', 'r' as 'ㄱ', 'c' as 'ㅊ', 'e' as 'ㄷ', 'g' as
+        // 'ㅎ', 'q' as 'ㅂ'. All six must fall back to their QWERTY keys.
+        for (jamo, qwerty) in [
+            ('ㅁ', 'a'),
+            ('ㄱ', 'r'),
+            ('ㅊ', 'c'),
+            ('ㄷ', 'e'),
+            ('ㅎ', 'g'),
+            ('ㅂ', 'q'),
+        ] {
+            assert_eq!(
+                dispatch_code(Screen::PlanningReview, false, KeyCode::Char(jamo), false),
+                KeyCode::Char(qwerty),
+            );
+        }
+        // The edit buffer keeps the raw jamo so multi-line Korean input survives.
+        assert_eq!(
+            dispatch_code(Screen::PlanningReview, true, KeyCode::Char('ㅁ'), false),
+            KeyCode::Char('ㅁ'),
+        );
+        // Text-input screens always keep the raw character.
+        assert_eq!(
+            dispatch_code(Screen::NewWork, false, KeyCode::Char('ㅁ'), false),
+            KeyCode::Char('ㅁ'),
+        );
+        assert_eq!(
+            dispatch_code(Screen::Answer, false, KeyCode::Char('ㅁ'), false),
+            KeyCode::Char('ㅁ'),
+        );
+        // Other shortcut screens (e.g. Home) get the fallback too.
+        assert_eq!(
+            dispatch_code(Screen::Home, false, KeyCode::Char('ㅂ'), false),
+            KeyCode::Char('q'),
+        );
+    }
+
+    #[test]
+    fn planning_review_nonediting_hangul_shortcut_reaches_qwerty_action() {
+        use planning_review::{action_for_key_with_enhancement, ReviewAction, ReviewGate};
+        let gate = ReviewGate {
+            busy: false,
+            editing: false,
+            has_pending_proposal: true,
+            has_visible_head: false,
+            confirmed: false,
+            pending_count: 1,
+        };
+        // Raw jamo miss the a/r shortcuts — this is the bug the fallback fixes.
+        assert_eq!(
+            action_for_key_with_enhancement(KeyCode::Char('ㅁ'), KeyModifiers::NONE, false, gate),
+            ReviewAction::Noop,
+        );
+        // Routed through the screen dispatch, 'ㅁ'/'ㄱ' fall back to a/r →
+        // Accept/Reject; 'ㄷ' → e (BeginEdit), 'ㅎ' → g (Refresh), 'ㅂ' → q (Back).
+        let accept = dispatch_code(Screen::PlanningReview, false, KeyCode::Char('ㅁ'), false);
+        assert_eq!(
+            action_for_key_with_enhancement(accept, KeyModifiers::NONE, false, gate),
+            ReviewAction::Accept,
+        );
+        let reject = dispatch_code(Screen::PlanningReview, false, KeyCode::Char('ㄱ'), false);
+        assert_eq!(
+            action_for_key_with_enhancement(reject, KeyModifiers::NONE, false, gate),
+            ReviewAction::Reject,
+        );
+        let edit = dispatch_code(Screen::PlanningReview, false, KeyCode::Char('ㄷ'), false);
+        assert_eq!(
+            action_for_key_with_enhancement(edit, KeyModifiers::NONE, false, gate),
+            ReviewAction::BeginEdit,
+        );
+        let refresh = dispatch_code(Screen::PlanningReview, false, KeyCode::Char('ㅎ'), false);
+        assert_eq!(
+            action_for_key_with_enhancement(refresh, KeyModifiers::NONE, false, gate),
+            ReviewAction::Refresh,
+        );
+        let back = dispatch_code(Screen::PlanningReview, false, KeyCode::Char('ㅂ'), false);
+        assert_eq!(
+            action_for_key_with_enhancement(back, KeyModifiers::NONE, false, gate),
+            ReviewAction::Back,
+        );
+        // Confirm (c) is available once the pending proposal is resolved.
+        let confirmed_gate = ReviewGate {
+            has_pending_proposal: false,
+            has_visible_head: true,
+            ..gate
+        };
+        let confirm = dispatch_code(Screen::PlanningReview, false, KeyCode::Char('ㅊ'), false);
+        assert_eq!(
+            action_for_key_with_enhancement(confirm, KeyModifiers::NONE, false, confirmed_gate),
+            ReviewAction::Confirm,
+        );
+    }
+
+    #[test]
+    fn planning_review_editing_keeps_raw_hangul_insert() {
+        use planning_review::{action_for_key_with_enhancement, ReviewAction, ReviewGate};
+        let editing = ReviewGate {
+            busy: false,
+            editing: true,
+            has_pending_proposal: false,
+            has_visible_head: true,
+            confirmed: false,
+            pending_count: 0,
+        };
+        // In the edit buffer a jamo is NOT de-koreaned: it is inserted as the raw
+        // character so multi-line Korean input is preserved verbatim.
+        let raw = dispatch_code(Screen::PlanningReview, true, KeyCode::Char('ㅁ'), false);
+        assert_eq!(
+            action_for_key_with_enhancement(raw, KeyModifiers::NONE, false, editing),
+            ReviewAction::Insert('ㅁ'),
+        );
+        let syllable = dispatch_code(Screen::PlanningReview, true, KeyCode::Char('한'), false);
+        assert_eq!(
+            action_for_key_with_enhancement(syllable, KeyModifiers::NONE, false, editing),
+            ReviewAction::Insert('한'),
+        );
+        // Enter still inserts a newline for multi-line input in the edit buffer.
+        let newline = dispatch_code(Screen::PlanningReview, true, KeyCode::Enter, false);
+        assert_eq!(
+            action_for_key_with_enhancement(newline, KeyModifiers::NONE, false, editing),
+            ReviewAction::InsertNewline,
+        );
     }
 
     #[test]
