@@ -246,7 +246,7 @@ session. From the Home screen:
 Korean keyboard layouts work without switching back to English: the Hangul jamo
 are mapped to the same shortcuts.
 
-In the New Work and plan revision input boxes:
+In the New Work, plan revision, and Answer input boxes:
 
 | Key | Action |
 | --- | --- |
@@ -257,6 +257,9 @@ In the New Work and plan revision input boxes:
 | `↑` / `↓` / `←` / `→` | Move the caret between and within lines. |
 | `Backspace` / `Delete` | Delete before / at the caret. |
 | `Esc` | Cancel and discard the input draft. |
+
+In the Answer box, `PgUp` / `PgDn` additionally scroll the read-only context
+shown above the draft.
 
 Bracketed paste preserves pasted newlines and Korean/CJK text.
 

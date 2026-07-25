@@ -579,8 +579,8 @@ pub const EN: L = L {
     conversation_user: "You",
     no_answer_context: "No related worker output or conversation was recorded.",
     your_answer_title: " Your answer ",
-    footer_answer: "PgUp/PgDn context   Enter send & resume   Esc cancel",
-    footer_answer_approve: "PgUp/PgDn context   Enter send, approve & resume   Esc cancel",
+    footer_answer: "PgUp/PgDn context   Enter newline   Ctrl+S send & resume   Ctrl+Enter send (when supported)   Esc cancel",
+    footer_answer_approve: "PgUp/PgDn context   Enter newline   Ctrl+S send, approve & resume   Ctrl+Enter send (when supported)   Esc cancel",
     handoff_title: " Handoff \u{00b7} latest run ",
     footer_handoff: "\u{2191}/\u{2193} scroll  Esc/q back",
     intent_title: " Intent \u{00b7} full goal ",
@@ -797,8 +797,8 @@ pub const KO: L = L {
     conversation_user: "사용자",
     no_answer_context: "관련 워커 출력이나 대화 기록이 없습니다.",
     your_answer_title: " 답변 ",
-    footer_answer: "PgUp/PgDn 문맥 스크롤   Enter 전송·재개   Esc 취소",
-    footer_answer_approve: "PgUp/PgDn 문맥 스크롤   Enter 전송·승인·재개   Esc 취소",
+    footer_answer: "PgUp/PgDn 문맥 스크롤   Enter 줄바꿈   Ctrl+S 전송·재개   Ctrl+Enter 전송(지원 터미널)   Esc 취소",
+    footer_answer_approve: "PgUp/PgDn 문맥 스크롤   Enter 줄바꿈   Ctrl+S 전송·승인·재개   Ctrl+Enter 전송(지원 터미널)   Esc 취소",
     handoff_title: " 핸드오프 · 최근 실행 ",
     footer_handoff: "\u{2191}/\u{2193} 스크롤  Esc/q 뒤로",
     intent_title: " 목표 \u{00b7} 전문 ",
@@ -1042,6 +1042,23 @@ mod tests {
                 assert!(footer.contains("Ctrl+S"), "{lang:?}: {footer}");
                 assert!(footer.contains("Ctrl+Enter"), "{lang:?}: {footer}");
                 assert!(footer.contains("Esc"), "{lang:?}: {footer}");
+                assert!(!footer.contains("Shift/Alt"), "{lang:?}: {footer}");
+            }
+        }
+    }
+
+    #[test]
+    fn answer_input_footers_match_the_multiline_submit_contract() {
+        // The Answer input now uses the same Enter=newline / Ctrl+S=submit branch
+        // as the planner, while keeping the read-only context scroll keys.
+        for lang in [Lang::En, Lang::Ko] {
+            let l = lang.l();
+            for footer in [l.footer_answer, l.footer_answer_approve] {
+                assert!(footer.contains("Enter"), "{lang:?}: {footer}");
+                assert!(footer.contains("Ctrl+S"), "{lang:?}: {footer}");
+                assert!(footer.contains("Ctrl+Enter"), "{lang:?}: {footer}");
+                assert!(footer.contains("Esc"), "{lang:?}: {footer}");
+                assert!(footer.contains("PgUp/PgDn"), "{lang:?}: {footer}");
                 assert!(!footer.contains("Shift/Alt"), "{lang:?}: {footer}");
             }
         }
