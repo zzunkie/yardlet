@@ -28,7 +28,7 @@ triage. Record why access was granted and remove it when the role ends.
 `main` must:
 
 - require a pull request, including for administrators;
-- require the formatting/Clippy, Ubuntu, and macOS checks;
+- require the formatting/Clippy, Rust 1.82 MSRV, Ubuntu, and macOS checks;
 - require the branch to be current with `main`;
 - require review conversations to be resolved;
 - reject force pushes and deletion;

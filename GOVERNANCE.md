@@ -74,7 +74,7 @@ repeat the same investigation.
 `main` is protected. Changes reach it through pull requests that:
 
 - are up to date with `main`;
-- pass formatting, Clippy, Ubuntu, and macOS checks;
+- pass formatting, Clippy, Rust 1.82 MSRV, Ubuntu, and macOS checks;
 - resolve review conversations;
 - stay within the accepted contribution scope.
 
