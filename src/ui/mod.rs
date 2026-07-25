@@ -2804,38 +2804,47 @@ fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifi
 }
 
 fn handle_answer_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
+    use text_input::TextInputAction;
+
     if app.is_busy() {
         if code == KeyCode::Esc {
             app.screen = Screen::Home;
         }
         return;
     }
-    match code {
-        KeyCode::Esc => {
+    // The Answer screen splits into a scrollable read-only context pane above the
+    // multi-line draft input. PgUp/PgDn scroll the context and must not reach the
+    // shared text-input branch (where they would be no-ops).
+    if matches!(code, KeyCode::PageUp | KeyCode::PageDown) {
+        apply_scroll(app, code);
+        return;
+    }
+    // Same Enter=newline / Ctrl+S=submit / Ctrl+Enter=submit (when supported)
+    // branch as the planner and plan-revision inputs.
+    match text_input::action_for_key(code, mods, app.keyboard_enhancement) {
+        TextInputAction::Noop => {}
+        TextInputAction::Cancel => {
+            app.input_clear();
             app.answer_target = None;
             app.answer_grants_approval = false;
             app.screen = Screen::Home;
         }
-        KeyCode::Enter if mods.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
-            app.input_insert("\n")
-        }
-        KeyCode::Enter => {
+        TextInputAction::Submit => {
             if !app.input.trim().is_empty() {
                 start_answer(app);
                 app.screen = Screen::Home;
             }
         }
-        KeyCode::PageUp | KeyCode::PageDown => apply_scroll(app, code),
-        KeyCode::Backspace => app.input_backspace(),
-        KeyCode::Delete => app.input_delete(),
-        KeyCode::Left => app.caret_left(),
-        KeyCode::Right => app.caret_right(),
-        KeyCode::Home => app.caret_home(),
-        KeyCode::End => app.caret_end(),
-        KeyCode::Up => app.caret_up(),
-        KeyCode::Down => app.caret_down(),
-        KeyCode::Char(c) => app.input_insert(&c.to_string()),
-        _ => {}
+        TextInputAction::InsertNewline => app.input_insert("\n"),
+        TextInputAction::Insert(c) => app.input_insert(&c.to_string()),
+        TextInputAction::Backspace => app.input_backspace(),
+        TextInputAction::Delete => app.input_delete(),
+        TextInputAction::CaretLeft => app.caret_left(),
+        TextInputAction::CaretRight => app.caret_right(),
+        TextInputAction::CaretHome => app.caret_home(),
+        TextInputAction::CaretEnd => app.caret_end(),
+        TextInputAction::CaretUp => app.caret_up(),
+        TextInputAction::CaretDown => app.caret_down(),
     }
 }
 
@@ -5321,6 +5330,65 @@ tasks:
         handle_answer_key(&mut app, KeyCode::PageUp, KeyModifiers::NONE);
         assert_eq!(app.scroll, 0);
         assert_eq!(app.input, "draft answer");
+    }
+
+    #[test]
+    fn answer_enter_is_newline_and_control_s_does_not_insert_text() {
+        // Answer input shares the planner/plan-revision multi-line submit branch:
+        // default Enter is a newline, Ctrl+S submits, and (with enhancement)
+        // Ctrl+Enter submits. Ctrl+S must never leak a literal 's'.
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-answer-key-test"));
+        let mut app = App::new(ws);
+        app.screen = Screen::Answer;
+
+        handle_answer_key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(app.input, "\n", "default Enter inserts a newline");
+        assert_eq!(app.screen, Screen::Answer);
+
+        app.input_clear();
+        handle_answer_key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(app.input.is_empty(), "Ctrl+S must never insert a literal s");
+        assert_eq!(
+            app.screen,
+            Screen::Answer,
+            "empty Ctrl+S submit is rejected"
+        );
+        assert!(matches!(app.job, Job::Idle));
+
+        handle_answer_key(&mut app, KeyCode::Enter, KeyModifiers::CONTROL);
+        assert_eq!(
+            app.input, "\n",
+            "without enhancement, modified Enter stays a newline"
+        );
+        app.input_clear();
+        app.keyboard_enhancement = true;
+        handle_answer_key(&mut app, KeyCode::Enter, KeyModifiers::CONTROL);
+        assert!(
+            app.input.is_empty(),
+            "enhanced Ctrl+Enter reaches empty-submit rejection, not a newline"
+        );
+        assert_eq!(app.screen, Screen::Answer);
+        assert!(matches!(app.job, Job::Idle));
+    }
+
+    #[test]
+    fn answer_escape_cancels_target_and_discards_the_draft() {
+        // Esc must leave no lingering answer state: the draft, the answer target,
+        // and the approval-grant flag all reset before returning Home.
+        let ws = Workspace::at(std::path::Path::new("/tmp/yard-answer-cancel-test"));
+        let mut app = App::new(ws);
+        app.screen = Screen::Answer;
+        app.answer_target = Some(("YARD-003".to_string(), "질문?".to_string()));
+        app.answer_grants_approval = true;
+        app.input_insert("취소할\n초안");
+
+        handle_answer_key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+
+        assert_eq!(app.screen, Screen::Home);
+        assert!(app.input.is_empty());
+        assert_eq!(app.input_caret, 0);
+        assert!(app.answer_target.is_none());
+        assert!(!app.answer_grants_approval);
     }
 
     #[test]
