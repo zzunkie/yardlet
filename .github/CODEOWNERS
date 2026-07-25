@@ -1,0 +1,9 @@
+# Default ownership keeps review responsibility explicit for external PRs.
+* @zzunkie
+
+# Keep repository policy and high-risk execution/state boundaries visible.
+/.github/ @zzunkie
+/src/guard.rs @zzunkie
+/src/state.rs @zzunkie
+/src/workers/ @zzunkie
+/templates/agents/ @zzunkie

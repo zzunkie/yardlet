@@ -1,0 +1,88 @@
+name: Bug report
+description: Report reproducible behavior that is incorrect or unsafe
+title: "[Bug]: "
+labels:
+  - bug
+  - needs triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. Search existing issues first.
+        If this may expose secrets, bypass approvals or sandboxing, or alter canonical state without authorization, stop and use the private process in SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Yardlet version
+      description: Paste `yardlet --version` or the exact commit SHA.
+      placeholder: yardlet x.y.z
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation method
+      options:
+        - cargo install yardlet
+        - cargo binstall yardlet
+        - GitHub release binary
+        - cargo install --path .
+        - cargo run from source
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 15.5 arm64 or Ubuntu 24.04 x86_64
+    validations:
+      required: true
+  - type: input
+    id: workers
+    attributes:
+      label: Worker CLI and version
+      description: Include only workers involved in the failure. Write "none" when not applicable.
+      placeholder: codex 1.2.3, claude 4.5.0, or none
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide the smallest sequence that reproduces the problem.
+      placeholder: |
+        1. Run ...
+        2. Enter ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      description: Remove tokens, credentials, billing variables, customer data, private prompts, and full home-directory paths.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues for this behavior.
+          required: true
+        - label: I removed secrets and private data from this report.
+          required: true
+        - label: This is not a security vulnerability requiring private disclosure.
+          required: true
