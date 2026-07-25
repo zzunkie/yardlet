@@ -522,6 +522,33 @@ pub(crate) fn resolved_dependency_output_paths(
     Ok(paths)
 }
 
+/// True when the run's recorded integration commit is already an ancestor of
+/// `worktree`'s HEAD (#53): the run's outputs reached this history through
+/// normal integration, so later commits may legitimately supersede them and a
+/// resolve-time snapshot of those paths is stale provenance rather than bytes
+/// that still need delivering. Fail-closed by default: a run with no recorded
+/// integration commit, a worktree that is not a git repository, or any git
+/// failure answers `false`, leaving the caller's conflict guard in force.
+pub(crate) fn integration_is_in_worktree_history(
+    run_dir: &std::path::Path,
+    worktree: &std::path::Path,
+) -> bool {
+    let Ok(record) = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")) else {
+        return false;
+    };
+    let oid = record.integration_oid.trim();
+    if oid.is_empty() {
+        return false;
+    }
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["merge-base", "--is-ancestor", oid, "HEAD"])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 /// Fallback proof source for a manually resolved Partial whose retained
 /// worktree is already cleaned up (#47): the integration merge landed in the
 /// owning root, only the push was blocked, and post-integration cleanup

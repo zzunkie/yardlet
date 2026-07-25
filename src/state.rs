@@ -5684,7 +5684,7 @@ pub fn materialize_resolved_dependency_outputs(
     for dependency in &task.depends_on {
         let manually_resolved = dependency_was_manually_resolved(ws, queue, dependency);
         let latest = latest_dependency_run(ws, queue, dependency);
-        let Some((run_id, _)) = latest else {
+        let Some((run_id, dependency_run_dir)) = latest else {
             if manually_resolved {
                 bail!(
                     "dependency_output_manifest_missing:dependency={dependency}:path=<latest-run>"
@@ -5748,6 +5748,16 @@ pub fn materialize_resolved_dependency_outputs(
             // Typed "absence proven" record from a no-output resolve: nothing
             // to materialize. Distinct from a missing manifest, which stays
             // fail-closed above.
+            continue;
+        }
+        // The dependency's outputs already reached this destination's history
+        // through normal integration (#53). Later commits may legitimately
+        // supersede those exact paths, so the resolve-time snapshot is stale
+        // provenance, not bytes to reproduce: skip it instead of failing the
+        // digest guard forever. The guard still applies whenever the
+        // dependency's work is absent from the destination's history, which is
+        // the case it was written for.
+        if crate::run::integration_is_in_worktree_history(&dependency_run_dir, destination) {
             continue;
         }
         if manifest.outputs.is_empty() {
@@ -8254,6 +8264,68 @@ records:
             .unwrap();
         }
         (ws, queue, downstream, destination)
+    }
+
+    #[test]
+    fn downstream_skips_snapshot_already_delivered_through_git_history() {
+        // #53: the dependency's outputs were integrated into the destination's
+        // history and later commits legitimately superseded them. The
+        // resolve-time snapshot is then stale provenance, not a conflict.
+        let bytes = b"snapshot\n";
+        let (ws, queue, task, destination) = dependency_materialization_fixture(
+            "dependency-output-superseded-by-history",
+            "output.txt",
+            Some(bytes),
+            &content_digest(bytes),
+            true,
+        );
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&destination)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?} failed");
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "test"]);
+        write_str(&destination.join("output.txt"), "snapshot\n").unwrap();
+        git(&["add", "output.txt"]);
+        git(&["commit", "-qm", "integration"]);
+        let integration = git(&["rev-parse", "HEAD"]);
+        // A later task edits the same path: the destination now diverges from
+        // the snapshot, but through legitimate successor history.
+        write_str(
+            &destination.join("output.txt"),
+            "superseded by later work\n",
+        )
+        .unwrap();
+        git(&["add", "output.txt"]);
+        git(&["commit", "-qm", "later work"]);
+
+        let run_dir = ws.runs_dir().join("run-20990101-000000-upstream");
+        let record = fs::read_to_string(run_dir.join("run.yaml")).unwrap();
+        write_str(
+            &run_dir.join("run.yaml"),
+            &format!("{record}integration_oid: {integration}\n"),
+        )
+        .unwrap();
+
+        let overlays =
+            materialize_resolved_dependency_outputs(&ws, &queue, &task, &destination).unwrap();
+        assert!(
+            overlays.is_empty(),
+            "nothing should be materialized for an already-delivered dependency: {overlays:?}"
+        );
+        assert_eq!(
+            fs::read(destination.join("output.txt")).unwrap(),
+            b"superseded by later work\n",
+            "successor bytes in history must survive"
+        );
+
+        let _ = fs::remove_dir_all(ws.root);
     }
 
     #[test]
