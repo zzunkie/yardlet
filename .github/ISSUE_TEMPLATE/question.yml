@@ -1,0 +1,42 @@
+name: Question
+description: Ask for help with Yardlet setup or usage
+title: "[Question]: "
+labels:
+  - question
+  - needs triage
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Yardlet version
+      placeholder: yardlet x.y.z
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the operating system and relevant worker CLI.
+      placeholder: macOS 15.5 arm64, codex 1.2.3
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Include redacted commands and output.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Data safety
+      options:
+        - label: I removed secrets, private prompts, customer data, and full personal paths.
+          required: true

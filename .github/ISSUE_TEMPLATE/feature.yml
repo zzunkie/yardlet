@@ -1,0 +1,60 @@
+name: Feature proposal
+description: Propose a user outcome before implementing new behavior
+title: "[Feature]: "
+labels:
+  - enhancement
+  - needs triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Features, public contracts, and architecture changes are issue-first. Describe the user problem before the implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Who is blocked, and what are they trying to accomplish?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior without prescribing an architecture.
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current workaround
+      description: Explain how the problem is handled today, if at all.
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Scope and boundaries
+      description: Note affected commands, files, worker contracts, policies, or compatibility concerns.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Contribution intent
+      options:
+        - I can implement this after scope agreement
+        - I can help test or review
+        - I am proposing the need only
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues and the roadmap references in the repository.
+          required: true
+        - label: I understand that issue discussion must agree on scope before implementation.
+          required: true

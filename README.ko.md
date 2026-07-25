@@ -57,7 +57,7 @@ Anthropic의 Claude Code 리드가 자신의 워크플로를 이렇게 설명합
 ## 설치
 
 ```bash
-cargo install yardlet
+cargo install yardlet --locked
 ```
 
 macOS와 Linux용 사전 빌드 바이너리가 각

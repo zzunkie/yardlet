@@ -56,7 +56,7 @@ User intent (a few sentences)
 ## Install
 
 ```bash
-cargo install yardlet
+cargo install yardlet --locked
 ```
 
 Prebuilt binaries for macOS and Linux are attached to each

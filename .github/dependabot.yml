@@ -1,0 +1,43 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - rust
+    ignore:
+      # Clap 4.6 requires Cargo's edition-2024 support. Keep receiving 4.5
+      # patches and security updates while Yardlet's declared MSRV is 1.82.
+      - dependency-name: clap
+        update-types:
+          - version-update:semver-minor
+      # Ratatui 0.30 requires Rust 1.88. Keep receiving 0.29 patches and
+      # security updates until Yardlet deliberately raises its MSRV.
+      - dependency-name: ratatui
+        update-types:
+          - version-update:semver-major
+    groups:
+      cargo-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
