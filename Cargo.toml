@@ -27,7 +27,7 @@ bin-dir = "yardlet"
 [dependencies]
 # Clap 4.6 requires Cargo's edition-2024 support. Keep the 4.5 line while the
 # package's declared MSRV remains Rust 1.82.
-clap = { version = ">=4.5, <4.6", features = ["derive"] }
+clap = { version = ">=4.5, <4.7", features = ["derive"] }
 ratatui = "0.29"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
