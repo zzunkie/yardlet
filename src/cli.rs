@@ -62,7 +62,7 @@ pub enum Command {
     Defer(DeferArgs),
     /// Bring a Deferred task back to Queued.
     Revive(ReviveArgs),
-    /// Finalize a merge-conflict Partial to Done after you integrated it by hand.
+    /// Finalize a blocked Partial to Done after you integrated it by hand.
     Resolve(ResolveArgs),
     /// Set the default worker permission: sandboxed | full.
     Access(AccessArgs),
@@ -1917,7 +1917,7 @@ fn cmd_resolve(cwd: &std::path::Path, args: ResolveArgs) -> Result<()> {
     } else if args.no_outputs {
         "state-only partial resolved by hand; no repository outputs".to_string()
     } else {
-        "merge conflict resolved by hand; task integrated".to_string()
+        "partial resolved by hand; task integrated".to_string()
     };
     let outcome = if args.no_outputs {
         crate::state::resolve_partial_no_outputs(&ws, &id, &detail).map_err(|error| {
@@ -1961,7 +1961,7 @@ fn cmd_resolve(cwd: &std::path::Path, args: ResolveArgs) -> Result<()> {
         );
     }
     if outcome.cleared_partial_reason {
-        println!("  Cleared the merge-conflict marker.");
+        println!("  Cleared the partial-reason marker.");
     }
     if let Some(wt) = &outcome.removed_worktree {
         println!("  Removed the merged worktree at {}.", wt.display());

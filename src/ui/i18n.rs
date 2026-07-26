@@ -93,11 +93,21 @@ pub fn runnable_class_label(l: &L, class: RunnableClass) -> &'static str {
 /// Typed progress emitted by the run engine. Identifiers and diagnostic
 /// details are interpolated verbatim; only Yardlet-authored chrome changes.
 pub enum RunProgress<'a> {
-    Ambiguity { turn: u32, cap: u32 },
+    Ambiguity {
+        turn: u32,
+        cap: u32,
+    },
     Paused,
     WaitingForWorker(&'a str),
     WorkerLongRunning(&'a str),
-    MergeConflict(&'a str),
+    /// A Partial the drain cannot continue past. The remediation differs by
+    /// cause, so the cause is carried through rather than assumed (issue #40).
+    PartialNeedsYou {
+        id: &'a str,
+        kind: crate::run::PartialReasonKind,
+        marker: &'a str,
+        detail: Option<&'a str>,
+    },
     ParallelOff(&'a str),
     ParallelSequential(&'a str),
     NeedsUserMany(&'a str),
@@ -111,6 +121,58 @@ pub enum RunProgress<'a> {
     NeedsUser(&'a str),
     PartialContinue(&'a str),
     FailedRetry(&'a str),
+}
+
+/// Per-cause stop wording. Only a genuine merge conflict asks for conflict
+/// resolution; the others name what actually has to be fixed.
+fn partial_needs_you(
+    lang: Lang,
+    id: &str,
+    kind: crate::run::PartialReasonKind,
+    marker: &str,
+    detail: Option<&str>,
+) -> String {
+    use crate::run::PartialReasonKind as K;
+    let detail_en = detail.map(|d| format!(" ({d})")).unwrap_or_default();
+    let detail_ko = detail.map(|d| format!(" ({d})")).unwrap_or_default();
+    match (lang, kind) {
+        (Lang::En, K::MergeConflict) => format!(
+            "stopped: {id} has a merge conflict; resolve it (see handoff), then run auto again"
+        ),
+        (Lang::Ko, K::MergeConflict) => format!(
+            "정지: {id}에 병합 충돌이 있음; 핸드오프를 보고 해결한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, K::IntegrationError) => format!(
+            "stopped: {id} could not be integrated; there is no conflict to resolve. See the run's handoff for the error, then run auto again"
+        ),
+        (Lang::Ko, K::IntegrationError) => format!(
+            "정지: {id} 통합이 실패함; 해결할 충돌은 없습니다. run 핸드오프에서 오류를 확인한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, K::GitFinishUnverified) => format!(
+            "stopped: {id} merged cleanly but its Git finish is unverified{detail_en}; fix that, then run auto again"
+        ),
+        (Lang::Ko, K::GitFinishUnverified) => format!(
+            "정지: {id}는 병합은 깨끗했지만 Git finish가 검증되지 않음{detail_ko}; 해결한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, K::WorktreeCleanupChanged) => format!(
+            "stopped: {id} merged, but its worktree changed during cleanup and was kept; inspect it, then run auto again"
+        ),
+        (Lang::Ko, K::WorktreeCleanupChanged) => format!(
+            "정지: {id}는 병합됐지만 정리 중 worktree가 변경되어 보존됨; 확인한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, K::AutoCommitDisabled) => format!(
+            "stopped: {id} left uncommitted work and auto-commit is off; commit it, then run auto again"
+        ),
+        (Lang::Ko, K::AutoCommitDisabled) => format!(
+            "정지: {id}가 커밋되지 않은 작업을 남겼고 자동 커밋이 꺼져 있음; 커밋한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, K::Other) => {
+            format!("stopped: {id} is partial ({marker}); resolve it, then run auto again")
+        }
+        (Lang::Ko, K::Other) => {
+            format!("정지: {id}가 부분 완료 상태({marker}); 해결한 뒤 자동 실행을 다시 시작하세요")
+        }
+    }
 }
 
 pub fn run_progress(lang: Lang, event: RunProgress<'_>) -> String {
@@ -139,12 +201,15 @@ pub fn run_progress(lang: Lang, event: RunProgress<'_>) -> String {
         (Lang::Ko, RunProgress::WorkerLongRunning(id)) => format!(
             "정지: {id}가 30분 넘게 실행 중; 워커를 정지하거나 계속 기다린 뒤 자동 실행을 다시 시작하세요"
         ),
-        (Lang::En, RunProgress::MergeConflict(id)) => format!(
-            "stopped: {id} has a merge conflict; resolve it (see handoff), then run auto again"
-        ),
-        (Lang::Ko, RunProgress::MergeConflict(id)) => format!(
-            "정지: {id}에 병합 충돌이 있음; 핸드오프를 보고 해결한 뒤 자동 실행을 다시 시작하세요"
-        ),
+        (
+            lang,
+            RunProgress::PartialNeedsYou {
+                id,
+                kind,
+                marker,
+                detail,
+            },
+        ) => partial_needs_you(lang, id, kind, marker, detail),
         (Lang::En, RunProgress::ParallelOff(reason)) => {
             format!("parallel off ({reason}); running sequentially")
         }
@@ -892,6 +957,60 @@ pub const KO: L = L {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #40: every Partial with a marker used to stop the drain with the
+    /// merge-conflict message, sending the operator after a conflict that does
+    /// not exist. Only a real conflict may ask for conflict resolution.
+    #[test]
+    fn partial_stop_message_names_the_actual_cause() {
+        use crate::run::PartialReasonKind as K;
+        let render = |lang, kind, marker, detail| {
+            run_progress(
+                lang,
+                RunProgress::PartialNeedsYou {
+                    id: "YARD-001",
+                    kind,
+                    marker,
+                    detail,
+                },
+            )
+        };
+
+        for lang in [Lang::En, Lang::Ko] {
+            let conflict = render(lang, K::MergeConflict, "merge_conflict", None);
+            assert!(
+                conflict.contains("conflict") || conflict.contains("충돌"),
+                "{conflict}"
+            );
+
+            for (kind, marker) in [
+                (K::IntegrationError, "integration_error"),
+                (K::GitFinishUnverified, "git_finish_unverified"),
+                (K::WorktreeCleanupChanged, "worktree_cleanup_changed"),
+                (K::AutoCommitDisabled, "auto_commit_disabled"),
+            ] {
+                let rendered = render(lang, kind, marker, None);
+                assert!(rendered.contains("YARD-001"), "{rendered}");
+                assert!(
+                    !rendered.contains("merge conflict") && !rendered.contains("병합 충돌"),
+                    "{marker} must not be reported as a merge conflict: {rendered}"
+                );
+            }
+        }
+
+        // An unknown marker is surfaced verbatim rather than guessed at.
+        let other = render(Lang::En, K::Other, "some_new_reason", None);
+        assert!(other.contains("some_new_reason"), "{other}");
+
+        // A blocked Git finish names the checks that failed.
+        let blocked = render(
+            Lang::En,
+            K::GitFinishUnverified,
+            "git_finish_unverified",
+            Some("cargo clippy"),
+        );
+        assert!(blocked.contains("cargo clippy"), "{blocked}");
+    }
 
     #[test]
     fn explicit_config_wins() {

@@ -3498,10 +3498,15 @@ pub fn run_auto<F: FnMut(&str)>(
         // A merge-conflict Partial needs a human; a self-reported Partial is
         // auto-continued from its checkpoint (retry path below, attempts-capped).
         if let Some(t) = queue.tasks.iter().find(|t| t.state == TaskState::Partial) {
-            if partial_is_conflict(ws, &t.id) {
+            if let Some(reason) = latest_partial_reason(ws, &t.id) {
                 emit(i18n::run_progress(
                     event_lang,
-                    i18n::RunProgress::MergeConflict(&t.id),
+                    i18n::RunProgress::PartialNeedsYou {
+                        id: &t.id,
+                        kind: reason.kind,
+                        marker: &reason.marker,
+                        detail: reason.detail.as_deref(),
+                    },
                 ));
                 break;
             }
@@ -7043,9 +7048,26 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         m.wt_path.display()
                     ));
                 }
+                // An integration ERROR is not a conflict: nothing is left
+                // half-merged for a human to resolve, and telling them to
+                // resolve one sends them looking for markers that do not exist
+                // (issue #69). Record the error itself so the handoff can say
+                // what actually failed.
                 Err(e) => {
                     next_state = TaskState::Partial;
-                    let _ = state::write_str(&run_dir.join("partial-reason"), "merge_conflict");
+                    let _ = state::write_str(&run_dir.join("partial-reason"), "integration_error");
+                    let note = format!(
+                        "\n## Integration error\n\nYardlet could not integrate `{}`: {}\n\
+                         This is not a merge conflict: there is nothing to resolve by hand. \
+                         The worktree is kept at `{}`.\n",
+                        m.branch,
+                        e.to_string().trim(),
+                        m.wt_path.display()
+                    );
+                    let hp = run_dir.join("handoff.md");
+                    let mut existing = std::fs::read_to_string(&hp).unwrap_or_default();
+                    existing.push_str(&note);
+                    let _ = state::write_str(&hp, &existing);
                     lines.push(format!("{}: integration error: {e}", task.id));
                 }
             }
@@ -7774,12 +7796,80 @@ pub(crate) fn continuation_context(ws: &Workspace, task_id: &str) -> Option<Stri
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// Did this task's latest run go Partial because of a merge conflict (needs a
-/// human) rather than a worker self-report (safe to auto-continue)?
-pub(crate) fn partial_is_conflict(ws: &Workspace, task_id: &str) -> bool {
-    latest_run_for(ws, task_id)
-        .map(|(_, dir)| dir.join("partial-reason").exists())
-        .unwrap_or(false)
+/// Why a run left its task Partial, as recorded in the run's `partial-reason`
+/// marker. The marker's presence means a human is needed before the drain can
+/// continue; its CONTENT says what they actually have to do, and those
+/// remediations differ (issue #40). Unrecognized markers keep their raw text
+/// rather than being folded into a familiar-looking cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PartialReason {
+    pub kind: PartialReasonKind,
+    /// Raw marker text, for causes with no dedicated wording.
+    pub marker: String,
+    /// Cause-specific evidence, e.g. the pre-push checks that failed.
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PartialReasonKind {
+    /// The merge itself conflicted; the worktree is kept for manual integration.
+    MergeConflict,
+    /// Integration failed for some other reason. Distinct from a conflict:
+    /// there is nothing to resolve by hand (issue #69).
+    IntegrationError,
+    /// The work merged cleanly; only delivery is unverified.
+    GitFinishUnverified,
+    WorktreeCleanupChanged,
+    AutoCommitDisabled,
+    Other,
+}
+
+impl PartialReason {
+    fn from_marker(marker: &str, run_dir: &std::path::Path) -> Self {
+        let marker = marker.trim().to_string();
+        let kind = match marker.as_str() {
+            "merge_conflict" => PartialReasonKind::MergeConflict,
+            "integration_error" => PartialReasonKind::IntegrationError,
+            "git_finish_unverified" => PartialReasonKind::GitFinishUnverified,
+            "worktree_cleanup_changed" => PartialReasonKind::WorktreeCleanupChanged,
+            "auto_commit_disabled" => PartialReasonKind::AutoCommitDisabled,
+            _ => PartialReasonKind::Other,
+        };
+        let detail = (kind == PartialReasonKind::GitFinishUnverified)
+            .then(|| git_finish_block_detail(run_dir))
+            .flatten();
+        Self {
+            kind,
+            marker,
+            detail,
+        }
+    }
+}
+
+/// Name the failing pre-push checks behind a `git_finish_unverified` Partial so
+/// the operator is not told to go hunting for the cause.
+fn git_finish_block_detail(run_dir: &std::path::Path) -> Option<String> {
+    let record: crate::git_finish::GitFinishRecord =
+        serde_json::from_str(&std::fs::read_to_string(run_dir.join("git-finish.json")).ok()?)
+            .ok()?;
+    let failed: Vec<&str> = record
+        .checks
+        .iter()
+        .filter(|check| !check.passed)
+        .map(|check| check.name.as_str())
+        .collect();
+    if !failed.is_empty() {
+        return Some(failed.join(", "));
+    }
+    Some(record.status.as_str().to_string())
+}
+
+/// The typed reason this task's latest run left it Partial, if it recorded one.
+/// A Partial with no marker is a worker self-report and is safe to auto-retry.
+pub(crate) fn latest_partial_reason(ws: &Workspace, task_id: &str) -> Option<PartialReason> {
+    let (_, dir) = latest_run_for(ws, task_id)?;
+    let marker = std::fs::read_to_string(dir.join("partial-reason")).ok()?;
+    Some(PartialReason::from_marker(&marker, &dir))
 }
 
 /// The intent a run belonged to, read from its `run.yaml` (empty if unknown).
@@ -7933,6 +8023,74 @@ mod tests {
             payload: serde_json::Value::Null,
             raw_ref: None,
         }
+    }
+
+    /// Issue #40: the marker's CONTENT decides the remediation. Reading only
+    /// its existence reported every blocked Partial as a merge conflict.
+    #[test]
+    fn partial_reason_is_typed_from_the_marker_content() {
+        let dir = std::env::temp_dir().join(format!("yard-partial-reason-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        for (marker, expected) in [
+            ("merge_conflict", PartialReasonKind::MergeConflict),
+            ("integration_error", PartialReasonKind::IntegrationError),
+            (
+                "git_finish_unverified",
+                PartialReasonKind::GitFinishUnverified,
+            ),
+            (
+                "worktree_cleanup_changed",
+                PartialReasonKind::WorktreeCleanupChanged,
+            ),
+            (
+                "auto_commit_disabled",
+                PartialReasonKind::AutoCommitDisabled,
+            ),
+            ("something_new", PartialReasonKind::Other),
+        ] {
+            // Trailing newline: writers use both forms.
+            let reason = PartialReason::from_marker(&format!("{marker}\n"), &dir);
+            assert_eq!(reason.kind, expected, "{marker}");
+            assert_eq!(reason.marker, marker);
+        }
+
+        // git_finish_unverified names the failing pre-push checks when the
+        // run recorded them.
+        std::fs::write(
+            dir.join("git-finish.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "run_id": "run-test",
+                "task_id": "YARD-001",
+                "attempted_at": "",
+                "status": "check_blocked",
+                "policy": {
+                    "auto_push": false,
+                    "remote": "origin",
+                    "target_ref": "refs/heads/main",
+                    "pre_push_checks": ["cargo fmt", "cargo clippy"]
+                },
+                "checks": [
+                    {"name": "cargo fmt", "passed": true},
+                    {"name": "cargo clippy", "passed": false}
+                ],
+                "push_invoked": false,
+                "push_succeeded": false,
+                "reason": "pre_push_check_failed"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let reason = PartialReason::from_marker("git_finish_unverified", &dir);
+        assert_eq!(reason.detail.as_deref(), Some("cargo clippy"));
+
+        // A conflict marker never picks up Git finish detail.
+        let reason = PartialReason::from_marker("merge_conflict", &dir);
+        assert_eq!(reason.detail, None);
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn eval_with_failed_checks(names: &[&str]) -> evaluator::Evaluation {
