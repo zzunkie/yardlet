@@ -1,0 +1,51 @@
+name: CodeQL
+
+# Advanced setup, replacing CodeQL default setup. The only reason to own this
+# workflow is the configuration file: default setup cannot apply path filters,
+# so it scanned test code and reported test-only temp directories as
+# path-injection sinks. See .github/codeql/codeql-config.yml.
+#
+# Languages match what default setup analyzed, so switching does not narrow
+# coverage.
+
+on:
+  push:
+    branches: [main, "v*"]
+  pull_request:
+  schedule:
+    # Keep a weekly baseline scan so advisories that land after a merge are
+    # still surfaced on the default branch.
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript, python, rust]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@3b0bd1d116c0bde30213346b22d4f634d96a2fb0 # v3
+        with:
+          languages: ${{ matrix.language }}
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - uses: github/codeql-action/analyze@3b0bd1d116c0bde30213346b22d4f634d96a2fb0 # v3
+        with:
+          category: "/language:${{ matrix.language }}"

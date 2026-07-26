@@ -1,0 +1,10 @@
+name: yardlet
+
+# Analyze production code only. Yardlet's tests build their own scratch
+# directories from `std::env::temp_dir()` and delete them on the way out,
+# which the Rust path-injection query reads as a filesystem sink fed by an
+# environment value. That threat model does not apply to a test creating and
+# removing its own directory, so scanning test code produced only false
+# positives while masking the signal from real code paths.
+paths-ignore:
+  - tests
