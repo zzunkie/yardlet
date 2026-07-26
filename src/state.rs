@@ -1935,6 +1935,7 @@ impl Workspace {
         run_dir: &Path,
         record: &crate::git_finish::GitFinishRecord,
     ) -> Result<()> {
+        record.validate_authority().map_err(anyhow::Error::msg)?;
         self.validate_receipt_run_id(&record.run_id)?;
         if run_dir != self.runs_dir().join(&record.run_id) {
             bail!("Git finish run directory does not match its core identity");
@@ -1971,6 +1972,7 @@ impl Workspace {
         if record.run_id != run_id {
             bail!("Git finish core record does not match its run id");
         }
+        record.validate_authority().map_err(anyhow::Error::msg)?;
         Ok(record)
     }
     /// Atomically claim a run directory without reusing an existing attempt's
@@ -6367,6 +6369,54 @@ routing:
 
     fn temp_root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("yard-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn git_finish_authority_rejects_remote_urls_and_unverified_pr_open_records() {
+        let dir = temp_root("git-finish-authority-validation");
+        let _ = fs::remove_dir_all(&dir);
+        let ws = Workspace::at(&dir);
+        let run_id = "run-authority-test";
+        let run_dir = ws.runs_dir().join(run_id);
+        fs::create_dir_all(&run_dir).unwrap();
+        let mut record = crate::git_finish::GitFinishRecord {
+            schema_version: 3,
+            run_id: run_id.into(),
+            task_id: "YARD-001".into(),
+            attempted_at: String::new(),
+            status: crate::git_finish::GitFinishStatus::Prepared,
+            policy: crate::git_finish::GitFinishPolicySnapshot {
+                auto_push: true,
+                delivery: crate::schemas::GitFinishDelivery::Direct,
+                remote: "https://user:secret@github.com/acme/project.git".into(),
+                target_ref: "refs/heads/main".into(),
+                pre_push_checks: vec![],
+            },
+            expected_oid: Some("a".repeat(40)),
+            baseline_oid: "b".repeat(40),
+            owned_oids: vec!["a".repeat(40)],
+            checks: vec![],
+            push_invoked: false,
+            push_succeeded: false,
+            remote_oid: None,
+            remote_before_oid: Some("b".repeat(40)),
+            head_ref: None,
+            pull_request_number: None,
+            pull_request_state: None,
+            reason: "ready_to_push".into(),
+        };
+
+        let url_error = ws.save_git_finish_record(&run_dir, &record).unwrap_err();
+        assert!(url_error.to_string().contains("remote name"));
+
+        record.policy.remote = "origin".into();
+        record.policy.delivery = crate::schemas::GitFinishDelivery::Auto;
+        record.status = crate::git_finish::GitFinishStatus::PullRequestOpen;
+        let pr_error = ws.save_git_finish_record(&run_dir, &record).unwrap_err();
+        assert!(pr_error.to_string().contains("verified pull request"));
+        assert!(!run_dir.join("git-finish.json").exists());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -30,10 +30,7 @@ fn is_done(state: &str) -> bool {
 
 fn telemetry_done(run: &RunTelemetry) -> bool {
     is_done(&run.eval_state)
-        && matches!(
-            run.git_finish_status.as_str(),
-            "" | "disabled" | "pushed" | "already_applied"
-        )
+        && crate::git_finish::GitFinishStatus::telemetry_verified_complete(&run.git_finish_status)
 }
 
 /// Per-worker reliability over its runs.
@@ -972,7 +969,7 @@ mod tests {
         let mut pending = rec("A", "codex", "done", "Done", 1);
         pending.git_finish_status = "prepared".into();
         let mut verified = rec("B", "codex", "done", "Done", 1);
-        verified.git_finish_status = "already_applied".into();
+        verified.git_finish_status = "pull_request_open".into();
 
         let report = summarize(&[pending, verified]);
 

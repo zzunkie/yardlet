@@ -452,12 +452,14 @@ human gates. Design: [docs/parallel-queue.md](docs/parallel-queue.md).
 
 Automatic push is a separate, user-owned completion policy and is off by
 default. `yardlet init` writes an explicit disabled block; older workspaces
-without the block also stay disabled. Configure a named remote, a fully
+without the block also stay disabled. The default `direct` delivery preserves
+the existing exact-OID push contract. Configure a named remote, a fully
 qualified branch ref, and checks in the order they must pass:
 
 ```yaml
 git_finish:
   auto_push: false
+  delivery: direct
   remote: safe-remote
   target_ref: refs/heads/main
   pre_push_checks:
@@ -474,6 +476,41 @@ commits newly reachable from the baseline are exactly that owned set. The
 remote target must still equal the baseline. A hook, another session, or local
 automation that inserts an unowned commit therefore fails closed before push.
 
+For a GitHub repository whose default branch may reject direct pushes, opt in
+to automatic delivery:
+
+```yaml
+git_finish:
+  auto_push: true
+  delivery: auto
+  remote: ""
+  target_ref: ""
+  pre_push_checks:
+    - name: tests
+      command: cargo test
+```
+
+Automatic delivery requires the current branch to have one unambiguous
+upstream, that upstream's raw remote URL to identify one GitHub repository, and
+the GitHub CLI `gh` to be installed and authenticated for `github.com`.
+Yardlet cross-checks the upstream remote and branch with GitHub's repository
+identity and default-branch metadata. Optional non-empty `remote` and
+`target_ref` values act as assertions and must match discovery. A missing or
+ambiguous upstream, multiple remote URLs, a non-GitHub provider, missing or
+unauthenticated `gh`, insufficient push permission, unavailable metadata, or
+any identity mismatch fails closed before remote mutation. GitLab, Bitbucket,
+and other hosting providers are not supported by this mode.
+
+When GitHub confirms push permission and an unprotected default branch,
+automatic delivery uses the existing exact-OID direct path. A protected branch
+uses the deterministic `refs/heads/yardlet/runs/<run-id>` head instead. Yardlet
+never pushes the expected OID to the protected base ref. It non-force pushes
+the expected OID to that run-owned head, independently verifies the remote head
+OID, reuses the single open PR with the same head and base when present, or
+creates one PR and queries it separately. Completion requires the PR to remain
+open with the expected head OID and base ref. Automatic merge, approval
+waiting, merged-branch deletion, and PR auto-merge are not performed.
+
 Finishers for the same Git common directory, remote, and target ref are
 serialized with a bounded local lock. While holding it, Yardlet requires the
 current branch and `HEAD` to match the target and owned OID, one push
@@ -488,18 +525,19 @@ remote OID equals the frozen expected OID. Repeating the same finish converges
 to `already_applied` without another push.
 
 When `auto_push: true`, only `pushed`, independently verified
-`already_applied`, and core-verified no-change `not_needed` complete the task.
-Every other finish status projects the task, sealed `run.yaml`, telemetry,
-final report, and Trust accounting as unfinished `Partial`. With the
-default-off policy, `disabled` is not a required finish and normal task
-completion is unchanged.
+`already_applied`, verified `pull_request_open`, and core-verified no-change
+`not_needed` complete the task. Every other finish status projects the task,
+sealed `run.yaml`, telemetry, final report, and Trust accounting as unfinished
+`Partial`. With the default-off policy, `disabled` is not a required finish and
+normal task completion is unchanged.
 
 | Recorded status | User-visible meaning |
 |---|---|
 | `pushed` | The exact OID was pushed and independently verified. |
 | `already_applied` | The remote already had the exact OID; no push ran. |
+| `pull_request_open` | The run-owned head OID and the single open PR's head and base were independently verified. |
 | `not_needed` | The core verified that this run produced no Git changes; no push ran. |
-| `prepared` | The durable pre-push record exists, but the remote result is not yet known; `recover` reconciles it. |
+| `prepared` | A durable record exists before head push and again before PR creation; `recover` reconciles the current remote and PR state. |
 | `check_blocked` / `safety_blocked` | A configured check, ownership proof, lock, or concurrent-state gate blocked; the task remains Partial for explicit resolution. |
 | `git_failed` | A Git lookup or push command failed; the task remains Partial and no remote success is claimed. |
 | `remote_mismatch` | Push returned success, but independent verification did not match; inspect the remote before resolving the Partial task. |
@@ -510,20 +548,25 @@ Every outcome is written authoritatively to
 `.agents/runs/<run-id>/git-finish.json` is a user-facing projection. The result
 is also projected into run telemetry and the final report. The record includes
 the remote name, target ref, baseline, run-owned and expected OIDs, before/after
-remote OIDs, check results, push flags, reason, and timestamp. It does not store
-a remote URL, check command text or output, credentials, or environment values.
+remote OIDs, run head ref, PR number and open state when applicable, check
+results, push flags, reason, and timestamp. It does not store a repository
+identity, remote URL, PR URL, check command text or output, credentials, or
+environment values.
 
-Yardlet writes `prepared` before invoking push. After an interruption,
-`yardlet recover` reloads that ownership record under the same target lock and
-checks the remote. If the remote already equals the expected OID, recovery
-converges to `already_applied` without another push. If it still equals the
-baseline, Yardlet can retry the same exact-OID push. Any other remote or local
-state fails closed. If remote verification finished but sealing the queue,
-`run.yaml`, or telemetry was interrupted, recovery reprojects the verified
-result idempotently. Other blocked or failed statuses are not silently retried
-or promoted; they remain Partial for explicit user resolution. Use a local bare
-remote for project dogfooding and tests; this contract does not claim that
-Yardlet pushes its own public `origin`.
+Yardlet writes `prepared` before invoking either base or run-head push, and
+writes it again after head verification before PR creation. After an
+interruption, `yardlet recover` reloads that ownership record under the same
+target lock and checks the remote. Direct delivery converges to
+`already_applied` without another push when the base already contains the
+expected OID. PR delivery skips an already-applied head push, reuses an existing
+open PR for the same head and base, and independently rechecks its head OID,
+base ref, and open state. Any conflicting head, duplicate PR, mismatched PR, or
+other ambiguous remote or local state fails closed. If remote verification
+finished but sealing the queue, `run.yaml`, or telemetry was interrupted,
+recovery reprojects the verified result idempotently. Other blocked or failed
+statuses are not promoted; they remain Partial for explicit user resolution.
+Use a local bare remote for project dogfooding and tests; this contract does not
+claim that Yardlet pushes its own public `origin`.
 
 ## Crash safety
 
