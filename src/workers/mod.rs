@@ -22,7 +22,9 @@ use crate::schemas::{
     RoutingProvenance, WorkerOutputLogSpan, WorkerProfile,
 };
 
-pub const MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES: u64 = 256 * 1024;
+/// Tail of a resultless attempt's log span that output-contract classification
+/// reads. Bounds the work; the causes it looks for are terminal events.
+pub const MAX_OUTPUT_CONTRACT_SCAN_BYTES: u64 = 256 * 1024;
 
 pub(crate) const WORKER_PROCESS_PROVENANCE_FILE: &str = "worker-process.yaml";
 
@@ -100,9 +102,17 @@ pub struct AttemptCapture {
     pub stderr_log: PathBuf,
 }
 
-/// Classify only the exact public-log bytes appended by one resultless attempt.
+/// Classify only the public-log bytes appended by one resultless attempt.
 /// Patterns are bounded, case-insensitive literals rather than regexes so a
 /// user-owned profile cannot introduce unbounded matching work.
+///
+/// A real attempt log runs to hundreds of kilobytes or more, so a span larger
+/// than the scan budget is the normal case, not an error: both classified
+/// causes are terminal events (a provider's refusal reply, a session teardown
+/// killing background tasks) and therefore land at the END of the span. The
+/// scan reads the last `MAX_OUTPUT_CONTRACT_SCAN_BYTES` of the span. Spans that
+/// are structurally invalid (inverted, or past the end of the file) are still
+/// errors.
 pub fn classify_output_contract_cause(
     profile: &WorkerProfile,
     result_path: &Path,
@@ -111,18 +121,14 @@ pub fn classify_output_contract_cause(
 ) -> Result<Option<OutputContractCause>> {
     use std::io::{Read, Seek, SeekFrom};
 
-    if result_path.is_file() || profile.provider_response_refusal_patterns.is_empty() {
+    if result_path.is_file()
+        || (profile.provider_response_refusal_patterns.is_empty()
+            && profile.background_deferral_patterns.is_empty())
+    {
         return Ok(None);
     }
     if span.byte_end < span.byte_start {
         anyhow::bail!("worker output log span ends before it starts");
-    }
-    let span_len = span.byte_end - span.byte_start;
-    if span_len > MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES {
-        anyhow::bail!(
-            "worker output log span exceeds {} bytes",
-            MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES
-        );
     }
     let mut file = std::fs::File::open(output_log)
         .with_context(|| format!("opening bounded worker output {}", output_log.display()))?;
@@ -135,15 +141,26 @@ pub fn classify_output_contract_cause(
             file_len
         );
     }
-    file.seek(SeekFrom::Start(span.byte_start))?;
-    let mut bytes = vec![0; span_len as usize];
+    let scan_start = span
+        .byte_end
+        .saturating_sub(MAX_OUTPUT_CONTRACT_SCAN_BYTES)
+        .max(span.byte_start);
+    file.seek(SeekFrom::Start(scan_start))?;
+    let mut bytes = vec![0; (span.byte_end - scan_start) as usize];
     file.read_exact(&mut bytes)?;
     let haystack = String::from_utf8_lossy(&bytes).to_lowercase();
-    Ok(profile
-        .provider_response_refusal_patterns
-        .iter()
-        .any(|pattern| haystack.contains(&pattern.to_lowercase()))
-        .then_some(OutputContractCause::ProviderResponseRefused))
+    let matches = |patterns: &[String]| {
+        patterns
+            .iter()
+            .any(|pattern| haystack.contains(&pattern.to_lowercase()))
+    };
+    // A refusal explains why no work happened at all; a background deferral only
+    // explains missing artifacts. Classify the stronger cause first.
+    if matches(&profile.provider_response_refusal_patterns) {
+        return Ok(Some(OutputContractCause::ProviderResponseRefused));
+    }
+    Ok(matches(&profile.background_deferral_patterns)
+        .then_some(OutputContractCause::WorkerDeferredToBackgroundTask))
 }
 
 fn normalized_event(
@@ -1637,15 +1654,17 @@ mod tests {
         )
         .unwrap();
         for span in [
+            // Inverted span.
             WorkerOutputLogSpan {
                 path: "worker-output.log".into(),
                 byte_start: 10,
                 byte_end: 9,
             },
+            // Span running past the end of the file.
             WorkerOutputLogSpan {
                 path: "worker-output.log".into(),
                 byte_start: 0,
-                byte_end: MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES + 1,
+                byte_end: MAX_OUTPUT_CONTRACT_SCAN_BYTES + 1,
             },
         ] {
             assert!(classify_output_contract_cause(
@@ -1656,6 +1675,91 @@ mod tests {
             )
             .is_err());
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Regression: a real attempt log is far larger than the scan budget. The
+    /// span must be scanned from its tail rather than rejected, or no live run
+    /// is ever classified.
+    #[test]
+    fn classification_scans_the_tail_of_an_oversized_span() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-output-contract-oversized-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let log = root.join("worker-output.log");
+        let filler = "x".repeat(MAX_OUTPUT_CONTRACT_SCAN_BYTES as usize + 4096);
+        std::fs::write(&log, format!("{filler}\nprovider declined\n")).unwrap();
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: fixture\nprovider_response_refusal_patterns: ['provider declined']\ninvocation: {command: fixture}\n",
+        )
+        .unwrap();
+        let span = WorkerOutputLogSpan {
+            path: "worker-output.log".into(),
+            byte_start: 0,
+            byte_end: std::fs::metadata(&log).unwrap().len(),
+        };
+        assert_eq!(
+            classify_output_contract_cause(&profile, &root.join("result.json"), &log, &span)
+                .unwrap(),
+            Some(OutputContractCause::ProviderResponseRefused)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Issue #38: the worker ended its turn with a background task still
+    /// running, so the non-interactive session tore down before result.json was
+    /// written. The teardown markers are structural stream events.
+    #[test]
+    fn classifies_background_task_deferral_from_teardown_markers() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-output-contract-deferral-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let log = root.join("worker-output.log");
+        // Verbatim shape of the teardown events observed in the runs cited by #38.
+        std::fs::write(
+            &log,
+            "{\"type\":\"system\",\"subtype\":\"task_updated\",\"task_id\":\"bdtea3zev\",\
+             \"patch\":{\"status\":\"killed\",\"end_time\":1784816678419}}\n\
+             {\"type\":\"system\",\"subtype\":\"task_notification\",\"task_id\":\"bdtea3zev\",\
+             \"status\":\"stopped\",\"output_file\":\"\",\"summary\":\"Run full cargo test\"}\n",
+        )
+        .unwrap();
+        let profile: WorkerProfile =
+            crate::yaml::from_str("id: claude-code\ninvocation: {command: claude}\n").unwrap();
+        assert_eq!(
+            profile.background_deferral_patterns,
+            crate::schemas::default_background_deferral_patterns(),
+            "an existing workers.yaml without the key must still be covered"
+        );
+        let span = WorkerOutputLogSpan {
+            path: "worker-output.log".into(),
+            byte_start: 0,
+            byte_end: std::fs::metadata(&log).unwrap().len(),
+        };
+        assert_eq!(
+            classify_output_contract_cause(&profile, &root.join("result.json"), &log, &span)
+                .unwrap(),
+            Some(OutputContractCause::WorkerDeferredToBackgroundTask)
+        );
+
+        // A worker family that never emits those events is unaffected.
+        std::fs::write(&log, "codex finished without writing a result\n").unwrap();
+        let span = WorkerOutputLogSpan {
+            path: "worker-output.log".into(),
+            byte_start: 0,
+            byte_end: std::fs::metadata(&log).unwrap().len(),
+        };
+        assert_eq!(
+            classify_output_contract_cause(&profile, &root.join("result.json"), &log, &span)
+                .unwrap(),
+            None
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
