@@ -9,8 +9,8 @@ use serde::Deserialize;
 
 use crate::inspect::RepoSummary;
 use crate::schemas::{
-    ConversationTurn, IntentContract, ResearchPolicy, ResearchSource, ScoutDisposition,
-    ScoutResult, Task, TurnRole,
+    ConversationTurn, GitFinishCheck, IntentContract, ResearchPolicy, ResearchSource,
+    ScoutDisposition, ScoutResult, Task, TurnRole,
 };
 
 pub struct ScoutPacketInputs<'a> {
@@ -194,6 +194,11 @@ pub struct PacketInputs<'a> {
     /// tells the worker to proceed and finish without re-gating or re-asking,
     /// so a single human decision carries the task to completion.
     pub approved: bool,
+    /// The workspace's configured pre-push checks, in execution order. The run
+    /// is judged by these AFTER the worker is done, so a worker that never
+    /// sees them can pass its own validation and still land Partial on a
+    /// one-line lint (issue #44).
+    pub pre_push_checks: &'a [GitFinishCheck],
 }
 
 /// Find existing local image files referenced in `text` (e.g. a path dragged
@@ -975,6 +980,26 @@ pub fn compile(inputs: &PacketInputs) -> String {
         ));
     }
     p.push('\n');
+
+    // The delivery gate the run will be judged by. Without this the worker
+    // validates with whatever it picked, passes, merges, and only then fails a
+    // configured style check it never ran (issue #44).
+    if !inputs.pre_push_checks.is_empty() {
+        p.push_str("## Delivery gate (these run after you finish)\n\n");
+        p.push_str(
+            "This workspace runs the following checks before delivering your work, in this \
+             order. They are part of what \"done\" means here: if one fails, the task lands \
+             Partial even when your own validation passed. Run them yourself and fix what they \
+             report BEFORE you write your result files.\n\n",
+        );
+        for check in inputs.pre_push_checks {
+            p.push_str(&format!("- {}: `{}`\n", check.name, check.command));
+        }
+        p.push_str(
+            "\nIf one of these cannot run in your environment, say so in \
+             `validation.failures` instead of skipping it silently.\n\n",
+        );
+    }
 
     // Role guidance: how this kind of task is worked, regardless of worker.
     p.push_str(&format!("## How to work \u{2014} role: {role}\n\n"));
@@ -1974,6 +1999,7 @@ mod tests {
             role_notes: "",
             harness: &harness,
             approved: false,
+            pre_push_checks: &[],
         });
         assert!(p.contains("## Workspace rules (always apply)"));
         assert!(p.contains("Never push without review."));
@@ -2148,6 +2174,7 @@ mod tests {
             role_notes,
             harness: &Harness::default(),
             approved: false,
+            pre_push_checks: &[],
         })
     }
 
@@ -2192,7 +2219,62 @@ mod tests {
             role_notes: "",
             harness: &Harness::default(),
             approved,
+            pre_push_checks: &[],
         })
+    }
+
+    /// Issue #44: the run is judged by the workspace's pre-push checks after
+    /// the worker finishes. A worker that never sees them passes its own
+    /// validation and still lands Partial on a one-line lint.
+    #[test]
+    fn packet_states_the_delivery_gate_commands() {
+        let task: crate::schemas::Task =
+            crate::yaml::from_str("id: YARD-001\ntitle: add a test\nkind: implementation\n")
+                .unwrap();
+        let repo = crate::inspect::RepoSummary::default();
+        let checks = vec![
+            GitFinishCheck {
+                name: "format".into(),
+                command: "cargo fmt --all -- --check".into(),
+            },
+            GitFinishCheck {
+                name: "clippy".into(),
+                command: "cargo clippy --all-targets -- -D warnings".into(),
+            },
+        ];
+        let inputs = |checks: &[GitFinishCheck]| {
+            compile(&PacketInputs {
+                worker_id: "codex",
+                task: &task,
+                intent: None,
+                repo: &repo,
+                run_dir_rel: ".agents/runs/run-x",
+                conversation: &[],
+                continuation: None,
+                chained_from: None,
+                language: "en",
+                images: &[],
+                role_notes: "",
+                harness: &Harness::default(),
+                approved: false,
+                pre_push_checks: checks,
+            })
+        };
+
+        let gated = inputs(&checks);
+        assert!(gated.contains("## Delivery gate"), "{gated}");
+        assert!(gated.contains("cargo fmt --all -- --check"), "{gated}");
+        assert!(
+            gated.contains("cargo clippy --all-targets -- -D warnings"),
+            "{gated}"
+        );
+        // The worker must know these decide the task's outcome, not just that
+        // they exist.
+        assert!(gated.contains("Partial"), "{gated}");
+
+        // A workspace with no configured gate gets no section at all.
+        let ungated = inputs(&[]);
+        assert!(!ungated.contains("## Delivery gate"), "{ungated}");
     }
 
     #[test]
@@ -2250,6 +2332,7 @@ mod tests {
             role_notes: "",
             harness: &Harness::default(),
             approved: false,
+            pre_push_checks: &[],
         });
         assert!(p.contains("## Same session, next task"));
         assert!(p.contains("completed task YARD-1 in this session"));
@@ -2301,6 +2384,7 @@ mod tests {
             role_notes: "",
             harness: &Harness::default(),
             approved: false,
+            pre_push_checks: &[],
         });
         assert!(p.contains("## Continuing a partial run"));
         assert!(p.contains("do not redo finished work"));
@@ -2365,6 +2449,7 @@ mod tests {
             role_notes: "",
             harness: &Harness::default(),
             approved: false,
+            pre_push_checks: &[],
         });
         assert!(p.contains("## Conversation with the user"));
         assert!(p.contains("[you] Forward+ or GL Compatibility?"));

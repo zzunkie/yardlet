@@ -1825,6 +1825,7 @@ mod tests {
             role_notes: "",
             harness: &harness,
             approved: false,
+            pre_push_checks: &[],
         });
         assert!(selected_packet.contains("frontend-design"));
         assert!(selected_packet.contains(".agents/skills/frontend-design/SKILL.md"));
@@ -1846,6 +1847,7 @@ mod tests {
             role_notes: "",
             harness: &harness,
             approved: false,
+            pre_push_checks: &[],
         });
         assert!(!unrelated_packet.contains("frontend-design"));
         assert!(unrelated_packet.contains("verification-before-completion"));
