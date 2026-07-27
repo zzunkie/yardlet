@@ -2289,6 +2289,109 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Issue #20: under sink backpressure the parent stayed busy long after the
+    /// worker had produced a successful result. The bounded queue must shed
+    /// rather than block, and completion must not wait for a slow sink to
+    /// consume the backlog.
+    #[cfg(unix)]
+    #[test]
+    fn codex_saturated_publisher_sheds_and_completes_without_draining_the_backlog() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        const EMITTED: usize = 400;
+        const SINK_DELAY: Duration = Duration::from_millis(25);
+
+        let root = std::env::temp_dir().join(format!(
+            "yard-codex-saturated-publisher-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fake_codex = root.join("codex");
+        // Many small events, emitted as fast as the shell can write them, so the
+        // reader outruns the deliberately slow sink and fills the 64-slot queue.
+        std::fs::write(
+            &fake_codex,
+            format!(
+                "#!/bin/sh\ni=0\nwhile [ $i -lt {EMITTED} ]; do \
+                 printf '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\
+                 \"text\":\"e%s\"}}}}\\n' \"$i\"; i=$((i+1)); done\n"
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&fake_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_codex, permissions).unwrap();
+
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+        )
+        .unwrap();
+        let capture = AttemptCapture {
+            combined_log: root.join("worker-output.log"),
+            stdout_log: root.join("attempts/att_1/stdout.log"),
+            stderr_log: root.join("attempts/att_1/stderr.log"),
+        };
+        let delivered = Arc::new(AtomicUsize::new(0));
+        let sink_delivered = Arc::clone(&delivered);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink_seen = Arc::clone(&seen);
+        let sink: AttemptEventSink = Arc::new(move |event| {
+            std::thread::sleep(SINK_DELAY);
+            sink_delivered.fetch_add(1, Ordering::Relaxed);
+            sink_seen.lock().unwrap().push(event);
+            Ok(())
+        });
+
+        let started = std::time::Instant::now();
+        let outcome = spawn_attempt_with_sink(
+            &profile,
+            &fake_codex,
+            "packet",
+            &root,
+            &root,
+            &[],
+            &capture,
+            Some(sink),
+            LOAD_TOLERANT_WORKER_CEILING,
+            false,
+            &[],
+            None,
+            false,
+        )
+        .unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(outcome.exit_ok);
+        assert!(
+            outcome.public_events_dropped,
+            "a saturated publisher queue must report shed events"
+        );
+        // Delivering every event through this sink would take EMITTED *
+        // SINK_DELAY (10s here). Completion must not wait for that backlog.
+        let full_drain = SINK_DELAY * EMITTED as u32;
+        assert!(
+            elapsed < full_drain / 3,
+            "parent did not complete promptly under backpressure: {elapsed:?} \
+             (full drain would be {full_drain:?})"
+        );
+        assert!(
+            delivered.load(Ordering::Relaxed) < EMITTED,
+            "shedding must drop events rather than deliver all of them"
+        );
+        // The authoritative raw stream is never shed: every emitted event is on
+        // disk even though the live sink saw only some of them.
+        let raw = std::fs::read_to_string(&capture.stdout_log).unwrap();
+        assert_eq!(raw.lines().count(), EMITTED);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[cfg(unix)]
     #[test]
     fn codex_resume_cumulative_file_changes_keep_public_log_bounded_and_raw_refs_exact() {
