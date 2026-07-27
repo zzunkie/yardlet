@@ -42,6 +42,9 @@ pub enum Screen {
     Completion,
     ReportList,
     Approvals,
+    /// The full Home key list (`?`). Home's footer can only carry the keys that
+    /// have a target right now, so the always-valid globals live here.
+    Keys,
 }
 
 /// One editable settings row. `key` routes the value back to the right file:
@@ -1148,6 +1151,7 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
             Screen::ReportList => handle_reportlist_key(&mut app, code),
             Screen::Approvals => handle_approvals_key(&mut app, code),
             Screen::Handoff => handle_handoff_key(&mut app, code),
+            Screen::Keys => handle_keys_key(&mut app, code),
             Screen::Intent => handle_intent_key(&mut app, code),
             Screen::Trust => handle_trust_key(&mut app, code),
             Screen::Monitor => match code {
@@ -1250,72 +1254,287 @@ fn dekorean(code: KeyCode, shifted: bool) -> KeyCode {
     }
 }
 
+/// Every action Home dispatches.
+///
+/// The dispatcher acts ONLY on this enum, so the set of working Home keys is
+/// enumerable rather than buried in a match on raw key codes. That is what the
+/// key list renders from and what its coverage test walks: a key that works but
+/// is documented nowhere was invisible to a test suite written only around the
+/// footer's own behavior (issue #71).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HomeKey {
+    Quit,
+    Restart,
+    New,
+    Replan,
+    Run,
+    Auto,
+    Tidy,
+    Defer,
+    Revive,
+    ApproveOrPause,
+    Answer,
+    Goal,
+    Handoff,
+    Trust,
+    Settings,
+    Monitor,
+    Refresh,
+    Language,
+    Access,
+    PlanReview,
+    Reports,
+    Stop,
+    Keys,
+    Up,
+    Down,
+    Act,
+    ToggleWorker,
+}
+
+/// Ordered for the key list: navigation, then work, then always-valid globals.
+const HOME_KEYS: &[HomeKey] = &[
+    HomeKey::Up,
+    HomeKey::Down,
+    HomeKey::Act,
+    HomeKey::ToggleWorker,
+    HomeKey::New,
+    HomeKey::Run,
+    HomeKey::Auto,
+    HomeKey::Answer,
+    HomeKey::ApproveOrPause,
+    HomeKey::Defer,
+    HomeKey::Revive,
+    HomeKey::Tidy,
+    HomeKey::Replan,
+    HomeKey::PlanReview,
+    HomeKey::Monitor,
+    HomeKey::Stop,
+    HomeKey::Goal,
+    HomeKey::Handoff,
+    HomeKey::Trust,
+    HomeKey::Reports,
+    HomeKey::Settings,
+    HomeKey::Access,
+    HomeKey::Language,
+    HomeKey::Refresh,
+    HomeKey::Restart,
+    HomeKey::Keys,
+    HomeKey::Quit,
+];
+
+/// Which Home key a code means. Pure, so the key list and its coverage test
+/// read the same source of truth the event loop does.
+fn home_key(code: KeyCode, update_available: bool) -> Option<HomeKey> {
+    Some(match code {
+        KeyCode::Char('q') => HomeKey::Quit,
+        // Restart into the freshly installed binary (notice in the status line).
+        KeyCode::Char('u') if update_available => HomeKey::Restart,
+        KeyCode::Char('n') => HomeKey::New,
+        KeyCode::Char('P') => HomeKey::Replan,
+        KeyCode::Char('r') => HomeKey::Run,
+        KeyCode::Char('A') => HomeKey::Auto,
+        KeyCode::Char('t') => HomeKey::Tidy,
+        KeyCode::Char('d') => HomeKey::Defer,
+        KeyCode::Char('v') => HomeKey::Revive,
+        KeyCode::Char('p') => HomeKey::ApproveOrPause,
+        KeyCode::Char('a') => HomeKey::Answer,
+        KeyCode::Char('i') => HomeKey::Goal,
+        KeyCode::Char('h') => HomeKey::Handoff,
+        KeyCode::Char('T') => HomeKey::Trust,
+        KeyCode::Char('s') => HomeKey::Settings,
+        KeyCode::Char('m') => HomeKey::Monitor,
+        KeyCode::Char('g') => HomeKey::Refresh,
+        KeyCode::Char('l') => HomeKey::Language,
+        KeyCode::Char('f') => HomeKey::Access,
+        KeyCode::Char('o') => HomeKey::PlanReview,
+        KeyCode::Char('R') => HomeKey::Reports,
+        KeyCode::Char('?') => HomeKey::Keys,
+        KeyCode::Esc => HomeKey::Stop,
+        KeyCode::Up => HomeKey::Up,
+        KeyCode::Down => HomeKey::Down,
+        KeyCode::Enter => HomeKey::Act,
+        KeyCode::Char(' ') => HomeKey::ToggleWorker,
+        _ => return None,
+    })
+}
+
+impl HomeKey {
+    /// Keys that start or change work: while a worker runs they explain why
+    /// nothing happened instead of acting. The rest stay live mid-run — that is
+    /// the whole point of settings, access, monitor and the key list.
+    fn needs_idle(self) -> bool {
+        matches!(
+            self,
+            Self::New
+                | Self::Run
+                | Self::Auto
+                | Self::Tidy
+                | Self::Defer
+                | Self::Revive
+                | Self::Language
+                | Self::PlanReview
+        )
+    }
+
+    /// The glyph shown in the key list, matching what the operator presses.
+    fn glyph(self) -> &'static str {
+        match self {
+            Self::Quit => "q",
+            Self::Restart => "u",
+            Self::New => "n",
+            Self::Replan => "P",
+            Self::Run => "r",
+            Self::Auto => "A",
+            Self::Tidy => "t",
+            Self::Defer => "d",
+            Self::Revive => "v",
+            Self::ApproveOrPause => "p",
+            Self::Answer => "a",
+            Self::Goal => "i",
+            Self::Handoff => "h",
+            Self::Trust => "T",
+            Self::Settings => "s",
+            Self::Monitor => "m",
+            Self::Refresh => "g",
+            Self::Language => "l",
+            Self::Access => "f",
+            Self::PlanReview => "o",
+            Self::Reports => "R",
+            Self::Stop => "Esc",
+            Self::Keys => "?",
+            Self::Up => "\u{2191}",
+            Self::Down => "\u{2193}",
+            Self::Act => "Enter",
+            Self::ToggleWorker => "Space",
+        }
+    }
+
+    /// What the key does, in the active language. Exhaustive on purpose: a new
+    /// Home action cannot compile without documenting itself.
+    fn doc(self, l: &i18n::L) -> &'static str {
+        match self {
+            Self::Quit => l.key_doc_quit,
+            Self::Restart => l.key_doc_restart,
+            Self::New => l.key_doc_new,
+            Self::Replan => l.key_doc_replan,
+            Self::Run => l.key_doc_run,
+            Self::Auto => l.key_doc_auto,
+            Self::Tidy => l.key_doc_tidy,
+            Self::Defer => l.key_doc_defer,
+            Self::Revive => l.key_doc_revive,
+            Self::ApproveOrPause => l.key_doc_approve_or_pause,
+            Self::Answer => l.key_doc_answer,
+            Self::Goal => l.key_doc_goal,
+            Self::Handoff => l.key_doc_handoff,
+            Self::Trust => l.key_doc_trust,
+            Self::Settings => l.key_doc_settings,
+            Self::Monitor => l.key_doc_monitor,
+            Self::Refresh => l.key_doc_refresh,
+            Self::Language => l.key_doc_language,
+            Self::Access => l.key_doc_access,
+            Self::PlanReview => l.key_doc_plan_review,
+            Self::Reports => l.key_doc_reports,
+            Self::Stop => l.key_doc_stop,
+            Self::Keys => l.key_doc_keys,
+            Self::Up => l.key_doc_up,
+            Self::Down => l.key_doc_down,
+            Self::Act => l.key_doc_act,
+            Self::ToggleWorker => l.key_doc_toggle_worker,
+        }
+    }
+}
+
+/// The full Home key list, one `(glyph, description)` row per action.
+pub(crate) fn home_key_rows(l: &i18n::L) -> Vec<(&'static str, &'static str)> {
+    HOME_KEYS
+        .iter()
+        .map(|key| (key.glyph(), key.doc(l)))
+        .collect()
+}
+
 /// Returns true to quit.
 fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
-    match code {
-        KeyCode::Char('q') => return true,
-        // Restart into the freshly installed binary (notice in the status line).
-        KeyCode::Char('u') if app.update_available => {
+    let busy = app.is_busy();
+    // A key Home does not use keeps the old fall-through: while a worker runs,
+    // any stray key says why nothing happened.
+    let Some(key) = home_key(code, app.update_available) else {
+        if busy {
+            app.toast = Some((true, app.lang.l().busy.into()));
+        }
+        return false;
+    };
+    if busy && key.needs_idle() {
+        app.toast = Some((true, app.lang.l().busy.into()));
+        return false;
+    }
+    match key {
+        HomeKey::Quit => return true,
+        HomeKey::Restart => {
             app.want_restart = true;
             return true;
         }
-        KeyCode::Char('n') if !app.is_busy() => {
+        HomeKey::New => {
             app.input_clear();
             app.toast = None;
             app.amend = false;
             app.replan = false;
             app.screen = Screen::NewWork;
         }
-        KeyCode::Char('P') => handle_home_replan(app),
-        KeyCode::Char('r') if !app.is_busy() => start_run(app),
-        KeyCode::Char('A') if !app.is_busy() => start_auto(app),
-        KeyCode::Char('t') if !app.is_busy() => tidy_workspace(app),
-        KeyCode::Char('d') if !app.is_busy() => defer_selected_task(app),
-        KeyCode::Char('v') if !app.is_busy() => revive_selected_task(app),
+        HomeKey::Replan => handle_home_replan(app),
+        HomeKey::Run => start_run(app),
+        HomeKey::Auto => start_auto(app),
+        HomeKey::Tidy => tidy_workspace(app),
+        HomeKey::Defer => defer_selected_task(app),
+        HomeKey::Revive => revive_selected_task(app),
         // `p` is context-aware: a selected approval row wins even while an
         // auto-drain is running; otherwise busy `p` stays graceful pause.
-        KeyCode::Char('p') => {
-            match home_approve_key_action(selected_awaits_approval(app), app.is_busy()) {
+        HomeKey::ApproveOrPause => {
+            match home_approve_key_action(selected_awaits_approval(app), busy) {
                 HomeApproveKeyAction::Approve => start_approve(app),
                 HomeApproveKeyAction::Pause => request_pause(app),
             }
         }
-        KeyCode::Char('a') => handle_home_answer(app),
-        KeyCode::Char('i') => {
+        HomeKey::Answer => handle_home_answer(app),
+        HomeKey::Goal => {
             app.intent_text = build_intent_view(app);
             app.scroll = 0;
             app.screen = Screen::Intent;
         }
-        KeyCode::Char('h') => {
+        HomeKey::Handoff => {
             app.handoff_text = load_latest_handoff(app);
             app.scroll = 0;
             app.screen = Screen::Handoff;
         }
         // Trust + autonomy panel: same numbers as `yardlet trust --json`.
-        KeyCode::Char('T') => {
+        HomeKey::Trust => {
             app.trust_text = build_trust_view(app);
             app.scroll = 0;
             app.screen = Screen::Trust;
         }
         // Settings can be opened mid-run; saved changes apply to the next task.
-        KeyCode::Char('s') => open_settings(app),
+        HomeKey::Settings => open_settings(app),
         // Monitor can be opened mid-run to watch the worker's live output.
-        KeyCode::Char('m') => app.screen = Screen::Monitor,
+        HomeKey::Monitor => app.screen = Screen::Monitor,
         // Refresh is safe mid-run and lets you re-read the live queue/snapshot.
         // Explicit refresh re-probes worker readiness too (the only reload
         // that does — it spawns each worker CLI, so it is on-demand only).
-        KeyCode::Char('g') => app.reload_full(),
-        KeyCode::Char('l') if !app.is_busy() => toggle_language(app),
+        HomeKey::Refresh => app.reload_full(),
+        HomeKey::Language => toggle_language(app),
         // Access can be toggled even mid-run; it takes effect on the next task.
-        KeyCode::Char('f') => toggle_access(app),
+        HomeKey::Access => toggle_access(app),
         // Esc while a worker runs stops it (kills the worker process). Also
         // covers an adopted worker from a previous session (task Running with
         // no active job): kill it and let the idle recovery pass requeue it.
-        KeyCode::Esc if app.is_busy() || has_running_task(app) => stop_running_worker(app),
+        HomeKey::Stop => {
+            if busy || has_running_task(app) {
+                stop_running_worker(app);
+            }
+        }
         // Browse the queue — and past its end, the workers panel (toggle a
         // worker on/off with Enter/Space). Works while busy too.
-        KeyCode::Up => app.selected = app.selected.saturating_sub(1),
-        KeyCode::Down => {
+        HomeKey::Up => app.selected = app.selected.saturating_sub(1),
+        HomeKey::Down => {
             let total = app
                 .snapshot
                 .as_ref()
@@ -1329,7 +1548,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         // action (run / answer / approve-guidance / monitor / handoff), or a
         // worker toggle past the queue. Space only toggles workers — queue rows
         // ignore it, so a stray Space never fires a task action.
-        KeyCode::Enter => {
+        HomeKey::Act => {
             let tasks = app
                 .snapshot
                 .as_ref()
@@ -1341,7 +1560,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
                 toggle_worker(app, app.selected - tasks);
             }
         }
-        KeyCode::Char(' ') => {
+        HomeKey::ToggleWorker => {
             let tasks = app
                 .snapshot
                 .as_ref()
@@ -1355,7 +1574,7 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         // exactly one entry point — a planning job finishing in THIS process —
         // so a restart mid-flow left an accepted-but-unconfirmed plan with no
         // TUI path at all (issue #65).
-        KeyCode::Char('o') if !app.is_busy() => {
+        HomeKey::PlanReview => {
             if app
                 .snapshot
                 .as_ref()
@@ -1367,9 +1586,13 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
             }
         }
         // Reports/history browser: current final report + past intents.
-        KeyCode::Char('R') => open_reports(app),
-        _ if app.is_busy() => app.toast = Some((true, app.lang.l().busy.into())),
-        _ => {}
+        HomeKey::Reports => open_reports(app),
+        // The always-valid globals (g, s, f, l, i, R) do not fit the footer, so
+        // this list is where they stay discoverable (issue #71).
+        HomeKey::Keys => {
+            app.scroll = 0;
+            app.screen = Screen::Keys;
+        }
     }
     false
 }
@@ -2136,6 +2359,13 @@ fn handle_completion_key(app: &mut App, code: KeyCode) {
 fn handle_intent_key(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') => app.screen = Screen::Home,
+        _ => apply_scroll(app, code),
+    }
+}
+
+fn handle_keys_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => app.screen = Screen::Home,
         _ => apply_scroll(app, code),
     }
 }
@@ -3960,6 +4190,100 @@ fn load_latest_handoff(app: &App) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every key that WORKS on Home must be documented somewhere the operator
+    /// can find it. The footer change that curated content keys shipped with
+    /// tests asserting keys are hidden when they have no target, but nothing
+    /// asserted the opposite direction — so `g`, `s`, `f`, `l`, `i` and `R`
+    /// worked while appearing on no idle surface (issue #71).
+    ///
+    /// This walks the dispatcher's own classifier rather than a hand-written
+    /// list, so a new binding cannot be added without documenting it.
+    #[test]
+    fn every_dispatched_home_key_appears_in_the_key_list() {
+        let mut dispatched = Vec::new();
+        let mut codes: Vec<KeyCode> = (0x20_u8..=0x7e).map(|b| KeyCode::Char(b as char)).collect();
+        codes.extend([
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Enter,
+            KeyCode::Esc,
+            KeyCode::Tab,
+            KeyCode::Backspace,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Home,
+            KeyCode::End,
+        ]);
+        for code in codes {
+            // `update_available` on, so the restart key is classified too.
+            if let Some(key) = home_key(code, true) {
+                if !dispatched.contains(&key) {
+                    dispatched.push(key);
+                }
+            }
+        }
+        assert!(
+            dispatched.len() >= 20,
+            "the classifier scan found almost nothing; the walk is broken, not the UI"
+        );
+        for key in dispatched {
+            assert!(
+                HOME_KEYS.contains(&key),
+                "{key:?} works on Home but is missing from the key list"
+            );
+            for lang in [i18n::Lang::En, i18n::Lang::Ko] {
+                assert!(
+                    !key.doc(lang.l()).trim().is_empty(),
+                    "{key:?} has no {lang:?} description"
+                );
+            }
+        }
+        // The list must not advertise a key the dispatcher does not have.
+        for key in HOME_KEYS {
+            assert!(
+                (0x20_u8..=0x7e)
+                    .map(|b| KeyCode::Char(b as char))
+                    .chain([KeyCode::Up, KeyCode::Down, KeyCode::Enter, KeyCode::Esc])
+                    .any(|code| home_key(code, true) == Some(*key)),
+                "the key list advertises {key:?}, which Home does not dispatch"
+            );
+        }
+    }
+
+    /// The key list is reachable from both Home footers, idle and busy: the
+    /// inversion the issue called out (globals discoverable only mid-run) must
+    /// not come back in either direction.
+    #[test]
+    fn the_key_list_key_is_advertised_in_every_home_footer() {
+        for lang in [i18n::Lang::En, i18n::Lang::Ko] {
+            let l = lang.l();
+            for footer in [l.footer_home_busy, l.footer_home_busy_nodrain] {
+                assert!(
+                    footer.contains(l.key_keys),
+                    "{lang:?} busy footer does not advertise the key list: {footer}"
+                );
+            }
+        }
+    }
+
+    /// Every always-valid global the issue named is in the list with a
+    /// description, in both languages.
+    #[test]
+    fn always_valid_globals_are_documented_in_both_languages() {
+        for glyph in ["g", "s", "f", "l", "i", "R", "q", "?"] {
+            for lang in [i18n::Lang::En, i18n::Lang::Ko] {
+                let rows = home_key_rows(lang.l());
+                let row = rows.iter().find(|(key, _)| *key == glyph);
+                let (_, doc) = row.unwrap_or_else(|| {
+                    panic!("{glyph} is not in the {lang:?} key list: {rows:?}");
+                });
+                assert!(!doc.trim().is_empty(), "{glyph} has an empty {lang:?} doc");
+            }
+        }
+    }
 
     const CONFIG_WITH_COMMENTS: &str = r#"schema_version: 1
 product: yardlet

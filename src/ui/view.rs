@@ -51,7 +51,45 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Screen::Completion => render_completion(frame, app),
         Screen::ReportList => render_report_list(frame, app),
         Screen::Approvals => render_approvals(frame, app),
+        Screen::Keys => render_keys(frame, app),
     }
+}
+
+/// The full Home key list. The idle footer can only carry keys with a target
+/// right now, which left the always-valid globals (g, s, f, l, i, R)
+/// undiscoverable; this is where they live (issue #71).
+fn render_keys(frame: &mut Frame, app: &mut App) {
+    let l = app.lang.l();
+    let area = safe_area(frame);
+    let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
+    let text = key_list_text(l);
+    let viewport = scroll_viewport(chunks[0]);
+    app.scroll_viewport = Some(viewport);
+    app.scroll = app.scroll.min(max_scroll_offset(&text, viewport));
+    frame.render_widget(
+        Paragraph::new(md_lines(&text))
+            .wrap(Wrap { trim: false })
+            .scroll((app.scroll, 0))
+            .block(Block::bordered().title(l.keys_title)),
+        chunks[0],
+    );
+    render_footer(frame, chunks[1], l.footer_keys);
+}
+
+/// The key list as markdown, so it reuses the same wrap-aware scroll clamp as
+/// every other scrollable screen.
+fn key_list_text(l: &L) -> String {
+    let rows = super::home_key_rows(l);
+    let width = rows
+        .iter()
+        .map(|(glyph, _)| glyph.width())
+        .max()
+        .unwrap_or(1);
+    let mut out = format!("{}\n\n", l.keys_intro);
+    for (glyph, doc) in rows {
+        out.push_str(&format!("`{glyph:<width$}`  {doc}\n"));
+    }
+    out
 }
 
 /// Turn one worker-output line into a readable monitor line. Worker CLIs stream
@@ -622,6 +660,9 @@ fn home_footer(
     if plan_reviewable {
         fragments.push(l.key_plan_review);
     }
+    // Always last, always present: the always-valid globals (g, s, f, l, i, R)
+    // do not fit here, so one advertised key has to lead to them (issue #71).
+    fragments.push(l.key_keys);
     fragments.join("  ")
 }
 
@@ -1684,11 +1725,11 @@ mod tests {
         };
         assert_eq!(
             home_footer(i18n::Lang::En.l(), availability, true, true, true, true),
-            "\u{2191}\u{2193} select  Enter action  n new  r run  A auto  t tidy  d defer  v revive  m monitor  h handoff  T trust  q quit  a answer  p approve  P replan  o plan review"
+            "\u{2191}\u{2193} select  Enter action  n new  r run  A auto  t tidy  d defer  v revive  m monitor  h handoff  T trust  q quit  a answer  p approve  P replan  o plan review  ? keys"
         );
         assert_eq!(
             home_footer(i18n::Lang::Ko.l(), availability, true, true, true, true),
-            "\u{2191}\u{2193} 선택  Enter 행동  n 새작업  r 실행  A 자동  t 정리  d 보류  v 되살림  m 모니터  h 핸드오프  T 신뢰  q 종료  a 답변  p 승인  P 재계획  o 플랜 검토"
+            "\u{2191}\u{2193} 선택  Enter 행동  n 새작업  r 실행  A 자동  t 정리  d 보류  v 되살림  m 모니터  h 핸드오프  T 신뢰  q 종료  a 답변  p 승인  P 재계획  o 플랜 검토  ? 키목록"
         );
     }
 
