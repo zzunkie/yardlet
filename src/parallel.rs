@@ -889,6 +889,7 @@ fn record_failover(run_dir: &Path, from: &str, to: &str, reason: &str) {
     );
 }
 
+#[derive(Debug)]
 pub(crate) enum Integration {
     Merged {
         oid: String,
@@ -900,6 +901,15 @@ pub(crate) enum Integration {
         worker_oid: String,
     },
     Conflict(String),
+    /// The run-owned branch does not resolve, so there is nothing left to
+    /// integrate from it. The normal cause is that this run was ALREADY
+    /// integrated and its cleanup deleted the branch: a second finalize of the
+    /// same run must confirm that outcome, not re-integrate it (issues #69,
+    /// #70). Returned as a typed outcome rather than letting an unresolvable
+    /// revision reach git and surface as a raw error.
+    BranchMissing {
+        branch: String,
+    },
 }
 
 const GIT_INTEGRATION_RECORD: &str = "git-integration.json";
@@ -1435,12 +1445,15 @@ where
         None => {}
     }
     let branch_ref = format!("refs/heads/{branch}");
-    let observed_tip = git(
-        root,
-        &["rev-parse", "--verify", &format!("{branch_ref}^{{commit}}")],
-    )?
-    .trim()
-    .to_string();
+    // Checked lookup: a run whose branch was already integrated and cleaned up
+    // no longer has this ref. Letting that reach `rev-parse --verify` produces
+    // a raw "Needed a single revision" error that the caller cannot tell apart
+    // from a real merge failure (issues #69, #70).
+    let Some(observed_tip) = ref_tip(root, &branch_ref) else {
+        return Ok(Integration::BranchMissing {
+            branch: branch.to_string(),
+        });
+    };
     if let Some(expected_tip_oid) = expected_tip_oid.filter(|oid| !oid.is_empty()) {
         if observed_tip != expected_tip_oid {
             return Ok(Integration::Conflict(format!(
@@ -4755,6 +4768,68 @@ exit 0
             _ => panic!("expected no changes"),
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Issues #69 and #70. A second finalize of a run that was ALREADY
+    /// integrated finds its branch deleted by the first pass's cleanup. That
+    /// used to reach `rev-parse --verify refs/heads/<gone>^{commit}` and come
+    /// back as a raw `fatal: Needed a single revision`, which the caller could
+    /// not tell apart from a merge failure: it recorded `merge_conflict` and
+    /// demoted a correct Done to Partial.
+    #[test]
+    fn integrating_an_already_cleaned_up_branch_is_typed_not_a_raw_git_error() {
+        let root = temp_repo("branch-missing-after-cleanup");
+        let wt = root.join(".agents/worktrees/run-branch-missing");
+        let branch = "yard/yard-gone/run-branch-missing";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("feature.txt"), "worker output\n").unwrap();
+
+        // First finalize: integrates and then cleans up, exactly as the real
+        // path does.
+        let (oid, worker_oid) = match integrate_parallel_worktree(
+            &root,
+            &wt,
+            branch,
+            "YARD-GONE",
+            &baseline,
+            None,
+            &[],
+        )
+        .unwrap()
+        {
+            Integration::Merged {
+                oid, worker_oid, ..
+            } => (oid, worker_oid),
+            other => panic!("expected a merge, got {other:?}"),
+        };
+        let cleanup = cleanup_integrated_worktree(
+            &root,
+            &wt,
+            branch,
+            &worker_oid,
+            run::IntegrationProvenance::ParallelWorkerDirect,
+        );
+        assert!(cleanup.complete, "{:?}", cleanup.warnings);
+        assert!(
+            ref_tip(&root, &format!("refs/heads/{branch}")).is_none(),
+            "cleanup must have removed the run-owned branch"
+        );
+        assert_eq!(sh_git(&root, &["rev-parse", "HEAD"]).trim(), oid);
+
+        // Second finalize of the same run: the branch is gone. This must be a
+        // typed outcome, never a raw git error and never a conflict.
+        let second =
+            integrate_parallel_worktree(&root, &wt, branch, "YARD-GONE", &baseline, None, &[]);
+        match second {
+            Ok(Integration::BranchMissing { branch: reported }) => {
+                assert_eq!(reported, branch);
+            }
+            Ok(other) => panic!("expected BranchMissing, got {other:?}"),
+            Err(error) => panic!("a missing branch must not surface as a raw error: {error:#}"),
+        }
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

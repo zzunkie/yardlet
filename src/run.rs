@@ -7100,6 +7100,36 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     let _ = state::write_str(&hp, &existing);
                     lines.push(format!("{}: integration error: {e}", task.id));
                 }
+                // The run-owned branch is gone. If THIS run already recorded a
+                // published integration, a second finalize is re-running over
+                // work that is already in the target: confirm it instead of
+                // demoting a correct terminal state (issue #69). Ownership is
+                // reconstructed from the run's own durable receipt, so the
+                // confirmation cannot claim commits this run does not own.
+                Ok(crate::parallel::Integration::BranchMissing { branch }) => {
+                    match already_integrated_ownership(ws, run_dir, run_id, &task.id) {
+                        Some(owned) => {
+                            ownership = Some(owned);
+                            lines.push(format!(
+                                "{}: {branch} was already integrated and cleaned up; \
+                                 confirming the recorded outcome",
+                                task.id
+                            ));
+                        }
+                        None => {
+                            next_state = TaskState::Partial;
+                            let _ = state::write_str(
+                                &run_dir.join("partial-reason"),
+                                "integration_branch_missing",
+                            );
+                            lines.push(format!(
+                                "{}: run-owned branch {branch} does not exist and this run \
+                                 recorded no integration; nothing to merge",
+                                task.id
+                            ));
+                        }
+                    }
+                }
             }
         } else {
             lines.push(format!(
@@ -7824,6 +7854,36 @@ pub(crate) fn continuation_context(ws: &Workspace, task_id: &str) -> Option<Stri
     }
     let trimmed = s.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Ownership for a run whose branch is gone because it was ALREADY integrated.
+/// Read only from this run's own durable receipt, and only when that receipt
+/// names this run and task and its integration commit is still reachable from
+/// the workspace head. Anything else returns None so a missing branch can never
+/// be mistaken for a completed integration.
+fn already_integrated_ownership(
+    ws: &Workspace,
+    run_dir: &std::path::Path,
+    run_id: &str,
+    task_id: &str,
+) -> Option<crate::git_finish::GitFinishOwnership> {
+    let record: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).ok()?;
+    if record.run_id != run_id || record.task_id != task_id {
+        return None;
+    }
+    let integration_oid = (!record.integration_oid.is_empty()).then_some(record.integration_oid)?;
+    // The recorded merge must actually be in this workspace's history; a
+    // receipt alone is not proof the work is present.
+    git_stdout(
+        &ws.root,
+        &["merge-base", "--is-ancestor", &integration_oid, "HEAD"],
+    )
+    .ok()?;
+    Some(crate::git_finish::GitFinishOwnership {
+        baseline_oid: record.integration_base_oid,
+        expected_oid: integration_oid,
+        owned_oids: record.owned_oids,
+    })
 }
 
 /// Repo-relative paths of just-learned harness assets that git does not track
