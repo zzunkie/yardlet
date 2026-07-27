@@ -1713,10 +1713,15 @@ fn cmd_redirect(cwd: &std::path::Path, args: RedirectArgs) -> Result<()> {
             &stopped.worker_id,
         )?;
         crate::state::write_str_atomic(&active_dir.join("cancelled"), "redirect\n")?;
+        // Signal the worker's whole process group first: a launcher-style
+        // profile keeps the real agent CLI in a grandchild, and leaving it alive
+        // means a second writer into this run directory while the redirect
+        // starts a new attempt (issue #52).
+        let group = crate::workers::terminate_worker_tree(pid, crate::workers::Signal::Term);
         let status = std::process::Command::new("kill")
             .arg(pid.to_string())
             .status()?;
-        if !status.success() {
+        if !status.success() && !group {
             anyhow::bail!("failed to stop worker pid {pid}; redirect was not recorded");
         }
 

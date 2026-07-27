@@ -1389,6 +1389,14 @@ fn spawn_internal(
             break status;
         }
         if start.elapsed() >= timeout {
+            // Kill the GROUP, not just the direct child. A worker profile whose
+            // invocation is a launcher (`bash wrapper.sh`, `npx`, `sh -c` — the
+            // shape this repo's own fixtures use) puts the real agent CLI in a
+            // grandchild, and killing only the launcher leaves it running and
+            // billing while the task is already requeued. It also still holds
+            // the inherited pipe write ends, so the reader joins below would
+            // never see EOF and this function would hang (issue #52).
+            terminate_worker_tree(child.id(), Signal::Kill);
             let _ = child.kill();
             timed_out = true;
             break child.wait()?;
@@ -1593,6 +1601,64 @@ fn codex_config_default_model() -> Option<String> {
             .map(|v| v.trim().trim_matches('"').to_string())
             .filter(|m| !m.is_empty())
     })
+}
+
+/// Which signal [`terminate_worker_tree`] sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signal {
+    /// Ask the worker to stop. What the operator's stop and the redirect send.
+    Term,
+    /// Take it down now. What a wall-clock timeout sends.
+    Kill,
+}
+
+#[cfg(unix)]
+impl Signal {
+    fn number(self) -> libc::c_int {
+        match self {
+            Self::Term => libc::SIGTERM,
+            Self::Kill => libc::SIGKILL,
+        }
+    }
+}
+
+/// Terminate a worker and everything it spawned.
+///
+/// A worker leads its own process group (issue #52), so its pgid equals its pid
+/// and a negative target reaches the whole tree. Killing only the direct child
+/// leaves a launcher's grandchild — the actual agent CLI — running after the
+/// task has already been requeued, which is both a runaway process and a second
+/// writer into the same run directory.
+///
+/// This mirrors `kill_validation_child`, which has group-killed since
+/// validation children were first put in their own group.
+///
+/// Returns whether the group signal was delivered. Callers keep their existing
+/// direct kill as the backstop for a worker that is not its own group leader —
+/// one adopted from a version before #52, or a platform without process groups.
+#[cfg(unix)]
+pub fn terminate_worker_tree(pid: u32, signal: Signal) -> bool {
+    // Signalling a group targets pgid == pid, which exists only while that pid
+    // is its group's leader. A zero pid would mean the CALLER's own group, so it
+    // must never reach the syscall.
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    if pid == 0 {
+        return false;
+    }
+    // The syscall, not `Command::new("kill")`: the negative pid a group signal
+    // needs is ambiguous on a command line, and Linux's `kill` reads `-123`
+    // after a signal flag as another option rather than a target. That parsed
+    // fine on macOS and failed on Linux, which is a bad way to discover that
+    // teardown silently stopped reaching the tree.
+    unsafe { libc::kill(-pid, signal.number()) == 0 }
+}
+
+#[cfg(not(unix))]
+pub fn terminate_worker_tree(_pid: u32, _signal: Signal) -> bool {
+    // No process groups to signal; callers fall back to their direct kill.
+    false
 }
 
 #[cfg(test)]

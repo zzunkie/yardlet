@@ -2737,11 +2737,25 @@ fn stop_running_worker(app: &mut App) {
         // Mark cancelled BEFORE killing so the run loop treats the worker's death
         // as a user stop (requeue) rather than a transient failure to auto-resume.
         let _ = std::fs::write(dir.join("cancelled"), b"1");
-        if let Ok(pid) = std::fs::read_to_string(dir.join("worker.pid")) {
-            let pid = pid.trim();
-            if !pid.is_empty() {
-                let _ = std::process::Command::new("kill").arg(pid).status();
-            }
+        // Verify the pid before signalling, and never signal an unverified one
+        // as a GROUP. `worker.pid` is a legacy projection for monitors — an
+        // adopted worker is not our child, so once it exits the OS is free to
+        // hand its pid to something else while the file still names it and the
+        // task still reads Running until the next recovery pass. Killing a
+        // recycled pid was already wrong; killing its whole process group would
+        // take out a shell job or a daemon. `live_worker_pid` proves process
+        // identity from the run-owned provenance record and its start marker,
+        // the same evidence the redirect path requires.
+        if let Some(pid) = crate::run::live_worker_pid(&dir) {
+            // The worker leads its own process group, so signal the whole tree:
+            // a launcher-style profile keeps the real agent CLI in a grandchild
+            // that a pid-only kill leaves running (issue #52). The direct kill
+            // stays as the backstop for a worker adopted from before that
+            // change, which is not its own group leader.
+            crate::workers::terminate_worker_tree(pid, crate::workers::Signal::Term);
+            let _ = std::process::Command::new("kill")
+                .arg(pid.to_string())
+                .status();
         }
     }
     app.toast = Some((true, app.lang.l().stopping.into()));
