@@ -1635,7 +1635,10 @@ impl Signal {
 /// Returns whether the group signal was delivered. Callers keep their existing
 /// direct kill as the backstop for a worker that is not its own group leader —
 /// one adopted from a version before #52, or a platform without process groups.
+#[cfg(unix)]
 pub fn terminate_worker_tree(pid: u32, signal: Signal) -> bool {
+    // `kill -SIG -0` targets the CALLER's process group, so a zero pid must
+    // never reach the command line.
     if pid == 0 {
         return false;
     }
@@ -1647,6 +1650,12 @@ pub fn terminate_worker_tree(pid: u32, signal: Signal) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+pub fn terminate_worker_tree(_pid: u32, _signal: Signal) -> bool {
+    // No process groups to signal; callers fall back to their direct kill.
+    false
 }
 
 #[cfg(test)]

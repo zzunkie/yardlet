@@ -2641,7 +2641,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let full_access = opts.full_access || config.default_access.eq_ignore_ascii_case("full");
     let mut env = guard::sanitized_worker_env_for(&billing, &eff_profile.invocation.pass_env)
         .map_err(|e| anyhow!(e))?;
-    let mut timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
+    let mut timeout = wall_clock_timeout(profile.limits.max_wall_minutes);
     lines.push(format!("worker: {active_worker_id} ({active_reason})"));
 
     // H3: workspace-owned pre-run gates bind every worker. A non-zero hook
@@ -3093,7 +3093,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 }
                 env = guard::sanitized_worker_env_for(&billing, &eff_profile.invocation.pass_env)
                     .map_err(|e| anyhow!(e))?;
-                timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
+                timeout = wall_clock_timeout(profile.limits.max_wall_minutes);
                 effective_chained = false;
                 session_id = if active_worker_id == "claude-code" {
                     Some(gen_session_uuid(&format!("{run_id}-{active_worker_id}")))
@@ -3340,6 +3340,28 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 /// changes were left to commit when the run actually produced deliverable
 /// (non-`.agents/`) edits. `None` evidence (no git signal) counts as no change.
 /// A leading `./` is normalized so `./.agents/x` is still recognized as state.
+/// The worker's wall-clock budget.
+///
+/// A debug-build process fixture may shorten it: the shortest expressible
+/// `max_wall_minutes` is a minute, which is too slow to regression-test the
+/// timeout path in CI. Same gate as the startup recovery delay, so a release
+/// binary cannot be talked into a shorter budget.
+fn wall_clock_timeout(max_wall_minutes: u32) -> Duration {
+    #[cfg(debug_assertions)]
+    {
+        if std::env::var("YARDLET_PROCESS_FIXTURE").as_deref() == Ok("1") {
+            if let Some(ms) = std::env::var("YARDLET_FIXTURE_WALL_MS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|ms| *ms > 0)
+            {
+                return Duration::from_millis(ms.min(60_000));
+            }
+        }
+    }
+    Duration::from_secs(max_wall_minutes as u64 * 60)
+}
+
 fn worker_changed_integratable_path(evidence: Option<&[String]>) -> bool {
     evidence
         .map(|e| e.iter().any(|p| evaluator::is_integratable_path(p)))

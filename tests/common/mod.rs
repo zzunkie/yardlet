@@ -25,6 +25,13 @@ impl ChildGuard {
         Self { child: Some(child) }
     }
 
+    /// The live child, for a test that polls its own exit.
+    pub fn as_mut(&mut self) -> &mut Child {
+        self.child
+            .as_mut()
+            .expect("child guard used after shutdown")
+    }
+
     /// The process id, so a test can assert the process really is gone.
     pub fn id(&self) -> u32 {
         self.child
