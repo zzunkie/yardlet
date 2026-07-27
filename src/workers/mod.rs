@@ -1612,11 +1612,12 @@ pub enum Signal {
     Kill,
 }
 
+#[cfg(unix)]
 impl Signal {
-    fn flag(self) -> &'static str {
+    fn number(self) -> libc::c_int {
         match self {
-            Self::Term => "-TERM",
-            Self::Kill => "-KILL",
+            Self::Term => libc::SIGTERM,
+            Self::Kill => libc::SIGKILL,
         }
     }
 }
@@ -1637,19 +1638,21 @@ impl Signal {
 /// one adopted from a version before #52, or a platform without process groups.
 #[cfg(unix)]
 pub fn terminate_worker_tree(pid: u32, signal: Signal) -> bool {
-    // `kill -SIG -0` targets the CALLER's process group, so a zero pid must
-    // never reach the command line.
+    // Signalling a group targets pgid == pid, which exists only while that pid
+    // is its group's leader. A zero pid would mean the CALLER's own group, so it
+    // must never reach the syscall.
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
     if pid == 0 {
         return false;
     }
-    std::process::Command::new("kill")
-        .arg(signal.flag())
-        .arg(format!("-{pid}"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    // The syscall, not `Command::new("kill")`: the negative pid a group signal
+    // needs is ambiguous on a command line, and Linux's `kill` reads `-123`
+    // after a signal flag as another option rather than a target. That parsed
+    // fine on macOS and failed on Linux, which is a bad way to discover that
+    // teardown silently stopped reaching the tree.
+    unsafe { libc::kill(-pid, signal.number()) == 0 }
 }
 
 #[cfg(not(unix))]

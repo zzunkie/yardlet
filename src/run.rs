@@ -4340,17 +4340,15 @@ const VALIDATION_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Kill a timed-out validation command and its whole process group (so children
 /// spawned by `npm test` / `cargo test` etc. do not survive the timeout), then
-/// reap it. On unix the child leads its own group (process_group(0)), so a
-/// negative pgid signals the group; the direct kill is a backstop.
+/// reap it. On unix the child leads its own group (process_group(0)), so
+/// signalling the negative pid reaches the group; the direct kill is a backstop.
 fn kill_validation_child(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        let pgid = child.id();
-        let _ = std::process::Command::new("kill")
-            .arg("-9")
-            .arg(format!("-{pgid}"))
-            .status();
-    }
+    // Same syscall the worker teardown uses. This used to shell out to `kill`
+    // with a negative pid, which Linux's `kill` reads as another option after a
+    // signal flag rather than a target — so on Linux the group was never
+    // actually signalled and a timed-out `npm test` kept its children, the one
+    // thing this function exists to prevent.
+    crate::workers::terminate_worker_tree(child.id(), crate::workers::Signal::Kill);
     let _ = child.kill();
     let _ = child.wait();
 }
