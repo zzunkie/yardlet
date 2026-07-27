@@ -3363,10 +3363,11 @@ struct DeclaredPathRoots<'a> {
 enum DeclaredPath {
     /// Placed in the repository. Judged by the normal integration rules.
     Repository(String),
-    /// Absolute and outside every root Yardlet owns. Not a repository
-    /// deliverable, so it cannot contradict an honest no-change outcome — but
-    /// it is still reported, because silently forgetting a declared output is
-    /// the failure this whole guard exists to prevent.
+    /// Outside every root Yardlet owns — an absolute path elsewhere, or a
+    /// relative one that climbs out. Not a repository deliverable, so it
+    /// cannot contradict an honest no-change outcome, but it is still
+    /// reported: silently forgetting a declared output is the failure this
+    /// whole guard exists to prevent.
     Unplaceable(String),
     /// Empty, or a root directory itself. Nothing to attribute either way.
     Nothing,
@@ -3392,6 +3393,11 @@ fn classify_declared_path(raw: &str, roots: &DeclaredPathRoots<'_>) -> DeclaredP
     }
     let path = std::path::Path::new(trimmed);
     let relative = if path.is_absolute() {
+        // Resolve `.`/`..` BEFORE stripping. A `..` that crosses a root
+        // boundary — `<worktree>/../../../docs/x.md` names a real file in the
+        // owning root — otherwise defeats every `strip_prefix` and the path
+        // looks unplaceable.
+        let path = &lexically_normalized(path);
         let mut candidates = Vec::new();
         for root in [roots.worktree, roots.workspace] {
             if let Ok(canonical) = root.canonicalize() {
@@ -3407,7 +3413,9 @@ fn classify_declared_path(raw: &str, roots: &DeclaredPathRoots<'_>) -> DeclaredP
             // A root itself is a directory, not a deliverable.
             Some("") => return DeclaredPath::Nothing,
             Some(relative) => relative.to_string(),
-            None => return DeclaredPath::Unplaceable(trimmed.to_string()),
+            // Report the normalized spelling so two spellings of the same
+            // outside path dedupe and cancel against each other.
+            None => return DeclaredPath::Unplaceable(path.display().to_string()),
         }
     } else {
         trimmed.to_string()
@@ -3418,6 +3426,26 @@ fn classify_declared_path(raw: &str, roots: &DeclaredPathRoots<'_>) -> DeclaredP
         Resolved::Root => DeclaredPath::Nothing,
         Resolved::Escapes => DeclaredPath::Unplaceable(trimmed.to_string()),
     }
+}
+
+/// Resolve `.` and `..` in an absolute path lexically, without touching the
+/// filesystem. `..` at the root stays at the root, as the kernel does.
+fn lexically_normalized(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push(component.as_os_str());
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Where a repository-relative path lands once `.` and `..` are resolved
@@ -3465,10 +3493,11 @@ fn resolve_repository_relative(relative: &str) -> Resolved {
 
 /// Declared outputs Yardlet could not place in the repository.
 ///
-/// These never contradict a no-change outcome: an absolute path outside every
-/// root Yardlet owns is not a repository deliverable, and flipping a correct
-/// run to Partial over a worker's scratch file would recreate the very
-/// false positive this guard was corrected for. They are surfaced instead.
+/// These never contradict a no-change outcome: a path outside every root
+/// Yardlet owns — absolute, or relative and climbing out — is not a repository
+/// deliverable, and flipping a correct run to Partial over a worker's scratch
+/// file would recreate the very false positive this guard was corrected for.
+/// They are surfaced instead.
 fn unplaceable_declared_outputs(
     result: Option<&RunResult>,
     roots: &DeclaredPathRoots<'_>,
@@ -12586,10 +12615,28 @@ printf "# worker handoff
             );
             assert_eq!(
                 unplaceable_declared_outputs(Some(&declared), &roots),
-                vec![outside.to_string()],
-                "{outside} must still be surfaced"
+                vec!["/elsewhere/other.md".to_string()],
+                "{outside} must be surfaced, in one normalized spelling"
             );
         }
+
+        // An absolute `..` that crosses a root boundary still names a real
+        // repository file, so it must gate rather than read as "outside this
+        // workspace". Stripping before resolving would miss it.
+        assert_eq!(
+            contradiction(
+                &result(
+                    &["/ws/.agents/worktrees/run-test/../../../docs/lost.md"],
+                    &[],
+                    &[]
+                ),
+                &[]
+            ),
+            Some((
+                "no_change_contradicts_declared_outputs",
+                vec!["docs/lost.md".to_string()]
+            ))
+        );
 
         // A root directory itself is neither a deliverable nor a lost output —
         // including when `..` walks back to it.
