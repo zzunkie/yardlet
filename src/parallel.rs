@@ -40,6 +40,48 @@ fn has_queued_non_verifier(queue: &WorkQueue) -> bool {
         .any(|task| task.state == TaskState::Queued && !is_verifier(task))
 }
 
+/// Runnable tasks the verifier barrier will refuse to co-schedule right now.
+///
+/// The barrier is a parallel-selection concept, so `runnable_class` — and every
+/// count derived from it — knows nothing about it. That is how `4 ready` came
+/// to mean four tasks the scheduler would never start together (issue #51).
+/// Both the selector below and the surfaced counts read this one predicate, so
+/// they cannot drift apart again.
+pub fn held_by_review_barrier(queue: &WorkQueue) -> Vec<String> {
+    let caps = std::collections::BTreeSet::new();
+    let work_pending = has_queued_non_verifier(queue);
+    queue
+        .tasks
+        .iter()
+        .filter(|task| is_verifier(task))
+        .filter(|task| work_pending || queue.has_active_remediation_for(&task.id))
+        .filter(|task| {
+            queue.runnable_class(task, false, &caps) == RunnableClass::Runnable
+                && !task.approval_required()
+        })
+        .map(|task| task.id.clone())
+        .collect()
+}
+
+/// Runnable verifiers that the barrier lets through but the serial cap still
+/// admits one at a time — the "only work left is reviews" case.
+fn serialized_verifiers(queue: &WorkQueue) -> Vec<String> {
+    let caps = std::collections::BTreeSet::new();
+    if has_queued_non_verifier(queue) {
+        return Vec::new();
+    }
+    queue
+        .tasks
+        .iter()
+        .filter(|task| is_verifier(task) && !queue.has_active_remediation_for(&task.id))
+        .filter(|task| {
+            queue.runnable_class(task, false, &caps) == RunnableClass::Runnable
+                && !task.approval_required()
+        })
+        .map(|task| task.id.clone())
+        .collect()
+}
+
 /// Indices of tasks eligible to run together right now: queued, dependencies
 /// met, not approval-gated. Priority order, up to `max`.
 ///
@@ -85,11 +127,33 @@ pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum SequentialReason {
-    ParallelDisabled { max_parallel: usize },
-    RunnableTaskCount { runnable: usize },
-    DependencyChain { tasks: Vec<String> },
-    ApprovalRequired { tasks: Vec<String> },
-    ValidationRequired { tasks: Vec<String> },
+    ParallelDisabled {
+        max_parallel: usize,
+    },
+    RunnableTaskCount {
+        runnable: usize,
+    },
+    DependencyChain {
+        tasks: Vec<String>,
+    },
+    ApprovalRequired {
+        tasks: Vec<String>,
+    },
+    ValidationRequired {
+        tasks: Vec<String>,
+    },
+    /// Verifiers held behind queued non-verifier work. Named explicitly because
+    /// "only 1 runnable task" is not what the operator sees on the queue, and
+    /// reading it against a visible `4 ready` is what made the scheduler look
+    /// broken rather than deliberate (issue #51).
+    ReviewBarrier {
+        tasks: Vec<String>,
+    },
+    /// Verifiers are the only work left, and they still run one at a time so
+    /// each observes the previous one's remediation.
+    VerifierSerial {
+        tasks: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,6 +189,16 @@ impl ParallelAssessment {
                 SequentialReason::ValidationRequired { tasks } => {
                     format!("validation required: {}", tasks.join(", "))
                 }
+                SequentialReason::ReviewBarrier { tasks } => format!(
+                    "{} review(s) held behind queued work: {}",
+                    tasks.len(),
+                    tasks.join(", ")
+                ),
+                SequentialReason::VerifierSerial { tasks } => format!(
+                    "{} review(s) run one at a time: {}",
+                    tasks.len(),
+                    tasks.join(", ")
+                ),
             })
             .collect::<Vec<_>>()
             .join("; ")
@@ -173,6 +247,18 @@ pub fn assess_parallelism(queue: &WorkQueue, max_parallel: usize) -> ParallelAss
         reasons.push(SequentialReason::ApprovalRequired {
             tasks: approval_required,
         });
+    }
+
+    // Name the barrier before falling back to the bare count: a queue whose
+    // ready tasks are reviews is not "only 1 runnable task" from where the
+    // operator is standing (issue #51).
+    let held = held_by_review_barrier(queue);
+    if !held.is_empty() {
+        reasons.push(SequentialReason::ReviewBarrier { tasks: held });
+    }
+    let serialized = serialized_verifiers(queue);
+    if serialized.len() > 1 {
+        reasons.push(SequentialReason::VerifierSerial { tasks: serialized });
     }
 
     if max_parallel > 1 && runnable.len() < 2 {
@@ -2357,6 +2443,85 @@ mod tests {
 
         q.tasks[1].state = TaskState::Done;
         assert_eq!(ready_independent(&q, 4), vec![0]);
+    }
+
+    /// The reported shape: `4 ready` with `max_parallel: 4`, of which three are
+    /// reviews the barrier will refuse to co-schedule. The assessment has to
+    /// name the barrier — "only 1 runnable task" contradicts what the operator
+    /// is looking at and made a deliberate scheduler look broken (issue #51).
+    #[test]
+    fn assessment_names_the_review_barrier_instead_of_a_bare_runnable_count() {
+        let mut builder = task("BUILD", TaskState::Queued, 10, vec![]);
+        builder.kind = "implementation".into();
+        let mut reviews = Vec::new();
+        for (index, id) in ["REVIEW-A", "REVIEW-B", "REVIEW-C"].iter().enumerate() {
+            let mut review = task(id, TaskState::Queued, 20 + index as i64, vec![]);
+            review.kind = "review".into();
+            reviews.push(review);
+        }
+        let mut tasks = vec![builder];
+        tasks.extend(reviews);
+        let q = queue(tasks);
+
+        assert_eq!(
+            ready_independent(&q, 4),
+            vec![0],
+            "the scheduler admits only the builder"
+        );
+        assert_eq!(
+            held_by_review_barrier(&q),
+            vec![
+                "REVIEW-A".to_string(),
+                "REVIEW-B".to_string(),
+                "REVIEW-C".to_string()
+            ]
+        );
+
+        let assessment = assess_parallelism(&q, 4);
+        let held = assessment
+            .reasons
+            .iter()
+            .find_map(|reason| match reason {
+                SequentialReason::ReviewBarrier { tasks } => Some(tasks.clone()),
+                _ => None,
+            })
+            .expect("the barrier must be a named reason");
+        assert_eq!(held.len(), 3);
+        assert!(
+            assessment
+                .summary()
+                .contains("review(s) held behind queued work"),
+            "summary must say why: {}",
+            assessment.summary()
+        );
+    }
+
+    /// Reviews as the only work left: nothing is "held behind" anything, but
+    /// they still run one at a time, which is its own invisible cap.
+    #[test]
+    fn assessment_names_the_serial_verifier_cap_when_reviews_are_all_that_is_left() {
+        let mut tasks = Vec::new();
+        for (index, id) in ["REVIEW-A", "REVIEW-B"].iter().enumerate() {
+            let mut review = task(id, TaskState::Queued, 10 + index as i64, vec![]);
+            review.kind = "review".into();
+            tasks.push(review);
+        }
+        let q = queue(tasks);
+
+        assert_eq!(ready_independent(&q, 4).len(), 1, "verifiers stay serial");
+        assert!(
+            held_by_review_barrier(&q).is_empty(),
+            "with no queued builder there is nothing to hold them behind"
+        );
+        let assessment = assess_parallelism(&q, 4);
+        assert!(
+            assessment.reasons.iter().any(|reason| matches!(
+                reason,
+                SequentialReason::VerifierSerial { tasks } if tasks.len() == 2
+            )),
+            "the serial verifier cap must be named: {:?}",
+            assessment.reasons
+        );
     }
 
     #[test]
