@@ -2731,9 +2731,16 @@ fn stop_running_worker(app: &mut App) {
         // as a user stop (requeue) rather than a transient failure to auto-resume.
         let _ = std::fs::write(dir.join("cancelled"), b"1");
         if let Ok(pid) = std::fs::read_to_string(dir.join("worker.pid")) {
-            let pid = pid.trim();
-            if !pid.is_empty() {
-                let _ = std::process::Command::new("kill").arg(pid).status();
+            if let Ok(pid) = pid.trim().parse::<u32>() {
+                // The worker leads its own process group, so signal the whole
+                // tree: a launcher-style profile keeps the real agent CLI in a
+                // grandchild that a pid-only kill leaves running (issue #52).
+                // The direct kill stays as the backstop for a worker adopted
+                // from before that change.
+                crate::workers::terminate_worker_tree(pid, crate::workers::Signal::Term);
+                let _ = std::process::Command::new("kill")
+                    .arg(pid.to_string())
+                    .status();
             }
         }
     }
