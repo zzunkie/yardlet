@@ -192,6 +192,45 @@ pub fn evaluate(
                         format!("changed but not reported: {}", undisclosed.join(", "))
                     },
                 ));
+                // The mirror of the disclosure check. `diff_matches_report` only
+                // looks for diff entries the worker failed to name, so a report
+                // that names a file the diff does NOT contain passed it
+                // vacuously — which is how a run shipped a green summary over a
+                // deliverable written outside the tree Yardlet integrates
+                // (issue #55). Advisory here because finalization is what fails
+                // that case closed; this keeps the summary from asserting a file
+                // that is not in the evidence.
+                let actual_norm: std::collections::HashSet<String> =
+                    actual.iter().map(|p| norm(p)).collect();
+                let deleted_norm: std::collections::HashSet<String> =
+                    r.changes.files_deleted.iter().map(|p| norm(p)).collect();
+                let unevidenced: Vec<String> = r
+                    .changes
+                    .files_created
+                    .iter()
+                    .chain(&r.changes.files_modified)
+                    .map(|p| norm(p))
+                    .filter(|p| !p.is_empty() && !deleted_norm.contains(p))
+                    .filter(|p| {
+                        // A reported directory is present when the diff holds
+                        // anything under it.
+                        let prefix = format!("{p}/");
+                        !actual_norm.contains(p)
+                            && !actual_norm.iter().any(|a| a.starts_with(&prefix))
+                    })
+                    .collect();
+                checks.push(advisory(
+                    "reported_changes_present",
+                    unevidenced.is_empty(),
+                    if unevidenced.is_empty() {
+                        "every reported change is in the actual diff".to_string()
+                    } else {
+                        format!(
+                            "reported but absent from the actual diff: {}",
+                            unevidenced.join(", ")
+                        )
+                    },
+                ));
             }
             None => {
                 // Fail closed: no independent evidence to certify the gate.

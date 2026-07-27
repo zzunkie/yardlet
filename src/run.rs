@@ -3346,6 +3346,113 @@ fn worker_changed_integratable_path(evidence: Option<&[String]>) -> bool {
         .unwrap_or(false)
 }
 
+/// Repository outputs the worker DECLARED in result.json, normalized and
+/// reduced to the paths a no-change integration would silently drop.
+///
+/// Receipted core and dependency input overlays are core-delivered validation
+/// inputs, not worker outputs, so naming one is not a missing deliverable. A
+/// path the worker also declared deleted is not one either.
+fn declared_integratable_outputs(
+    result: Option<&RunResult>,
+    core_input_overlays: &[state::SerialInputOverlay],
+    dependency_input_overlays: &[state::DependencyInputOverlay],
+) -> Vec<String> {
+    let Some(result) = result else {
+        return Vec::new();
+    };
+    let norm = |path: &String| path.trim_start_matches("./").trim_matches('"').to_string();
+    let deleted = result
+        .changes
+        .files_deleted
+        .iter()
+        .map(norm)
+        .collect::<HashSet<_>>();
+    let mut declared = result
+        .changes
+        .files_created
+        .iter()
+        .chain(&result.changes.files_modified)
+        .map(norm)
+        .filter(|path| !path.is_empty())
+        .filter(|path| evaluator::is_integratable_path(path))
+        .filter(|path| !deleted.contains(path))
+        .filter(|path| {
+            !core_input_overlays
+                .iter()
+                .any(|overlay| overlay.path == *path)
+        })
+        .filter(|path| {
+            !dependency_input_overlays
+                .iter()
+                .any(|overlay| overlay.path == *path)
+        })
+        .collect::<Vec<_>>();
+    declared.sort();
+    declared.dedup();
+    declared
+}
+
+/// Why a finished run must NOT be recorded as "no changes to integrate"
+/// (issue #55).
+///
+/// Integration and evaluation have to agree on ONE change-evidence source. A
+/// no-change outcome means the run-owned worktree contributed no commit and no
+/// staged content, so either of these makes `not_needed/no_changes` a lie:
+///
+/// - the run's own change evidence still lists an integratable worker change,
+///   which staging would have committed; or
+/// - result.json declares integratable outputs, which the worktree therefore
+///   never held — the deliverable was written somewhere Yardlet does not
+///   integrate (typically the owning root) and would be reported Done while
+///   sitting uncommitted.
+///
+/// Returning a typed reason lets finalization fail closed to Partial and keep
+/// the worktree instead of shipping a green report over lost work.
+fn no_change_contradiction(
+    result: Option<&RunResult>,
+    evidence: Option<&[String]>,
+    core_input_overlays: &[state::SerialInputOverlay],
+    dependency_input_overlays: &[state::DependencyInputOverlay],
+) -> Option<(&'static str, Vec<String>)> {
+    if worker_changed_integratable_path(evidence) {
+        let paths = evidence
+            .unwrap_or_default()
+            .iter()
+            .filter(|path| evaluator::is_integratable_path(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Some(("no_change_contradicts_change_evidence", paths));
+    }
+    let declared =
+        declared_integratable_outputs(result, core_input_overlays, dependency_input_overlays);
+    if !declared.is_empty() {
+        return Some(("no_change_contradicts_declared_outputs", declared));
+    }
+    None
+}
+
+/// Operator-facing explanation for a refused no-change integration.
+fn no_change_contradiction_note(reason: &str, paths: &[String], wt: &std::path::Path) -> String {
+    let source = if reason == "no_change_contradicts_change_evidence" {
+        "this run's change evidence"
+    } else {
+        "the worker's result.json"
+    };
+    format!(
+        "\n## No-change integration refused\n\nIntegration found nothing to commit for this run, \
+         but {source} lists repository output(s):\n\n{}\n\nRecording \"no changes\" here would \
+         report the task Done while its deliverable stayed out of Git, so the run is Partial and \
+         the worktree is kept at `{}`. Check whether the output was written outside the run-owned \
+         worktree; if so, move it in and re-run, or commit it deliberately.\n",
+        paths
+            .iter()
+            .map(|path| format!("- `{path}`"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        wt.display()
+    )
+}
+
 /// Surface-neutral auto-drain guidance.
 ///
 /// `run_auto` streams these lines to whatever surface drives it — the TUI live
@@ -6896,6 +7003,25 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                             "{}: serial input overlay parity failed before cleanup: {reason}",
                             task.id
                         ));
+                    } else if let Some((reason, paths)) = no_change_contradiction(
+                        result.as_ref(),
+                        evidence.as_deref(),
+                        m.core_input_overlays,
+                        m.dependency_input_overlays,
+                    ) {
+                        next_state = TaskState::Partial;
+                        state::write_str(&run_dir.join("partial-reason"), reason)?;
+                        let hp = run_dir.join("handoff.md");
+                        let mut existing = std::fs::read_to_string(&hp).unwrap_or_default();
+                        existing.push_str(&no_change_contradiction_note(reason, &paths, m.wt_path));
+                        let _ = state::write_str(&hp, &existing);
+                        lines.push(format!(
+                            "{}: refused to record no changes — {} still lists {}; worktree kept at {}",
+                            task.id,
+                            reason,
+                            paths.join(", "),
+                            m.wt_path.display()
+                        ));
                     } else {
                         let no_change_receipt = persist_no_change_receipt(
                             ws,
@@ -7025,50 +7151,76 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     }
                 }
                 Ok(crate::parallel::Integration::NoChanges { worker_oid }) => {
-                    let no_change_receipt = persist_no_change_receipt(
-                        ws,
-                        run_dir,
-                        run_id,
-                        &task.id,
-                        &intent_id,
-                        worker_id,
-                        m,
-                        &worker_oid,
-                    )?;
-                    if let Some(reason) =
-                        serial_input_overlay_parity_failure(&ws.root, m.core_input_overlays)
-                    {
+                    // A no-change outcome is durable: it writes a core-owned
+                    // receipt that later recovery replays as "nothing to
+                    // integrate". Refuse it before that receipt exists when the
+                    // run's own evidence or result.json still claims repository
+                    // output (issue #55).
+                    if let Some((reason, paths)) = no_change_contradiction(
+                        result.as_ref(),
+                        evidence.as_deref(),
+                        m.core_input_overlays,
+                        m.dependency_input_overlays,
+                    ) {
                         next_state = TaskState::Partial;
-                        state::write_str(&run_dir.join("partial-reason"), &reason)?;
+                        state::write_str(&run_dir.join("partial-reason"), reason)?;
+                        let hp = run_dir.join("handoff.md");
+                        let mut existing = std::fs::read_to_string(&hp).unwrap_or_default();
+                        existing.push_str(&no_change_contradiction_note(reason, &paths, m.wt_path));
+                        let _ = state::write_str(&hp, &existing);
                         lines.push(format!(
-                            "{}: serial input overlay parity failed before cleanup: {reason}",
-                            task.id
+                            "{}: refused to record no changes — {} still lists {}; worktree kept at {}",
+                            task.id,
+                            reason,
+                            paths.join(", "),
+                            m.wt_path.display()
                         ));
                     } else {
-                        let cleanup = crate::parallel::cleanup_integrated_worktree(
-                            &ws.root,
-                            m.wt_path,
-                            m.branch,
-                            &worker_oid,
-                            m.provenance,
-                        );
-                        for warning in cleanup.warnings {
-                            lines.push(format!("{}: {warning}", task.id));
-                        }
-                        persist_no_change_projection(
+                        let no_change_receipt = persist_no_change_receipt(
+                            ws,
                             run_dir,
-                            &no_change_receipt,
-                            cleanup.complete,
+                            run_id,
+                            &task.id,
+                            &intent_id,
+                            worker_id,
+                            m,
+                            &worker_oid,
                         )?;
-                        if cleanup.complete {
-                            lines.push(format!("{}: no file changes to merge", task.id));
-                            git_finish_not_needed = true;
-                        } else {
+                        if let Some(reason) =
+                            serial_input_overlay_parity_failure(&ws.root, m.core_input_overlays)
+                        {
                             next_state = TaskState::Partial;
-                            let _ = state::write_str(
-                                &run_dir.join("partial-reason"),
-                                "worktree_cleanup_changed",
+                            state::write_str(&run_dir.join("partial-reason"), &reason)?;
+                            lines.push(format!(
+                                "{}: serial input overlay parity failed before cleanup: {reason}",
+                                task.id
+                            ));
+                        } else {
+                            let cleanup = crate::parallel::cleanup_integrated_worktree(
+                                &ws.root,
+                                m.wt_path,
+                                m.branch,
+                                &worker_oid,
+                                m.provenance,
                             );
+                            for warning in cleanup.warnings {
+                                lines.push(format!("{}: {warning}", task.id));
+                            }
+                            persist_no_change_projection(
+                                run_dir,
+                                &no_change_receipt,
+                                cleanup.complete,
+                            )?;
+                            if cleanup.complete {
+                                lines.push(format!("{}: no file changes to merge", task.id));
+                                git_finish_not_needed = true;
+                            } else {
+                                next_state = TaskState::Partial;
+                                let _ = state::write_str(
+                                    &run_dir.join("partial-reason"),
+                                    "worktree_cleanup_changed",
+                                );
+                            }
                         }
                     }
                 }
@@ -11663,6 +11815,255 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
 
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// A worker that declares a repository deliverable but writes it OUTSIDE
+    /// its run-owned worktree leaves that worktree with nothing to integrate.
+    /// Recording "no changes" there reports Done over an uncommitted file
+    /// (issue #55), so both integration protocols must refuse it.
+    fn outside_write_no_change_fixture(name: &str, auto_commit_on: bool) -> (Workspace, PathBuf) {
+        let source = std::env::temp_dir().join(format!(
+            "yard-outside-write-source-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        // init_test_workspace derives the owning root from the same formula, so
+        // the worker can be handed a path that is deliberately not its cwd.
+        let owning_root = std::env::temp_dir().join(format!("yard-{name}-{}", std::process::id()));
+        let worker = write_worker_script(
+            &source,
+            "outside-writer.sh",
+            r##"#!/bin/sh
+run_dir="$1"
+owning_root="$2"
+run_id=$(basename "$run_dir")
+packet=$(cat)
+task_id=$(printf "%s" "$packet" | sed -n 's/^# Yardlet task packet: //p' | head -n 1)
+printf "declared deliverable\n" > "$owning_root/declared-deliverable.txt"
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": {
+    "files_modified": [],
+    "files_created": ["declared-deliverable.txt"],
+    "files_deleted": []
+  },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "wrote its deliverable outside the run-owned worktree",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&worker),
+            shell_literal(&owning_root)
+        );
+        let ws = init_test_workspace(name, &worker_yaml);
+        assert_eq!(ws.root, owning_root);
+        if auto_commit_on {
+            let mut config = std::fs::read_to_string(ws.config_path()).unwrap();
+            config.push_str("auto_commit: true\n");
+            write_str(&ws.config_path(), &config).unwrap();
+        }
+        let mut q = queue(vec![task("YARD-OUTSIDE", TaskState::Queued, 10, false)]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+        (ws, source)
+    }
+
+    fn assert_no_change_refused(ws: &Workspace, report: &RunReport) {
+        assert_eq!(
+            report.result_state,
+            Some(TaskState::Partial),
+            "a declared deliverable the worktree never held must not land Done: {:?}",
+            report.lines
+        );
+        assert_eq!(
+            std::fs::read_to_string(report.run_dir.join("partial-reason"))
+                .unwrap()
+                .trim(),
+            "no_change_contradicts_declared_outputs"
+        );
+        assert!(
+            ws.load_no_change_receipt(&report.run_id).is_err(),
+            "a refused no-change outcome must not leave a durable receipt recovery would replay"
+        );
+        let record: RunRecord = state::load_yaml(&report.run_dir.join("run.yaml")).unwrap();
+        assert!(
+            std::path::Path::new(&record.worktree).exists(),
+            "the worktree must be kept so the operator can inspect the contradiction"
+        );
+        let handoff = std::fs::read_to_string(report.run_dir.join("handoff.md")).unwrap();
+        assert!(
+            handoff.contains("No-change integration refused")
+                && handoff.contains("declared-deliverable.txt"),
+            "the handoff must name the output that was not integrated: {handoff}"
+        );
+        let finish: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("git-finish.json")).unwrap(),
+        )
+        .unwrap();
+        assert_ne!(
+            finish["status"], "not_needed",
+            "Git finish must not report 'no changes' over a declared deliverable: {finish}"
+        );
+        let evaluation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("evaluation.json")).unwrap(),
+        )
+        .unwrap();
+        let presence = evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "reported_changes_present")
+            .unwrap();
+        assert_eq!(
+            presence["passed"], false,
+            "the evaluator must say the reported file is absent from the diff: {presence}"
+        );
+    }
+
+    #[test]
+    fn declared_output_written_outside_the_worktree_refuses_no_change_integration() {
+        let (ws, source) = outside_write_no_change_fixture("outside-write-auto-commit", true);
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-OUTSIDE".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_no_change_refused(&ws, &report);
+        assert!(
+            ws.root.join("declared-deliverable.txt").exists(),
+            "the fixture must reproduce the loose file the operator found in the owning root"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn declared_output_written_outside_the_worktree_refuses_no_change_without_auto_commit() {
+        let (ws, source) = outside_write_no_change_fixture("outside-write-no-auto-commit", false);
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-OUTSIDE".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_no_change_refused(&ws, &report);
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn no_change_contradiction_reads_evidence_before_declared_outputs() {
+        let overlay = state::SerialInputOverlay {
+            path: ".agents/skills/seeded/SKILL.md".into(),
+            content_digest: "digest".into(),
+        };
+        let dependency = state::DependencyInputOverlay {
+            dependency_task_id: "YARD-UPSTREAM".into(),
+            path: "dependency-output.txt".into(),
+            content_digest: "digest".into(),
+        };
+        let result = |created: &[&str], modified: &[&str], deleted: &[&str]| RunResult {
+            schema_version: 1,
+            run_id: "run-test".into(),
+            task_id: "YARD-001".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: crate::schemas::Changes {
+                files_created: created.iter().map(|p| p.to_string()).collect(),
+                files_modified: modified.iter().map(|p| p.to_string()).collect(),
+                files_deleted: deleted.iter().map(|p| p.to_string()).collect(),
+            },
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: String::new(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
+        };
+
+        // Change evidence outranks the self-report: staging would have committed
+        // this path, so a no-change outcome contradicts Yardlet's own diff.
+        let evidenced = result(&[], &[], &[]);
+        assert_eq!(
+            no_change_contradiction(
+                Some(&evidenced),
+                Some(&["src/lib.rs".to_string()]),
+                &[],
+                &[]
+            ),
+            Some((
+                "no_change_contradicts_change_evidence",
+                vec!["src/lib.rs".to_string()]
+            ))
+        );
+
+        // No evidence, but the worker still claims a repository output.
+        assert_eq!(
+            no_change_contradiction(
+                Some(&result(&["./tests/new.rs"], &[], &[])),
+                Some(&[]),
+                &[],
+                &[]
+            ),
+            Some((
+                "no_change_contradicts_declared_outputs",
+                vec!["tests/new.rs".to_string()]
+            ))
+        );
+
+        // Core-delivered inputs, canonical/runtime state, and a path the worker
+        // also declared deleted are not missing deliverables.
+        assert_eq!(
+            no_change_contradiction(
+                Some(&result(
+                    &[
+                        ".agents/skills/seeded/SKILL.md",
+                        "dependency-output.txt",
+                        ".agents/telemetry/runs.jsonl",
+                        "scratch.txt",
+                    ],
+                    &[],
+                    &["scratch.txt"],
+                )),
+                Some(&[]),
+                std::slice::from_ref(&overlay),
+                std::slice::from_ref(&dependency),
+            ),
+            None
+        );
+
+        // A run that genuinely produced nothing stays a clean no-op.
+        assert_eq!(
+            no_change_contradiction(Some(&result(&[], &[], &[])), Some(&[]), &[], &[]),
+            None
+        );
     }
 
     #[test]
