@@ -374,6 +374,10 @@ pub struct L {
     pub key_replan: &'static str,
     /// Offered whenever an open planning session is waiting on the operator.
     pub key_plan_review: &'static str,
+    /// Suffixes for the `N ready` breakdown when the verifier barrier is
+    /// holding runnable tasks back (issue #51).
+    pub ready_admissible: &'static str,
+    pub ready_review_barrier: &'static str,
     /// Always offered: the full key list. Home's footer can only carry the keys
     /// with a target right now, so the always-valid globals live behind this
     /// one advertised key (issue #71).
@@ -643,6 +647,8 @@ pub const EN: L = L {
     key_approve: "p approve",
     key_replan: "P replan",
     key_plan_review: "o plan review",
+    ready_admissible: " parallelizable",
+    ready_review_barrier: " held by the review barrier",
     key_keys: "? keys",
     keys_title: " Home keys ",
     keys_intro: "Every key Home accepts. The footer only lists the ones with something to act on right now; all of these work.",
@@ -897,6 +903,8 @@ pub const KO: L = L {
     key_approve: "p 승인",
     key_replan: "P 재계획",
     key_plan_review: "o 플랜 검토",
+    ready_admissible: " 동시실행",
+    ready_review_barrier: " 리뷰 배리어 대기",
     key_keys: "? 키목록",
     keys_title: " 홈 키 목록 ",
     keys_intro: "홈에서 받는 모든 키입니다. 푸터에는 지금 대상이 있는 키만 나오지만, 아래는 전부 동작합니다.",

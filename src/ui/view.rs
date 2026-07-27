@@ -707,6 +707,17 @@ fn truncate_width(s: &str, max: usize) -> String {
     out
 }
 
+/// The parenthetical after `N ready`, empty when the plain count is honest.
+fn ready_breakdown(health: &crate::snapshot::QueueHealth, l: &L) -> String {
+    if health.review_barrier == 0 || health.admissible >= health.runnable {
+        return String::new();
+    }
+    format!(
+        " ({}{}, {}{})",
+        health.admissible, l.ready_admissible, health.review_barrier, l.ready_review_barrier
+    )
+}
+
 fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
     let health = snap.health();
     let status = Line::from(vec![
@@ -714,6 +725,14 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
         Span::styled(
             format!("{} {}", health.runnable, l.c_ready),
             Style::default().fg(Color::Green),
+        ),
+        // `N ready` on its own counted tasks the scheduler will deliberately
+        // refuse to co-schedule, so pressing A after "4 ready" got one task and
+        // read as a bug (issue #51). Say what is actually admissible whenever
+        // the barrier is holding something back.
+        Span::styled(
+            ready_breakdown(&health, l),
+            Style::default().fg(Color::DarkGray),
         ),
         Span::raw(", "),
         Span::styled(
@@ -1607,6 +1626,56 @@ mod tests {
         assert!(failed.contains("activation fixture mismatch"));
         assert!(failed.contains("g retry  q quit"));
         assert!(!failed.contains("r run"));
+    }
+
+    /// `N ready` counted tasks the scheduler would never co-schedule, so the
+    /// operator pressed A expecting a 4-wide batch and got one task. The header
+    /// now says what is actually admissible — and stays silent when the plain
+    /// count is already honest (issue #51).
+    #[test]
+    fn the_ready_count_breaks_out_what_the_review_barrier_is_holding() {
+        use crate::snapshot::QueueHealth;
+
+        let reported = QueueHealth {
+            runnable: 4,
+            admissible: 1,
+            review_barrier: 3,
+            ..QueueHealth::default()
+        };
+        assert_eq!(
+            ready_breakdown(&reported, i18n::Lang::En.l()),
+            " (1 parallelizable, 3 held by the review barrier)"
+        );
+        assert_eq!(
+            ready_breakdown(&reported, i18n::Lang::Ko.l()),
+            " (1 동시실행, 3 리뷰 배리어 대기)"
+        );
+
+        for honest in [
+            // Nothing held back: the plain count already tells the truth.
+            QueueHealth {
+                runnable: 3,
+                admissible: 3,
+                review_barrier: 0,
+                ..QueueHealth::default()
+            },
+            // Reviews are the only work left, so none are held BEHIND anything;
+            // the serial cap is a different reason and not this suffix's job.
+            QueueHealth {
+                runnable: 2,
+                admissible: 1,
+                review_barrier: 0,
+                ..QueueHealth::default()
+            },
+        ] {
+            for lang in [i18n::Lang::En, i18n::Lang::Ko] {
+                assert_eq!(
+                    ready_breakdown(&honest, lang.l()),
+                    "",
+                    "no breakdown when nothing is held back: {honest:?}"
+                );
+            }
+        }
     }
 
     #[test]

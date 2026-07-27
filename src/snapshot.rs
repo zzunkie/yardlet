@@ -164,6 +164,13 @@ pub struct RecoveryRequired {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct QueueHealth {
     pub runnable: usize,
+    /// How many of `runnable` the scheduler would actually start together
+    /// right now, and how many the verifier barrier is holding back.
+    ///
+    /// `runnable` alone counts tasks the scheduler will deliberately refuse to
+    /// co-schedule, which reads as parallelism that never arrives (issue #51).
+    pub admissible: usize,
+    pub review_barrier: usize,
     pub running: usize,
     pub waiting_decision: usize,
     pub waiting_approval: usize,
@@ -441,6 +448,9 @@ impl Snapshot {
                 RunnableClass::Done => health.done += 1,
             }
         }
+        health.admissible =
+            crate::parallel::ready_independent(&self.queue, self.config.max_parallel.max(1)).len();
+        health.review_barrier = crate::parallel::held_by_review_barrier(&self.queue).len();
         health
     }
 
@@ -467,6 +477,8 @@ impl Snapshot {
             "intent": self.intent_summary(),
             "queue": {
                 "runnable": health.runnable,
+                "admissible": health.admissible,
+                "review_barrier": health.review_barrier,
                 "running": health.running,
                 "waiting_decision": health.waiting_decision,
                 "waiting_approval": health.waiting_approval,
@@ -633,6 +645,57 @@ mod tests {
             crate::yaml::from_str(&format!("id: {id}\ntitle: Home footer {id}\n")).unwrap();
         task.state = state;
         task
+    }
+
+    /// The health projection and the scheduler must agree on what "ready"
+    /// buys you. `runnable` alone counted three reviews the barrier would
+    /// refuse to co-schedule (issue #51).
+    #[test]
+    fn health_reports_what_the_scheduler_would_actually_admit() {
+        let mut builder = home_footer_task("BUILD", TaskState::Queued);
+        builder.kind = "implementation".into();
+        let mut tasks = vec![builder];
+        for id in ["REVIEW-A", "REVIEW-B", "REVIEW-C"] {
+            let mut review = home_footer_task(id, TaskState::Queued);
+            review.kind = "review".into();
+            tasks.push(review);
+        }
+        let mut queue = WorkQueue::empty();
+        queue.tasks = tasks;
+        let mut config: YardConfig = crate::yaml::from_str(
+            "schema_version: 1\nproduct: yardlet\nworkspace_id: health\ncreated_at: \"2026-07-27T00:00:00Z\"\nstate_dir: .agents\ndefault_interface: tui\ncanonical_queue: work-queue.yaml\ncurrent_intent: \"\"\n",
+        )
+        .unwrap();
+        config.max_parallel = 4;
+        let snapshot = Snapshot {
+            config,
+            intent: None,
+            queue,
+            home_footer: HomeFooterAvailability::default(),
+            workers: Vec::new(),
+            planner: String::new(),
+            pending: None,
+            gate: None,
+            approvals_needed: Vec::new(),
+            capabilities: Default::default(),
+            last_transitions: BTreeMap::new(),
+            recovery_required: Vec::new(),
+            harness_copy_warnings: Vec::new(),
+            planning_reentry: None,
+        };
+
+        let health = snapshot.health();
+        assert_eq!(health.runnable, 4, "all four are class-runnable");
+        assert_eq!(
+            health.admissible, 1,
+            "but the scheduler would start exactly one"
+        );
+        assert_eq!(health.review_barrier, 3);
+        assert_eq!(
+            health.admissible + health.review_barrier,
+            health.runnable,
+            "the breakdown must account for every ready task"
+        );
     }
 
     #[test]
