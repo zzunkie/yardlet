@@ -1043,6 +1043,21 @@ fn spawn_internal(
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    // A worker must outlive the terminal that started it. Yardlet's contract is
+    // that quitting the orchestrator does not kill workers — the next start
+    // ADOPTS a live one — and that held for `q` but not for the window closing:
+    // a plain spawn inherits Yardlet's process group, which is the controlling
+    // pty's foreground group, so pty teardown SIGHUPs the worker too and a whole
+    // reasoning pass is lost (issue #52). Leading its own group detaches it from
+    // that signal. Safe here because all three of its stdio ends are pipes, so
+    // it never reads or writes the controlling terminal (no SIGTTIN/SIGTTOU).
+    // Deliberate termination is unaffected: the stop path writes the `cancelled`
+    // marker and kills `worker.pid` explicitly.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
 
     let attempt_raw_files = if let Some(capture) = attempt_capture {
         for path in [&capture.stdout_log, &capture.stderr_log] {
