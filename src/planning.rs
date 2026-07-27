@@ -2628,10 +2628,11 @@ pub enum PlanningReentry {
 
 /// Read-only re-entry state of the latest planning session.
 ///
-/// Deliberately lock-free and best-effort: it runs on every snapshot load, and
-/// an unreadable or half-written session is a reason to show nothing, never to
-/// fail the snapshot. Anything actionable is confirmed by the review screen
-/// itself, which takes the lock and validates properly.
+/// Deliberately lock-free: it runs on every snapshot load and must never fail
+/// the snapshot. A session that exists but cannot be read reports `Unreadable`
+/// rather than nothing — answering "nothing here" for it reproduces the
+/// invisible dead end #65 exists to kill. Anything actionable is confirmed by
+/// the review screen itself, which takes the lock and validates properly.
 pub fn reentry(ws: &Workspace) -> Option<PlanningReentry> {
     let session = match ws.load_latest_planning_session() {
         Ok(Some(session)) => session,

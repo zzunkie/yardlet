@@ -712,13 +712,22 @@ fn truncate_width(s: &str, max: usize) -> String {
 /// barrier, and the one-at-a-time cap when reviews are all that is left. A
 /// "how many will start" number is deliberately absent — see `QueueHealth`.
 fn ready_breakdown(health: &crate::snapshot::QueueHealth, l: &L) -> String {
+    let mut parts = Vec::new();
     if health.review_barrier > 0 {
-        return format!(" ({}{})", health.review_barrier, l.ready_review_barrier);
+        parts.push(format!(
+            "{}{}",
+            health.review_barrier, l.ready_review_barrier
+        ));
     }
+    // Both can apply at once — a remediation-held review plus reviews with
+    // nothing else queued. Saying only the first implies the rest are free.
     if health.serialized_reviews > 1 {
-        return format!(" ({})", l.ready_reviews_serial);
+        parts.push(l.ready_reviews_serial.to_string());
     }
-    String::new()
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!(" ({})", parts.join(", "))
 }
 
 fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
@@ -1667,6 +1676,19 @@ mod tests {
         assert_eq!(
             ready_breakdown(&reviews_only, i18n::Lang::Ko.l()),
             " (리뷰는 한 번에 하나씩)"
+        );
+
+        // Both can apply at once. Naming only the barrier implies the rest are
+        // free to run together, which is the same overstatement as before.
+        let both = QueueHealth {
+            runnable: 3,
+            review_barrier: 1,
+            serialized_reviews: 2,
+            ..QueueHealth::default()
+        };
+        assert_eq!(
+            ready_breakdown(&both, i18n::Lang::En.l()),
+            " (1 held by the review barrier, reviews run one at a time)"
         );
 
         for honest in [

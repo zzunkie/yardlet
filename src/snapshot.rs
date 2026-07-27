@@ -164,18 +164,23 @@ pub struct RecoveryRequired {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct QueueHealth {
     pub runnable: usize,
-    /// Runnable tasks the verifier barrier is holding back, and whether the
-    /// runnable set is reviews that will run one at a time.
+    /// Runnable tasks the verifier barrier is holding back, and runnable
+    /// reviews that will go one at a time because nothing else is queued.
     ///
     /// `runnable` alone counts tasks the scheduler will deliberately refuse to
     /// co-schedule, which reads as parallelism that never arrives (issue #51).
     ///
-    /// There is deliberately no "how many will start" number here. The parallel
-    /// selector works from an empty capability vocabulary, ignores live approval
-    /// grants, and truncates to `max_parallel`, while `runnable` uses the real
-    /// ones — so any count derived from it and printed next to `runnable` is
-    /// wrong in three independent ways. Only the barrier itself is computed from
-    /// the same inputs on both sides, so only the barrier is claimed.
+    /// Both are computed HERE, from `task_class` — the same real capability
+    /// vocabulary and live approval grants `runnable` uses. The scheduler's own
+    /// helpers deliberately work from an empty vocabulary and ignore approval
+    /// grants (so parallel selection falls through to the serial selector for
+    /// those cases), which makes them right for scheduling and wrong to print
+    /// next to `runnable`: a queue of approval-granted reviews would count 3
+    /// runnable and 0 held.
+    ///
+    /// There is deliberately no "how many will start" number. That would also
+    /// have to fold in `max_parallel`, and a count that says "1 parallelizable"
+    /// in a workspace where parallelism is switched off explains nothing.
     pub review_barrier: usize,
     pub serialized_reviews: usize,
     pub running: usize,
@@ -455,8 +460,19 @@ impl Snapshot {
                 RunnableClass::Done => health.done += 1,
             }
         }
-        health.review_barrier = crate::parallel::held_by_review_barrier(&self.queue).len();
-        health.serialized_reviews = crate::parallel::serialized_verifiers(&self.queue).len();
+        let work_pending = crate::parallel::has_queued_non_verifier(&self.queue);
+        for task in &self.queue.tasks {
+            if !crate::parallel::is_verifier(task)
+                || self.task_class(task) != RunnableClass::Runnable
+            {
+                continue;
+            }
+            if work_pending || self.queue.has_active_remediation_for(&task.id) {
+                health.review_barrier += 1;
+            } else {
+                health.serialized_reviews += 1;
+            }
+        }
         health
     }
 
@@ -722,6 +738,29 @@ mod tests {
         assert_eq!(health.runnable, 3);
         assert_eq!(health.review_barrier, 0);
         assert_eq!(health.serialized_reviews, 3);
+
+        // The counts must use the SAME inputs as `runnable`. The scheduler's own
+        // helpers work from an empty capability vocabulary and ignore approval
+        // grants, so reading them here would report 3 runnable and 0 held for a
+        // queue that is entirely reviews requiring a granted approval.
+        let mut approval_gated = reviews_only.queue.clone();
+        for task in &mut approval_gated.tasks {
+            task.approval = Some(crate::yaml::from_str("required: true").unwrap());
+        }
+        let approval_gated = Snapshot {
+            queue: approval_gated,
+            approvals_needed: Vec::new(),
+            ..reviews_only
+        };
+        let health = approval_gated.health();
+        assert_eq!(
+            health.runnable, 3,
+            "approval was granted, so these are ready"
+        );
+        assert_eq!(
+            health.serialized_reviews, 3,
+            "and the count that explains them has to agree"
+        );
     }
 
     #[test]
