@@ -32,6 +32,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod common;
+
 /// Slow-recovery injection (debug + `YARDLET_PROCESS_FIXTURE=1` only). Big enough
 /// that the loading screen is unmistakably shown before Home, small enough to
 /// keep the test quick.
@@ -318,7 +320,7 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
     let stdout = Stdio::from(slave.try_clone().unwrap());
     let stderr = Stdio::from(slave);
     let started = Instant::now();
-    let mut child = Command::new(&binary)
+    let child = Command::new(&binary)
         .current_dir(&root)
         .env("TERM", "xterm-256color")
         .env("YARDLET_PROCESS_FIXTURE", "1")
@@ -331,6 +333,9 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
         .stderr(stderr)
         .spawn()
         .unwrap();
+    // Killed and reaped even if an assertion below unwinds past the clean quit
+    // (issue #64).
+    let mut child = common::ChildGuard::new(child);
 
     let mut sink: Vec<u8> = Vec::new();
 
@@ -436,14 +441,6 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
     let _ = master.write_all(b"q");
     std::thread::sleep(Duration::from_millis(150));
     let _ = master.write_all(b"q");
-    let exit_deadline = Instant::now() + Duration::from_secs(5);
-    while child.try_wait().unwrap().is_none() && Instant::now() < exit_deadline {
-        drain(&mut master, &mut sink);
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    if child.try_wait().unwrap().is_none() {
-        child.kill().unwrap();
-        child.wait().unwrap();
-    }
+    child.shutdown(Duration::from_secs(5), || drain(&mut master, &mut sink));
     let _ = fs::remove_dir_all(&root);
 }

@@ -16,6 +16,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod common;
+
 fn test_root() -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -160,7 +162,7 @@ fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
     let stdin = Stdio::from(slave.try_clone().unwrap());
     let stdout = Stdio::from(slave.try_clone().unwrap());
     let stderr = Stdio::from(slave);
-    let mut child = Command::new(&binary)
+    let child = Command::new(&binary)
         .current_dir(&root)
         .env("TERM", "xterm-256color")
         .env("YARDLET_PROCESS_FIXTURE", "1")
@@ -169,6 +171,9 @@ fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
         .stderr(stderr)
         .spawn()
         .unwrap();
+    // Killed and reaped even if an assertion below unwinds past the clean quit
+    // (issue #64).
+    let mut child = common::ChildGuard::new(child);
 
     let mut sink: Vec<u8> = Vec::new();
 
@@ -203,14 +208,6 @@ fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
 
     std::thread::sleep(Duration::from_millis(200));
     let _ = master.write_all(b"q");
-    let exit_deadline = Instant::now() + Duration::from_secs(5);
-    while child.try_wait().unwrap().is_none() && Instant::now() < exit_deadline {
-        drain(&mut master, &mut sink);
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    if child.try_wait().unwrap().is_none() {
-        child.kill().unwrap();
-        child.wait().unwrap();
-    }
+    child.shutdown(Duration::from_secs(5), || drain(&mut master, &mut sink));
     let _ = fs::remove_dir_all(&root);
 }
