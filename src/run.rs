@@ -3346,69 +3346,111 @@ fn worker_changed_integratable_path(evidence: Option<&[String]>) -> bool {
         .unwrap_or(false)
 }
 
-/// Where a worker-declared absolute path can be resolved from. The worktree
-/// comes FIRST and is not optional to get right: an isolated serial run's cwd
-/// IS the worktree, so a path the worker forms from its own cwd resolves
-/// against the owning root as `.agents/worktrees/<run>/…` — which the harness
-/// allowlist rejects, silently dropping a real deliverable.
+/// Where a worker-declared absolute path can be resolved from.
+///
+/// The worktree is FIRST and is not optional: an isolated serial run's cwd IS
+/// the worktree, so a path the worker forms from its own cwd resolves against
+/// the owning root as `.agents/worktrees/<run>/…`, which the harness allowlist
+/// rejects — silently dropping a real deliverable. Making the field mandatory
+/// keeps that mistake unrepresentable.
 struct DeclaredPathRoots<'a> {
-    worktree: Option<&'a std::path::Path>,
+    worktree: &'a std::path::Path,
     workspace: &'a std::path::Path,
 }
 
-/// A worker-declared path as a REPOSITORY-relative one, or `None` when it
-/// cannot be placed in this repository.
+/// What a worker-declared path is, once Yardlet tries to place it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DeclaredPath {
+    /// Placed in the repository. Judged by the normal integration rules.
+    Repository(String),
+    /// Absolute and outside every root Yardlet owns. Not a repository
+    /// deliverable, so it cannot contradict an honest no-change outcome — but
+    /// it is still reported, because silently forgetting a declared output is
+    /// the failure this whole guard exists to prevent.
+    Unplaceable(String),
+    /// Empty, or a root directory itself. Nothing to attribute either way.
+    Nothing,
+}
+
+/// Classify one worker-declared path.
 ///
 /// `changes` is free-form worker text and the packet itself hands out ABSOLUTE
 /// paths (an isolated serial run receives its run directory as one), so a
 /// declared path arrives in either form. That matters because
 /// `is_integratable_path` tests the `.agents/` prefix lexically: an absolute
 /// `/ws/.agents/runs/<id>/report.md` sails past it and would be read as a lost
-/// repository deliverable (issue #55 remediation).
+/// repository deliverable (issue #55).
 ///
-/// Both roots are tried against their canonical form too, because macOS resolves
-/// the temp roots these run under through `/private`.
-///
-/// `None` means "not attributable", and the caller keeps the raw path rather
-/// than discarding it: a declared output Yardlet cannot place is not evidence
-/// that nothing was lost. A stripped result that still escapes upward is
-/// treated the same way, so `/ws/../elsewhere/x` and `/elsewhere/x` cannot
-/// reach opposite verdicts.
-fn repository_relative_declared_path(raw: &str, roots: &DeclaredPathRoots<'_>) -> Option<String> {
+/// Each root is tried in canonical and literal form, because macOS resolves the
+/// temp roots these run under through `/private`. A result that still climbs out
+/// of the repository is `Unplaceable`, so `/ws/../elsewhere/x` and
+/// `/elsewhere/x` cannot reach opposite verdicts.
+fn classify_declared_path(raw: &str, roots: &DeclaredPathRoots<'_>) -> DeclaredPath {
     let trimmed = raw.trim().trim_matches('"');
     if trimmed.is_empty() {
-        return None;
+        return DeclaredPath::Nothing;
     }
     let path = std::path::Path::new(trimmed);
     let relative = if path.is_absolute() {
         let mut candidates = Vec::new();
-        for root in roots.worktree.into_iter().chain([roots.workspace]) {
+        for root in [roots.worktree, roots.workspace] {
             if let Ok(canonical) = root.canonicalize() {
                 candidates.push(canonical);
             }
             candidates.push(root.to_path_buf());
         }
-        candidates
+        match candidates
             .iter()
             .find_map(|root| path.strip_prefix(root).ok())
             .and_then(|relative| relative.to_str())
-            .map(str::to_string)?
+        {
+            // A root itself is a directory, not a deliverable.
+            Some("") => return DeclaredPath::Nothing,
+            Some(relative) => relative.to_string(),
+            None => return DeclaredPath::Unplaceable(trimmed.to_string()),
+        }
     } else {
         trimmed.to_string()
     };
     let relative = relative.trim_start_matches("./").trim_end_matches('/');
     if relative.is_empty() {
-        return None;
+        return DeclaredPath::Nothing;
     }
-    // A path that still climbs out of the repository is not repository-relative,
-    // however it was spelled.
     if std::path::Path::new(relative)
         .components()
         .any(|component| component == std::path::Component::ParentDir)
     {
-        return None;
+        return DeclaredPath::Unplaceable(trimmed.to_string());
     }
-    Some(relative.to_string())
+    DeclaredPath::Repository(relative.to_string())
+}
+
+/// Declared outputs Yardlet could not place in the repository.
+///
+/// These never contradict a no-change outcome: an absolute path outside every
+/// root Yardlet owns is not a repository deliverable, and flipping a correct
+/// run to Partial over a worker's scratch file would recreate the very
+/// false positive this guard was corrected for. They are surfaced instead.
+fn unplaceable_declared_outputs(
+    result: Option<&RunResult>,
+    roots: &DeclaredPathRoots<'_>,
+) -> Vec<String> {
+    let Some(result) = result else {
+        return Vec::new();
+    };
+    let mut unplaceable = result
+        .changes
+        .files_created
+        .iter()
+        .chain(&result.changes.files_modified)
+        .filter_map(|path| match classify_declared_path(path, roots) {
+            DeclaredPath::Unplaceable(path) => Some(path),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    unplaceable.sort();
+    unplaceable.dedup();
+    unplaceable
 }
 
 /// Repository outputs the worker DECLARED in result.json, normalized and
@@ -3422,9 +3464,8 @@ fn repository_relative_declared_path(raw: &str, roots: &DeclaredPathRoots<'_>) -
 /// against the right root matters, since every non-implementation task is
 /// REQUIRED to write `report.md` there and forbidden to touch code.
 ///
-/// A path that cannot be placed in the repository is kept VERBATIM rather than
-/// dropped. Yardlet did not integrate it and cannot prove anything about it, so
-/// silently forgetting it would be the same silent loss issue #55 is about.
+/// A path Yardlet cannot place is NOT here — see [`unplaceable_declared_outputs`],
+/// which reports it without letting it flip a correct run.
 fn declared_integratable_outputs(
     result: Option<&RunResult>,
     roots: &DeclaredPathRoots<'_>,
@@ -3434,23 +3475,22 @@ fn declared_integratable_outputs(
     let Some(result) = result else {
         return Vec::new();
     };
-    let norm = |path: &String| {
-        repository_relative_declared_path(path, roots)
-            .unwrap_or_else(|| path.trim().trim_matches('"').to_string())
+    let repository = |path: &String| match classify_declared_path(path, roots) {
+        DeclaredPath::Repository(path) => Some(path),
+        _ => None,
     };
     let deleted = result
         .changes
         .files_deleted
         .iter()
-        .map(norm)
+        .filter_map(repository)
         .collect::<HashSet<_>>();
     let mut declared = result
         .changes
         .files_created
         .iter()
         .chain(&result.changes.files_modified)
-        .map(norm)
-        .filter(|path| !path.is_empty())
+        .filter_map(repository)
         .filter(|path| evaluator::is_integratable_path(path))
         .filter(|path| !deleted.contains(path))
         .filter(|path| {
@@ -7065,6 +7105,20 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         .then(|| recovery_git_finish_ownership(ws, run_id, &task.id))
         .flatten();
     if let Some(m) = &merge {
+        // The worker's cwd IS the worktree, so a path it forms from its own cwd
+        // must resolve against that first (issue #55).
+        let declared_path_roots = DeclaredPathRoots {
+            worktree: m.wt_path,
+            workspace: &ws.root,
+        };
+        // Declared outputs Yardlet cannot place are not repository deliverables
+        // and must not flip a correct run, but they must not vanish either.
+        for path in unplaceable_declared_outputs(result.as_ref(), &declared_path_roots) {
+            lines.push(format!(
+                "{}: declared output {path} is outside this workspace; Yardlet did not integrate it",
+                task.id
+            ));
+        }
         if !m.auto_commit {
             let has_changes = evidence
                 .as_ref()
@@ -7128,10 +7182,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     } else if let Some((reason, paths)) = no_change_contradiction(
                         result.as_ref(),
                         evidence.as_deref(),
-                        &DeclaredPathRoots {
-                            worktree: Some(m.wt_path),
-                            workspace: &ws.root,
-                        },
+                        &declared_path_roots,
                         m.core_input_overlays,
                         m.dependency_input_overlays,
                     ) {
@@ -7288,10 +7339,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     if let Some((reason, paths)) = no_change_contradiction(
                         result.as_ref(),
                         evidence.as_deref(),
-                        &DeclaredPathRoots {
-                            worktree: Some(m.wt_path),
-                            workspace: &ws.root,
-                        },
+                        &declared_path_roots,
                         m.core_input_overlays,
                         m.dependency_input_overlays,
                     ) {
@@ -12115,6 +12163,106 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         let _ = std::fs::remove_dir_all(ws.root);
     }
 
+    /// The wiring, not just the helper: a worker that names a deliverable from
+    /// its OWN cwd (the worktree) while actually writing it somewhere Yardlet
+    /// does not integrate must still be caught. Resolving that path against the
+    /// owning root instead lands it under `.agents/worktrees/**`, which the
+    /// allowlist rejects — so the guard goes silent and issue #55 ships again.
+    /// This is the case the review-artifact test cannot see, because a run
+    /// artifact is non-integratable under either root.
+    #[test]
+    fn a_deliverable_named_from_the_worktree_is_still_caught() {
+        let source = std::env::temp_dir().join(format!(
+            "yard-worktree-declared-source-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        let owning_root =
+            std::env::temp_dir().join(format!("yard-worktree-declared-{}", std::process::id()));
+        // The worker declares `<its cwd>/tests/new.rs` but writes the file into
+        // the owning root, so its own worktree diff stays empty.
+        let worker = write_worker_script(
+            &source,
+            "worktree-declaring-worker.sh",
+            r##"#!/bin/sh
+run_dir="$1"
+owning_root="$2"
+run_id=$(basename "$run_dir")
+packet=$(cat)
+task_id=$(printf "%s" "$packet" | sed -n 's/^# Yardlet task packet: //p' | head -n 1)
+mkdir -p "$owning_root/tests"
+printf "// deliverable\n" > "$owning_root/tests/new.rs"
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": {
+    "files_modified": [],
+    "files_created": ["$(pwd)/tests/new.rs"],
+    "files_deleted": []
+  },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "declared from the worktree, written elsewhere",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&worker),
+            shell_literal(&owning_root)
+        );
+        let ws = init_test_workspace("worktree-declared", &worker_yaml);
+        assert_eq!(ws.root, owning_root);
+        let mut config = std::fs::read_to_string(ws.config_path()).unwrap();
+        config.push_str("auto_commit: true\n");
+        write_str(&ws.config_path(), &config).unwrap();
+        let mut q = queue(vec![task("YARD-WT", TaskState::Queued, 10, false)]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-WT".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.result_state,
+            Some(TaskState::Partial),
+            "a deliverable declared from the worktree must not be dropped into \
+             .agents/worktrees/**: {:?}",
+            report.lines
+        );
+        assert_eq!(
+            std::fs::read_to_string(report.run_dir.join("partial-reason"))
+                .unwrap()
+                .trim(),
+            "no_change_contradicts_declared_outputs"
+        );
+        let handoff = std::fs::read_to_string(report.run_dir.join("handoff.md")).unwrap();
+        assert!(
+            handoff.contains("tests/new.rs"),
+            "the handoff must name the output, repository-relative: {handoff}"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
     /// A `review` task is REQUIRED by the packet to write `report.md` into its
     /// run directory, is forbidden to touch code, and is handed that directory
     /// as an ABSOLUTE path. It therefore finishes with zero repository changes
@@ -12254,7 +12402,7 @@ printf "# worker handoff
         // lands under `.agents/worktrees/...` and vanishes from the allowlist.
         let worktree = std::path::PathBuf::from("/ws/.agents/worktrees/run-test");
         let roots = DeclaredPathRoots {
-            worktree: Some(&worktree),
+            worktree: &worktree,
             workspace: std::path::Path::new("/ws"),
         };
         let contradiction = |result: &RunResult, evidence: &[String]| {
@@ -12357,18 +12505,31 @@ printf "# worker handoff
             "a review run's own artifacts must not read as lost repository output"
         );
 
-        // A path Yardlet cannot place in the repository is kept VERBATIM, not
-        // dropped: it was not integrated and nothing here can prove otherwise,
-        // so forgetting it would be the same silent loss this guard exists for.
-        // The two spellings of "outside" must also agree.
+        // A path Yardlet cannot place is not a repository deliverable, so it
+        // must NOT flip a correct run — that would recreate the false positive
+        // this guard was corrected for. It is reported instead, and the two
+        // spellings of "outside" must agree.
         for outside in ["/elsewhere/other.md", "/ws/../elsewhere/other.md"] {
+            let declared = result(&[outside], &[], &[]);
             assert_eq!(
-                contradiction(&result(&[outside], &[], &[]), &[]),
-                Some((
-                    "no_change_contradicts_declared_outputs",
-                    vec![outside.to_string()]
-                )),
-                "{outside} must not be silently forgotten"
+                contradiction(&declared, &[]),
+                None,
+                "{outside} must not flip the run"
+            );
+            assert_eq!(
+                unplaceable_declared_outputs(Some(&declared), &roots),
+                vec![outside.to_string()],
+                "{outside} must still be surfaced"
+            );
+        }
+
+        // A root directory itself is neither a deliverable nor a lost output.
+        for root_path in ["/ws", "/ws/.agents/worktrees/run-test", "/ws/"] {
+            let declared = result(&[root_path], &[], &[]);
+            assert_eq!(contradiction(&declared, &[]), None, "{root_path}");
+            assert!(
+                unplaceable_declared_outputs(Some(&declared), &roots).is_empty(),
+                "{root_path} must not be reported as a lost output"
             );
         }
 

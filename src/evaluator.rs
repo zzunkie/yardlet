@@ -368,7 +368,7 @@ pub fn evaluate(
 /// packet tells it to write `{abs}/result.json` and, for every non-implementation
 /// kind, `{abs}/report.md`. A worker echoing those paths back in `changes` is
 /// reporting its own artifacts, not lost repository output (issue #55).
-pub(crate) fn is_current_run_artifact(path: &str, run_id: &str) -> bool {
+fn is_current_run_artifact(path: &str, run_id: &str) -> bool {
     let path = path.trim_start_matches("./").trim_matches('"');
     let root = format!(".agents/runs/{run_id}");
     path == root
