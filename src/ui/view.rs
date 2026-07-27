@@ -499,25 +499,39 @@ fn render_home(frame: &mut Frame, app: &App) {
             l.footer_home_busy_nodrain.to_string()
         }
     } else {
-        let (availability, answerable, approvable, replannable) = if let Some(snap) = &app.snapshot
-        {
-            let answerable = snap.pending.is_some()
-                || snap.gate.is_some()
-                || snap
-                    .queue
-                    .tasks
-                    .iter()
-                    .any(|t| !matches!(t.state, TaskState::Running | TaskState::Done));
-            (
-                snap.home_footer,
-                answerable,
-                !snap.approvals_needed.is_empty(),
-                same_intent_replan_availability(&snap.queue) == ReplanAvailability::Available,
-            )
-        } else {
-            (HomeFooterAvailability::default(), false, false, false)
-        };
-        home_footer(l, availability, answerable, approvable, replannable)
+        let (availability, answerable, approvable, replannable, plan_reviewable) =
+            if let Some(snap) = &app.snapshot {
+                let answerable = snap.pending.is_some()
+                    || snap.gate.is_some()
+                    || snap
+                        .queue
+                        .tasks
+                        .iter()
+                        .any(|t| !matches!(t.state, TaskState::Running | TaskState::Done));
+                (
+                    snap.home_footer,
+                    answerable,
+                    !snap.approvals_needed.is_empty(),
+                    same_intent_replan_availability(&snap.queue) == ReplanAvailability::Available,
+                    snap.planning_reentry.is_some(),
+                )
+            } else {
+                (
+                    HomeFooterAvailability::default(),
+                    false,
+                    false,
+                    false,
+                    false,
+                )
+            };
+        home_footer(
+            l,
+            availability,
+            answerable,
+            approvable,
+            replannable,
+            plan_reviewable,
+        )
     };
     render_footer(frame, chunks[4], &footer);
 }
@@ -580,6 +594,7 @@ fn home_footer(
     answerable: bool,
     approvable: bool,
     replannable: bool,
+    plan_reviewable: bool,
 ) -> String {
     let mut fragments = vec![l.footer_home];
     for (available, fragment) in [
@@ -603,6 +618,9 @@ fn home_footer(
     }
     if replannable {
         fragments.push(l.key_replan);
+    }
+    if plan_reviewable {
+        fragments.push(l.key_plan_review);
     }
     fragments.join("  ")
 }
@@ -732,14 +750,36 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
     );
 }
 
+/// The Home row for an open planning session, if one is waiting. It leads the
+/// queue box in both the empty and populated cases: an accepted-but-unconfirmed
+/// plan leaves the queue legitimately empty, which is exactly the state that
+/// read as "my plan disappeared" (issue #65).
+fn planning_reentry_item(snap: &Snapshot, l: &L) -> Option<ListItem<'static>> {
+    let text = match snap.planning_reentry? {
+        crate::planning::PlanningReentry::PendingProposal { count } => {
+            l.home_plan_pending.replace("{n}", &count.to_string())
+        }
+        crate::planning::PlanningReentry::AcceptedDraft => l.home_plan_accepted.to_string(),
+    };
+    Some(ListItem::new(Line::from(Span::styled(
+        text,
+        Style::default().fg(Color::Cyan).bold(),
+    ))))
+}
+
 fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected: usize) {
+    let planning = planning_reentry_item(snap, l);
     let items: Vec<ListItem> = if snap.tasks().is_empty() {
-        vec![ListItem::new(Line::from(Span::styled(
-            l.queue_empty,
-            Style::default().fg(Color::DarkGray),
-        )))]
+        planning
+            .into_iter()
+            .chain(std::iter::once(ListItem::new(Line::from(Span::styled(
+                l.queue_empty,
+                Style::default().fg(Color::DarkGray),
+            )))))
+            .collect()
     } else {
         let mut items = Vec::new();
+        items.extend(planning);
         if snap
             .tasks()
             .iter()
@@ -1601,8 +1641,8 @@ mod tests {
         ];
 
         for (availability, en_hint, ko_hint) in cases {
-            let en = home_footer(i18n::Lang::En.l(), availability, false, false, false);
-            let ko = home_footer(i18n::Lang::Ko.l(), availability, false, false, false);
+            let en = home_footer(i18n::Lang::En.l(), availability, false, false, false, false);
+            let ko = home_footer(i18n::Lang::Ko.l(), availability, false, false, false, false);
             assert!(en.contains(en_hint), "missing English hint: {en_hint}");
             assert!(ko.contains(ko_hint), "missing Korean hint: {ko_hint}");
             for other in [
@@ -1643,12 +1683,12 @@ mod tests {
             trust: true,
         };
         assert_eq!(
-            home_footer(i18n::Lang::En.l(), availability, true, true, true),
-            "\u{2191}\u{2193} select  Enter action  n new  r run  A auto  t tidy  d defer  v revive  m monitor  h handoff  T trust  q quit  a answer  p approve  P replan"
+            home_footer(i18n::Lang::En.l(), availability, true, true, true, true),
+            "\u{2191}\u{2193} select  Enter action  n new  r run  A auto  t tidy  d defer  v revive  m monitor  h handoff  T trust  q quit  a answer  p approve  P replan  o plan review"
         );
         assert_eq!(
-            home_footer(i18n::Lang::Ko.l(), availability, true, true, true),
-            "\u{2191}\u{2193} 선택  Enter 행동  n 새작업  r 실행  A 자동  t 정리  d 보류  v 되살림  m 모니터  h 핸드오프  T 신뢰  q 종료  a 답변  p 승인  P 재계획"
+            home_footer(i18n::Lang::Ko.l(), availability, true, true, true, true),
+            "\u{2191}\u{2193} 선택  Enter 행동  n 새작업  r 실행  A 자동  t 정리  d 보류  v 되살림  m 모니터  h 핸드오프  T 신뢰  q 종료  a 답변  p 승인  P 재계획  o 플랜 검토"
         );
     }
 

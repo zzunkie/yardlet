@@ -372,6 +372,15 @@ pub struct L {
     pub key_answer: &'static str,
     pub key_approve: &'static str,
     pub key_replan: &'static str,
+    /// Offered whenever an open planning session is waiting on the operator.
+    pub key_plan_review: &'static str,
+    /// Home rows for an open planning session. The queue is legitimately empty
+    /// in this state, so these are the only thing distinguishing "a plan is
+    /// waiting" from "there is no work" (issue #65). `{n}` is the count.
+    pub home_plan_pending: &'static str,
+    pub home_plan_accepted: &'static str,
+    /// Shown when `o` is pressed with no planning session to re-enter.
+    pub plan_review_nothing: &'static str,
     pub replan_worker_question_hint: &'static str,
     pub replan_live_queue_hint: &'static str,
     pub replan_nothing_hint: &'static str,
@@ -597,6 +606,11 @@ pub const EN: L = L {
     key_answer: "a answer",
     key_approve: "p approve",
     key_replan: "P replan",
+    key_plan_review: "o plan review",
+    home_plan_pending: "\u{25b6} {n} plan proposal(s) waiting for review \u{2014} press o",
+    home_plan_accepted:
+        "\u{25b6} an accepted plan is waiting to be confirmed into the queue \u{2014} press o",
+    plan_review_nothing: "no open planning session to review; press n to describe new work",
     replan_worker_question_hint: "a worker question is open; press a and answer it instead of replanning",
     replan_live_queue_hint: "the queue still has live work; finish or settle it before replanning",
     replan_nothing_hint: "this settled queue has no failed approach to replan; press n for follow-up work",
@@ -815,6 +829,10 @@ pub const KO: L = L {
     key_answer: "a 답변",
     key_approve: "p 승인",
     key_replan: "P 재계획",
+    key_plan_review: "o 플랜 검토",
+    home_plan_pending: "\u{25b6} 검토 대기 중인 플랜 제안 {n}건 — o 키",
+    home_plan_accepted: "\u{25b6} 수락된 플랜이 큐 확정을 기다리는 중 — o 키",
+    plan_review_nothing: "검토할 열린 플래닝 세션이 없습니다. 새 작업은 n을 누르세요",
     replan_worker_question_hint: "워커 질문이 열려 있음. 재계획 대신 a 눌러 답변하세요",
     replan_live_queue_hint: "큐에 진행 중인 작업이 있음. 완료하거나 종결한 뒤 재계획하세요",
     replan_nothing_hint: "이 종결 큐에는 재계획할 실패 접근이 없음. 후속 작업은 n을 누르세요",

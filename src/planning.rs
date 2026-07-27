@@ -2607,6 +2607,59 @@ pub fn active_is_confirmed_or_running(ws: &Workspace) -> Result<bool> {
     Ok(gate == ActivationGate::Confirmed)
 }
 
+/// What an OPEN planning session still needs from the operator.
+///
+/// The planning flow is only complete once a draft is confirmed into a queue.
+/// Between those points the work lives entirely in the session, so a surface
+/// that shows only the queue reads as "nothing here" while a whole plan is
+/// waiting (issue #65). This is the projection a read-only snapshot carries so
+/// re-entry after a restart is visible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningReentry {
+    /// Worker proposal(s) waiting for accept/reject.
+    PendingProposal { count: usize },
+    /// A draft was accepted and is waiting for confirm to become the queue.
+    AcceptedDraft,
+}
+
+/// Read-only re-entry state of the latest planning session.
+///
+/// Deliberately lock-free and best-effort: it runs on every snapshot load, and
+/// an unreadable or half-written session is a reason to show nothing, never to
+/// fail the snapshot. Anything actionable is confirmed by the review screen
+/// itself, which takes the lock and validates properly.
+pub fn reentry(ws: &Workspace) -> Option<PlanningReentry> {
+    let session = ws.load_latest_planning_session().ok()??;
+    if session.lifecycle != PlanningLifecycle::Open {
+        return None;
+    }
+    let proposals = ws.load_planning_proposals(&session.session_id).ok()?;
+    let events = ws.load_planning_events(&session.session_id).ok()?;
+    let disposed = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type,
+                PlanningEventType::DraftAccepted
+                    | PlanningEventType::DraftRevised
+                    | PlanningEventType::DraftRejected
+            )
+        })
+        .map(|event| event.proposal_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let pending = proposals
+        .iter()
+        .filter(|proposal| !disposed.contains(proposal.proposal_id.as_str()))
+        .count();
+    if pending > 0 {
+        return Some(PlanningReentry::PendingProposal { count: pending });
+    }
+    if session.current_head.is_some() && session.confirmation_id.is_none() {
+        return Some(PlanningReentry::AcceptedDraft);
+    }
+    None
+}
+
 pub fn projection(ws: &Workspace) -> Result<PlanningProjection> {
     let _lock = ws.acquire_planning_lock()?;
     let session = ws
@@ -2865,6 +2918,57 @@ queue:
         let mut conflicting = audit;
         conflicting.max_cycles = 2;
         assert!(ws.save_planning_capability_audit(&conflicting).is_err());
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// Re-entry has to name the state a restarted surface would otherwise show
+    /// as an empty workspace (issue #65).
+    #[test]
+    fn reentry_reports_pending_then_accepted_then_nothing() {
+        let ws = temp_workspace("reentry");
+        assert_eq!(reentry(&ws), None, "no session means nothing to re-enter");
+
+        let (session, turn) = begin_user_turn_exact(&ws, "bounded test").unwrap();
+        let mut content = draft();
+        content.intent.id = session.intent_id.clone();
+        content.queue.intent_id = session.intent_id.clone();
+        content.queue.queue_id = session.queue_id.clone();
+        assert_eq!(
+            reentry(&ws),
+            None,
+            "an open session with no proposal yet has nothing for the operator"
+        );
+
+        let proposal = record_worker_proposal(
+            &ws,
+            &turn,
+            "planner",
+            "attempt-reentry",
+            "proposal",
+            "rationale",
+            content,
+        )
+        .unwrap();
+        assert_eq!(
+            reentry(&ws),
+            Some(PlanningReentry::PendingProposal { count: 1 }),
+            "a proposal waiting for accept/reject must be re-enterable"
+        );
+
+        let revision =
+            accept_proposal(&ws, &proposal.proposal_id, None, "action-reentry-accept").unwrap();
+        assert_eq!(
+            reentry(&ws),
+            Some(PlanningReentry::AcceptedDraft),
+            "an accepted draft is still unconfirmed work, not a finished session"
+        );
+
+        confirm(&ws, &revision.draft_revision_id, "action-reentry-confirm").unwrap();
+        assert_eq!(
+            reentry(&ws),
+            None,
+            "a confirmed session became the queue; the queue surface owns it now"
+        );
         let _ = std::fs::remove_dir_all(ws.root);
     }
 

@@ -39,6 +39,10 @@ pub struct Snapshot {
     /// harness-copy warnings as evidence. Absence of the evidence file means
     /// preparation was clean, so such runs never appear here.
     pub harness_copy_warnings: Vec<HarnessCopyWarning>,
+    /// An open planning session still waiting on the operator. The queue is
+    /// legitimately empty in this state, so without this the surface is
+    /// indistinguishable from having no work at all (issue #65).
+    pub planning_reentry: Option<crate::planning::PlanningReentry>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -401,6 +405,7 @@ impl Snapshot {
             last_transitions,
             recovery_required,
             harness_copy_warnings,
+            planning_reentry: crate::planning::reentry(ws),
         })
     }
 
