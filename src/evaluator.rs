@@ -211,6 +211,12 @@ pub fn evaluate(
                     .chain(&r.changes.files_modified)
                     .map(|p| norm(p))
                     .filter(|p| !p.is_empty() && !deleted_norm.contains(p))
+                    // The run's own artifacts are not repository output. The
+                    // disclosure check above already exempts them on the actual
+                    // side; this direction has to match or every review run —
+                    // which is REQUIRED to write report.md and forbidden to
+                    // touch code — reports its own deliverable as missing.
+                    .filter(|p| !is_current_run_artifact(p, run_id))
                     .filter(|p| {
                         // A reported directory is present when the diff holds
                         // anything under it.
@@ -354,10 +360,21 @@ pub fn evaluate(
     }
 }
 
+/// Is this path one of the run's OWN artifacts (result.json, handoff.md,
+/// report.md, …) rather than a repository deliverable?
+///
+/// Matches the absolute form too, because that is what the worker is handed:
+/// an isolated serial run gets its run directory as an absolute path and the
+/// packet tells it to write `{abs}/result.json` and, for every non-implementation
+/// kind, `{abs}/report.md`. A worker echoing those paths back in `changes` is
+/// reporting its own artifacts, not lost repository output (issue #55).
 fn is_current_run_artifact(path: &str, run_id: &str) -> bool {
     let path = path.trim_start_matches("./").trim_matches('"');
     let root = format!(".agents/runs/{run_id}");
-    path == root || path.starts_with(&format!("{root}/"))
+    path == root
+        || path.starts_with(&format!("{root}/"))
+        || path.ends_with(&format!("/{root}"))
+        || path.contains(&format!("/{root}/"))
 }
 
 /// Paths that are sensitive (secrets/keys), escape the workspace, or are
