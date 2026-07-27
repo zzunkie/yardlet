@@ -231,7 +231,7 @@ mod unix {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let notice = stdout
             .lines()
-            .find(|line| line.starts_with("provider refusal classification skipped for "))
+            .find(|line| line.starts_with("output-contract classification skipped for "))
             .unwrap_or_else(|| {
                 panic!(
                     "run summary keeps the classification skip notice\nstdout:\n{stdout}\nstderr:\n{}",

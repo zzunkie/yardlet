@@ -1076,6 +1076,16 @@ pub fn compile(inputs: &PacketInputs) -> String {
          - `{rd}/validation.log` (if you ran validation)\n\n",
         rd = inputs.run_dir_rel
     ));
+    // Issue #38: workers repeatedly backgrounded a long `cargo test` and ended
+    // the turn intending to finish "when the notification arrives". The session
+    // is torn down at end of turn, so that notification never comes and the
+    // finished work is lost. State the session lifetime explicitly.
+    p.push_str(
+        "Your session ends when your turn ends. Run long validation commands synchronously in \
+         the foreground and wait for them to exit \u{2014} a backgrounded task is killed at \
+         teardown and its completion notification is never delivered. Write the files above \
+         BEFORE ending your turn; work you did not record does not exist.\n\n",
+    );
     // Non-code tasks (research/review/safety) deliver findings as prose; require
     // a human-readable report so there's an artifact a person can actually read.
     let kind = inputs.task.kind.trim();
@@ -1582,6 +1592,20 @@ pub(crate) fn provider_refusal_recovery_instruction() -> &'static str {
      run/task ids. If the task cannot be completed, use status needs_user with a concise \
      question_for_user. Do not repeat, reinterpret, or work around any prior provider message; \
      report only the structured task status."
+}
+
+/// Recovery guidance for a worker that ended its turn while a background task
+/// was still running (issue #38). It names the mechanism rather than the
+/// symptom, because the worker's own review work was usually complete.
+pub(crate) fn background_deferral_recovery_instruction() -> &'static str {
+    "Output-contract recovery: your previous attempt ended its turn while a background task was \
+     still running, so it never wrote its result files. This session is non-interactive — when \
+     your turn ends the session is torn down, any background task is killed, and its completion \
+     notification is never delivered. Run every validation command synchronously in the \
+     foreground and wait for it to exit, then write result.json (and handoff.md, and \
+     validation.log if you ran validation) BEFORE you end your turn. If a command is too slow to \
+     finish in the foreground, narrow it and record what you did not run in validation.failures \
+     rather than deferring the write."
 }
 
 const RESULT_SCHEMA_HINT: &str = r#"```json

@@ -1152,23 +1152,23 @@ fn output_log_span(run_dir: &std::path::Path, byte_start: u64) -> WorkerOutputLo
     }
 }
 
-struct ProviderRefusalAttemptClassification {
+struct OutputContractAttemptClassification {
     incident: Option<OutputContractIncident>,
     skip_notice: Option<String>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
-struct ProviderRefusalClassificationSkips {
+struct OutputContractClassificationSkips {
     schema_version: u32,
     notices: Vec<String>,
 }
 
-fn classify_provider_refusal_attempt(
+fn classify_output_contract_attempt(
     profile: &WorkerProfile,
     run_dir: &std::path::Path,
     attempt_id: &str,
     byte_start: u64,
-) -> ProviderRefusalAttemptClassification {
+) -> OutputContractAttemptClassification {
     let span = output_log_span(run_dir, byte_start);
     match workers::classify_output_contract_cause(
         profile,
@@ -1176,44 +1176,42 @@ fn classify_provider_refusal_attempt(
         &run_dir.join("worker-output.log"),
         &span,
     ) {
-        Ok(Some(OutputContractCause::ProviderResponseRefused)) => {
-            ProviderRefusalAttemptClassification {
-                incident: Some(OutputContractIncident {
-                    cause: OutputContractCause::ProviderResponseRefused,
-                    worker_id: profile.id.clone(),
-                    first_attempt_id: attempt_id.to_string(),
-                    first_log_span: span,
-                    recovery_consumed: false,
-                    terminal_attempt_id: None,
-                }),
-                skip_notice: None,
-            }
-        }
-        Ok(None) => ProviderRefusalAttemptClassification {
+        Ok(Some(cause)) => OutputContractAttemptClassification {
+            incident: Some(OutputContractIncident {
+                cause,
+                worker_id: profile.id.clone(),
+                first_attempt_id: attempt_id.to_string(),
+                first_log_span: span,
+                recovery_consumed: false,
+                terminal_attempt_id: None,
+            }),
+            skip_notice: None,
+        },
+        Ok(None) => OutputContractAttemptClassification {
             incident: None,
             skip_notice: None,
         },
-        Err(error) => ProviderRefusalAttemptClassification {
+        Err(error) => OutputContractAttemptClassification {
             incident: None,
             skip_notice: Some(format!(
-                "provider refusal classification skipped for {attempt_id}: {error}"
+                "output-contract classification skipped for {attempt_id}: {error}"
             )),
         },
     }
 }
 
-fn retain_provider_refusal_classification(
+fn retain_output_contract_classification(
     run_dir: &std::path::Path,
-    classification: ProviderRefusalAttemptClassification,
+    classification: OutputContractAttemptClassification,
     lines: &mut Vec<String>,
 ) -> Result<Option<OutputContractIncident>> {
     if let Some(notice) = classification.skip_notice {
         lines.push(notice.clone());
         let path = run_dir.join(PROVIDER_REFUSAL_CLASSIFICATION_SKIPS_FILE);
         let mut record = if path.is_file() {
-            state::load_yaml::<ProviderRefusalClassificationSkips>(&path)?
+            state::load_yaml::<OutputContractClassificationSkips>(&path)?
         } else {
-            ProviderRefusalClassificationSkips {
+            OutputContractClassificationSkips {
                 schema_version: 1,
                 notices: Vec::new(),
             }
@@ -2818,9 +2816,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         &current_capture,
         &outcome,
     )?;
-    let mut output_contract_incident = retain_provider_refusal_classification(
+    let mut output_contract_incident = retain_output_contract_classification(
         &run_dir,
-        classify_provider_refusal_attempt(
+        classify_output_contract_attempt(
             &eff_profile,
             &run_dir,
             &current_attempt.attempt_id,
@@ -2910,9 +2908,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             &current_capture,
             &outcome,
         )?;
-        output_contract_incident = retain_provider_refusal_classification(
+        output_contract_incident = retain_output_contract_classification(
             &run_dir,
-            classify_provider_refusal_attempt(
+            classify_output_contract_attempt(
                 &eff_profile,
                 &run_dir,
                 &current_attempt.attempt_id,
@@ -2958,9 +2956,18 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         // NeedsUser instead of starting another worker.
         incident.recovery_consumed = true;
         persist_output_contract_incident(&run_dir, &incident)?;
+        let (cause_label, recovery_instruction) = match incident.cause {
+            OutputContractCause::ProviderResponseRefused => (
+                "provider_response_refused",
+                packet::provider_refusal_recovery_instruction(),
+            ),
+            OutputContractCause::WorkerDeferredToBackgroundTask => (
+                "worker_deferred_to_background_task",
+                packet::background_deferral_recovery_instruction(),
+            ),
+        };
         lines.push(format!(
-            "typed output-contract cause: provider_response_refused; retrying {} once",
-            active_worker_id
+            "typed output-contract cause: {cause_label}; retrying {active_worker_id} once"
         ));
         let recovery_packet = packet::compile(&PacketInputs {
             worker_id: &active_worker_id,
@@ -2969,7 +2976,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             repo: &summary,
             run_dir_rel: &run_dir_rel,
             conversation: &conversation,
-            continuation: Some(packet::provider_refusal_recovery_instruction()),
+            continuation: Some(recovery_instruction),
             chained_from: None,
             language: &language,
             images: &images,
@@ -6111,11 +6118,60 @@ fn feedback_question(task: &crate::schemas::Task, feedback: &FeedbackRecord) -> 
     }
 }
 
-fn review_without_remediation_question(task: &crate::schemas::Task) -> String {
-    format!(
-        "`{}` 리뷰가 통과하지 못했고 실행 가능한 수정 작업이 없습니다. 수정 작업을 큐에 추가한 뒤 리뷰를 재실행하거나 현재 판정을 수동으로 확정해 주세요. 어느 조치로 이어갈까요?",
-        task.id
-    )
+/// Why a review run ended without a usable pass. These are different events for
+/// the operator: a failing verdict is review evidence to act on, while missing
+/// artifacts mean no verdict exists at all and the only next step is a re-run
+/// (issue #39).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewFailureCause {
+    /// The review ran and judged at least one criterion as failing.
+    VerdictFailed,
+    /// The worker exited without writing (or writing a valid) result.json.
+    ArtifactsMissing,
+}
+
+fn review_failure_cause(eval: &evaluator::Evaluation) -> ReviewFailureCause {
+    let artifacts_missing = eval.checks.iter().any(|check| {
+        check.fatal
+            && !check.passed
+            && matches!(
+                check.name.as_str(),
+                "result_file_present" | "result_schema_valid"
+            )
+    });
+    if artifacts_missing {
+        ReviewFailureCause::ArtifactsMissing
+    } else {
+        ReviewFailureCause::VerdictFailed
+    }
+}
+
+fn review_without_remediation_question(
+    task: &crate::schemas::Task,
+    cause: ReviewFailureCause,
+    incident: Option<&OutputContractIncident>,
+) -> String {
+    match cause {
+        ReviewFailureCause::VerdictFailed => format!(
+            "`{}` 리뷰가 통과하지 못했고 실행 가능한 수정 작업이 없습니다. 수정 작업을 큐에 추가한 뒤 리뷰를 재실행하거나 현재 판정을 수동으로 확정해 주세요. 어느 조치로 이어갈까요?",
+            task.id
+        ),
+        ReviewFailureCause::ArtifactsMissing => {
+            let detail = match incident.map(|incident| incident.cause) {
+                Some(OutputContractCause::WorkerDeferredToBackgroundTask) => {
+                    " 워커가 백그라운드 작업을 남긴 채 턴을 끝낸 것이 원인입니다."
+                }
+                Some(OutputContractCause::ProviderResponseRefused) => {
+                    " provider가 응답을 거부한 것이 원인입니다."
+                }
+                None => "",
+            };
+            format!(
+                "`{}` 리뷰 워커가 결과 파일 없이 종료되어 판정 자체가 없습니다. 리뷰가 실패했다는 뜻이 아니므로 수정 작업을 추가하거나 판정을 확정하지 마시고, 리뷰를 다시 실행해 주세요.{detail} 어느 조치로 이어갈까요?",
+                task.id
+            )
+        }
+    }
 }
 
 fn review_evaluation_failed(is_review: bool, evaluated_state: TaskState) -> bool {
@@ -6551,8 +6607,8 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok());
     let output_contract_incident = load_output_contract_incident(run_dir);
-    let provider_refusal_classification_skips =
-        state::load_yaml::<ProviderRefusalClassificationSkips>(
+    let output_contract_classification_skips =
+        state::load_yaml::<OutputContractClassificationSkips>(
             &run_dir.join(PROVIDER_REFUSAL_CLASSIFICATION_SKIPS_FILE),
         )
         .map(|record| record.notices)
@@ -6608,15 +6664,23 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     }
     if terminal_output_contract_incident {
         next_state = TaskState::NeedsUser;
-        question_to_persist = Some((
-            "provider_response_refused가 감지되었고 동일 worker의 1회 output-contract 복구도 result.json 없이 종료되었습니다. worker/provider 응답을 확인한 뒤 이 작업을 어떻게 진행할지 알려주세요."
-                .to_string(),
-            EventActorKind::System,
+        let cause = output_contract_incident
+            .as_ref()
+            .map(|incident| incident.cause);
+        let (cause_label, question) = match cause {
+            Some(OutputContractCause::WorkerDeferredToBackgroundTask) => (
+                "worker_deferred_to_background_task",
+                "worker가 백그라운드 작업을 남긴 채 턴을 끝내 result.json 없이 종료되었고, 전경 실행을 지시한 1회 복구도 같은 방식으로 끝났습니다. 리뷰/작업 내용이 실패했다는 뜻은 아닙니다. 이 작업을 어떻게 진행할지 알려주세요.",
+            ),
+            _ => (
+                "provider_response_refused",
+                "provider_response_refused가 감지되었고 동일 worker의 1회 output-contract 복구도 result.json 없이 종료되었습니다. worker/provider 응답을 확인한 뒤 이 작업을 어떻게 진행할지 알려주세요.",
+            ),
+        };
+        question_to_persist = Some((question.to_string(), EventActorKind::System));
+        lines.push(format!(
+            "output-contract recovery exhausted: {cause_label}; paused for user"
         ));
-        lines.push(
-            "output-contract recovery exhausted: provider_response_refused; paused for user"
-                .to_string(),
-        );
     }
     if let Some(reason) = input_overlay_parity_failure.as_ref() {
         state::write_str(&run_dir.join("partial-reason"), reason)?;
@@ -6673,9 +6737,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     if let Some(incident) = &output_contract_incident {
         append_output_contract_incident_note(run_dir, incident)?;
     }
-    append_provider_refusal_classification_skip_notes(
+    append_output_contract_classification_skip_notes(
         run_dir,
-        &provider_refusal_classification_skips,
+        &output_contract_classification_skips,
     )?;
     let artifact_context = channel_run_context(ws, &intent_id, &task.id);
     let worker_root = merge
@@ -7127,7 +7191,11 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         let remediation = schedulable_remediation_ids(queue, &ingested);
         if remediation.is_empty() {
             if persisted_question.is_none() {
-                let question = review_without_remediation_question(task);
+                let question = review_without_remediation_question(
+                    task,
+                    review_failure_cause(&eval),
+                    output_contract_incident.as_ref(),
+                );
                 let channel_context = channel_run_context(ws, &intent_id, &task.id);
                 persist_needs_user_question(
                     ws,
@@ -7596,7 +7664,7 @@ fn append_output_contract_incident_note(
     Ok(())
 }
 
-fn append_provider_refusal_classification_skip_notes(
+fn append_output_contract_classification_skip_notes(
     run_dir: &std::path::Path,
     notices: &[String],
 ) -> Result<()> {
@@ -7865,6 +7933,93 @@ mod tests {
             payload: serde_json::Value::Null,
             raw_ref: None,
         }
+    }
+
+    fn eval_with_failed_checks(names: &[&str]) -> evaluator::Evaluation {
+        evaluator::Evaluation {
+            run_id: "run-test".into(),
+            task_id: "YARD-002".into(),
+            status: "failed".into(),
+            checks: names
+                .iter()
+                .map(|name| evaluator::Check {
+                    name: (*name).into(),
+                    passed: false,
+                    fatal: true,
+                    note: String::new(),
+                })
+                .collect(),
+            next_task_state: TaskState::Failed,
+        }
+    }
+
+    fn review_task() -> crate::schemas::Task {
+        crate::yaml::from_str("id: YARD-002\ntitle: review\nkind: review\n").unwrap()
+    }
+
+    /// Issue #39: a review worker that exits without result.json produced NO
+    /// verdict. Telling the operator the review "did not pass" makes them queue
+    /// fix tasks for a review that never judged anything.
+    #[test]
+    fn review_without_artifacts_is_not_reported_as_a_failed_verdict() {
+        let missing = eval_with_failed_checks(&["result_file_present"]);
+        assert_eq!(
+            review_failure_cause(&missing),
+            ReviewFailureCause::ArtifactsMissing
+        );
+        let question = review_without_remediation_question(
+            &review_task(),
+            review_failure_cause(&missing),
+            None,
+        );
+        assert!(question.contains("판정 자체가 없습니다"), "{question}");
+        assert!(
+            !question.contains("리뷰가 통과하지 못했고"),
+            "must not claim a failing verdict: {question}"
+        );
+
+        let invalid = eval_with_failed_checks(&["result_schema_valid"]);
+        assert_eq!(
+            review_failure_cause(&invalid),
+            ReviewFailureCause::ArtifactsMissing
+        );
+
+        // A real failing verdict keeps the remediation wording.
+        let judged = eval_with_failed_checks(&["review_criteria_pass"]);
+        assert_eq!(
+            review_failure_cause(&judged),
+            ReviewFailureCause::VerdictFailed
+        );
+        let question = review_without_remediation_question(
+            &review_task(),
+            review_failure_cause(&judged),
+            None,
+        );
+        assert!(question.contains("리뷰가 통과하지 못했고"), "{question}");
+    }
+
+    /// Issue #38: when the missing artifacts are explained by a typed incident,
+    /// the operator prompt names that cause instead of leaving them guessing.
+    #[test]
+    fn review_artifacts_missing_question_names_a_typed_incident_cause() {
+        let incident = OutputContractIncident {
+            cause: OutputContractCause::WorkerDeferredToBackgroundTask,
+            worker_id: "claude-code".into(),
+            first_attempt_id: "attempt-1".into(),
+            first_log_span: WorkerOutputLogSpan {
+                path: "worker-output.log".into(),
+                byte_start: 0,
+                byte_end: 1,
+            },
+            recovery_consumed: true,
+            terminal_attempt_id: Some("attempt-2".into()),
+        };
+        let question = review_without_remediation_question(
+            &review_task(),
+            ReviewFailureCause::ArtifactsMissing,
+            Some(&incident),
+        );
+        assert!(question.contains("백그라운드 작업"), "{question}");
     }
 
     #[test]
