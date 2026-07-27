@@ -2507,6 +2507,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         role_notes: &role_notes,
         harness: &harness,
         approved,
+        pre_push_checks: &config.git_finish.pre_push_checks,
     });
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
@@ -2983,6 +2984,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             role_notes: &role_notes,
             harness: &harness,
             approved,
+            pre_push_checks: &config.git_finish.pre_push_checks,
         });
         write_str(&workers::packet_path(&run_dir), &recovery_packet)?;
         if worker_run_dir != run_dir.as_path() {
@@ -3116,6 +3118,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                     role_notes: &role_notes,
                     harness: &harness,
                     approved,
+                    pre_push_checks: &config.git_finish.pre_push_checks,
                 });
                 write_str(&workers::packet_path(&run_dir), &failover_packet)?;
                 if serial_worktree.is_some() {
@@ -6772,6 +6775,33 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             if !rules.is_empty() {
                 lines.push(format!("learned rule(s): {}", rules.join(", ")));
             }
+            // These land in the owning root outside the run's integration
+            // commit, so "learned" does not yet mean "durable". Say so, with
+            // the exact command, instead of leaving the operator to notice an
+            // untracked path (issue #45).
+            let untracked = untracked_harness_assets(ws, &learned, &rules);
+            if !untracked.is_empty() {
+                lines.push(format!(
+                    "learned harness assets are NOT in git yet: {}. Track them with `git add {}`",
+                    untracked.join(", "),
+                    untracked.join(" ")
+                ));
+                let note = format!(
+                    "\n## Untracked harness assets\n\nThis run learned harness assets that are \
+                     on disk but not in git:\n\n{}\n\nThey are not durable until committed:\n\n\
+                     ```\ngit add {}\n```\n",
+                    untracked
+                        .iter()
+                        .map(|path| format!("- `{path}`"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    untracked.join(" ")
+                );
+                let handoff = run_dir.join("handoff.md");
+                let mut existing = std::fs::read_to_string(&handoff).unwrap_or_default();
+                existing.push_str(&note);
+                let _ = state::write_str(&handoff, &existing);
+            }
         }
     }
 
@@ -7796,6 +7826,44 @@ pub(crate) fn continuation_context(ws: &Workspace, task_id: &str) -> Option<Stri
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+/// Repo-relative paths of just-learned harness assets that git does not track
+/// yet. Only files git reports as untracked are listed: an asset that updated
+/// an already-tracked skill shows up as a modification, which the normal
+/// workspace diff already surfaces.
+fn untracked_harness_assets(ws: &Workspace, skills: &[String], rules: &[String]) -> Vec<String> {
+    // `record_run_rules` returns bare names; the files it writes carry the
+    // `learned-` prefix.
+    let candidates: Vec<String> = skills
+        .iter()
+        .map(|name| format!(".agents/skills/{name}/SKILL.md"))
+        .chain(
+            rules
+                .iter()
+                .map(|name| format!(".agents/rules/learned-{name}.md")),
+        )
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    candidates
+        .into_iter()
+        .filter(|path| ws.root.join(path).exists())
+        .filter(|path| {
+            // `ls-files --error-unmatch` exits non-zero for a path git does not
+            // track. Treat an unavailable git as "cannot prove it is tracked"
+            // and stay quiet rather than nagging with a wrong claim.
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&ws.root)
+                .args(["ls-files", "--error-unmatch", "--"])
+                .arg(path)
+                .output()
+                .map(|out| !out.status.success())
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
 /// Why a run left its task Partial, as recorded in the run's `partial-reason`
 /// marker. The marker's presence means a human is needed before the drain can
 /// continue; its CONTENT says what they actually have to do, and those
@@ -8023,6 +8091,63 @@ mod tests {
             payload: serde_json::Value::Null,
             raw_ref: None,
         }
+    }
+
+    /// Issue #45: a learned skill on disk but not in git is not durable. The
+    /// reminder must fire for exactly the untracked ones, and must use the
+    /// real on-disk paths (rules carry a `learned-` prefix).
+    #[test]
+    fn untracked_learned_harness_assets_are_listed_for_the_operator() {
+        let root =
+            std::env::temp_dir().join(format!("yard-untracked-harness-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let sh = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+        };
+        sh(&["init", "-q"]);
+        sh(&["config", "user.email", "t@example.com"]);
+        sh(&["config", "user.name", "t"]);
+
+        let ws = Workspace::at(&root);
+        let write = |rel: &str| {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "body\n").unwrap();
+        };
+        write(".agents/skills/tracked-skill/SKILL.md");
+        write(".agents/rules/learned-tracked-rule.md");
+        sh(&["add", "-A"]);
+        sh(&["commit", "-qm", "seed"]);
+
+        write(".agents/skills/fresh-skill/SKILL.md");
+        write(".agents/rules/learned-fresh-rule.md");
+
+        let untracked = untracked_harness_assets(
+            &ws,
+            &["fresh-skill".to_string(), "tracked-skill".to_string()],
+            &["fresh-rule".to_string(), "tracked-rule".to_string()],
+        );
+        assert_eq!(
+            untracked,
+            vec![
+                ".agents/skills/fresh-skill/SKILL.md".to_string(),
+                ".agents/rules/learned-fresh-rule.md".to_string(),
+            ],
+            "only the assets git does not track yet"
+        );
+
+        // Nothing learned, nothing to say.
+        assert!(untracked_harness_assets(&ws, &[], &[]).is_empty());
+        // A name with no file on disk is never reported.
+        assert!(untracked_harness_assets(&ws, &["ghost".to_string()], &[]).is_empty());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Issue #40: the marker's CONTENT decides the remediation. Reading only

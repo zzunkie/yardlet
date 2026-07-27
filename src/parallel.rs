@@ -496,6 +496,7 @@ pub fn run_batch<F: FnMut(&str)>(
             // The parallel path never carries approval-gated tasks (they are held
             // for the serial path), so no approval directive applies here.
             approved: false,
+            pre_push_checks: &config.git_finish.pre_push_checks,
         });
         write_str(&workers::packet_path(&p.run_dir), &p.packet_text)?;
         state::save_yaml_atomic(
@@ -724,6 +725,7 @@ pub fn run_batch<F: FnMut(&str)>(
                             role_notes: &role_notes,
                             harness: &harness,
                             approved: false,
+                            pre_push_checks: &config.git_finish.pre_push_checks,
                         });
                         write_str(&workers::packet_path(&p.run_dir), &failover_packet)?;
                         // The first worker ran with full access to this run

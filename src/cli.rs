@@ -2481,6 +2481,7 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         role_notes: &role_notes,
         harness: &harness,
         approved,
+        pre_push_checks: &config.git_finish.pre_push_checks,
     });
     if args.dry_run {
         eprintln!("(dry-run: packet not persisted)\n");
