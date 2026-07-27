@@ -62,12 +62,11 @@ fn render_keys(frame: &mut Frame, app: &mut App) {
     let l = app.lang.l();
     let area = safe_area(frame);
     let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
-    let text = key_list_text(l);
     let viewport = scroll_viewport(chunks[0]);
     app.scroll_viewport = Some(viewport);
-    app.scroll = app.scroll.min(max_scroll_offset(&text, viewport));
+    app.scroll = app.scroll.min(max_scroll_offset(&app.keys_text, viewport));
     frame.render_widget(
-        Paragraph::new(md_lines(&text))
+        Paragraph::new(md_lines(&app.keys_text))
             .wrap(Wrap { trim: false })
             .scroll((app.scroll, 0))
             .block(Block::bordered().title(l.keys_title)),
@@ -78,7 +77,7 @@ fn render_keys(frame: &mut Frame, app: &mut App) {
 
 /// The key list as markdown, so it reuses the same wrap-aware scroll clamp as
 /// every other scrollable screen.
-fn key_list_text(l: &L) -> String {
+pub(super) fn key_list_text(l: &L) -> String {
     let rows = super::home_key_rows(l);
     let width = rows
         .iter()
@@ -708,14 +707,27 @@ fn truncate_width(s: &str, max: usize) -> String {
 }
 
 /// The parenthetical after `N ready`, empty when the plain count is honest.
+///
+/// Only states what is computed from the SAME inputs as `runnable`: the review
+/// barrier, and the one-at-a-time cap when reviews are all that is left. A
+/// "how many will start" number is deliberately absent — see `QueueHealth`.
 fn ready_breakdown(health: &crate::snapshot::QueueHealth, l: &L) -> String {
-    if health.review_barrier == 0 || health.admissible >= health.runnable {
+    let mut parts = Vec::new();
+    if health.review_barrier > 0 {
+        parts.push(format!(
+            "{}{}",
+            health.review_barrier, l.ready_review_barrier
+        ));
+    }
+    // Both can apply at once — a remediation-held review plus reviews with
+    // nothing else queued. Saying only the first implies the rest are free.
+    if health.serialized_reviews > 1 {
+        parts.push(l.ready_reviews_serial.to_string());
+    }
+    if parts.is_empty() {
         return String::new();
     }
-    format!(
-        " ({}{}, {}{})",
-        health.admissible, l.ready_admissible, health.review_barrier, l.ready_review_barrier
-    )
+    format!(" ({})", parts.join(", "))
 }
 
 fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
@@ -728,8 +740,7 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
         ),
         // `N ready` on its own counted tasks the scheduler will deliberately
         // refuse to co-schedule, so pressing A after "4 ready" got one task and
-        // read as a bug (issue #51). Say what is actually admissible whenever
-        // the barrier is holding something back.
+        // read as a bug (issue #51). Name what is holding them.
         Span::styled(
             ready_breakdown(&health, l),
             Style::default().fg(Color::DarkGray),
@@ -820,6 +831,7 @@ fn planning_reentry_item(snap: &Snapshot, l: &L) -> Option<ListItem<'static>> {
             l.home_plan_pending.replace("{n}", &count.to_string())
         }
         crate::planning::PlanningReentry::AcceptedDraft => l.home_plan_accepted.to_string(),
+        crate::planning::PlanningReentry::Unreadable => l.home_plan_unreadable.to_string(),
     };
     Some(ListItem::new(Line::from(Span::styled(
         text,
@@ -1630,41 +1642,65 @@ mod tests {
 
     /// `N ready` counted tasks the scheduler would never co-schedule, so the
     /// operator pressed A expecting a 4-wide batch and got one task. The header
-    /// now says what is actually admissible — and stays silent when the plain
-    /// count is already honest (issue #51).
+    /// now names what is holding them — and claims nothing it cannot compute
+    /// from the same inputs as `runnable` (issue #51).
     #[test]
-    fn the_ready_count_breaks_out_what_the_review_barrier_is_holding() {
+    fn the_ready_count_names_what_the_scheduler_is_holding() {
         use crate::snapshot::QueueHealth;
 
         let reported = QueueHealth {
             runnable: 4,
-            admissible: 1,
             review_barrier: 3,
             ..QueueHealth::default()
         };
         assert_eq!(
             ready_breakdown(&reported, i18n::Lang::En.l()),
-            " (1 parallelizable, 3 held by the review barrier)"
+            " (3 held by the review barrier)"
         );
         assert_eq!(
             ready_breakdown(&reported, i18n::Lang::Ko.l()),
-            " (1 동시실행, 3 리뷰 배리어 대기)"
+            " (3 리뷰 배리어 대기)"
+        );
+
+        // Issue #51's second reported case: reviews are all that is left, so
+        // nothing is held BEHIND anything, but they still go one at a time.
+        let reviews_only = QueueHealth {
+            runnable: 3,
+            serialized_reviews: 3,
+            ..QueueHealth::default()
+        };
+        assert_eq!(
+            ready_breakdown(&reviews_only, i18n::Lang::En.l()),
+            " (reviews run one at a time)"
+        );
+        assert_eq!(
+            ready_breakdown(&reviews_only, i18n::Lang::Ko.l()),
+            " (리뷰는 한 번에 하나씩)"
+        );
+
+        // Both can apply at once. Naming only the barrier implies the rest are
+        // free to run together, which is the same overstatement as before.
+        let both = QueueHealth {
+            runnable: 3,
+            review_barrier: 1,
+            serialized_reviews: 2,
+            ..QueueHealth::default()
+        };
+        assert_eq!(
+            ready_breakdown(&both, i18n::Lang::En.l()),
+            " (1 held by the review barrier, reviews run one at a time)"
         );
 
         for honest in [
-            // Nothing held back: the plain count already tells the truth.
+            // Nothing held back.
             QueueHealth {
                 runnable: 3,
-                admissible: 3,
-                review_barrier: 0,
                 ..QueueHealth::default()
             },
-            // Reviews are the only work left, so none are held BEHIND anything;
-            // the serial cap is a different reason and not this suffix's job.
+            // A single review left is not "one at a time" news.
             QueueHealth {
-                runnable: 2,
-                admissible: 1,
-                review_barrier: 0,
+                runnable: 1,
+                serialized_reviews: 1,
                 ..QueueHealth::default()
             },
         ] {
@@ -1672,7 +1708,7 @@ mod tests {
                 assert_eq!(
                     ready_breakdown(&honest, lang.l()),
                     "",
-                    "no breakdown when nothing is held back: {honest:?}"
+                    "no breakdown when the plain count is honest: {honest:?}"
                 );
             }
         }

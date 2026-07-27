@@ -2620,21 +2620,36 @@ pub enum PlanningReentry {
     PendingProposal { count: usize },
     /// A draft was accepted and is waiting for confirm to become the queue.
     AcceptedDraft,
+    /// A session exists but could not be read. Surfaced rather than swallowed:
+    /// answering "nothing here" for an unreadable session reproduces the
+    /// invisible dead end #65 exists to kill, just quietly.
+    Unreadable,
 }
 
 /// Read-only re-entry state of the latest planning session.
 ///
-/// Deliberately lock-free and best-effort: it runs on every snapshot load, and
-/// an unreadable or half-written session is a reason to show nothing, never to
-/// fail the snapshot. Anything actionable is confirmed by the review screen
-/// itself, which takes the lock and validates properly.
+/// Deliberately lock-free: it runs on every snapshot load and must never fail
+/// the snapshot. A session that exists but cannot be read reports `Unreadable`
+/// rather than nothing — answering "nothing here" for it reproduces the
+/// invisible dead end #65 exists to kill. Anything actionable is confirmed by
+/// the review screen itself, which takes the lock and validates properly.
 pub fn reentry(ws: &Workspace) -> Option<PlanningReentry> {
-    let session = ws.load_latest_planning_session().ok()??;
+    let session = match ws.load_latest_planning_session() {
+        Ok(Some(session)) => session,
+        // No session at all is the ordinary empty case; a session that exists
+        // but will not load is not.
+        Ok(None) => return None,
+        Err(_) => return Some(PlanningReentry::Unreadable),
+    };
     if session.lifecycle != PlanningLifecycle::Open {
         return None;
     }
-    let proposals = ws.load_planning_proposals(&session.session_id).ok()?;
-    let events = ws.load_planning_events(&session.session_id).ok()?;
+    let Ok(proposals) = ws.load_planning_proposals(&session.session_id) else {
+        return Some(PlanningReentry::Unreadable);
+    };
+    let Ok(events) = ws.load_planning_events(&session.session_id) else {
+        return Some(PlanningReentry::Unreadable);
+    };
     let disposed = events
         .iter()
         .filter(|event| {
