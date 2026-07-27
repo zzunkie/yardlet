@@ -371,7 +371,9 @@ import sys
 
 directory = pathlib.Path(sys.argv[1])
 root = sys.argv[2]
-for path in directory.glob("*.yaml"):
+# Receipts whose cleanup already reconciled live in the `reconciled/`
+# archive, so a copied workspace has to rebind those too (issue #43).
+for path in directory.rglob("*.yaml"):
     run_id = path.stem
     lines = path.read_text(encoding="utf-8").splitlines()
     lines = [

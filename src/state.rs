@@ -2178,6 +2178,20 @@ impl Workspace {
     fn no_change_receipts_dir(&self) -> PathBuf {
         self.checkpoints_dir().join("no-change")
     }
+    /// Terminal receipts, moved out of the directory startup reconcile scans.
+    ///
+    /// A reconciled receipt is audit history, not pending work: replaying it
+    /// costs several git subprocesses and can never change anything. Startup
+    /// cost has to track outstanding work, not the number of runs a workspace
+    /// has ever completed (issue #43). They stay addressable by run id because
+    /// ownership reconstruction and overlay lookups still read them by name.
+    fn integrated_cleanup_reconciled_dir(&self) -> PathBuf {
+        self.integrated_cleanup_receipts_dir()
+            .join(RECONCILED_RECEIPTS_DIR)
+    }
+    fn no_change_reconciled_dir(&self) -> PathBuf {
+        self.no_change_receipts_dir().join(RECONCILED_RECEIPTS_DIR)
+    }
     fn resolved_dependency_outputs_dir(&self) -> PathBuf {
         self.checkpoints_dir().join("dependency-outputs")
     }
@@ -2287,7 +2301,22 @@ impl Workspace {
         &self,
         run_id: &str,
     ) -> Result<IntegratedCleanupReceipt> {
-        load_yaml(&self.integrated_cleanup_receipt_path(run_id)?)
+        let pending = self.integrated_cleanup_receipt_path(run_id)?;
+        if pending.is_file() {
+            return load_yaml(&pending);
+        }
+        load_yaml(
+            &self
+                .integrated_cleanup_reconciled_dir()
+                .join(format!("{run_id}.yaml")),
+        )
+    }
+    /// Retire a receipt whose cleanup is finished so later startups stop
+    /// replaying it. Nothing is deleted: the receipt keeps its exact bytes and
+    /// stays loadable by run id.
+    pub fn archive_integrated_cleanup_receipt(&self, run_id: &str) -> Result<()> {
+        let pending = self.integrated_cleanup_receipt_path(run_id)?;
+        archive_receipt(&pending, &self.integrated_cleanup_reconciled_dir())
     }
     pub fn load_integrated_cleanup_receipts(&self) -> Result<Vec<IntegratedCleanupReceipt>> {
         let directory = self.integrated_cleanup_receipts_dir();
@@ -2311,7 +2340,21 @@ impl Workspace {
         write_str_atomic(&path, &yaml::to_string(receipt)?)
     }
     pub fn load_no_change_receipt(&self, run_id: &str) -> Result<NoChangeReceipt> {
-        load_yaml(&self.no_change_receipt_path(run_id)?)
+        let pending = self.no_change_receipt_path(run_id)?;
+        if pending.is_file() {
+            return load_yaml(&pending);
+        }
+        load_yaml(
+            &self
+                .no_change_reconciled_dir()
+                .join(format!("{run_id}.yaml")),
+        )
+    }
+    /// Retire a settled no-change receipt. See
+    /// [`Workspace::archive_integrated_cleanup_receipt`].
+    pub fn archive_no_change_receipt(&self, run_id: &str) -> Result<()> {
+        let pending = self.no_change_receipt_path(run_id)?;
+        archive_receipt(&pending, &self.no_change_reconciled_dir())
     }
     pub fn load_no_change_receipts(&self) -> Result<Vec<NoChangeReceipt>> {
         let directory = self.no_change_receipts_dir();
@@ -6201,6 +6244,28 @@ pub(crate) fn append_private_file(path: &Path) -> Result<fs::File> {
 
 /// Write a durable state snapshot through a same-directory temporary file so a
 /// crash cannot leave readers with a truncated JSON/YAML record.
+/// Subdirectory holding receipts whose reconciliation is finished. It carries
+/// no `.yaml` extension, so the `*_receipts` sweeps skip it the same way they
+/// skip any other non-receipt entry.
+const RECONCILED_RECEIPTS_DIR: &str = "reconciled";
+
+/// Move a settled receipt into its archive directory, preserving its bytes and
+/// its `<run_id>.yaml` name. A receipt that is already archived (or was never
+/// written) is a no-op, so this is safe to call on every reconcile pass.
+fn archive_receipt(pending: &Path, archive_dir: &Path) -> Result<()> {
+    if !pending.is_file() {
+        return Ok(());
+    }
+    let file_name = pending
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("receipt path has no file name"))?;
+    fs::create_dir_all(archive_dir)
+        .with_context(|| format!("creating {}", archive_dir.display()))?;
+    let archived = archive_dir.join(file_name);
+    fs::rename(pending, &archived)
+        .with_context(|| format!("archiving {} to {}", pending.display(), archived.display()))
+}
+
 pub fn write_str_atomic(path: &Path, contents: &str) -> Result<()> {
     write_bytes_atomic(path, contents.as_bytes())
 }
