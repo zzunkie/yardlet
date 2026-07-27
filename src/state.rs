@@ -2350,6 +2350,23 @@ impl Workspace {
                 .join(format!("{run_id}.yaml")),
         )
     }
+    /// Does a no-change receipt exist for this run, readable or not?
+    ///
+    /// Presence alone is the safety-relevant question: it means the run already
+    /// recorded a no-op, so re-deriving integration provenance from a
+    /// worker-writable record would be wrong. A corrupt or unreadable receipt is
+    /// exactly the case that must still count, which a parse-based check would
+    /// let through.
+    pub fn has_no_change_receipt(&self, run_id: &str) -> bool {
+        let Ok(pending) = self.no_change_receipt_path(run_id) else {
+            return false;
+        };
+        pending.is_file()
+            || self
+                .no_change_reconciled_dir()
+                .join(format!("{run_id}.yaml"))
+                .is_file()
+    }
     /// Retire a settled no-change receipt. See
     /// [`Workspace::archive_integrated_cleanup_receipt`].
     pub fn archive_no_change_receipt(&self, run_id: &str) -> Result<()> {

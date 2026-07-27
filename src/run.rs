@@ -3346,8 +3346,18 @@ fn worker_changed_integratable_path(evidence: Option<&[String]>) -> bool {
         .unwrap_or(false)
 }
 
-/// A worker-declared path as a workspace-relative one, or `None` when it cannot
-/// be attributed to this repository.
+/// Where a worker-declared absolute path can be resolved from. The worktree
+/// comes FIRST and is not optional to get right: an isolated serial run's cwd
+/// IS the worktree, so a path the worker forms from its own cwd resolves
+/// against the owning root as `.agents/worktrees/<run>/…` — which the harness
+/// allowlist rejects, silently dropping a real deliverable.
+struct DeclaredPathRoots<'a> {
+    worktree: Option<&'a std::path::Path>,
+    workspace: &'a std::path::Path,
+}
+
+/// A worker-declared path as a REPOSITORY-relative one, or `None` when it
+/// cannot be placed in this repository.
 ///
 /// `changes` is free-form worker text and the packet itself hands out ABSOLUTE
 /// paths (an isolated serial run receives its run directory as one), so a
@@ -3356,63 +3366,91 @@ fn worker_changed_integratable_path(evidence: Option<&[String]>) -> bool {
 /// `/ws/.agents/runs/<id>/report.md` sails past it and would be read as a lost
 /// repository deliverable (issue #55 remediation).
 ///
-/// A path outside the workspace is dropped rather than guessed at. That is
-/// deliberately the fail-OPEN direction for this guard: refusing to integrate
-/// on an unattributable path would strand a correct run, and the forbidden-path
-/// gate already fails a run whose ACTUAL diff escapes the workspace.
-fn workspace_relative_declared_path(raw: &str, ws_root: &std::path::Path) -> Option<String> {
+/// Both roots are tried against their canonical form too, because macOS resolves
+/// the temp roots these run under through `/private`.
+///
+/// `None` means "not attributable", and the caller keeps the raw path rather
+/// than discarding it: a declared output Yardlet cannot place is not evidence
+/// that nothing was lost. A stripped result that still escapes upward is
+/// treated the same way, so `/ws/../elsewhere/x` and `/elsewhere/x` cannot
+/// reach opposite verdicts.
+fn repository_relative_declared_path(raw: &str, roots: &DeclaredPathRoots<'_>) -> Option<String> {
     let trimmed = raw.trim().trim_matches('"');
     if trimmed.is_empty() {
         return None;
     }
     let path = std::path::Path::new(trimmed);
-    if !path.is_absolute() {
-        let relative = trimmed.trim_start_matches("./");
-        return (!relative.is_empty()).then(|| relative.to_string());
+    let relative = if path.is_absolute() {
+        let mut candidates = Vec::new();
+        for root in roots.worktree.into_iter().chain([roots.workspace]) {
+            if let Ok(canonical) = root.canonicalize() {
+                candidates.push(canonical);
+            }
+            candidates.push(root.to_path_buf());
+        }
+        candidates
+            .iter()
+            .find_map(|root| path.strip_prefix(root).ok())
+            .and_then(|relative| relative.to_str())
+            .map(str::to_string)?
+    } else {
+        trimmed.to_string()
+    };
+    let relative = relative.trim_start_matches("./").trim_end_matches('/');
+    if relative.is_empty() {
+        return None;
     }
-    let canonical_root = ws_root.canonicalize();
-    let root = canonical_root.as_deref().unwrap_or(ws_root);
-    path.strip_prefix(root)
-        .or_else(|_| path.strip_prefix(ws_root))
-        .ok()
-        .and_then(|relative| relative.to_str())
-        .map(|relative| relative.trim_start_matches("./").to_string())
-        .filter(|relative| !relative.is_empty())
+    // A path that still climbs out of the repository is not repository-relative,
+    // however it was spelled.
+    if std::path::Path::new(relative)
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
+    {
+        return None;
+    }
+    Some(relative.to_string())
 }
 
 /// Repository outputs the worker DECLARED in result.json, normalized and
 /// reduced to the paths a no-change integration would silently drop.
 ///
 /// Receipted core and dependency input overlays are core-delivered validation
-/// inputs, not worker outputs, so naming one is not a missing deliverable. A
-/// path the worker also declared deleted is not one either, and neither are the
-/// run's OWN artifacts — every non-implementation task is REQUIRED to write
-/// `report.md` into its run directory and forbidden to touch code, so counting
-/// that as lost repository output would fail exactly the runs that behaved.
+/// inputs, not worker outputs, so naming one is not a missing deliverable, and
+/// neither is a path the worker also declared deleted. The run's OWN artifacts
+/// fall out on their own: normalized they live under `.agents/runs/`, which the
+/// integration allowlist already rejects — which is exactly why normalizing
+/// against the right root matters, since every non-implementation task is
+/// REQUIRED to write `report.md` there and forbidden to touch code.
+///
+/// A path that cannot be placed in the repository is kept VERBATIM rather than
+/// dropped. Yardlet did not integrate it and cannot prove anything about it, so
+/// silently forgetting it would be the same silent loss issue #55 is about.
 fn declared_integratable_outputs(
     result: Option<&RunResult>,
-    ws_root: &std::path::Path,
-    run_id: &str,
+    roots: &DeclaredPathRoots<'_>,
     core_input_overlays: &[state::SerialInputOverlay],
     dependency_input_overlays: &[state::DependencyInputOverlay],
 ) -> Vec<String> {
     let Some(result) = result else {
         return Vec::new();
     };
-    let norm = |path: &String| workspace_relative_declared_path(path, ws_root);
+    let norm = |path: &String| {
+        repository_relative_declared_path(path, roots)
+            .unwrap_or_else(|| path.trim().trim_matches('"').to_string())
+    };
     let deleted = result
         .changes
         .files_deleted
         .iter()
-        .filter_map(norm)
+        .map(norm)
         .collect::<HashSet<_>>();
     let mut declared = result
         .changes
         .files_created
         .iter()
         .chain(&result.changes.files_modified)
-        .filter_map(norm)
-        .filter(|path| !evaluator::is_current_run_artifact(path, run_id))
+        .map(norm)
+        .filter(|path| !path.is_empty())
         .filter(|path| evaluator::is_integratable_path(path))
         .filter(|path| !deleted.contains(path))
         .filter(|path| {
@@ -3455,8 +3493,7 @@ fn declared_integratable_outputs(
 fn no_change_contradiction(
     result: Option<&RunResult>,
     evidence: Option<&[String]>,
-    ws_root: &std::path::Path,
-    run_id: &str,
+    roots: &DeclaredPathRoots<'_>,
     core_input_overlays: &[state::SerialInputOverlay],
     dependency_input_overlays: &[state::DependencyInputOverlay],
 ) -> Option<(&'static str, Vec<String>)> {
@@ -3464,8 +3501,8 @@ fn no_change_contradiction(
         let mut paths = evidence
             .unwrap_or_default()
             .iter()
-            .filter_map(|path| workspace_relative_declared_path(path, ws_root))
             .filter(|path| evaluator::is_integratable_path(path))
+            .cloned()
             .collect::<Vec<_>>();
         paths.sort();
         paths.dedup();
@@ -3473,8 +3510,7 @@ fn no_change_contradiction(
     }
     let declared = declared_integratable_outputs(
         result,
-        ws_root,
-        run_id,
+        roots,
         core_input_overlays,
         dependency_input_overlays,
     );
@@ -4770,10 +4806,12 @@ fn recovery_integration_provenance(
     worktree: &std::path::Path,
     branch: &str,
 ) -> IntegrationProvenance {
-    // Read through the loader, not the pending path: a settled receipt now
-    // lives in the `reconciled/` archive, and a raw path check would express
-    // "this run already recorded a no-op" against half the store (issue #43).
-    if ws.load_no_change_receipt(run_id).is_ok() {
+    // Presence, across BOTH the pending and reconciled locations: a settled
+    // receipt now lives in the archive, so a raw pending-path check would
+    // express "this run already recorded a no-op" against half the store
+    // (issue #43). Presence rather than parseability, because a corrupt receipt
+    // is precisely the case that must still force Unknown.
+    if ws.has_no_change_receipt(run_id) {
         return IntegrationProvenance::Unknown;
     }
     let Some(record) = record else {
@@ -7090,8 +7128,10 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     } else if let Some((reason, paths)) = no_change_contradiction(
                         result.as_ref(),
                         evidence.as_deref(),
-                        &ws.root,
-                        run_id,
+                        &DeclaredPathRoots {
+                            worktree: Some(m.wt_path),
+                            workspace: &ws.root,
+                        },
                         m.core_input_overlays,
                         m.dependency_input_overlays,
                     ) {
@@ -7248,8 +7288,10 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                     if let Some((reason, paths)) = no_change_contradiction(
                         result.as_ref(),
                         evidence.as_deref(),
-                        &ws.root,
-                        run_id,
+                        &DeclaredPathRoots {
+                            worktree: Some(m.wt_path),
+                            workspace: &ws.root,
+                        },
                         m.core_input_overlays,
                         m.dependency_input_overlays,
                     ) {
@@ -12207,13 +12249,19 @@ printf "# worker handoff
             resources: vec![],
         };
 
-        let root = std::path::Path::new("/ws");
+        // The worker's cwd IS the worktree, and its run dir is nested inside it,
+        // so both roots have to resolve or an absolutely-declared deliverable
+        // lands under `.agents/worktrees/...` and vanishes from the allowlist.
+        let worktree = std::path::PathBuf::from("/ws/.agents/worktrees/run-test");
+        let roots = DeclaredPathRoots {
+            worktree: Some(&worktree),
+            workspace: std::path::Path::new("/ws"),
+        };
         let contradiction = |result: &RunResult, evidence: &[String]| {
             no_change_contradiction(
                 Some(result),
                 Some(evidence),
-                root,
-                "run-test",
+                &roots,
                 std::slice::from_ref(&overlay),
                 std::slice::from_ref(&dependency),
             )
@@ -12223,12 +12271,11 @@ printf "# worker handoff
         // this path, so a no-change outcome contradicts Yardlet's own diff.
         let evidenced = result(&[], &[], &[]);
         assert_eq!(
-            contradiction(&evidenced, &["./src/lib.rs".to_string()]),
+            contradiction(&evidenced, &["src/lib.rs".to_string()]),
             Some((
                 "no_change_contradicts_change_evidence",
                 vec!["src/lib.rs".to_string()]
-            )),
-            "evidence paths must be normalized the same way declared ones are"
+            ))
         );
 
         // No evidence, but the worker still claims a repository output.
@@ -12247,13 +12294,26 @@ printf "# worker handoff
                 vec!["src/lib.rs".to_string()]
             ))
         );
-        // ...and stated as an absolute path inside the workspace.
+        // ...stated as an absolute path inside the workspace...
         assert_eq!(
             contradiction(&result(&["/ws/docs/lost.md"], &[], &[]), &[]),
             Some((
                 "no_change_contradicts_declared_outputs",
                 vec!["docs/lost.md".to_string()]
             ))
+        );
+        // ...and — the case a workspace-only normalizer silently drops — stated
+        // from the worker's own cwd, which is the worktree.
+        assert_eq!(
+            contradiction(
+                &result(&["/ws/.agents/worktrees/run-test/tests/new.rs"], &[], &[]),
+                &[]
+            ),
+            Some((
+                "no_change_contradicts_declared_outputs",
+                vec!["tests/new.rs".to_string()]
+            )),
+            "a deliverable named from the worktree must not resolve into .agents/worktrees/**"
         );
 
         // Core-delivered inputs, canonical/runtime state, and a path the worker
@@ -12284,7 +12344,7 @@ printf "# worker handoff
             contradiction(
                 &result(
                     &[
-                        "/ws/.agents/runs/run-test/report.md",
+                        "/ws/.agents/worktrees/run-test/.agents/runs/run-test/report.md",
                         "/ws/.agents/runs/run-test/result.json",
                         ".agents/runs/run-test/handoff.md",
                     ],
@@ -12297,21 +12357,27 @@ printf "# worker handoff
             "a review run's own artifacts must not read as lost repository output"
         );
 
-        // A path that cannot be attributed to this workspace is dropped rather
-        // than guessed at: refusing to integrate on it would strand a correct
-        // run, and the forbidden-path gate already covers an actual diff that
-        // escapes the workspace.
-        assert_eq!(
-            contradiction(&result(&["/elsewhere/other.md"], &[], &[]), &[]),
-            None
-        );
+        // A path Yardlet cannot place in the repository is kept VERBATIM, not
+        // dropped: it was not integrated and nothing here can prove otherwise,
+        // so forgetting it would be the same silent loss this guard exists for.
+        // The two spellings of "outside" must also agree.
+        for outside in ["/elsewhere/other.md", "/ws/../elsewhere/other.md"] {
+            assert_eq!(
+                contradiction(&result(&[outside], &[], &[]), &[]),
+                Some((
+                    "no_change_contradicts_declared_outputs",
+                    vec![outside.to_string()]
+                )),
+                "{outside} must not be silently forgotten"
+            );
+        }
 
         // A run that genuinely produced nothing stays a clean no-op.
         assert_eq!(contradiction(&result(&[], &[], &[]), &[]), None);
 
         // No result.json at all: nothing is declared, so nothing is contradicted.
         assert_eq!(
-            no_change_contradiction(None, Some(&[]), root, "run-test", &[], &[]),
+            no_change_contradiction(None, Some(&[]), &roots, &[], &[]),
             None
         );
     }
