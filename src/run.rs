@@ -5014,7 +5014,17 @@ fn reconcile_no_change_outcomes(ws: &Workspace, msgs: &mut Vec<String>) {
             &receipt.task_id,
             TaskState::Done,
         ) {
-            Ok(record) if record.status.verified_complete() => {}
+            // Cleanup is done and delivery reached a verified end state, so
+            // this receipt has no work left for any later startup to find
+            // (issue #43). An unverified finish stays in the pending set.
+            Ok(record) if record.status.verified_complete() => {
+                if let Err(error) = ws.archive_no_change_receipt(&receipt.run_id) {
+                    msgs.push(format!(
+                        "{}: could not archive a settled no-change receipt: {error}",
+                        receipt.task_id
+                    ));
+                }
+            }
             Ok(record) => msgs.push(format!(
                 "{}: no-change Git finish remains {}",
                 receipt.task_id,
@@ -5069,11 +5079,22 @@ fn reconcile_integrated_cleanups(ws: &Workspace, msgs: &mut Vec<String>) {
             msgs.push(format!("{}: {warning}", receipt.task_id));
         }
         let _ = persist_integrated_cleanup_projection(&run_dir, &receipt, cleanup.complete);
-        if cleanup.complete && !was_complete {
-            msgs.push(format!(
-                "{}: reconciled integrated worktree cleanup",
-                receipt.task_id
-            ));
+        if cleanup.complete {
+            if !was_complete {
+                msgs.push(format!(
+                    "{}: reconciled integrated worktree cleanup",
+                    receipt.task_id
+                ));
+            }
+            // Nothing about this receipt can change again, so retire it from
+            // the set every later startup replays (issue #43). Failing to
+            // archive only costs the old repeated work, so it is not fatal.
+            if let Err(error) = ws.archive_integrated_cleanup_receipt(&receipt.run_id) {
+                msgs.push(format!(
+                    "{}: could not archive a reconciled Git cleanup receipt: {error}",
+                    receipt.task_id
+                ));
+            }
         }
     }
 }
@@ -7147,6 +7168,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         }
                         if cleanup.complete {
                             persist_integrated_cleanup_projection(run_dir, &cleanup_receipt, true)?;
+                            // Settled here means no later startup has to
+                            // rediscover that by replaying git (issue #43).
+                            let _ = ws.archive_integrated_cleanup_receipt(run_id);
                         }
                     }
                 }
@@ -7326,6 +7350,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         crate::git_finish::finish_owned_run(ws, run_dir, run_id, &task.id, next_state, ownership)?
     };
     lines.push(git_finish.user_line());
+    // A no-op whose cleanup and delivery both settled here leaves the pending
+    // reconcile set immediately, instead of being rediscovered and replayed by
+    // every later startup (issue #43).
+    if git_finish_not_needed && git_finish.status.verified_complete() {
+        let _ = ws.archive_no_change_receipt(run_id);
+    }
     let projected_state = state_after_git_finish(next_state, &git_finish);
     if projected_state != next_state {
         next_state = projected_state;
@@ -14275,6 +14305,184 @@ exit 1
 
             let _ = std::fs::remove_dir_all(ws.root);
         }
+    }
+
+    /// Startup reconcile cost must track OUTSTANDING work, not the number of
+    /// runs a workspace has ever completed. Every settled receipt left in the
+    /// scanned directory is several git subprocesses re-spent on every launch,
+    /// which is what made startup 11s on a workspace with a few hundred runs
+    /// (issue #43). Once a receipt is settled it leaves that directory, while
+    /// staying loadable by run id as ownership and overlay evidence.
+    #[test]
+    fn startup_reconcile_retires_settled_receipts_from_the_scanned_set() {
+        let ws = init_test_workspace(
+            "reconcile-hot-set",
+            "schema_version: 1\nrouting: {default_worker: builder}\nworkers: []\n",
+        );
+        let mut config = ws.load_config().unwrap();
+        config.git_finish.auto_push = true;
+        state::save_yaml(&ws.config_path(), &config).unwrap();
+
+        // A run whose integration merged and whose worktree and branch are
+        // already gone: cleanup has nothing left to do, forever.
+        let merged_run = "run-20990101-000001-merged";
+        let merged_task = "YARD-MERGED";
+        let baseline = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        write_str(&ws.root.join("merged.txt"), "merged\n").unwrap();
+        git_stdout(&ws.root, &["add", "merged.txt"]).unwrap();
+        let tree = git_stdout(&ws.root, &["write-tree"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let worker_oid = git_stdout(
+            &ws.root,
+            &["commit-tree", &tree, "-p", &baseline, "-m", "worker"],
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        let integration_oid = git_stdout(
+            &ws.root,
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                &baseline,
+                "-p",
+                &worker_oid,
+                "-m",
+                "integration",
+            ],
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        git_stdout(&ws.root, &["reset", "-q", "--hard", &integration_oid]).unwrap();
+        let merged_run_dir = ws.runs_dir().join(merged_run);
+        std::fs::create_dir_all(&merged_run_dir).unwrap();
+        ws.save_integrated_cleanup_receipt(&state::IntegratedCleanupReceipt {
+            schema_version: 1,
+            run_id: merged_run.into(),
+            task_id: merged_task.into(),
+            intent_id: "intent-test".into(),
+            worker: "codex".into(),
+            worktree: ws
+                .agents_dir()
+                .join("worktrees")
+                .join(merged_run)
+                .display()
+                .to_string(),
+            branch: format!("yard/{}/{merged_run}", merged_task.to_lowercase()),
+            baseline_oid: baseline.clone(),
+            integration_base_oid: baseline.clone(),
+            integration_worker_oid: worker_oid.clone(),
+            integration_oid: integration_oid.clone(),
+            provenance: IntegrationProvenance::ParallelWorkerDirect,
+            owned_oids: vec![worker_oid, integration_oid],
+            core_input_overlays: vec![],
+            dependency_input_overlays: vec![],
+        })
+        .unwrap();
+
+        // A no-op run whose cleanup and `not_needed` finish both settle during
+        // this very recovery pass.
+        let no_change_run = "run-20990101-000002-nochange";
+        let no_change_task = "YARD-NOCHANGE";
+        let branch = format!("yard/{}/{no_change_run}", no_change_task.to_lowercase());
+        let worktree = ws.agents_dir().join("worktrees").join(no_change_run);
+        crate::parallel::create_worktree(&ws.root, &worktree, &branch).unwrap();
+        let no_change_run_dir = ws.runs_dir().join(no_change_run);
+        std::fs::create_dir_all(&no_change_run_dir).unwrap();
+        write_str(
+            &no_change_run_dir.join("result.json"),
+            &serde_json::to_string(&RunResult {
+                schema_version: 1,
+                run_id: no_change_run.into(),
+                task_id: no_change_task.into(),
+                status: "done".into(),
+                intent_adherence: Default::default(),
+                changes: Default::default(),
+                validation: Default::default(),
+                question_for_user: None,
+                compact_summary: "no changes".into(),
+                verdict: vec![],
+                harness_suggestions: vec![],
+                follow_up_tasks: vec![],
+                artifacts: vec![],
+                resources: vec![],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        write_str(&no_change_run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        let head = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        ws.save_no_change_receipt(&state::NoChangeReceipt {
+            schema_version: 1,
+            run_id: no_change_run.into(),
+            task_id: no_change_task.into(),
+            intent_id: "intent-test".into(),
+            worker: "codex".into(),
+            worktree: worktree.display().to_string(),
+            branch,
+            baseline_oid: head.clone(),
+            worker_oid: head,
+            provenance: IntegrationProvenance::ParallelWorkerDirect,
+            core_input_overlays: vec![],
+            dependency_input_overlays: vec![],
+        })
+        .unwrap();
+
+        let mut running = task(no_change_task, TaskState::Running, 10, false);
+        running.kind = "implementation".into();
+        let mut q = queue(vec![running]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        assert_eq!(ws.load_integrated_cleanup_receipts().unwrap().len(), 1);
+        assert_eq!(ws.load_no_change_receipts().unwrap().len(), 1);
+
+        let first = recover_orphans(&ws);
+
+        assert!(
+            ws.load_integrated_cleanup_receipts().unwrap().is_empty(),
+            "a reconciled cleanup receipt must leave the scanned set: {first:?}"
+        );
+        assert!(
+            ws.load_no_change_receipts().unwrap().is_empty(),
+            "a settled no-change receipt must leave the scanned set: {first:?}"
+        );
+        // Retired, not discarded: both stay addressable as ownership evidence.
+        assert_eq!(
+            ws.load_integrated_cleanup_receipt(merged_run)
+                .unwrap()
+                .task_id,
+            merged_task
+        );
+        assert_eq!(
+            ws.load_no_change_receipt(no_change_run).unwrap().task_id,
+            no_change_task
+        );
+        assert_eq!(
+            ws.load_git_finish_record(&no_change_run_dir)
+                .unwrap()
+                .status,
+            crate::git_finish::GitFinishStatus::NotNeeded
+        );
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+
+        let second = recover_orphans(&ws);
+        assert!(
+            second.is_empty(),
+            "second recovery was not inert: {second:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     #[test]
