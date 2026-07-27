@@ -26,11 +26,17 @@ fn test_root() -> PathBuf {
     std::env::temp_dir().join(format!("yard-tui-key-list-{}-{nonce}", std::process::id()))
 }
 
+/// A realistic default terminal. The list is 27 rows plus chrome, so at this
+/// height the tail of it — including `g`, the key issue #71 was filed about —
+/// is below the fold and only reachable by scrolling. The original test used 40
+/// rows, which fit the whole list and hid that the screen could not scroll.
+const ROWS: u16 = 24;
+
 fn open_pty() -> (File, File) {
     let mut master = -1;
     let mut slave = -1;
     let mut size = libc::winsize {
-        ws_row: 40,
+        ws_row: ROWS,
         ws_col: 140,
         ws_xpixel: 0,
         ws_ypixel: 0,
@@ -52,6 +58,29 @@ fn open_pty() -> (File, File) {
     let rc = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
     assert_eq!(rc, 0);
     (master, slave)
+}
+
+/// Force a full repaint.
+///
+/// Ratatui writes only CHANGED cells, so after scrolling a string can lose any
+/// character whose cell happened to already hold it — exact matching on
+/// scrolled content is unreliable. A resize makes the next frame a complete
+/// one. The column change is cosmetic and preserves the scroll offset, so what
+/// is on screen is still what scrolling brought there.
+fn force_repaint(master: &File, cols: u16) {
+    let size = libc::winsize {
+        ws_row: ROWS,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let rc = unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &size) };
+    assert_eq!(
+        rc,
+        0,
+        "TIOCSWINSZ failed: {}",
+        std::io::Error::last_os_error()
+    );
 }
 
 fn drain(master: &mut File, sink: &mut Vec<u8>) {
@@ -184,27 +213,68 @@ fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
     master.write_all(b"?").unwrap();
     wait_for_marker(&mut master, &mut sink, "Home keys", Duration::from_secs(10));
 
+    // The list opens at the top, so the tail is genuinely below the fold at this
+    // height. Assert that BEFORE scrolling, otherwise "it scrolled" proves
+    // nothing.
+    assert!(
+        !seen(&sink, "reload the workspace"),
+        "`g` was already visible at {ROWS} rows, so this test cannot prove scrolling;\n{}",
+        recent(&sink)
+    );
+
+    // Page down to the end. Without a scroll clamp for this screen the offset is
+    // forced back to 0 on every keypress and nothing below the fold ever
+    // appears — which is how `g`, the key the issue is about, stayed
+    // unreachable on a default terminal.
+    for _ in 0..8 {
+        master.write_all(b"\x1b[6~").unwrap();
+        std::thread::sleep(Duration::from_millis(40));
+        drain(&mut master, &mut sink);
+    }
+
+    force_repaint(&master, 139);
+    std::thread::sleep(Duration::from_millis(300));
+    drain(&mut master, &mut sink);
+    let after_repaint = sink.len();
+    force_repaint(&master, 140);
+    std::thread::sleep(Duration::from_millis(300));
+    drain(&mut master, &mut sink);
+
     // The always-valid globals the issue named: each present with its meaning,
     // on a surface the operator can reach without already knowing the key.
-    for (glyph, doc) in [
-        ("g", "reload the workspace"),
-        ("s", "open settings"),
-        ("f", "toggle the worker access level"),
-        ("l", "switch language"),
-        ("i", "show the intent contract"),
-        ("R", "reports and past intents"),
+    for doc in [
+        "reload the workspace",
+        "open settings",
+        "toggle the worker access level",
+        "switch language",
+        "show the intent contract",
+        "reports and past intents",
     ] {
-        wait_for_marker(&mut master, &mut sink, doc, Duration::from_secs(10));
         assert!(
-            seen(&sink, glyph),
-            "key list is missing the {glyph:?} glyph;\n{}",
+            seen(&sink[after_repaint..], doc),
+            "{doc:?} never came into view after scrolling at {ROWS} rows;\n{}",
             recent(&sink)
         );
     }
 
-    // Esc returns to Home rather than dead-ending on the list.
+    // Esc returns to Home rather than dead-ending on the list. Match only what
+    // arrives AFTER the keypress: the cumulative sink already holds every
+    // marker this session has ever rendered.
+    let before_escape = sink.len();
     master.write_all(b"\x1b").unwrap();
-    wait_for_marker(&mut master, &mut sink, "? keys", Duration::from_secs(10));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        drain(&mut master, &mut sink);
+        if seen(&sink[before_escape..], "A auto") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Esc did not return to Home;\n{}",
+            recent(&sink)
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     std::thread::sleep(Duration::from_millis(200));
     let _ = master.write_all(b"q");

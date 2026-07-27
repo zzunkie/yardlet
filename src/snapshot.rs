@@ -164,13 +164,20 @@ pub struct RecoveryRequired {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct QueueHealth {
     pub runnable: usize,
-    /// How many of `runnable` the scheduler would actually start together
-    /// right now, and how many the verifier barrier is holding back.
+    /// Runnable tasks the verifier barrier is holding back, and whether the
+    /// runnable set is reviews that will run one at a time.
     ///
     /// `runnable` alone counts tasks the scheduler will deliberately refuse to
     /// co-schedule, which reads as parallelism that never arrives (issue #51).
-    pub admissible: usize,
+    ///
+    /// There is deliberately no "how many will start" number here. The parallel
+    /// selector works from an empty capability vocabulary, ignores live approval
+    /// grants, and truncates to `max_parallel`, while `runnable` uses the real
+    /// ones — so any count derived from it and printed next to `runnable` is
+    /// wrong in three independent ways. Only the barrier itself is computed from
+    /// the same inputs on both sides, so only the barrier is claimed.
     pub review_barrier: usize,
+    pub serialized_reviews: usize,
     pub running: usize,
     pub waiting_decision: usize,
     pub waiting_approval: usize,
@@ -448,9 +455,8 @@ impl Snapshot {
                 RunnableClass::Done => health.done += 1,
             }
         }
-        health.admissible =
-            crate::parallel::ready_independent(&self.queue, self.config.max_parallel.max(1)).len();
         health.review_barrier = crate::parallel::held_by_review_barrier(&self.queue).len();
+        health.serialized_reviews = crate::parallel::serialized_verifiers(&self.queue).len();
         health
     }
 
@@ -475,10 +481,21 @@ impl Snapshot {
             "planner": self.planner,
             "pending": self.pending.as_ref().map(|(id, q)| serde_json::json!({"task": id, "question": q})),
             "intent": self.intent_summary(),
+            "planning_reentry": self.planning_reentry.map(|reentry| match reentry {
+                crate::planning::PlanningReentry::PendingProposal { count } => {
+                    serde_json::json!({"kind": "pending_proposal", "count": count})
+                }
+                crate::planning::PlanningReentry::AcceptedDraft => {
+                    serde_json::json!({"kind": "accepted_draft"})
+                }
+                crate::planning::PlanningReentry::Unreadable => {
+                    serde_json::json!({"kind": "unreadable"})
+                }
+            }),
             "queue": {
                 "runnable": health.runnable,
-                "admissible": health.admissible,
                 "review_barrier": health.review_barrier,
+                "serialized_reviews": health.serialized_reviews,
                 "running": health.running,
                 "waiting_decision": health.waiting_decision,
                 "waiting_approval": health.waiting_approval,
@@ -687,15 +704,24 @@ mod tests {
         let health = snapshot.health();
         assert_eq!(health.runnable, 4, "all four are class-runnable");
         assert_eq!(
-            health.admissible, 1,
-            "but the scheduler would start exactly one"
+            health.review_barrier, 3,
+            "three of them are reviews the barrier will not co-schedule"
         );
-        assert_eq!(health.review_barrier, 3);
-        assert_eq!(
-            health.admissible + health.review_barrier,
-            health.runnable,
-            "the breakdown must account for every ready task"
-        );
+        assert_eq!(health.serialized_reviews, 0, "a builder is still queued");
+
+        // Reviews as the only work left: nothing is held BEHIND anything, but
+        // they still run one at a time — issue #51's second reported case,
+        // which a barrier-only signal reports as a bare, dishonest count.
+        let mut reviews_only = snapshot.queue.clone();
+        reviews_only.tasks.retain(|task| task.kind == "review");
+        let reviews_only = Snapshot {
+            queue: reviews_only,
+            ..snapshot
+        };
+        let health = reviews_only.health();
+        assert_eq!(health.runnable, 3);
+        assert_eq!(health.review_barrier, 0);
+        assert_eq!(health.serialized_reviews, 3);
     }
 
     #[test]

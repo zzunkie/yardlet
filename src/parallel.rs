@@ -65,7 +65,7 @@ pub fn held_by_review_barrier(queue: &WorkQueue) -> Vec<String> {
 
 /// Runnable verifiers that the barrier lets through but the serial cap still
 /// admits one at a time — the "only work left is reviews" case.
-fn serialized_verifiers(queue: &WorkQueue) -> Vec<String> {
+pub fn serialized_verifiers(queue: &WorkQueue) -> Vec<String> {
     let caps = std::collections::BTreeSet::new();
     if has_queued_non_verifier(queue) {
         return Vec::new();

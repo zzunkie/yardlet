@@ -391,9 +391,24 @@ fn an_accepted_unconfirmed_plan_is_reachable_from_home_after_a_restart() {
         recent(&sink)
     );
 
+    // Match only what arrives AFTER the keypress. The cumulative sink already
+    // holds "o 플랜 검토" from the footer, so waiting for "플랜 검토" on the whole
+    // buffer would return instantly whatever `o` did.
+    let before_open = sink.len();
     master.write_all(b"o").unwrap();
-    wait_for_marker(&mut master, &mut sink, "플랜 검토", Duration::from_secs(10));
-    wait_for_marker(&mut master, &mut sink, "c 확정", Duration::from_secs(10));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        drain(&mut master, &mut sink);
+        if seen(&sink[before_open..], "c 확정") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "`o` did not open the planning review;\n{}",
+            recent(&sink)
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert!(
         seen(&sink, "reentry fixture slice"),
         "the review screen opened without the accepted draft's content;\n{}",
