@@ -31,7 +31,7 @@ clap = { version = ">=4.5, <4.6", features = ["derive"] }
 # Clap 4.5.58+ accepts clap_lex 1.x, whose 1.1 line requires Rust 1.85.
 # Constrain resolution to the Rust-1.82-compatible 1.0 line without blocking
 # compatible Clap 4.5 patch releases.
-clap_lex = ">=1.0, <1.1"
+clap_lex = ">=1.0, <1.2"
 ratatui = "0.29"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
