@@ -1351,6 +1351,21 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
                 toggle_worker(app, app.selected - tasks);
             }
         }
+        // Re-enter an open planning session. Until today the review screen had
+        // exactly one entry point — a planning job finishing in THIS process —
+        // so a restart mid-flow left an accepted-but-unconfirmed plan with no
+        // TUI path at all (issue #65).
+        KeyCode::Char('o') if !app.is_busy() => {
+            if app
+                .snapshot
+                .as_ref()
+                .is_some_and(|snap| snap.planning_reentry.is_some())
+            {
+                let _ = open_planning_review(app);
+            } else {
+                app.toast = Some((false, app.lang.l().plan_review_nothing.to_string()));
+            }
+        }
         // Reports/history browser: current final report + past intents.
         KeyCode::Char('R') => open_reports(app),
         _ if app.is_busy() => app.toast = Some((true, app.lang.l().busy.into())),
