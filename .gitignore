@@ -26,6 +26,7 @@ Cargo.lock.orig
 /.agents/conversations/
 /.agents/approvals.yaml
 /.agents/planning.lock
+/.agents/locks/
 /.agents/planning-sessions/
 /.agents/activations/
 /.agents/runtime-task-receipts/

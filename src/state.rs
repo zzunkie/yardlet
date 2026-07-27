@@ -67,6 +67,26 @@ pub struct PlanningLock {
     queue_snapshot: RefCell<Option<String>>,
 }
 
+/// Kernel-owned lock scoped to ONE run's finalization. Run finalization
+/// integrates the worktree and writes the task's terminal state; without this,
+/// two processes (a CLI command and a TUI idle `recover_orphans`, say) can
+/// finalize the same run concurrently, and the loser re-integrates a branch the
+/// winner already merged and cleaned up (issue #69). Like `PlanningLock`, the
+/// descriptor lifetime IS the transaction lifetime, so process death releases
+/// it with no stale-PID protocol.
+pub struct RunFinalizeLock {
+    #[cfg(unix)]
+    file: fs::File,
+}
+
+#[cfg(unix)]
+impl Drop for RunFinalizeLock {
+    fn drop(&mut self) {
+        // SAFETY: `self.file` owns this descriptor until Drop finishes.
+        let _ = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN) };
+    }
+}
+
 struct RuntimeTaskPlacement {
     ordinal: usize,
     runs_before: Vec<String>,
@@ -560,6 +580,74 @@ impl Workspace {
             Ok(PlanningLock {
                 queue_snapshot: RefCell::new(queue_snapshot),
             })
+        }
+    }
+
+    /// Serialize finalization of one run across processes. The lock file lives
+    /// beside the run's own records so it is scoped exactly to that run: two
+    /// different runs still finalize concurrently, which parallel batches rely
+    /// on. Acquisition is bounded by the same mutation timeout as the planning
+    /// lock, and a timeout is an error rather than a silent second finalize.
+    ///
+    /// Callers MUST re-read the run record after acquiring: the whole point is
+    /// that the state may have changed while waiting.
+    pub fn acquire_run_finalize_lock(&self, run_id: &str) -> Result<RunFinalizeLock> {
+        // Deliberately NOT inside the run directory: that directory is scanned
+        // for evidence and published artifacts, and a lock file has no business
+        // showing up as either.
+        let dir = self.agents_dir().join("locks");
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let path = dir.join(format!("finalize-{run_id}.lock"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .custom_flags(libc::O_CLOEXEC)
+                .open(&path)
+                .with_context(|| format!("opening run finalize lock {}", path.display()))?;
+            let timeout = mutation_lock_timeout();
+            let started = Instant::now();
+            loop {
+                // SAFETY: `file` stays alive in RunFinalizeLock and flock only
+                // reads its valid descriptor. LOCK_NB prevents an unbounded
+                // wait; a crash releases the kernel-owned lock.
+                if unsafe {
+                    libc::flock(
+                        std::os::fd::AsRawFd::as_raw_fd(&file),
+                        libc::LOCK_EX | libc::LOCK_NB,
+                    )
+                } == 0
+                {
+                    break;
+                }
+                let error = std::io::Error::last_os_error();
+                let retryable = error.raw_os_error().is_some_and(|code| {
+                    code == libc::EINTR || code == libc::EAGAIN || code == libc::EWOULDBLOCK
+                });
+                if !retryable {
+                    return Err(error)
+                        .with_context(|| format!("locking run finalization {}", path.display()));
+                }
+                if started.elapsed() >= timeout {
+                    bail!(
+                        "run_finalize_lock_timeout after {}ms at {}",
+                        timeout.as_millis(),
+                        path.display()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(RunFinalizeLock { file })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(RunFinalizeLock {})
         }
     }
 
@@ -6321,6 +6409,73 @@ pub fn place_skill_files_no_clobber(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #69: two processes finalized the SAME run 840ms apart and the
+    /// second demoted a correct Done to Partial. Finalization must be
+    /// exclusive per run, while different runs stay concurrent so parallel
+    /// batches are unaffected.
+    #[cfg(unix)]
+    #[test]
+    fn run_finalize_lock_is_exclusive_per_run_and_concurrent_across_runs() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-run-finalize-lock-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".agents")).unwrap();
+        let ws = Workspace::at(&root);
+
+        let held = ws.acquire_run_finalize_lock("run-a").unwrap();
+
+        // A different run is not blocked by it.
+        let other = ws.acquire_run_finalize_lock("run-b");
+        assert!(
+            other.is_ok(),
+            "a lock on run-a must not block run-b: {:?}",
+            other.err()
+        );
+        drop(other);
+
+        // The same run is refused while the first holder lives. Probe the
+        // kernel lock directly rather than calling the acquirer: the acquirer
+        // would spin for the full mutation timeout, and shortening that timeout
+        // means setting a process-wide env var that other tests running in
+        // parallel also read.
+        let probe = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join(".agents/locks/finalize-run-a.lock"))
+            .unwrap();
+        // SAFETY: `probe` owns a valid descriptor for the duration of the call.
+        let taken = unsafe {
+            libc::flock(
+                std::os::fd::AsRawFd::as_raw_fd(&probe),
+                libc::LOCK_EX | libc::LOCK_NB,
+            )
+        };
+        assert_ne!(
+            taken, 0,
+            "a second finalizer of run-a must not be able to take the lock"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EWOULDBLOCK),
+            "contention must be reported as would-block, not a real error"
+        );
+        drop(probe);
+
+        // Releasing it hands the run over.
+        drop(held);
+        assert!(ws.acquire_run_finalize_lock("run-a").is_ok());
+
+        // The lock never lands inside the run directory, where it would be
+        // scanned as evidence or published as an artifact.
+        assert!(!ws.runs_dir().join("run-a").join("finalize.lock").exists());
+        assert!(root.join(".agents/locks/finalize-run-a.lock").is_file());
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     const CONFIG_WITH_COMMENTS: &str = r#"schema_version: 1
 product: yardlet

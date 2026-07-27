@@ -6460,6 +6460,20 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         flags,
         merge,
     } = input;
+    // Serialize this run's finalization across processes (issue #69). Two
+    // finalizers of the SAME run must not interleave: the loser would evaluate
+    // and integrate against a worktree and branch the winner is merging and
+    // cleaning up underneath it. Held for the whole finalization, and released
+    // when this function returns or unwinds.
+    //
+    // Lock ORDER is run-lock then planning-lock, always. The planning lock is
+    // taken later in this function and every other holder releases it before
+    // reaching finalization, so the two can never be taken in the opposite
+    // order.
+    //
+    // Different runs still finalize concurrently, which parallel batches need.
+    let _finalize_lock = ws.acquire_run_finalize_lock(run_id)?;
+
     let mut lines = Vec::new();
     // Capture the intent this run belonged to BEFORE finalize_on_latest_queue
     // reloads `queue` from disk (which would swap in a re-plan's intent_id):
