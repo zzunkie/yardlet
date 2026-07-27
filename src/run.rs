@@ -3413,16 +3413,54 @@ fn classify_declared_path(raw: &str, roots: &DeclaredPathRoots<'_>) -> DeclaredP
         trimmed.to_string()
     };
     let relative = relative.trim_start_matches("./").trim_end_matches('/');
-    if relative.is_empty() {
-        return DeclaredPath::Nothing;
+    match resolve_repository_relative(relative) {
+        Resolved::Inside(path) => DeclaredPath::Repository(path),
+        Resolved::Root => DeclaredPath::Nothing,
+        Resolved::Escapes => DeclaredPath::Unplaceable(trimmed.to_string()),
     }
-    if std::path::Path::new(relative)
-        .components()
-        .any(|component| component == std::path::Component::ParentDir)
-    {
-        return DeclaredPath::Unplaceable(trimmed.to_string());
+}
+
+/// Where a repository-relative path lands once `.` and `..` are resolved
+/// LEXICALLY (no filesystem access — the path may name something that no longer
+/// exists, or never did).
+enum Resolved {
+    Inside(String),
+    /// Resolves to the repository root itself: a directory, not a deliverable.
+    Root,
+    /// Climbs out of the repository however it was spelled.
+    Escapes,
+}
+
+/// Resolve `.` and `..` inside a repository-relative path.
+///
+/// Rejecting any path that merely CONTAINS `..` is too blunt: `src/../tests/x.rs`
+/// names a file that is squarely inside the repository, and treating it as
+/// unplaceable stops it gating a no-change outcome — silently re-opening
+/// issue #55 for that spelling, while telling the operator the path is
+/// "outside this workspace".
+fn resolve_repository_relative(relative: &str) -> Resolved {
+    use std::path::Component;
+
+    let mut parts: Vec<&str> = Vec::new();
+    for component in std::path::Path::new(relative).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => match part.to_str() {
+                Some(part) => parts.push(part),
+                None => return Resolved::Escapes,
+            },
+            Component::ParentDir => {
+                if parts.pop().is_none() {
+                    return Resolved::Escapes;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return Resolved::Escapes,
+        }
     }
-    DeclaredPath::Repository(relative.to_string())
+    if parts.is_empty() {
+        return Resolved::Root;
+    }
+    Resolved::Inside(parts.join("/"))
 }
 
 /// Declared outputs Yardlet could not place in the repository.
@@ -3438,15 +3476,25 @@ fn unplaceable_declared_outputs(
     let Some(result) = result else {
         return Vec::new();
     };
+    let unplaceable_only = |path: &String| match classify_declared_path(path, roots) {
+        DeclaredPath::Unplaceable(path) => Some(path),
+        _ => None,
+    };
+    // A path the worker also declared deleted was not left behind, so reporting
+    // it would be noise in exactly the scratch-file case this branch exists for.
+    let deleted = result
+        .changes
+        .files_deleted
+        .iter()
+        .filter_map(unplaceable_only)
+        .collect::<HashSet<_>>();
     let mut unplaceable = result
         .changes
         .files_created
         .iter()
         .chain(&result.changes.files_modified)
-        .filter_map(|path| match classify_declared_path(path, roots) {
-            DeclaredPath::Unplaceable(path) => Some(path),
-            _ => None,
-        })
+        .filter_map(unplaceable_only)
+        .filter(|path| !deleted.contains(path))
         .collect::<Vec<_>>();
     unplaceable.sort();
     unplaceable.dedup();
@@ -7112,12 +7160,32 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             workspace: &ws.root,
         };
         // Declared outputs Yardlet cannot place are not repository deliverables
-        // and must not flip a correct run, but they must not vanish either.
-        for path in unplaceable_declared_outputs(result.as_ref(), &declared_path_roots) {
-            lines.push(format!(
-                "{}: declared output {path} is outside this workspace; Yardlet did not integrate it",
-                task.id
-            ));
+        // and must not flip a correct run, but they must not vanish either. The
+        // run lines are transient — a background or parallel drain may never put
+        // them in front of anyone — so the record goes in the handoff too.
+        let unplaceable = unplaceable_declared_outputs(result.as_ref(), &declared_path_roots);
+        if !unplaceable.is_empty() {
+            for path in &unplaceable {
+                lines.push(format!(
+                    "{}: declared output {path} is outside this workspace; Yardlet did not integrate it",
+                    task.id
+                ));
+            }
+            let note = format!(
+                "\n## Declared outputs outside the workspace\n\nThe worker declared these paths, \
+                 which are not inside this repository:\n\n{}\n\nYardlet did not integrate them and \
+                 cannot say anything about them. They are recorded here so they are not lost \
+                 silently; nothing about this run's state depends on them.\n",
+                unplaceable
+                    .iter()
+                    .map(|path| format!("- `{path}`"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            let handoff = run_dir.join("handoff.md");
+            let mut existing = std::fs::read_to_string(&handoff).unwrap_or_default();
+            existing.push_str(&note);
+            let _ = state::write_str(&handoff, &existing);
         }
         if !m.auto_commit {
             let has_changes = evidence
@@ -12523,8 +12591,15 @@ printf "# worker handoff
             );
         }
 
-        // A root directory itself is neither a deliverable nor a lost output.
-        for root_path in ["/ws", "/ws/.agents/worktrees/run-test", "/ws/"] {
+        // A root directory itself is neither a deliverable nor a lost output —
+        // including when `..` walks back to it.
+        for root_path in [
+            "/ws",
+            "/ws/.agents/worktrees/run-test",
+            "/ws/",
+            "src/..",
+            "./",
+        ] {
             let declared = result(&[root_path], &[], &[]);
             assert_eq!(contradiction(&declared, &[]), None, "{root_path}");
             assert!(
@@ -12532,6 +12607,41 @@ printf "# worker handoff
                 "{root_path} must not be reported as a lost output"
             );
         }
+
+        // An interior `..` that still lands INSIDE the repository names a real
+        // file. Treating "contains .." as unplaceable stops it gating, which is
+        // issue #55 re-opened for that spelling — and tells the operator the
+        // path is "outside this workspace", which it is not.
+        for (inside, resolved) in [
+            ("src/../tests/regression.rs", "tests/regression.rs"),
+            (
+                "./crates/a/../tests/regression.rs",
+                "crates/tests/regression.rs",
+            ),
+            ("/ws/src/../tests/regression.rs", "tests/regression.rs"),
+            (
+                "/ws/.agents/worktrees/run-test/src/../tests/regression.rs",
+                "tests/regression.rs",
+            ),
+        ] {
+            assert_eq!(
+                contradiction(&result(&[inside], &[], &[]), &[]),
+                Some((
+                    "no_change_contradicts_declared_outputs",
+                    vec![resolved.to_string()]
+                )),
+                "{inside} resolves inside the repository and must still gate"
+            );
+        }
+
+        // A declared output that is created and then deleted is not left
+        // behind, wherever it lives.
+        let scratch = result(&["/outside/scratch.txt"], &[], &["/outside/scratch.txt"]);
+        assert_eq!(contradiction(&scratch, &[]), None);
+        assert!(
+            unplaceable_declared_outputs(Some(&scratch), &roots).is_empty(),
+            "a created-then-deleted scratch file must not be reported as lost"
+        );
 
         // A run that genuinely produced nothing stays a clean no-op.
         assert_eq!(contradiction(&result(&[], &[], &[]), &[]), None);
