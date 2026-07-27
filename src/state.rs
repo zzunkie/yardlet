@@ -6242,8 +6242,6 @@ pub(crate) fn append_private_file(path: &Path) -> Result<fs::File> {
         .with_context(|| format!("opening private evidence {}", path.display()))
 }
 
-/// Write a durable state snapshot through a same-directory temporary file so a
-/// crash cannot leave readers with a truncated JSON/YAML record.
 /// Subdirectory holding receipts whose reconciliation is finished. It carries
 /// no `.yaml` extension, so the `*_receipts` sweeps skip it the same way they
 /// skip any other non-receipt entry.
@@ -6266,6 +6264,8 @@ fn archive_receipt(pending: &Path, archive_dir: &Path) -> Result<()> {
         .with_context(|| format!("archiving {} to {}", pending.display(), archived.display()))
 }
 
+/// Write a durable state snapshot through a same-directory temporary file so a
+/// crash cannot leave readers with a truncated JSON/YAML record.
 pub fn write_str_atomic(path: &Path, contents: &str) -> Result<()> {
     write_bytes_atomic(path, contents.as_bytes())
 }
