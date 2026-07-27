@@ -29,11 +29,11 @@ use crate::schemas::{RunnableClass, Task, TaskState, WorkQueue, WorkerProfile};
 use crate::state::{self, write_str, Workspace};
 use crate::{evaluator, guard, inspect, routing, run, workers};
 
-fn is_verifier(task: &Task) -> bool {
+pub(crate) fn is_verifier(task: &Task) -> bool {
     matches!(packet::role_for(&task.kind), "reviewer" | "security")
 }
 
-fn has_queued_non_verifier(queue: &WorkQueue) -> bool {
+pub(crate) fn has_queued_non_verifier(queue: &WorkQueue) -> bool {
     queue
         .tasks
         .iter()
@@ -65,7 +65,7 @@ pub fn held_by_review_barrier(queue: &WorkQueue) -> Vec<String> {
 
 /// Runnable verifiers that the barrier lets through but the serial cap still
 /// admits one at a time — the "only work left is reviews" case.
-fn serialized_verifiers(queue: &WorkQueue) -> Vec<String> {
+pub fn serialized_verifiers(queue: &WorkQueue) -> Vec<String> {
     let caps = std::collections::BTreeSet::new();
     if has_queued_non_verifier(queue) {
         return Vec::new();

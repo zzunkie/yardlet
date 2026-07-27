@@ -235,6 +235,9 @@ pub struct App {
     pub report_text: String,
     /// Rendered trust + autonomy panel text (v1 table + v2 autonomy block).
     pub trust_text: String,
+    /// The `?` key list, generated on entry so it scrolls through the same
+    /// clamp every other scrollable screen uses (issue #71 remediation).
+    pub keys_text: String,
     /// When true, NewWork input continues (amends) the current intent instead of
     /// starting a fresh one.
     pub amend: bool,
@@ -501,6 +504,7 @@ impl App {
             intent_text: String::new(),
             report_text: String::new(),
             trust_text: String::new(),
+            keys_text: String::new(),
             amend: false,
             replan: false,
             pause: None,
@@ -1590,7 +1594,9 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         // The always-valid globals (g, s, f, l, i, R) do not fit the footer, so
         // this list is where they stay discoverable (issue #71).
         HomeKey::Keys => {
+            app.keys_text = view::key_list_text(app.lang.l());
             app.scroll = 0;
+            app.scroll_viewport = None;
             app.screen = Screen::Keys;
         }
     }
@@ -2458,6 +2464,7 @@ fn scroll_text(app: &App) -> Option<&str> {
         Screen::Handoff => Some(&app.handoff_text),
         Screen::Intent => Some(&app.intent_text),
         Screen::Trust => Some(&app.trust_text),
+        Screen::Keys => Some(&app.keys_text),
         Screen::Completion => Some(&app.report_text),
         _ => None,
     }
@@ -4264,6 +4271,56 @@ mod tests {
                     .any(|code| home_key(code, true) == Some(*key)),
                 "the key list advertises {key:?}, which Home does not dispatch"
             );
+        }
+    }
+
+    /// Busy-gating moved from eight inline `if !app.is_busy()` guards into one
+    /// predicate. Nothing tested it, so dropping `Run` from the set — starting a
+    /// second run while one is in flight — would have failed no test at all.
+    #[test]
+    fn busy_gating_covers_exactly_the_keys_that_start_or_change_work() {
+        let gated: Vec<HomeKey> = HOME_KEYS
+            .iter()
+            .copied()
+            .filter(|key| key.needs_idle())
+            .collect();
+        assert_eq!(
+            gated,
+            vec![
+                HomeKey::New,
+                HomeKey::Run,
+                HomeKey::Auto,
+                HomeKey::Defer,
+                HomeKey::Revive,
+                HomeKey::Tidy,
+                HomeKey::PlanReview,
+                HomeKey::Language,
+            ],
+            "the busy gate changed; every entry here starts or changes work, and \
+             every key NOT here has to stay usable while a worker runs"
+        );
+        // The inverse is the part that actually bit operators: settings, access,
+        // the monitor, the handoff and the key list exist to be reachable
+        // mid-run, and quitting must never be gated.
+        for key in [
+            HomeKey::Settings,
+            HomeKey::Access,
+            HomeKey::Monitor,
+            HomeKey::Handoff,
+            HomeKey::Goal,
+            HomeKey::Trust,
+            HomeKey::Reports,
+            HomeKey::Refresh,
+            HomeKey::Keys,
+            HomeKey::Quit,
+            HomeKey::Stop,
+            HomeKey::ApproveOrPause,
+            HomeKey::Up,
+            HomeKey::Down,
+            HomeKey::Act,
+            HomeKey::ToggleWorker,
+        ] {
+            assert!(!key.needs_idle(), "{key:?} must stay usable while busy");
         }
     }
 
