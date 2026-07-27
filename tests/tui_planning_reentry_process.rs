@@ -27,8 +27,10 @@ use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+mod common;
 
 fn test_root() -> PathBuf {
     let nonce = SystemTime::now()
@@ -227,7 +229,7 @@ fn wait_until(
     }
 }
 
-fn spawn_tui(binary: &Path, root: &Path) -> (Child, File, Vec<u8>) {
+fn spawn_tui(binary: &Path, root: &Path) -> (common::ChildGuard, File, Vec<u8>) {
     let (master, slave) = open_pty();
     let stdin = Stdio::from(slave.try_clone().unwrap());
     let stdout = Stdio::from(slave.try_clone().unwrap());
@@ -241,23 +243,17 @@ fn spawn_tui(binary: &Path, root: &Path) -> (Child, File, Vec<u8>) {
         .stderr(stderr)
         .spawn()
         .unwrap();
-    (child, master, Vec::new())
+    // Killed and reaped even if an assertion unwinds past the clean quit
+    // (issue #64).
+    (common::ChildGuard::new(child), master, Vec::new())
 }
 
-fn quit_tui(child: &mut Child, master: &mut File, sink: &mut Vec<u8>) {
+fn quit_tui(child: &mut common::ChildGuard, master: &mut File, sink: &mut Vec<u8>) {
     std::thread::sleep(Duration::from_millis(200));
     let _ = master.write_all(b"q");
     std::thread::sleep(Duration::from_millis(150));
     let _ = master.write_all(b"q");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while child.try_wait().unwrap().is_none() && Instant::now() < deadline {
-        drain(master, sink);
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    if child.try_wait().unwrap().is_none() {
-        child.kill().unwrap();
-        child.wait().unwrap();
-    }
+    child.shutdown(Duration::from_secs(5), || drain(master, sink));
 }
 
 /// The single open session's record, read straight off disk.
