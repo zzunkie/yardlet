@@ -24,6 +24,7 @@ Cargo.lock.orig
 /.agents/intent-contract.yaml
 /.agents/work-queue.yaml
 /.agents/conversations/
+/.agents/git-finish-target.log
 /.agents/approvals.yaml
 /.agents/planning.lock
 /.agents/locks/

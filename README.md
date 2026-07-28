@@ -288,6 +288,7 @@ Bracketed paste preserves pasted newlines and Korean/CJK text.
 | `yardlet defer <id> --cascade [reason]` | Also defer queued tasks stranded behind it, transitively, as one revive group. |
 | `yardlet revive <id> [--group]` | Return a Deferred task to Queued; `--group` revives the cascade group recorded with it. |
 | `yardlet access <sandboxed\|full>` | Set the default worker permission level. |
+| `yardlet target [<ref>]` | Show or set where Git finish delivers; `--to-checkout` retargets to the current branch. |
 | `yardlet handoff` | Print the latest run's handoff. |
 | `yardlet report` | Print the intent's final report (aggregate of every task). |
 | `yardlet memory [init \| refresh [--stale-only]]` | List the project-memory index (flags possibly stale docs); `init`/`refresh` draft docs via a worker that Yardlet's core then writes. |

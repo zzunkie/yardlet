@@ -641,7 +641,7 @@ pub fn checkout_ref(root: &std::path::Path) -> Option<String> {
 /// Operators think in branch names; the policy stores full refs. Rejecting
 /// `main` because it is not `refs/heads/main` would make the retarget command
 /// as fiddly as the hand-edit it replaces (issue #42).
-pub fn normalize_target_ref(requested: &str) -> anyhow::Result<String> {
+pub fn normalize_target_ref(root: &std::path::Path, requested: &str) -> anyhow::Result<String> {
     let trimmed = requested.trim();
     let candidate = if trimmed.starts_with("refs/") {
         trimmed.to_string()
@@ -653,6 +653,14 @@ pub fn normalize_target_ref(requested: &str) -> anyhow::Result<String> {
             "'{requested}' is not a usable branch ref; give a branch name like `main` or a \
              full `refs/heads/<branch>`"
         );
+    }
+    // The same check the finish path runs. Accepting a ref here that Git will
+    // later reject would turn one clear block into a worse one: the command
+    // would report success and every run would then fail with
+    // `target_ref_invalid`, which is less actionable than the mismatch the
+    // operator invoked this to clear.
+    if !git_ok(root, &["check-ref-format", &candidate]) {
+        anyhow::bail!("'{candidate}' is not a valid Git ref name");
     }
     Ok(candidate)
 }
@@ -1721,9 +1729,13 @@ mod target_ref_tests {
     /// replaces (issue #42).
     #[test]
     fn a_retarget_accepts_either_spelling_and_refuses_unusable_refs() {
-        assert_eq!(normalize_target_ref("main").unwrap(), "refs/heads/main");
+        let root = std::env::temp_dir();
         assert_eq!(
-            normalize_target_ref("  refs/heads/release/1.0  ").unwrap(),
+            normalize_target_ref(&root, "main").unwrap(),
+            "refs/heads/main"
+        );
+        assert_eq!(
+            normalize_target_ref(&root, "  refs/heads/release/1.0  ").unwrap(),
             "refs/heads/release/1.0"
         );
         for bad in [
@@ -1736,8 +1748,16 @@ mod target_ref_tests {
             "back\\slash",
         ] {
             assert!(
-                normalize_target_ref(bad).is_err(),
+                normalize_target_ref(&root, bad).is_err(),
                 "{bad:?} must not become a delivery target"
+            );
+        }
+        // Lexically safe, but Git itself refuses these. Accepting one would
+        // trade the operator's clear block for a worse one at run time.
+        for git_refuses in [".hidden", "foo.lock", "a//b", "foo/.bar", "x.lock/y"] {
+            assert!(
+                normalize_target_ref(&root, git_refuses).is_err(),
+                "{git_refuses:?} is not a valid Git ref name and must be refused"
             );
         }
     }

@@ -2028,6 +2028,12 @@ fn cmd_target(cwd: &std::path::Path, args: TargetArgs) -> Result<()> {
     let checkout = crate::git_finish::checkout_ref(&ws.root);
     let current = config.git_finish.target_ref.clone();
 
+    if args.to_checkout && checkout.is_none() {
+        anyhow::bail!(
+            "--to-checkout needs a checked-out branch; the owning root is on a detached or \
+             unborn HEAD. Check out the branch you want to deliver to, or name a ref."
+        );
+    }
     let Some(requested) = args
         .target_ref
         .clone()
@@ -2056,7 +2062,7 @@ fn cmd_target(cwd: &std::path::Path, args: TargetArgs) -> Result<()> {
         return Ok(());
     };
 
-    let normalized = crate::git_finish::normalize_target_ref(&requested)?;
+    let normalized = crate::git_finish::normalize_target_ref(&ws.root, &requested)?;
     if normalized == current {
         println!("Git finish target is already {normalized}.");
         return Ok(());
