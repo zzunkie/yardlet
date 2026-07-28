@@ -5145,6 +5145,58 @@ enum ScalarValue<'a> {
     Usize(usize),
 }
 
+/// Set `git_finish.target_ref`, preserving the file's comments and layout.
+///
+/// `save_config_preserving_format` only rewrites top-level scalars, so a nested
+/// change made through it is silently dropped — the caller reports success over
+/// a file it never wrote. Delivery retargeting needs a real writer (issue #42),
+/// and it goes here because `.agents/` is written from one place.
+pub fn save_git_finish_target_ref(path: &Path, target_ref: &str) -> Result<()> {
+    let original =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let updated = apply_git_finish_target_edit(&original, target_ref);
+    write_str_atomic(path, &updated)
+}
+
+/// Rewrite (or introduce) `target_ref` inside the `git_finish:` block.
+fn apply_git_finish_target_edit(input: &str, target_ref: &str) -> String {
+    let mut lines = split_preserving_newlines(input);
+    let scalar = ScalarValue::String(target_ref);
+    let value = render_scalar("", &scalar);
+    let Some(block_start) = lines.iter().position(|line| {
+        yaml_key_line(split_line_ending(line).0)
+            .is_some_and(|(indent, key, _)| indent == 0 && key == "git_finish")
+    }) else {
+        // No block at all: add one rather than dropping the change.
+        if !lines.last().is_some_and(|line| line.ends_with('\n')) {
+            if let Some(last) = lines.last_mut() {
+                last.push('\n');
+            }
+        }
+        lines.push(format!("git_finish:\n  target_ref: {value}\n"));
+        return lines.concat();
+    };
+    // The block ends at the next line whose key is top-level.
+    let block_end = lines
+        .iter()
+        .enumerate()
+        .skip(block_start + 1)
+        .find(|(_, line)| {
+            yaml_key_line(split_line_ending(line).0).is_some_and(|(indent, _, _)| indent == 0)
+        })
+        .map(|(index, _)| index)
+        .unwrap_or(lines.len());
+    for line in lines.iter_mut().take(block_end).skip(block_start + 1) {
+        let (body, eol) = split_line_ending(line);
+        if yaml_key_line(body).is_some_and(|(indent, key, _)| indent > 0 && key == "target_ref") {
+            *line = format!("{}{}", replace_line_value(body, &scalar), eol);
+            return lines.concat();
+        }
+    }
+    lines.insert(block_start + 1, format!("  target_ref: {value}\n"));
+    lines.concat()
+}
+
 fn apply_top_level_edits(input: &str, edits: &[LineEdit<'_>]) -> Result<String> {
     let mut lines = split_preserving_newlines(input);
     for edit in edits {
@@ -6485,6 +6537,91 @@ pub fn place_skill_files_no_clobber(
             let _ = fs::remove_dir_all(&staging);
             Err(error).with_context(|| format!("placing skill {}", dst.display()))
         }
+    }
+}
+
+#[cfg(test)]
+mod git_finish_target_tests {
+    use super::apply_git_finish_target_edit;
+
+    /// The written value, quoting style aside.
+    fn target_line(text: &str) -> String {
+        text.lines()
+            .find_map(|line| line.trim().strip_prefix("target_ref:"))
+            .map(|value| {
+                value
+                    .trim()
+                    .trim_matches('\'')
+                    .trim_matches('"')
+                    .to_string()
+            })
+            .unwrap_or_default()
+    }
+
+    /// `save_config_preserving_format` only rewrites top-level scalars, so a
+    /// nested change made through it is silently dropped and the caller reports
+    /// success over a file it never wrote (issue #42).
+    #[test]
+    fn retarget_rewrites_the_nested_key_without_disturbing_the_file() {
+        let existing = "schema_version: 1\n# keep this comment\ngit_finish:\n  auto_push: false\n  # and this one\n  target_ref: 'refs/heads/old'\n  remote: origin\nlanguage: ko\n";
+        let updated = apply_git_finish_target_edit(existing, "refs/heads/main");
+        assert!(updated.contains("target_ref: 'refs/heads/main'"));
+        assert!(!updated.contains("refs/heads/old"));
+        for preserved in [
+            "# keep this comment",
+            "# and this one",
+            "auto_push: false",
+            "remote: origin",
+            "language: ko",
+        ] {
+            assert!(
+                updated.contains(preserved),
+                "lost {preserved:?}:\n{updated}"
+            );
+        }
+        assert_eq!(
+            updated.matches("target_ref:").count(),
+            1,
+            "the key must be rewritten, not duplicated"
+        );
+    }
+
+    #[test]
+    fn retarget_adds_the_key_to_a_block_that_lacks_it() {
+        let existing = "git_finish:\n  auto_push: true\nlanguage: en\n";
+        let updated = apply_git_finish_target_edit(existing, "refs/heads/main");
+        assert!(target_line(&updated) == "refs/heads/main", "{updated}");
+        assert!(updated.contains("auto_push: true"));
+        assert!(
+            updated.find("target_ref").unwrap() < updated.find("language").unwrap(),
+            "the key must land inside the block, not after it:\n{updated}"
+        );
+    }
+
+    #[test]
+    fn retarget_adds_the_block_when_the_file_has_none() {
+        for existing in ["language: en\n", "language: en"] {
+            let updated = apply_git_finish_target_edit(existing, "refs/heads/main");
+            assert!(updated.contains("language: en"));
+            assert!(
+                updated.contains("git_finish:\n  target_ref: "),
+                "a missing block must be introduced rather than dropping the change:\n{updated}"
+            );
+            assert_eq!(target_line(&updated), "refs/heads/main", "{updated}");
+        }
+    }
+
+    /// A key of the same name in a LATER top-level block must not be mistaken
+    /// for this one.
+    #[test]
+    fn retarget_stays_inside_its_own_block() {
+        let existing =
+            "git_finish:\n  auto_push: false\nother:\n  target_ref: 'refs/heads/decoy'\n";
+        let updated = apply_git_finish_target_edit(existing, "refs/heads/main");
+        assert!(updated.contains("refs/heads/decoy"), "{updated}");
+        let block = updated.split("other:").next().unwrap();
+        assert!(block.contains("target_ref: "), "{updated}");
+        assert!(block.contains("refs/heads/main"), "{updated}");
     }
 }
 
