@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+mod common;
+
 fn test_root(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("yard-tui-startup-{name}-{}", std::process::id()))
 }
@@ -99,7 +101,7 @@ fn slow_probe_and_recovery_do_not_block_first_safe_tui_frame() {
         std::env::var("PATH").unwrap_or_default()
     );
     let started = Instant::now();
-    let mut child = Command::new(&binary)
+    let child = Command::new(&binary)
         .current_dir(&root)
         .env("PATH", path)
         .env("TERM", "xterm-256color")
@@ -110,6 +112,9 @@ fn slow_probe_and_recovery_do_not_block_first_safe_tui_frame() {
         .stderr(stderr)
         .spawn()
         .unwrap();
+    // Killed and reaped even if an assertion below unwinds past the clean quit
+    // (issue #64).
+    let mut child = common::ChildGuard::new(child);
 
     let marker = b"Starting Yardlet safely";
     let deadline = started + Duration::from_secs(3);
@@ -150,13 +155,6 @@ fn slow_probe_and_recovery_do_not_block_first_safe_tui_frame() {
     );
     master.write_all(b"q").unwrap();
 
-    let exit_deadline = Instant::now() + Duration::from_secs(3);
-    while child.try_wait().unwrap().is_none() && Instant::now() < exit_deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    if child.try_wait().unwrap().is_none() {
-        child.kill().unwrap();
-        child.wait().unwrap();
-    }
+    child.shutdown(Duration::from_secs(3), || {});
     let _ = fs::remove_dir_all(root);
 }

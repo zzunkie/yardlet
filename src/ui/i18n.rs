@@ -93,11 +93,21 @@ pub fn runnable_class_label(l: &L, class: RunnableClass) -> &'static str {
 /// Typed progress emitted by the run engine. Identifiers and diagnostic
 /// details are interpolated verbatim; only Yardlet-authored chrome changes.
 pub enum RunProgress<'a> {
-    Ambiguity { turn: u32, cap: u32 },
+    Ambiguity {
+        turn: u32,
+        cap: u32,
+    },
     Paused,
     WaitingForWorker(&'a str),
     WorkerLongRunning(&'a str),
-    MergeConflict(&'a str),
+    /// A Partial the drain cannot continue past. The remediation differs by
+    /// cause, so the cause is carried through rather than assumed (issue #40).
+    PartialNeedsYou {
+        id: &'a str,
+        kind: crate::run::PartialReasonKind,
+        marker: &'a str,
+        detail: Option<&'a str>,
+    },
     ParallelOff(&'a str),
     ParallelSequential(&'a str),
     NeedsUserMany(&'a str),
@@ -111,6 +121,58 @@ pub enum RunProgress<'a> {
     NeedsUser(&'a str),
     PartialContinue(&'a str),
     FailedRetry(&'a str),
+}
+
+/// Per-cause stop wording. Only a genuine merge conflict asks for conflict
+/// resolution; the others name what actually has to be fixed.
+fn partial_needs_you(
+    lang: Lang,
+    id: &str,
+    kind: crate::run::PartialReasonKind,
+    marker: &str,
+    detail: Option<&str>,
+) -> String {
+    use crate::run::PartialReasonKind as K;
+    let detail_en = detail.map(|d| format!(" ({d})")).unwrap_or_default();
+    let detail_ko = detail.map(|d| format!(" ({d})")).unwrap_or_default();
+    match (lang, kind) {
+        (Lang::En, K::MergeConflict) => format!(
+            "stopped: {id} has a merge conflict; resolve it (see handoff), then run auto again"
+        ),
+        (Lang::Ko, K::MergeConflict) => format!(
+            "정지: {id}에 병합 충돌이 있음; 핸드오프를 보고 해결한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, K::IntegrationError) => format!(
+            "stopped: {id} could not be integrated; there is no conflict to resolve. See the run's handoff for the error, then run auto again"
+        ),
+        (Lang::Ko, K::IntegrationError) => format!(
+            "정지: {id} 통합이 실패함; 해결할 충돌은 없습니다. run 핸드오프에서 오류를 확인한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, K::GitFinishUnverified) => format!(
+            "stopped: {id} merged cleanly but its Git finish is unverified{detail_en}; fix that, then run auto again"
+        ),
+        (Lang::Ko, K::GitFinishUnverified) => format!(
+            "정지: {id}는 병합은 깨끗했지만 Git finish가 검증되지 않음{detail_ko}; 해결한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, K::WorktreeCleanupChanged) => format!(
+            "stopped: {id} merged, but its worktree changed during cleanup and was kept; inspect it, then run auto again"
+        ),
+        (Lang::Ko, K::WorktreeCleanupChanged) => format!(
+            "정지: {id}는 병합됐지만 정리 중 worktree가 변경되어 보존됨; 확인한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, K::AutoCommitDisabled) => format!(
+            "stopped: {id} left uncommitted work and auto-commit is off; commit it, then run auto again"
+        ),
+        (Lang::Ko, K::AutoCommitDisabled) => format!(
+            "정지: {id}가 커밋되지 않은 작업을 남겼고 자동 커밋이 꺼져 있음; 커밋한 뒤 자동 실행을 다시 시작하세요"
+        ),
+        (Lang::En, K::Other) => {
+            format!("stopped: {id} is partial ({marker}); resolve it, then run auto again")
+        }
+        (Lang::Ko, K::Other) => {
+            format!("정지: {id}가 부분 완료 상태({marker}); 해결한 뒤 자동 실행을 다시 시작하세요")
+        }
+    }
 }
 
 pub fn run_progress(lang: Lang, event: RunProgress<'_>) -> String {
@@ -139,12 +201,15 @@ pub fn run_progress(lang: Lang, event: RunProgress<'_>) -> String {
         (Lang::Ko, RunProgress::WorkerLongRunning(id)) => format!(
             "정지: {id}가 30분 넘게 실행 중; 워커를 정지하거나 계속 기다린 뒤 자동 실행을 다시 시작하세요"
         ),
-        (Lang::En, RunProgress::MergeConflict(id)) => format!(
-            "stopped: {id} has a merge conflict; resolve it (see handoff), then run auto again"
-        ),
-        (Lang::Ko, RunProgress::MergeConflict(id)) => format!(
-            "정지: {id}에 병합 충돌이 있음; 핸드오프를 보고 해결한 뒤 자동 실행을 다시 시작하세요"
-        ),
+        (
+            lang,
+            RunProgress::PartialNeedsYou {
+                id,
+                kind,
+                marker,
+                detail,
+            },
+        ) => partial_needs_you(lang, id, kind, marker, detail),
         (Lang::En, RunProgress::ParallelOff(reason)) => {
             format!("parallel off ({reason}); running sequentially")
         }
@@ -307,6 +372,56 @@ pub struct L {
     pub key_answer: &'static str,
     pub key_approve: &'static str,
     pub key_replan: &'static str,
+    /// Offered whenever an open planning session is waiting on the operator.
+    pub key_plan_review: &'static str,
+    /// Suffixes for the `N ready` breakdown when the scheduler will not start
+    /// what the count implies (issue #51).
+    pub ready_review_barrier: &'static str,
+    pub ready_reviews_serial: &'static str,
+    /// Always offered: the full key list. Home's footer can only carry the keys
+    /// with a target right now, so the always-valid globals live behind this
+    /// one advertised key (issue #71).
+    pub key_keys: &'static str,
+    pub keys_title: &'static str,
+    pub keys_intro: &'static str,
+    pub footer_keys: &'static str,
+    /// One line per Home action. Every key Home dispatches has an entry here;
+    /// `HomeKey::doc` is exhaustive, so a new action cannot compile undocumented.
+    pub key_doc_quit: &'static str,
+    pub key_doc_restart: &'static str,
+    pub key_doc_new: &'static str,
+    pub key_doc_replan: &'static str,
+    pub key_doc_run: &'static str,
+    pub key_doc_auto: &'static str,
+    pub key_doc_tidy: &'static str,
+    pub key_doc_defer: &'static str,
+    pub key_doc_revive: &'static str,
+    pub key_doc_approve_or_pause: &'static str,
+    pub key_doc_answer: &'static str,
+    pub key_doc_goal: &'static str,
+    pub key_doc_handoff: &'static str,
+    pub key_doc_trust: &'static str,
+    pub key_doc_settings: &'static str,
+    pub key_doc_monitor: &'static str,
+    pub key_doc_refresh: &'static str,
+    pub key_doc_language: &'static str,
+    pub key_doc_access: &'static str,
+    pub key_doc_plan_review: &'static str,
+    pub key_doc_reports: &'static str,
+    pub key_doc_stop: &'static str,
+    pub key_doc_keys: &'static str,
+    pub key_doc_up: &'static str,
+    pub key_doc_down: &'static str,
+    pub key_doc_act: &'static str,
+    pub key_doc_toggle_worker: &'static str,
+    /// Home rows for an open planning session. The queue is legitimately empty
+    /// in this state, so these are the only thing distinguishing "a plan is
+    /// waiting" from "there is no work" (issue #65). `{n}` is the count.
+    pub home_plan_pending: &'static str,
+    pub home_plan_accepted: &'static str,
+    pub home_plan_unreadable: &'static str,
+    /// Shown when `o` is pressed with no planning session to re-enter.
+    pub plan_review_nothing: &'static str,
     pub replan_worker_question_hint: &'static str,
     pub replan_live_queue_hint: &'static str,
     pub replan_nothing_hint: &'static str,
@@ -527,11 +642,49 @@ pub const EN: L = L {
     key_handoff: "h handoff",
     key_trust: "T trust",
     key_quit: "q quit",
-    footer_home_busy: "running...  p pause  Esc stop  m monitor  h handoff  i goal  f access  s settings  q quit",
-    footer_home_busy_nodrain: "running...  Esc stop  m monitor  h handoff  i goal  f access  s settings  q quit",
+    footer_home_busy: "running...  p pause  Esc stop  m monitor  h handoff  i goal  f access  s settings  ? keys  q quit",
+    footer_home_busy_nodrain: "running...  Esc stop  m monitor  h handoff  i goal  f access  s settings  ? keys  q quit",
     key_answer: "a answer",
     key_approve: "p approve",
     key_replan: "P replan",
+    key_plan_review: "o plan review",
+    ready_review_barrier: " held by the review barrier",
+    ready_reviews_serial: "reviews run one at a time",
+    key_keys: "? keys",
+    keys_title: " Home keys ",
+    keys_intro: "Every key Home accepts. The footer only lists the ones with something to act on right now; all of these work.",
+    footer_keys: "\u{2191}/\u{2193}/PgUp/PgDn scroll  Esc/q/? back",
+    key_doc_quit: "quit Yardlet",
+    key_doc_restart: "restart into a newly installed binary (offered when one is ready)",
+    key_doc_new: "describe new work",
+    key_doc_replan: "replan this intent from a settled queue",
+    key_doc_run: "run the next task",
+    key_doc_auto: "drain the queue",
+    key_doc_tidy: "archive settled work",
+    key_doc_defer: "set the selected task aside",
+    key_doc_revive: "bring a deferred task back",
+    key_doc_approve_or_pause: "approve the selected task, or pause a running drain",
+    key_doc_answer: "answer the open question",
+    key_doc_goal: "show the intent contract",
+    key_doc_handoff: "show the latest handoff",
+    key_doc_trust: "trust and autonomy panel",
+    key_doc_settings: "open settings",
+    key_doc_monitor: "follow the worker's live output",
+    key_doc_refresh: "reload the workspace and re-probe worker readiness",
+    key_doc_language: "switch language",
+    key_doc_access: "toggle the worker access level",
+    key_doc_plan_review: "open the planning review",
+    key_doc_reports: "reports and past intents",
+    key_doc_stop: "stop the running worker",
+    key_doc_keys: "this list",
+    key_doc_up: "move the selection up",
+    key_doc_down: "move the selection down",
+    key_doc_act: "act on the selected row",
+    key_doc_toggle_worker: "enable or disable the selected worker",
+    home_plan_pending: "\u{25b6} {n} plan proposal(s) waiting for review: press o",
+    home_plan_accepted: "\u{25b6} an accepted plan is waiting to be confirmed into the queue: press o",
+    home_plan_unreadable: "\u{25b6} a planning session exists but could not be read: press o for the error",
+    plan_review_nothing: "no open planning session to review; press n to describe new work",
     replan_worker_question_hint: "a worker question is open; press a and answer it instead of replanning",
     replan_live_queue_hint: "the queue still has live work; finish or settle it before replanning",
     replan_nothing_hint: "this settled queue has no failed approach to replan; press n for follow-up work",
@@ -745,11 +898,49 @@ pub const KO: L = L {
     key_handoff: "h 핸드오프",
     key_trust: "T 신뢰",
     key_quit: "q 종료",
-    footer_home_busy: "실행 중...  p 일시정지  Esc 정지  m 모니터  h 핸드오프  i 목표  f 권한  s 설정  q 종료",
-    footer_home_busy_nodrain: "실행 중...  Esc 정지  m 모니터  h 핸드오프  i 목표  f 권한  s 설정  q 종료",
+    footer_home_busy: "실행 중...  p 일시정지  Esc 정지  m 모니터  h 핸드오프  i 목표  f 권한  s 설정  ? 키목록  q 종료",
+    footer_home_busy_nodrain: "실행 중...  Esc 정지  m 모니터  h 핸드오프  i 목표  f 권한  s 설정  ? 키목록  q 종료",
     key_answer: "a 답변",
     key_approve: "p 승인",
     key_replan: "P 재계획",
+    key_plan_review: "o 플랜 검토",
+    ready_review_barrier: " 리뷰 배리어 대기",
+    ready_reviews_serial: "리뷰는 한 번에 하나씩",
+    key_keys: "? 키목록",
+    keys_title: " 홈 키 목록 ",
+    keys_intro: "홈에서 받는 모든 키입니다. 푸터에는 지금 대상이 있는 키만 나오지만, 아래는 전부 동작합니다.",
+    footer_keys: "\u{2191}/\u{2193}/PgUp/PgDn 스크롤  Esc/q/? 뒤로",
+    key_doc_quit: "Yardlet 종료",
+    key_doc_restart: "새로 설치된 바이너리로 재시작 (준비됐을 때만 제공)",
+    key_doc_new: "새 작업 입력",
+    key_doc_replan: "종결된 큐를 같은 인텐트로 재계획",
+    key_doc_run: "다음 태스크 실행",
+    key_doc_auto: "큐 자동 드레인",
+    key_doc_tidy: "종결된 작업 아카이브",
+    key_doc_defer: "선택한 태스크 보류",
+    key_doc_revive: "보류한 태스크 되살림",
+    key_doc_approve_or_pause: "선택한 태스크 승인, 또는 진행 중인 드레인 일시정지",
+    key_doc_answer: "열린 질문에 답변",
+    key_doc_goal: "인텐트 계약 보기",
+    key_doc_handoff: "최신 핸드오프 보기",
+    key_doc_trust: "신뢰·자율성 패널",
+    key_doc_settings: "설정 열기",
+    key_doc_monitor: "워커 실시간 출력 따라가기",
+    key_doc_refresh: "워크스페이스 새로고침 + 워커 준비 상태 재확인",
+    key_doc_language: "언어 전환",
+    key_doc_access: "워커 권한 수준 전환",
+    key_doc_plan_review: "플랜 검토 화면 열기",
+    key_doc_reports: "리포트와 지난 인텐트",
+    key_doc_stop: "실행 중인 워커 정지",
+    key_doc_keys: "이 목록",
+    key_doc_up: "선택 위로",
+    key_doc_down: "선택 아래로",
+    key_doc_act: "선택한 행에 대해 행동",
+    key_doc_toggle_worker: "선택한 워커 켜기/끄기",
+    home_plan_pending: "\u{25b6} 검토 대기 중인 플랜 제안 {n}건: o 키",
+    home_plan_accepted: "\u{25b6} 수락된 플랜이 큐 확정을 기다리는 중: o 키",
+    home_plan_unreadable: "\u{25b6} 플래닝 세션이 있으나 읽을 수 없음: o 키로 오류 확인",
+    plan_review_nothing: "검토할 열린 플래닝 세션이 없습니다. 새 작업은 n을 누르세요",
     replan_worker_question_hint: "워커 질문이 열려 있음. 재계획 대신 a 눌러 답변하세요",
     replan_live_queue_hint: "큐에 진행 중인 작업이 있음. 완료하거나 종결한 뒤 재계획하세요",
     replan_nothing_hint: "이 종결 큐에는 재계획할 실패 접근이 없음. 후속 작업은 n을 누르세요",
@@ -892,6 +1083,60 @@ pub const KO: L = L {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #40: every Partial with a marker used to stop the drain with the
+    /// merge-conflict message, sending the operator after a conflict that does
+    /// not exist. Only a real conflict may ask for conflict resolution.
+    #[test]
+    fn partial_stop_message_names_the_actual_cause() {
+        use crate::run::PartialReasonKind as K;
+        let render = |lang, kind, marker, detail| {
+            run_progress(
+                lang,
+                RunProgress::PartialNeedsYou {
+                    id: "YARD-001",
+                    kind,
+                    marker,
+                    detail,
+                },
+            )
+        };
+
+        for lang in [Lang::En, Lang::Ko] {
+            let conflict = render(lang, K::MergeConflict, "merge_conflict", None);
+            assert!(
+                conflict.contains("conflict") || conflict.contains("충돌"),
+                "{conflict}"
+            );
+
+            for (kind, marker) in [
+                (K::IntegrationError, "integration_error"),
+                (K::GitFinishUnverified, "git_finish_unverified"),
+                (K::WorktreeCleanupChanged, "worktree_cleanup_changed"),
+                (K::AutoCommitDisabled, "auto_commit_disabled"),
+            ] {
+                let rendered = render(lang, kind, marker, None);
+                assert!(rendered.contains("YARD-001"), "{rendered}");
+                assert!(
+                    !rendered.contains("merge conflict") && !rendered.contains("병합 충돌"),
+                    "{marker} must not be reported as a merge conflict: {rendered}"
+                );
+            }
+        }
+
+        // An unknown marker is surfaced verbatim rather than guessed at.
+        let other = render(Lang::En, K::Other, "some_new_reason", None);
+        assert!(other.contains("some_new_reason"), "{other}");
+
+        // A blocked Git finish names the checks that failed.
+        let blocked = render(
+            Lang::En,
+            K::GitFinishUnverified,
+            "git_finish_unverified",
+            Some("cargo clippy"),
+        );
+        assert!(blocked.contains("cargo clippy"), "{blocked}");
+    }
 
     #[test]
     fn explicit_config_wins() {

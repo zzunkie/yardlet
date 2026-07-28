@@ -39,6 +39,10 @@ pub struct Snapshot {
     /// harness-copy warnings as evidence. Absence of the evidence file means
     /// preparation was clean, so such runs never appear here.
     pub harness_copy_warnings: Vec<HarnessCopyWarning>,
+    /// An open planning session still waiting on the operator. The queue is
+    /// legitimately empty in this state, so without this the surface is
+    /// indistinguishable from having no work at all (issue #65).
+    pub planning_reentry: Option<crate::planning::PlanningReentry>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -160,6 +164,25 @@ pub struct RecoveryRequired {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct QueueHealth {
     pub runnable: usize,
+    /// Runnable tasks the verifier barrier is holding back, and runnable
+    /// reviews that will go one at a time because nothing else is queued.
+    ///
+    /// `runnable` alone counts tasks the scheduler will deliberately refuse to
+    /// co-schedule, which reads as parallelism that never arrives (issue #51).
+    ///
+    /// Both are computed HERE, from `task_class` — the same real capability
+    /// vocabulary and live approval grants `runnable` uses. The scheduler's own
+    /// helpers deliberately work from an empty vocabulary and ignore approval
+    /// grants (so parallel selection falls through to the serial selector for
+    /// those cases), which makes them right for scheduling and wrong to print
+    /// next to `runnable`: a queue of approval-granted reviews would count 3
+    /// runnable and 0 held.
+    ///
+    /// There is deliberately no "how many will start" number. That would also
+    /// have to fold in `max_parallel`, and a count that says "1 parallelizable"
+    /// in a workspace where parallelism is switched off explains nothing.
+    pub review_barrier: usize,
+    pub serialized_reviews: usize,
     pub running: usize,
     pub waiting_decision: usize,
     pub waiting_approval: usize,
@@ -401,6 +424,7 @@ impl Snapshot {
             last_transitions,
             recovery_required,
             harness_copy_warnings,
+            planning_reentry: crate::planning::reentry(ws),
         })
     }
 
@@ -436,6 +460,19 @@ impl Snapshot {
                 RunnableClass::Done => health.done += 1,
             }
         }
+        let work_pending = crate::parallel::has_queued_non_verifier(&self.queue);
+        for task in &self.queue.tasks {
+            if !crate::parallel::is_verifier(task)
+                || self.task_class(task) != RunnableClass::Runnable
+            {
+                continue;
+            }
+            if work_pending || self.queue.has_active_remediation_for(&task.id) {
+                health.review_barrier += 1;
+            } else {
+                health.serialized_reviews += 1;
+            }
+        }
         health
     }
 
@@ -460,8 +497,21 @@ impl Snapshot {
             "planner": self.planner,
             "pending": self.pending.as_ref().map(|(id, q)| serde_json::json!({"task": id, "question": q})),
             "intent": self.intent_summary(),
+            "planning_reentry": self.planning_reentry.map(|reentry| match reentry {
+                crate::planning::PlanningReentry::PendingProposal { count } => {
+                    serde_json::json!({"kind": "pending_proposal", "count": count})
+                }
+                crate::planning::PlanningReentry::AcceptedDraft => {
+                    serde_json::json!({"kind": "accepted_draft"})
+                }
+                crate::planning::PlanningReentry::Unreadable => {
+                    serde_json::json!({"kind": "unreadable"})
+                }
+            }),
             "queue": {
                 "runnable": health.runnable,
+                "review_barrier": health.review_barrier,
+                "serialized_reviews": health.serialized_reviews,
                 "running": health.running,
                 "waiting_decision": health.waiting_decision,
                 "waiting_approval": health.waiting_approval,
@@ -628,6 +678,89 @@ mod tests {
             crate::yaml::from_str(&format!("id: {id}\ntitle: Home footer {id}\n")).unwrap();
         task.state = state;
         task
+    }
+
+    /// The health projection and the scheduler must agree on what "ready"
+    /// buys you. `runnable` alone counted three reviews the barrier would
+    /// refuse to co-schedule (issue #51).
+    #[test]
+    fn health_reports_what_the_scheduler_would_actually_admit() {
+        let mut builder = home_footer_task("BUILD", TaskState::Queued);
+        builder.kind = "implementation".into();
+        let mut tasks = vec![builder];
+        for id in ["REVIEW-A", "REVIEW-B", "REVIEW-C"] {
+            let mut review = home_footer_task(id, TaskState::Queued);
+            review.kind = "review".into();
+            tasks.push(review);
+        }
+        let mut queue = WorkQueue::empty();
+        queue.tasks = tasks;
+        let mut config: YardConfig = crate::yaml::from_str(
+            "schema_version: 1\nproduct: yardlet\nworkspace_id: health\ncreated_at: \"2026-07-27T00:00:00Z\"\nstate_dir: .agents\ndefault_interface: tui\ncanonical_queue: work-queue.yaml\ncurrent_intent: \"\"\n",
+        )
+        .unwrap();
+        config.max_parallel = 4;
+        let snapshot = Snapshot {
+            config,
+            intent: None,
+            queue,
+            home_footer: HomeFooterAvailability::default(),
+            workers: Vec::new(),
+            planner: String::new(),
+            pending: None,
+            gate: None,
+            approvals_needed: Vec::new(),
+            capabilities: Default::default(),
+            last_transitions: BTreeMap::new(),
+            recovery_required: Vec::new(),
+            harness_copy_warnings: Vec::new(),
+            planning_reentry: None,
+        };
+
+        let health = snapshot.health();
+        assert_eq!(health.runnable, 4, "all four are class-runnable");
+        assert_eq!(
+            health.review_barrier, 3,
+            "three of them are reviews the barrier will not co-schedule"
+        );
+        assert_eq!(health.serialized_reviews, 0, "a builder is still queued");
+
+        // Reviews as the only work left: nothing is held BEHIND anything, but
+        // they still run one at a time — issue #51's second reported case,
+        // which a barrier-only signal reports as a bare, dishonest count.
+        let mut reviews_only = snapshot.queue.clone();
+        reviews_only.tasks.retain(|task| task.kind == "review");
+        let reviews_only = Snapshot {
+            queue: reviews_only,
+            ..snapshot
+        };
+        let health = reviews_only.health();
+        assert_eq!(health.runnable, 3);
+        assert_eq!(health.review_barrier, 0);
+        assert_eq!(health.serialized_reviews, 3);
+
+        // The counts must use the SAME inputs as `runnable`. The scheduler's own
+        // helpers work from an empty capability vocabulary and ignore approval
+        // grants, so reading them here would report 3 runnable and 0 held for a
+        // queue that is entirely reviews requiring a granted approval.
+        let mut approval_gated = reviews_only.queue.clone();
+        for task in &mut approval_gated.tasks {
+            task.approval = Some(crate::yaml::from_str("required: true").unwrap());
+        }
+        let approval_gated = Snapshot {
+            queue: approval_gated,
+            approvals_needed: Vec::new(),
+            ..reviews_only
+        };
+        let health = approval_gated.health();
+        assert_eq!(
+            health.runnable, 3,
+            "approval was granted, so these are ready"
+        );
+        assert_eq!(
+            health.serialized_reviews, 3,
+            "and the count that explains them has to agree"
+        );
     }
 
     #[test]

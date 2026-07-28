@@ -51,7 +51,44 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Screen::Completion => render_completion(frame, app),
         Screen::ReportList => render_report_list(frame, app),
         Screen::Approvals => render_approvals(frame, app),
+        Screen::Keys => render_keys(frame, app),
     }
+}
+
+/// The full Home key list. The idle footer can only carry keys with a target
+/// right now, which left the always-valid globals (g, s, f, l, i, R)
+/// undiscoverable; this is where they live (issue #71).
+fn render_keys(frame: &mut Frame, app: &mut App) {
+    let l = app.lang.l();
+    let area = safe_area(frame);
+    let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(3)]).split(area);
+    let viewport = scroll_viewport(chunks[0]);
+    app.scroll_viewport = Some(viewport);
+    app.scroll = app.scroll.min(max_scroll_offset(&app.keys_text, viewport));
+    frame.render_widget(
+        Paragraph::new(md_lines(&app.keys_text))
+            .wrap(Wrap { trim: false })
+            .scroll((app.scroll, 0))
+            .block(Block::bordered().title(l.keys_title)),
+        chunks[0],
+    );
+    render_footer(frame, chunks[1], l.footer_keys);
+}
+
+/// The key list as markdown, so it reuses the same wrap-aware scroll clamp as
+/// every other scrollable screen.
+pub(super) fn key_list_text(l: &L) -> String {
+    let rows = super::home_key_rows(l);
+    let width = rows
+        .iter()
+        .map(|(glyph, _)| glyph.width())
+        .max()
+        .unwrap_or(1);
+    let mut out = format!("{}\n\n", l.keys_intro);
+    for (glyph, doc) in rows {
+        out.push_str(&format!("`{glyph:<width$}`  {doc}\n"));
+    }
+    out
 }
 
 /// Turn one worker-output line into a readable monitor line. Worker CLIs stream
@@ -499,25 +536,39 @@ fn render_home(frame: &mut Frame, app: &App) {
             l.footer_home_busy_nodrain.to_string()
         }
     } else {
-        let (availability, answerable, approvable, replannable) = if let Some(snap) = &app.snapshot
-        {
-            let answerable = snap.pending.is_some()
-                || snap.gate.is_some()
-                || snap
-                    .queue
-                    .tasks
-                    .iter()
-                    .any(|t| !matches!(t.state, TaskState::Running | TaskState::Done));
-            (
-                snap.home_footer,
-                answerable,
-                !snap.approvals_needed.is_empty(),
-                same_intent_replan_availability(&snap.queue) == ReplanAvailability::Available,
-            )
-        } else {
-            (HomeFooterAvailability::default(), false, false, false)
-        };
-        home_footer(l, availability, answerable, approvable, replannable)
+        let (availability, answerable, approvable, replannable, plan_reviewable) =
+            if let Some(snap) = &app.snapshot {
+                let answerable = snap.pending.is_some()
+                    || snap.gate.is_some()
+                    || snap
+                        .queue
+                        .tasks
+                        .iter()
+                        .any(|t| !matches!(t.state, TaskState::Running | TaskState::Done));
+                (
+                    snap.home_footer,
+                    answerable,
+                    !snap.approvals_needed.is_empty(),
+                    same_intent_replan_availability(&snap.queue) == ReplanAvailability::Available,
+                    snap.planning_reentry.is_some(),
+                )
+            } else {
+                (
+                    HomeFooterAvailability::default(),
+                    false,
+                    false,
+                    false,
+                    false,
+                )
+            };
+        home_footer(
+            l,
+            availability,
+            answerable,
+            approvable,
+            replannable,
+            plan_reviewable,
+        )
     };
     render_footer(frame, chunks[4], &footer);
 }
@@ -580,6 +631,7 @@ fn home_footer(
     answerable: bool,
     approvable: bool,
     replannable: bool,
+    plan_reviewable: bool,
 ) -> String {
     let mut fragments = vec![l.footer_home];
     for (available, fragment) in [
@@ -604,6 +656,12 @@ fn home_footer(
     if replannable {
         fragments.push(l.key_replan);
     }
+    if plan_reviewable {
+        fragments.push(l.key_plan_review);
+    }
+    // Always last, always present: the always-valid globals (g, s, f, l, i, R)
+    // do not fit here, so one advertised key has to lead to them (issue #71).
+    fragments.push(l.key_keys);
     fragments.join("  ")
 }
 
@@ -648,6 +706,30 @@ fn truncate_width(s: &str, max: usize) -> String {
     out
 }
 
+/// The parenthetical after `N ready`, empty when the plain count is honest.
+///
+/// Only states what is computed from the SAME inputs as `runnable`: the review
+/// barrier, and the one-at-a-time cap when reviews are all that is left. A
+/// "how many will start" number is deliberately absent — see `QueueHealth`.
+fn ready_breakdown(health: &crate::snapshot::QueueHealth, l: &L) -> String {
+    let mut parts = Vec::new();
+    if health.review_barrier > 0 {
+        parts.push(format!(
+            "{}{}",
+            health.review_barrier, l.ready_review_barrier
+        ));
+    }
+    // Both can apply at once — a remediation-held review plus reviews with
+    // nothing else queued. Saying only the first implies the rest are free.
+    if health.serialized_reviews > 1 {
+        parts.push(l.ready_reviews_serial.to_string());
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!(" ({})", parts.join(", "))
+}
+
 fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
     let health = snap.health();
     let status = Line::from(vec![
@@ -655,6 +737,13 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
         Span::styled(
             format!("{} {}", health.runnable, l.c_ready),
             Style::default().fg(Color::Green),
+        ),
+        // `N ready` on its own counted tasks the scheduler will deliberately
+        // refuse to co-schedule, so pressing A after "4 ready" got one task and
+        // read as a bug (issue #51). Name what is holding them.
+        Span::styled(
+            ready_breakdown(&health, l),
+            Style::default().fg(Color::DarkGray),
         ),
         Span::raw(", "),
         Span::styled(
@@ -732,14 +821,37 @@ fn render_header(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L) {
     );
 }
 
+/// The Home row for an open planning session, if one is waiting. It leads the
+/// queue box in both the empty and populated cases: an accepted-but-unconfirmed
+/// plan leaves the queue legitimately empty, which is exactly the state that
+/// read as "my plan disappeared" (issue #65).
+fn planning_reentry_item(snap: &Snapshot, l: &L) -> Option<ListItem<'static>> {
+    let text = match snap.planning_reentry? {
+        crate::planning::PlanningReentry::PendingProposal { count } => {
+            l.home_plan_pending.replace("{n}", &count.to_string())
+        }
+        crate::planning::PlanningReentry::AcceptedDraft => l.home_plan_accepted.to_string(),
+        crate::planning::PlanningReentry::Unreadable => l.home_plan_unreadable.to_string(),
+    };
+    Some(ListItem::new(Line::from(Span::styled(
+        text,
+        Style::default().fg(Color::Cyan).bold(),
+    ))))
+}
+
 fn render_queue(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected: usize) {
+    let planning = planning_reentry_item(snap, l);
     let items: Vec<ListItem> = if snap.tasks().is_empty() {
-        vec![ListItem::new(Line::from(Span::styled(
-            l.queue_empty,
-            Style::default().fg(Color::DarkGray),
-        )))]
+        planning
+            .into_iter()
+            .chain(std::iter::once(ListItem::new(Line::from(Span::styled(
+                l.queue_empty,
+                Style::default().fg(Color::DarkGray),
+            )))))
+            .collect()
     } else {
         let mut items = Vec::new();
+        items.extend(planning);
         if snap
             .tasks()
             .iter()
@@ -1528,6 +1640,80 @@ mod tests {
         assert!(!failed.contains("r run"));
     }
 
+    /// `N ready` counted tasks the scheduler would never co-schedule, so the
+    /// operator pressed A expecting a 4-wide batch and got one task. The header
+    /// now names what is holding them — and claims nothing it cannot compute
+    /// from the same inputs as `runnable` (issue #51).
+    #[test]
+    fn the_ready_count_names_what_the_scheduler_is_holding() {
+        use crate::snapshot::QueueHealth;
+
+        let reported = QueueHealth {
+            runnable: 4,
+            review_barrier: 3,
+            ..QueueHealth::default()
+        };
+        assert_eq!(
+            ready_breakdown(&reported, i18n::Lang::En.l()),
+            " (3 held by the review barrier)"
+        );
+        assert_eq!(
+            ready_breakdown(&reported, i18n::Lang::Ko.l()),
+            " (3 리뷰 배리어 대기)"
+        );
+
+        // Issue #51's second reported case: reviews are all that is left, so
+        // nothing is held BEHIND anything, but they still go one at a time.
+        let reviews_only = QueueHealth {
+            runnable: 3,
+            serialized_reviews: 3,
+            ..QueueHealth::default()
+        };
+        assert_eq!(
+            ready_breakdown(&reviews_only, i18n::Lang::En.l()),
+            " (reviews run one at a time)"
+        );
+        assert_eq!(
+            ready_breakdown(&reviews_only, i18n::Lang::Ko.l()),
+            " (리뷰는 한 번에 하나씩)"
+        );
+
+        // Both can apply at once. Naming only the barrier implies the rest are
+        // free to run together, which is the same overstatement as before.
+        let both = QueueHealth {
+            runnable: 3,
+            review_barrier: 1,
+            serialized_reviews: 2,
+            ..QueueHealth::default()
+        };
+        assert_eq!(
+            ready_breakdown(&both, i18n::Lang::En.l()),
+            " (1 held by the review barrier, reviews run one at a time)"
+        );
+
+        for honest in [
+            // Nothing held back.
+            QueueHealth {
+                runnable: 3,
+                ..QueueHealth::default()
+            },
+            // A single review left is not "one at a time" news.
+            QueueHealth {
+                runnable: 1,
+                serialized_reviews: 1,
+                ..QueueHealth::default()
+            },
+        ] {
+            for lang in [i18n::Lang::En, i18n::Lang::Ko] {
+                assert_eq!(
+                    ready_breakdown(&honest, lang.l()),
+                    "",
+                    "no breakdown when the plain count is honest: {honest:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn home_footer_hides_content_keys_when_workspace_has_none() {
         let root =
@@ -1601,8 +1787,8 @@ mod tests {
         ];
 
         for (availability, en_hint, ko_hint) in cases {
-            let en = home_footer(i18n::Lang::En.l(), availability, false, false, false);
-            let ko = home_footer(i18n::Lang::Ko.l(), availability, false, false, false);
+            let en = home_footer(i18n::Lang::En.l(), availability, false, false, false, false);
+            let ko = home_footer(i18n::Lang::Ko.l(), availability, false, false, false, false);
             assert!(en.contains(en_hint), "missing English hint: {en_hint}");
             assert!(ko.contains(ko_hint), "missing Korean hint: {ko_hint}");
             for other in [
@@ -1643,12 +1829,12 @@ mod tests {
             trust: true,
         };
         assert_eq!(
-            home_footer(i18n::Lang::En.l(), availability, true, true, true),
-            "\u{2191}\u{2193} select  Enter action  n new  r run  A auto  t tidy  d defer  v revive  m monitor  h handoff  T trust  q quit  a answer  p approve  P replan"
+            home_footer(i18n::Lang::En.l(), availability, true, true, true, true),
+            "\u{2191}\u{2193} select  Enter action  n new  r run  A auto  t tidy  d defer  v revive  m monitor  h handoff  T trust  q quit  a answer  p approve  P replan  o plan review  ? keys"
         );
         assert_eq!(
-            home_footer(i18n::Lang::Ko.l(), availability, true, true, true),
-            "\u{2191}\u{2193} 선택  Enter 행동  n 새작업  r 실행  A 자동  t 정리  d 보류  v 되살림  m 모니터  h 핸드오프  T 신뢰  q 종료  a 답변  p 승인  P 재계획"
+            home_footer(i18n::Lang::Ko.l(), availability, true, true, true, true),
+            "\u{2191}\u{2193} 선택  Enter 행동  n 새작업  r 실행  A 자동  t 정리  d 보류  v 되살림  m 모니터  h 핸드오프  T 신뢰  q 종료  a 답변  p 승인  P 재계획  o 플랜 검토  ? 키목록"
         );
     }
 

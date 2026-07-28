@@ -29,15 +29,57 @@ use crate::schemas::{RunnableClass, Task, TaskState, WorkQueue, WorkerProfile};
 use crate::state::{self, write_str, Workspace};
 use crate::{evaluator, guard, inspect, routing, run, workers};
 
-fn is_verifier(task: &Task) -> bool {
+pub(crate) fn is_verifier(task: &Task) -> bool {
     matches!(packet::role_for(&task.kind), "reviewer" | "security")
 }
 
-fn has_queued_non_verifier(queue: &WorkQueue) -> bool {
+pub(crate) fn has_queued_non_verifier(queue: &WorkQueue) -> bool {
     queue
         .tasks
         .iter()
         .any(|task| task.state == TaskState::Queued && !is_verifier(task))
+}
+
+/// Runnable tasks the verifier barrier will refuse to co-schedule right now.
+///
+/// The barrier is a parallel-selection concept, so `runnable_class` — and every
+/// count derived from it — knows nothing about it. That is how `4 ready` came
+/// to mean four tasks the scheduler would never start together (issue #51).
+/// Both the selector below and the surfaced counts read this one predicate, so
+/// they cannot drift apart again.
+pub fn held_by_review_barrier(queue: &WorkQueue) -> Vec<String> {
+    let caps = std::collections::BTreeSet::new();
+    let work_pending = has_queued_non_verifier(queue);
+    queue
+        .tasks
+        .iter()
+        .filter(|task| is_verifier(task))
+        .filter(|task| work_pending || queue.has_active_remediation_for(&task.id))
+        .filter(|task| {
+            queue.runnable_class(task, false, &caps) == RunnableClass::Runnable
+                && !task.approval_required()
+        })
+        .map(|task| task.id.clone())
+        .collect()
+}
+
+/// Runnable verifiers that the barrier lets through but the serial cap still
+/// admits one at a time — the "only work left is reviews" case.
+pub fn serialized_verifiers(queue: &WorkQueue) -> Vec<String> {
+    let caps = std::collections::BTreeSet::new();
+    if has_queued_non_verifier(queue) {
+        return Vec::new();
+    }
+    queue
+        .tasks
+        .iter()
+        .filter(|task| is_verifier(task) && !queue.has_active_remediation_for(&task.id))
+        .filter(|task| {
+            queue.runnable_class(task, false, &caps) == RunnableClass::Runnable
+                && !task.approval_required()
+        })
+        .map(|task| task.id.clone())
+        .collect()
 }
 
 /// Indices of tasks eligible to run together right now: queued, dependencies
@@ -85,11 +127,33 @@ pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum SequentialReason {
-    ParallelDisabled { max_parallel: usize },
-    RunnableTaskCount { runnable: usize },
-    DependencyChain { tasks: Vec<String> },
-    ApprovalRequired { tasks: Vec<String> },
-    ValidationRequired { tasks: Vec<String> },
+    ParallelDisabled {
+        max_parallel: usize,
+    },
+    RunnableTaskCount {
+        runnable: usize,
+    },
+    DependencyChain {
+        tasks: Vec<String>,
+    },
+    ApprovalRequired {
+        tasks: Vec<String>,
+    },
+    ValidationRequired {
+        tasks: Vec<String>,
+    },
+    /// Verifiers held behind queued non-verifier work. Named explicitly because
+    /// "only 1 runnable task" is not what the operator sees on the queue, and
+    /// reading it against a visible `4 ready` is what made the scheduler look
+    /// broken rather than deliberate (issue #51).
+    ReviewBarrier {
+        tasks: Vec<String>,
+    },
+    /// Verifiers are the only work left, and they still run one at a time so
+    /// each observes the previous one's remediation.
+    VerifierSerial {
+        tasks: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,6 +189,16 @@ impl ParallelAssessment {
                 SequentialReason::ValidationRequired { tasks } => {
                     format!("validation required: {}", tasks.join(", "))
                 }
+                SequentialReason::ReviewBarrier { tasks } => format!(
+                    "{} review(s) held behind queued work: {}",
+                    tasks.len(),
+                    tasks.join(", ")
+                ),
+                SequentialReason::VerifierSerial { tasks } => format!(
+                    "{} review(s) run one at a time: {}",
+                    tasks.len(),
+                    tasks.join(", ")
+                ),
             })
             .collect::<Vec<_>>()
             .join("; ")
@@ -173,6 +247,18 @@ pub fn assess_parallelism(queue: &WorkQueue, max_parallel: usize) -> ParallelAss
         reasons.push(SequentialReason::ApprovalRequired {
             tasks: approval_required,
         });
+    }
+
+    // Name the barrier before falling back to the bare count: a queue whose
+    // ready tasks are reviews is not "only 1 runnable task" from where the
+    // operator is standing (issue #51).
+    let held = held_by_review_barrier(queue);
+    if !held.is_empty() {
+        reasons.push(SequentialReason::ReviewBarrier { tasks: held });
+    }
+    let serialized = serialized_verifiers(queue);
+    if serialized.len() > 1 {
+        reasons.push(SequentialReason::VerifierSerial { tasks: serialized });
     }
 
     if max_parallel > 1 && runnable.len() < 2 {
@@ -496,6 +582,7 @@ pub fn run_batch<F: FnMut(&str)>(
             // The parallel path never carries approval-gated tasks (they are held
             // for the serial path), so no approval directive applies here.
             approved: false,
+            pre_push_checks: &config.git_finish.pre_push_checks,
         });
         write_str(&workers::packet_path(&p.run_dir), &p.packet_text)?;
         state::save_yaml_atomic(
@@ -724,6 +811,7 @@ pub fn run_batch<F: FnMut(&str)>(
                             role_notes: &role_notes,
                             harness: &harness,
                             approved: false,
+                            pre_push_checks: &config.git_finish.pre_push_checks,
                         });
                         write_str(&workers::packet_path(&p.run_dir), &failover_packet)?;
                         // The first worker ran with full access to this run
@@ -887,6 +975,7 @@ fn record_failover(run_dir: &Path, from: &str, to: &str, reason: &str) {
     );
 }
 
+#[derive(Debug)]
 pub(crate) enum Integration {
     Merged {
         oid: String,
@@ -898,6 +987,15 @@ pub(crate) enum Integration {
         worker_oid: String,
     },
     Conflict(String),
+    /// The run-owned branch does not resolve, so there is nothing left to
+    /// integrate from it. The normal cause is that this run was ALREADY
+    /// integrated and its cleanup deleted the branch: a second finalize of the
+    /// same run must confirm that outcome, not re-integrate it (issues #69,
+    /// #70). Returned as a typed outcome rather than letting an unresolvable
+    /// revision reach git and surface as a raw error.
+    BranchMissing {
+        branch: String,
+    },
 }
 
 const GIT_INTEGRATION_RECORD: &str = "git-integration.json";
@@ -1433,12 +1531,15 @@ where
         None => {}
     }
     let branch_ref = format!("refs/heads/{branch}");
-    let observed_tip = git(
-        root,
-        &["rev-parse", "--verify", &format!("{branch_ref}^{{commit}}")],
-    )?
-    .trim()
-    .to_string();
+    // Checked lookup: a run whose branch was already integrated and cleaned up
+    // no longer has this ref. Letting that reach `rev-parse --verify` produces
+    // a raw "Needed a single revision" error that the caller cannot tell apart
+    // from a real merge failure (issues #69, #70).
+    let Some(observed_tip) = ref_tip(root, &branch_ref) else {
+        return Ok(Integration::BranchMissing {
+            branch: branch.to_string(),
+        });
+    };
     if let Some(expected_tip_oid) = expected_tip_oid.filter(|oid| !oid.is_empty()) {
         if observed_tip != expected_tip_oid {
             return Ok(Integration::Conflict(format!(
@@ -1943,6 +2044,19 @@ pub(crate) fn parallel_worker_evidence(
 ) -> Result<ParallelWorkerEvidence> {
     let mut paths = evaluator::changed_paths(wt)
         .ok_or_else(|| anyhow!("could not enumerate parallel worktree changes"))?;
+    // Working-tree status alone is not the run's diff. A worker that commits
+    // its own work leaves a clean status, so status-only evidence is EMPTY for
+    // everything it committed — and an empty `Some(vec![])` is not the `None`
+    // the evaluator fails closed on, so `forbidden_paths_untouched` certifies a
+    // diff it never saw (issue #83). The serial path has unioned committed
+    // paths since it was written, for exactly this reason. Committing is
+    // off-contract for a worker, which is why this defends against it rather
+    // than trusting it not to happen.
+    //
+    // Collected up front but unioned at the END, so a committed path is never
+    // eligible for overlay attribution — the serial rule is that a path the
+    // worker committed loses that provenance and stays attributed to it.
+    let committed = run::committed_paths_since_baseline(wt, run_dir)?;
     let seed_root = run_dir.join(run::HARNESS_SEED_DIR);
     let mut core_input_overlays = Vec::new();
     if seed_root.is_dir() {
@@ -1951,6 +2065,10 @@ pub(crate) fn parallel_worker_evidence(
         let unchanged = paths
             .iter()
             .filter(|path| seeded.contains(*path) && !modified.contains(*path))
+            // Serial's rule, applied on this side too: a path the worker
+            // committed loses its dispatcher provenance and stays attributed to
+            // the worker, so it must not also be recorded as a core overlay.
+            .filter(|path| !committed.contains(*path))
             .cloned()
             .collect::<Vec<_>>();
         paths.retain(|path| !seeded.contains(path) || modified.contains(path));
@@ -2014,17 +2132,31 @@ pub(crate) fn parallel_worker_evidence(
         else {
             return true;
         };
-        if !run::dependency_input_overlay_matches(wt, overlay) {
+        if committed.contains(path) || !run::dependency_input_overlay_matches(wt, overlay) {
             return true;
         }
         dependency_input_overlays.push(overlay.clone());
         false
     });
+    // Status-derived paths keep the harness-allowlist filter: a parallel
+    // worktree also carries Yardlet's OWN seeded copies of canonical state, and
+    // without a pre-worker snapshot to subtract them by content this filter is
+    // what stops them being attributed to the worker.
+    //
+    // Committed paths do NOT get that filter. Yardlet never commits its seeds,
+    // so a commit is unambiguously the worker's — and applying the allowlist to
+    // it silently removed exactly the canonical-state set `forbidden_in` exists
+    // to catch, leaving `.agents/yardlet.yaml` invisible to the gate while the
+    // merge carried it into the workspace (issue #83).
+    let mut paths = paths
+        .into_iter()
+        .filter(|path| evaluator::is_integratable_path(path))
+        .collect::<Vec<_>>();
+    paths.extend(committed);
+    paths.sort();
+    paths.dedup();
     Ok(ParallelWorkerEvidence {
-        paths: paths
-            .into_iter()
-            .filter(|path| evaluator::is_integratable_path(path))
-            .collect(),
+        paths,
         core_input_overlays,
         dependency_input_overlays,
     })
@@ -2344,6 +2476,85 @@ mod tests {
         assert_eq!(ready_independent(&q, 4), vec![0]);
     }
 
+    /// The reported shape: `4 ready` with `max_parallel: 4`, of which three are
+    /// reviews the barrier will refuse to co-schedule. The assessment has to
+    /// name the barrier — "only 1 runnable task" contradicts what the operator
+    /// is looking at and made a deliberate scheduler look broken (issue #51).
+    #[test]
+    fn assessment_names_the_review_barrier_instead_of_a_bare_runnable_count() {
+        let mut builder = task("BUILD", TaskState::Queued, 10, vec![]);
+        builder.kind = "implementation".into();
+        let mut reviews = Vec::new();
+        for (index, id) in ["REVIEW-A", "REVIEW-B", "REVIEW-C"].iter().enumerate() {
+            let mut review = task(id, TaskState::Queued, 20 + index as i64, vec![]);
+            review.kind = "review".into();
+            reviews.push(review);
+        }
+        let mut tasks = vec![builder];
+        tasks.extend(reviews);
+        let q = queue(tasks);
+
+        assert_eq!(
+            ready_independent(&q, 4),
+            vec![0],
+            "the scheduler admits only the builder"
+        );
+        assert_eq!(
+            held_by_review_barrier(&q),
+            vec![
+                "REVIEW-A".to_string(),
+                "REVIEW-B".to_string(),
+                "REVIEW-C".to_string()
+            ]
+        );
+
+        let assessment = assess_parallelism(&q, 4);
+        let held = assessment
+            .reasons
+            .iter()
+            .find_map(|reason| match reason {
+                SequentialReason::ReviewBarrier { tasks } => Some(tasks.clone()),
+                _ => None,
+            })
+            .expect("the barrier must be a named reason");
+        assert_eq!(held.len(), 3);
+        assert!(
+            assessment
+                .summary()
+                .contains("review(s) held behind queued work"),
+            "summary must say why: {}",
+            assessment.summary()
+        );
+    }
+
+    /// Reviews as the only work left: nothing is "held behind" anything, but
+    /// they still run one at a time, which is its own invisible cap.
+    #[test]
+    fn assessment_names_the_serial_verifier_cap_when_reviews_are_all_that_is_left() {
+        let mut tasks = Vec::new();
+        for (index, id) in ["REVIEW-A", "REVIEW-B"].iter().enumerate() {
+            let mut review = task(id, TaskState::Queued, 10 + index as i64, vec![]);
+            review.kind = "review".into();
+            tasks.push(review);
+        }
+        let q = queue(tasks);
+
+        assert_eq!(ready_independent(&q, 4).len(), 1, "verifiers stay serial");
+        assert!(
+            held_by_review_barrier(&q).is_empty(),
+            "with no queued builder there is nothing to hold them behind"
+        );
+        let assessment = assess_parallelism(&q, 4);
+        assert!(
+            assessment.reasons.iter().any(|reason| matches!(
+                reason,
+                SequentialReason::VerifierSerial { tasks } if tasks.len() == 2
+            )),
+            "the serial verifier cap must be named: {:?}",
+            assessment.reasons
+        );
+    }
+
     #[test]
     fn review_barrier_is_soft_for_gated_or_terminal_builders() {
         let mut review = task("REVIEW", TaskState::Queued, 10, vec![]);
@@ -2536,10 +2747,344 @@ mod tests {
         sh_git(&root, &["init", "-q"]);
         sh_git(&root, &["config", "user.name", "Local User"]);
         sh_git(&root, &["config", "user.email", "local@example.test"]);
+        // Pin rename detection ON. With `diff.renames = false` in an ambient
+        // global config, a range diff already reports both sides of a rename,
+        // so the `--no-renames` regression guard would pass without the fix.
+        sh_git(&root, &["config", "diff.renames", "true"]);
         std::fs::write(root.join("base.txt"), "base\n").unwrap();
         sh_git(&root, &["add", "base.txt"]);
         sh_git(&root, &["commit", "-q", "-m", "init"]);
         root
+    }
+
+    /// A worker that COMMITS its work leaves a clean `git status`, so
+    /// status-only evidence is empty for everything it committed. Empty is not
+    /// `None`, so the evaluator's fail-closed branch never fires and
+    /// `forbidden_paths_untouched` certifies a diff it never saw (issue #83).
+    /// Committing is off-contract for a worker; the serial path has defended
+    /// against it since it was written.
+    #[test]
+    fn parallel_evidence_includes_what_the_worker_committed() {
+        let root = temp_repo("committed-evidence");
+        let run_id = "run-committed-evidence";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/committed/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let baseline = sh_git(&worktree, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        crate::state::write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\n\
+                 worker: fixture\nstate: running\nstarted_at: \"2026-07-27T00:00:00+00:00\"\n\
+                 worktree: {}\nworktree_branch: {branch}\nbaseline_oid: {baseline}\n",
+                worktree.display()
+            ),
+        )
+        .unwrap();
+
+        // The worker writes a secret, commits it, and leaves a clean tree.
+        std::fs::write(worktree.join(".env"), "SECRET=1\n").unwrap();
+        sh_git(&worktree, &["add", ".env"]);
+        sh_git(&worktree, &["commit", "-q", "-m", "worker commit"]);
+        assert!(
+            crate::evaluator::changed_paths(&worktree)
+                .unwrap()
+                .is_empty(),
+            "the fixture must leave a clean status, or it is not reproducing the bug"
+        );
+
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence.paths.iter().any(|path| path == ".env"),
+            "committed paths must reach the evidence the forbidden-path gate reads: {:?}",
+            evidence.paths
+        );
+
+        // Canonical state is the class the gate cares about most, and the one an
+        // `is_integratable_path` filter on the evidence silently removed: it
+        // rejects everything under `.agents/` outside the harness roots, which
+        // is precisely what `forbidden_in` is looking for.
+        std::fs::create_dir_all(worktree.join(".agents")).unwrap();
+        std::fs::write(worktree.join(".agents/yardlet.yaml"), "pwned: true\n").unwrap();
+        sh_git(&worktree, &["add", "-f", ".agents/yardlet.yaml"]);
+        sh_git(&worktree, &["commit", "-q", "-m", "canonical state"]);
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence
+                .paths
+                .iter()
+                .any(|path| path == ".agents/yardlet.yaml"),
+            "a committed canonical-state file must reach the gate: {:?}",
+            evidence.paths
+        );
+        assert!(
+            !crate::evaluator::forbidden_paths(evidence.paths.iter()).is_empty(),
+            "and the gate must actually call it forbidden"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The guarantee #83 is actually about: not that the path appears in a
+    /// vector, but that the gate STOPS it. A worker that commits canonical
+    /// state must not have that commit merged into the workspace.
+    #[test]
+    fn a_committed_canonical_state_file_blocks_the_run_and_never_merges() {
+        let root = temp_repo("committed-canonical-blocks");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let worker = write_test_worker(
+            &root,
+            "canonical-committer.sh",
+            r##"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "fixture 1.0"
+  exit 0
+fi
+run_dir="$1"
+task_id="$2"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+printf "feature\n" > feature.txt
+mkdir -p .agents
+printf "pwned: true\n" > .agents/yardlet.yaml
+git add -f feature.txt .agents/yardlet.yaml
+git -c user.name=w -c user.email=w@e.t commit -q -m "worker commit"
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": ["feature.txt"], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "committed canonical state",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", YARD-PAR-CANON]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            yaml_string(&worker)
+        );
+        let mut offender = task("YARD-PAR-CANON", TaskState::Queued, 10, vec![]);
+        offender.kind = "implementation".into();
+        let ws = setup_workspace(&root, &worker_yaml, vec![offender]);
+        let mut q = ws.load_queue().unwrap();
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+        let canonical_before = std::fs::read_to_string(ws.config_path()).unwrap();
+        let head_before = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let mut events = Vec::new();
+        let states = run_batch(&ws, &[0], false, |line| events.push(line.to_string())).unwrap();
+
+        assert_ne!(
+            states.first().map(|(_, state)| *state),
+            Some(TaskState::Done),
+            "a run that committed canonical state must not land Done: {events:?}"
+        );
+        // Assert the FORBIDDEN-PATH gate is what stopped it. Without this the
+        // test passes on any unrelated failure — the run is refused for other
+        // reasons too, so "not Done" alone proves nothing about #83.
+        let run_dir = std::fs::read_dir(ws.runs_dir())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| path.join("evaluation.json").is_file())
+            .expect("the run wrote an evaluation");
+        let evaluation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join("evaluation.json")).unwrap(),
+        )
+        .unwrap();
+        let gate = evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "forbidden_paths_untouched")
+            .expect("the evaluator still runs the forbidden-path gate");
+        assert_eq!(
+            gate["passed"], false,
+            "the forbidden-path gate must be what refuses this run: {gate}"
+        );
+        assert!(
+            gate["note"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(".agents/yardlet.yaml"),
+            "and it must name the committed path: {gate}"
+        );
+        assert_eq!(
+            sh_git(&root, &["rev-parse", "HEAD"]).trim(),
+            head_before,
+            "the worker's commit must not have been merged: {events:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.config_path()).unwrap(),
+            canonical_before,
+            "the workspace's canonical state must be untouched"
+        );
+        assert!(
+            !root.join("feature.txt").exists(),
+            "nothing from a blocked run may reach the workspace"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The status side had the same rename blind spot the committed side closed:
+    /// `git status` reports a rename as one record naming the destination, and
+    /// dropping the original hid a forbidden source from the gate.
+    #[test]
+    fn an_uncommitted_rename_still_reports_the_forbidden_source() {
+        let root = temp_repo("uncommitted-rename");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(root.join("config/secret.pem"), "key\n").unwrap();
+        sh_git(&root, &["add", "config/secret.pem"]);
+        sh_git(&root, &["commit", "-q", "-m", "add key"]);
+
+        let run_id = "run-uncommitted-rename";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/uncommitted-rename/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+
+        // Staged but NOT committed, so only `git status` can see it.
+        sh_git(&worktree, &["mv", "config/secret.pem", "config/plain.txt"]);
+
+        let changed = crate::evaluator::changed_paths(&worktree).unwrap();
+        assert!(
+            changed.iter().any(|path| path == "config/secret.pem"),
+            "the renamed-away source must be in the diff: {changed:?}"
+        );
+        assert!(
+            !crate::evaluator::forbidden_paths(changed.iter()).is_empty(),
+            "and the gate must call it forbidden"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A seeded harness copy the worker COMMITTED is the worker's, not a
+    /// dispatcher overlay — serial's rule, now applied on the core side too.
+    #[test]
+    fn a_committed_seed_copy_is_worker_evidence_not_a_core_overlay() {
+        let root = temp_repo("committed-seed-copy");
+        let rules = root.join(".agents/rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::write(rules.join("seeded.md"), "seed bytes\n").unwrap();
+        sh_git(&root, &["add", ".agents/rules/seeded.md"]);
+        sh_git(&root, &["commit", "-q", "-m", "seed rule"]);
+
+        let run_id = "run-committed-seed";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/seed/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let baseline = sh_git(&worktree, &["rev-parse", "HEAD"]).trim().to_string();
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        crate::state::write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\n\
+                 worker: fixture\nstate: running\nstarted_at: \"2026-07-28T00:00:00+00:00\"\n\
+                 worktree: {}\nworktree_branch: {branch}\nbaseline_oid: {baseline}\n",
+                worktree.display()
+            ),
+        )
+        .unwrap();
+        // Yardlet's pre-worker seed snapshot: the same bytes it copied in.
+        let seed = run_dir.join(run::HARNESS_SEED_DIR).join("rules");
+        std::fs::create_dir_all(&seed).unwrap();
+        std::fs::write(seed.join("seeded.md"), "seed bytes\n").unwrap();
+
+        // The worker commits a change, then restores the seed bytes — so the
+        // working tree matches the seed while the commit does not.
+        std::fs::write(worktree.join(".agents/rules/seeded.md"), "worker bytes\n").unwrap();
+        sh_git(&worktree, &["add", ".agents/rules/seeded.md"]);
+        sh_git(
+            &worktree,
+            &["commit", "-q", "-m", "worker rewrote the rule"],
+        );
+        std::fs::write(worktree.join(".agents/rules/seeded.md"), "seed bytes\n").unwrap();
+
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence
+                .paths
+                .iter()
+                .any(|path| path == ".agents/rules/seeded.md"),
+            "a committed seed copy stays worker evidence: {:?}",
+            evidence.paths
+        );
+        assert!(
+            evidence.core_input_overlays.is_empty(),
+            "and must not also be recorded as a dispatcher overlay: {:?}",
+            evidence.core_input_overlays
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Git's default rename detection reports only a rename's DESTINATION, so
+    /// moving a forbidden path out of the way would hide the source from the
+    /// gate entirely. The serial enumeration has always passed `--no-renames`.
+    #[test]
+    fn a_committed_rename_still_reports_the_forbidden_source() {
+        let root = temp_repo("committed-rename");
+        // The file has to exist at the baseline: a path created AND renamed
+        // inside the range collapses legitimately, because nothing by that name
+        // ever reaches the merge.
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(root.join("config/secret.pem"), "key\n").unwrap();
+        sh_git(&root, &["add", "config/secret.pem"]);
+        sh_git(&root, &["commit", "-q", "-m", "add key"]);
+
+        let run_id = "run-committed-rename";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/rename/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let baseline = sh_git(&worktree, &["rev-parse", "HEAD"]).trim().to_string();
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        crate::state::write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\n\
+                 worker: fixture\nstate: running\nstarted_at: \"2026-07-27T00:00:00+00:00\"\n\
+                 worktree: {}\nworktree_branch: {branch}\nbaseline_oid: {baseline}\n",
+                worktree.display()
+            ),
+        )
+        .unwrap();
+
+        sh_git(&worktree, &["mv", "config/secret.pem", "config/plain.txt"]);
+        sh_git(&worktree, &["commit", "-q", "-m", "rename away"]);
+
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence
+                .paths
+                .iter()
+                .any(|path| path == "config/secret.pem"),
+            "the renamed-away source must still reach the gate: {:?}",
+            evidence.paths
+        );
+        assert!(
+            !crate::evaluator::forbidden_paths(evidence.paths.iter()).is_empty(),
+            "and the gate must call it forbidden"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
@@ -4753,6 +5298,68 @@ exit 0
             _ => panic!("expected no changes"),
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Issues #69 and #70. A second finalize of a run that was ALREADY
+    /// integrated finds its branch deleted by the first pass's cleanup. That
+    /// used to reach `rev-parse --verify refs/heads/<gone>^{commit}` and come
+    /// back as a raw `fatal: Needed a single revision`, which the caller could
+    /// not tell apart from a merge failure: it recorded `merge_conflict` and
+    /// demoted a correct Done to Partial.
+    #[test]
+    fn integrating_an_already_cleaned_up_branch_is_typed_not_a_raw_git_error() {
+        let root = temp_repo("branch-missing-after-cleanup");
+        let wt = root.join(".agents/worktrees/run-branch-missing");
+        let branch = "yard/yard-gone/run-branch-missing";
+        let baseline = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        create_worktree(&root, &wt, branch).unwrap();
+        std::fs::write(wt.join("feature.txt"), "worker output\n").unwrap();
+
+        // First finalize: integrates and then cleans up, exactly as the real
+        // path does.
+        let (oid, worker_oid) = match integrate_parallel_worktree(
+            &root,
+            &wt,
+            branch,
+            "YARD-GONE",
+            &baseline,
+            None,
+            &[],
+        )
+        .unwrap()
+        {
+            Integration::Merged {
+                oid, worker_oid, ..
+            } => (oid, worker_oid),
+            other => panic!("expected a merge, got {other:?}"),
+        };
+        let cleanup = cleanup_integrated_worktree(
+            &root,
+            &wt,
+            branch,
+            &worker_oid,
+            run::IntegrationProvenance::ParallelWorkerDirect,
+        );
+        assert!(cleanup.complete, "{:?}", cleanup.warnings);
+        assert!(
+            ref_tip(&root, &format!("refs/heads/{branch}")).is_none(),
+            "cleanup must have removed the run-owned branch"
+        );
+        assert_eq!(sh_git(&root, &["rev-parse", "HEAD"]).trim(), oid);
+
+        // Second finalize of the same run: the branch is gone. This must be a
+        // typed outcome, never a raw git error and never a conflict.
+        let second =
+            integrate_parallel_worktree(&root, &wt, branch, "YARD-GONE", &baseline, None, &[]);
+        match second {
+            Ok(Integration::BranchMissing { branch: reported }) => {
+                assert_eq!(reported, branch);
+            }
+            Ok(other) => panic!("expected BranchMissing, got {other:?}"),
+            Err(error) => panic!("a missing branch must not surface as a raw error: {error:#}"),
+        }
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

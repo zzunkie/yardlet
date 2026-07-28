@@ -273,6 +273,7 @@ Bracketed paste는 붙여넣은 줄바꿈과 한국어/CJK 본문을 그대로 �
 | `yardlet defer <id> --cascade [reason]` | 그 뒤에 좌초된 queued 작업까지 전이적으로 함께 defer하고 하나의 revive 그룹으로 기록. |
 | `yardlet revive <id> [--group]` | Deferred 작업을 Queued로 되살림; `--group`은 함께 기록된 cascade 그룹을 되살림. |
 | `yardlet access <sandboxed\|full>` | 기본 워커 권한 수준 설정. |
+| `yardlet target [<ref>]` | Git finish 배송 대상 확인/변경. `--to-checkout`은 현재 체크아웃으로 맞춤. |
 | `yardlet handoff` | 최신 실행의 핸드오프 출력. |
 | `yardlet report` | 인텐트의 최종 리포트 출력 (모든 작업의 집계). |
 | `yardlet memory [init \| refresh [--stale-only]]` | 프로젝트 메모리 인덱스 나열(오래되었을 수 있는 문서 표시); `init`/`refresh`는 워커가 초안한 문서를 Yardlet 코어가 기록. |
@@ -282,6 +283,7 @@ Bracketed paste는 붙여넣은 줄바꿈과 한국어/CJK 본문을 그대로 �
 | `yardlet trust [--json]` | 실행 텔레메트리와 전이 감사 로그 기반 신뢰+자율성 리포트 (읽기 전용); `--json`은 지표를 내보냄. |
 | `yardlet recover` | 중단된 세션에서 상태 복구 (고아 실행, 미확인 계획). |
 | `yardlet skill list / suggest / equip <preset> / unequip / research / create / apply / review` | 저장소 분류, managed 11-skill catalog 사용, 스킬 장착·작성·점수화. Core skill은 외부 library 없이 설치되고 overlay는 task 범위에서만 활성화. |
+| `yardlet skill commit` | 학습된 하니스 자산을 커밋해 "학습됨"이 곧 "내구적"이 되게 함. |
 | `yardlet harness review` | 자동 학습된 규칙과 스킬을 eval 점수와 함께 표시, 그리고 마이닝된 개선 후보. |
 | `yardlet rubric drift / sync [--adopt-text]` | 워크스페이스 루브릭이 템플릿에 얼마나 뒤처졌는지 진단하고 개선을 병합 (비파괴적). |
 | `yardlet routing review` | 작업 종류별 워커 성공 통계 + 제안 선호도. |

@@ -9,8 +9,8 @@ use serde::Deserialize;
 
 use crate::inspect::RepoSummary;
 use crate::schemas::{
-    ConversationTurn, IntentContract, ResearchPolicy, ResearchSource, ScoutDisposition,
-    ScoutResult, Task, TurnRole,
+    ConversationTurn, GitFinishCheck, IntentContract, ResearchPolicy, ResearchSource,
+    ScoutDisposition, ScoutResult, Task, TurnRole,
 };
 
 pub struct ScoutPacketInputs<'a> {
@@ -194,6 +194,11 @@ pub struct PacketInputs<'a> {
     /// tells the worker to proceed and finish without re-gating or re-asking,
     /// so a single human decision carries the task to completion.
     pub approved: bool,
+    /// The workspace's configured pre-push checks, in execution order. The run
+    /// is judged by these AFTER the worker is done, so a worker that never
+    /// sees them can pass its own validation and still land Partial on a
+    /// one-line lint (issue #44).
+    pub pre_push_checks: &'a [GitFinishCheck],
 }
 
 /// Find existing local image files referenced in `text` (e.g. a path dragged
@@ -976,6 +981,26 @@ pub fn compile(inputs: &PacketInputs) -> String {
     }
     p.push('\n');
 
+    // The delivery gate the run will be judged by. Without this the worker
+    // validates with whatever it picked, passes, merges, and only then fails a
+    // configured style check it never ran (issue #44).
+    if !inputs.pre_push_checks.is_empty() {
+        p.push_str("## Delivery gate (these run after you finish)\n\n");
+        p.push_str(
+            "This workspace runs the following checks before delivering your work, in this \
+             order. They are part of what \"done\" means here: if one fails, the task lands \
+             Partial even when your own validation passed. Run them yourself and fix what they \
+             report BEFORE you write your result files.\n\n",
+        );
+        for check in inputs.pre_push_checks {
+            p.push_str(&format!("- {}: `{}`\n", check.name, check.command));
+        }
+        p.push_str(
+            "\nIf one of these cannot run in your environment, say so in \
+             `validation.failures` instead of skipping it silently.\n\n",
+        );
+    }
+
     // Role guidance: how this kind of task is worked, regardless of worker.
     p.push_str(&format!("## How to work \u{2014} role: {role}\n\n"));
     p.push_str(role_guidance(role));
@@ -1076,6 +1101,16 @@ pub fn compile(inputs: &PacketInputs) -> String {
          - `{rd}/validation.log` (if you ran validation)\n\n",
         rd = inputs.run_dir_rel
     ));
+    // Issue #38: workers repeatedly backgrounded a long `cargo test` and ended
+    // the turn intending to finish "when the notification arrives". The session
+    // is torn down at end of turn, so that notification never comes and the
+    // finished work is lost. State the session lifetime explicitly.
+    p.push_str(
+        "Your session ends when your turn ends. Run long validation commands synchronously in \
+         the foreground and wait for them to exit \u{2014} a backgrounded task is killed at \
+         teardown and its completion notification is never delivered. Write the files above \
+         BEFORE ending your turn; work you did not record does not exist.\n\n",
+    );
     // Non-code tasks (research/review/safety) deliver findings as prose; require
     // a human-readable report so there's an artifact a person can actually read.
     let kind = inputs.task.kind.trim();
@@ -1584,6 +1619,20 @@ pub(crate) fn provider_refusal_recovery_instruction() -> &'static str {
      report only the structured task status."
 }
 
+/// Recovery guidance for a worker that ended its turn while a background task
+/// was still running (issue #38). It names the mechanism rather than the
+/// symptom, because the worker's own review work was usually complete.
+pub(crate) fn background_deferral_recovery_instruction() -> &'static str {
+    "Output-contract recovery: your previous attempt ended its turn while a background task was \
+     still running, so it never wrote its result files. This session is non-interactive — when \
+     your turn ends the session is torn down, any background task is killed, and its completion \
+     notification is never delivered. Run every validation command synchronously in the \
+     foreground and wait for it to exit, then write result.json (and handoff.md, and \
+     validation.log if you ran validation) BEFORE you end your turn. If a command is too slow to \
+     finish in the foreground, narrow it and record what you did not run in validation.failures \
+     rather than deferring the write."
+}
+
 const RESULT_SCHEMA_HINT: &str = r#"```json
 {
   "schema_version": 1,
@@ -1950,6 +1999,7 @@ mod tests {
             role_notes: "",
             harness: &harness,
             approved: false,
+            pre_push_checks: &[],
         });
         assert!(p.contains("## Workspace rules (always apply)"));
         assert!(p.contains("Never push without review."));
@@ -2124,6 +2174,7 @@ mod tests {
             role_notes,
             harness: &Harness::default(),
             approved: false,
+            pre_push_checks: &[],
         })
     }
 
@@ -2168,7 +2219,62 @@ mod tests {
             role_notes: "",
             harness: &Harness::default(),
             approved,
+            pre_push_checks: &[],
         })
+    }
+
+    /// Issue #44: the run is judged by the workspace's pre-push checks after
+    /// the worker finishes. A worker that never sees them passes its own
+    /// validation and still lands Partial on a one-line lint.
+    #[test]
+    fn packet_states_the_delivery_gate_commands() {
+        let task: crate::schemas::Task =
+            crate::yaml::from_str("id: YARD-001\ntitle: add a test\nkind: implementation\n")
+                .unwrap();
+        let repo = crate::inspect::RepoSummary::default();
+        let checks = vec![
+            GitFinishCheck {
+                name: "format".into(),
+                command: "cargo fmt --all -- --check".into(),
+            },
+            GitFinishCheck {
+                name: "clippy".into(),
+                command: "cargo clippy --all-targets -- -D warnings".into(),
+            },
+        ];
+        let inputs = |checks: &[GitFinishCheck]| {
+            compile(&PacketInputs {
+                worker_id: "codex",
+                task: &task,
+                intent: None,
+                repo: &repo,
+                run_dir_rel: ".agents/runs/run-x",
+                conversation: &[],
+                continuation: None,
+                chained_from: None,
+                language: "en",
+                images: &[],
+                role_notes: "",
+                harness: &Harness::default(),
+                approved: false,
+                pre_push_checks: checks,
+            })
+        };
+
+        let gated = inputs(&checks);
+        assert!(gated.contains("## Delivery gate"), "{gated}");
+        assert!(gated.contains("cargo fmt --all -- --check"), "{gated}");
+        assert!(
+            gated.contains("cargo clippy --all-targets -- -D warnings"),
+            "{gated}"
+        );
+        // The worker must know these decide the task's outcome, not just that
+        // they exist.
+        assert!(gated.contains("Partial"), "{gated}");
+
+        // A workspace with no configured gate gets no section at all.
+        let ungated = inputs(&[]);
+        assert!(!ungated.contains("## Delivery gate"), "{ungated}");
     }
 
     #[test]
@@ -2226,6 +2332,7 @@ mod tests {
             role_notes: "",
             harness: &Harness::default(),
             approved: false,
+            pre_push_checks: &[],
         });
         assert!(p.contains("## Same session, next task"));
         assert!(p.contains("completed task YARD-1 in this session"));
@@ -2277,6 +2384,7 @@ mod tests {
             role_notes: "",
             harness: &Harness::default(),
             approved: false,
+            pre_push_checks: &[],
         });
         assert!(p.contains("## Continuing a partial run"));
         assert!(p.contains("do not redo finished work"));
@@ -2341,6 +2449,7 @@ mod tests {
             role_notes: "",
             harness: &Harness::default(),
             approved: false,
+            pre_push_checks: &[],
         });
         assert!(p.contains("## Conversation with the user"));
         assert!(p.contains("[you] Forward+ or GL Compatibility?"));

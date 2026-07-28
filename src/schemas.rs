@@ -1959,32 +1959,48 @@ pub const MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES: usize = 256;
 impl WorkersFile {
     pub fn validate(&self) -> Result<(), String> {
         for worker in &self.workers {
-            let patterns = &worker.provider_response_refusal_patterns;
-            if patterns.len() > MAX_PROVIDER_RESPONSE_REFUSAL_PATTERNS {
-                return Err(format!(
-                    "worker '{}' configures {} provider refusal patterns; maximum is {}",
-                    worker.id,
-                    patterns.len(),
-                    MAX_PROVIDER_RESPONSE_REFUSAL_PATTERNS
-                ));
-            }
-            for pattern in patterns {
-                if pattern.trim().is_empty() {
-                    return Err(format!(
-                        "worker '{}' has an empty provider refusal pattern",
-                        worker.id
-                    ));
-                }
-                if pattern.len() > MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES {
-                    return Err(format!(
-                        "worker '{}' provider refusal pattern exceeds {} bytes",
-                        worker.id, MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES
-                    ));
-                }
-            }
+            validate_output_contract_patterns(
+                &worker.id,
+                "provider refusal",
+                &worker.provider_response_refusal_patterns,
+            )?;
+            validate_output_contract_patterns(
+                &worker.id,
+                "background deferral",
+                &worker.background_deferral_patterns,
+            )?;
         }
         Ok(())
     }
+}
+
+/// Both output-contract pattern lists are scanned over the same bounded log
+/// span, so they share one budget and one set of well-formedness rules.
+fn validate_output_contract_patterns(
+    worker_id: &str,
+    label: &str,
+    patterns: &[String],
+) -> Result<(), String> {
+    if patterns.len() > MAX_PROVIDER_RESPONSE_REFUSAL_PATTERNS {
+        return Err(format!(
+            "worker '{}' configures {} {label} patterns; maximum is {}",
+            worker_id,
+            patterns.len(),
+            MAX_PROVIDER_RESPONSE_REFUSAL_PATTERNS
+        ));
+    }
+    for pattern in patterns {
+        if pattern.trim().is_empty() {
+            return Err(format!("worker '{worker_id}' has an empty {label} pattern"));
+        }
+        if pattern.len() > MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES {
+            return Err(format!(
+                "worker '{worker_id}' {label} pattern exceeds {} bytes",
+                MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2079,12 +2095,44 @@ pub struct WorkerProfile {
     /// current attempt wrote no result.json.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provider_response_refusal_patterns: Vec<String>,
+    /// Bounded, case-insensitive literal signatures this worker emits when its
+    /// non-interactive session is torn down with a background task still
+    /// running. Consulted only when the current attempt wrote no result.json:
+    /// the worker deferred its artifacts to a completion notification that a
+    /// non-interactive session can never deliver. Defaulted rather than left
+    /// empty so existing workspaces are covered without editing workers.yaml;
+    /// set an explicit (possibly empty) list to override.
+    #[serde(
+        default = "default_background_deferral_patterns",
+        skip_serializing_if = "is_default_background_deferral_patterns"
+    )]
+    pub background_deferral_patterns: Vec<String>,
+}
+
+/// Structural markers, not prose: these are the exact stream events a
+/// non-interactive Claude Code session emits while tearing down a still-running
+/// background task. Other worker families simply never emit them, so an
+/// unconditional default cannot produce a cross-worker false positive.
+pub fn default_background_deferral_patterns() -> Vec<String> {
+    vec![
+        "\"subtype\":\"task_updated\"".to_string(),
+        "\"subtype\":\"task_notification\"".to_string(),
+    ]
+}
+
+/// Keep the defaulted list out of written workers.yaml so only a deliberate
+/// user override is ever persisted.
+fn is_default_background_deferral_patterns(patterns: &[String]) -> bool {
+    patterns == default_background_deferral_patterns()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputContractCause {
     ProviderResponseRefused,
+    /// The worker ended its turn while a background task was still running, so
+    /// it never wrote its result artifacts (issue #38).
+    WorkerDeferredToBackgroundTask,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
