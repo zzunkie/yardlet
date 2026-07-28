@@ -67,6 +67,26 @@ pub struct PlanningLock {
     queue_snapshot: RefCell<Option<String>>,
 }
 
+/// Kernel-owned lock scoped to ONE run's finalization. Run finalization
+/// integrates the worktree and writes the task's terminal state; without this,
+/// two processes (a CLI command and a TUI idle `recover_orphans`, say) can
+/// finalize the same run concurrently, and the loser re-integrates a branch the
+/// winner already merged and cleaned up (issue #69). Like `PlanningLock`, the
+/// descriptor lifetime IS the transaction lifetime, so process death releases
+/// it with no stale-PID protocol.
+pub struct RunFinalizeLock {
+    #[cfg(unix)]
+    file: fs::File,
+}
+
+#[cfg(unix)]
+impl Drop for RunFinalizeLock {
+    fn drop(&mut self) {
+        // SAFETY: `self.file` owns this descriptor until Drop finishes.
+        let _ = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN) };
+    }
+}
+
 struct RuntimeTaskPlacement {
     ordinal: usize,
     runs_before: Vec<String>,
@@ -560,6 +580,74 @@ impl Workspace {
             Ok(PlanningLock {
                 queue_snapshot: RefCell::new(queue_snapshot),
             })
+        }
+    }
+
+    /// Serialize finalization of one run across processes. The lock file lives
+    /// beside the run's own records so it is scoped exactly to that run: two
+    /// different runs still finalize concurrently, which parallel batches rely
+    /// on. Acquisition is bounded by the same mutation timeout as the planning
+    /// lock, and a timeout is an error rather than a silent second finalize.
+    ///
+    /// Callers MUST re-read the run record after acquiring: the whole point is
+    /// that the state may have changed while waiting.
+    pub fn acquire_run_finalize_lock(&self, run_id: &str) -> Result<RunFinalizeLock> {
+        // Deliberately NOT inside the run directory: that directory is scanned
+        // for evidence and published artifacts, and a lock file has no business
+        // showing up as either.
+        let dir = self.agents_dir().join("locks");
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let path = dir.join(format!("finalize-{run_id}.lock"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .custom_flags(libc::O_CLOEXEC)
+                .open(&path)
+                .with_context(|| format!("opening run finalize lock {}", path.display()))?;
+            let timeout = mutation_lock_timeout();
+            let started = Instant::now();
+            loop {
+                // SAFETY: `file` stays alive in RunFinalizeLock and flock only
+                // reads its valid descriptor. LOCK_NB prevents an unbounded
+                // wait; a crash releases the kernel-owned lock.
+                if unsafe {
+                    libc::flock(
+                        std::os::fd::AsRawFd::as_raw_fd(&file),
+                        libc::LOCK_EX | libc::LOCK_NB,
+                    )
+                } == 0
+                {
+                    break;
+                }
+                let error = std::io::Error::last_os_error();
+                let retryable = error.raw_os_error().is_some_and(|code| {
+                    code == libc::EINTR || code == libc::EAGAIN || code == libc::EWOULDBLOCK
+                });
+                if !retryable {
+                    return Err(error)
+                        .with_context(|| format!("locking run finalization {}", path.display()));
+                }
+                if started.elapsed() >= timeout {
+                    bail!(
+                        "run_finalize_lock_timeout after {}ms at {}",
+                        timeout.as_millis(),
+                        path.display()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(RunFinalizeLock { file })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(RunFinalizeLock {})
         }
     }
 
@@ -2090,6 +2178,20 @@ impl Workspace {
     fn no_change_receipts_dir(&self) -> PathBuf {
         self.checkpoints_dir().join("no-change")
     }
+    /// Terminal receipts, moved out of the directory startup reconcile scans.
+    ///
+    /// A reconciled receipt is audit history, not pending work: replaying it
+    /// costs several git subprocesses and can never change anything. Startup
+    /// cost has to track outstanding work, not the number of runs a workspace
+    /// has ever completed (issue #43). They stay addressable by run id because
+    /// ownership reconstruction and overlay lookups still read them by name.
+    fn integrated_cleanup_reconciled_dir(&self) -> PathBuf {
+        self.integrated_cleanup_receipts_dir()
+            .join(RECONCILED_RECEIPTS_DIR)
+    }
+    fn no_change_reconciled_dir(&self) -> PathBuf {
+        self.no_change_receipts_dir().join(RECONCILED_RECEIPTS_DIR)
+    }
     fn resolved_dependency_outputs_dir(&self) -> PathBuf {
         self.checkpoints_dir().join("dependency-outputs")
     }
@@ -2199,7 +2301,22 @@ impl Workspace {
         &self,
         run_id: &str,
     ) -> Result<IntegratedCleanupReceipt> {
-        load_yaml(&self.integrated_cleanup_receipt_path(run_id)?)
+        let pending = self.integrated_cleanup_receipt_path(run_id)?;
+        if pending.is_file() {
+            return load_yaml(&pending);
+        }
+        load_yaml(
+            &self
+                .integrated_cleanup_reconciled_dir()
+                .join(format!("{run_id}.yaml")),
+        )
+    }
+    /// Retire a receipt whose cleanup is finished so later startups stop
+    /// replaying it. Nothing is deleted: the receipt keeps its exact bytes and
+    /// stays loadable by run id.
+    pub fn archive_integrated_cleanup_receipt(&self, run_id: &str) -> Result<()> {
+        let pending = self.integrated_cleanup_receipt_path(run_id)?;
+        archive_receipt(&pending, &self.integrated_cleanup_reconciled_dir())
     }
     pub fn load_integrated_cleanup_receipts(&self) -> Result<Vec<IntegratedCleanupReceipt>> {
         let directory = self.integrated_cleanup_receipts_dir();
@@ -2223,7 +2340,38 @@ impl Workspace {
         write_str_atomic(&path, &yaml::to_string(receipt)?)
     }
     pub fn load_no_change_receipt(&self, run_id: &str) -> Result<NoChangeReceipt> {
-        load_yaml(&self.no_change_receipt_path(run_id)?)
+        let pending = self.no_change_receipt_path(run_id)?;
+        if pending.is_file() {
+            return load_yaml(&pending);
+        }
+        load_yaml(
+            &self
+                .no_change_reconciled_dir()
+                .join(format!("{run_id}.yaml")),
+        )
+    }
+    /// Does a no-change receipt exist for this run, readable or not?
+    ///
+    /// Presence alone is the safety-relevant question: it means the run already
+    /// recorded a no-op, so re-deriving integration provenance from a
+    /// worker-writable record would be wrong. A corrupt or unreadable receipt is
+    /// exactly the case that must still count, which a parse-based check would
+    /// let through.
+    pub fn has_no_change_receipt(&self, run_id: &str) -> bool {
+        let Ok(pending) = self.no_change_receipt_path(run_id) else {
+            return false;
+        };
+        pending.is_file()
+            || self
+                .no_change_reconciled_dir()
+                .join(format!("{run_id}.yaml"))
+                .is_file()
+    }
+    /// Retire a settled no-change receipt. See
+    /// [`Workspace::archive_integrated_cleanup_receipt`].
+    pub fn archive_no_change_receipt(&self, run_id: &str) -> Result<()> {
+        let pending = self.no_change_receipt_path(run_id)?;
+        archive_receipt(&pending, &self.no_change_reconciled_dir())
     }
     pub fn load_no_change_receipts(&self) -> Result<Vec<NoChangeReceipt>> {
         let directory = self.no_change_receipts_dir();
@@ -4997,6 +5145,105 @@ enum ScalarValue<'a> {
     Usize(usize),
 }
 
+/// Set `git_finish.target_ref`, preserving the file's comments and layout.
+///
+/// `save_config_preserving_format` only rewrites top-level scalars, so a nested
+/// change made through it is silently dropped — the caller reports success over
+/// a file it never wrote. Delivery retargeting needs a real writer (issue #42),
+/// and it goes here because `.agents/` is written from one place.
+pub fn save_git_finish_target_ref(path: &Path, target_ref: &str) -> Result<()> {
+    let original =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let updated = apply_git_finish_target_edit(&original, target_ref);
+    // Prove the edit before committing it. This is hand-rolled line editing of
+    // Yardlet-owned canonical state: a shape the editor mishandles (a flow
+    // mapping, a file with no trailing newline, a same-named key at another
+    // depth) would otherwise write YAML that no longer parses, and every
+    // `yardlet` command in the workspace would fail with a parse error. There is
+    // no backup to fall back on, so the recovery would be exactly the hand-edit
+    // this writer exists to remove. Refusing is always better than corrupting.
+    let parsed: YardConfig = crate::yaml::from_str(&updated).map_err(|error| {
+        anyhow::anyhow!(
+            "refusing to write {}: the edit would not parse ({error}); \
+             set git_finish.target_ref by hand and report this config shape",
+            path.display()
+        )
+    })?;
+    if parsed.git_finish.target_ref != target_ref {
+        bail!(
+            "refusing to write {}: the edit did not set git_finish.target_ref to '{target_ref}' \
+             (it reads '{}'); set it by hand and report this config shape",
+            path.display(),
+            parsed.git_finish.target_ref
+        );
+    }
+    write_str_atomic(path, &updated)
+}
+
+/// Rewrite (or introduce) `target_ref` inside the `git_finish:` block.
+fn apply_git_finish_target_edit(input: &str, target_ref: &str) -> String {
+    let mut lines = split_preserving_newlines(input);
+    let scalar = ScalarValue::String(target_ref);
+    let value = render_scalar("", &scalar);
+    let Some(block_start) = lines.iter().position(|line| {
+        yaml_key_line(split_line_ending(line).0)
+            .is_some_and(|(indent, key, _)| indent == 0 && key == "git_finish")
+    }) else {
+        // No block at all: add one rather than dropping the change.
+        if !lines.last().is_some_and(|line| line.ends_with('\n')) {
+            if let Some(last) = lines.last_mut() {
+                last.push('\n');
+            }
+        }
+        lines.push(format!("git_finish:\n  target_ref: {value}\n"));
+        return lines.concat();
+    };
+    // The block ends at the next line whose key is top-level.
+    let block_end = lines
+        .iter()
+        .enumerate()
+        .skip(block_start + 1)
+        .find(|(_, line)| {
+            yaml_key_line(split_line_ending(line).0).is_some_and(|(indent, _, _)| indent == 0)
+        })
+        .map(|(index, _)| index)
+        .unwrap_or(lines.len());
+    // The block's own indent, taken from its first child. Matching `indent > 0`
+    // instead would rewrite a same-named key nested deeper (a
+    // `pre_push_checks[].target_ref`, or one inside a block scalar) and return,
+    // leaving the real key unwritten.
+    let child_indent = lines
+        .iter()
+        .take(block_end)
+        .skip(block_start + 1)
+        .find_map(|line| {
+            yaml_key_line(split_line_ending(line).0)
+                .map(|(indent, _, _)| indent)
+                .filter(|indent| *indent > 0)
+        })
+        .unwrap_or(2);
+    for line in lines.iter_mut().take(block_end).skip(block_start + 1) {
+        let (body, eol) = split_line_ending(line);
+        if yaml_key_line(body)
+            .is_some_and(|(indent, key, _)| indent == child_indent && key == "target_ref")
+        {
+            *line = format!("{}{}", replace_line_value(body, &scalar), eol);
+            return lines.concat();
+        }
+    }
+    // A block header with no newline would otherwise be joined to the new key.
+    if let Some(header) = lines.get_mut(block_start) {
+        if !header.ends_with('\n') {
+            header.push('\n');
+        }
+    }
+    lines.insert(
+        block_start + 1,
+        format!("{}target_ref: {value}\n", " ".repeat(child_indent)),
+    );
+    lines.concat()
+}
+
 fn apply_top_level_edits(input: &str, edits: &[LineEdit<'_>]) -> Result<String> {
     let mut lines = split_preserving_newlines(input);
     for edit in edits {
@@ -6111,6 +6358,28 @@ pub(crate) fn append_private_file(path: &Path) -> Result<fs::File> {
         .with_context(|| format!("opening private evidence {}", path.display()))
 }
 
+/// Subdirectory holding receipts whose reconciliation is finished. It carries
+/// no `.yaml` extension, so the `*_receipts` sweeps skip it the same way they
+/// skip any other non-receipt entry.
+const RECONCILED_RECEIPTS_DIR: &str = "reconciled";
+
+/// Move a settled receipt into its archive directory, preserving its bytes and
+/// its `<run_id>.yaml` name. A receipt that is already archived (or was never
+/// written) is a no-op, so this is safe to call on every reconcile pass.
+fn archive_receipt(pending: &Path, archive_dir: &Path) -> Result<()> {
+    if !pending.is_file() {
+        return Ok(());
+    }
+    let file_name = pending
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("receipt path has no file name"))?;
+    fs::create_dir_all(archive_dir)
+        .with_context(|| format!("creating {}", archive_dir.display()))?;
+    let archived = archive_dir.join(file_name);
+    fs::rename(pending, &archived)
+        .with_context(|| format!("archiving {} to {}", pending.display(), archived.display()))
+}
+
 /// Write a durable state snapshot through a same-directory temporary file so a
 /// crash cannot leave readers with a truncated JSON/YAML record.
 pub fn write_str_atomic(path: &Path, contents: &str) -> Result<()> {
@@ -6319,8 +6588,207 @@ pub fn place_skill_files_no_clobber(
 }
 
 #[cfg(test)]
+mod git_finish_target_tests {
+    use super::apply_git_finish_target_edit;
+
+    /// The written value, quoting style aside.
+    fn target_line(text: &str) -> String {
+        text.lines()
+            .find_map(|line| line.trim().strip_prefix("target_ref:"))
+            .map(|value| {
+                value
+                    .trim()
+                    .trim_matches('\'')
+                    .trim_matches('"')
+                    .to_string()
+            })
+            .unwrap_or_default()
+    }
+
+    /// `save_config_preserving_format` only rewrites top-level scalars, so a
+    /// nested change made through it is silently dropped and the caller reports
+    /// success over a file it never wrote (issue #42).
+    #[test]
+    fn retarget_rewrites_the_nested_key_without_disturbing_the_file() {
+        let existing = "schema_version: 1\n# keep this comment\ngit_finish:\n  auto_push: false\n  # and this one\n  target_ref: 'refs/heads/old'\n  remote: origin\nlanguage: ko\n";
+        let updated = apply_git_finish_target_edit(existing, "refs/heads/main");
+        assert!(updated.contains("target_ref: 'refs/heads/main'"));
+        assert!(!updated.contains("refs/heads/old"));
+        for preserved in [
+            "# keep this comment",
+            "# and this one",
+            "auto_push: false",
+            "remote: origin",
+            "language: ko",
+        ] {
+            assert!(
+                updated.contains(preserved),
+                "lost {preserved:?}:\n{updated}"
+            );
+        }
+        assert_eq!(
+            updated.matches("target_ref:").count(),
+            1,
+            "the key must be rewritten, not duplicated"
+        );
+    }
+
+    #[test]
+    fn retarget_adds_the_key_to_a_block_that_lacks_it() {
+        let existing = "git_finish:\n  auto_push: true\nlanguage: en\n";
+        let updated = apply_git_finish_target_edit(existing, "refs/heads/main");
+        assert!(target_line(&updated) == "refs/heads/main", "{updated}");
+        assert!(updated.contains("auto_push: true"));
+        assert!(
+            updated.find("target_ref").unwrap() < updated.find("language").unwrap(),
+            "the key must land inside the block, not after it:\n{updated}"
+        );
+    }
+
+    /// The writer edits Yardlet-owned canonical state by hand, so every case
+    /// must round-trip to a loadable config. Substring assertions alone let a
+    /// shape through that produced YAML no `yardlet` command could parse.
+    #[test]
+    fn every_edited_shape_still_parses_as_a_config() {
+        let base = "schema_version: 1\nproduct: yardlet\nworkspace_id: t\ncreated_at: \"2026-07-28T00:00:00Z\"\nstate_dir: .agents\ndefault_interface: tui\ncanonical_queue: work-queue.yaml\ncurrent_intent: \"\"\n";
+        for (label, shape) in [
+            ("block with the key", "git_finish:\n  auto_push: false\n  target_ref: 'refs/heads/old'\n"),
+            ("block without the key", "git_finish:\n  auto_push: false\n"),
+            ("no block", ""),
+            ("block header last, no trailing newline", "git_finish:"),
+            ("flow mapping", "git_finish: {auto_push: false}\n"),
+            ("deeper same-named key", "git_finish:\n  auto_push: false\n  pre_push_checks:\n    - name: c\n      command: 'echo target_ref: decoy'\n"),
+            ("no trailing newline", "git_finish:\n  auto_push: false"),
+        ] {
+            let input = format!("{base}{shape}");
+            let updated = super::apply_git_finish_target_edit(&input, "refs/heads/main");
+            match crate::yaml::from_str::<crate::schemas::YardConfig>(&updated) {
+                Ok(config) => assert_eq!(
+                    config.git_finish.target_ref, "refs/heads/main",
+                    "{label}: parsed but did not take the value:\n{updated}"
+                ),
+                Err(error) => {
+                    // A shape the editor cannot handle must be REFUSED by the
+                    // writer, never written. Prove the guard catches it.
+                    let path = std::env::temp_dir().join(format!(
+                        "yard-target-shape-{}-{}.yaml",
+                        std::process::id(),
+                        label.replace(' ', "-")
+                    ));
+                    std::fs::write(&path, &input).unwrap();
+                    let refused = super::save_git_finish_target_ref(&path, "refs/heads/main");
+                    assert!(
+                        refused.is_err(),
+                        "{label}: writer produced unparseable YAML ({error}) and wrote it anyway"
+                    );
+                    assert_eq!(
+                        std::fs::read_to_string(&path).unwrap(),
+                        input,
+                        "{label}: a refused edit must leave the file untouched"
+                    );
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retarget_adds_the_block_when_the_file_has_none() {
+        for existing in ["language: en\n", "language: en"] {
+            let updated = apply_git_finish_target_edit(existing, "refs/heads/main");
+            assert!(updated.contains("language: en"));
+            assert!(
+                updated.contains("git_finish:\n  target_ref: "),
+                "a missing block must be introduced rather than dropping the change:\n{updated}"
+            );
+            assert_eq!(target_line(&updated), "refs/heads/main", "{updated}");
+        }
+    }
+
+    /// A key of the same name in a LATER top-level block must not be mistaken
+    /// for this one.
+    #[test]
+    fn retarget_stays_inside_its_own_block() {
+        let existing =
+            "git_finish:\n  auto_push: false\nother:\n  target_ref: 'refs/heads/decoy'\n";
+        let updated = apply_git_finish_target_edit(existing, "refs/heads/main");
+        assert!(updated.contains("refs/heads/decoy"), "{updated}");
+        let block = updated.split("other:").next().unwrap();
+        assert!(block.contains("target_ref: "), "{updated}");
+        assert!(block.contains("refs/heads/main"), "{updated}");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #69: two processes finalized the SAME run 840ms apart and the
+    /// second demoted a correct Done to Partial. Finalization must be
+    /// exclusive per run, while different runs stay concurrent so parallel
+    /// batches are unaffected.
+    #[cfg(unix)]
+    #[test]
+    fn run_finalize_lock_is_exclusive_per_run_and_concurrent_across_runs() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-run-finalize-lock-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".agents")).unwrap();
+        let ws = Workspace::at(&root);
+
+        let held = ws.acquire_run_finalize_lock("run-a").unwrap();
+
+        // A different run is not blocked by it.
+        let other = ws.acquire_run_finalize_lock("run-b");
+        assert!(
+            other.is_ok(),
+            "a lock on run-a must not block run-b: {:?}",
+            other.err()
+        );
+        drop(other);
+
+        // The same run is refused while the first holder lives. Probe the
+        // kernel lock directly rather than calling the acquirer: the acquirer
+        // would spin for the full mutation timeout, and shortening that timeout
+        // means setting a process-wide env var that other tests running in
+        // parallel also read.
+        let probe = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join(".agents/locks/finalize-run-a.lock"))
+            .unwrap();
+        // SAFETY: `probe` owns a valid descriptor for the duration of the call.
+        let taken = unsafe {
+            libc::flock(
+                std::os::fd::AsRawFd::as_raw_fd(&probe),
+                libc::LOCK_EX | libc::LOCK_NB,
+            )
+        };
+        assert_ne!(
+            taken, 0,
+            "a second finalizer of run-a must not be able to take the lock"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EWOULDBLOCK),
+            "contention must be reported as would-block, not a real error"
+        );
+        drop(probe);
+
+        // Releasing it hands the run over.
+        drop(held);
+        assert!(ws.acquire_run_finalize_lock("run-a").is_ok());
+
+        // The lock never lands inside the run directory, where it would be
+        // scanned as evidence or published as an artifact.
+        assert!(!ws.runs_dir().join("run-a").join("finalize.lock").exists());
+        assert!(root.join(".agents/locks/finalize-run-a.lock").is_file());
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     const CONFIG_WITH_COMMENTS: &str = r#"schema_version: 1
 product: yardlet

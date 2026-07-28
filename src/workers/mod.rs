@@ -22,7 +22,9 @@ use crate::schemas::{
     RoutingProvenance, WorkerOutputLogSpan, WorkerProfile,
 };
 
-pub const MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES: u64 = 256 * 1024;
+/// Tail of a resultless attempt's log span that output-contract classification
+/// reads. Bounds the work; the causes it looks for are terminal events.
+pub const MAX_OUTPUT_CONTRACT_SCAN_BYTES: u64 = 256 * 1024;
 
 pub(crate) const WORKER_PROCESS_PROVENANCE_FILE: &str = "worker-process.yaml";
 
@@ -100,9 +102,17 @@ pub struct AttemptCapture {
     pub stderr_log: PathBuf,
 }
 
-/// Classify only the exact public-log bytes appended by one resultless attempt.
+/// Classify only the public-log bytes appended by one resultless attempt.
 /// Patterns are bounded, case-insensitive literals rather than regexes so a
 /// user-owned profile cannot introduce unbounded matching work.
+///
+/// A real attempt log runs to hundreds of kilobytes or more, so a span larger
+/// than the scan budget is the normal case, not an error: both classified
+/// causes are terminal events (a provider's refusal reply, a session teardown
+/// killing background tasks) and therefore land at the END of the span. The
+/// scan reads the last `MAX_OUTPUT_CONTRACT_SCAN_BYTES` of the span. Spans that
+/// are structurally invalid (inverted, or past the end of the file) are still
+/// errors.
 pub fn classify_output_contract_cause(
     profile: &WorkerProfile,
     result_path: &Path,
@@ -111,18 +121,14 @@ pub fn classify_output_contract_cause(
 ) -> Result<Option<OutputContractCause>> {
     use std::io::{Read, Seek, SeekFrom};
 
-    if result_path.is_file() || profile.provider_response_refusal_patterns.is_empty() {
+    if result_path.is_file()
+        || (profile.provider_response_refusal_patterns.is_empty()
+            && profile.background_deferral_patterns.is_empty())
+    {
         return Ok(None);
     }
     if span.byte_end < span.byte_start {
         anyhow::bail!("worker output log span ends before it starts");
-    }
-    let span_len = span.byte_end - span.byte_start;
-    if span_len > MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES {
-        anyhow::bail!(
-            "worker output log span exceeds {} bytes",
-            MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES
-        );
     }
     let mut file = std::fs::File::open(output_log)
         .with_context(|| format!("opening bounded worker output {}", output_log.display()))?;
@@ -135,15 +141,26 @@ pub fn classify_output_contract_cause(
             file_len
         );
     }
-    file.seek(SeekFrom::Start(span.byte_start))?;
-    let mut bytes = vec![0; span_len as usize];
+    let scan_start = span
+        .byte_end
+        .saturating_sub(MAX_OUTPUT_CONTRACT_SCAN_BYTES)
+        .max(span.byte_start);
+    file.seek(SeekFrom::Start(scan_start))?;
+    let mut bytes = vec![0; (span.byte_end - scan_start) as usize];
     file.read_exact(&mut bytes)?;
     let haystack = String::from_utf8_lossy(&bytes).to_lowercase();
-    Ok(profile
-        .provider_response_refusal_patterns
-        .iter()
-        .any(|pattern| haystack.contains(&pattern.to_lowercase()))
-        .then_some(OutputContractCause::ProviderResponseRefused))
+    let matches = |patterns: &[String]| {
+        patterns
+            .iter()
+            .any(|pattern| haystack.contains(&pattern.to_lowercase()))
+    };
+    // A refusal explains why no work happened at all; a background deferral only
+    // explains missing artifacts. Classify the stronger cause first.
+    if matches(&profile.provider_response_refusal_patterns) {
+        return Ok(Some(OutputContractCause::ProviderResponseRefused));
+    }
+    Ok(matches(&profile.background_deferral_patterns)
+        .then_some(OutputContractCause::WorkerDeferredToBackgroundTask))
 }
 
 fn normalized_event(
@@ -1026,6 +1043,21 @@ fn spawn_internal(
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    // A worker must outlive the terminal that started it. Yardlet's contract is
+    // that quitting the orchestrator does not kill workers — the next start
+    // ADOPTS a live one — and that held for `q` but not for the window closing:
+    // a plain spawn inherits Yardlet's process group, which is the controlling
+    // pty's foreground group, so pty teardown SIGHUPs the worker too and a whole
+    // reasoning pass is lost (issue #52). Leading its own group detaches it from
+    // that signal. Safe here because all three of its stdio ends are pipes, so
+    // it never reads or writes the controlling terminal (no SIGTTIN/SIGTTOU).
+    // Deliberate termination is unaffected: the stop path writes the `cancelled`
+    // marker and kills `worker.pid` explicitly.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
 
     let attempt_raw_files = if let Some(capture) = attempt_capture {
         for path in [&capture.stdout_log, &capture.stderr_log] {
@@ -1357,6 +1389,14 @@ fn spawn_internal(
             break status;
         }
         if start.elapsed() >= timeout {
+            // Kill the GROUP, not just the direct child. A worker profile whose
+            // invocation is a launcher (`bash wrapper.sh`, `npx`, `sh -c` — the
+            // shape this repo's own fixtures use) puts the real agent CLI in a
+            // grandchild, and killing only the launcher leaves it running and
+            // billing while the task is already requeued. It also still holds
+            // the inherited pipe write ends, so the reader joins below would
+            // never see EOF and this function would hang (issue #52).
+            terminate_worker_tree(child.id(), Signal::Kill);
             let _ = child.kill();
             timed_out = true;
             break child.wait()?;
@@ -1563,6 +1603,64 @@ fn codex_config_default_model() -> Option<String> {
     })
 }
 
+/// Which signal [`terminate_worker_tree`] sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signal {
+    /// Ask the worker to stop. What the operator's stop and the redirect send.
+    Term,
+    /// Take it down now. What a wall-clock timeout sends.
+    Kill,
+}
+
+#[cfg(unix)]
+impl Signal {
+    fn number(self) -> libc::c_int {
+        match self {
+            Self::Term => libc::SIGTERM,
+            Self::Kill => libc::SIGKILL,
+        }
+    }
+}
+
+/// Terminate a worker and everything it spawned.
+///
+/// A worker leads its own process group (issue #52), so its pgid equals its pid
+/// and a negative target reaches the whole tree. Killing only the direct child
+/// leaves a launcher's grandchild — the actual agent CLI — running after the
+/// task has already been requeued, which is both a runaway process and a second
+/// writer into the same run directory.
+///
+/// This mirrors `kill_validation_child`, which has group-killed since
+/// validation children were first put in their own group.
+///
+/// Returns whether the group signal was delivered. Callers keep their existing
+/// direct kill as the backstop for a worker that is not its own group leader —
+/// one adopted from a version before #52, or a platform without process groups.
+#[cfg(unix)]
+pub fn terminate_worker_tree(pid: u32, signal: Signal) -> bool {
+    // Signalling a group targets pgid == pid, which exists only while that pid
+    // is its group's leader. A zero pid would mean the CALLER's own group, so it
+    // must never reach the syscall.
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    if pid == 0 {
+        return false;
+    }
+    // The syscall, not `Command::new("kill")`: the negative pid a group signal
+    // needs is ambiguous on a command line, and Linux's `kill` reads `-123`
+    // after a signal flag as another option rather than a target. That parsed
+    // fine on macOS and failed on Linux, which is a bad way to discover that
+    // teardown silently stopped reaching the tree.
+    unsafe { libc::kill(-pid, signal.number()) == 0 }
+}
+
+#[cfg(not(unix))]
+pub fn terminate_worker_tree(_pid: u32, _signal: Signal) -> bool {
+    // No process groups to signal; callers fall back to their direct kill.
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1637,15 +1735,17 @@ mod tests {
         )
         .unwrap();
         for span in [
+            // Inverted span.
             WorkerOutputLogSpan {
                 path: "worker-output.log".into(),
                 byte_start: 10,
                 byte_end: 9,
             },
+            // Span running past the end of the file.
             WorkerOutputLogSpan {
                 path: "worker-output.log".into(),
                 byte_start: 0,
-                byte_end: MAX_PROVIDER_RESPONSE_REFUSAL_SCAN_BYTES + 1,
+                byte_end: MAX_OUTPUT_CONTRACT_SCAN_BYTES + 1,
             },
         ] {
             assert!(classify_output_contract_cause(
@@ -1656,6 +1756,91 @@ mod tests {
             )
             .is_err());
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Regression: a real attempt log is far larger than the scan budget. The
+    /// span must be scanned from its tail rather than rejected, or no live run
+    /// is ever classified.
+    #[test]
+    fn classification_scans_the_tail_of_an_oversized_span() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-output-contract-oversized-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let log = root.join("worker-output.log");
+        let filler = "x".repeat(MAX_OUTPUT_CONTRACT_SCAN_BYTES as usize + 4096);
+        std::fs::write(&log, format!("{filler}\nprovider declined\n")).unwrap();
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: fixture\nprovider_response_refusal_patterns: ['provider declined']\ninvocation: {command: fixture}\n",
+        )
+        .unwrap();
+        let span = WorkerOutputLogSpan {
+            path: "worker-output.log".into(),
+            byte_start: 0,
+            byte_end: std::fs::metadata(&log).unwrap().len(),
+        };
+        assert_eq!(
+            classify_output_contract_cause(&profile, &root.join("result.json"), &log, &span)
+                .unwrap(),
+            Some(OutputContractCause::ProviderResponseRefused)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Issue #38: the worker ended its turn with a background task still
+    /// running, so the non-interactive session tore down before result.json was
+    /// written. The teardown markers are structural stream events.
+    #[test]
+    fn classifies_background_task_deferral_from_teardown_markers() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-output-contract-deferral-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let log = root.join("worker-output.log");
+        // Verbatim shape of the teardown events observed in the runs cited by #38.
+        std::fs::write(
+            &log,
+            "{\"type\":\"system\",\"subtype\":\"task_updated\",\"task_id\":\"bdtea3zev\",\
+             \"patch\":{\"status\":\"killed\",\"end_time\":1784816678419}}\n\
+             {\"type\":\"system\",\"subtype\":\"task_notification\",\"task_id\":\"bdtea3zev\",\
+             \"status\":\"stopped\",\"output_file\":\"\",\"summary\":\"Run full cargo test\"}\n",
+        )
+        .unwrap();
+        let profile: WorkerProfile =
+            crate::yaml::from_str("id: claude-code\ninvocation: {command: claude}\n").unwrap();
+        assert_eq!(
+            profile.background_deferral_patterns,
+            crate::schemas::default_background_deferral_patterns(),
+            "an existing workers.yaml without the key must still be covered"
+        );
+        let span = WorkerOutputLogSpan {
+            path: "worker-output.log".into(),
+            byte_start: 0,
+            byte_end: std::fs::metadata(&log).unwrap().len(),
+        };
+        assert_eq!(
+            classify_output_contract_cause(&profile, &root.join("result.json"), &log, &span)
+                .unwrap(),
+            Some(OutputContractCause::WorkerDeferredToBackgroundTask)
+        );
+
+        // A worker family that never emits those events is unaffected.
+        std::fs::write(&log, "codex finished without writing a result\n").unwrap();
+        let span = WorkerOutputLogSpan {
+            path: "worker-output.log".into(),
+            byte_start: 0,
+            byte_end: std::fs::metadata(&log).unwrap().len(),
+        };
+        assert_eq!(
+            classify_output_contract_cause(&profile, &root.join("result.json"), &log, &span)
+                .unwrap(),
+            None
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2182,6 +2367,109 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
             !outcome.public_events_dropped,
             "an unsaturated publisher queue must not report shed events"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Issue #20: under sink backpressure the parent stayed busy long after the
+    /// worker had produced a successful result. The bounded queue must shed
+    /// rather than block, and completion must not wait for a slow sink to
+    /// consume the backlog.
+    #[cfg(unix)]
+    #[test]
+    fn codex_saturated_publisher_sheds_and_completes_without_draining_the_backlog() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        const EMITTED: usize = 400;
+        const SINK_DELAY: Duration = Duration::from_millis(25);
+
+        let root = std::env::temp_dir().join(format!(
+            "yard-codex-saturated-publisher-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fake_codex = root.join("codex");
+        // Many small events, emitted as fast as the shell can write them, so the
+        // reader outruns the deliberately slow sink and fills the 64-slot queue.
+        std::fs::write(
+            &fake_codex,
+            format!(
+                "#!/bin/sh\ni=0\nwhile [ $i -lt {EMITTED} ]; do \
+                 printf '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\
+                 \"text\":\"e%s\"}}}}\\n' \"$i\"; i=$((i+1)); done\n"
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&fake_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_codex, permissions).unwrap();
+
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+        )
+        .unwrap();
+        let capture = AttemptCapture {
+            combined_log: root.join("worker-output.log"),
+            stdout_log: root.join("attempts/att_1/stdout.log"),
+            stderr_log: root.join("attempts/att_1/stderr.log"),
+        };
+        let delivered = Arc::new(AtomicUsize::new(0));
+        let sink_delivered = Arc::clone(&delivered);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink_seen = Arc::clone(&seen);
+        let sink: AttemptEventSink = Arc::new(move |event| {
+            std::thread::sleep(SINK_DELAY);
+            sink_delivered.fetch_add(1, Ordering::Relaxed);
+            sink_seen.lock().unwrap().push(event);
+            Ok(())
+        });
+
+        let started = std::time::Instant::now();
+        let outcome = spawn_attempt_with_sink(
+            &profile,
+            &fake_codex,
+            "packet",
+            &root,
+            &root,
+            &[],
+            &capture,
+            Some(sink),
+            LOAD_TOLERANT_WORKER_CEILING,
+            false,
+            &[],
+            None,
+            false,
+        )
+        .unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(outcome.exit_ok);
+        assert!(
+            outcome.public_events_dropped,
+            "a saturated publisher queue must report shed events"
+        );
+        // Delivering every event through this sink would take EMITTED *
+        // SINK_DELAY (10s here). Completion must not wait for that backlog.
+        let full_drain = SINK_DELAY * EMITTED as u32;
+        assert!(
+            elapsed < full_drain / 3,
+            "parent did not complete promptly under backpressure: {elapsed:?} \
+             (full drain would be {full_drain:?})"
+        );
+        assert!(
+            delivered.load(Ordering::Relaxed) < EMITTED,
+            "shedding must drop events rather than deliver all of them"
+        );
+        // The authoritative raw stream is never shed: every emitted event is on
+        // disk even though the live sink saw only some of them.
+        let raw = std::fs::read_to_string(&capture.stdout_log).unwrap();
+        assert_eq!(raw.lines().count(), EMITTED);
+
         let _ = std::fs::remove_dir_all(root);
     }
 

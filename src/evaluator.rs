@@ -192,6 +192,51 @@ pub fn evaluate(
                         format!("changed but not reported: {}", undisclosed.join(", "))
                     },
                 ));
+                // The mirror of the disclosure check. `diff_matches_report` only
+                // looks for diff entries the worker failed to name, so a report
+                // that names a file the diff does NOT contain passed it
+                // vacuously — which is how a run shipped a green summary over a
+                // deliverable written outside the tree Yardlet integrates
+                // (issue #55). Advisory here because finalization is what fails
+                // that case closed; this keeps the summary from asserting a file
+                // that is not in the evidence.
+                let actual_norm: std::collections::HashSet<String> =
+                    actual.iter().map(|p| norm(p)).collect();
+                let deleted_norm: std::collections::HashSet<String> =
+                    r.changes.files_deleted.iter().map(|p| norm(p)).collect();
+                let unevidenced: Vec<String> = r
+                    .changes
+                    .files_created
+                    .iter()
+                    .chain(&r.changes.files_modified)
+                    .map(|p| norm(p))
+                    .filter(|p| !p.is_empty() && !deleted_norm.contains(p))
+                    // The run's own artifacts are not repository output. The
+                    // disclosure check above already exempts them on the actual
+                    // side; this direction has to match or every review run —
+                    // which is REQUIRED to write report.md and forbidden to
+                    // touch code — reports its own deliverable as missing.
+                    .filter(|p| !is_current_run_artifact(p, run_id))
+                    .filter(|p| {
+                        // A reported directory is present when the diff holds
+                        // anything under it.
+                        let prefix = format!("{p}/");
+                        !actual_norm.contains(p)
+                            && !actual_norm.iter().any(|a| a.starts_with(&prefix))
+                    })
+                    .collect();
+                checks.push(advisory(
+                    "reported_changes_present",
+                    unevidenced.is_empty(),
+                    if unevidenced.is_empty() {
+                        "every reported change is in the actual diff".to_string()
+                    } else {
+                        format!(
+                            "reported but absent from the actual diff: {}",
+                            unevidenced.join(", ")
+                        )
+                    },
+                ));
             }
             None => {
                 // Fail closed: no independent evidence to certify the gate.
@@ -315,15 +360,31 @@ pub fn evaluate(
     }
 }
 
+/// Is this path one of the run's OWN artifacts (result.json, handoff.md,
+/// report.md, …) rather than a repository deliverable?
+///
+/// Matches the absolute form too, because that is what the worker is handed:
+/// an isolated serial run gets its run directory as an absolute path and the
+/// packet tells it to write `{abs}/result.json` and, for every non-implementation
+/// kind, `{abs}/report.md`. A worker echoing those paths back in `changes` is
+/// reporting its own artifacts, not lost repository output (issue #55).
 fn is_current_run_artifact(path: &str, run_id: &str) -> bool {
     let path = path.trim_start_matches("./").trim_matches('"');
     let root = format!(".agents/runs/{run_id}");
-    path == root || path.starts_with(&format!("{root}/"))
+    path == root
+        || path.starts_with(&format!("{root}/"))
+        || path.ends_with(&format!("/{root}"))
+        || path.contains(&format!("/{root}/"))
 }
 
 /// Paths that are sensitive (secrets/keys), escape the workspace, or are
 /// Yardlet-owned canonical state a worker must never write directly. A worker
 /// touching any of these fails the run regardless of its self-report.
+#[cfg(test)]
+pub(crate) fn forbidden_paths<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
+    forbidden_in(paths)
+}
+
 fn forbidden_in<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
     const SENSITIVE: &[&str] = &[
         ".env",
@@ -450,9 +511,22 @@ fn git_changed_paths_with(cwd: &Path, git_bin: &OsStr) -> Result<Vec<String>, Gi
             paths.push(path);
         }
         if xy.starts_with('R') || xy.starts_with('C') {
-            chunks.next();
+            // A rename/copy record carries "<new>\0<orig>\0". The original is
+            // part of the diff too — a rename DELETES it — and dropping it hid
+            // a forbidden source from the gate: `git mv config/secret.pem
+            // config/plain.txt` reported only the destination, so
+            // `forbidden_paths_untouched` certified "no sensitive paths" for a
+            // diff that removed one. The committed enumeration passes
+            // `--no-renames` for the same reason.
+            if let Some(original) = chunks.next() {
+                if !original.is_empty() {
+                    paths.push(original.to_string());
+                }
+            }
         }
     }
+    paths.sort();
+    paths.dedup();
     Ok(paths)
 }
 

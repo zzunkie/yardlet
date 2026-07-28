@@ -629,6 +629,54 @@ fn remote_name_is_safe(value: &str) -> bool {
             .all(|byte| !byte.is_ascii_whitespace() && !byte.is_ascii_control())
 }
 
+/// The owning root's checked-out ref, or `None` on a detached or unborn HEAD.
+pub fn checkout_ref(root: &std::path::Path) -> Option<String> {
+    git_stdout(root, &["symbolic-ref", "--quiet", "HEAD"])
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Accept a delivery target in either spelling and return the full ref.
+///
+/// Operators think in branch names; the policy stores full refs. Rejecting
+/// `main` because it is not `refs/heads/main` would make the retarget command
+/// as fiddly as the hand-edit it replaces (issue #42).
+pub fn normalize_target_ref(root: &std::path::Path, requested: &str) -> anyhow::Result<String> {
+    let trimmed = requested.trim();
+    let candidate = if trimmed.starts_with("refs/") {
+        trimmed.to_string()
+    } else {
+        format!("refs/heads/{trimmed}")
+    };
+    if !branch_ref_label_is_safe(&candidate) {
+        anyhow::bail!(
+            "'{requested}' is not a usable branch ref; give a branch name like `main` or a \
+             full `refs/heads/<branch>`"
+        );
+    }
+    // The same check the finish path runs. Accepting a ref here that Git will
+    // later reject would turn one clear block into a worse one: the command
+    // would report success and every run would then fail with
+    // `target_ref_invalid`, which is less actionable than the mismatch the
+    // operator invoked this to clear.
+    match std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["check-ref-format", &candidate])
+        .output()
+    {
+        Ok(output) if output.status.success() => {}
+        // Distinguish "git rejected the name" from "git could not be run".
+        // Reporting a spawn failure as an invalid ref would send the operator
+        // looking at their branch name for a problem that is not there.
+        Ok(_) => anyhow::bail!("'{candidate}' is not a valid Git ref name"),
+        Err(error) => {
+            anyhow::bail!("could not run git to validate '{candidate}': {error}")
+        }
+    }
+    Ok(candidate)
+}
+
 fn branch_ref_label_is_safe(value: &str) -> bool {
     let Some(branch) = value.strip_prefix("refs/heads/") else {
         return false;
@@ -676,9 +724,7 @@ pub(crate) fn preflight_target_before_spawn(
     } else {
         policy.target_ref.clone()
     };
-    let checkout_ref = git_stdout(&ws.root, &["symbolic-ref", "--quiet", "HEAD"])
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let checkout_ref = checkout_ref(&ws.root);
     if checkout_ref.as_deref() == Some(effective_target.as_str()) {
         return Ok(());
     }
@@ -692,7 +738,8 @@ pub(crate) fn preflight_target_before_spawn(
     persist(ws, run_dir, &record)?;
     anyhow::bail!(
         "branch_does_not_match_target_ref: configured Git finish target_ref '{}' \
-         does not match checkout ref '{}'; update git_finish.target_ref before running",
+         does not match checkout ref '{}'; retarget with `yardlet target --to-checkout` \
+         (or `yardlet target <ref>`) before running",
         effective_target,
         observed
     )
@@ -1062,6 +1109,10 @@ fn finish_owned_run_with_mode_and_github(
         block(&mut record, "worktree_changed_during_checks");
         return persist_result(record);
     }
+    // Refreshed only AFTER the outcome is durably recorded below: it is
+    // cosmetic, and widening the push-to-record crash window for it would trade
+    // a real guarantee for a nicety.
+    let mut tracking_ref_to_refresh = None;
     match remote_oid(&ws.root, &policy.remote, &policy.target_ref) {
         Ok(oid) if oid == remote_before => {}
         Ok(_) => {
@@ -1251,8 +1302,9 @@ fn finish_owned_run_with_mode_and_github(
     match remote_oid(&ws.root, &policy.remote, &policy.target_ref) {
         Ok(Some(oid)) if oid == expected => {
             record.status = GitFinishStatus::Pushed;
-            record.remote_oid = Some(oid);
+            record.remote_oid = Some(oid.clone());
             record.reason = "remote_verified".to_string();
+            tracking_ref_to_refresh = Some(oid);
         }
         Ok(oid) => {
             record.status = GitFinishStatus::RemoteMismatch;
@@ -1264,7 +1316,45 @@ fn finish_owned_run_with_mode_and_github(
             record.reason = "remote_lookup_after_push_failed".to_string();
         }
     }
-    persist_result(record)
+    let result = persist_result(record);
+    if let Some(oid) = tracking_ref_to_refresh {
+        refresh_remote_tracking_ref(&ws.root, &policy.remote, &policy.target_ref, &oid);
+    }
+    result
+}
+
+/// Move the local remote-tracking ref to the OID a verified push just put on
+/// the remote.
+///
+/// Git updates tracking refs when you push to a named remote; Yardlet pushes to
+/// the exact URL pinned before the run, so a remote cannot be retargeted
+/// mid-push. That deliberate choice has a cost: `git status` in the owning root
+/// keeps reporting the branch "ahead" after a successful push until someone
+/// fetches, which twice read as a failed auto-push during dogfooding (issue
+/// #41).
+///
+/// Only refreshes a tracking ref that ALREADY exists, and only to the OID the
+/// remote was just verified to hold. A workspace whose remote uses a
+/// non-standard fetch refspec, or that has never fetched this branch, has no
+/// such ref and none is invented — the point is to un-stale a ref Git itself
+/// created, not to fabricate remote state. Best-effort: a failure here leaves
+/// the pre-existing cosmetic staleness and must not affect the finish outcome.
+fn refresh_remote_tracking_ref(root: &std::path::Path, remote: &str, target_ref: &str, oid: &str) {
+    let Some(branch) = target_ref.strip_prefix("refs/heads/") else {
+        return;
+    };
+    if branch.is_empty() || remote.is_empty() {
+        return;
+    }
+    let tracking = format!("refs/remotes/{remote}/{branch}");
+    let Some(current) = git_stdout(root, &["rev-parse", "--verify", "--quiet", &tracking]) else {
+        return;
+    };
+    let current = current.trim();
+    if current.is_empty() || current == oid {
+        return;
+    }
+    let _ = git_ok(root, &["update-ref", &tracking, oid, current]);
 }
 
 fn single_push_destination(bytes: &[u8]) -> Option<String> {
@@ -1648,6 +1738,128 @@ fn shell_ok(root: &Path, command: &str) -> bool {
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+#[cfg(test)]
+mod target_ref_tests {
+    use super::*;
+
+    /// Operators think in branch names; the policy stores full refs. Requiring
+    /// the long spelling would make the command as fiddly as the hand-edit it
+    /// replaces (issue #42).
+    #[test]
+    fn a_retarget_accepts_either_spelling_and_refuses_unusable_refs() {
+        let root = std::env::temp_dir();
+        assert_eq!(
+            normalize_target_ref(&root, "main").unwrap(),
+            "refs/heads/main"
+        );
+        assert_eq!(
+            normalize_target_ref(&root, "  refs/heads/release/1.0  ").unwrap(),
+            "refs/heads/release/1.0"
+        );
+        for bad in [
+            "",
+            "   ",
+            "refs/tags/v1",
+            "main..other",
+            "with space",
+            "a@{0}",
+            "back\\slash",
+        ] {
+            assert!(
+                normalize_target_ref(&root, bad).is_err(),
+                "{bad:?} must not become a delivery target"
+            );
+        }
+        // Lexically safe, but Git itself refuses these. Accepting one would
+        // trade the operator's clear block for a worse one at run time.
+        for git_refuses in [".hidden", "foo.lock", "a//b", "foo/.bar", "x.lock/y"] {
+            assert!(
+                normalize_target_ref(&root, git_refuses).is_err(),
+                "{git_refuses:?} is not a valid Git ref name and must be refused"
+            );
+        }
+    }
+
+    /// The tracking ref is refreshed only when Git itself already created one,
+    /// and only to the OID the remote was just verified to hold. Inventing one
+    /// would assert remote state Yardlet did not observe.
+    #[test]
+    fn tracking_ref_refresh_touches_only_an_existing_stale_ref() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-tracking-ref-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.name", "Fixture"][..],
+            &["config", "user.email", "fixture@example.test"][..],
+        ] {
+            assert!(git_ok(&root, args), "git {args:?}");
+        }
+        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        assert!(git_ok(&root, &["add", "a.txt"]));
+        assert!(git_ok(&root, &["commit", "-qm", "one"]));
+        let first = git_stdout(&root, &["rev-parse", "HEAD"]).unwrap();
+        let first = first.trim().to_string();
+        std::fs::write(root.join("a.txt"), "b\n").unwrap();
+        assert!(git_ok(&root, &["add", "a.txt"]));
+        assert!(git_ok(&root, &["commit", "-qm", "two"]));
+        let second = git_stdout(&root, &["rev-parse", "HEAD"]).unwrap();
+        let second = second.trim().to_string();
+
+        // No tracking ref yet: nothing is invented.
+        refresh_remote_tracking_ref(&root, "origin", "refs/heads/main", &second);
+        assert!(
+            git_stdout(
+                &root,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "refs/remotes/origin/main"
+                ]
+            )
+            .is_none(),
+            "a tracking ref must not be created out of thin air"
+        );
+
+        // A stale one is moved to the verified OID.
+        assert!(git_ok(
+            &root,
+            &["update-ref", "refs/remotes/origin/main", &first]
+        ));
+        refresh_remote_tracking_ref(&root, "origin", "refs/heads/main", &second);
+        assert_eq!(
+            git_stdout(&root, &["rev-parse", "refs/remotes/origin/main"])
+                .unwrap()
+                .trim(),
+            second,
+            "a verified push must leave the tracking ref current"
+        );
+
+        // A non-branch target is not a tracking-ref shape at all.
+        assert!(git_ok(
+            &root,
+            &["update-ref", "refs/remotes/origin/main", &first]
+        ));
+        refresh_remote_tracking_ref(&root, "origin", "refs/tags/v1", &second);
+        assert_eq!(
+            git_stdout(&root, &["rev-parse", "refs/remotes/origin/main"])
+                .unwrap()
+                .trim(),
+            first
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]

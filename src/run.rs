@@ -292,6 +292,43 @@ fn serial_committed_paths(
     })
 }
 
+/// Paths committed on a run-owned worktree branch since its pinned baseline.
+///
+/// Shared by both evidence paths: a worker that commits its work leaves a clean
+/// `git status`, so status alone would report no changes at all for it. The
+/// serial path has always unioned these; the parallel path did not, which left
+/// the forbidden-path gate certifying a diff it never saw (issue #83).
+///
+/// A missing or baseline-less run record yields no committed paths rather than
+/// an error: legacy runs predate the pinned baseline, and their status-only
+/// evidence is what they have always been evaluated on.
+pub(crate) fn committed_paths_since_baseline(
+    worktree: &std::path::Path,
+    run_dir: &std::path::Path,
+) -> Result<Vec<String>> {
+    let Ok(record) = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")) else {
+        return Ok(Vec::new());
+    };
+    if record.baseline_oid.is_empty() {
+        return Ok(Vec::new());
+    }
+    let merge_target = if record.worktree_branch.is_empty() {
+        "HEAD^{commit}".to_string()
+    } else {
+        format!("refs/heads/{}^{{commit}}", record.worktree_branch)
+    };
+    let tip = git_stdout(worktree, &["rev-parse", "--verify", &merge_target])
+        .with_context(|| format!("resolving {merge_target} for committed change evidence"))?
+        .trim()
+        .to_string();
+    committed_paths_since(worktree, &format!("{}..{tip}", record.baseline_oid)).ok_or_else(|| {
+        anyhow!(
+            "could not enumerate committed changes in {}",
+            worktree.display()
+        )
+    })
+}
+
 /// Actual serial-worktree changes with only Yardlet's unchanged canonical seed
 /// copies removed. The main run owns an exact pre-worker snapshot, so a worker
 /// create, edit, delete, or symlink replacement stays in the evidence and is
@@ -660,7 +697,9 @@ pub(crate) fn detectable_repository_outputs(
     }
     if let Ok(record) = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")) {
         if !record.baseline_oid.is_empty() {
-            if let Some(committed) = committed_paths_since(worktree, &record.baseline_oid) {
+            if let Some(committed) =
+                committed_paths_since(worktree, &format!("{}..HEAD", record.baseline_oid))
+            {
                 evidence = true;
                 paths.extend(committed);
             }
@@ -677,11 +716,15 @@ pub(crate) fn detectable_repository_outputs(
     )
 }
 
-fn committed_paths_since(worktree: &std::path::Path, baseline: &str) -> Option<Vec<String>> {
+fn committed_paths_since(worktree: &std::path::Path, range: &str) -> Option<Vec<String>> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(worktree)
-        .args(["diff", "--name-only", "-z", &format!("{baseline}..HEAD")])
+        // `--no-renames` or a committed rename reports only its DESTINATION,
+        // so moving `config/secret.pem` to `config/plain.txt` would hide the
+        // forbidden source from the gate entirely. The serial enumeration has
+        // always passed it.
+        .args(["diff", "--name-only", "--no-renames", "-z", range])
         .env("LC_ALL", "C")
         .env("LANG", "C")
         .output()
@@ -1152,23 +1195,23 @@ fn output_log_span(run_dir: &std::path::Path, byte_start: u64) -> WorkerOutputLo
     }
 }
 
-struct ProviderRefusalAttemptClassification {
+struct OutputContractAttemptClassification {
     incident: Option<OutputContractIncident>,
     skip_notice: Option<String>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
-struct ProviderRefusalClassificationSkips {
+struct OutputContractClassificationSkips {
     schema_version: u32,
     notices: Vec<String>,
 }
 
-fn classify_provider_refusal_attempt(
+fn classify_output_contract_attempt(
     profile: &WorkerProfile,
     run_dir: &std::path::Path,
     attempt_id: &str,
     byte_start: u64,
-) -> ProviderRefusalAttemptClassification {
+) -> OutputContractAttemptClassification {
     let span = output_log_span(run_dir, byte_start);
     match workers::classify_output_contract_cause(
         profile,
@@ -1176,44 +1219,42 @@ fn classify_provider_refusal_attempt(
         &run_dir.join("worker-output.log"),
         &span,
     ) {
-        Ok(Some(OutputContractCause::ProviderResponseRefused)) => {
-            ProviderRefusalAttemptClassification {
-                incident: Some(OutputContractIncident {
-                    cause: OutputContractCause::ProviderResponseRefused,
-                    worker_id: profile.id.clone(),
-                    first_attempt_id: attempt_id.to_string(),
-                    first_log_span: span,
-                    recovery_consumed: false,
-                    terminal_attempt_id: None,
-                }),
-                skip_notice: None,
-            }
-        }
-        Ok(None) => ProviderRefusalAttemptClassification {
+        Ok(Some(cause)) => OutputContractAttemptClassification {
+            incident: Some(OutputContractIncident {
+                cause,
+                worker_id: profile.id.clone(),
+                first_attempt_id: attempt_id.to_string(),
+                first_log_span: span,
+                recovery_consumed: false,
+                terminal_attempt_id: None,
+            }),
+            skip_notice: None,
+        },
+        Ok(None) => OutputContractAttemptClassification {
             incident: None,
             skip_notice: None,
         },
-        Err(error) => ProviderRefusalAttemptClassification {
+        Err(error) => OutputContractAttemptClassification {
             incident: None,
             skip_notice: Some(format!(
-                "provider refusal classification skipped for {attempt_id}: {error}"
+                "output-contract classification skipped for {attempt_id}: {error}"
             )),
         },
     }
 }
 
-fn retain_provider_refusal_classification(
+fn retain_output_contract_classification(
     run_dir: &std::path::Path,
-    classification: ProviderRefusalAttemptClassification,
+    classification: OutputContractAttemptClassification,
     lines: &mut Vec<String>,
 ) -> Result<Option<OutputContractIncident>> {
     if let Some(notice) = classification.skip_notice {
         lines.push(notice.clone());
         let path = run_dir.join(PROVIDER_REFUSAL_CLASSIFICATION_SKIPS_FILE);
         let mut record = if path.is_file() {
-            state::load_yaml::<ProviderRefusalClassificationSkips>(&path)?
+            state::load_yaml::<OutputContractClassificationSkips>(&path)?
         } else {
-            ProviderRefusalClassificationSkips {
+            OutputContractClassificationSkips {
                 schema_version: 1,
                 notices: Vec::new(),
             }
@@ -2509,6 +2550,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         role_notes: &role_notes,
         harness: &harness,
         approved,
+        pre_push_checks: &config.git_finish.pre_push_checks,
     });
     write_str(&workers::packet_path(&run_dir), &packet_text)?;
 
@@ -2642,7 +2684,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     let full_access = opts.full_access || config.default_access.eq_ignore_ascii_case("full");
     let mut env = guard::sanitized_worker_env_for(&billing, &eff_profile.invocation.pass_env)
         .map_err(|e| anyhow!(e))?;
-    let mut timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
+    let mut timeout = wall_clock_timeout(profile.limits.max_wall_minutes);
     lines.push(format!("worker: {active_worker_id} ({active_reason})"));
 
     // H3: workspace-owned pre-run gates bind every worker. A non-zero hook
@@ -2818,9 +2860,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         &current_capture,
         &outcome,
     )?;
-    let mut output_contract_incident = retain_provider_refusal_classification(
+    let mut output_contract_incident = retain_output_contract_classification(
         &run_dir,
-        classify_provider_refusal_attempt(
+        classify_output_contract_attempt(
             &eff_profile,
             &run_dir,
             &current_attempt.attempt_id,
@@ -2910,9 +2952,9 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             &current_capture,
             &outcome,
         )?;
-        output_contract_incident = retain_provider_refusal_classification(
+        output_contract_incident = retain_output_contract_classification(
             &run_dir,
-            classify_provider_refusal_attempt(
+            classify_output_contract_attempt(
                 &eff_profile,
                 &run_dir,
                 &current_attempt.attempt_id,
@@ -2958,9 +3000,18 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         // NeedsUser instead of starting another worker.
         incident.recovery_consumed = true;
         persist_output_contract_incident(&run_dir, &incident)?;
+        let (cause_label, recovery_instruction) = match incident.cause {
+            OutputContractCause::ProviderResponseRefused => (
+                "provider_response_refused",
+                packet::provider_refusal_recovery_instruction(),
+            ),
+            OutputContractCause::WorkerDeferredToBackgroundTask => (
+                "worker_deferred_to_background_task",
+                packet::background_deferral_recovery_instruction(),
+            ),
+        };
         lines.push(format!(
-            "typed output-contract cause: provider_response_refused; retrying {} once",
-            active_worker_id
+            "typed output-contract cause: {cause_label}; retrying {active_worker_id} once"
         ));
         let recovery_packet = packet::compile(&PacketInputs {
             worker_id: &active_worker_id,
@@ -2969,13 +3020,14 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             repo: &summary,
             run_dir_rel: &run_dir_rel,
             conversation: &conversation,
-            continuation: Some(packet::provider_refusal_recovery_instruction()),
+            continuation: Some(recovery_instruction),
             chained_from: None,
             language: &language,
             images: &images,
             role_notes: &role_notes,
             harness: &harness,
             approved,
+            pre_push_checks: &config.git_finish.pre_push_checks,
         });
         write_str(&workers::packet_path(&run_dir), &recovery_packet)?;
         if worker_run_dir != run_dir.as_path() {
@@ -3084,7 +3136,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 }
                 env = guard::sanitized_worker_env_for(&billing, &eff_profile.invocation.pass_env)
                     .map_err(|e| anyhow!(e))?;
-                timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
+                timeout = wall_clock_timeout(profile.limits.max_wall_minutes);
                 effective_chained = false;
                 session_id = if active_worker_id == "claude-code" {
                     Some(gen_session_uuid(&format!("{run_id}-{active_worker_id}")))
@@ -3109,6 +3161,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                     role_notes: &role_notes,
                     harness: &harness,
                     approved,
+                    pre_push_checks: &config.git_finish.pre_push_checks,
                 });
                 write_str(&workers::packet_path(&run_dir), &failover_packet)?;
                 if serial_worktree.is_some() {
@@ -3330,10 +3383,345 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
 /// changes were left to commit when the run actually produced deliverable
 /// (non-`.agents/`) edits. `None` evidence (no git signal) counts as no change.
 /// A leading `./` is normalized so `./.agents/x` is still recognized as state.
+/// The worker's wall-clock budget.
+///
+/// A debug-build process fixture may shorten it: the shortest expressible
+/// `max_wall_minutes` is a minute, which is too slow to regression-test the
+/// timeout path in CI. Same gate as the startup recovery delay, so a release
+/// binary cannot be talked into a shorter budget.
+fn wall_clock_timeout(max_wall_minutes: u32) -> Duration {
+    #[cfg(debug_assertions)]
+    {
+        if std::env::var("YARDLET_PROCESS_FIXTURE").as_deref() == Ok("1") {
+            if let Some(ms) = std::env::var("YARDLET_FIXTURE_WALL_MS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|ms| *ms > 0)
+            {
+                return Duration::from_millis(ms.min(60_000));
+            }
+        }
+    }
+    Duration::from_secs(max_wall_minutes as u64 * 60)
+}
+
 fn worker_changed_integratable_path(evidence: Option<&[String]>) -> bool {
     evidence
         .map(|e| e.iter().any(|p| evaluator::is_integratable_path(p)))
         .unwrap_or(false)
+}
+
+/// Where a worker-declared absolute path can be resolved from.
+///
+/// The worktree is FIRST and is not optional: an isolated serial run's cwd IS
+/// the worktree, so a path the worker forms from its own cwd resolves against
+/// the owning root as `.agents/worktrees/<run>/…`, which the harness allowlist
+/// rejects — silently dropping a real deliverable. Making the field mandatory
+/// keeps that mistake unrepresentable.
+struct DeclaredPathRoots<'a> {
+    worktree: &'a std::path::Path,
+    workspace: &'a std::path::Path,
+}
+
+/// What a worker-declared path is, once Yardlet tries to place it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DeclaredPath {
+    /// Placed in the repository. Judged by the normal integration rules.
+    Repository(String),
+    /// Outside every root Yardlet owns — an absolute path elsewhere, or a
+    /// relative one that climbs out. Not a repository deliverable, so it
+    /// cannot contradict an honest no-change outcome, but it is still
+    /// reported: silently forgetting a declared output is the failure this
+    /// whole guard exists to prevent.
+    Unplaceable(String),
+    /// Empty, or a root directory itself. Nothing to attribute either way.
+    Nothing,
+}
+
+/// Classify one worker-declared path.
+///
+/// `changes` is free-form worker text and the packet itself hands out ABSOLUTE
+/// paths (an isolated serial run receives its run directory as one), so a
+/// declared path arrives in either form. That matters because
+/// `is_integratable_path` tests the `.agents/` prefix lexically: an absolute
+/// `/ws/.agents/runs/<id>/report.md` sails past it and would be read as a lost
+/// repository deliverable (issue #55).
+///
+/// Each root is tried in canonical and literal form, because macOS resolves the
+/// temp roots these run under through `/private`. A result that still climbs out
+/// of the repository is `Unplaceable`, so `/ws/../elsewhere/x` and
+/// `/elsewhere/x` cannot reach opposite verdicts.
+fn classify_declared_path(raw: &str, roots: &DeclaredPathRoots<'_>) -> DeclaredPath {
+    let trimmed = raw.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return DeclaredPath::Nothing;
+    }
+    let path = std::path::Path::new(trimmed);
+    let relative = if path.is_absolute() {
+        // Resolve `.`/`..` BEFORE stripping. A `..` that crosses a root
+        // boundary — `<worktree>/../../../docs/x.md` names a real file in the
+        // owning root — otherwise defeats every `strip_prefix` and the path
+        // looks unplaceable.
+        let path = &lexically_normalized(path);
+        let mut candidates = Vec::new();
+        for root in [roots.worktree, roots.workspace] {
+            if let Ok(canonical) = root.canonicalize() {
+                candidates.push(canonical);
+            }
+            candidates.push(root.to_path_buf());
+        }
+        match candidates
+            .iter()
+            .find_map(|root| path.strip_prefix(root).ok())
+            .and_then(|relative| relative.to_str())
+        {
+            // A root itself is a directory, not a deliverable.
+            Some("") => return DeclaredPath::Nothing,
+            Some(relative) => relative.to_string(),
+            // Report the normalized spelling so two spellings of the same
+            // outside path dedupe and cancel against each other.
+            None => return DeclaredPath::Unplaceable(path.display().to_string()),
+        }
+    } else {
+        trimmed.to_string()
+    };
+    let relative = relative.trim_start_matches("./").trim_end_matches('/');
+    match resolve_repository_relative(relative) {
+        Resolved::Inside(path) => DeclaredPath::Repository(path),
+        Resolved::Root => DeclaredPath::Nothing,
+        Resolved::Escapes => DeclaredPath::Unplaceable(trimmed.to_string()),
+    }
+}
+
+/// Resolve `.` and `..` in an absolute path lexically, without touching the
+/// filesystem. `..` at the root stays at the root, as the kernel does.
+fn lexically_normalized(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push(component.as_os_str());
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Where a repository-relative path lands once `.` and `..` are resolved
+/// LEXICALLY (no filesystem access — the path may name something that no longer
+/// exists, or never did).
+enum Resolved {
+    Inside(String),
+    /// Resolves to the repository root itself: a directory, not a deliverable.
+    Root,
+    /// Climbs out of the repository however it was spelled.
+    Escapes,
+}
+
+/// Resolve `.` and `..` inside a repository-relative path.
+///
+/// Rejecting any path that merely CONTAINS `..` is too blunt: `src/../tests/x.rs`
+/// names a file that is squarely inside the repository, and treating it as
+/// unplaceable stops it gating a no-change outcome — silently re-opening
+/// issue #55 for that spelling, while telling the operator the path is
+/// "outside this workspace".
+fn resolve_repository_relative(relative: &str) -> Resolved {
+    use std::path::Component;
+
+    let mut parts: Vec<&str> = Vec::new();
+    for component in std::path::Path::new(relative).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => match part.to_str() {
+                Some(part) => parts.push(part),
+                None => return Resolved::Escapes,
+            },
+            Component::ParentDir => {
+                if parts.pop().is_none() {
+                    return Resolved::Escapes;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return Resolved::Escapes,
+        }
+    }
+    if parts.is_empty() {
+        return Resolved::Root;
+    }
+    Resolved::Inside(parts.join("/"))
+}
+
+/// Declared outputs Yardlet could not place in the repository.
+///
+/// These never contradict a no-change outcome: a path outside every root
+/// Yardlet owns — absolute, or relative and climbing out — is not a repository
+/// deliverable, and flipping a correct run to Partial over a worker's scratch
+/// file would recreate the very false positive this guard was corrected for.
+/// They are surfaced instead.
+fn unplaceable_declared_outputs(
+    result: Option<&RunResult>,
+    roots: &DeclaredPathRoots<'_>,
+) -> Vec<String> {
+    let Some(result) = result else {
+        return Vec::new();
+    };
+    let unplaceable_only = |path: &String| match classify_declared_path(path, roots) {
+        DeclaredPath::Unplaceable(path) => Some(path),
+        _ => None,
+    };
+    // A path the worker also declared deleted was not left behind, so reporting
+    // it would be noise in exactly the scratch-file case this branch exists for.
+    let deleted = result
+        .changes
+        .files_deleted
+        .iter()
+        .filter_map(unplaceable_only)
+        .collect::<HashSet<_>>();
+    let mut unplaceable = result
+        .changes
+        .files_created
+        .iter()
+        .chain(&result.changes.files_modified)
+        .filter_map(unplaceable_only)
+        .filter(|path| !deleted.contains(path))
+        .collect::<Vec<_>>();
+    unplaceable.sort();
+    unplaceable.dedup();
+    unplaceable
+}
+
+/// Repository outputs the worker DECLARED in result.json, normalized and
+/// reduced to the paths a no-change integration would silently drop.
+///
+/// Receipted core and dependency input overlays are core-delivered validation
+/// inputs, not worker outputs, so naming one is not a missing deliverable, and
+/// neither is a path the worker also declared deleted. The run's OWN artifacts
+/// fall out on their own: normalized they live under `.agents/runs/`, which the
+/// integration allowlist already rejects — which is exactly why normalizing
+/// against the right root matters, since every non-implementation task is
+/// REQUIRED to write `report.md` there and forbidden to touch code.
+///
+/// A path Yardlet cannot place is NOT here — see [`unplaceable_declared_outputs`],
+/// which reports it without letting it flip a correct run.
+fn declared_integratable_outputs(
+    result: Option<&RunResult>,
+    roots: &DeclaredPathRoots<'_>,
+    core_input_overlays: &[state::SerialInputOverlay],
+    dependency_input_overlays: &[state::DependencyInputOverlay],
+) -> Vec<String> {
+    let Some(result) = result else {
+        return Vec::new();
+    };
+    let repository = |path: &String| match classify_declared_path(path, roots) {
+        DeclaredPath::Repository(path) => Some(path),
+        _ => None,
+    };
+    let deleted = result
+        .changes
+        .files_deleted
+        .iter()
+        .filter_map(repository)
+        .collect::<HashSet<_>>();
+    let mut declared = result
+        .changes
+        .files_created
+        .iter()
+        .chain(&result.changes.files_modified)
+        .filter_map(repository)
+        .filter(|path| evaluator::is_integratable_path(path))
+        .filter(|path| !deleted.contains(path))
+        .filter(|path| {
+            !core_input_overlays
+                .iter()
+                .any(|overlay| overlay.path == *path)
+        })
+        .filter(|path| {
+            !dependency_input_overlays
+                .iter()
+                .any(|overlay| overlay.path == *path)
+        })
+        .collect::<Vec<_>>();
+    declared.sort();
+    declared.dedup();
+    declared
+}
+
+/// Why a finished run must NOT be recorded as "no changes to integrate"
+/// (issue #55).
+///
+/// Integration and evaluation have to agree on ONE change-evidence source. A
+/// no-change outcome means the run-owned worktree contributed no commit and no
+/// staged content, so either of these makes `not_needed/no_changes` a lie:
+///
+/// - the run's own change evidence still lists an integratable worker change,
+///   which staging would have committed; or
+/// - result.json declares integratable outputs, which the worktree therefore
+///   never held — the deliverable was written somewhere Yardlet does not
+///   integrate (typically the owning root) and would be reported Done while
+///   sitting uncommitted.
+///
+/// Returning a typed reason lets finalization fail closed to Partial and keep
+/// the worktree instead of shipping a green report over lost work.
+///
+/// Only the `Integration::NoChanges` caller can actually see the first case:
+/// the auto_commit-off caller reaches this only when its own evidence check
+/// already found nothing integratable. Both call it anyway so neither has to
+/// re-derive the rule, but the evidence arm is dead at that second site.
+fn no_change_contradiction(
+    result: Option<&RunResult>,
+    evidence: Option<&[String]>,
+    roots: &DeclaredPathRoots<'_>,
+    core_input_overlays: &[state::SerialInputOverlay],
+    dependency_input_overlays: &[state::DependencyInputOverlay],
+) -> Option<(&'static str, Vec<String>)> {
+    if worker_changed_integratable_path(evidence) {
+        let mut paths = evidence
+            .unwrap_or_default()
+            .iter()
+            .filter(|path| evaluator::is_integratable_path(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+        return Some(("no_change_contradicts_change_evidence", paths));
+    }
+    let declared = declared_integratable_outputs(
+        result,
+        roots,
+        core_input_overlays,
+        dependency_input_overlays,
+    );
+    if !declared.is_empty() {
+        return Some(("no_change_contradicts_declared_outputs", declared));
+    }
+    None
+}
+
+/// Operator-facing explanation for a refused no-change integration.
+fn no_change_contradiction_note(reason: &str, paths: &[String], wt: &std::path::Path) -> String {
+    let source = if reason == "no_change_contradicts_change_evidence" {
+        "this run's change evidence"
+    } else {
+        "the worker's result.json"
+    };
+    format!(
+        "\n## No-change integration refused\n\nIntegration found nothing to commit for this run, \
+         but {source} lists repository output(s):\n\n{}\n\nRecording \"no changes\" here would \
+         report the task Done while its deliverable stayed out of Git, so the run is Partial and \
+         the worktree is kept at `{}`. Check whether the output was written outside the run-owned \
+         worktree; if so, move it in and re-run, or commit it deliberately.\n",
+        paths
+            .iter()
+            .map(|path| format!("- `{path}`"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        wt.display()
+    )
 }
 
 /// Surface-neutral auto-drain guidance.
@@ -3491,10 +3879,15 @@ pub fn run_auto<F: FnMut(&str)>(
         // A merge-conflict Partial needs a human; a self-reported Partial is
         // auto-continued from its checkpoint (retry path below, attempts-capped).
         if let Some(t) = queue.tasks.iter().find(|t| t.state == TaskState::Partial) {
-            if partial_is_conflict(ws, &t.id) {
+            if let Some(reason) = latest_partial_reason(ws, &t.id) {
                 emit(i18n::run_progress(
                     event_lang,
-                    i18n::RunProgress::MergeConflict(&t.id),
+                    i18n::RunProgress::PartialNeedsYou {
+                        id: &t.id,
+                        kind: reason.kind,
+                        marker: &reason.marker,
+                        detail: reason.detail.as_deref(),
+                    },
                 ));
                 break;
             }
@@ -3990,17 +4383,15 @@ const VALIDATION_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Kill a timed-out validation command and its whole process group (so children
 /// spawned by `npm test` / `cargo test` etc. do not survive the timeout), then
-/// reap it. On unix the child leads its own group (process_group(0)), so a
-/// negative pgid signals the group; the direct kill is a backstop.
+/// reap it. On unix the child leads its own group (process_group(0)), so
+/// signalling the negative pid reaches the group; the direct kill is a backstop.
 fn kill_validation_child(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        let pgid = child.id();
-        let _ = std::process::Command::new("kill")
-            .arg("-9")
-            .arg(format!("-{pgid}"))
-            .status();
-    }
+    // Same syscall the worker teardown uses. This used to shell out to `kill`
+    // with a negative pid, which Linux's `kill` reads as another option after a
+    // signal flag rather than a target — so on Linux the group was never
+    // actually signalled and a timed-out `npm test` kept its children, the one
+    // thing this function exists to prevent.
+    crate::workers::terminate_worker_tree(child.id(), crate::workers::Signal::Kill);
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -4595,12 +4986,12 @@ fn recovery_integration_provenance(
     worktree: &std::path::Path,
     branch: &str,
 ) -> IntegrationProvenance {
-    if ws
-        .checkpoints_dir()
-        .join("no-change")
-        .join(format!("{run_id}.yaml"))
-        .exists()
-    {
+    // Presence, across BOTH the pending and reconciled locations: a settled
+    // receipt now lives in the archive, so a raw pending-path check would
+    // express "this run already recorded a no-op" against half the store
+    // (issue #43). Presence rather than parseability, because a corrupt receipt
+    // is precisely the case that must still force Unknown.
+    if ws.has_no_change_receipt(run_id) {
         return IntegrationProvenance::Unknown;
     }
     let Some(record) = record else {
@@ -4892,7 +5283,17 @@ fn reconcile_no_change_outcomes(ws: &Workspace, msgs: &mut Vec<String>) {
             &receipt.task_id,
             TaskState::Done,
         ) {
-            Ok(record) if record.status.verified_complete() => {}
+            // Cleanup is done and delivery reached a verified end state, so
+            // this receipt has no work left for any later startup to find
+            // (issue #43). An unverified finish stays in the pending set.
+            Ok(record) if record.status.verified_complete() => {
+                if let Err(error) = ws.archive_no_change_receipt(&receipt.run_id) {
+                    msgs.push(format!(
+                        "{}: could not archive a settled no-change receipt: {error}",
+                        receipt.task_id
+                    ));
+                }
+            }
             Ok(record) => msgs.push(format!(
                 "{}: no-change Git finish remains {}",
                 receipt.task_id,
@@ -4946,12 +5347,35 @@ fn reconcile_integrated_cleanups(ws: &Workspace, msgs: &mut Vec<String>) {
         for warning in cleanup.warnings {
             msgs.push(format!("{}: {warning}", receipt.task_id));
         }
-        let _ = persist_integrated_cleanup_projection(&run_dir, &receipt, cleanup.complete);
-        if cleanup.complete && !was_complete {
+        // Keep the receipt in the scanned set when its projection could not be
+        // written: retiring it here would leave run.yaml permanently stale with
+        // no retry path, which is exactly what staying pending used to fix. The
+        // no-change sibling above skips the same way.
+        if let Err(error) =
+            persist_integrated_cleanup_projection(&run_dir, &receipt, cleanup.complete)
+        {
             msgs.push(format!(
-                "{}: reconciled integrated worktree cleanup",
+                "{}: could not persist Git cleanup projection: {error}",
                 receipt.task_id
             ));
+            continue;
+        }
+        if cleanup.complete {
+            if !was_complete {
+                msgs.push(format!(
+                    "{}: reconciled integrated worktree cleanup",
+                    receipt.task_id
+                ));
+            }
+            // Nothing about this receipt can change again, so retire it from
+            // the set every later startup replays (issue #43). Failing to
+            // archive only costs the old repeated work, so it is not fatal.
+            if let Err(error) = ws.archive_integrated_cleanup_receipt(&receipt.run_id) {
+                msgs.push(format!(
+                    "{}: could not archive a reconciled Git cleanup receipt: {error}",
+                    receipt.task_id
+                ));
+            }
         }
     }
 }
@@ -6111,11 +6535,60 @@ fn feedback_question(task: &crate::schemas::Task, feedback: &FeedbackRecord) -> 
     }
 }
 
-fn review_without_remediation_question(task: &crate::schemas::Task) -> String {
-    format!(
-        "`{}` 리뷰가 통과하지 못했고 실행 가능한 수정 작업이 없습니다. 수정 작업을 큐에 추가한 뒤 리뷰를 재실행하거나 현재 판정을 수동으로 확정해 주세요. 어느 조치로 이어갈까요?",
-        task.id
-    )
+/// Why a review run ended without a usable pass. These are different events for
+/// the operator: a failing verdict is review evidence to act on, while missing
+/// artifacts mean no verdict exists at all and the only next step is a re-run
+/// (issue #39).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewFailureCause {
+    /// The review ran and judged at least one criterion as failing.
+    VerdictFailed,
+    /// The worker exited without writing (or writing a valid) result.json.
+    ArtifactsMissing,
+}
+
+fn review_failure_cause(eval: &evaluator::Evaluation) -> ReviewFailureCause {
+    let artifacts_missing = eval.checks.iter().any(|check| {
+        check.fatal
+            && !check.passed
+            && matches!(
+                check.name.as_str(),
+                "result_file_present" | "result_schema_valid"
+            )
+    });
+    if artifacts_missing {
+        ReviewFailureCause::ArtifactsMissing
+    } else {
+        ReviewFailureCause::VerdictFailed
+    }
+}
+
+fn review_without_remediation_question(
+    task: &crate::schemas::Task,
+    cause: ReviewFailureCause,
+    incident: Option<&OutputContractIncident>,
+) -> String {
+    match cause {
+        ReviewFailureCause::VerdictFailed => format!(
+            "`{}` 리뷰가 통과하지 못했고 실행 가능한 수정 작업이 없습니다. 수정 작업을 큐에 추가한 뒤 리뷰를 재실행하거나 현재 판정을 수동으로 확정해 주세요. 어느 조치로 이어갈까요?",
+            task.id
+        ),
+        ReviewFailureCause::ArtifactsMissing => {
+            let detail = match incident.map(|incident| incident.cause) {
+                Some(OutputContractCause::WorkerDeferredToBackgroundTask) => {
+                    " 워커가 백그라운드 작업을 남긴 채 턴을 끝낸 것이 원인입니다."
+                }
+                Some(OutputContractCause::ProviderResponseRefused) => {
+                    " provider가 응답을 거부한 것이 원인입니다."
+                }
+                None => "",
+            };
+            format!(
+                "`{}` 리뷰 워커가 결과 파일 없이 종료되어 판정 자체가 없습니다. 리뷰가 실패했다는 뜻이 아니므로 수정 작업을 추가하거나 판정을 확정하지 마시고, 리뷰를 다시 실행해 주세요.{detail} 어느 조치로 이어갈까요?",
+                task.id
+            )
+        }
+    }
 }
 
 fn review_evaluation_failed(is_review: bool, evaluated_state: TaskState) -> bool {
@@ -6396,6 +6869,20 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         flags,
         merge,
     } = input;
+    // Serialize this run's finalization across processes (issue #69). Two
+    // finalizers of the SAME run must not interleave: the loser would evaluate
+    // and integrate against a worktree and branch the winner is merging and
+    // cleaning up underneath it. Held for the whole finalization, and released
+    // when this function returns or unwinds.
+    //
+    // Lock ORDER is run-lock then planning-lock, always. The planning lock is
+    // taken later in this function and every other holder releases it before
+    // reaching finalization, so the two can never be taken in the opposite
+    // order.
+    //
+    // Different runs still finalize concurrently, which parallel batches need.
+    let _finalize_lock = ws.acquire_run_finalize_lock(run_id)?;
+
     let mut lines = Vec::new();
     // Capture the intent this run belonged to BEFORE finalize_on_latest_queue
     // reloads `queue` from disk (which would swap in a re-plan's intent_id):
@@ -6551,8 +7038,8 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok());
     let output_contract_incident = load_output_contract_incident(run_dir);
-    let provider_refusal_classification_skips =
-        state::load_yaml::<ProviderRefusalClassificationSkips>(
+    let output_contract_classification_skips =
+        state::load_yaml::<OutputContractClassificationSkips>(
             &run_dir.join(PROVIDER_REFUSAL_CLASSIFICATION_SKIPS_FILE),
         )
         .map(|record| record.notices)
@@ -6608,15 +7095,23 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     }
     if terminal_output_contract_incident {
         next_state = TaskState::NeedsUser;
-        question_to_persist = Some((
-            "provider_response_refused가 감지되었고 동일 worker의 1회 output-contract 복구도 result.json 없이 종료되었습니다. worker/provider 응답을 확인한 뒤 이 작업을 어떻게 진행할지 알려주세요."
-                .to_string(),
-            EventActorKind::System,
+        let cause = output_contract_incident
+            .as_ref()
+            .map(|incident| incident.cause);
+        let (cause_label, question) = match cause {
+            Some(OutputContractCause::WorkerDeferredToBackgroundTask) => (
+                "worker_deferred_to_background_task",
+                "worker가 백그라운드 작업을 남긴 채 턴을 끝내 result.json 없이 종료되었고, 전경 실행을 지시한 1회 복구도 같은 방식으로 끝났습니다. 리뷰/작업 내용이 실패했다는 뜻은 아닙니다. 이 작업을 어떻게 진행할지 알려주세요.",
+            ),
+            _ => (
+                "provider_response_refused",
+                "provider_response_refused가 감지되었고 동일 worker의 1회 output-contract 복구도 result.json 없이 종료되었습니다. worker/provider 응답을 확인한 뒤 이 작업을 어떻게 진행할지 알려주세요.",
+            ),
+        };
+        question_to_persist = Some((question.to_string(), EventActorKind::System));
+        lines.push(format!(
+            "output-contract recovery exhausted: {cause_label}; paused for user"
         ));
-        lines.push(
-            "output-contract recovery exhausted: provider_response_refused; paused for user"
-                .to_string(),
-        );
     }
     if let Some(reason) = input_overlay_parity_failure.as_ref() {
         state::write_str(&run_dir.join("partial-reason"), reason)?;
@@ -6673,9 +7168,9 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     if let Some(incident) = &output_contract_incident {
         append_output_contract_incident_note(run_dir, incident)?;
     }
-    append_provider_refusal_classification_skip_notes(
+    append_output_contract_classification_skip_notes(
         run_dir,
-        &provider_refusal_classification_skips,
+        &output_contract_classification_skips,
     )?;
     let artifact_context = channel_run_context(ws, &intent_id, &task.id);
     let worker_root = merge
@@ -6703,6 +7198,32 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             if !rules.is_empty() {
                 lines.push(format!("learned rule(s): {}", rules.join(", ")));
             }
+            // These land in the owning root outside the run's integration
+            // commit, so "learned" does not yet mean "durable". Say so, with
+            // the exact command, instead of leaving the operator to notice an
+            // untracked path (issue #45).
+            let untracked = untracked_harness_assets(ws, &learned, &rules);
+            if !untracked.is_empty() {
+                lines.push(format!(
+                    "learned harness assets are NOT in git yet: {}. Commit them with \
+                     `yardlet skill commit`",
+                    untracked.join(", ")
+                ));
+                let note = format!(
+                    "\n## Untracked harness assets\n\nThis run learned harness assets that are \
+                     on disk but not in git:\n\n{}\n\nThey are not durable until committed:\n\n\
+                     ```\nyardlet skill commit\n```\n",
+                    untracked
+                        .iter()
+                        .map(|path| format!("- `{path}`"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+                let handoff = run_dir.join("handoff.md");
+                let mut existing = std::fs::read_to_string(&handoff).unwrap_or_default();
+                existing.push_str(&note);
+                let _ = state::write_str(&handoff, &existing);
+            }
         }
     }
 
@@ -6723,6 +7244,40 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         .then(|| recovery_git_finish_ownership(ws, run_id, &task.id))
         .flatten();
     if let Some(m) = &merge {
+        // The worker's cwd IS the worktree, so a path it forms from its own cwd
+        // must resolve against that first (issue #55).
+        let declared_path_roots = DeclaredPathRoots {
+            worktree: m.wt_path,
+            workspace: &ws.root,
+        };
+        // Declared outputs Yardlet cannot place are not repository deliverables
+        // and must not flip a correct run, but they must not vanish either. The
+        // run lines are transient — a background or parallel drain may never put
+        // them in front of anyone — so the record goes in the handoff too.
+        let unplaceable = unplaceable_declared_outputs(result.as_ref(), &declared_path_roots);
+        if !unplaceable.is_empty() {
+            for path in &unplaceable {
+                lines.push(format!(
+                    "{}: declared output {path} is outside this workspace; Yardlet did not integrate it",
+                    task.id
+                ));
+            }
+            let note = format!(
+                "\n## Declared outputs outside the workspace\n\nThe worker declared these paths, \
+                 which are not inside this repository:\n\n{}\n\nYardlet did not integrate them and \
+                 cannot say anything about them. They are recorded here so they are not lost \
+                 silently; nothing about this run's state depends on them.\n",
+                unplaceable
+                    .iter()
+                    .map(|path| format!("- `{path}`"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            let handoff = run_dir.join("handoff.md");
+            let mut existing = std::fs::read_to_string(&handoff).unwrap_or_default();
+            existing.push_str(&note);
+            let _ = state::write_str(&handoff, &existing);
+        }
         if !m.auto_commit {
             let has_changes = evidence
                 .as_ref()
@@ -6782,6 +7337,26 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         lines.push(format!(
                             "{}: serial input overlay parity failed before cleanup: {reason}",
                             task.id
+                        ));
+                    } else if let Some((reason, paths)) = no_change_contradiction(
+                        result.as_ref(),
+                        evidence.as_deref(),
+                        &declared_path_roots,
+                        m.core_input_overlays,
+                        m.dependency_input_overlays,
+                    ) {
+                        next_state = TaskState::Partial;
+                        state::write_str(&run_dir.join("partial-reason"), reason)?;
+                        let hp = run_dir.join("handoff.md");
+                        let mut existing = std::fs::read_to_string(&hp).unwrap_or_default();
+                        existing.push_str(&no_change_contradiction_note(reason, &paths, m.wt_path));
+                        let _ = state::write_str(&hp, &existing);
+                        lines.push(format!(
+                            "{}: refused to record no changes — {} still lists {}; worktree kept at {}",
+                            task.id,
+                            reason,
+                            paths.join(", "),
+                            m.wt_path.display()
                         ));
                     } else {
                         let no_change_receipt = persist_no_change_receipt(
@@ -6908,54 +7483,84 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         }
                         if cleanup.complete {
                             persist_integrated_cleanup_projection(run_dir, &cleanup_receipt, true)?;
+                            // Settled here means no later startup has to
+                            // rediscover that by replaying git (issue #43).
+                            let _ = ws.archive_integrated_cleanup_receipt(run_id);
                         }
                     }
                 }
                 Ok(crate::parallel::Integration::NoChanges { worker_oid }) => {
-                    let no_change_receipt = persist_no_change_receipt(
-                        ws,
-                        run_dir,
-                        run_id,
-                        &task.id,
-                        &intent_id,
-                        worker_id,
-                        m,
-                        &worker_oid,
-                    )?;
-                    if let Some(reason) =
-                        serial_input_overlay_parity_failure(&ws.root, m.core_input_overlays)
-                    {
+                    // A no-change outcome is durable: it writes a core-owned
+                    // receipt that later recovery replays as "nothing to
+                    // integrate". Refuse it before that receipt exists when the
+                    // run's own evidence or result.json still claims repository
+                    // output (issue #55).
+                    if let Some((reason, paths)) = no_change_contradiction(
+                        result.as_ref(),
+                        evidence.as_deref(),
+                        &declared_path_roots,
+                        m.core_input_overlays,
+                        m.dependency_input_overlays,
+                    ) {
                         next_state = TaskState::Partial;
-                        state::write_str(&run_dir.join("partial-reason"), &reason)?;
+                        state::write_str(&run_dir.join("partial-reason"), reason)?;
+                        let hp = run_dir.join("handoff.md");
+                        let mut existing = std::fs::read_to_string(&hp).unwrap_or_default();
+                        existing.push_str(&no_change_contradiction_note(reason, &paths, m.wt_path));
+                        let _ = state::write_str(&hp, &existing);
                         lines.push(format!(
-                            "{}: serial input overlay parity failed before cleanup: {reason}",
-                            task.id
+                            "{}: refused to record no changes — {} still lists {}; worktree kept at {}",
+                            task.id,
+                            reason,
+                            paths.join(", "),
+                            m.wt_path.display()
                         ));
                     } else {
-                        let cleanup = crate::parallel::cleanup_integrated_worktree(
-                            &ws.root,
-                            m.wt_path,
-                            m.branch,
-                            &worker_oid,
-                            m.provenance,
-                        );
-                        for warning in cleanup.warnings {
-                            lines.push(format!("{}: {warning}", task.id));
-                        }
-                        persist_no_change_projection(
+                        let no_change_receipt = persist_no_change_receipt(
+                            ws,
                             run_dir,
-                            &no_change_receipt,
-                            cleanup.complete,
+                            run_id,
+                            &task.id,
+                            &intent_id,
+                            worker_id,
+                            m,
+                            &worker_oid,
                         )?;
-                        if cleanup.complete {
-                            lines.push(format!("{}: no file changes to merge", task.id));
-                            git_finish_not_needed = true;
-                        } else {
+                        if let Some(reason) =
+                            serial_input_overlay_parity_failure(&ws.root, m.core_input_overlays)
+                        {
                             next_state = TaskState::Partial;
-                            let _ = state::write_str(
-                                &run_dir.join("partial-reason"),
-                                "worktree_cleanup_changed",
+                            state::write_str(&run_dir.join("partial-reason"), &reason)?;
+                            lines.push(format!(
+                                "{}: serial input overlay parity failed before cleanup: {reason}",
+                                task.id
+                            ));
+                        } else {
+                            let cleanup = crate::parallel::cleanup_integrated_worktree(
+                                &ws.root,
+                                m.wt_path,
+                                m.branch,
+                                &worker_oid,
+                                m.provenance,
                             );
+                            for warning in cleanup.warnings {
+                                lines.push(format!("{}: {warning}", task.id));
+                            }
+                            persist_no_change_projection(
+                                run_dir,
+                                &no_change_receipt,
+                                cleanup.complete,
+                            )?;
+                            if cleanup.complete {
+                                lines.push(format!("{}: no file changes to merge", task.id));
+                                git_finish_not_needed = true;
+                            } else {
+                                next_state = TaskState::Partial;
+                                let _ = state::write_str(
+                                    &run_dir.join("partial-reason"),
+                                    "worktree_cleanup_changed",
+                                );
+                            }
                         }
                     }
                 }
@@ -6979,10 +7584,57 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         m.wt_path.display()
                     ));
                 }
+                // An integration ERROR is not a conflict: nothing is left
+                // half-merged for a human to resolve, and telling them to
+                // resolve one sends them looking for markers that do not exist
+                // (issue #69). Record the error itself so the handoff can say
+                // what actually failed.
                 Err(e) => {
                     next_state = TaskState::Partial;
-                    let _ = state::write_str(&run_dir.join("partial-reason"), "merge_conflict");
+                    let _ = state::write_str(&run_dir.join("partial-reason"), "integration_error");
+                    let note = format!(
+                        "\n## Integration error\n\nYardlet could not integrate `{}`: {}\n\
+                         This is not a merge conflict: there is nothing to resolve by hand. \
+                         The worktree is kept at `{}`.\n",
+                        m.branch,
+                        e.to_string().trim(),
+                        m.wt_path.display()
+                    );
+                    let hp = run_dir.join("handoff.md");
+                    let mut existing = std::fs::read_to_string(&hp).unwrap_or_default();
+                    existing.push_str(&note);
+                    let _ = state::write_str(&hp, &existing);
                     lines.push(format!("{}: integration error: {e}", task.id));
+                }
+                // The run-owned branch is gone. If THIS run already recorded a
+                // published integration, a second finalize is re-running over
+                // work that is already in the target: confirm it instead of
+                // demoting a correct terminal state (issue #69). Ownership is
+                // reconstructed from the run's own durable receipt, so the
+                // confirmation cannot claim commits this run does not own.
+                Ok(crate::parallel::Integration::BranchMissing { branch }) => {
+                    match already_integrated_ownership(ws, run_dir, run_id, &task.id) {
+                        Some(owned) => {
+                            ownership = Some(owned);
+                            lines.push(format!(
+                                "{}: {branch} was already integrated and cleaned up; \
+                                 confirming the recorded outcome",
+                                task.id
+                            ));
+                        }
+                        None => {
+                            next_state = TaskState::Partial;
+                            let _ = state::write_str(
+                                &run_dir.join("partial-reason"),
+                                "integration_branch_missing",
+                            );
+                            lines.push(format!(
+                                "{}: run-owned branch {branch} does not exist and this run \
+                                 recorded no integration; nothing to merge",
+                                task.id
+                            ));
+                        }
+                    }
                 }
             }
         } else {
@@ -7014,6 +7666,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         crate::git_finish::finish_owned_run(ws, run_dir, run_id, &task.id, next_state, ownership)?
     };
     lines.push(git_finish.user_line());
+    // A no-op whose cleanup and delivery both settled here leaves the pending
+    // reconcile set immediately, instead of being rediscovered and replayed by
+    // every later startup (issue #43).
+    if git_finish_not_needed && git_finish.status.verified_complete() {
+        let _ = ws.archive_no_change_receipt(run_id);
+    }
     let projected_state = state_after_git_finish(next_state, &git_finish);
     if projected_state != next_state {
         next_state = projected_state;
@@ -7127,7 +7785,11 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         let remediation = schedulable_remediation_ids(queue, &ingested);
         if remediation.is_empty() {
             if persisted_question.is_none() {
-                let question = review_without_remediation_question(task);
+                let question = review_without_remediation_question(
+                    task,
+                    review_failure_cause(&eval),
+                    output_contract_incident.as_ref(),
+                );
                 let channel_context = channel_run_context(ws, &intent_id, &task.id);
                 persist_needs_user_question(
                     ws,
@@ -7596,7 +8258,7 @@ fn append_output_contract_incident_note(
     Ok(())
 }
 
-fn append_provider_refusal_classification_skip_notes(
+fn append_output_contract_classification_skip_notes(
     run_dir: &std::path::Path,
     notices: &[String],
 ) -> Result<()> {
@@ -7706,12 +8368,148 @@ pub(crate) fn continuation_context(ws: &Workspace, task_id: &str) -> Option<Stri
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// Did this task's latest run go Partial because of a merge conflict (needs a
-/// human) rather than a worker self-report (safe to auto-continue)?
-pub(crate) fn partial_is_conflict(ws: &Workspace, task_id: &str) -> bool {
-    latest_run_for(ws, task_id)
-        .map(|(_, dir)| dir.join("partial-reason").exists())
-        .unwrap_or(false)
+/// Ownership for a run whose branch is gone because it was ALREADY integrated.
+/// Read only from this run's own durable receipt, and only when that receipt
+/// names this run and task and its integration commit is still reachable from
+/// the workspace head. Anything else returns None so a missing branch can never
+/// be mistaken for a completed integration.
+fn already_integrated_ownership(
+    ws: &Workspace,
+    run_dir: &std::path::Path,
+    run_id: &str,
+    task_id: &str,
+) -> Option<crate::git_finish::GitFinishOwnership> {
+    let record: RunRecord = state::load_yaml(&run_dir.join("run.yaml")).ok()?;
+    if record.run_id != run_id || record.task_id != task_id {
+        return None;
+    }
+    let integration_oid = (!record.integration_oid.is_empty()).then_some(record.integration_oid)?;
+    // The recorded merge must actually be in this workspace's history; a
+    // receipt alone is not proof the work is present.
+    git_stdout(
+        &ws.root,
+        &["merge-base", "--is-ancestor", &integration_oid, "HEAD"],
+    )
+    .ok()?;
+    Some(crate::git_finish::GitFinishOwnership {
+        baseline_oid: record.integration_base_oid,
+        expected_oid: integration_oid,
+        owned_oids: record.owned_oids,
+    })
+}
+
+/// Repo-relative paths of just-learned harness assets that git does not track
+/// yet. Only files git reports as untracked are listed: an asset that updated
+/// an already-tracked skill shows up as a modification, which the normal
+/// workspace diff already surfaces.
+fn untracked_harness_assets(ws: &Workspace, skills: &[String], rules: &[String]) -> Vec<String> {
+    // `record_run_rules` returns bare names; the files it writes carry the
+    // `learned-` prefix.
+    let candidates: Vec<String> = skills
+        .iter()
+        .map(|name| format!(".agents/skills/{name}/SKILL.md"))
+        .chain(
+            rules
+                .iter()
+                .map(|name| format!(".agents/rules/learned-{name}.md")),
+        )
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    candidates
+        .into_iter()
+        .filter(|path| ws.root.join(path).exists())
+        .filter(|path| {
+            // `ls-files --error-unmatch` exits non-zero for a path git does not
+            // track. Treat an unavailable git as "cannot prove it is tracked"
+            // and stay quiet rather than nagging with a wrong claim.
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&ws.root)
+                .args(["ls-files", "--error-unmatch", "--"])
+                .arg(path)
+                .output()
+                .map(|out| !out.status.success())
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Why a run left its task Partial, as recorded in the run's `partial-reason`
+/// marker. The marker's presence means a human is needed before the drain can
+/// continue; its CONTENT says what they actually have to do, and those
+/// remediations differ (issue #40). Unrecognized markers keep their raw text
+/// rather than being folded into a familiar-looking cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PartialReason {
+    pub kind: PartialReasonKind,
+    /// Raw marker text, for causes with no dedicated wording.
+    pub marker: String,
+    /// Cause-specific evidence, e.g. the pre-push checks that failed.
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PartialReasonKind {
+    /// The merge itself conflicted; the worktree is kept for manual integration.
+    MergeConflict,
+    /// Integration failed for some other reason. Distinct from a conflict:
+    /// there is nothing to resolve by hand (issue #69).
+    IntegrationError,
+    /// The work merged cleanly; only delivery is unverified.
+    GitFinishUnverified,
+    WorktreeCleanupChanged,
+    AutoCommitDisabled,
+    Other,
+}
+
+impl PartialReason {
+    fn from_marker(marker: &str, run_dir: &std::path::Path) -> Self {
+        let marker = marker.trim().to_string();
+        let kind = match marker.as_str() {
+            "merge_conflict" => PartialReasonKind::MergeConflict,
+            "integration_error" => PartialReasonKind::IntegrationError,
+            "git_finish_unverified" => PartialReasonKind::GitFinishUnverified,
+            "worktree_cleanup_changed" => PartialReasonKind::WorktreeCleanupChanged,
+            "auto_commit_disabled" => PartialReasonKind::AutoCommitDisabled,
+            _ => PartialReasonKind::Other,
+        };
+        let detail = (kind == PartialReasonKind::GitFinishUnverified)
+            .then(|| git_finish_block_detail(run_dir))
+            .flatten();
+        Self {
+            kind,
+            marker,
+            detail,
+        }
+    }
+}
+
+/// Name the failing pre-push checks behind a `git_finish_unverified` Partial so
+/// the operator is not told to go hunting for the cause.
+fn git_finish_block_detail(run_dir: &std::path::Path) -> Option<String> {
+    let record: crate::git_finish::GitFinishRecord =
+        serde_json::from_str(&std::fs::read_to_string(run_dir.join("git-finish.json")).ok()?)
+            .ok()?;
+    let failed: Vec<&str> = record
+        .checks
+        .iter()
+        .filter(|check| !check.passed)
+        .map(|check| check.name.as_str())
+        .collect();
+    if !failed.is_empty() {
+        return Some(failed.join(", "));
+    }
+    Some(record.status.as_str().to_string())
+}
+
+/// The typed reason this task's latest run left it Partial, if it recorded one.
+/// A Partial with no marker is a worker self-report and is safe to auto-retry.
+pub(crate) fn latest_partial_reason(ws: &Workspace, task_id: &str) -> Option<PartialReason> {
+    let (_, dir) = latest_run_for(ws, task_id)?;
+    let marker = std::fs::read_to_string(dir.join("partial-reason")).ok()?;
+    Some(PartialReason::from_marker(&marker, &dir))
 }
 
 /// The intent a run belonged to, read from its `run.yaml` (empty if unknown).
@@ -7865,6 +8663,218 @@ mod tests {
             payload: serde_json::Value::Null,
             raw_ref: None,
         }
+    }
+
+    /// Issue #45: a learned skill on disk but not in git is not durable. The
+    /// reminder must fire for exactly the untracked ones, and must use the
+    /// real on-disk paths (rules carry a `learned-` prefix).
+    #[test]
+    fn untracked_learned_harness_assets_are_listed_for_the_operator() {
+        let root =
+            std::env::temp_dir().join(format!("yard-untracked-harness-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let sh = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+        };
+        sh(&["init", "-q"]);
+        sh(&["config", "user.email", "t@example.com"]);
+        sh(&["config", "user.name", "t"]);
+
+        let ws = Workspace::at(&root);
+        let write = |rel: &str| {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "body\n").unwrap();
+        };
+        write(".agents/skills/tracked-skill/SKILL.md");
+        write(".agents/rules/learned-tracked-rule.md");
+        sh(&["add", "-A"]);
+        sh(&["commit", "-qm", "seed"]);
+
+        write(".agents/skills/fresh-skill/SKILL.md");
+        write(".agents/rules/learned-fresh-rule.md");
+
+        let untracked = untracked_harness_assets(
+            &ws,
+            &["fresh-skill".to_string(), "tracked-skill".to_string()],
+            &["fresh-rule".to_string(), "tracked-rule".to_string()],
+        );
+        assert_eq!(
+            untracked,
+            vec![
+                ".agents/skills/fresh-skill/SKILL.md".to_string(),
+                ".agents/rules/learned-fresh-rule.md".to_string(),
+            ],
+            "only the assets git does not track yet"
+        );
+
+        // Nothing learned, nothing to say.
+        assert!(untracked_harness_assets(&ws, &[], &[]).is_empty());
+        // A name with no file on disk is never reported.
+        assert!(untracked_harness_assets(&ws, &["ghost".to_string()], &[]).is_empty());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Issue #40: the marker's CONTENT decides the remediation. Reading only
+    /// its existence reported every blocked Partial as a merge conflict.
+    #[test]
+    fn partial_reason_is_typed_from_the_marker_content() {
+        let dir = std::env::temp_dir().join(format!("yard-partial-reason-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        for (marker, expected) in [
+            ("merge_conflict", PartialReasonKind::MergeConflict),
+            ("integration_error", PartialReasonKind::IntegrationError),
+            (
+                "git_finish_unverified",
+                PartialReasonKind::GitFinishUnverified,
+            ),
+            (
+                "worktree_cleanup_changed",
+                PartialReasonKind::WorktreeCleanupChanged,
+            ),
+            (
+                "auto_commit_disabled",
+                PartialReasonKind::AutoCommitDisabled,
+            ),
+            ("something_new", PartialReasonKind::Other),
+        ] {
+            // Trailing newline: writers use both forms.
+            let reason = PartialReason::from_marker(&format!("{marker}\n"), &dir);
+            assert_eq!(reason.kind, expected, "{marker}");
+            assert_eq!(reason.marker, marker);
+        }
+
+        // git_finish_unverified names the failing pre-push checks when the
+        // run recorded them.
+        std::fs::write(
+            dir.join("git-finish.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "run_id": "run-test",
+                "task_id": "YARD-001",
+                "attempted_at": "",
+                "status": "check_blocked",
+                "policy": {
+                    "auto_push": false,
+                    "remote": "origin",
+                    "target_ref": "refs/heads/main",
+                    "pre_push_checks": ["cargo fmt", "cargo clippy"]
+                },
+                "checks": [
+                    {"name": "cargo fmt", "passed": true},
+                    {"name": "cargo clippy", "passed": false}
+                ],
+                "push_invoked": false,
+                "push_succeeded": false,
+                "reason": "pre_push_check_failed"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let reason = PartialReason::from_marker("git_finish_unverified", &dir);
+        assert_eq!(reason.detail.as_deref(), Some("cargo clippy"));
+
+        // A conflict marker never picks up Git finish detail.
+        let reason = PartialReason::from_marker("merge_conflict", &dir);
+        assert_eq!(reason.detail, None);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn eval_with_failed_checks(names: &[&str]) -> evaluator::Evaluation {
+        evaluator::Evaluation {
+            run_id: "run-test".into(),
+            task_id: "YARD-002".into(),
+            status: "failed".into(),
+            checks: names
+                .iter()
+                .map(|name| evaluator::Check {
+                    name: (*name).into(),
+                    passed: false,
+                    fatal: true,
+                    note: String::new(),
+                })
+                .collect(),
+            next_task_state: TaskState::Failed,
+        }
+    }
+
+    fn review_task() -> crate::schemas::Task {
+        crate::yaml::from_str("id: YARD-002\ntitle: review\nkind: review\n").unwrap()
+    }
+
+    /// Issue #39: a review worker that exits without result.json produced NO
+    /// verdict. Telling the operator the review "did not pass" makes them queue
+    /// fix tasks for a review that never judged anything.
+    #[test]
+    fn review_without_artifacts_is_not_reported_as_a_failed_verdict() {
+        let missing = eval_with_failed_checks(&["result_file_present"]);
+        assert_eq!(
+            review_failure_cause(&missing),
+            ReviewFailureCause::ArtifactsMissing
+        );
+        let question = review_without_remediation_question(
+            &review_task(),
+            review_failure_cause(&missing),
+            None,
+        );
+        assert!(question.contains("판정 자체가 없습니다"), "{question}");
+        assert!(
+            !question.contains("리뷰가 통과하지 못했고"),
+            "must not claim a failing verdict: {question}"
+        );
+
+        let invalid = eval_with_failed_checks(&["result_schema_valid"]);
+        assert_eq!(
+            review_failure_cause(&invalid),
+            ReviewFailureCause::ArtifactsMissing
+        );
+
+        // A real failing verdict keeps the remediation wording.
+        let judged = eval_with_failed_checks(&["review_criteria_pass"]);
+        assert_eq!(
+            review_failure_cause(&judged),
+            ReviewFailureCause::VerdictFailed
+        );
+        let question = review_without_remediation_question(
+            &review_task(),
+            review_failure_cause(&judged),
+            None,
+        );
+        assert!(question.contains("리뷰가 통과하지 못했고"), "{question}");
+    }
+
+    /// Issue #38: when the missing artifacts are explained by a typed incident,
+    /// the operator prompt names that cause instead of leaving them guessing.
+    #[test]
+    fn review_artifacts_missing_question_names_a_typed_incident_cause() {
+        let incident = OutputContractIncident {
+            cause: OutputContractCause::WorkerDeferredToBackgroundTask,
+            worker_id: "claude-code".into(),
+            first_attempt_id: "attempt-1".into(),
+            first_log_span: WorkerOutputLogSpan {
+                path: "worker-output.log".into(),
+                byte_start: 0,
+                byte_end: 1,
+            },
+            recovery_consumed: true,
+            terminal_attempt_id: Some("attempt-2".into()),
+        };
+        let question = review_without_remediation_question(
+            &review_task(),
+            ReviewFailureCause::ArtifactsMissing,
+            Some(&incident),
+        );
+        assert!(question.contains("백그라운드 작업"), "{question}");
     }
 
     #[test]
@@ -11153,6 +12163,605 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         let _ = std::fs::remove_dir_all(ws.root);
     }
 
+    /// A worker that declares a repository deliverable but writes it OUTSIDE
+    /// its run-owned worktree leaves that worktree with nothing to integrate.
+    /// Recording "no changes" there reports Done over an uncommitted file
+    /// (issue #55), so both integration protocols must refuse it.
+    fn outside_write_no_change_fixture(name: &str, auto_commit_on: bool) -> (Workspace, PathBuf) {
+        let source = std::env::temp_dir().join(format!(
+            "yard-outside-write-source-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        // init_test_workspace derives the owning root from the same formula, so
+        // the worker can be handed a path that is deliberately not its cwd.
+        let owning_root = std::env::temp_dir().join(format!("yard-{name}-{}", std::process::id()));
+        let worker = write_worker_script(
+            &source,
+            "outside-writer.sh",
+            r##"#!/bin/sh
+run_dir="$1"
+owning_root="$2"
+run_id=$(basename "$run_dir")
+packet=$(cat)
+task_id=$(printf "%s" "$packet" | sed -n 's/^# Yardlet task packet: //p' | head -n 1)
+printf "declared deliverable\n" > "$owning_root/declared-deliverable.txt"
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": {
+    "files_modified": [],
+    "files_created": ["declared-deliverable.txt"],
+    "files_deleted": []
+  },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "wrote its deliverable outside the run-owned worktree",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&worker),
+            shell_literal(&owning_root)
+        );
+        let ws = init_test_workspace(name, &worker_yaml);
+        assert_eq!(ws.root, owning_root);
+        if auto_commit_on {
+            let mut config = std::fs::read_to_string(ws.config_path()).unwrap();
+            config.push_str("auto_commit: true\n");
+            write_str(&ws.config_path(), &config).unwrap();
+        }
+        let mut q = queue(vec![task("YARD-OUTSIDE", TaskState::Queued, 10, false)]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+        (ws, source)
+    }
+
+    fn assert_no_change_refused(ws: &Workspace, report: &RunReport) {
+        assert_eq!(
+            report.result_state,
+            Some(TaskState::Partial),
+            "a declared deliverable the worktree never held must not land Done: {:?}",
+            report.lines
+        );
+        assert_eq!(
+            std::fs::read_to_string(report.run_dir.join("partial-reason"))
+                .unwrap()
+                .trim(),
+            "no_change_contradicts_declared_outputs"
+        );
+        assert!(
+            ws.load_no_change_receipt(&report.run_id).is_err(),
+            "a refused no-change outcome must not leave a durable receipt recovery would replay"
+        );
+        let record: RunRecord = state::load_yaml(&report.run_dir.join("run.yaml")).unwrap();
+        assert!(
+            std::path::Path::new(&record.worktree).exists(),
+            "the worktree must be kept so the operator can inspect the contradiction"
+        );
+        let handoff = std::fs::read_to_string(report.run_dir.join("handoff.md")).unwrap();
+        assert!(
+            handoff.contains("No-change integration refused")
+                && handoff.contains("declared-deliverable.txt"),
+            "the handoff must name the output that was not integrated: {handoff}"
+        );
+        let finish: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("git-finish.json")).unwrap(),
+        )
+        .unwrap();
+        assert_ne!(
+            finish["status"], "not_needed",
+            "Git finish must not report 'no changes' over a declared deliverable: {finish}"
+        );
+        let evaluation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("evaluation.json")).unwrap(),
+        )
+        .unwrap();
+        let presence = evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "reported_changes_present")
+            .unwrap();
+        assert_eq!(
+            presence["passed"], false,
+            "the evaluator must say the reported file is absent from the diff: {presence}"
+        );
+    }
+
+    #[test]
+    fn declared_output_written_outside_the_worktree_refuses_no_change_integration() {
+        let (ws, source) = outside_write_no_change_fixture("outside-write-auto-commit", true);
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-OUTSIDE".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_no_change_refused(&ws, &report);
+        assert!(
+            ws.root.join("declared-deliverable.txt").exists(),
+            "the fixture must reproduce the loose file the operator found in the owning root"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn declared_output_written_outside_the_worktree_refuses_no_change_without_auto_commit() {
+        let (ws, source) = outside_write_no_change_fixture("outside-write-no-auto-commit", false);
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-OUTSIDE".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_no_change_refused(&ws, &report);
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// The wiring, not just the helper: a worker that names a deliverable from
+    /// its OWN cwd (the worktree) while actually writing it somewhere Yardlet
+    /// does not integrate must still be caught. Resolving that path against the
+    /// owning root instead lands it under `.agents/worktrees/**`, which the
+    /// allowlist rejects — so the guard goes silent and issue #55 ships again.
+    /// This is the case the review-artifact test cannot see, because a run
+    /// artifact is non-integratable under either root.
+    #[test]
+    fn a_deliverable_named_from_the_worktree_is_still_caught() {
+        let source = std::env::temp_dir().join(format!(
+            "yard-worktree-declared-source-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        let owning_root =
+            std::env::temp_dir().join(format!("yard-worktree-declared-{}", std::process::id()));
+        // The worker declares `<its cwd>/tests/new.rs` but writes the file into
+        // the owning root, so its own worktree diff stays empty.
+        let worker = write_worker_script(
+            &source,
+            "worktree-declaring-worker.sh",
+            r##"#!/bin/sh
+run_dir="$1"
+owning_root="$2"
+run_id=$(basename "$run_dir")
+packet=$(cat)
+task_id=$(printf "%s" "$packet" | sed -n 's/^# Yardlet task packet: //p' | head -n 1)
+mkdir -p "$owning_root/tests"
+printf "// deliverable\n" > "$owning_root/tests/new.rs"
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": {
+    "files_modified": [],
+    "files_created": ["$(pwd)/tests/new.rs"],
+    "files_deleted": []
+  },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "declared from the worktree, written elsewhere",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&worker),
+            shell_literal(&owning_root)
+        );
+        let ws = init_test_workspace("worktree-declared", &worker_yaml);
+        assert_eq!(ws.root, owning_root);
+        let mut config = std::fs::read_to_string(ws.config_path()).unwrap();
+        config.push_str("auto_commit: true\n");
+        write_str(&ws.config_path(), &config).unwrap();
+        let mut q = queue(vec![task("YARD-WT", TaskState::Queued, 10, false)]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-WT".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.result_state,
+            Some(TaskState::Partial),
+            "a deliverable declared from the worktree must not be dropped into \
+             .agents/worktrees/**: {:?}",
+            report.lines
+        );
+        assert_eq!(
+            std::fs::read_to_string(report.run_dir.join("partial-reason"))
+                .unwrap()
+                .trim(),
+            "no_change_contradicts_declared_outputs"
+        );
+        let handoff = std::fs::read_to_string(report.run_dir.join("handoff.md")).unwrap();
+        assert!(
+            handoff.contains("tests/new.rs"),
+            "the handoff must name the output, repository-relative: {handoff}"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// A `review` task is REQUIRED by the packet to write `report.md` into its
+    /// run directory, is forbidden to touch code, and is handed that directory
+    /// as an ABSOLUTE path. It therefore finishes with zero repository changes
+    /// while honestly declaring an absolute run-artifact path — the exact shape
+    /// the no-change guard must not mistake for lost output (issue #55
+    /// remediation).
+    #[test]
+    fn a_review_run_declaring_its_own_report_still_lands_done() {
+        let source = std::env::temp_dir().join(format!(
+            "yard-review-artifact-source-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        let worker = write_worker_script(
+            &source,
+            "review-worker.sh",
+            r##"#!/bin/sh
+run_dir="$1"
+run_id=$(basename "$run_dir")
+packet=$(cat)
+task_id=$(printf "%s" "$packet" | sed -n 's/^# Yardlet task packet: //p' | head -n 1)
+printf "# findings
+" > "$run_dir/report.md"
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": {
+    "files_modified": [],
+    "files_created": ["$run_dir/report.md"],
+    "files_deleted": []
+  },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "review produced findings, no code changes",
+  "verdict": [{ "criterion_id": "AC-001", "pass": true, "evidence": "read the code" }],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff
+" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            shell_literal(&worker)
+        );
+        let ws = init_test_workspace("review-artifact", &worker_yaml);
+        let mut config = std::fs::read_to_string(ws.config_path()).unwrap();
+        config.push_str("auto_commit: true\n");
+        write_str(&ws.config_path(), &config).unwrap();
+        let mut review = task("YARD-REVIEW", TaskState::Queued, 10, false);
+        review.kind = "review".into();
+        let mut q = queue(vec![review]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        let report = run_next(
+            &ws,
+            &RunOptions {
+                execute: true,
+                target: Some("YARD-REVIEW".into()),
+                ..opts()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.result_state,
+            Some(TaskState::Done),
+            "a review that wrote only its own report must not be refused as a lost deliverable: {:?}",
+            report.lines
+        );
+        assert!(
+            !report.run_dir.join("partial-reason").exists(),
+            "no partial-reason should have been written: {:?}",
+            std::fs::read_to_string(report.run_dir.join("partial-reason"))
+        );
+        let evaluation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(report.run_dir.join("evaluation.json")).unwrap(),
+        )
+        .unwrap();
+        let presence = evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "reported_changes_present")
+            .unwrap_or_else(|| panic!("the evaluator no longer reports declared-path presence"));
+        assert_eq!(
+            presence["passed"], true,
+            "the run's own artifacts must not read as absent repository output: {presence}"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn no_change_contradiction_reads_evidence_before_declared_outputs() {
+        let overlay = state::SerialInputOverlay {
+            path: ".agents/skills/seeded/SKILL.md".into(),
+            content_digest: "digest".into(),
+        };
+        let dependency = state::DependencyInputOverlay {
+            dependency_task_id: "YARD-UPSTREAM".into(),
+            path: "dependency-output.txt".into(),
+            content_digest: "digest".into(),
+        };
+        let result = |created: &[&str], modified: &[&str], deleted: &[&str]| RunResult {
+            schema_version: 1,
+            run_id: "run-test".into(),
+            task_id: "YARD-001".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: crate::schemas::Changes {
+                files_created: created.iter().map(|p| p.to_string()).collect(),
+                files_modified: modified.iter().map(|p| p.to_string()).collect(),
+                files_deleted: deleted.iter().map(|p| p.to_string()).collect(),
+            },
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: String::new(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
+        };
+
+        // The worker's cwd IS the worktree, and its run dir is nested inside it,
+        // so both roots have to resolve or an absolutely-declared deliverable
+        // lands under `.agents/worktrees/...` and vanishes from the allowlist.
+        let worktree = std::path::PathBuf::from("/ws/.agents/worktrees/run-test");
+        let roots = DeclaredPathRoots {
+            worktree: &worktree,
+            workspace: std::path::Path::new("/ws"),
+        };
+        let contradiction = |result: &RunResult, evidence: &[String]| {
+            no_change_contradiction(
+                Some(result),
+                Some(evidence),
+                &roots,
+                std::slice::from_ref(&overlay),
+                std::slice::from_ref(&dependency),
+            )
+        };
+
+        // Change evidence outranks the self-report: staging would have committed
+        // this path, so a no-change outcome contradicts Yardlet's own diff.
+        let evidenced = result(&[], &[], &[]);
+        assert_eq!(
+            contradiction(&evidenced, &["src/lib.rs".to_string()]),
+            Some((
+                "no_change_contradicts_change_evidence",
+                vec!["src/lib.rs".to_string()]
+            ))
+        );
+
+        // No evidence, but the worker still claims a repository output.
+        assert_eq!(
+            contradiction(&result(&["./tests/new.rs"], &[], &[]), &[]),
+            Some((
+                "no_change_contradicts_declared_outputs",
+                vec!["tests/new.rs".to_string()]
+            ))
+        );
+        // ...including one it declared as modified rather than created.
+        assert_eq!(
+            contradiction(&result(&[], &["src/lib.rs"], &[]), &[]),
+            Some((
+                "no_change_contradicts_declared_outputs",
+                vec!["src/lib.rs".to_string()]
+            ))
+        );
+        // ...stated as an absolute path inside the workspace...
+        assert_eq!(
+            contradiction(&result(&["/ws/docs/lost.md"], &[], &[]), &[]),
+            Some((
+                "no_change_contradicts_declared_outputs",
+                vec!["docs/lost.md".to_string()]
+            ))
+        );
+        // ...and — the case a workspace-only normalizer silently drops — stated
+        // from the worker's own cwd, which is the worktree.
+        assert_eq!(
+            contradiction(
+                &result(&["/ws/.agents/worktrees/run-test/tests/new.rs"], &[], &[]),
+                &[]
+            ),
+            Some((
+                "no_change_contradicts_declared_outputs",
+                vec!["tests/new.rs".to_string()]
+            )),
+            "a deliverable named from the worktree must not resolve into .agents/worktrees/**"
+        );
+
+        // Core-delivered inputs, canonical/runtime state, and a path the worker
+        // also declared deleted are not missing deliverables.
+        assert_eq!(
+            contradiction(
+                &result(
+                    &[
+                        ".agents/skills/seeded/SKILL.md",
+                        "dependency-output.txt",
+                        ".agents/telemetry/runs.jsonl",
+                        "scratch.txt",
+                    ],
+                    &[],
+                    &["scratch.txt"],
+                ),
+                &[]
+            ),
+            None
+        );
+
+        // The run's OWN artifacts are not repository output. Every
+        // non-implementation task is required to write report.md into its run
+        // directory and forbidden to touch code, and the packet hands it that
+        // directory as an ABSOLUTE path — so a review that behaved perfectly
+        // reports exactly these and must not be flipped to Partial.
+        assert_eq!(
+            contradiction(
+                &result(
+                    &[
+                        "/ws/.agents/worktrees/run-test/.agents/runs/run-test/report.md",
+                        "/ws/.agents/runs/run-test/result.json",
+                        ".agents/runs/run-test/handoff.md",
+                    ],
+                    &[],
+                    &[]
+                ),
+                &[]
+            ),
+            None,
+            "a review run's own artifacts must not read as lost repository output"
+        );
+
+        // A path Yardlet cannot place is not a repository deliverable, so it
+        // must NOT flip a correct run — that would recreate the false positive
+        // this guard was corrected for. It is reported instead, and the two
+        // spellings of "outside" must agree.
+        for outside in ["/elsewhere/other.md", "/ws/../elsewhere/other.md"] {
+            let declared = result(&[outside], &[], &[]);
+            assert_eq!(
+                contradiction(&declared, &[]),
+                None,
+                "{outside} must not flip the run"
+            );
+            assert_eq!(
+                unplaceable_declared_outputs(Some(&declared), &roots),
+                vec!["/elsewhere/other.md".to_string()],
+                "{outside} must be surfaced, in one normalized spelling"
+            );
+        }
+
+        // An absolute `..` that crosses a root boundary still names a real
+        // repository file, so it must gate rather than read as "outside this
+        // workspace". Stripping before resolving would miss it.
+        assert_eq!(
+            contradiction(
+                &result(
+                    &["/ws/.agents/worktrees/run-test/../../../docs/lost.md"],
+                    &[],
+                    &[]
+                ),
+                &[]
+            ),
+            Some((
+                "no_change_contradicts_declared_outputs",
+                vec!["docs/lost.md".to_string()]
+            ))
+        );
+
+        // A root directory itself is neither a deliverable nor a lost output —
+        // including when `..` walks back to it.
+        for root_path in [
+            "/ws",
+            "/ws/.agents/worktrees/run-test",
+            "/ws/",
+            "src/..",
+            "./",
+        ] {
+            let declared = result(&[root_path], &[], &[]);
+            assert_eq!(contradiction(&declared, &[]), None, "{root_path}");
+            assert!(
+                unplaceable_declared_outputs(Some(&declared), &roots).is_empty(),
+                "{root_path} must not be reported as a lost output"
+            );
+        }
+
+        // An interior `..` that still lands INSIDE the repository names a real
+        // file. Treating "contains .." as unplaceable stops it gating, which is
+        // issue #55 re-opened for that spelling — and tells the operator the
+        // path is "outside this workspace", which it is not.
+        for (inside, resolved) in [
+            ("src/../tests/regression.rs", "tests/regression.rs"),
+            (
+                "./crates/a/../tests/regression.rs",
+                "crates/tests/regression.rs",
+            ),
+            ("/ws/src/../tests/regression.rs", "tests/regression.rs"),
+            (
+                "/ws/.agents/worktrees/run-test/src/../tests/regression.rs",
+                "tests/regression.rs",
+            ),
+        ] {
+            assert_eq!(
+                contradiction(&result(&[inside], &[], &[]), &[]),
+                Some((
+                    "no_change_contradicts_declared_outputs",
+                    vec![resolved.to_string()]
+                )),
+                "{inside} resolves inside the repository and must still gate"
+            );
+        }
+
+        // A declared output that is created and then deleted is not left
+        // behind, wherever it lives.
+        let scratch = result(&["/outside/scratch.txt"], &[], &["/outside/scratch.txt"]);
+        assert_eq!(contradiction(&scratch, &[]), None);
+        assert!(
+            unplaceable_declared_outputs(Some(&scratch), &roots).is_empty(),
+            "a created-then-deleted scratch file must not be reported as lost"
+        );
+
+        // A run that genuinely produced nothing stays a clean no-op.
+        assert_eq!(contradiction(&result(&[], &[], &[]), &[]), None);
+
+        // No result.json at all: nothing is declared, so nothing is contradicted.
+        assert_eq!(
+            no_change_contradiction(None, Some(&[]), &roots, &[], &[]),
+            None
+        );
+    }
+
     #[test]
     fn dependency_overlay_worktree_tamper_blocks_done_with_typed_diagnosis() {
         let (ws, _upstream, source, spawn_marker) = resolved_dependency_output_fixture(
@@ -13362,6 +14971,184 @@ exit 1
 
             let _ = std::fs::remove_dir_all(ws.root);
         }
+    }
+
+    /// Startup reconcile cost must track OUTSTANDING work, not the number of
+    /// runs a workspace has ever completed. Every settled receipt left in the
+    /// scanned directory is several git subprocesses re-spent on every launch,
+    /// which is what made startup 11s on a workspace with a few hundred runs
+    /// (issue #43). Once a receipt is settled it leaves that directory, while
+    /// staying loadable by run id as ownership and overlay evidence.
+    #[test]
+    fn startup_reconcile_retires_settled_receipts_from_the_scanned_set() {
+        let ws = init_test_workspace(
+            "reconcile-hot-set",
+            "schema_version: 1\nrouting: {default_worker: builder}\nworkers: []\n",
+        );
+        let mut config = ws.load_config().unwrap();
+        config.git_finish.auto_push = true;
+        state::save_yaml(&ws.config_path(), &config).unwrap();
+
+        // A run whose integration merged and whose worktree and branch are
+        // already gone: cleanup has nothing left to do, forever.
+        let merged_run = "run-20990101-000001-merged";
+        let merged_task = "YARD-MERGED";
+        let baseline = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        write_str(&ws.root.join("merged.txt"), "merged\n").unwrap();
+        git_stdout(&ws.root, &["add", "merged.txt"]).unwrap();
+        let tree = git_stdout(&ws.root, &["write-tree"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let worker_oid = git_stdout(
+            &ws.root,
+            &["commit-tree", &tree, "-p", &baseline, "-m", "worker"],
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        let integration_oid = git_stdout(
+            &ws.root,
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                &baseline,
+                "-p",
+                &worker_oid,
+                "-m",
+                "integration",
+            ],
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        git_stdout(&ws.root, &["reset", "-q", "--hard", &integration_oid]).unwrap();
+        let merged_run_dir = ws.runs_dir().join(merged_run);
+        std::fs::create_dir_all(&merged_run_dir).unwrap();
+        ws.save_integrated_cleanup_receipt(&state::IntegratedCleanupReceipt {
+            schema_version: 1,
+            run_id: merged_run.into(),
+            task_id: merged_task.into(),
+            intent_id: "intent-test".into(),
+            worker: "codex".into(),
+            worktree: ws
+                .agents_dir()
+                .join("worktrees")
+                .join(merged_run)
+                .display()
+                .to_string(),
+            branch: format!("yard/{}/{merged_run}", merged_task.to_lowercase()),
+            baseline_oid: baseline.clone(),
+            integration_base_oid: baseline.clone(),
+            integration_worker_oid: worker_oid.clone(),
+            integration_oid: integration_oid.clone(),
+            provenance: IntegrationProvenance::ParallelWorkerDirect,
+            owned_oids: vec![worker_oid, integration_oid],
+            core_input_overlays: vec![],
+            dependency_input_overlays: vec![],
+        })
+        .unwrap();
+
+        // A no-op run whose cleanup and `not_needed` finish both settle during
+        // this very recovery pass.
+        let no_change_run = "run-20990101-000002-nochange";
+        let no_change_task = "YARD-NOCHANGE";
+        let branch = format!("yard/{}/{no_change_run}", no_change_task.to_lowercase());
+        let worktree = ws.agents_dir().join("worktrees").join(no_change_run);
+        crate::parallel::create_worktree(&ws.root, &worktree, &branch).unwrap();
+        let no_change_run_dir = ws.runs_dir().join(no_change_run);
+        std::fs::create_dir_all(&no_change_run_dir).unwrap();
+        write_str(
+            &no_change_run_dir.join("result.json"),
+            &serde_json::to_string(&RunResult {
+                schema_version: 1,
+                run_id: no_change_run.into(),
+                task_id: no_change_task.into(),
+                status: "done".into(),
+                intent_adherence: Default::default(),
+                changes: Default::default(),
+                validation: Default::default(),
+                question_for_user: None,
+                compact_summary: "no changes".into(),
+                verdict: vec![],
+                harness_suggestions: vec![],
+                follow_up_tasks: vec![],
+                artifacts: vec![],
+                resources: vec![],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        write_str(&no_change_run_dir.join("handoff.md"), "# Handoff\n").unwrap();
+        let head = git_stdout(&ws.root, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        ws.save_no_change_receipt(&state::NoChangeReceipt {
+            schema_version: 1,
+            run_id: no_change_run.into(),
+            task_id: no_change_task.into(),
+            intent_id: "intent-test".into(),
+            worker: "codex".into(),
+            worktree: worktree.display().to_string(),
+            branch,
+            baseline_oid: head.clone(),
+            worker_oid: head,
+            provenance: IntegrationProvenance::ParallelWorkerDirect,
+            core_input_overlays: vec![],
+            dependency_input_overlays: vec![],
+        })
+        .unwrap();
+
+        let mut running = task(no_change_task, TaskState::Running, 10, false);
+        running.kind = "implementation".into();
+        let mut q = queue(vec![running]);
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+
+        assert_eq!(ws.load_integrated_cleanup_receipts().unwrap().len(), 1);
+        assert_eq!(ws.load_no_change_receipts().unwrap().len(), 1);
+
+        let first = recover_orphans(&ws);
+
+        assert!(
+            ws.load_integrated_cleanup_receipts().unwrap().is_empty(),
+            "a reconciled cleanup receipt must leave the scanned set: {first:?}"
+        );
+        assert!(
+            ws.load_no_change_receipts().unwrap().is_empty(),
+            "a settled no-change receipt must leave the scanned set: {first:?}"
+        );
+        // Retired, not discarded: both stay addressable as ownership evidence.
+        assert_eq!(
+            ws.load_integrated_cleanup_receipt(merged_run)
+                .unwrap()
+                .task_id,
+            merged_task
+        );
+        assert_eq!(
+            ws.load_no_change_receipt(no_change_run).unwrap().task_id,
+            no_change_task
+        );
+        assert_eq!(
+            ws.load_git_finish_record(&no_change_run_dir)
+                .unwrap()
+                .status,
+            crate::git_finish::GitFinishStatus::NotNeeded
+        );
+        assert_eq!(ws.load_queue().unwrap().tasks[0].state, TaskState::Done);
+
+        let second = recover_orphans(&ws);
+        assert!(
+            second.is_empty(),
+            "second recovery was not inert: {second:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     #[test]
