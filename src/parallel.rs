@@ -2065,6 +2065,10 @@ pub(crate) fn parallel_worker_evidence(
         let unchanged = paths
             .iter()
             .filter(|path| seeded.contains(*path) && !modified.contains(*path))
+            // Serial's rule, applied on this side too: a path the worker
+            // committed loses its dispatcher provenance and stays attributed to
+            // the worker, so it must not also be recorded as a core overlay.
+            .filter(|path| !committed.contains(*path))
             .cloned()
             .collect::<Vec<_>>();
         paths.retain(|path| !seeded.contains(path) || modified.contains(path));
@@ -2743,6 +2747,10 @@ mod tests {
         sh_git(&root, &["init", "-q"]);
         sh_git(&root, &["config", "user.name", "Local User"]);
         sh_git(&root, &["config", "user.email", "local@example.test"]);
+        // Pin rename detection ON. With `diff.renames = false` in an ambient
+        // global config, a range diff already reports both sides of a rename,
+        // so the `--no-renames` regression guard would pass without the fix.
+        sh_git(&root, &["config", "diff.renames", "true"]);
         std::fs::write(root.join("base.txt"), "base\n").unwrap();
         sh_git(&root, &["add", "base.txt"]);
         sh_git(&root, &["commit", "-q", "-m", "init"]);
@@ -2815,6 +2823,118 @@ mod tests {
         assert!(
             !crate::evaluator::forbidden_paths(evidence.paths.iter()).is_empty(),
             "and the gate must actually call it forbidden"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The guarantee #83 is actually about: not that the path appears in a
+    /// vector, but that the gate STOPS it. A worker that commits canonical
+    /// state must not have that commit merged into the workspace.
+    #[test]
+    fn a_committed_canonical_state_file_blocks_the_run_and_never_merges() {
+        let root = temp_repo("committed-canonical-blocks");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let worker = write_test_worker(
+            &root,
+            "canonical-committer.sh",
+            r##"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "fixture 1.0"
+  exit 0
+fi
+run_dir="$1"
+task_id="$2"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+printf "feature\n" > feature.txt
+mkdir -p .agents
+printf "pwned: true\n" > .agents/yardlet.yaml
+git add -f feature.txt .agents/yardlet.yaml
+git -c user.name=w -c user.email=w@e.t commit -q -m "worker commit"
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": ["feature.txt"], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "committed canonical state",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", YARD-PAR-CANON]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            yaml_string(&worker)
+        );
+        let mut offender = task("YARD-PAR-CANON", TaskState::Queued, 10, vec![]);
+        offender.kind = "implementation".into();
+        let ws = setup_workspace(&root, &worker_yaml, vec![offender]);
+        let mut q = ws.load_queue().unwrap();
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+        let canonical_before = std::fs::read_to_string(ws.config_path()).unwrap();
+        let head_before = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let mut events = Vec::new();
+        let states = run_batch(&ws, &[0], false, |line| events.push(line.to_string())).unwrap();
+
+        assert_ne!(
+            states.first().map(|(_, state)| *state),
+            Some(TaskState::Done),
+            "a run that committed canonical state must not land Done: {events:?}"
+        );
+        // Assert the FORBIDDEN-PATH gate is what stopped it. Without this the
+        // test passes on any unrelated failure — the run is refused for other
+        // reasons too, so "not Done" alone proves nothing about #83.
+        let run_dir = std::fs::read_dir(ws.runs_dir())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| path.join("evaluation.json").is_file())
+            .expect("the run wrote an evaluation");
+        let evaluation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join("evaluation.json")).unwrap(),
+        )
+        .unwrap();
+        let gate = evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "forbidden_paths_untouched")
+            .expect("the evaluator still runs the forbidden-path gate");
+        assert_eq!(
+            gate["passed"], false,
+            "the forbidden-path gate must be what refuses this run: {gate}"
+        );
+        assert!(
+            gate["note"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(".agents/yardlet.yaml"),
+            "and it must name the committed path: {gate}"
+        );
+        assert_eq!(
+            sh_git(&root, &["rev-parse", "HEAD"]).trim(),
+            head_before,
+            "the worker's commit must not have been merged: {events:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.config_path()).unwrap(),
+            canonical_before,
+            "the workspace's canonical state must be untouched"
+        );
+        assert!(
+            !root.join("feature.txt").exists(),
+            "nothing from a blocked run may reach the workspace"
         );
 
         let _ = std::fs::remove_dir_all(&root);
