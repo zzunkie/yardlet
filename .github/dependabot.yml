@@ -17,6 +17,11 @@ updates:
       - dependency-name: clap
         update-types:
           - version-update:semver-minor
+      # clap_lex 1.1 ships an edition-2024 manifest, which Cargo 1.82 cannot
+      # even parse. Keep receiving 1.0 patches while the MSRV is 1.82.
+      - dependency-name: clap_lex
+        update-types:
+          - version-update:semver-minor
       # Ratatui 0.30 requires Rust 1.88. Keep receiving 0.29 patches and
       # security updates until Yardlet deliberately raises its MSRV.
       - dependency-name: ratatui
