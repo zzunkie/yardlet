@@ -292,6 +292,43 @@ fn serial_committed_paths(
     })
 }
 
+/// Paths committed on a run-owned worktree branch since its pinned baseline.
+///
+/// Shared by both evidence paths: a worker that commits its work leaves a clean
+/// `git status`, so status alone would report no changes at all for it. The
+/// serial path has always unioned these; the parallel path did not, which left
+/// the forbidden-path gate certifying a diff it never saw (issue #83).
+///
+/// A missing or baseline-less run record yields no committed paths rather than
+/// an error: legacy runs predate the pinned baseline, and their status-only
+/// evidence is what they have always been evaluated on.
+pub(crate) fn committed_paths_since_baseline(
+    worktree: &std::path::Path,
+    run_dir: &std::path::Path,
+) -> Result<Vec<String>> {
+    let Ok(record) = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")) else {
+        return Ok(Vec::new());
+    };
+    if record.baseline_oid.is_empty() {
+        return Ok(Vec::new());
+    }
+    let merge_target = if record.worktree_branch.is_empty() {
+        "HEAD^{commit}".to_string()
+    } else {
+        format!("refs/heads/{}^{{commit}}", record.worktree_branch)
+    };
+    let tip = git_stdout(worktree, &["rev-parse", "--verify", &merge_target])
+        .with_context(|| format!("resolving {merge_target} for committed change evidence"))?
+        .trim()
+        .to_string();
+    committed_paths_since(worktree, &format!("{}..{tip}", record.baseline_oid)).ok_or_else(|| {
+        anyhow!(
+            "could not enumerate committed changes in {}",
+            worktree.display()
+        )
+    })
+}
+
 /// Actual serial-worktree changes with only Yardlet's unchanged canonical seed
 /// copies removed. The main run owns an exact pre-worker snapshot, so a worker
 /// create, edit, delete, or symlink replacement stays in the evidence and is
@@ -660,7 +697,9 @@ pub(crate) fn detectable_repository_outputs(
     }
     if let Ok(record) = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml")) {
         if !record.baseline_oid.is_empty() {
-            if let Some(committed) = committed_paths_since(worktree, &record.baseline_oid) {
+            if let Some(committed) =
+                committed_paths_since(worktree, &format!("{}..HEAD", record.baseline_oid))
+            {
                 evidence = true;
                 paths.extend(committed);
             }
@@ -677,11 +716,15 @@ pub(crate) fn detectable_repository_outputs(
     )
 }
 
-fn committed_paths_since(worktree: &std::path::Path, baseline: &str) -> Option<Vec<String>> {
+fn committed_paths_since(worktree: &std::path::Path, range: &str) -> Option<Vec<String>> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(worktree)
-        .args(["diff", "--name-only", "-z", &format!("{baseline}..HEAD")])
+        // `--no-renames` or a committed rename reports only its DESTINATION,
+        // so moving `config/secret.pem` to `config/plain.txt` would hide the
+        // forbidden source from the gate entirely. The serial enumeration has
+        // always passed it.
+        .args(["diff", "--name-only", "--no-renames", "-z", range])
         .env("LC_ALL", "C")
         .env("LANG", "C")
         .output()

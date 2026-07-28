@@ -380,6 +380,11 @@ fn is_current_run_artifact(path: &str, run_id: &str) -> bool {
 /// Paths that are sensitive (secrets/keys), escape the workspace, or are
 /// Yardlet-owned canonical state a worker must never write directly. A worker
 /// touching any of these fails the run regardless of its self-report.
+#[cfg(test)]
+pub(crate) fn forbidden_paths<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
+    forbidden_in(paths)
+}
+
 fn forbidden_in<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
     const SENSITIVE: &[&str] = &[
         ".env",
@@ -506,9 +511,22 @@ fn git_changed_paths_with(cwd: &Path, git_bin: &OsStr) -> Result<Vec<String>, Gi
             paths.push(path);
         }
         if xy.starts_with('R') || xy.starts_with('C') {
-            chunks.next();
+            // A rename/copy record carries "<new>\0<orig>\0". The original is
+            // part of the diff too — a rename DELETES it — and dropping it hid
+            // a forbidden source from the gate: `git mv config/secret.pem
+            // config/plain.txt` reported only the destination, so
+            // `forbidden_paths_untouched` certified "no sensitive paths" for a
+            // diff that removed one. The committed enumeration passes
+            // `--no-renames` for the same reason.
+            if let Some(original) = chunks.next() {
+                if !original.is_empty() {
+                    paths.push(original.to_string());
+                }
+            }
         }
     }
+    paths.sort();
+    paths.dedup();
     Ok(paths)
 }
 
