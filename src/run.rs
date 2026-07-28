@@ -7205,20 +7205,19 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             let untracked = untracked_harness_assets(ws, &learned, &rules);
             if !untracked.is_empty() {
                 lines.push(format!(
-                    "learned harness assets are NOT in git yet: {}. Track them with `git add {}`",
-                    untracked.join(", "),
-                    untracked.join(" ")
+                    "learned harness assets are NOT in git yet: {}. Commit them with \
+                     `yardlet skill commit`",
+                    untracked.join(", ")
                 ));
                 let note = format!(
                     "\n## Untracked harness assets\n\nThis run learned harness assets that are \
                      on disk but not in git:\n\n{}\n\nThey are not durable until committed:\n\n\
-                     ```\ngit add {}\n```\n",
+                     ```\nyardlet skill commit\n```\n",
                     untracked
                         .iter()
                         .map(|path| format!("- `{path}`"))
                         .collect::<Vec<_>>()
                         .join("\n"),
-                    untracked.join(" ")
                 );
                 let handoff = run_dir.join("handoff.md");
                 let mut existing = std::fs::read_to_string(&handoff).unwrap_or_default();

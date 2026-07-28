@@ -189,6 +189,12 @@ enum SkillCmd {
     },
     /// Install a skill previously drafted by `research`, by its run id.
     Apply { run: String },
+    /// Commit learned harness assets so "learned" also means durable.
+    Commit {
+        /// Show what would be committed and stop.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Show each equipped skill's eval score (from telemetry).
     Review,
 }
@@ -969,6 +975,23 @@ fn cmd_skill(cwd: &std::path::Path, args: SkillArgs) -> Result<()> {
             for l in &r.lines {
                 println!("  {l}");
             }
+        }
+        SkillCmd::Commit { dry_run } => {
+            let pending = crate::skills::uncommitted_harness_assets(&ws);
+            if pending.is_empty() {
+                println!("Every learned harness asset is already in git.");
+                return Ok(());
+            }
+            println!("Learned harness assets not yet in git:");
+            for path in &pending {
+                println!("  {path}");
+            }
+            if dry_run {
+                println!("\n(dry run — nothing committed)");
+                return Ok(());
+            }
+            let commit = crate::skills::commit_harness_assets(&ws, &pending)?;
+            println!("\nCommitted {} as {}.", pending.len(), commit);
         }
         SkillCmd::Review => {
             let scores = crate::skills::scores(&ws);

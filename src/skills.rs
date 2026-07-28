@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::inspect::RepoSummary;
@@ -1090,6 +1090,146 @@ pub fn scores(ws: &Workspace) -> Vec<SkillScore> {
     out
 }
 
+/// Learned harness assets that are on disk but not yet in git.
+///
+/// A learned skill that is not committed is not durable: `docs/skills.md` makes
+/// git the record and the safety net for skill learning with no human gate, so
+/// the gap between "learned" and "in git" is a gap in that safety net (issue
+/// #45). Reads the same two roots the learning loop writes.
+pub fn uncommitted_harness_assets(ws: &Workspace) -> Vec<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&ws.root)
+        .args([
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "-z",
+            "--",
+            ".agents/skills",
+            ".agents/rules",
+        ])
+        .env("LC_ALL", "C")
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let mut chunks = raw.split('\0');
+    let mut paths = Vec::new();
+    while let Some(entry) = chunks.next() {
+        if entry.len() < 4 {
+            continue;
+        }
+        let status = &entry[..2];
+        let path = entry[3..].to_string();
+        if status.starts_with('R') || status.starts_with('C') {
+            chunks.next();
+        }
+        if !path.is_empty() {
+            paths.push(path);
+        }
+    }
+    paths.retain(|path| is_learned_harness_asset(ws, path));
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Is this path a LEARNED harness asset, as opposed to a library skill the
+/// operator equipped or a managed builtin?
+///
+/// `.agents/skills/` holds all three. Only the learned ones are what the
+/// learning loop writes with no human gate, and only they are what issue #45 is
+/// about — sweeping an equipped bundle into a `chore(harness)` commit would be
+/// a different, unrequested change to the operator's repository.
+fn is_learned_harness_asset(ws: &Workspace, path: &str) -> bool {
+    if let Some(rest) = path.strip_prefix(".agents/rules/") {
+        return rest.starts_with("learned-") && rest.ends_with(".md");
+    }
+    let Some(rest) = path.strip_prefix(".agents/skills/") else {
+        return false;
+    };
+    let Some(slug) = rest.split('/').next().filter(|slug| !slug.is_empty()) else {
+        return false;
+    };
+    // The bundle directory and anything carrying a managed marker came from the
+    // library, not from a run.
+    !slug.starts_with('.')
+        && !ws
+            .agents_dir()
+            .join("skills")
+            .join(slug)
+            .join(".yardlet-managed.yaml")
+            .exists()
+}
+
+/// Stage and commit exactly these paths, and nothing else.
+///
+/// Deliberately pathspec-scoped on BOTH sides: `.agents/` is shared with
+/// parallel sessions and the operator's own work, so a commit that swept in
+/// whatever else happened to be staged would violate the repo's own
+/// multi-session rule ("stage only the files you changed", never `git add -A`).
+pub fn commit_harness_assets(ws: &Workspace, paths: &[String]) -> Result<String> {
+    if paths.is_empty() {
+        bail!("no learned harness assets to commit");
+    }
+    let git = |args: &[&str]| -> Result<String> {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&ws.root)
+            .args(args)
+            .env("LC_ALL", "C")
+            .output()
+            .with_context(|| format!("running git {args:?}"))?;
+        if !output.status.success() {
+            bail!(
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    let mut add = vec!["add", "--"];
+    add.extend(paths.iter().map(String::as_str));
+    git(&add)?;
+    let summary = summarize_harness_assets(paths);
+    let mut commit = vec!["commit", "-m", &summary, "--"];
+    commit.extend(paths.iter().map(String::as_str));
+    git(&commit)?;
+    Ok(git(&["rev-parse", "--short", "HEAD"])?.trim().to_string())
+}
+
+/// A commit subject naming what was learned, matching the message operators
+/// have been writing by hand.
+fn summarize_harness_assets(paths: &[String]) -> String {
+    let names = paths
+        .iter()
+        .filter_map(|path| {
+            path.strip_prefix(".agents/skills/")
+                .and_then(|rest| rest.split('/').next())
+                .or_else(|| {
+                    path.strip_prefix(".agents/rules/")
+                        .and_then(|rest| rest.strip_suffix(".md"))
+                })
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    match names.len() {
+        0 => "chore(harness): track learned harness assets".to_string(),
+        1 => format!("chore(harness): track learned {}", names[0]),
+        _ => format!(
+            "chore(harness): track {} learned assets ({})",
+            names.len(),
+            names.join(", ")
+        ),
+    }
+}
+
 /// Minimum runs before a learned skill can be pruned (don't judge on noise).
 const PRUNE_MIN_RUNS: u32 = 3;
 /// Score floor below which a learned skill is pruned.
@@ -1315,6 +1455,148 @@ fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod harness_commit_tests {
+    use super::*;
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn repo(label: &str) -> Workspace {
+        let root = std::env::temp_dir().join(format!(
+            "yard-harness-commit-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agents/rules")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/skills")).unwrap();
+        git(&root, &["init", "-q"]);
+        git(&root, &["config", "user.name", "Fixture"]);
+        git(&root, &["config", "user.email", "fixture@example.test"]);
+        std::fs::write(root.join("base.txt"), "base\n").unwrap();
+        git(&root, &["add", "base.txt"]);
+        git(&root, &["commit", "-qm", "base"]);
+        Workspace::at(&root)
+    }
+
+    /// `.agents/skills/` holds learned skills, operator-equipped library skills,
+    /// and managed builtins. Only the first kind is what the learning loop
+    /// writes with no human gate, and only it is issue #45 — sweeping an
+    /// equipped bundle into a `chore(harness)` commit would be a different,
+    /// unrequested change to the operator's repository.
+    #[test]
+    fn only_learned_assets_are_offered_for_commit() {
+        let ws = repo("scope");
+        let skills = ws.agents_dir().join("skills");
+        for (slug, managed) in [("learned-one", false), ("equipped", true)] {
+            std::fs::create_dir_all(skills.join(slug)).unwrap();
+            std::fs::write(skills.join(slug).join("SKILL.md"), "# s\n").unwrap();
+            if managed {
+                std::fs::write(
+                    skills.join(slug).join(".yardlet-managed.yaml"),
+                    "source: library\n",
+                )
+                .unwrap();
+            }
+        }
+        std::fs::create_dir_all(skills.join(".yardlet-managed-bundle")).unwrap();
+        std::fs::write(
+            skills.join(".yardlet-managed-bundle/manifest.yaml"),
+            "bundle: true\n",
+        )
+        .unwrap();
+        std::fs::write(
+            ws.agents_dir().join("rules/learned-thing.md"),
+            "# learned\n",
+        )
+        .unwrap();
+        std::fs::write(
+            ws.agents_dir().join("rules/handwritten.md"),
+            "# operator's own\n",
+        )
+        .unwrap();
+
+        let pending = uncommitted_harness_assets(&ws);
+        assert_eq!(
+            pending,
+            vec![
+                ".agents/rules/learned-thing.md".to_string(),
+                ".agents/skills/learned-one/SKILL.md".to_string(),
+            ],
+            "only learned assets belong in a `yardlet skill commit`"
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// `.agents/` is shared with parallel sessions and the operator's own work,
+    /// so this must never sweep in whatever else happens to be staged — the
+    /// repo's own multi-session rule.
+    #[test]
+    fn committing_learned_assets_leaves_other_staged_work_alone() {
+        let ws = repo("scope-commit");
+        let skills = ws.agents_dir().join("skills");
+        std::fs::create_dir_all(skills.join("learned-one")).unwrap();
+        std::fs::write(skills.join("learned-one/SKILL.md"), "# s\n").unwrap();
+        std::fs::write(ws.root.join("unrelated.txt"), "someone else\n").unwrap();
+        git(&ws.root, &["add", "unrelated.txt"]);
+
+        let pending = uncommitted_harness_assets(&ws);
+        let commit = commit_harness_assets(&ws, &pending).unwrap();
+        assert!(!commit.is_empty());
+
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&ws.root)
+            .args(["show", "--name-only", "--format=", "HEAD"])
+            .output()
+            .unwrap();
+        let touched = String::from_utf8_lossy(&output.stdout);
+        assert!(touched.contains(".agents/skills/learned-one/SKILL.md"));
+        assert!(
+            !touched.contains("unrelated.txt"),
+            "another session's staged file must not ride along: {touched}"
+        );
+        assert!(
+            uncommitted_harness_assets(&ws).is_empty(),
+            "a second run has nothing left to do"
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn the_commit_subject_names_what_was_learned() {
+        assert_eq!(
+            summarize_harness_assets(&[".agents/skills/red-base/SKILL.md".into()]),
+            "chore(harness): track learned red-base"
+        );
+        assert_eq!(
+            summarize_harness_assets(&[
+                ".agents/skills/red-base/SKILL.md".into(),
+                ".agents/skills/red-base/notes.md".into(),
+                ".agents/rules/learned-x.md".into(),
+            ]),
+            "chore(harness): track 2 learned assets (learned-x, red-base)"
+        );
+    }
 }
 
 #[cfg(test)]

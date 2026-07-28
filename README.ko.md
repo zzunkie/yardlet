@@ -283,6 +283,7 @@ Bracketed paste는 붙여넣은 줄바꿈과 한국어/CJK 본문을 그대로 �
 | `yardlet trust [--json]` | 실행 텔레메트리와 전이 감사 로그 기반 신뢰+자율성 리포트 (읽기 전용); `--json`은 지표를 내보냄. |
 | `yardlet recover` | 중단된 세션에서 상태 복구 (고아 실행, 미확인 계획). |
 | `yardlet skill list / suggest / equip <preset> / unequip / research / create / apply / review` | 저장소 분류, managed 11-skill catalog 사용, 스킬 장착·작성·점수화. Core skill은 외부 library 없이 설치되고 overlay는 task 범위에서만 활성화. |
+| `yardlet skill commit` | 학습된 하니스 자산을 커밋해 "학습됨"이 곧 "내구적"이 되게 함. |
 | `yardlet harness review` | 자동 학습된 규칙과 스킬을 eval 점수와 함께 표시, 그리고 마이닝된 개선 후보. |
 | `yardlet rubric drift / sync [--adopt-text]` | 워크스페이스 루브릭이 템플릿에 얼마나 뒤처졌는지 진단하고 개선을 병합 (비파괴적). |
 | `yardlet routing review` | 작업 종류별 워커 성공 통계 + 제안 선호도. |
