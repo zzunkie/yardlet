@@ -2044,6 +2044,19 @@ pub(crate) fn parallel_worker_evidence(
 ) -> Result<ParallelWorkerEvidence> {
     let mut paths = evaluator::changed_paths(wt)
         .ok_or_else(|| anyhow!("could not enumerate parallel worktree changes"))?;
+    // Working-tree status alone is not the run's diff. A worker that commits
+    // its own work leaves a clean status, so status-only evidence is EMPTY for
+    // everything it committed — and an empty `Some(vec![])` is not the `None`
+    // the evaluator fails closed on, so `forbidden_paths_untouched` certifies a
+    // diff it never saw (issue #83). The serial path has unioned committed
+    // paths since it was written, for exactly this reason. Committing is
+    // off-contract for a worker, which is why this defends against it rather
+    // than trusting it not to happen.
+    //
+    // Collected up front but unioned at the END, so a committed path is never
+    // eligible for overlay attribution — the serial rule is that a path the
+    // worker committed loses that provenance and stays attributed to it.
+    let committed = run::committed_paths_since_baseline(wt, run_dir)?;
     let seed_root = run_dir.join(run::HARNESS_SEED_DIR);
     let mut core_input_overlays = Vec::new();
     if seed_root.is_dir() {
@@ -2052,6 +2065,10 @@ pub(crate) fn parallel_worker_evidence(
         let unchanged = paths
             .iter()
             .filter(|path| seeded.contains(*path) && !modified.contains(*path))
+            // Serial's rule, applied on this side too: a path the worker
+            // committed loses its dispatcher provenance and stays attributed to
+            // the worker, so it must not also be recorded as a core overlay.
+            .filter(|path| !committed.contains(*path))
             .cloned()
             .collect::<Vec<_>>();
         paths.retain(|path| !seeded.contains(path) || modified.contains(path));
@@ -2115,17 +2132,31 @@ pub(crate) fn parallel_worker_evidence(
         else {
             return true;
         };
-        if !run::dependency_input_overlay_matches(wt, overlay) {
+        if committed.contains(path) || !run::dependency_input_overlay_matches(wt, overlay) {
             return true;
         }
         dependency_input_overlays.push(overlay.clone());
         false
     });
+    // Status-derived paths keep the harness-allowlist filter: a parallel
+    // worktree also carries Yardlet's OWN seeded copies of canonical state, and
+    // without a pre-worker snapshot to subtract them by content this filter is
+    // what stops them being attributed to the worker.
+    //
+    // Committed paths do NOT get that filter. Yardlet never commits its seeds,
+    // so a commit is unambiguously the worker's — and applying the allowlist to
+    // it silently removed exactly the canonical-state set `forbidden_in` exists
+    // to catch, leaving `.agents/yardlet.yaml` invisible to the gate while the
+    // merge carried it into the workspace (issue #83).
+    let mut paths = paths
+        .into_iter()
+        .filter(|path| evaluator::is_integratable_path(path))
+        .collect::<Vec<_>>();
+    paths.extend(committed);
+    paths.sort();
+    paths.dedup();
     Ok(ParallelWorkerEvidence {
-        paths: paths
-            .into_iter()
-            .filter(|path| evaluator::is_integratable_path(path))
-            .collect(),
+        paths,
         core_input_overlays,
         dependency_input_overlays,
     })
@@ -2716,10 +2747,344 @@ mod tests {
         sh_git(&root, &["init", "-q"]);
         sh_git(&root, &["config", "user.name", "Local User"]);
         sh_git(&root, &["config", "user.email", "local@example.test"]);
+        // Pin rename detection ON. With `diff.renames = false` in an ambient
+        // global config, a range diff already reports both sides of a rename,
+        // so the `--no-renames` regression guard would pass without the fix.
+        sh_git(&root, &["config", "diff.renames", "true"]);
         std::fs::write(root.join("base.txt"), "base\n").unwrap();
         sh_git(&root, &["add", "base.txt"]);
         sh_git(&root, &["commit", "-q", "-m", "init"]);
         root
+    }
+
+    /// A worker that COMMITS its work leaves a clean `git status`, so
+    /// status-only evidence is empty for everything it committed. Empty is not
+    /// `None`, so the evaluator's fail-closed branch never fires and
+    /// `forbidden_paths_untouched` certifies a diff it never saw (issue #83).
+    /// Committing is off-contract for a worker; the serial path has defended
+    /// against it since it was written.
+    #[test]
+    fn parallel_evidence_includes_what_the_worker_committed() {
+        let root = temp_repo("committed-evidence");
+        let run_id = "run-committed-evidence";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/committed/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let baseline = sh_git(&worktree, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        crate::state::write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\n\
+                 worker: fixture\nstate: running\nstarted_at: \"2026-07-27T00:00:00+00:00\"\n\
+                 worktree: {}\nworktree_branch: {branch}\nbaseline_oid: {baseline}\n",
+                worktree.display()
+            ),
+        )
+        .unwrap();
+
+        // The worker writes a secret, commits it, and leaves a clean tree.
+        std::fs::write(worktree.join(".env"), "SECRET=1\n").unwrap();
+        sh_git(&worktree, &["add", ".env"]);
+        sh_git(&worktree, &["commit", "-q", "-m", "worker commit"]);
+        assert!(
+            crate::evaluator::changed_paths(&worktree)
+                .unwrap()
+                .is_empty(),
+            "the fixture must leave a clean status, or it is not reproducing the bug"
+        );
+
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence.paths.iter().any(|path| path == ".env"),
+            "committed paths must reach the evidence the forbidden-path gate reads: {:?}",
+            evidence.paths
+        );
+
+        // Canonical state is the class the gate cares about most, and the one an
+        // `is_integratable_path` filter on the evidence silently removed: it
+        // rejects everything under `.agents/` outside the harness roots, which
+        // is precisely what `forbidden_in` is looking for.
+        std::fs::create_dir_all(worktree.join(".agents")).unwrap();
+        std::fs::write(worktree.join(".agents/yardlet.yaml"), "pwned: true\n").unwrap();
+        sh_git(&worktree, &["add", "-f", ".agents/yardlet.yaml"]);
+        sh_git(&worktree, &["commit", "-q", "-m", "canonical state"]);
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence
+                .paths
+                .iter()
+                .any(|path| path == ".agents/yardlet.yaml"),
+            "a committed canonical-state file must reach the gate: {:?}",
+            evidence.paths
+        );
+        assert!(
+            !crate::evaluator::forbidden_paths(evidence.paths.iter()).is_empty(),
+            "and the gate must actually call it forbidden"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The guarantee #83 is actually about: not that the path appears in a
+    /// vector, but that the gate STOPS it. A worker that commits canonical
+    /// state must not have that commit merged into the workspace.
+    #[test]
+    fn a_committed_canonical_state_file_blocks_the_run_and_never_merges() {
+        let root = temp_repo("committed-canonical-blocks");
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        let worker = write_test_worker(
+            &root,
+            "canonical-committer.sh",
+            r##"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "fixture 1.0"
+  exit 0
+fi
+run_dir="$1"
+task_id="$2"
+run_id=$(basename "$run_dir")
+cat >/dev/null
+printf "feature\n" > feature.txt
+mkdir -p .agents
+printf "pwned: true\n" > .agents/yardlet.yaml
+git add -f feature.txt .agents/yardlet.yaml
+git -c user.name=w -c user.email=w@e.t commit -q -m "worker commit"
+cat > "$run_dir/result.json" <<EOF
+{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "$task_id",
+  "status": "done",
+  "intent_adherence": { "drift_detected": false, "notes": "" },
+  "changes": { "files_modified": [], "files_created": ["feature.txt"], "files_deleted": [] },
+  "validation": { "commands_run": [], "passed": true, "failures": [] },
+  "question_for_user": null,
+  "compact_summary": "committed canonical state",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}
+EOF
+printf "# worker handoff\n" > "$run_dir/handoff.md"
+"##,
+        );
+        let worker_yaml = format!(
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", YARD-PAR-CANON]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            yaml_string(&worker)
+        );
+        let mut offender = task("YARD-PAR-CANON", TaskState::Queued, 10, vec![]);
+        offender.kind = "implementation".into();
+        let ws = setup_workspace(&root, &worker_yaml, vec![offender]);
+        let mut q = ws.load_queue().unwrap();
+        q.intent_id = "intent-test".into();
+        ws.save_queue(&q).unwrap();
+        let canonical_before = std::fs::read_to_string(ws.config_path()).unwrap();
+        let head_before = sh_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let mut events = Vec::new();
+        let states = run_batch(&ws, &[0], false, |line| events.push(line.to_string())).unwrap();
+
+        assert_ne!(
+            states.first().map(|(_, state)| *state),
+            Some(TaskState::Done),
+            "a run that committed canonical state must not land Done: {events:?}"
+        );
+        // Assert the FORBIDDEN-PATH gate is what stopped it. Without this the
+        // test passes on any unrelated failure — the run is refused for other
+        // reasons too, so "not Done" alone proves nothing about #83.
+        let run_dir = std::fs::read_dir(ws.runs_dir())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| path.join("evaluation.json").is_file())
+            .expect("the run wrote an evaluation");
+        let evaluation: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join("evaluation.json")).unwrap(),
+        )
+        .unwrap();
+        let gate = evaluation["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "forbidden_paths_untouched")
+            .expect("the evaluator still runs the forbidden-path gate");
+        assert_eq!(
+            gate["passed"], false,
+            "the forbidden-path gate must be what refuses this run: {gate}"
+        );
+        assert!(
+            gate["note"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(".agents/yardlet.yaml"),
+            "and it must name the committed path: {gate}"
+        );
+        assert_eq!(
+            sh_git(&root, &["rev-parse", "HEAD"]).trim(),
+            head_before,
+            "the worker's commit must not have been merged: {events:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.config_path()).unwrap(),
+            canonical_before,
+            "the workspace's canonical state must be untouched"
+        );
+        assert!(
+            !root.join("feature.txt").exists(),
+            "nothing from a blocked run may reach the workspace"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The status side had the same rename blind spot the committed side closed:
+    /// `git status` reports a rename as one record naming the destination, and
+    /// dropping the original hid a forbidden source from the gate.
+    #[test]
+    fn an_uncommitted_rename_still_reports_the_forbidden_source() {
+        let root = temp_repo("uncommitted-rename");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(root.join("config/secret.pem"), "key\n").unwrap();
+        sh_git(&root, &["add", "config/secret.pem"]);
+        sh_git(&root, &["commit", "-q", "-m", "add key"]);
+
+        let run_id = "run-uncommitted-rename";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/uncommitted-rename/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+
+        // Staged but NOT committed, so only `git status` can see it.
+        sh_git(&worktree, &["mv", "config/secret.pem", "config/plain.txt"]);
+
+        let changed = crate::evaluator::changed_paths(&worktree).unwrap();
+        assert!(
+            changed.iter().any(|path| path == "config/secret.pem"),
+            "the renamed-away source must be in the diff: {changed:?}"
+        );
+        assert!(
+            !crate::evaluator::forbidden_paths(changed.iter()).is_empty(),
+            "and the gate must call it forbidden"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A seeded harness copy the worker COMMITTED is the worker's, not a
+    /// dispatcher overlay — serial's rule, now applied on the core side too.
+    #[test]
+    fn a_committed_seed_copy_is_worker_evidence_not_a_core_overlay() {
+        let root = temp_repo("committed-seed-copy");
+        let rules = root.join(".agents/rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::write(rules.join("seeded.md"), "seed bytes\n").unwrap();
+        sh_git(&root, &["add", ".agents/rules/seeded.md"]);
+        sh_git(&root, &["commit", "-q", "-m", "seed rule"]);
+
+        let run_id = "run-committed-seed";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/seed/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let baseline = sh_git(&worktree, &["rev-parse", "HEAD"]).trim().to_string();
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        crate::state::write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\n\
+                 worker: fixture\nstate: running\nstarted_at: \"2026-07-28T00:00:00+00:00\"\n\
+                 worktree: {}\nworktree_branch: {branch}\nbaseline_oid: {baseline}\n",
+                worktree.display()
+            ),
+        )
+        .unwrap();
+        // Yardlet's pre-worker seed snapshot: the same bytes it copied in.
+        let seed = run_dir.join(run::HARNESS_SEED_DIR).join("rules");
+        std::fs::create_dir_all(&seed).unwrap();
+        std::fs::write(seed.join("seeded.md"), "seed bytes\n").unwrap();
+
+        // The worker commits a change, then restores the seed bytes — so the
+        // working tree matches the seed while the commit does not.
+        std::fs::write(worktree.join(".agents/rules/seeded.md"), "worker bytes\n").unwrap();
+        sh_git(&worktree, &["add", ".agents/rules/seeded.md"]);
+        sh_git(
+            &worktree,
+            &["commit", "-q", "-m", "worker rewrote the rule"],
+        );
+        std::fs::write(worktree.join(".agents/rules/seeded.md"), "seed bytes\n").unwrap();
+
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence
+                .paths
+                .iter()
+                .any(|path| path == ".agents/rules/seeded.md"),
+            "a committed seed copy stays worker evidence: {:?}",
+            evidence.paths
+        );
+        assert!(
+            evidence.core_input_overlays.is_empty(),
+            "and must not also be recorded as a dispatcher overlay: {:?}",
+            evidence.core_input_overlays
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Git's default rename detection reports only a rename's DESTINATION, so
+    /// moving a forbidden path out of the way would hide the source from the
+    /// gate entirely. The serial enumeration has always passed `--no-renames`.
+    #[test]
+    fn a_committed_rename_still_reports_the_forbidden_source() {
+        let root = temp_repo("committed-rename");
+        // The file has to exist at the baseline: a path created AND renamed
+        // inside the range collapses legitimately, because nothing by that name
+        // ever reaches the merge.
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(root.join("config/secret.pem"), "key\n").unwrap();
+        sh_git(&root, &["add", "config/secret.pem"]);
+        sh_git(&root, &["commit", "-q", "-m", "add key"]);
+
+        let run_id = "run-committed-rename";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/rename/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let baseline = sh_git(&worktree, &["rev-parse", "HEAD"]).trim().to_string();
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        crate::state::write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\n\
+                 worker: fixture\nstate: running\nstarted_at: \"2026-07-27T00:00:00+00:00\"\n\
+                 worktree: {}\nworktree_branch: {branch}\nbaseline_oid: {baseline}\n",
+                worktree.display()
+            ),
+        )
+        .unwrap();
+
+        sh_git(&worktree, &["mv", "config/secret.pem", "config/plain.txt"]);
+        sh_git(&worktree, &["commit", "-q", "-m", "rename away"]);
+
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence
+                .paths
+                .iter()
+                .any(|path| path == "config/secret.pem"),
+            "the renamed-away source must still reach the gate: {:?}",
+            evidence.paths
+        );
+        assert!(
+            !crate::evaluator::forbidden_paths(evidence.paths.iter()).is_empty(),
+            "and the gate must call it forbidden"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
