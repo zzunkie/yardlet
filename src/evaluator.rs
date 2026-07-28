@@ -380,6 +380,11 @@ fn is_current_run_artifact(path: &str, run_id: &str) -> bool {
 /// Paths that are sensitive (secrets/keys), escape the workspace, or are
 /// Yardlet-owned canonical state a worker must never write directly. A worker
 /// touching any of these fails the run regardless of its self-report.
+#[cfg(test)]
+pub(crate) fn forbidden_paths<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
+    forbidden_in(paths)
+}
+
 fn forbidden_in<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
     const SENSITIVE: &[&str] = &[
         ".env",

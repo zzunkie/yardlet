@@ -720,7 +720,11 @@ fn committed_paths_since(worktree: &std::path::Path, range: &str) -> Option<Vec<
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(worktree)
-        .args(["diff", "--name-only", "-z", range])
+        // `--no-renames` or a committed rename reports only its DESTINATION,
+        // so moving `config/secret.pem` to `config/plain.txt` would hide the
+        // forbidden source from the gate entirely. The serial enumeration has
+        // always passed it.
+        .args(["diff", "--name-only", "--no-renames", "-z", range])
         .env("LC_ALL", "C")
         .env("LANG", "C")
         .output()

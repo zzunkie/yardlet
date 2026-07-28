@@ -2052,9 +2052,11 @@ pub(crate) fn parallel_worker_evidence(
     // paths since it was written, for exactly this reason. Committing is
     // off-contract for a worker, which is why this defends against it rather
     // than trusting it not to happen.
-    paths.extend(run::committed_paths_since_baseline(wt, run_dir)?);
-    paths.sort();
-    paths.dedup();
+    //
+    // Collected up front but unioned at the END, so a committed path is never
+    // eligible for overlay attribution — the serial rule is that a path the
+    // worker committed loses that provenance and stays attributed to it.
+    let committed = run::committed_paths_since_baseline(wt, run_dir)?;
     let seed_root = run_dir.join(run::HARNESS_SEED_DIR);
     let mut core_input_overlays = Vec::new();
     if seed_root.is_dir() {
@@ -2126,17 +2128,31 @@ pub(crate) fn parallel_worker_evidence(
         else {
             return true;
         };
-        if !run::dependency_input_overlay_matches(wt, overlay) {
+        if committed.contains(path) || !run::dependency_input_overlay_matches(wt, overlay) {
             return true;
         }
         dependency_input_overlays.push(overlay.clone());
         false
     });
+    // Status-derived paths keep the harness-allowlist filter: a parallel
+    // worktree also carries Yardlet's OWN seeded copies of canonical state, and
+    // without a pre-worker snapshot to subtract them by content this filter is
+    // what stops them being attributed to the worker.
+    //
+    // Committed paths do NOT get that filter. Yardlet never commits its seeds,
+    // so a commit is unambiguously the worker's — and applying the allowlist to
+    // it silently removed exactly the canonical-state set `forbidden_in` exists
+    // to catch, leaving `.agents/yardlet.yaml` invisible to the gate while the
+    // merge carried it into the workspace (issue #83).
+    let mut paths = paths
+        .into_iter()
+        .filter(|path| evaluator::is_integratable_path(path))
+        .collect::<Vec<_>>();
+    paths.extend(committed);
+    paths.sort();
+    paths.dedup();
     Ok(ParallelWorkerEvidence {
-        paths: paths
-            .into_iter()
-            .filter(|path| evaluator::is_integratable_path(path))
-            .collect(),
+        paths,
         core_input_overlays,
         dependency_input_overlays,
     })
@@ -2777,6 +2793,80 @@ mod tests {
             evidence.paths.iter().any(|path| path == ".env"),
             "committed paths must reach the evidence the forbidden-path gate reads: {:?}",
             evidence.paths
+        );
+
+        // Canonical state is the class the gate cares about most, and the one an
+        // `is_integratable_path` filter on the evidence silently removed: it
+        // rejects everything under `.agents/` outside the harness roots, which
+        // is precisely what `forbidden_in` is looking for.
+        std::fs::create_dir_all(worktree.join(".agents")).unwrap();
+        std::fs::write(worktree.join(".agents/yardlet.yaml"), "pwned: true\n").unwrap();
+        sh_git(&worktree, &["add", "-f", ".agents/yardlet.yaml"]);
+        sh_git(&worktree, &["commit", "-q", "-m", "canonical state"]);
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence
+                .paths
+                .iter()
+                .any(|path| path == ".agents/yardlet.yaml"),
+            "a committed canonical-state file must reach the gate: {:?}",
+            evidence.paths
+        );
+        assert!(
+            !crate::evaluator::forbidden_paths(evidence.paths.iter()).is_empty(),
+            "and the gate must actually call it forbidden"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Git's default rename detection reports only a rename's DESTINATION, so
+    /// moving a forbidden path out of the way would hide the source from the
+    /// gate entirely. The serial enumeration has always passed `--no-renames`.
+    #[test]
+    fn a_committed_rename_still_reports_the_forbidden_source() {
+        let root = temp_repo("committed-rename");
+        // The file has to exist at the baseline: a path created AND renamed
+        // inside the range collapses legitimately, because nothing by that name
+        // ever reaches the merge.
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(root.join("config/secret.pem"), "key\n").unwrap();
+        sh_git(&root, &["add", "config/secret.pem"]);
+        sh_git(&root, &["commit", "-q", "-m", "add key"]);
+
+        let run_id = "run-committed-rename";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/rename/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let baseline = sh_git(&worktree, &["rev-parse", "HEAD"]).trim().to_string();
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        crate::state::write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\n\
+                 worker: fixture\nstate: running\nstarted_at: \"2026-07-27T00:00:00+00:00\"\n\
+                 worktree: {}\nworktree_branch: {branch}\nbaseline_oid: {baseline}\n",
+                worktree.display()
+            ),
+        )
+        .unwrap();
+
+        sh_git(&worktree, &["mv", "config/secret.pem", "config/plain.txt"]);
+        sh_git(&worktree, &["commit", "-q", "-m", "rename away"]);
+
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence
+                .paths
+                .iter()
+                .any(|path| path == "config/secret.pem"),
+            "the renamed-away source must still reach the gate: {:?}",
+            evidence.paths
+        );
+        assert!(
+            !crate::evaluator::forbidden_paths(evidence.paths.iter()).is_empty(),
+            "and the gate must call it forbidden"
         );
 
         let _ = std::fs::remove_dir_all(&root);
