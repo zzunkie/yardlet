@@ -273,6 +273,7 @@ Bracketed paste는 붙여넣은 줄바꿈과 한국어/CJK 본문을 그대로 �
 | `yardlet defer <id> --cascade [reason]` | 그 뒤에 좌초된 queued 작업까지 전이적으로 함께 defer하고 하나의 revive 그룹으로 기록. |
 | `yardlet revive <id> [--group]` | Deferred 작업을 Queued로 되살림; `--group`은 함께 기록된 cascade 그룹을 되살림. |
 | `yardlet access <sandboxed\|full>` | 기본 워커 권한 수준 설정. |
+| `yardlet target [<ref>]` | Git finish 배송 대상 확인/변경. `--to-checkout`은 현재 체크아웃으로 맞춤. |
 | `yardlet handoff` | 최신 실행의 핸드오프 출력. |
 | `yardlet report` | 인텐트의 최종 리포트 출력 (모든 작업의 집계). |
 | `yardlet memory [init \| refresh [--stale-only]]` | 프로젝트 메모리 인덱스 나열(오래되었을 수 있는 문서 표시); `init`/`refresh`는 워커가 초안한 문서를 Yardlet 코어가 기록. |

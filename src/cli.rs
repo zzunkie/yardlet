@@ -66,6 +66,8 @@ pub enum Command {
     Resolve(ResolveArgs),
     /// Set the default worker permission: sandboxed | full.
     Access(AccessArgs),
+    /// Show or change where Git finish delivers (`git_finish.target_ref`).
+    Target(TargetArgs),
     /// Print the latest run's handoff.
     Handoff,
     /// Print the intent's final report (aggregate of every task's result).
@@ -309,6 +311,17 @@ pub struct RedirectArgs {
     /// Drop the worker sandbox for the new attempt.
     #[arg(long)]
     full_access: bool,
+}
+
+#[derive(Args)]
+pub struct TargetArgs {
+    /// The ref to deliver to, e.g. `refs/heads/main` or just `main`. Omit to
+    /// show the current target and the checkout it would be compared against.
+    target_ref: Option<String>,
+    /// Retarget to whatever the owning root currently has checked out. This is
+    /// what a blocked run's diagnostic is asking for.
+    #[arg(long, conflicts_with = "target_ref")]
+    to_checkout: bool,
 }
 
 #[derive(Args)]
@@ -621,6 +634,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Revive(a)) => cmd_revive(&cwd, a),
         Some(Command::Resolve(a)) => cmd_resolve(&cwd, a),
         Some(Command::Access(a)) => cmd_access(&cwd, a),
+        Some(Command::Target(a)) => cmd_target(&cwd, a),
         Some(Command::Handoff) => cmd_handoff(&cwd),
         Some(Command::Report) => cmd_report(&cwd),
         Some(Command::Trust(a)) => cmd_trust(&cwd, a),
@@ -1995,6 +2009,92 @@ fn cmd_access(cwd: &std::path::Path, args: AccessArgs) -> Result<()> {
             "Workers now run without the sandbox (commands and network flow freely). They still \
              self-gate dangerous actions per the packet, and any change to a forbidden path still \
              fails the run."
+        );
+    }
+    Ok(())
+}
+
+/// Show or change the Git finish delivery target.
+///
+/// The #36 fix deliberately blocks a run whose configured `target_ref` does not
+/// match the checkout, rather than silently retargeting. That was the right
+/// call, but it left the prescribed remedy performable only by hand-editing
+/// Yardlet-owned state — which this project's own guidance tells operators not
+/// to do (issue #42). The change goes through `state.rs` like every other
+/// canonical write, and is recorded so the retarget itself is auditable.
+fn cmd_target(cwd: &std::path::Path, args: TargetArgs) -> Result<()> {
+    let ws = init::ensure_initialized(cwd)?.0;
+    let config = ws.load_config()?;
+    let checkout = crate::git_finish::checkout_ref(&ws.root);
+    let current = config.git_finish.target_ref.clone();
+
+    if args.to_checkout && checkout.is_none() {
+        anyhow::bail!(
+            "--to-checkout needs a checked-out branch; the owning root is on a detached or \
+             unborn HEAD. Check out the branch you want to deliver to, or name a ref."
+        );
+    }
+    let Some(requested) = args
+        .target_ref
+        .clone()
+        .or_else(|| args.to_checkout.then(|| checkout.clone()).flatten())
+    else {
+        println!(
+            "Git finish target: {}",
+            if current.is_empty() {
+                "(unset — the run's checkout is used)"
+            } else {
+                &current
+            }
+        );
+        match &checkout {
+            Some(checkout) => {
+                println!("Owning root checkout: {checkout}");
+                if !current.is_empty() && &current != checkout {
+                    println!(
+                        "\nThese differ, so a run will be blocked before it spawns a worker.\n\
+                         Retarget with `yardlet target --to-checkout`, or name a ref explicitly."
+                    );
+                }
+            }
+            None => println!("Owning root checkout: (detached HEAD or not a repository)"),
+        }
+        return Ok(());
+    };
+
+    let normalized = crate::git_finish::normalize_target_ref(&ws.root, &requested)?;
+    if normalized == current {
+        println!("Git finish target is already {normalized}.");
+        return Ok(());
+    }
+    crate::state::save_git_finish_target_ref(&ws.config_path(), &normalized)?;
+    // Read it back rather than trusting the write: a config writer that silently
+    // no-ops would otherwise be reported to the operator as a completed
+    // retarget, which is the failure this command exists to remove.
+    let written = ws.load_config()?.git_finish.target_ref;
+    if written != normalized {
+        anyhow::bail!(
+            "retarget did not persist: {} still reads '{written}'",
+            ws.config_path().display()
+        );
+    }
+    let from = if current.is_empty() {
+        "(unset)".to_string()
+    } else {
+        current
+    };
+    crate::state::append_str(
+        &ws.agents_dir().join("git-finish-target.log"),
+        &format!(
+            "{}\tretargeted\t{from}\t{normalized}\n",
+            chrono::Local::now().to_rfc3339()
+        ),
+    )?;
+    println!("Git finish target set to {normalized} (was {from}).");
+    if checkout.as_deref() != Some(normalized.as_str()) {
+        println!(
+            "Note: the owning root is not on this ref right now, so a run will still be blocked \
+             until it is."
         );
     }
     Ok(())
