@@ -2044,6 +2044,17 @@ pub(crate) fn parallel_worker_evidence(
 ) -> Result<ParallelWorkerEvidence> {
     let mut paths = evaluator::changed_paths(wt)
         .ok_or_else(|| anyhow!("could not enumerate parallel worktree changes"))?;
+    // Working-tree status alone is not the run's diff. A worker that commits
+    // its own work leaves a clean status, so status-only evidence is EMPTY for
+    // everything it committed — and an empty `Some(vec![])` is not the `None`
+    // the evaluator fails closed on, so `forbidden_paths_untouched` certifies a
+    // diff it never saw (issue #83). The serial path has unioned committed
+    // paths since it was written, for exactly this reason. Committing is
+    // off-contract for a worker, which is why this defends against it rather
+    // than trusting it not to happen.
+    paths.extend(run::committed_paths_since_baseline(wt, run_dir)?);
+    paths.sort();
+    paths.dedup();
     let seed_root = run_dir.join(run::HARNESS_SEED_DIR);
     let mut core_input_overlays = Vec::new();
     if seed_root.is_dir() {
@@ -2720,6 +2731,55 @@ mod tests {
         sh_git(&root, &["add", "base.txt"]);
         sh_git(&root, &["commit", "-q", "-m", "init"]);
         root
+    }
+
+    /// A worker that COMMITS its work leaves a clean `git status`, so
+    /// status-only evidence is empty for everything it committed. Empty is not
+    /// `None`, so the evaluator's fail-closed branch never fires and
+    /// `forbidden_paths_untouched` certifies a diff it never saw (issue #83).
+    /// Committing is off-contract for a worker; the serial path has defended
+    /// against it since it was written.
+    #[test]
+    fn parallel_evidence_includes_what_the_worker_committed() {
+        let root = temp_repo("committed-evidence");
+        let run_id = "run-committed-evidence";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/committed/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let baseline = sh_git(&worktree, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        crate::state::write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\n\
+                 worker: fixture\nstate: running\nstarted_at: \"2026-07-27T00:00:00+00:00\"\n\
+                 worktree: {}\nworktree_branch: {branch}\nbaseline_oid: {baseline}\n",
+                worktree.display()
+            ),
+        )
+        .unwrap();
+
+        // The worker writes a secret, commits it, and leaves a clean tree.
+        std::fs::write(worktree.join(".env"), "SECRET=1\n").unwrap();
+        sh_git(&worktree, &["add", ".env"]);
+        sh_git(&worktree, &["commit", "-q", "-m", "worker commit"]);
+        assert!(
+            crate::evaluator::changed_paths(&worktree)
+                .unwrap()
+                .is_empty(),
+            "the fixture must leave a clean status, or it is not reproducing the bug"
+        );
+
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence.paths.iter().any(|path| path == ".env"),
+            "committed paths must reach the evidence the forbidden-path gate reads: {:?}",
+            evidence.paths
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
