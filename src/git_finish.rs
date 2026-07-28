@@ -659,8 +659,20 @@ pub fn normalize_target_ref(root: &std::path::Path, requested: &str) -> anyhow::
     // would report success and every run would then fail with
     // `target_ref_invalid`, which is less actionable than the mismatch the
     // operator invoked this to clear.
-    if !git_ok(root, &["check-ref-format", &candidate]) {
-        anyhow::bail!("'{candidate}' is not a valid Git ref name");
+    match std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["check-ref-format", &candidate])
+        .output()
+    {
+        Ok(output) if output.status.success() => {}
+        // Distinguish "git rejected the name" from "git could not be run".
+        // Reporting a spawn failure as an invalid ref would send the operator
+        // looking at their branch name for a problem that is not there.
+        Ok(_) => anyhow::bail!("'{candidate}' is not a valid Git ref name"),
+        Err(error) => {
+            anyhow::bail!("could not run git to validate '{candidate}': {error}")
+        }
     }
     Ok(candidate)
 }
@@ -1097,6 +1109,10 @@ fn finish_owned_run_with_mode_and_github(
         block(&mut record, "worktree_changed_during_checks");
         return persist_result(record);
     }
+    // Refreshed only AFTER the outcome is durably recorded below: it is
+    // cosmetic, and widening the push-to-record crash window for it would trade
+    // a real guarantee for a nicety.
+    let mut tracking_ref_to_refresh = None;
     match remote_oid(&ws.root, &policy.remote, &policy.target_ref) {
         Ok(oid) if oid == remote_before => {}
         Ok(_) => {
@@ -1288,7 +1304,7 @@ fn finish_owned_run_with_mode_and_github(
             record.status = GitFinishStatus::Pushed;
             record.remote_oid = Some(oid.clone());
             record.reason = "remote_verified".to_string();
-            refresh_remote_tracking_ref(&ws.root, &policy.remote, &policy.target_ref, &oid);
+            tracking_ref_to_refresh = Some(oid);
         }
         Ok(oid) => {
             record.status = GitFinishStatus::RemoteMismatch;
@@ -1300,7 +1316,11 @@ fn finish_owned_run_with_mode_and_github(
             record.reason = "remote_lookup_after_push_failed".to_string();
         }
     }
-    persist_result(record)
+    let result = persist_result(record);
+    if let Some(oid) = tracking_ref_to_refresh {
+        refresh_remote_tracking_ref(&ws.root, &policy.remote, &policy.target_ref, &oid);
+    }
+    result
 }
 
 /// Move the local remote-tracking ref to the OID a verified push just put on
