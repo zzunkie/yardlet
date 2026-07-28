@@ -511,9 +511,22 @@ fn git_changed_paths_with(cwd: &Path, git_bin: &OsStr) -> Result<Vec<String>, Gi
             paths.push(path);
         }
         if xy.starts_with('R') || xy.starts_with('C') {
-            chunks.next();
+            // A rename/copy record carries "<new>\0<orig>\0". The original is
+            // part of the diff too — a rename DELETES it — and dropping it hid
+            // a forbidden source from the gate: `git mv config/secret.pem
+            // config/plain.txt` reported only the destination, so
+            // `forbidden_paths_untouched` certified "no sensitive paths" for a
+            // diff that removed one. The committed enumeration passes
+            // `--no-renames` for the same reason.
+            if let Some(original) = chunks.next() {
+                if !original.is_empty() {
+                    paths.push(original.to_string());
+                }
+            }
         }
     }
+    paths.sort();
+    paths.dedup();
     Ok(paths)
 }
 

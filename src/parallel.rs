@@ -2940,6 +2940,101 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The status side had the same rename blind spot the committed side closed:
+    /// `git status` reports a rename as one record naming the destination, and
+    /// dropping the original hid a forbidden source from the gate.
+    #[test]
+    fn an_uncommitted_rename_still_reports_the_forbidden_source() {
+        let root = temp_repo("uncommitted-rename");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(root.join("config/secret.pem"), "key\n").unwrap();
+        sh_git(&root, &["add", "config/secret.pem"]);
+        sh_git(&root, &["commit", "-q", "-m", "add key"]);
+
+        let run_id = "run-uncommitted-rename";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/uncommitted-rename/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+
+        // Staged but NOT committed, so only `git status` can see it.
+        sh_git(&worktree, &["mv", "config/secret.pem", "config/plain.txt"]);
+
+        let changed = crate::evaluator::changed_paths(&worktree).unwrap();
+        assert!(
+            changed.iter().any(|path| path == "config/secret.pem"),
+            "the renamed-away source must be in the diff: {changed:?}"
+        );
+        assert!(
+            !crate::evaluator::forbidden_paths(changed.iter()).is_empty(),
+            "and the gate must call it forbidden"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A seeded harness copy the worker COMMITTED is the worker's, not a
+    /// dispatcher overlay — serial's rule, now applied on the core side too.
+    #[test]
+    fn a_committed_seed_copy_is_worker_evidence_not_a_core_overlay() {
+        let root = temp_repo("committed-seed-copy");
+        let rules = root.join(".agents/rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::write(rules.join("seeded.md"), "seed bytes\n").unwrap();
+        sh_git(&root, &["add", ".agents/rules/seeded.md"]);
+        sh_git(&root, &["commit", "-q", "-m", "seed rule"]);
+
+        let run_id = "run-committed-seed";
+        let worktree = root.join(".agents/worktrees").join(run_id);
+        let branch = format!("yard/seed/{run_id}");
+        create_worktree(&root, &worktree, &branch).unwrap();
+        let baseline = sh_git(&worktree, &["rev-parse", "HEAD"]).trim().to_string();
+        let run_dir = root.join(".agents/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        crate::state::write_str(
+            &run_dir.join("run.yaml"),
+            &format!(
+                "schema_version: 1\nrun_id: {run_id}\ntask_id: YARD-001\nintent_id: intent-test\n\
+                 worker: fixture\nstate: running\nstarted_at: \"2026-07-28T00:00:00+00:00\"\n\
+                 worktree: {}\nworktree_branch: {branch}\nbaseline_oid: {baseline}\n",
+                worktree.display()
+            ),
+        )
+        .unwrap();
+        // Yardlet's pre-worker seed snapshot: the same bytes it copied in.
+        let seed = run_dir.join(run::HARNESS_SEED_DIR).join("rules");
+        std::fs::create_dir_all(&seed).unwrap();
+        std::fs::write(seed.join("seeded.md"), "seed bytes\n").unwrap();
+
+        // The worker commits a change, then restores the seed bytes — so the
+        // working tree matches the seed while the commit does not.
+        std::fs::write(worktree.join(".agents/rules/seeded.md"), "worker bytes\n").unwrap();
+        sh_git(&worktree, &["add", ".agents/rules/seeded.md"]);
+        sh_git(
+            &worktree,
+            &["commit", "-q", "-m", "worker rewrote the rule"],
+        );
+        std::fs::write(worktree.join(".agents/rules/seeded.md"), "seed bytes\n").unwrap();
+
+        let evidence = parallel_worker_evidence(&root, &worktree, &run_dir).unwrap();
+        assert!(
+            evidence
+                .paths
+                .iter()
+                .any(|path| path == ".agents/rules/seeded.md"),
+            "a committed seed copy stays worker evidence: {:?}",
+            evidence.paths
+        );
+        assert!(
+            evidence.core_input_overlays.is_empty(),
+            "and must not also be recorded as a dispatcher overlay: {:?}",
+            evidence.core_input_overlays
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Git's default rename detection reports only a rename's DESTINATION, so
     /// moving a forbidden path out of the way would hide the source from the
     /// gate entirely. The serial enumeration has always passed `--no-renames`.
