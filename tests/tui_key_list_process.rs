@@ -167,9 +167,10 @@ fn wait_for_marker(master: &mut File, sink: &mut Vec<u8>, marker: &str, within: 
 #[test]
 fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
-    let root = test_root();
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
+    // Removed even if an assertion below unwinds past the clean exit — the other
+    // half of issue #64.
+    let workspace = common::WorkspaceGuard::create(test_root());
+    let root = workspace.path().to_path_buf();
 
     let init = Command::new(&binary)
         .arg("init")
@@ -279,5 +280,5 @@ fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
     std::thread::sleep(Duration::from_millis(200));
     let _ = master.write_all(b"q");
     child.shutdown(Duration::from_secs(5), || drain(&mut master, &mut sink));
-    let _ = fs::remove_dir_all(&root);
+    // `workspace` removes the root on drop, on this path and on a panicking one.
 }

@@ -279,9 +279,10 @@ fn accepted_but_unconfirmed(root: &Path) -> bool {
 #[test]
 fn an_accepted_unconfirmed_plan_is_reachable_from_home_after_a_restart() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
-    let root = test_root();
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
+    // Removed even if an assertion below unwinds past the clean exit — the other
+    // half of issue #64.
+    let workspace = common::WorkspaceGuard::create(test_root());
+    let root = workspace.path().to_path_buf();
 
     let init = Command::new(&binary)
         .arg("init")
@@ -409,12 +410,16 @@ fn an_accepted_unconfirmed_plan_is_reachable_from_home_after_a_restart() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+    // Scoped to after `o` so this can only ever be satisfied by the screen it is
+    // about. Measured today: Home does NOT render the draft's summary before `o`,
+    // so the cumulative form was not yet vacuous here — the window keeps it from
+    // becoming vacuous the day Home starts showing the summary in its queue row.
     assert!(
-        seen(&sink, "reentry fixture slice"),
+        seen(&sink[before_open..], "reentry fixture slice"),
         "the review screen opened without the accepted draft's content;\n{}",
         recent(&sink)
     );
 
     quit_tui(&mut second, &mut master, &mut sink);
-    let _ = fs::remove_dir_all(&root);
+    // `workspace` removes the root on drop, on this path and on a panicking one.
 }

@@ -65,9 +65,10 @@ fn open_pty() -> (File, File) {
 #[test]
 fn slow_probe_and_recovery_do_not_block_first_safe_tui_frame() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
-    let root = test_root("first-frame");
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
+    // Removed even if an assertion below unwinds past the clean exit — the other
+    // half of issue #64.
+    let workspace = common::WorkspaceGuard::create(test_root("first-frame"));
+    let root = workspace.path().to_path_buf();
 
     let init = Command::new(&binary)
         .arg("init")
@@ -156,5 +157,5 @@ fn slow_probe_and_recovery_do_not_block_first_safe_tui_frame() {
     master.write_all(b"q").unwrap();
 
     child.shutdown(Duration::from_secs(3), || {});
-    let _ = fs::remove_dir_all(root);
+    // `workspace` removes the root on drop, on this path and on a panicking one.
 }
