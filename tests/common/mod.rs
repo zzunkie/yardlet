@@ -41,6 +41,27 @@ impl ChildGuard {
             .id()
     }
 
+    /// Hand the child back for `wait_with_output`, which consumes it.
+    ///
+    /// The guard is spent from here on, which is the point: it covered the window
+    /// that actually leaked — every assertion between the spawn and the moment
+    /// the test collects the output.
+    pub fn into_inner(mut self) -> Child {
+        self.child.take().expect("child guard used after shutdown")
+    }
+
+    /// Kill and reap now, for a test that deliberately cuts its child off
+    /// mid-flight (a crash window, a decoy that must never finish).
+    ///
+    /// Idempotent, and safe before `Drop`: the drop sees an already-reaped child
+    /// and does not signal a pid it no longer owns.
+    pub fn kill_now(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
     /// Wait out a clean exit, killing after `within` if it never comes.
     ///
     /// `tick` runs between polls so a test can keep draining its PTY: a child
