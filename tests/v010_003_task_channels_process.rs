@@ -2077,7 +2077,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
         let mut resumed = ChildGuard::new(
-    Command::new(&fixture.binary)
+            Command::new(&fixture.binary)
                 .args([
                     "answer",
                     "resume",
@@ -2104,7 +2104,9 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "resume fixture never published its successful result"
         );
         let result_seen = Instant::now();
-        let exited = wait_until(LOAD_TOLERANT_WAIT, || resumed.as_mut().try_wait().unwrap().is_some());
+        let exited = wait_until(LOAD_TOLERANT_WAIT, || {
+            resumed.as_mut().try_wait().unwrap().is_some()
+        });
         if !exited {
             resumed.kill_now();
         }
@@ -2245,7 +2247,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
         let mut running = ChildGuard::new(
-    Command::new(&fixture.binary)
+            Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-REDIRECT", "--execute"])
                 .current_dir(&fixture.root)
                 .stdout(Stdio::piped())
@@ -2354,7 +2356,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
         let mut running = ChildGuard::new(
-    Command::new(&fixture.binary)
+            Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-EXACT-REDIRECT", "--execute"])
                 .current_dir(&fixture.root)
                 .stdout(Stdio::piped())
@@ -2389,7 +2391,12 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "--action-id",
             "act-exact-model-redirect",
         ]);
-        assert!(running.into_inner().wait_with_output().unwrap().status.success());
+        assert!(running
+            .into_inner()
+            .wait_with_output()
+            .unwrap()
+            .status
+            .success());
         assert_eq!(task_state(&fixture.root, "YARD-EXACT-REDIRECT"), "done");
         assert_exact_queue_task(&fixture.root, "YARD-EXACT-REDIRECT", "YARD-EXACT-REDIRECT");
         let runs = run_dirs_for_task(&fixture.root, "YARD-EXACT-REDIRECT");
@@ -2471,7 +2478,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
         let mut running = ChildGuard::new(
-    Command::new(&fixture.binary)
+            Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-REDIRECT", "--execute"])
                 .current_dir(&fixture.root)
                 .stdout(Stdio::piped())
@@ -2844,7 +2851,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
         let mut running = ChildGuard::new(
-    Command::new(&fixture.binary)
+            Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-LIVE", "--execute"])
                 .current_dir(&fixture.root)
                 .stdout(Stdio::piped())
@@ -3142,7 +3149,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
         let running = ChildGuard::new(
-    Command::new(&fixture.binary)
+            Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-REDIRECT", "--execute"])
                 .current_dir(&fixture.root)
                 .stdout(Stdio::piped())

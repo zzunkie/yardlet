@@ -8,6 +8,188 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
 
+// Re-exported for `use common::{...}` at the call sites. A test binary that needs
+// only some of them still compiles this module whole, so the rest look unused.
+#[cfg(unix)]
+#[allow(unused_imports)]
+pub use pty::{drain, norm, open_pty, recent, resize_pty, seen, strip_ansi, wait_for_marker};
+
+/// The PTY harness the TUI process tests drive the app through.
+///
+/// This lived as four copy-pasted blocks, one per test file, which is how the
+/// same defect could be fixed in one of them and stay open in the other three
+/// (issue #92). One home means one place to fix.
+#[cfg(unix)]
+mod pty {
+    use std::fs::File;
+    use std::io::{ErrorKind, Read};
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::time::{Duration, Instant};
+
+    /// How much rendered tail a failure message carries.
+    const RECENT_CHARS: usize = 900;
+
+    /// Open a pseudo-terminal at an explicit size, with a non-blocking master.
+    ///
+    /// The size is the caller's contract, not a harness default: a screen that
+    /// fits at 40 rows can hide a scrolling defect that a real 24-row terminal
+    /// shows (issue #71, where a 40-row test hid the very key the issue was
+    /// filed about).
+    pub fn open_pty(rows: u16, cols: u16) -> (File, File) {
+        let mut master = -1;
+        let mut slave = -1;
+        let mut size = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let rc = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut size as *mut libc::winsize,
+            )
+        };
+        assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
+        let master = unsafe { File::from_raw_fd(master) };
+        let slave = unsafe { File::from_raw_fd(slave) };
+        let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0);
+        let rc =
+            unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        assert_eq!(rc, 0);
+        (master, slave)
+    }
+
+    /// Resize, which also forces a full repaint.
+    ///
+    /// Ratatui writes only CHANGED cells, so a string on scrolled content can be
+    /// missing any character whose cell already held it. A resize makes the next
+    /// frame a complete one.
+    pub fn resize_pty(master: &File, rows: u16, cols: u16) {
+        let size = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let rc = unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &size) };
+        assert_eq!(
+            rc,
+            0,
+            "TIOCSWINSZ failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    /// Drain everything currently readable into `sink`.
+    ///
+    /// Draining continuously is mandatory: if the PTY buffer fills, the child
+    /// blocks on its next render and the whole TUI event loop stalls.
+    pub fn drain(master: &mut File, sink: &mut Vec<u8>) {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match master.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => sink.extend_from_slice(&buffer[..count]),
+                Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                Err(error) => panic!("PTY read failed: {error}"),
+            }
+        }
+    }
+
+    /// Remove ANSI/VT control sequences so the visible glyphs collapse into
+    /// reading order.
+    ///
+    /// Ratatui positions every wide (CJK) cell with its own cursor-move escape,
+    /// so a Korean word is NOT a contiguous byte run in the raw stream —
+    /// stripping the escapes is what makes it one again.
+    pub fn strip_ansi(bytes: &[u8]) -> String {
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == 0x1b {
+                match bytes.get(i + 1) {
+                    Some(b'[') => {
+                        // CSI: consume params/intermediates up to the final byte.
+                        i += 2;
+                        while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
+                            i += 1;
+                        }
+                        i += usize::from(i < bytes.len());
+                    }
+                    Some(b']') => {
+                        // OSC: terminated by BEL or ST (ESC \).
+                        i += 2;
+                        while i < bytes.len() {
+                            if bytes[i] == 0x07 {
+                                i += 1;
+                                break;
+                            }
+                            if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
+                                i += 2;
+                                break;
+                            }
+                            i += 1;
+                        }
+                    }
+                    Some(_) => i += 2, // other two-byte escapes
+                    None => break,
+                }
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Whitespace between cells is emitted as cursor motion too, so compare the
+    /// visible text with all whitespace removed.
+    pub fn norm(s: &str) -> String {
+        s.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// Is `marker` in this slice of rendered output?
+    ///
+    /// Pass the slice the assertion is ABOUT. A cumulative sink holds every frame
+    /// the session ever drew, so a marker matched against all of it says nothing
+    /// about the screen under test — that is how removing `Esc` handling once left
+    /// its test passing (issue #92).
+    pub fn seen(sink: &[u8], marker: &str) -> bool {
+        norm(&strip_ansi(sink)).contains(&norm(marker))
+    }
+
+    /// The rendered tail, for a failure message.
+    pub fn recent(sink: &[u8]) -> String {
+        let text = strip_ansi(sink);
+        let chars: Vec<char> = text.chars().collect();
+        let start = chars.len().saturating_sub(RECENT_CHARS);
+        chars[start..].iter().collect()
+    }
+
+    /// Read (draining) until `marker` shows up in `sink`, or panic with the tail
+    /// of what was actually rendered.
+    pub fn wait_for_marker(master: &mut File, sink: &mut Vec<u8>, marker: &str, within: Duration) {
+        let deadline = Instant::now() + within;
+        loop {
+            drain(master, sink);
+            if seen(sink, marker) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "marker {marker:?} not seen within {within:?}; recent output:\n{}",
+                recent(sink)
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
 /// Kills and reaps a spawned child on drop.
 ///
 /// `std::process::Child` does NOT kill on drop, so a failing assertion unwinds

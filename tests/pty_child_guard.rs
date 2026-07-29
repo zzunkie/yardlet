@@ -41,7 +41,10 @@ fn scratch(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock before Unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("yard-harness-{name}-{}-{nonce}", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "yard-harness-{name}-{}-{nonce}",
+        std::process::id()
+    ))
 }
 
 fn spawn_long_lived() -> std::process::Child {
