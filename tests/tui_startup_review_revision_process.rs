@@ -236,31 +236,13 @@ fn wait_for_marker(master: &mut File, sink: &mut Vec<u8>, marker: &str, within: 
     }
 }
 
-/// Poll for a file to appear while still draining the PTY, so the child never
-/// blocks on render while we wait for its worker side effect.
-fn wait_for_file(master: &mut File, sink: &mut Vec<u8>, path: &Path, within: Duration) {
-    let deadline = Instant::now() + within;
-    loop {
-        drain(master, sink);
-        if path.exists() {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "expected fixture file {} within {within:?}; recent output:\n{}",
-            path.display(),
-            recent(sink)
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
 #[test]
 fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
-    let root = test_root();
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
+    // Removed even if an assertion below unwinds past the clean exit — the other
+    // half of issue #64.
+    let workspace = common::WorkspaceGuard::create(test_root());
+    let root = workspace.path().to_path_buf();
 
     // Canonical workspace init, then pin the UI to Korean.
     let init = Command::new(&binary)
@@ -422,13 +404,25 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
     master.write_all(b"\x13").unwrap(); // Ctrl+S submit revision
 
     // 7) The verbatim two-line revision must reach the planner as a second turn.
+    //
+    // Wait on the CONTENT, not on the path existing: the fixture creates the file
+    // and writes it in two steps, so an existence-only wait reads an empty string
+    // and the assertion fails having observed nothing at all.
     let turn_two = root.join(".fixture-capture/turn-2.md");
-    wait_for_file(&mut master, &mut sink, &turn_two, Duration::from_secs(20));
-    let packet = fs::read_to_string(&turn_two).unwrap();
-    assert!(
-        packet.contains("REVLINE-TOP\nREVLINE-BOTTOM"),
-        "second planner packet did not carry the verbatim multi-line revision;\npacket:\n{packet}"
-    );
+    let verbatim = "REVLINE-TOP\nREVLINE-BOTTOM";
+    if let Err(last) = common::wait_for_file_contents(
+        &turn_two,
+        Duration::from_secs(20),
+        || drain(&mut master, &mut sink),
+        |packet| packet.contains(verbatim),
+    ) {
+        panic!(
+            "second planner packet did not carry the verbatim multi-line revision \
+             within 20s;\nlast contents of {}:\n{last}\nrecent output:\n{}",
+            turn_two.display(),
+            recent(&sink)
+        );
+    }
     let turns = fs::read_to_string(root.join(".fixture-planning-turn")).unwrap();
     assert_eq!(
         turns.trim(),
@@ -442,5 +436,5 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
     std::thread::sleep(Duration::from_millis(150));
     let _ = master.write_all(b"q");
     child.shutdown(Duration::from_secs(5), || drain(&mut master, &mut sink));
-    let _ = fs::remove_dir_all(&root);
+    // `workspace` removes the root on drop, on this path and on a panicking one.
 }
