@@ -21,6 +21,8 @@
 #![cfg(unix)]
 
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::ExitStatusExt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -149,6 +151,137 @@ fn the_workspace_guard_removes_its_own_root_and_nothing_else() {
          is not its business"
     );
     let _ = std::fs::remove_dir_all(&neighbour);
+}
+
+/// A script that idles under a name only this test would use, so a pid can be
+/// matched by identity rather than trusted by number.
+fn write_idle_script(path: &std::path::Path, marker: &str) {
+    std::fs::write(
+        path,
+        format!("#!/bin/sh\n# {marker}\nprintf '%s' \"$$\" > \"$1\"\nsleep 120\n"),
+    )
+    .expect("write the idle script");
+    let mut permissions = std::fs::metadata(path)
+        .expect("stat the idle script")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).expect("chmod the idle script");
+}
+
+#[test]
+fn the_pid_file_guard_reaps_a_process_that_never_removed_its_pid_file() {
+    // The leak this exists for: a hook still polling when an assertion fires. It
+    // never reaches its own `rm`, so the guard is the only thing that will.
+    let workspace = common::WorkspaceGuard::create(scratch("pid-guard-kill"));
+    let script = workspace.join("idle-fixture-alpha.sh");
+    write_idle_script(&script, "idle-fixture-alpha");
+    let pid_path = workspace.join("fixture.pid");
+
+    let mut child = common::ChildGuard::new(
+        Command::new(&script)
+            .arg(&pid_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the idle fixture"),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !pid_path.exists() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let pid: u32 = std::fs::read_to_string(&pid_path)
+        .expect("the fixture never wrote its pid")
+        .trim()
+        .parse()
+        .expect("numeric fixture pid");
+    assert!(alive(pid), "the fixture never started");
+
+    drop(common::PidFileGuard::new(
+        pid_path.clone(),
+        "idle-fixture-alpha",
+    ));
+
+    // Assert on the exit signal, not on `kill(pid, 0)`. This fixture is a child of
+    // the test process, so once killed it stays a reapable zombie and a liveness
+    // probe still succeeds — which says nothing about who killed it. The real hook
+    // is not our child and has no such state. Waiting for the status both reaps it
+    // and proves SIGKILL is what ended it.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut status = None;
+    while Instant::now() < deadline {
+        if let Ok(Some(exited)) = child.as_mut().try_wait() {
+            status = Some(exited);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let status = status.expect("pid the guard was pointed straight at never exited");
+    assert_eq!(
+        status.signal(),
+        Some(libc::SIGKILL),
+        "the fixture ended by {status:?} rather than the guard's SIGKILL"
+    );
+    assert!(
+        !pid_path.exists(),
+        "the guard left its pid file behind for a later run to trust"
+    );
+}
+
+#[test]
+fn the_pid_file_guard_leaves_a_pid_that_is_not_the_process_it_was_watching() {
+    // The danger the guard has to avoid. A hook that dies without clearing its pid
+    // file leaves a number behind; once the OS recycles it, killing by number
+    // takes down a stranger. So a pid whose command line does not match is not
+    // this guard's to signal — here a live process stands in for the recycled one.
+    let workspace = common::WorkspaceGuard::create(scratch("pid-guard-stale"));
+    let script = workspace.join("idle-fixture-beta.sh");
+    write_idle_script(&script, "idle-fixture-beta");
+    let pid_path = workspace.join("live.pid");
+
+    let mut bystander = common::ChildGuard::new(
+        Command::new(&script)
+            .arg(&pid_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the bystander"),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !pid_path.exists() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let pid: u32 = std::fs::read_to_string(&pid_path)
+        .expect("the bystander never wrote its pid")
+        .trim()
+        .parse()
+        .expect("numeric bystander pid");
+    assert!(alive(pid), "the bystander never started");
+
+    // The guard is watching for a DIFFERENT fixture, so this pid is not its
+    // business no matter what the file says.
+    drop(common::PidFileGuard::new(
+        pid_path.clone(),
+        "some-other-fixture-entirely",
+    ));
+    std::thread::sleep(Duration::from_millis(300));
+
+    // `kill(pid, 0)` is NOT the check here: this bystander is our child, so a
+    // SIGKILLed one stays a zombie and a liveness probe keeps succeeding. That
+    // made the first version of this test pass even with the identity check
+    // deleted — vacuous, the very defect this branch is about. `try_wait`
+    // distinguishes still-running from exited-and-reapable.
+    let exited = bystander
+        .as_mut()
+        .try_wait()
+        .expect("poll the bystander's status");
+    assert!(
+        exited.is_none(),
+        "the guard ended pid {pid} ({exited:?}) although its command line never \
+         matched what the guard was watching for"
+    );
+    bystander.kill_now();
 }
 
 #[test]

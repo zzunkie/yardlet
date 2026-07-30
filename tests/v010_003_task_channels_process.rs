@@ -839,7 +839,10 @@ exit 1
         // receipted-orphan state under test — so it cannot be group-killed with
         // the parent. It can still be reaped by pid if an assertion fires while it
         // is mid-loop, which otherwise leaves it running out its own 200s timeout.
-        let _hook_guard = common::PidFileGuard::new(fixture.root.join(".agents/failover-hook.pid"));
+        let _hook_guard = common::PidFileGuard::new(
+            fixture.root.join(".agents/failover-hook.pid"),
+            "00-pause-before-finalize",
+        );
         let mut running = ChildGuard::new(
             Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-FAILOVER", "--execute"])

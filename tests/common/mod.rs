@@ -358,18 +358,46 @@ pub fn wait_for_file_contents(
 /// it running for the rest of its own timeout (the failover hook polls for 200
 /// seconds).
 ///
-/// Skips a hook that already finished: the pid file is removed on the hook's clean
-/// exit, so a missing file means nothing to do rather than a pid to guess at. That
-/// ordering is what keeps this from signalling a recycled pid.
+/// # Why it checks identity before signalling
+///
+/// A pid file is not proof. The process removes it on a clean exit, but a hook
+/// that is killed — or that trips `set -e` — leaves the number behind, and the
+/// test may then sit for another minute. Once the OS recycles that pid, killing
+/// it blind takes down whatever unrelated process now holds it.
+///
+/// So the pid is only a candidate. Before signalling, the guard reads the live
+/// process's command line and requires `expected` to appear in it. A recycled pid
+/// is not running the fixture script, so it does not match and is left alone.
+/// This is the same rule Yardlet applies to its own workers, which never signal a
+/// recorded pid without cross-checking its process identity first.
 #[cfg(unix)]
 pub struct PidFileGuard {
     path: PathBuf,
+    expected: String,
 }
 
 #[cfg(unix)]
 impl PidFileGuard {
-    pub fn new(path: PathBuf) -> Self {
-        Self { path }
+    /// `expected` must appear in the target's command line for the kill to happen.
+    /// Use something only that process could carry — a fixture script's filename.
+    pub fn new(path: PathBuf, expected: impl Into<String>) -> Self {
+        Self {
+            path,
+            expected: expected.into(),
+        }
+    }
+
+    /// The live command line for `pid`, or `None` if it is gone or unreadable.
+    fn command_line(pid: libc::pid_t) -> Option<String> {
+        let output = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "args="])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!line.is_empty()).then_some(line)
     }
 }
 
@@ -379,14 +407,24 @@ impl Drop for PidFileGuard {
         let Ok(raw) = std::fs::read_to_string(&self.path) else {
             return; // the process removed its own pid file: it is gone
         };
-        if let Ok(pid) = raw.trim().parse::<libc::pid_t>() {
-            if pid > 0 {
-                unsafe {
-                    libc::kill(pid, libc::SIGKILL);
-                }
-            }
-        }
         let _ = std::fs::remove_file(&self.path);
+        let Ok(pid) = raw.trim().parse::<libc::pid_t>() else {
+            return;
+        };
+        if pid <= 0 {
+            return;
+        }
+        // Identity, not just liveness: a stale pid the OS has handed to someone
+        // else is exactly what must NOT be signalled.
+        let Some(command) = Self::command_line(pid) else {
+            return;
+        };
+        if !command.contains(&self.expected) {
+            return;
+        }
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
     }
 }
 
