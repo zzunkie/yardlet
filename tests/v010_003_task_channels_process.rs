@@ -7,6 +7,7 @@ mod common;
 
 #[cfg(unix)]
 mod unix {
+    use super::common;
     use super::common::ChildGuard;
     use super::process_binary_preflight::{preflight_process_binary, CliCapability};
     use serde_yaml_ng::Value;
@@ -812,14 +813,20 @@ printf '# Handoff\n\nPolicy-authorized failover completed.\n' >"$run_dir/handoff
             &hook,
             r##"#!/usr/bin/env bash
 set -euo pipefail
+# The pid file is what lets the test reap this hook if an assertion fires while
+# it is still polling; removing it on the way out is what stops the guard from
+# signalling a pid the OS has since handed to someone else.
+printf '%s' "$$" > .agents/failover-hook.pid
 touch .agents/failover-hook-entered
 for _ in $(seq 1 4000); do
   if [[ -f .agents/failover-hook-release ]]; then
     touch .agents/failover-hook-exited
+    rm -f .agents/failover-hook.pid
     exit 0
   fi
   sleep 0.05
 done
+rm -f .agents/failover-hook.pid
 exit 1
 "##,
         )
@@ -828,13 +835,11 @@ exit 1
         permissions.set_mode(0o755);
         fs::set_permissions(&hook, permissions).unwrap();
 
-        // A direct-child guard on purpose, NOT a group-leader one: this test
-        // deliberately produces a receipted ORPHAN. It kills the parent and then
-        // requires the worker to still be there for `recover` to finalize, so a
-        // guard that took down the whole tree would destroy the state under test
-        // (proven: group-killing here left `failover-hook-exited` unwritten).
-        // The guard still covers what it is for — an assertion unwinding past the
-        // kill and abandoning the parent.
+        // The hook keeps polling after this test kills Yardlet — that IS the
+        // receipted-orphan state under test — so it cannot be group-killed with
+        // the parent. It can still be reaped by pid if an assertion fires while it
+        // is mid-loop, which otherwise leaves it running out its own 200s timeout.
+        let _hook_guard = common::PidFileGuard::new(fixture.root.join(".agents/failover-hook.pid"));
         let mut running = ChildGuard::new(
             Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-FAILOVER", "--execute"])
@@ -2081,7 +2086,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
 
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
-        let mut resumed = ChildGuard::spawn_group_leader(
+        let mut resumed = ChildGuard::new(
             Command::new(&fixture.binary)
                 .args([
                     "answer",
@@ -2093,7 +2098,9 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
                 ])
                 .current_dir(&fixture.root)
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped()),
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
         );
         assert!(
             wait_until(LOAD_TOLERANT_WAIT, || {
@@ -2249,12 +2256,14 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
 
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
-        let mut running = ChildGuard::spawn_group_leader(
+        let mut running = ChildGuard::new(
             Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-REDIRECT", "--execute"])
                 .current_dir(&fixture.root)
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped()),
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
         );
         let started = wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-REDIRECT") == "running"
@@ -2356,12 +2365,14 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
 
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
-        let mut running = ChildGuard::spawn_group_leader(
+        let mut running = ChildGuard::new(
             Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-EXACT-REDIRECT", "--execute"])
                 .current_dir(&fixture.root)
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped()),
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
         );
         let started = wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-EXACT-REDIRECT") == "running"
@@ -2476,12 +2487,14 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
 
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
-        let mut running = ChildGuard::spawn_group_leader(
+        let mut running = ChildGuard::new(
             Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-REDIRECT", "--execute"])
                 .current_dir(&fixture.root)
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped()),
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
         );
         let started = wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-REDIRECT") == "running"
@@ -2548,7 +2561,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
 
         // The long-lived decoy that leaked for 26 hours when an assertion below
         // fired before its kill (issue #64).
-        let mut decoy = ChildGuard::spawn_group_leader(Command::new("sleep").arg("600"));
+        let mut decoy = ChildGuard::new(Command::new("sleep").arg("600").spawn().unwrap());
         let decoy_pid = decoy.id();
         fs::write(&pid_path, decoy_pid.to_string()).unwrap();
 
@@ -2601,7 +2614,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         );
 
         // Same shape, same leak (issue #64).
-        let mut worker = ChildGuard::spawn_group_leader(Command::new("sleep").arg("599"));
+        let mut worker = ChildGuard::new(Command::new("sleep").arg("599").spawn().unwrap());
         let worker_pid = worker.id();
         let marker =
             process_start_marker(worker_pid).expect("fixture worker identity must be observable");
@@ -2847,12 +2860,14 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
 
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
-        let mut running = ChildGuard::spawn_group_leader(
+        let mut running = ChildGuard::new(
             Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-LIVE", "--execute"])
                 .current_dir(&fixture.root)
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped()),
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
         );
 
         let live_events_visible = wait_until(LOAD_TOLERANT_WAIT, || {
@@ -3143,12 +3158,14 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         );
         // Guarded so an assertion below cannot unwind past the kill and
         // abandon a live child (issue #64).
-        let running = ChildGuard::spawn_group_leader(
+        let running = ChildGuard::new(
             Command::new(&fixture.binary)
                 .args(["run", "--task", "YARD-REDIRECT", "--execute"])
                 .current_dir(&fixture.root)
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped()),
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
         );
         assert!(wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-REDIRECT") == "running"

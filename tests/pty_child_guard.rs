@@ -24,6 +24,7 @@ use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod common;
@@ -151,6 +152,42 @@ fn the_workspace_guard_removes_its_own_root_and_nothing_else() {
 }
 
 #[test]
+fn only_one_of_many_racing_guards_can_adopt_a_root() {
+    // `exists()` then `create_dir_all` is TOCTOU, and not theoretically: an
+    // independent review ran five threads at one root through a barrier and got
+    // five guards that each believed they owned it, on the first round. The check
+    // has to BE the creation.
+    for round in 0..64 {
+        let root = scratch(&format!("race-{round}"));
+        let start = Arc::new(Barrier::new(4));
+        let winners: Vec<_> = (0..4)
+            .map(|_| {
+                let root = root.clone();
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    catch_unwind(AssertUnwindSafe(|| common::WorkspaceGuard::create(root))).ok()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(|thread| {
+                thread
+                    .join()
+                    .expect("a creator thread panicked outside catch")
+            })
+            .collect();
+        assert_eq!(
+            winners.len(),
+            1,
+            "{} guards adopted {} at once; creation is not atomic",
+            winners.len(),
+            root.display()
+        );
+    }
+}
+
+#[test]
 fn the_file_wait_does_not_return_on_a_created_but_unwritten_file() {
     let workspace = common::WorkspaceGuard::create(scratch("file-wait"));
     let path = workspace.join("turn-2.md");
@@ -198,44 +235,6 @@ fn the_file_wait_does_not_return_on_a_created_but_unwritten_file() {
     .expect("the content wait timed out on a file that was written");
     assert!(text.contains(verbatim));
     writer.join().expect("the writer thread panicked");
-}
-
-#[test]
-fn a_group_leader_guard_takes_down_the_children_its_child_spawned() {
-    // `kill` signals one pid. A child that spawns its own children leaves them
-    // running — an independent review of this work proved it with exactly this
-    // shape, so it is pinned here rather than assumed.
-    let pid_path = scratch("descendant").with_extension("pid");
-    let script = format!("sleep 120 & echo $! > {}; wait", pid_path.display());
-    let descendant = {
-        let _guard = common::ChildGuard::spawn_group_leader(
-            Command::new("sh")
-                .args(["-c", &script])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null()),
-        );
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut pid = None;
-        while Instant::now() < deadline {
-            if let Ok(raw) = std::fs::read_to_string(&pid_path) {
-                if let Ok(parsed) = raw.trim().parse::<u32>() {
-                    pid = Some(parsed);
-                    break;
-                }
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let pid = pid.expect("the grandchild never reported its pid");
-        assert!(alive(pid), "the grandchild never started");
-        pid
-    };
-
-    assert!(
-        wait_until_gone(descendant, Duration::from_secs(5)),
-        "grandchild {descendant} outlived the guard that owned its parent's group"
-    );
-    let _ = std::fs::remove_file(&pid_path);
 }
 
 #[test]

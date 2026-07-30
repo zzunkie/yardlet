@@ -202,68 +202,29 @@ mod pty {
 ///
 /// # What it reaches, and what it does not
 ///
-/// `kill` signals ONE pid. A child that spawns its own children leaves them
-/// behind, which an independent review of this work demonstrated directly:
-/// `sh -c 'sleep 30 & wait'` under a guard left the inner `sleep` alive after
-/// both `drop` and `kill_now`.
+/// The DIRECT child, and only that. `kill` signals one pid, so a descendant is
+/// not covered — an independent review demonstrated it with `sh -c 'sleep 30 &
+/// wait'`, whose inner `sleep` outlived the guard.
 ///
-/// [`ChildGuard::spawn_group_leader`] closes that: the child leads its own
-/// process group, so a negative-pid signal reaches everything it started.
+/// A group-leader variant was tried and withdrawn. Putting the child in its own
+/// process group does let a negative-pid signal reach the tree, but it also
+/// removes the child from the test harness's group, so a developer's Ctrl-C no
+/// longer reaches it — and signal termination does not run `Drop`, so nothing
+/// else cleans up either. That trade only pays when the tree is actually
+/// reachable, and at every site here it is not: a Yardlet worker regroups itself
+/// on purpose (`src/workers/mod.rs` `process_group(0)`, issue #52) so it survives
+/// the terminal, so it escapes a group kill regardless. The remaining sites spawn
+/// leaves with no children at all.
 ///
-/// It still does NOT reach a descendant that deliberately leads a group of its
-/// own. Yardlet workers do exactly that on purpose (`src/workers/mod.rs`
-/// `process_group(0)`, issue #52) so they survive the terminal. A killed
-/// `yardlet run` therefore orphans its worker no matter what this guard does —
-/// that gap belongs to Yardlet's own teardown, not to a test helper.
+/// So a killed `yardlet run` orphans its worker no matter what this helper does.
+/// That gap is Yardlet's own teardown (issue #107), not a test helper's.
 pub struct ChildGuard {
     child: Option<Child>,
-    /// Did we make this child a group leader? Only then is `-pid` a group this
-    /// guard owns, rather than whichever unrelated group happens to share the
-    /// number.
-    own_group: bool,
 }
 
 impl ChildGuard {
     pub fn new(child: Child) -> Self {
-        Self {
-            child: Some(child),
-            own_group: false,
-        }
-    }
-
-    /// Spawn with the child as its own process-group leader, so the guard can
-    /// take down the tree the child goes on to build.
-    ///
-    /// Use this for a child that spawns further processes. Do NOT use it for a
-    /// child that reads a PTY the test also drives: a background process group
-    /// reading its controlling terminal takes SIGTTIN.
-    #[cfg(unix)]
-    pub fn spawn_group_leader(command: &mut std::process::Command) -> Self {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-        Self {
-            child: Some(command.spawn().expect("spawn guarded child")),
-            own_group: true,
-        }
-    }
-
-    /// Signal the group this guard created, then the pid itself as the backstop.
-    ///
-    /// Mirrors `workers::terminate_worker_tree`: a group signal targets
-    /// `pgid == pid`, which is only ours when we made the child a leader.
-    #[cfg(unix)]
-    fn kill_tree(child: &mut Child, own_group: bool) {
-        if own_group {
-            unsafe {
-                libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
-            }
-        }
-        let _ = child.kill();
-    }
-
-    #[cfg(not(unix))]
-    fn kill_tree(child: &mut Child, _own_group: bool) {
-        let _ = child.kill();
+        Self { child: Some(child) }
     }
 
     /// The live child, for a test that polls its own exit.
@@ -296,9 +257,8 @@ impl ChildGuard {
     /// Idempotent, and safe before `Drop`: the drop sees an already-reaped child
     /// and does not signal a pid it no longer owns.
     pub fn kill_now(&mut self) {
-        let own_group = self.own_group;
         if let Some(child) = self.child.as_mut() {
-            Self::kill_tree(child, own_group);
+            let _ = child.kill();
             let _ = child.wait();
         }
     }
@@ -309,7 +269,6 @@ impl ChildGuard {
     /// blocked writing into a full buffer would otherwise never reach its own
     /// shutdown and would always be killed here.
     pub fn shutdown(&mut self, within: Duration, mut tick: impl FnMut()) {
-        let own_group = self.own_group;
         let Some(child) = self.child.as_mut() else {
             return;
         };
@@ -323,19 +282,18 @@ impl ChildGuard {
             tick();
             std::thread::sleep(Duration::from_millis(20));
         }
-        Self::kill_tree(child, own_group);
+        let _ = child.kill();
         let _ = child.wait();
     }
 }
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        let own_group = self.own_group;
         let Some(mut child) = self.child.take() else {
             return;
         };
         if matches!(child.try_wait(), Ok(None)) {
-            Self::kill_tree(&mut child, own_group);
+            let _ = child.kill();
         }
         let _ = child.wait();
     }
@@ -392,6 +350,46 @@ pub fn wait_for_file_contents(
     }
 }
 
+/// Kills a process the test has no `Child` for, identified by a pid file it wrote.
+///
+/// For a process a test causes but does not spawn: a post-run hook, a fixture
+/// script started by the program under test. `ChildGuard` cannot cover those —
+/// there is no handle — and an assertion that fires while one is mid-loop leaves
+/// it running for the rest of its own timeout (the failover hook polls for 200
+/// seconds).
+///
+/// Skips a hook that already finished: the pid file is removed on the hook's clean
+/// exit, so a missing file means nothing to do rather than a pid to guess at. That
+/// ordering is what keeps this from signalling a recycled pid.
+#[cfg(unix)]
+pub struct PidFileGuard {
+    path: PathBuf,
+}
+
+#[cfg(unix)]
+impl PidFileGuard {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for PidFileGuard {
+    fn drop(&mut self) {
+        let Ok(raw) = std::fs::read_to_string(&self.path) else {
+            return; // the process removed its own pid file: it is gone
+        };
+        if let Ok(pid) = raw.trim().parse::<libc::pid_t>() {
+            if pid > 0 {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// Removes one exact temp workspace on drop.
 ///
 /// `ChildGuard` closed half of issue #64; this closes the other half. Every PTY
@@ -419,16 +417,26 @@ impl WorkspaceGuard {
     ///
     /// Panics if the path already exists: this guard deletes what it owns, so
     /// adopting a directory someone else made is exactly the mistake to prevent.
+    ///
+    /// The check is the creation itself, not an `exists()` before it. `exists()`
+    /// then `create_dir_all` is TOCTOU: an independent review ran five threads at
+    /// one root through a barrier and got five guards that all believed they owned
+    /// it, on the first round. `create_dir` fails with `AlreadyExists` in the
+    /// kernel, so exactly one caller can win.
     pub fn create(root: PathBuf) -> Self {
-        assert!(
-            !root.exists(),
-            "test workspace {} already exists; a guard must not adopt (and later \
-             delete) a directory it did not create — give each test root a unique \
-             name",
-            root.display()
-        );
-        std::fs::create_dir_all(&root).expect("create test workspace");
-        Self { root }
+        if let Some(parent) = root.parent() {
+            std::fs::create_dir_all(parent).expect("create the test root's parent");
+        }
+        match std::fs::create_dir(&root) {
+            Ok(()) => Self { root },
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => panic!(
+                "test workspace {} already exists; a guard must not adopt (and later \
+                 delete) a directory it did not create — give each test root a unique \
+                 name",
+                root.display()
+            ),
+            Err(error) => panic!("create test workspace {}: {error}", root.display()),
+        }
     }
 
     pub fn path(&self) -> &Path {
