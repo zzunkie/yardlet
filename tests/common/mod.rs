@@ -199,13 +199,71 @@ mod pty {
 ///
 /// The clean-quit path stays in the tests — it exercises the app's own shutdown
 /// and is worth asserting on — and this sits underneath it as the backstop.
+///
+/// # What it reaches, and what it does not
+///
+/// `kill` signals ONE pid. A child that spawns its own children leaves them
+/// behind, which an independent review of this work demonstrated directly:
+/// `sh -c 'sleep 30 & wait'` under a guard left the inner `sleep` alive after
+/// both `drop` and `kill_now`.
+///
+/// [`ChildGuard::spawn_group_leader`] closes that: the child leads its own
+/// process group, so a negative-pid signal reaches everything it started.
+///
+/// It still does NOT reach a descendant that deliberately leads a group of its
+/// own. Yardlet workers do exactly that on purpose (`src/workers/mod.rs`
+/// `process_group(0)`, issue #52) so they survive the terminal. A killed
+/// `yardlet run` therefore orphans its worker no matter what this guard does —
+/// that gap belongs to Yardlet's own teardown, not to a test helper.
 pub struct ChildGuard {
     child: Option<Child>,
+    /// Did we make this child a group leader? Only then is `-pid` a group this
+    /// guard owns, rather than whichever unrelated group happens to share the
+    /// number.
+    own_group: bool,
 }
 
 impl ChildGuard {
     pub fn new(child: Child) -> Self {
-        Self { child: Some(child) }
+        Self {
+            child: Some(child),
+            own_group: false,
+        }
+    }
+
+    /// Spawn with the child as its own process-group leader, so the guard can
+    /// take down the tree the child goes on to build.
+    ///
+    /// Use this for a child that spawns further processes. Do NOT use it for a
+    /// child that reads a PTY the test also drives: a background process group
+    /// reading its controlling terminal takes SIGTTIN.
+    #[cfg(unix)]
+    pub fn spawn_group_leader(command: &mut std::process::Command) -> Self {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+        Self {
+            child: Some(command.spawn().expect("spawn guarded child")),
+            own_group: true,
+        }
+    }
+
+    /// Signal the group this guard created, then the pid itself as the backstop.
+    ///
+    /// Mirrors `workers::terminate_worker_tree`: a group signal targets
+    /// `pgid == pid`, which is only ours when we made the child a leader.
+    #[cfg(unix)]
+    fn kill_tree(child: &mut Child, own_group: bool) {
+        if own_group {
+            unsafe {
+                libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+            }
+        }
+        let _ = child.kill();
+    }
+
+    #[cfg(not(unix))]
+    fn kill_tree(child: &mut Child, _own_group: bool) {
+        let _ = child.kill();
     }
 
     /// The live child, for a test that polls its own exit.
@@ -238,8 +296,9 @@ impl ChildGuard {
     /// Idempotent, and safe before `Drop`: the drop sees an already-reaped child
     /// and does not signal a pid it no longer owns.
     pub fn kill_now(&mut self) {
+        let own_group = self.own_group;
         if let Some(child) = self.child.as_mut() {
-            let _ = child.kill();
+            Self::kill_tree(child, own_group);
             let _ = child.wait();
         }
     }
@@ -250,6 +309,7 @@ impl ChildGuard {
     /// blocked writing into a full buffer would otherwise never reach its own
     /// shutdown and would always be killed here.
     pub fn shutdown(&mut self, within: Duration, mut tick: impl FnMut()) {
+        let own_group = self.own_group;
         let Some(child) = self.child.as_mut() else {
             return;
         };
@@ -263,18 +323,19 @@ impl ChildGuard {
             tick();
             std::thread::sleep(Duration::from_millis(20));
         }
-        let _ = child.kill();
+        Self::kill_tree(child, own_group);
         let _ = child.wait();
     }
 }
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
+        let own_group = self.own_group;
         let Some(mut child) = self.child.take() else {
             return;
         };
         if matches!(child.try_wait(), Ok(None)) {
-            let _ = child.kill();
+            Self::kill_tree(&mut child, own_group);
         }
         let _ = child.wait();
     }
@@ -342,14 +403,30 @@ pub fn wait_for_file_contents(
 /// Owns exactly the path it was given and nothing else: no globbing over the
 /// temp directory, no removal of workspaces other runs left behind. A
 /// concurrent test's workspace is not this guard's business.
+///
+/// It also refuses to adopt a path that already exists. An earlier cut removed
+/// the directory first, which meant two guards on the same root silently ate
+/// each other's data — the second `create` wiped the first's files, and the
+/// first's `drop` then removed the second's workspace. Since the guard now owns
+/// deletion, taking a path it did not create is how it would delete work it does
+/// not own. A collision is a broken test root, so it fails loudly instead.
 pub struct WorkspaceGuard {
     root: PathBuf,
 }
 
 impl WorkspaceGuard {
-    /// Create the workspace fresh, and own it until the test's scope ends.
+    /// Create the workspace, and own it until the test's scope ends.
+    ///
+    /// Panics if the path already exists: this guard deletes what it owns, so
+    /// adopting a directory someone else made is exactly the mistake to prevent.
     pub fn create(root: PathBuf) -> Self {
-        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            !root.exists(),
+            "test workspace {} already exists; a guard must not adopt (and later \
+             delete) a directory it did not create — give each test root a unique \
+             name",
+            root.display()
+        );
         std::fs::create_dir_all(&root).expect("create test workspace");
         Self { root }
     }

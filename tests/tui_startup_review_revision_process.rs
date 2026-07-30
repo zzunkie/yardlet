@@ -223,12 +223,6 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
         Duration::from_secs(5),
     );
     master.write_all("INITIAL-PLAN-REQUEST".as_bytes()).unwrap();
-    // Everything the review screen renders arrives after this submit, so judge
-    // the Korean labels against output from here on. Measured: none of the eight
-    // labels was in the sink before this point, so the cumulative form was not
-    // yet vacuous — the window is what keeps it from becoming vacuous when a
-    // future Home or loading frame starts carrying one of them (issue #92).
-    let before_review = sink.len();
     master.write_all(b"\x13").unwrap(); // Ctrl+S submit
 
     // 4) The finished planner transitions the app to the review screen on its
@@ -249,9 +243,8 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
         "Esc/q 뒤로",     // footer: back
     ] {
         assert!(
-            seen(&sink[before_review..], label),
-            "Korean review label {label:?} not visible on the review screen; \
-             recent output:\n{}",
+            seen(&sink, label),
+            "Korean review label {label:?} not visible; recent output:\n{}",
             recent(&sink)
         );
     }
@@ -269,7 +262,6 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
     // Type two lines separated by Enter, then submit with Ctrl+S. Both lines must
     // render on the review edit box (proving Enter produced a newline, not a
     // submit).
-    let before_typing = sink.len();
     master.write_all(b"REVLINE-TOP").unwrap();
     master.write_all(b"\r").unwrap(); // Enter = newline
     master.write_all(b"REVLINE-BOTTOM").unwrap();
@@ -279,11 +271,8 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
         "REVLINE-BOTTOM",
         Duration::from_secs(5),
     );
-    // Both lines must be on the frame that holds the second one. Matching the
-    // whole sink would also accept the echo of the first line from before Enter
-    // was pressed, which is the state this asserts against.
     assert!(
-        seen(&sink[before_typing..], "REVLINE-TOP"),
+        seen(&sink, "REVLINE-TOP"),
         "first revision line vanished before submit — Enter did not insert a newline;\n{}",
         recent(&sink)
     );

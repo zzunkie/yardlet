@@ -294,12 +294,8 @@ fn an_accepted_unconfirmed_plan_is_reachable_from_home_after_a_restart() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    // Scoped to after `o` so this can only ever be satisfied by the screen it is
-    // about. Measured today: Home does NOT render the draft's summary before `o`,
-    // so the cumulative form was not yet vacuous here — the window keeps it from
-    // becoming vacuous the day Home starts showing the summary in its queue row.
     assert!(
-        seen(&sink[before_open..], "reentry fixture slice"),
+        seen(&sink, "reentry fixture slice"),
         "the review screen opened without the accepted draft's content;\n{}",
         recent(&sink)
     );

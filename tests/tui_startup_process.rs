@@ -5,14 +5,23 @@ use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod common;
 
 use common::open_pty;
 
 fn test_root(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("yard-tui-startup-{name}-{}", std::process::id()))
+    // Unique per run: WorkspaceGuard refuses to adopt an existing directory, so a
+    // pid alone (which the OS recycles) is not a safe root name.
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "yard-tui-startup-{name}-{}-{nonce}",
+        std::process::id()
+    ))
 }
 
 fn write_worker(path: &Path, sentinel: &Path) {

@@ -157,32 +157,36 @@ fn the_file_wait_does_not_return_on_a_created_but_unwritten_file() {
     let verbatim = "REVLINE-TOP\nREVLINE-BOTTOM";
 
     // Exactly what `printf '%s' "$packet" >"$file"` does in the planner fixture:
-    // create (truncating) first, write second. The gap is the race window.
+    // create (truncating) first, write second. The gap between them is the race.
+    //
+    // Held open by a handshake, not by a sleep. A timing window would make THIS
+    // test the flaky one — the reader only has to be descheduled past the sleep
+    // for the window to close and the test to fail claiming the race never
+    // happened. That is precisely the defect under repair, so it may not be the
+    // method of repair.
+    let (created, file_exists) = std::sync::mpsc::channel();
+    let (observed, reader_looked) = std::sync::mpsc::channel();
     let writing = path.clone();
     let writer = std::thread::spawn(move || {
         let mut file = std::fs::File::create(&writing).expect("create the fixture file");
-        std::thread::sleep(Duration::from_millis(300));
+        created.send(()).expect("announce the empty file");
+        // Blocks until the reader has read. The gap is now as wide as it needs
+        // to be and not one millisecond wider.
+        reader_looked.recv().expect("reader never reported");
         file.write_all(b"REVLINE-TOP\nREVLINE-BOTTOM\n")
             .expect("write the fixture file");
     });
 
-    // The predicate the harness used to wait on. It is satisfied while the file
-    // still holds nothing, which is how the assertion came to fail having
-    // observed no value at all.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut on_existence = None;
-    while Instant::now() < deadline {
-        if path.exists() {
-            on_existence = Some(std::fs::read_to_string(&path).expect("read the fixture file"));
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    let on_existence = on_existence.expect("the fixture file never appeared");
+    // The predicate the harness used to wait on, exercised exactly while the file
+    // holds nothing: satisfied, and satisfied by no value at all.
+    file_exists.recv().expect("writer never created the file");
+    assert!(path.exists(), "the existence predicate did not even hold");
+    let on_existence = std::fs::read_to_string(&path).expect("read the fixture file");
     assert!(
-        !on_existence.contains(verbatim),
-        "the race window never opened, so this test cannot prove the difference"
+        on_existence.is_empty(),
+        "expected the created-but-unwritten file to be empty, got {on_existence:?}"
     );
+    observed.send(()).expect("release the writer");
 
     // The content wait sees the whole value instead.
     let text = common::wait_for_file_contents(
@@ -194,6 +198,55 @@ fn the_file_wait_does_not_return_on_a_created_but_unwritten_file() {
     .expect("the content wait timed out on a file that was written");
     assert!(text.contains(verbatim));
     writer.join().expect("the writer thread panicked");
+}
+
+#[test]
+fn a_group_leader_guard_takes_down_the_children_its_child_spawned() {
+    // `kill` signals one pid. A child that spawns its own children leaves them
+    // running — an independent review of this work proved it with exactly this
+    // shape, so it is pinned here rather than assumed.
+    let pid_path = scratch("descendant").with_extension("pid");
+    let script = format!("sleep 120 & echo $! > {}; wait", pid_path.display());
+    let descendant = {
+        let _guard = common::ChildGuard::spawn_group_leader(
+            Command::new("sh")
+                .args(["-c", &script])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut pid = None;
+        while Instant::now() < deadline {
+            if let Ok(raw) = std::fs::read_to_string(&pid_path) {
+                if let Ok(parsed) = raw.trim().parse::<u32>() {
+                    pid = Some(parsed);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid = pid.expect("the grandchild never reported its pid");
+        assert!(alive(pid), "the grandchild never started");
+        pid
+    };
+
+    assert!(
+        wait_until_gone(descendant, Duration::from_secs(5)),
+        "grandchild {descendant} outlived the guard that owned its parent's group"
+    );
+    let _ = std::fs::remove_file(&pid_path);
+}
+
+#[test]
+#[should_panic(expected = "already exists")]
+fn the_workspace_guard_refuses_to_adopt_a_directory_it_did_not_create() {
+    // Two guards on one root used to eat each other: the second create wiped the
+    // first's files, and the first's drop removed the second's workspace. A guard
+    // that deletes on drop must not adopt what it did not make.
+    let root = scratch("collision");
+    let _first = common::WorkspaceGuard::create(root.clone());
+    let _second = common::WorkspaceGuard::create(root);
 }
 
 #[test]
