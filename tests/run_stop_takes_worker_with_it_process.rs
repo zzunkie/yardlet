@@ -334,3 +334,127 @@ fn stopping_reaches_a_grandchild_whose_launcher_exits_first() {
         fs::read_to_string(root.join("yardlet.err")).unwrap_or_default()
     );
 }
+
+/// A worker that already wrote a valid result, then kept working, must not have
+/// that result finalized as a completed task when the operator interrupts. An
+/// independent review reproduced exactly this: the attempt was recorded stopped
+/// while the queue landed `done`, so the Ctrl-C looked like it finished the work.
+#[test]
+fn a_result_written_before_the_interrupt_does_not_finish_the_task() {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let workspace = common::WorkspaceGuard::create(std::env::temp_dir().join(format!(
+        "yardlet-run-stop-result-{}-{nonce}",
+        std::process::id()
+    )));
+    let root = workspace.path().to_path_buf();
+    must_succeed(&root, Path::new("git"), &["init", "-q"]);
+    must_succeed(&root, Path::new("git"), &["config", "user.name", "fixture"]);
+    must_succeed(
+        &root,
+        Path::new("git"),
+        &["config", "user.email", "fixture@example.invalid"],
+    );
+    fs::write(root.join("README.md"), "fixture\n").unwrap();
+    must_succeed(&root, Path::new("git"), &["add", "README.md"]);
+    must_succeed(&root, Path::new("git"), &["commit", "-qm", "fixture"]);
+    must_succeed(&root, &binary, &["init"]);
+
+    // Writes a complete, valid result FIRST, announces itself, then keeps going.
+    let worker = root.join("fixture-early-result.sh");
+    let ids = root.join("worker-pid");
+    fs::write(
+        &worker,
+        "#!/bin/sh\n\
+         set -eu\n\
+         if [ \"${1:-}\" = \"--version\" ]; then\n\
+         \x20 printf 'fixture-early 1.0\\n'\n\
+         \x20 exit 0\n\
+         fi\n\
+         run_dir=\"$1\"\n\
+         ids=\"$2\"\n\
+         cat >/dev/null\n\
+         printf '{\"status\":\"done\",\"summary\":\"fixture finished early\"}' >\"$run_dir/result.json\"\n\
+         printf '%s\\n' \"$$\" >\"$ids\"\n\
+         sleep 300\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&worker).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&worker, permissions).unwrap();
+
+    fs::write(
+        root.join(".agents/intent-contract.yaml"),
+        "schema_version: 1\nid: intent-early\nsummary: early result fixture\nstatus: accepted\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agents/work-queue.yaml"),
+        "schema_version: 1\nqueue_id: queue-early\nintent_id: intent-early\ntasks:\n  - id: YARD-001\n    title: early result fixture\n    state: queued\n    priority: 10\n    risk: low\n    kind: implementation\n    preferred_worker: fixture\n    acceptance: [an interrupted run is not a finished one]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agents/workers.yaml"),
+        format!(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: {}\n      args: ['{{run_dir}}', '{}']\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 10\n      max_retries: 0\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n",
+            worker.display(),
+            ids.display()
+        ),
+    )
+    .unwrap();
+
+    let yardlet = Command::new(&binary)
+        .args(["run", "--task", "YARD-001", "--execute"])
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(
+            fs::File::create(root.join("yardlet.err")).unwrap(),
+        ))
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let yardlet_pid = yardlet.id() as i32;
+    let mut yardlet = common::ChildGuard::new(yardlet);
+
+    assert!(
+        wait_for(&ids, Duration::from_secs(60)),
+        "the fixture worker never started; yardlet said:\n{}",
+        fs::read_to_string(root.join("yardlet.err")).unwrap_or_default()
+    );
+    assert!(
+        root.join(".agents/runs").exists(),
+        "no run directory was created"
+    );
+
+    assert_eq!(
+        unsafe { libc::kill(yardlet_pid, libc::SIGINT) },
+        0,
+        "could not signal Yardlet"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let mut exited = false;
+    while Instant::now() < deadline {
+        if matches!(yardlet.as_mut().try_wait(), Ok(Some(_))) {
+            exited = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        exited,
+        "Yardlet never finished after the interrupt; it said:\n{}",
+        fs::read_to_string(root.join("yardlet.err")).unwrap_or_default()
+    );
+
+    let queue = fs::read_to_string(root.join(".agents/work-queue.yaml")).unwrap_or_default();
+    assert!(
+        !queue.contains("state: done"),
+        "a result written before the interrupt was finalized as a finished task, \
+         so the Ctrl-C looks like it completed the work:\n{queue}"
+    );
+}

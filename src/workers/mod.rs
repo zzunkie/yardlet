@@ -734,15 +734,28 @@ fn build_resume_command(
 /// signal that follows still has a group to reach.
 #[cfg(unix)]
 fn exited_without_reaping(child: &std::process::Child) -> bool {
-    let mut status = 0;
-    let observed = unsafe {
-        libc::waitpid(
-            child.id() as libc::pid_t,
-            &mut status,
-            libc::WNOHANG | libc::WNOWAIT,
+    // `waitid`, not `waitpid`: WNOWAIT is a `waitid` option, and `waitpid`
+    // rejects it with EINVAL on both macOS and Linux. An independent review
+    // caught that — the first cut used `waitpid` and so reported "not exited"
+    // for every child, which silently turned the grace window into a fixed
+    // three-second wait.
+    //
+    // `waitid` returns 0 whether or not a child was found, so the answer is in
+    // `si_pid`: it stays 0 when nothing has exited yet.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id() as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
         )
     };
-    observed > 0
+    if rc != 0 {
+        return false;
+    }
+    // SAFETY: `si_pid` is populated by the kernel for a WEXITED report.
+    unsafe { info.si_pid() != 0 }
 }
 
 #[cfg(not(unix))]
@@ -1173,6 +1186,10 @@ fn spawn_internal(
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning worker '{}'", bin.display()))?;
+    // Tracked so an emergency exit can still take it down: `process::exit` runs
+    // no destructors, and a worker leads its own group, so nothing else could.
+    crate::signals::track_worker(child.id());
+    let tracked_pid = child.id();
 
     let provenance_result = (|| -> Result<()> {
         let Some((run_id, attempt_id)) = provenance_identity.as_ref() else {
@@ -1516,6 +1533,8 @@ fn spawn_internal(
         .lock()
         .ok()
         .and_then(|captured| captured.clone());
+
+    crate::signals::untrack_worker(tracked_pid);
 
     // A worker that finished in the same instant the operator interrupted still
     // belongs to an interrupted run: whatever comes next — integration, a commit,

@@ -17,11 +17,51 @@
 //! single installation and everything else reads the flag.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Once;
+use std::sync::{Mutex, Once, OnceLock};
 
 static REQUESTED: AtomicBool = AtomicBool::new(false);
 static INSTALL: Once = Once::new();
 static INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// Workers this process started and has not yet reaped.
+///
+/// The emergency exit needs them: a second interrupt that leaves the process
+/// without taking its workers down produces the exact orphan #107 is about, only
+/// faster. Yardlet is still the only holder of these pids.
+fn live_workers() -> &'static Mutex<Vec<u32>> {
+    static LIVE: OnceLock<Mutex<Vec<u32>>> = OnceLock::new();
+    LIVE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Record a worker this process owns, for the duration of its run.
+pub fn track_worker(pid: u32) {
+    if let Ok(mut live) = live_workers().lock() {
+        live.push(pid);
+    }
+}
+
+/// Forget a worker that has been reaped, so its pid is never signalled again
+/// after the OS may have handed it to someone else.
+pub fn untrack_worker(pid: u32) {
+    if let Ok(mut live) = live_workers().lock() {
+        live.retain(|tracked| *tracked != pid);
+    }
+}
+
+/// Take down every worker this process still owns. Used by the emergency exit,
+/// which cannot rely on the normal teardown running.
+fn kill_tracked_workers() {
+    let pids = match live_workers().lock() {
+        Ok(live) => live.clone(),
+        // A poisoned lock means a panic while holding it; the pid list is still
+        // the best information available and leaking workers is the worse
+        // outcome.
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    for pid in pids {
+        crate::workers::terminate_worker_tree(pid, crate::workers::Signal::Kill);
+    }
+}
 
 /// Install the process-wide stop handler. Idempotent, and safe to call from any
 /// command; the second call is a no-op rather than the `MultipleHandlers` error
@@ -43,7 +83,14 @@ pub fn install_stop_handler() -> bool {
             // if a teardown ever wedges. `ctrlc` runs this on its own thread, not
             // in a raw handler, so exiting from here is allowed.
             if REQUESTED.swap(true, Ordering::SeqCst) {
-                eprintln!("\nyardlet: second interrupt — exiting now, workers may be left running");
+                // Take the workers with us BEFORE exiting. `process::exit` runs
+                // no destructors, so an emergency exit that skipped this would
+                // produce the very orphan #107 is about, just faster.
+                kill_tracked_workers();
+                eprintln!(
+                    "\nyardlet: second interrupt — workers killed, exiting now. \
+                     Run `yardlet recover` to settle the interrupted run."
+                );
                 std::process::exit(130); // 128 + SIGINT, what a shell reports
             }
         })

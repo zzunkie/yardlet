@@ -2857,6 +2857,18 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             return Err(error);
         }
     };
+    // A stop joins the convention the TUI's Esc already uses. The marker is what
+    // the rest of this function reads: it stops the resume loop, it stops typed
+    // output-contract recovery and failover from starting a REPLACEMENT worker,
+    // and it makes the attempt's outcome `cancelled` rather than a success
+    // finalized from whatever the interrupted worker had written (issue #107).
+    //
+    // Written durably before any of those decisions, so a crash in this window
+    // leaves the same answer on disk that this process would have given.
+    if outcome.stopped || crate::signals::stop_requested() {
+        outcome.stopped = true;
+        crate::state::write_str_atomic(&run_dir.join("cancelled"), "stopped\n")?;
+    }
     // From this point the worktree may contain completed or partially completed
     // worker work. Any import/finalization error must retain it for recovery;
     // the guard is only for failures before a worker actually ran.
@@ -3005,6 +3017,13 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         });
     }
 
+    // A stop cancels recovery too. This spawns a fresh attempt on a typed
+    // refusal, which is right when the worker is unwell and wrong when the
+    // operator has asked Yardlet to stop — an independent review reproduced
+    // `attempt-2` being created after a SIGINT (issue #107).
+    if run_dir.join("cancelled").is_file() {
+        output_contract_incident = None;
+    }
     if let Some(mut incident) = output_contract_incident.take() {
         // Consume the one-shot budget durably BEFORE spawning. If Yardlet dies
         // in this crash window, orphan recovery reads this receipt and parks
@@ -3118,7 +3137,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // worker is unwell and another should try, but here the missing result is
     // what the operator asked for, and spawning a replacement is the one thing a
     // stop is meant to prevent (issue #107).
-    if !outcome.stopped
+    if !run_dir.join("cancelled").is_file()
         && !run_dir.join("result.json").exists()
         && output_contract_incident.is_none()
     {

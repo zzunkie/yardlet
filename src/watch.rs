@@ -303,6 +303,19 @@ fn run_loop(
         let observation = observer.observe(attempt);
         let met = observation.condition_met;
         observations.push(observation);
+        // Cancellation is decided BEFORE a met condition is accepted. The
+        // observed command can be the very thing that raises the signal, and an
+        // independent review reproduced it: `watch --until success -- sh -c 'kill
+        // -INT "$PPID"'` recorded `satisfied`, so the interrupt read as the run
+        // finishing on its own terms.
+        if crate::signals::stop_requested() || cancelled.load(Ordering::SeqCst) {
+            cancelled.store(true, Ordering::SeqCst);
+            return (
+                "cancelled".into(),
+                observations,
+                "cancel signal received".into(),
+            );
+        }
         if met {
             return (
                 "satisfied".into(),
