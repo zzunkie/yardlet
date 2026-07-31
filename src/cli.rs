@@ -977,7 +977,17 @@ fn cmd_skill(cwd: &std::path::Path, args: SkillArgs) -> Result<()> {
             }
         }
         SkillCmd::Commit { dry_run } => {
-            let pending = crate::skills::uncommitted_harness_assets(&ws);
+            // "Nothing to commit" and "could not look" are different answers, and
+            // this command exists to make durability verifiable (issue #104).
+            let pending = match crate::skills::harness_asset_durability(&ws) {
+                Ok(pending) => pending,
+                Err(reason) => {
+                    anyhow::bail!(
+                        "cannot tell whether learned harness assets are in git: {reason}\n\
+                         They may or may not be durable; this command will not claim either."
+                    );
+                }
+            };
             if pending.is_empty() {
                 println!("Every learned harness asset is already in git.");
                 return Ok(());
