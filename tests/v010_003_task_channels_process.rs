@@ -3,7 +3,12 @@
 mod process_binary_preflight;
 
 #[cfg(unix)]
+mod common;
+
+#[cfg(unix)]
 mod unix {
+    use super::common;
+    use super::common::ChildGuard;
     use super::process_binary_preflight::{preflight_process_binary, CliCapability};
     use serde_yaml_ng::Value;
     use std::fs;
@@ -808,14 +813,20 @@ printf '# Handoff\n\nPolicy-authorized failover completed.\n' >"$run_dir/handoff
             &hook,
             r##"#!/usr/bin/env bash
 set -euo pipefail
+# The pid file is what lets the test reap this hook if an assertion fires while
+# it is still polling; removing it on the way out is what stops the guard from
+# signalling a pid the OS has since handed to someone else.
+printf '%s' "$$" > .agents/failover-hook.pid
 touch .agents/failover-hook-entered
 for _ in $(seq 1 4000); do
   if [[ -f .agents/failover-hook-release ]]; then
     touch .agents/failover-hook-exited
+    rm -f .agents/failover-hook.pid
     exit 0
   fi
   sleep 0.05
 done
+rm -f .agents/failover-hook.pid
 exit 1
 "##,
         )
@@ -824,13 +835,23 @@ exit 1
         permissions.set_mode(0o755);
         fs::set_permissions(&hook, permissions).unwrap();
 
-        let mut running = Command::new(&fixture.binary)
-            .args(["run", "--task", "YARD-FAILOVER", "--execute"])
-            .current_dir(&fixture.root)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        // The hook keeps polling after this test kills Yardlet — that IS the
+        // receipted-orphan state under test — so it cannot be group-killed with
+        // the parent. It can still be reaped by pid if an assertion fires while it
+        // is mid-loop, which otherwise leaves it running out its own 200s timeout.
+        let _hook_guard = common::PidFileGuard::new(
+            fixture.root.join(".agents/failover-hook.pid"),
+            "00-pause-before-finalize",
+        );
+        let mut running = ChildGuard::new(
+            Command::new(&fixture.binary)
+                .args(["run", "--task", "YARD-FAILOVER", "--execute"])
+                .current_dir(&fixture.root)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
         assert!(
             wait_until(LOAD_TOLERANT_WAIT, || {
                 if !fixture.root.join(".agents/failover-hook-entered").is_file() {
@@ -849,8 +870,7 @@ exit 1
             }),
             "failover worker did not reach the receipted pre-finalize crash window"
         );
-        running.kill().unwrap();
-        running.wait().unwrap();
+        running.kill_now();
         fs::write(
             fixture.root.join(".agents/failover-hook-release"),
             "release\n",
@@ -2067,20 +2087,24 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "needs_user"
         );
 
-        let mut resumed = Command::new(&fixture.binary)
-            .args([
-                "answer",
-                "resume",
-                "--task",
-                "YARD-CODEX-BACKPRESSURE",
-                "--action-id",
-                "act-codex-backpressure",
-            ])
-            .current_dir(&fixture.root)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        // Guarded so an assertion below cannot unwind past the kill and
+        // abandon a live child (issue #64).
+        let mut resumed = ChildGuard::new(
+            Command::new(&fixture.binary)
+                .args([
+                    "answer",
+                    "resume",
+                    "--task",
+                    "YARD-CODEX-BACKPRESSURE",
+                    "--action-id",
+                    "act-codex-backpressure",
+                ])
+                .current_dir(&fixture.root)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
         assert!(
             wait_until(LOAD_TOLERANT_WAIT, || {
                 files_below(&fixture.root.join(".agents/runs"), "/result.json")
@@ -2093,11 +2117,13 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "resume fixture never published its successful result"
         );
         let result_seen = Instant::now();
-        let exited = wait_until(LOAD_TOLERANT_WAIT, || resumed.try_wait().unwrap().is_some());
+        let exited = wait_until(LOAD_TOLERANT_WAIT, || {
+            resumed.as_mut().try_wait().unwrap().is_some()
+        });
         if !exited {
-            let _ = resumed.kill();
+            resumed.kill_now();
         }
-        let output = resumed.wait_with_output().unwrap();
+        let output = resumed.into_inner().wait_with_output().unwrap();
         assert!(
             exited,
             "Yardlet parent exceeded the load-tolerant hard timeout"
@@ -2231,13 +2257,17 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "  - id: YARD-REDIRECT\n    title: running worker is redirected\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
         );
 
-        let mut running = Command::new(&fixture.binary)
-            .args(["run", "--task", "YARD-REDIRECT", "--execute"])
-            .current_dir(&fixture.root)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        // Guarded so an assertion below cannot unwind past the kill and
+        // abandon a live child (issue #64).
+        let mut running = ChildGuard::new(
+            Command::new(&fixture.binary)
+                .args(["run", "--task", "YARD-REDIRECT", "--execute"])
+                .current_dir(&fixture.root)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
         let started = wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-REDIRECT") == "running"
                 && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
@@ -2249,8 +2279,8 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
                     })
         });
         if !started {
-            let _ = running.kill();
-            let output = running.wait_with_output().unwrap();
+            running.kill_now();
+            let output = running.into_inner().wait_with_output().unwrap();
             panic!(
                 "redirect fixture never reached running with a checkpoint handoff\nstdout:\n{}\nstderr:\n{}",
                 String::from_utf8_lossy(&output.stdout),
@@ -2267,7 +2297,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "--action-id",
             "act-running-redirect",
         ]);
-        let original = running.wait_with_output().unwrap();
+        let original = running.into_inner().wait_with_output().unwrap();
         assert!(original.status.success());
 
         let channel = channel_dir(&fixture.root, "YARD-REDIRECT");
@@ -2336,13 +2366,17 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "  - id: YARD-EXACT-REDIRECT\n    title: exact redirect lineage\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n    model: gpt-5.6-sol\n    fallback_enabled: false\n",
         );
 
-        let mut running = Command::new(&fixture.binary)
-            .args(["run", "--task", "YARD-EXACT-REDIRECT", "--execute"])
-            .current_dir(&fixture.root)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        // Guarded so an assertion below cannot unwind past the kill and
+        // abandon a live child (issue #64).
+        let mut running = ChildGuard::new(
+            Command::new(&fixture.binary)
+                .args(["run", "--task", "YARD-EXACT-REDIRECT", "--execute"])
+                .current_dir(&fixture.root)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
         let started = wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-EXACT-REDIRECT") == "running"
                 && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
@@ -2354,8 +2388,8 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
                     })
         });
         if !started {
-            let _ = running.kill();
-            let output = running.wait_with_output().unwrap();
+            running.kill_now();
+            let output = running.into_inner().wait_with_output().unwrap();
             panic!(
                 "exact redirect fixture never reached running\nstdout:\n{}\nstderr:\n{}",
                 String::from_utf8_lossy(&output.stdout),
@@ -2370,7 +2404,12 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "--action-id",
             "act-exact-model-redirect",
         ]);
-        assert!(running.wait_with_output().unwrap().status.success());
+        assert!(running
+            .into_inner()
+            .wait_with_output()
+            .unwrap()
+            .status
+            .success());
         assert_eq!(task_state(&fixture.root, "YARD-EXACT-REDIRECT"), "done");
         assert_exact_queue_task(&fixture.root, "YARD-EXACT-REDIRECT", "YARD-EXACT-REDIRECT");
         let runs = run_dirs_for_task(&fixture.root, "YARD-EXACT-REDIRECT");
@@ -2449,20 +2488,24 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "  - id: YARD-REDIRECT\n    title: redirect verifies worker provenance\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
         );
 
-        let mut running = Command::new(&fixture.binary)
-            .args(["run", "--task", "YARD-REDIRECT", "--execute"])
-            .current_dir(&fixture.root)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        // Guarded so an assertion below cannot unwind past the kill and
+        // abandon a live child (issue #64).
+        let mut running = ChildGuard::new(
+            Command::new(&fixture.binary)
+                .args(["run", "--task", "YARD-REDIRECT", "--execute"])
+                .current_dir(&fixture.root)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
         let started = wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-REDIRECT") == "running"
                 && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
         });
         if !started {
-            let _ = running.kill();
-            let output = running.wait_with_output().unwrap();
+            running.kill_now();
+            let output = running.into_inner().wait_with_output().unwrap();
             panic!(
                 "redirect provenance fixture never reached running\nstdout:\n{}\nstderr:\n{}",
                 String::from_utf8_lossy(&output.stdout),
@@ -2519,7 +2562,9 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         );
         assert!(!run_dir.join("cancelled").exists());
 
-        let mut decoy = Command::new("sleep").arg("600").spawn().unwrap();
+        // The long-lived decoy that leaked for 26 hours when an assertion below
+        // fired before its kill (issue #64).
+        let mut decoy = ChildGuard::new(Command::new("sleep").arg("600").spawn().unwrap());
         let decoy_pid = decoy.id();
         fs::write(&pid_path, decoy_pid.to_string()).unwrap();
 
@@ -2537,16 +2582,15 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             ],
         );
         let worker_was_still_alive = process_is_alive(worker_pid);
-        let decoy_survived = decoy.try_wait().unwrap().is_none();
+        let decoy_survived = decoy.as_mut().try_wait().unwrap().is_none();
 
         if worker_was_still_alive {
             let _ = Command::new("kill").arg(worker_pid.to_string()).status();
         }
-        let original = running.wait_with_output().unwrap();
+        let original = running.into_inner().wait_with_output().unwrap();
         if decoy_survived {
-            let _ = decoy.kill();
+            decoy.kill_now();
         }
-        let _ = decoy.wait();
 
         assert!(
             redirect.status.success(),
@@ -2572,7 +2616,8 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "  - id: YARD-DEAD-WORKER\n    title: externally killed worker status\n    state: running\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
         );
 
-        let mut worker = Command::new("sleep").arg("599").spawn().unwrap();
+        // Same shape, same leak (issue #64).
+        let mut worker = ChildGuard::new(Command::new("sleep").arg("599").spawn().unwrap());
         let worker_pid = worker.id();
         let marker =
             process_start_marker(worker_pid).expect("fixture worker identity must be observable");
@@ -2611,8 +2656,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "verified live worker must not be diagnosed as interrupted"
         );
 
-        worker.kill().unwrap();
-        worker.wait().unwrap();
+        worker.kill_now();
         assert!(!process_is_alive(worker_pid));
 
         let queue_path = fixture.root.join(".agents/work-queue.yaml");
@@ -2817,13 +2861,17 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "  - id: YARD-LIVE\n    title: live provider progress and artifacts\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: codex\n",
         );
 
-        let mut running = Command::new(&fixture.binary)
-            .args(["run", "--task", "YARD-LIVE", "--execute"])
-            .current_dir(&fixture.root)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        // Guarded so an assertion below cannot unwind past the kill and
+        // abandon a live child (issue #64).
+        let mut running = ChildGuard::new(
+            Command::new(&fixture.binary)
+                .args(["run", "--task", "YARD-LIVE", "--execute"])
+                .current_dir(&fixture.root)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
 
         let live_events_visible = wait_until(LOAD_TOLERANT_WAIT, || {
             let Some(channel) = maybe_channel_dir(&fixture.root, "YARD-LIVE") else {
@@ -2860,7 +2908,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             "normalized events were not visible while the worker lived"
         );
         assert!(
-            running.try_wait().unwrap().is_none(),
+            running.as_mut().try_wait().unwrap().is_none(),
             "worker run exited before live channel observation"
         );
 
@@ -2895,7 +2943,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
                 .contains("private fixture reasoning")
         }));
 
-        let output = running.wait_with_output().unwrap();
+        let output = running.into_inner().wait_with_output().unwrap();
         assert!(
             output.status.success(),
             "live fixture failed\nstdout:\n{}\nstderr:\n{}",
@@ -3111,13 +3159,17 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
         fixture.write_queue(
             "  - id: YARD-REDIRECT\n    title: redirect receipt crash recovery\n    state: queued\n    priority: 10\n    kind: implementation\n    preferred_worker: fixture\n",
         );
-        let running = Command::new(&fixture.binary)
-            .args(["run", "--task", "YARD-REDIRECT", "--execute"])
-            .current_dir(&fixture.root)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        // Guarded so an assertion below cannot unwind past the kill and
+        // abandon a live child (issue #64).
+        let running = ChildGuard::new(
+            Command::new(&fixture.binary)
+                .args(["run", "--task", "YARD-REDIRECT", "--execute"])
+                .current_dir(&fixture.root)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
         assert!(wait_until(LOAD_TOLERANT_WAIT, || {
             task_state(&fixture.root, "YARD-REDIRECT") == "running"
                 && !files_below(&fixture.root.join(".agents/runs"), "/worker.pid").is_empty()
@@ -3141,7 +3193,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             !crashed.status.success(),
             "redirect did not stop after the terminal receipt"
         );
-        let original = running.wait_with_output().unwrap();
+        let original = running.into_inner().wait_with_output().unwrap();
         assert!(original.status.success());
         let channel = channel_dir(&fixture.root, "YARD-REDIRECT");
         let prepared_attempts = yaml_dir(&channel.join("attempts"));

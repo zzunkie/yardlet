@@ -9,14 +9,15 @@
 
 #![cfg(unix)]
 
-use std::fs::{self, File};
-use std::io::{ErrorKind, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod common;
+
+use common::{drain, open_pty, recent, resize_pty, seen, wait_for_marker};
 
 fn test_root() -> PathBuf {
     let nonce = SystemTime::now()
@@ -32,144 +33,13 @@ fn test_root() -> PathBuf {
 /// rows, which fit the whole list and hid that the screen could not scroll.
 const ROWS: u16 = 24;
 
-fn open_pty() -> (File, File) {
-    let mut master = -1;
-    let mut slave = -1;
-    let mut size = libc::winsize {
-        ws_row: ROWS,
-        ws_col: 140,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let rc = unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut size as *mut libc::winsize,
-        )
-    };
-    assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
-    let master = unsafe { File::from_raw_fd(master) };
-    let slave = unsafe { File::from_raw_fd(slave) };
-    let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
-    assert!(flags >= 0);
-    let rc = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    assert_eq!(rc, 0);
-    (master, slave)
-}
-
-/// Force a full repaint.
-///
-/// Ratatui writes only CHANGED cells, so after scrolling a string can lose any
-/// character whose cell happened to already hold it — exact matching on
-/// scrolled content is unreliable. A resize makes the next frame a complete
-/// one. The column change is cosmetic and preserves the scroll offset, so what
-/// is on screen is still what scrolling brought there.
-fn force_repaint(master: &File, cols: u16) {
-    let size = libc::winsize {
-        ws_row: ROWS,
-        ws_col: cols,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let rc = unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &size) };
-    assert_eq!(
-        rc,
-        0,
-        "TIOCSWINSZ failed: {}",
-        std::io::Error::last_os_error()
-    );
-}
-
-fn drain(master: &mut File, sink: &mut Vec<u8>) {
-    let mut buffer = [0_u8; 8192];
-    loop {
-        match master.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(count) => sink.extend_from_slice(&buffer[..count]),
-            Err(error) if error.kind() == ErrorKind::WouldBlock => break,
-            Err(error) => panic!("PTY read failed: {error}"),
-        }
-    }
-}
-
-fn strip_ansi(bytes: &[u8]) -> String {
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1b {
-            match bytes.get(i + 1) {
-                Some(b'[') => {
-                    i += 2;
-                    while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
-                        i += 1;
-                    }
-                    i += usize::from(i < bytes.len());
-                }
-                Some(b']') => {
-                    i += 2;
-                    while i < bytes.len() {
-                        if bytes[i] == 0x07 {
-                            i += 1;
-                            break;
-                        }
-                        if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
-                            i += 2;
-                            break;
-                        }
-                        i += 1;
-                    }
-                }
-                Some(_) => i += 2,
-                None => break,
-            }
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn norm(s: &str) -> String {
-    s.chars().filter(|c| !c.is_whitespace()).collect()
-}
-
-fn seen(sink: &[u8], marker: &str) -> bool {
-    norm(&strip_ansi(sink)).contains(&norm(marker))
-}
-
-fn recent(sink: &[u8]) -> String {
-    let text = strip_ansi(sink);
-    let chars: Vec<char> = text.chars().collect();
-    let start = chars.len().saturating_sub(900);
-    chars[start..].iter().collect()
-}
-
-fn wait_for_marker(master: &mut File, sink: &mut Vec<u8>, marker: &str, within: Duration) {
-    let deadline = Instant::now() + within;
-    loop {
-        drain(master, sink);
-        if seen(sink, marker) {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "marker {marker:?} not seen within {within:?}; recent output:\n{}",
-            recent(sink)
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
 #[test]
 fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
-    let root = test_root();
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
+    // Removed even if an assertion below unwinds past the clean exit — the other
+    // half of issue #64.
+    let workspace = common::WorkspaceGuard::create(test_root());
+    let root = workspace.path().to_path_buf();
 
     let init = Command::new(&binary)
         .arg("init")
@@ -187,7 +57,7 @@ fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
         .replace("language: auto", "language: en");
     fs::write(&config_path, config).unwrap();
 
-    let (mut master, slave) = open_pty();
+    let (mut master, slave) = open_pty(ROWS, 140);
     let stdin = Stdio::from(slave.try_clone().unwrap());
     let stdout = Stdio::from(slave.try_clone().unwrap());
     let stderr = Stdio::from(slave);
@@ -232,11 +102,11 @@ fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
         drain(&mut master, &mut sink);
     }
 
-    force_repaint(&master, 139);
+    resize_pty(&master, ROWS, 139);
     std::thread::sleep(Duration::from_millis(300));
     drain(&mut master, &mut sink);
     let after_repaint = sink.len();
-    force_repaint(&master, 140);
+    resize_pty(&master, ROWS, 140);
     std::thread::sleep(Duration::from_millis(300));
     drain(&mut master, &mut sink);
 
@@ -279,5 +149,5 @@ fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
     std::thread::sleep(Duration::from_millis(200));
     let _ = master.write_all(b"q");
     child.shutdown(Duration::from_secs(5), || drain(&mut master, &mut sink));
-    let _ = fs::remove_dir_all(&root);
+    // `workspace` removes the root on drop, on this path and on a panicking one.
 }

@@ -1,17 +1,27 @@
 #![cfg(unix)]
 
-use std::fs::{self, File};
+use std::fs;
 use std::io::{ErrorKind, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod common;
 
+use common::open_pty;
+
 fn test_root(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("yard-tui-startup-{name}-{}", std::process::id()))
+    // Unique per run: WorkspaceGuard refuses to adopt an existing directory, so a
+    // pid alone (which the OS recycles) is not a safe root name.
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "yard-tui-startup-{name}-{}-{nonce}",
+        std::process::id()
+    ))
 }
 
 fn write_worker(path: &Path, sentinel: &Path) {
@@ -34,40 +44,13 @@ fn write_worker(path: &Path, sentinel: &Path) {
     fs::set_permissions(path, permissions).unwrap();
 }
 
-fn open_pty() -> (File, File) {
-    let mut master = -1;
-    let mut slave = -1;
-    let mut size = libc::winsize {
-        ws_row: 30,
-        ws_col: 120,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let rc = unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut size as *mut libc::winsize,
-        )
-    };
-    assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
-    let master = unsafe { File::from_raw_fd(master) };
-    let slave = unsafe { File::from_raw_fd(slave) };
-    let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
-    assert!(flags >= 0);
-    let rc = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    assert_eq!(rc, 0);
-    (master, slave)
-}
-
 #[test]
 fn slow_probe_and_recovery_do_not_block_first_safe_tui_frame() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
-    let root = test_root("first-frame");
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
+    // Removed even if an assertion below unwinds past the clean exit — the other
+    // half of issue #64.
+    let workspace = common::WorkspaceGuard::create(test_root("first-frame"));
+    let root = workspace.path().to_path_buf();
 
     let init = Command::new(&binary)
         .arg("init")
@@ -91,7 +74,7 @@ fn slow_probe_and_recovery_do_not_block_first_safe_tui_frame() {
     write_worker(&bin_dir.join("codex"), &sentinel);
     write_worker(&bin_dir.join("claude"), &sentinel);
 
-    let (mut master, slave) = open_pty();
+    let (mut master, slave) = open_pty(30, 120);
     let stdin = Stdio::from(slave.try_clone().unwrap());
     let stdout = Stdio::from(slave.try_clone().unwrap());
     let stderr = Stdio::from(slave);
@@ -156,5 +139,5 @@ fn slow_probe_and_recovery_do_not_block_first_safe_tui_frame() {
     master.write_all(b"q").unwrap();
 
     child.shutdown(Duration::from_secs(3), || {});
-    let _ = fs::remove_dir_all(root);
+    // `workspace` removes the root on drop, on this path and on a panicking one.
 }

@@ -24,15 +24,16 @@
 
 #![cfg(unix)]
 
-use std::fs::{self, File};
-use std::io::{ErrorKind, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod common;
+
+use common::{drain, open_pty, recent, seen, wait_for_marker};
 
 /// Slow-recovery injection (debug + `YARDLET_PROCESS_FIXTURE=1` only). Big enough
 /// that the loading screen is unmistakably shown before Home, small enough to
@@ -110,157 +111,13 @@ fn write_planner(path: &Path) {
     fs::set_permissions(path, permissions).unwrap();
 }
 
-fn open_pty() -> (File, File) {
-    let mut master = -1;
-    let mut slave = -1;
-    let mut size = libc::winsize {
-        ws_row: 40,
-        ws_col: 140,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let rc = unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut size as *mut libc::winsize,
-        )
-    };
-    assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
-    let master = unsafe { File::from_raw_fd(master) };
-    let slave = unsafe { File::from_raw_fd(slave) };
-    let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
-    assert!(flags >= 0);
-    let rc = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    assert_eq!(rc, 0);
-    (master, slave)
-}
-
-/// Drain everything currently readable from the master into `sink`. Draining
-/// continuously is mandatory: if the PTY buffer fills, the child blocks on its
-/// next render and the whole TUI event loop stalls.
-fn drain(master: &mut File, sink: &mut Vec<u8>) {
-    let mut buffer = [0_u8; 8192];
-    loop {
-        match master.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(count) => sink.extend_from_slice(&buffer[..count]),
-            Err(error) if error.kind() == ErrorKind::WouldBlock => break,
-            Err(error) => panic!("PTY read failed: {error}"),
-        }
-    }
-}
-
-/// Remove ANSI/VT control sequences so the visible glyphs collapse into reading
-/// order. Ratatui positions every wide (CJK) cell with its own cursor-move
-/// escape, so a Korean word is *not* a contiguous byte run in the raw stream —
-/// stripping the escapes is what makes it one again.
-fn strip_ansi(bytes: &[u8]) -> String {
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1b {
-            match bytes.get(i + 1) {
-                Some(b'[') => {
-                    // CSI: consume params/intermediates up to the final byte.
-                    i += 2;
-                    while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
-                        i += 1;
-                    }
-                    i += usize::from(i < bytes.len());
-                }
-                Some(b']') => {
-                    // OSC: terminated by BEL or ST (ESC \).
-                    i += 2;
-                    while i < bytes.len() {
-                        if bytes[i] == 0x07 {
-                            i += 1;
-                            break;
-                        }
-                        if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
-                            i += 2;
-                            break;
-                        }
-                        i += 1;
-                    }
-                }
-                Some(_) => i += 2, // other two-byte escapes
-                None => break,
-            }
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Whitespace between cells is likewise emitted as cursor motion, so compare the
-/// visible text with all whitespace removed.
-fn norm(s: &str) -> String {
-    s.chars().filter(|c| !c.is_whitespace()).collect()
-}
-
-fn visible(sink: &[u8]) -> String {
-    norm(&strip_ansi(sink))
-}
-
-fn seen(sink: &[u8], marker: &str) -> bool {
-    visible(sink).contains(&norm(marker))
-}
-
-fn recent(sink: &[u8]) -> String {
-    let text = strip_ansi(sink);
-    let chars: Vec<char> = text.chars().collect();
-    let start = chars.len().saturating_sub(600);
-    chars[start..].iter().collect()
-}
-
-/// Read (draining) until `marker` shows up in the visible output, or panic with
-/// the tail of what was actually rendered.
-fn wait_for_marker(master: &mut File, sink: &mut Vec<u8>, marker: &str, within: Duration) {
-    let deadline = Instant::now() + within;
-    loop {
-        drain(master, sink);
-        if seen(sink, marker) {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "marker {marker:?} not seen within {within:?}; recent output:\n{}",
-            recent(sink)
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-/// Poll for a file to appear while still draining the PTY, so the child never
-/// blocks on render while we wait for its worker side effect.
-fn wait_for_file(master: &mut File, sink: &mut Vec<u8>, path: &Path, within: Duration) {
-    let deadline = Instant::now() + within;
-    loop {
-        drain(master, sink);
-        if path.exists() {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "expected fixture file {} within {within:?}; recent output:\n{}",
-            path.display(),
-            recent(sink)
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
 #[test]
 fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
-    let root = test_root();
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
+    // Removed even if an assertion below unwinds past the clean exit — the other
+    // half of issue #64.
+    let workspace = common::WorkspaceGuard::create(test_root());
+    let root = workspace.path().to_path_buf();
 
     // Canonical workspace init, then pin the UI to Korean.
     let init = Command::new(&binary)
@@ -315,7 +172,7 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
     )
     .unwrap();
 
-    let (mut master, slave) = open_pty();
+    let (mut master, slave) = open_pty(40, 140);
     let stdin = Stdio::from(slave.try_clone().unwrap());
     let stdout = Stdio::from(slave.try_clone().unwrap());
     let stderr = Stdio::from(slave);
@@ -422,13 +279,25 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
     master.write_all(b"\x13").unwrap(); // Ctrl+S submit revision
 
     // 7) The verbatim two-line revision must reach the planner as a second turn.
+    //
+    // Wait on the CONTENT, not on the path existing: the fixture creates the file
+    // and writes it in two steps, so an existence-only wait reads an empty string
+    // and the assertion fails having observed nothing at all.
     let turn_two = root.join(".fixture-capture/turn-2.md");
-    wait_for_file(&mut master, &mut sink, &turn_two, Duration::from_secs(20));
-    let packet = fs::read_to_string(&turn_two).unwrap();
-    assert!(
-        packet.contains("REVLINE-TOP\nREVLINE-BOTTOM"),
-        "second planner packet did not carry the verbatim multi-line revision;\npacket:\n{packet}"
-    );
+    let verbatim = "REVLINE-TOP\nREVLINE-BOTTOM";
+    if let Err(last) = common::wait_for_file_contents(
+        &turn_two,
+        Duration::from_secs(20),
+        || drain(&mut master, &mut sink),
+        |packet| packet.contains(verbatim),
+    ) {
+        panic!(
+            "second planner packet did not carry the verbatim multi-line revision \
+             within 20s;\nlast contents of {}:\n{last}\nrecent output:\n{}",
+            turn_two.display(),
+            recent(&sink)
+        );
+    }
     let turns = fs::read_to_string(root.join(".fixture-planning-turn")).unwrap();
     assert_eq!(
         turns.trim(),
@@ -442,5 +311,5 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
     std::thread::sleep(Duration::from_millis(150));
     let _ = master.write_all(b"q");
     child.shutdown(Duration::from_secs(5), || drain(&mut master, &mut sink));
-    let _ = fs::remove_dir_all(&root);
+    // `workspace` removes the root on drop, on this path and on a panicking one.
 }
