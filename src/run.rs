@@ -8421,16 +8421,19 @@ fn untracked_harness_assets(ws: &Workspace, skills: &[String], rules: &[String])
         .into_iter()
         .filter(|path| ws.root.join(path).exists())
         .filter(|path| {
-            // `ls-files --error-unmatch` exits non-zero for a path git does not
-            // track. Treat an unavailable git as "cannot prove it is tracked"
-            // and stay quiet rather than nagging with a wrong claim.
+            // `ls-files --error-unmatch` exits 1 for a path git does not track.
+            // ONLY that exit code means untracked. Any other failure means the
+            // question was not answered, and reporting "NOT in git yet" on the
+            // strength of a git that exited 42 is a claim this never checked
+            // (issue #104). Silence is the honest response to an unanswered
+            // question here, because the notice only ever adds a warning.
             std::process::Command::new("git")
                 .arg("-C")
                 .arg(&ws.root)
                 .args(["ls-files", "--error-unmatch", "--"])
                 .arg(path)
                 .output()
-                .map(|out| !out.status.success())
+                .map(|out| out.status.code() == Some(1))
                 .unwrap_or(false)
         })
         .collect()
@@ -8718,6 +8721,40 @@ mod tests {
         assert!(untracked_harness_assets(&ws, &[], &[]).is_empty());
         // A name with no file on disk is never reported.
         assert!(untracked_harness_assets(&ws, &["ghost".to_string()], &[]).is_empty());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Only "git looked and does not track it" may produce the warning. A git
+    /// that fails for any other reason has not answered the question, and saying
+    /// "NOT in git yet" on the strength of that is a claim nothing verified
+    /// (issue #104, found while reviewing the fix for it).
+    ///
+    /// A directory that is not a repository is the realistic case: the file is
+    /// right there on disk, and `ls-files --error-unmatch` exits 128, not the 1
+    /// that means "this path is untracked".
+    #[test]
+    fn a_git_that_fails_for_another_reason_does_not_become_untracked() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-untracked-nonrepo-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let skill = root.join(".agents/skills/some-skill/SKILL.md");
+        std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        std::fs::write(&skill, "body\n").unwrap();
+
+        let ws = Workspace::at(&root);
+        let reported = untracked_harness_assets(&ws, &["some-skill".to_string()], &[]);
+        assert!(
+            reported.is_empty(),
+            "git failing because this is not a repository was read as proof the \
+             asset is untracked: {reported:?}"
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }

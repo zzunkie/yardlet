@@ -1096,7 +1096,16 @@ pub fn scores(ws: &Workspace) -> Vec<SkillScore> {
 /// git the record and the safety net for skill learning with no human gate, so
 /// the gap between "learned" and "in git" is a gap in that safety net (issue
 /// #45). Reads the same two roots the learning loop writes.
-pub fn uncommitted_harness_assets(ws: &Workspace) -> Vec<String> {
+/// `Ok(paths)` means git was asked and reported; an empty vector is then a real
+/// "everything is committed". `Err(reason)` means the check did not happen —
+/// git missing, not a repository, git failing — and the caller must NOT report
+/// durability it never established (issue #104).
+///
+/// Fallible on purpose, with no infallible companion. The version that swallowed
+/// the failure into an empty vector is what let `yardlet skill commit` announce
+/// "Every learned harness asset is already in git" having checked nothing, and a
+/// caller cannot make that mistake against a `Result` it has to handle.
+pub fn harness_asset_durability(ws: &Workspace) -> Result<Vec<String>, String> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(&ws.root)
@@ -1111,60 +1120,183 @@ pub fn uncommitted_harness_assets(ws: &Workspace) -> Vec<String> {
         ])
         .env("LC_ALL", "C")
         .output();
-    let Ok(output) = output else {
-        return Vec::new();
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => return Err(format!("could not run git: {error}")),
     };
     if !output.status.success() {
-        return Vec::new();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.lines().next().unwrap_or("git reported no detail");
+        return Err(format!(
+            "git could not report on {}: {detail}",
+            ws.root.display()
+        ));
     }
     let raw = String::from_utf8_lossy(&output.stdout);
     let mut chunks = raw.split('\0');
-    let mut paths = Vec::new();
+    let mut entries: Vec<(String, Option<String>)> = Vec::new();
     while let Some(entry) = chunks.next() {
         if entry.len() < 4 {
             continue;
         }
         let status = &entry[..2];
         let path = entry[3..].to_string();
-        if status.starts_with('R') || status.starts_with('C') {
-            chunks.next();
-        }
+        // A rename record is `XY <new>\0<old>\0`. Keep the old name: when the new
+        // one has since been deleted too, `HEAD` only knows the asset by the old
+        // one, and dropping it is how a deletion became unclassifiable.
+        let previous = if status.starts_with('R') || status.starts_with('C') {
+            chunks.next().map(str::to_string)
+        } else {
+            None
+        };
         if !path.is_empty() {
+            entries.push((path, previous));
+        }
+    }
+    let mut paths = Vec::new();
+    for (path, previous) in entries {
+        if classify_harness_asset(ws, &path, previous.as_deref())? {
             paths.push(path);
         }
     }
-    paths.retain(|path| is_learned_harness_asset(ws, path));
     paths.sort();
     paths.dedup();
-    paths
+    Ok(paths)
 }
 
 /// Is this path a LEARNED harness asset, as opposed to a library skill the
-/// operator equipped or a managed builtin?
+/// operator equipped, a managed builtin, or one they wrote by hand?
 ///
-/// `.agents/skills/` holds all three. Only the learned ones are what the
-/// learning loop writes with no human gate, and only they are what issue #45 is
-/// about — sweeping an equipped bundle into a `chore(harness)` commit would be
-/// a different, unrequested change to the operator's repository.
-fn is_learned_harness_asset(ws: &Workspace, path: &str) -> bool {
+/// `.agents/skills/` holds all of those. Only the learned ones come from the
+/// no-human-gate learning loop, and only they are what issue #45 is about —
+/// sweeping an equipped bundle into a `chore(harness)` commit would be a
+/// different, unrequested change to the operator's repository.
+///
+/// Decided by the asset's own declaration, not by a sibling marker file. The
+/// marker proxy was wrong three ways (issue #103): a `source: created` skill
+/// carries no marker, `yardlet init` scaffolds `planning-gate` without one
+/// (`src/init.rs`), and a DELETED managed skill loses its marker along with the
+/// directory — so its removal would have been committed as "track learned".
+/// `write_skill` stamps `source:` on everything it writes, so the front matter
+/// is the fact and the marker was only ever a guess at it.
+/// `Err` when the answer cannot be established, never a quiet `false`.
+///
+/// A path this cannot classify used to be dropped from the result, and an empty
+/// result reads as "everything is committed" — the same false durability claim
+/// #104 is about, arriving through the back door. If the manifest is neither on
+/// disk nor in `HEAD`, say so and let the caller refuse to claim.
+fn classify_harness_asset(
+    ws: &Workspace,
+    path: &str,
+    previous: Option<&str>,
+) -> Result<bool, String> {
     if let Some(rest) = path.strip_prefix(".agents/rules/") {
-        return rest.starts_with("learned-") && rest.ends_with(".md");
+        return Ok(rest.starts_with("learned-") && rest.ends_with(".md"));
     }
     let Some(rest) = path.strip_prefix(".agents/skills/") else {
-        return false;
+        return Ok(false);
     };
     let Some(slug) = rest.split('/').next().filter(|slug| !slug.is_empty()) else {
-        return false;
+        return Ok(false);
     };
-    // The bundle directory and anything carrying a managed marker came from the
-    // library, not from a run.
-    !slug.starts_with('.')
-        && !ws
-            .agents_dir()
-            .join("skills")
-            .join(slug)
-            .join(".yardlet-managed.yaml")
-            .exists()
+    if slug.starts_with('.') {
+        return Ok(false); // the managed bundle directory
+    }
+    let manifest = format!(".agents/skills/{slug}/SKILL.md");
+    // On disk first; for a deletion the file is already gone, so ask git what it
+    // was. Judging a removal by what is left on disk is how it got misread.
+    if let Ok(text) = std::fs::read_to_string(ws.root.join(&manifest)) {
+        return Ok(declares_learned(&text));
+    }
+    if let Some(text) = committed_blob(ws, &manifest)? {
+        return Ok(declares_learned(&text));
+    }
+    // A rename whose destination was then deleted: `HEAD` only has the old name.
+    if let Some(previous) = previous {
+        let previous_manifest = previous
+            .strip_prefix(".agents/skills/")
+            .and_then(|rest| rest.split('/').next())
+            .map(|slug| format!(".agents/skills/{slug}/SKILL.md"));
+        if let Some(previous_manifest) = previous_manifest {
+            if let Some(text) = committed_blob(ws, &previous_manifest)? {
+                return Ok(declares_learned(&text));
+            }
+        }
+    }
+    Err(format!(
+        "cannot tell what {manifest} is: it is not on disk and HEAD does not have it"
+    ))
+}
+
+/// Does this SKILL.md's FRONT MATTER say the learning loop wrote it?
+///
+/// Parsed as YAML from the delimited block, not matched as a line anywhere near
+/// the top. A scan is wrong in both directions, and an adversarial review
+/// demonstrated both: a `source: created` skill whose body opened with a
+/// `source: learned` line read as learned, and a legitimate `source: "learned"`
+/// read as not. `write_skill` interpolates an operator-supplied description
+/// ahead of the `source` key, so the body is not even the only way in.
+fn declares_learned(manifest: &str) -> bool {
+    front_matter(manifest)
+        .and_then(|block| serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&block).ok())
+        .and_then(|value| {
+            value
+                .get("source")
+                .and_then(|source| source.as_str().map(str::to_string))
+        })
+        .is_some_and(|source| source.trim() == "learned")
+}
+
+/// The text between the opening `---` and the next `---`, if the file opens with
+/// one at all.
+fn front_matter(manifest: &str) -> Option<String> {
+    let mut lines = manifest.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    let mut block = String::new();
+    for line in lines {
+        if line.trim() == "---" {
+            return Some(block);
+        }
+        block.push_str(line);
+        block.push('\n');
+    }
+    None // unterminated front matter is not front matter
+}
+
+/// The file as `HEAD` has it, for a path that no longer exists on disk.
+///
+/// `Ok(None)` means git answered and does not have that path. `Err` means git
+/// could not be asked, which is a different thing and must not read as absence —
+/// an unreadable check that looks like "no learned assets" is exactly the claim
+/// #104 forbids.
+fn committed_blob(ws: &Workspace, path: &str) -> Result<Option<String>, String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&ws.root)
+        .args(["show", &format!("HEAD:{path}")])
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|error| format!("could not run git show for {path}: {error}"))?;
+    if output.status.success() {
+        return Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // "does not exist" / "exists on disk, but not in" / unborn HEAD are real
+    // answers: git looked and the path is not there.
+    let absent = stderr.contains("does not exist")
+        || stderr.contains("exists on disk, but not in")
+        || stderr.contains("unknown revision")
+        || stderr.contains("ambiguous argument");
+    if absent {
+        Ok(None)
+    } else {
+        Err(format!(
+            "git could not read HEAD:{path}: {}",
+            stderr.lines().next().unwrap_or("no detail")
+        ))
+    }
 }
 
 /// Stage and commit exactly these paths, and nothing else.
@@ -1501,13 +1633,23 @@ mod harness_commit_tests {
     /// writes with no human gate, and only it is issue #45 — sweeping an
     /// equipped bundle into a `chore(harness)` commit would be a different,
     /// unrequested change to the operator's repository.
+    /// A SKILL.md the way `write_skill` stamps it.
+    fn skill_manifest(slug: &str, source: &str) -> String {
+        format!("---\nname: {slug}\ndescription: fixture\nsource: {source}\n---\n\n# {slug}\n")
+    }
+
     #[test]
     fn only_learned_assets_are_offered_for_commit() {
         let ws = repo("scope");
         let skills = ws.agents_dir().join("skills");
         for (slug, managed) in [("learned-one", false), ("equipped", true)] {
             std::fs::create_dir_all(skills.join(slug)).unwrap();
-            std::fs::write(skills.join(slug).join("SKILL.md"), "# s\n").unwrap();
+            let source = if managed { "library" } else { "learned" };
+            std::fs::write(
+                skills.join(slug).join("SKILL.md"),
+                skill_manifest(slug, source),
+            )
+            .unwrap();
             if managed {
                 std::fs::write(
                     skills.join(slug).join(".yardlet-managed.yaml"),
@@ -1533,7 +1675,7 @@ mod harness_commit_tests {
         )
         .unwrap();
 
-        let pending = uncommitted_harness_assets(&ws);
+        let pending = harness_asset_durability(&ws).unwrap();
         assert_eq!(
             pending,
             vec![
@@ -1554,11 +1696,15 @@ mod harness_commit_tests {
         let ws = repo("scope-commit");
         let skills = ws.agents_dir().join("skills");
         std::fs::create_dir_all(skills.join("learned-one")).unwrap();
-        std::fs::write(skills.join("learned-one/SKILL.md"), "# s\n").unwrap();
+        std::fs::write(
+            skills.join("learned-one/SKILL.md"),
+            skill_manifest("learned-one", "learned"),
+        )
+        .unwrap();
         std::fs::write(ws.root.join("unrelated.txt"), "someone else\n").unwrap();
         git(&ws.root, &["add", "unrelated.txt"]);
 
-        let pending = uncommitted_harness_assets(&ws);
+        let pending = harness_asset_durability(&ws).unwrap();
         let commit = commit_harness_assets(&ws, &pending).unwrap();
         assert!(!commit.is_empty());
 
@@ -1575,11 +1721,180 @@ mod harness_commit_tests {
             "another session's staged file must not ride along: {touched}"
         );
         assert!(
-            uncommitted_harness_assets(&ws).is_empty(),
+            harness_asset_durability(&ws).unwrap().is_empty(),
             "a second run has nothing left to do"
         );
 
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// The marker file was a proxy for "not learned", and it is wrong for
+    /// everything the learning loop did not write but that carries no marker
+    /// either (issue #103).
+    #[test]
+    fn a_created_skill_and_a_marker_less_scaffold_are_not_learned() {
+        let ws = repo("classification");
+        let skills = ws.agents_dir().join("skills");
+
+        // Authored in place by the operator: `source: created`, no marker.
+        std::fs::create_dir_all(skills.join("hand-written")).unwrap();
+        std::fs::write(
+            skills.join("hand-written/SKILL.md"),
+            skill_manifest("hand-written", "created"),
+        )
+        .unwrap();
+
+        // What `yardlet init` scaffolds: no marker AND no source field at all.
+        std::fs::create_dir_all(skills.join("planning-gate")).unwrap();
+        std::fs::write(
+            skills.join("planning-gate/SKILL.md"),
+            "---\nname: planning-gate\ndescription: scaffold\n---\n\n# Planning Gate\n",
+        )
+        .unwrap();
+
+        // The one thing that IS learned.
+        std::fs::create_dir_all(skills.join("real-learned")).unwrap();
+        std::fs::write(
+            skills.join("real-learned/SKILL.md"),
+            skill_manifest("real-learned", "learned"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            harness_asset_durability(&ws).unwrap(),
+            vec![".agents/skills/real-learned/SKILL.md".to_string()],
+            "only the asset that declares itself learned may be offered"
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// A deleted managed skill takes its marker with it, so judging by what is
+    /// left on disk read the removal as learned and would have committed someone
+    /// else's deletion under a `track learned ...` subject (issue #103).
+    #[test]
+    fn deleting_a_managed_skill_is_not_offered_as_learned() {
+        let ws = repo("deleted-managed");
+        let skills = ws.agents_dir().join("skills");
+        std::fs::create_dir_all(skills.join("equipped")).unwrap();
+        std::fs::write(
+            skills.join("equipped/SKILL.md"),
+            skill_manifest("equipped", "library"),
+        )
+        .unwrap();
+        std::fs::write(
+            skills.join("equipped/.yardlet-managed.yaml"),
+            "source: library\n",
+        )
+        .unwrap();
+        git(&ws.root, &["add", ".agents"]);
+        git(&ws.root, &["commit", "-qm", "equip"]);
+
+        std::fs::remove_dir_all(skills.join("equipped")).unwrap();
+
+        assert!(
+            harness_asset_durability(&ws).unwrap().is_empty(),
+            "removing an equipped skill is the operator's change, not a learned asset"
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// The declaration is in the FRONT MATTER, not anywhere above the first
+    /// heading. An adversarial review broke a line scan in both directions.
+    #[test]
+    fn only_the_front_matter_decides_what_is_learned() {
+        assert!(declares_learned(
+            "---\nname: s\nsource: learned\n---\n\n# s\n"
+        ));
+        assert!(
+            declares_learned("---\nname: s\nsource: \"learned\"\n---\n\n# s\n"),
+            "a quoted value is the same value"
+        );
+        assert!(
+            !declares_learned("---\nname: s\nsource: created\n---\n\nsource: learned\n\n# s\n"),
+            "a body line must not be able to promote a created skill"
+        );
+        assert!(
+            !declares_learned(
+                "---\nname: s\ndescription: |\n  how to write source: learned\nsource: created\n---\n\n# s\n"
+            ),
+            "an operator-written description must not be able to promote it either"
+        );
+        assert!(
+            !declares_learned("# s\n\nsource: learned\n"),
+            "a file with no front matter declares nothing"
+        );
+        assert!(
+            !declares_learned("---\nname: s\nsource: learned\n"),
+            "unterminated front matter is not front matter"
+        );
+    }
+
+    /// A path that cannot be classified must not be silently dropped: an empty
+    /// result reads as "everything is committed", which is #104 by another route.
+    #[test]
+    fn an_unclassifiable_path_is_an_error_not_a_silent_omission() {
+        let ws = repo("unclassifiable");
+        let skills = ws.agents_dir().join("skills");
+        std::fs::create_dir_all(skills.join("ghost")).unwrap();
+        std::fs::write(
+            skills.join("ghost/SKILL.md"),
+            skill_manifest("ghost", "learned"),
+        )
+        .unwrap();
+        git(&ws.root, &["add", ".agents"]);
+        git(&ws.root, &["commit", "-qm", "learn"]);
+
+        // A tracked sibling is deleted while its manifest is gone too, so neither
+        // disk nor HEAD can say what it was.
+        std::fs::write(skills.join("ghost/extra.md"), "x\n").unwrap();
+        git(&ws.root, &["add", ".agents"]);
+        git(&ws.root, &["commit", "-qm", "extra"]);
+        std::fs::remove_dir_all(skills.join("ghost")).unwrap();
+        git(
+            &ws.root,
+            &["rm", "-q", "--cached", "-r", "--", ".agents/skills/ghost"],
+        );
+        git(&ws.root, &["commit", "-qm", "forget"]);
+        // Now HEAD has no manifest, and the porcelain will still report the paths
+        // as changed relative to the index after we restore only the extra file.
+        std::fs::create_dir_all(skills.join("ghost")).unwrap();
+        std::fs::write(skills.join("ghost/extra.md"), "x\n").unwrap();
+
+        let error = harness_asset_durability(&ws)
+            .expect_err("a path neither on disk nor in HEAD cannot be classified");
+        assert!(
+            error.contains("cannot tell what"),
+            "the reason must name what could not be established: {error}"
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// Durability is the whole point of the command, so "could not check" must
+    /// not be reported as "checked, nothing pending" (issue #104).
+    #[test]
+    fn an_unanswerable_check_is_an_error_not_an_empty_answer() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-harness-nogit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join(".agents/skills")).unwrap();
+        let ws = Workspace::at(&root);
+
+        let error = harness_asset_durability(&ws)
+            .expect_err("a directory that is not a repository cannot answer this");
+        assert!(
+            error.contains("git could not report") || error.contains("could not run git"),
+            "the reason must say the check did not happen: {error}"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
