@@ -33,18 +33,31 @@ fn live_workers() -> &'static Mutex<Vec<u32>> {
     LIVE.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// Record a worker this process owns, for the duration of its run.
-pub fn track_worker(pid: u32) {
-    if let Ok(mut live) = live_workers().lock() {
-        live.push(pid);
+/// Tracks one worker for as long as this value lives.
+///
+/// RAII because a hand-placed untrack is a leak waiting to happen, and an
+/// independent review found two: the provenance-failure path and the reader-error
+/// path both return before reaching it. A pid left tracked after being reaped is
+/// a recycled-pid kill — the emergency exit would SIGKILL whatever the OS handed
+/// that number to next. Same defect this branch already fixed in `PidFileGuard`.
+pub struct TrackedWorker {
+    pid: u32,
+}
+
+impl TrackedWorker {
+    pub fn new(pid: u32) -> Self {
+        if let Ok(mut live) = live_workers().lock() {
+            live.push(pid);
+        }
+        Self { pid }
     }
 }
 
-/// Forget a worker that has been reaped, so its pid is never signalled again
-/// after the OS may have handed it to someone else.
-pub fn untrack_worker(pid: u32) {
-    if let Ok(mut live) = live_workers().lock() {
-        live.retain(|tracked| *tracked != pid);
+impl Drop for TrackedWorker {
+    fn drop(&mut self) {
+        if let Ok(mut live) = live_workers().lock() {
+            live.retain(|tracked| *tracked != self.pid);
+        }
     }
 }
 

@@ -7182,6 +7182,27 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         ));
         next_state = TaskState::Done;
     }
+    // An interrupted run cannot finish a task, whichever attempt produced the
+    // result and whichever path got here.
+    //
+    // This is the ONE place that decides, deliberately. Marking the spawn sites
+    // instead left three holes an independent review walked through: a serial
+    // FAILOVER worker never wrote the marker, the parallel path never wrote it
+    // at all, and the marker itself was deleted before the queue transition was
+    // durable — so a save that failed left `recover` finalizing the task Done.
+    // Every one of those routes passes through here.
+    //
+    // Reads the process flag rather than a file: the flag cannot be deleted by
+    // an intervening step, and it is true for exactly the runs this process was
+    // asked to abandon. Partial, not Failed — the work may well be usable, and
+    // `run --auto` retries Failed, which would restart what the operator stopped.
+    if crate::signals::stop_requested() && next_state == TaskState::Done {
+        lines.push(format!(
+            "{}: interrupted before it could be finished; left Partial",
+            task.id
+        ));
+        next_state = TaskState::Partial;
+    }
     // Preserve the worker/evaluator outcome before Git integration can turn a
     // passing Done into a manual-integration Partial. Review remediation is
     // about failed review evidence, not a later delivery hold.

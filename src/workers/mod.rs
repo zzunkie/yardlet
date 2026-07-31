@@ -1188,8 +1188,9 @@ fn spawn_internal(
         .with_context(|| format!("spawning worker '{}'", bin.display()))?;
     // Tracked so an emergency exit can still take it down: `process::exit` runs
     // no destructors, and a worker leads its own group, so nothing else could.
-    crate::signals::track_worker(child.id());
-    let tracked_pid = child.id();
+    // RAII, so every return path below untracks — including the error ones that
+    // a hand-placed call missed.
+    let _tracked = crate::signals::TrackedWorker::new(child.id());
 
     let provenance_result = (|| -> Result<()> {
         let Some((run_id, attempt_id)) = provenance_identity.as_ref() else {
@@ -1533,8 +1534,6 @@ fn spawn_internal(
         .lock()
         .ok()
         .and_then(|captured| captured.clone());
-
-    crate::signals::untrack_worker(tracked_pid);
 
     // A worker that finished in the same instant the operator interrupted still
     // belongs to an interrupted run: whatever comes next — integration, a commit,
