@@ -1134,21 +1134,31 @@ pub fn harness_asset_durability(ws: &Workspace) -> Result<Vec<String>, String> {
     }
     let raw = String::from_utf8_lossy(&output.stdout);
     let mut chunks = raw.split('\0');
-    let mut paths = Vec::new();
+    let mut entries: Vec<(String, Option<String>)> = Vec::new();
     while let Some(entry) = chunks.next() {
         if entry.len() < 4 {
             continue;
         }
         let status = &entry[..2];
         let path = entry[3..].to_string();
-        if status.starts_with('R') || status.starts_with('C') {
-            chunks.next();
-        }
+        // A rename record is `XY <new>\0<old>\0`. Keep the old name: when the new
+        // one has since been deleted too, `HEAD` only knows the asset by the old
+        // one, and dropping it is how a deletion became unclassifiable.
+        let previous = if status.starts_with('R') || status.starts_with('C') {
+            chunks.next().map(str::to_string)
+        } else {
+            None
+        };
         if !path.is_empty() {
+            entries.push((path, previous));
+        }
+    }
+    let mut paths = Vec::new();
+    for (path, previous) in entries {
+        if classify_harness_asset(ws, &path, previous.as_deref())? {
             paths.push(path);
         }
     }
-    paths.retain(|path| is_learned_harness_asset(ws, path));
     paths.sort();
     paths.dedup();
     Ok(paths)
@@ -1169,49 +1179,124 @@ pub fn harness_asset_durability(ws: &Workspace) -> Result<Vec<String>, String> {
 /// directory — so its removal would have been committed as "track learned".
 /// `write_skill` stamps `source:` on everything it writes, so the front matter
 /// is the fact and the marker was only ever a guess at it.
-fn is_learned_harness_asset(ws: &Workspace, path: &str) -> bool {
+/// `Err` when the answer cannot be established, never a quiet `false`.
+///
+/// A path this cannot classify used to be dropped from the result, and an empty
+/// result reads as "everything is committed" — the same false durability claim
+/// #104 is about, arriving through the back door. If the manifest is neither on
+/// disk nor in `HEAD`, say so and let the caller refuse to claim.
+fn classify_harness_asset(
+    ws: &Workspace,
+    path: &str,
+    previous: Option<&str>,
+) -> Result<bool, String> {
     if let Some(rest) = path.strip_prefix(".agents/rules/") {
-        return rest.starts_with("learned-") && rest.ends_with(".md");
+        return Ok(rest.starts_with("learned-") && rest.ends_with(".md"));
     }
     let Some(rest) = path.strip_prefix(".agents/skills/") else {
-        return false;
+        return Ok(false);
     };
     let Some(slug) = rest.split('/').next().filter(|slug| !slug.is_empty()) else {
-        return false;
+        return Ok(false);
     };
     if slug.starts_with('.') {
-        return false; // the managed bundle directory
+        return Ok(false); // the managed bundle directory
     }
     let manifest = format!(".agents/skills/{slug}/SKILL.md");
     // On disk first; for a deletion the file is already gone, so ask git what it
     // was. Judging a removal by what is left on disk is how it got misread.
-    match std::fs::read_to_string(ws.root.join(&manifest)) {
-        Ok(text) => declares_learned(&text),
-        Err(_) => committed_blob(ws, &manifest).is_some_and(|text| declares_learned(&text)),
+    if let Ok(text) = std::fs::read_to_string(ws.root.join(&manifest)) {
+        return Ok(declares_learned(&text));
     }
+    if let Some(text) = committed_blob(ws, &manifest)? {
+        return Ok(declares_learned(&text));
+    }
+    // A rename whose destination was then deleted: `HEAD` only has the old name.
+    if let Some(previous) = previous {
+        let previous_manifest = previous
+            .strip_prefix(".agents/skills/")
+            .and_then(|rest| rest.split('/').next())
+            .map(|slug| format!(".agents/skills/{slug}/SKILL.md"));
+        if let Some(previous_manifest) = previous_manifest {
+            if let Some(text) = committed_blob(ws, &previous_manifest)? {
+                return Ok(declares_learned(&text));
+            }
+        }
+    }
+    Err(format!(
+        "cannot tell what {manifest} is: it is not on disk and HEAD does not have it"
+    ))
 }
 
-/// Does this SKILL.md front matter say the learning loop wrote it?
+/// Does this SKILL.md's FRONT MATTER say the learning loop wrote it?
+///
+/// Parsed as YAML from the delimited block, not matched as a line anywhere near
+/// the top. A scan is wrong in both directions, and an adversarial review
+/// demonstrated both: a `source: created` skill whose body opened with a
+/// `source: learned` line read as learned, and a legitimate `source: "learned"`
+/// read as not. `write_skill` interpolates an operator-supplied description
+/// ahead of the `source` key, so the body is not even the only way in.
 fn declares_learned(manifest: &str) -> bool {
-    manifest
-        .lines()
-        .take_while(|line| !line.starts_with("# "))
-        .any(|line| line.trim() == "source: learned")
+    front_matter(manifest)
+        .and_then(|block| serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&block).ok())
+        .and_then(|value| {
+            value
+                .get("source")
+                .and_then(|source| source.as_str().map(str::to_string))
+        })
+        .is_some_and(|source| source.trim() == "learned")
+}
+
+/// The text between the opening `---` and the next `---`, if the file opens with
+/// one at all.
+fn front_matter(manifest: &str) -> Option<String> {
+    let mut lines = manifest.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    let mut block = String::new();
+    for line in lines {
+        if line.trim() == "---" {
+            return Some(block);
+        }
+        block.push_str(line);
+        block.push('\n');
+    }
+    None // unterminated front matter is not front matter
 }
 
 /// The file as `HEAD` has it, for a path that no longer exists on disk.
-fn committed_blob(ws: &Workspace, path: &str) -> Option<String> {
+///
+/// `Ok(None)` means git answered and does not have that path. `Err` means git
+/// could not be asked, which is a different thing and must not read as absence —
+/// an unreadable check that looks like "no learned assets" is exactly the claim
+/// #104 forbids.
+fn committed_blob(ws: &Workspace, path: &str) -> Result<Option<String>, String> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(&ws.root)
         .args(["show", &format!("HEAD:{path}")])
         .env("LC_ALL", "C")
         .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+        .map_err(|error| format!("could not run git show for {path}: {error}"))?;
+    if output.status.success() {
+        return Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // "does not exist" / "exists on disk, but not in" / unborn HEAD are real
+    // answers: git looked and the path is not there.
+    let absent = stderr.contains("does not exist")
+        || stderr.contains("exists on disk, but not in")
+        || stderr.contains("unknown revision")
+        || stderr.contains("ambiguous argument");
+    if absent {
+        Ok(None)
+    } else {
+        Err(format!(
+            "git could not read HEAD:{path}: {}",
+            stderr.lines().next().unwrap_or("no detail")
+        ))
+    }
 }
 
 /// Stage and commit exactly these paths, and nothing else.
@@ -1710,6 +1795,78 @@ mod harness_commit_tests {
         assert!(
             harness_asset_durability(&ws).unwrap().is_empty(),
             "removing an equipped skill is the operator's change, not a learned asset"
+        );
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// The declaration is in the FRONT MATTER, not anywhere above the first
+    /// heading. An adversarial review broke a line scan in both directions.
+    #[test]
+    fn only_the_front_matter_decides_what_is_learned() {
+        assert!(declares_learned(
+            "---\nname: s\nsource: learned\n---\n\n# s\n"
+        ));
+        assert!(
+            declares_learned("---\nname: s\nsource: \"learned\"\n---\n\n# s\n"),
+            "a quoted value is the same value"
+        );
+        assert!(
+            !declares_learned("---\nname: s\nsource: created\n---\n\nsource: learned\n\n# s\n"),
+            "a body line must not be able to promote a created skill"
+        );
+        assert!(
+            !declares_learned(
+                "---\nname: s\ndescription: |\n  how to write source: learned\nsource: created\n---\n\n# s\n"
+            ),
+            "an operator-written description must not be able to promote it either"
+        );
+        assert!(
+            !declares_learned("# s\n\nsource: learned\n"),
+            "a file with no front matter declares nothing"
+        );
+        assert!(
+            !declares_learned("---\nname: s\nsource: learned\n"),
+            "unterminated front matter is not front matter"
+        );
+    }
+
+    /// A path that cannot be classified must not be silently dropped: an empty
+    /// result reads as "everything is committed", which is #104 by another route.
+    #[test]
+    fn an_unclassifiable_path_is_an_error_not_a_silent_omission() {
+        let ws = repo("unclassifiable");
+        let skills = ws.agents_dir().join("skills");
+        std::fs::create_dir_all(skills.join("ghost")).unwrap();
+        std::fs::write(
+            skills.join("ghost/SKILL.md"),
+            skill_manifest("ghost", "learned"),
+        )
+        .unwrap();
+        git(&ws.root, &["add", ".agents"]);
+        git(&ws.root, &["commit", "-qm", "learn"]);
+
+        // A tracked sibling is deleted while its manifest is gone too, so neither
+        // disk nor HEAD can say what it was.
+        std::fs::write(skills.join("ghost/extra.md"), "x\n").unwrap();
+        git(&ws.root, &["add", ".agents"]);
+        git(&ws.root, &["commit", "-qm", "extra"]);
+        std::fs::remove_dir_all(skills.join("ghost")).unwrap();
+        git(
+            &ws.root,
+            &["rm", "-q", "--cached", "-r", "--", ".agents/skills/ghost"],
+        );
+        git(&ws.root, &["commit", "-qm", "forget"]);
+        // Now HEAD has no manifest, and the porcelain will still report the paths
+        // as changed relative to the index after we restore only the extra file.
+        std::fs::create_dir_all(skills.join("ghost")).unwrap();
+        std::fs::write(skills.join("ghost/extra.md"), "x\n").unwrap();
+
+        let error = harness_asset_durability(&ws)
+            .expect_err("a path neither on disk nor in HEAD cannot be classified");
+        assert!(
+            error.contains("cannot tell what"),
+            "the reason must name what could not be established: {error}"
         );
 
         let _ = std::fs::remove_dir_all(ws.root);
