@@ -28,6 +28,7 @@ mod routing;
 mod rubric;
 mod run;
 mod schemas;
+mod signals;
 mod skill_author;
 mod skills;
 mod snapshot;

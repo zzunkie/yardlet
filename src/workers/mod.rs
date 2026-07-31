@@ -727,10 +727,20 @@ fn build_resume_command(
     cmd
 }
 
+/// How long a worker gets to stop on its own before Yardlet insists.
+///
+/// Long enough for an agent CLI to flush what it was writing, short enough that
+/// the operator's second Ctrl-C is not the one that finally works.
+const STOP_GRACE: Duration = Duration::from_secs(3);
+
 #[derive(Debug, Clone)]
 pub struct WorkerOutcome {
     pub exit_ok: bool,
     pub timed_out: bool,
+    /// The operator stopped Yardlet, and this worker was taken down with it
+    /// rather than left holding the run directory (issue #107). Distinct from a
+    /// timeout: nothing was exceeded, the run was interrupted.
+    pub stopped: bool,
     pub note: String,
     /// Live public events can be shed under sink backpressure because exact raw
     /// streams remain authoritative and must never stop draining.
@@ -1384,9 +1394,30 @@ fn spawn_internal(
 
     let start = Instant::now();
     let mut timed_out = false;
+    let mut stopped = false;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
+        }
+        if crate::signals::stop_requested() {
+            // The operator asked THIS process to stop, and the worker leads its
+            // own process group so nothing else can reach it (issue #107). Ask
+            // first, then insist: a worker given SIGTERM can close its own files
+            // and stop cleanly, which a SIGKILL denies it.
+            terminate_worker_tree(child.id(), Signal::Term);
+            let grace = Instant::now();
+            while grace.elapsed() < STOP_GRACE {
+                if child.try_wait()?.is_some() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            if child.try_wait()?.is_none() {
+                terminate_worker_tree(child.id(), Signal::Kill);
+                let _ = child.kill();
+            }
+            stopped = true;
+            break child.wait()?;
         }
         if start.elapsed() >= timeout {
             // Kill the GROUP, not just the direct child. A worker profile whose
@@ -1460,11 +1491,14 @@ fn spawn_internal(
         .and_then(|captured| captured.clone());
 
     Ok(WorkerOutcome {
-        exit_ok: status.success() && !timed_out,
+        exit_ok: status.success() && !timed_out && !stopped,
         timed_out,
+        stopped,
         session_id,
         public_events_dropped: public_events_dropped.load(std::sync::atomic::Ordering::Relaxed),
-        note: if timed_out {
+        note: if stopped {
+            "worker stopped with Yardlet at the operator's request".to_string()
+        } else if timed_out {
             "worker exceeded wall-clock limit and was stopped".to_string()
         } else {
             format!("worker exited (success={})", status.success())

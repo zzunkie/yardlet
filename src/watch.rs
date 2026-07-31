@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use chrono::Local;
 use serde::Serialize;
 
@@ -274,6 +274,12 @@ fn run_loop(
 ) -> (String, Vec<Observation>, String) {
     let mut observations = Vec::new();
     for attempt in 1..=options.max_runs {
+        // The signal now lands on a process-wide flag (one handler per process),
+        // so carry it into the flag this loop and its observer already share.
+        // Tests set that flag directly and must keep working without a signal.
+        if crate::signals::stop_requested() {
+            cancelled.store(true, Ordering::SeqCst);
+        }
         if cancelled.load(Ordering::SeqCst) {
             return (
                 "cancelled".into(),
@@ -364,9 +370,14 @@ pub fn run(ws: &Workspace, options: WatchOptions) -> Result<(String, WatchResult
     let (run_id, run_dir) = ws.claim_run_dir(&base)?;
     let started_at = Local::now().to_rfc3339();
     let cancelled = Arc::new(AtomicBool::new(false));
-    let signal = Arc::clone(&cancelled);
-    ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst))
-        .context("installing foreground watch cancel handler")?;
+    // Through the shared installer, not `ctrlc::set_handler` directly: only one
+    // handler may exist per process, and `run` needs one too now that stopping
+    // Yardlet has to take its worker with it (issue #107). A second direct
+    // registration is an error, which is how this first showed up — as a test
+    // failing because another test had already registered.
+    if !crate::signals::install_stop_handler() {
+        eprintln!("yardlet: could not install a cancel handler; Ctrl-C will not stop this watch");
+    }
     let mut observer = LocalObserver::new(
         &ws.root,
         options.until.clone(),

@@ -1727,6 +1727,12 @@ fn worker_attempt_result(
     if run_dir.join("cancelled").is_file() {
         return "cancelled";
     }
+    // Checked before `result.json`: an interrupted worker may already have
+    // written a result it had not finished acting on, and recording that as a
+    // success would tell the operator their Ctrl-C completed the task.
+    if outcome.stopped {
+        return "stopped";
+    }
     if outcome.timed_out {
         return "timed_out";
     }
@@ -4327,7 +4333,12 @@ pub(crate) fn gen_session_uuid(seed: &str) -> String {
 /// A transient (likely network/infra) failure: the worker did not exit cleanly,
 /// left no result, and was not stopped by us — worth resuming rather than redoing.
 fn is_transient_failure(outcome: &workers::WorkerOutcome, run_dir: &std::path::Path) -> bool {
-    !outcome.exit_ok && !outcome.timed_out && !run_dir.join("result.json").exists()
+    // A run the operator stopped is not transient infrastructure trouble, and
+    // resuming it automatically would undo the stop they asked for.
+    !outcome.exit_ok
+        && !outcome.timed_out
+        && !outcome.stopped
+        && !run_dir.join("result.json").exists()
 }
 
 /// Validation commands configured on a task: `validation: { commands: [..] }`
