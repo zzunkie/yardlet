@@ -727,6 +727,29 @@ fn build_resume_command(
     cmd
 }
 
+/// Has the child exited, WITHOUT reaping it?
+///
+/// `try_wait` reaps, which frees the pid — and the pid is the process group id
+/// the teardown still needs. `WNOWAIT` leaves the child waitable so the group
+/// signal that follows still has a group to reach.
+#[cfg(unix)]
+fn exited_without_reaping(child: &std::process::Child) -> bool {
+    let mut status = 0;
+    let observed = unsafe {
+        libc::waitpid(
+            child.id() as libc::pid_t,
+            &mut status,
+            libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    observed > 0
+}
+
+#[cfg(not(unix))]
+fn exited_without_reaping(_child: &std::process::Child) -> bool {
+    false
+}
+
 /// How long a worker gets to stop on its own before Yardlet insists.
 ///
 /// Long enough for an agent CLI to flush what it was writing, short enough that
@@ -1406,16 +1429,20 @@ fn spawn_internal(
             // and stop cleanly, which a SIGKILL denies it.
             terminate_worker_tree(child.id(), Signal::Term);
             let grace = Instant::now();
-            while grace.elapsed() < STOP_GRACE {
-                if child.try_wait()?.is_some() {
-                    break;
-                }
+            while grace.elapsed() < STOP_GRACE && !exited_without_reaping(&child) {
                 thread::sleep(Duration::from_millis(50));
             }
-            if child.try_wait()?.is_none() {
-                terminate_worker_tree(child.id(), Signal::Kill);
-                let _ = child.kill();
-            }
+            // ALWAYS group-kill, even when the direct child has already gone. A
+            // launcher that handles SIGTERM exits while the agent CLI it spawned
+            // ignores it and keeps the inherited pipe ends open — the grandchild
+            // survives and the reader joins below never see EOF, so this function
+            // hangs. That is the same shape as #52, reached through the stop path.
+            //
+            // Safe here precisely because the grace loop does not reap: an
+            // unreaped child still holds its pid, so `-pid` is still this group
+            // and cannot be a recycled one.
+            terminate_worker_tree(child.id(), Signal::Kill);
+            let _ = child.kill();
             stopped = true;
             break child.wait()?;
         }
@@ -1489,6 +1516,14 @@ fn spawn_internal(
         .lock()
         .ok()
         .and_then(|captured| captured.clone());
+
+    // A worker that finished in the same instant the operator interrupted still
+    // belongs to an interrupted run: whatever comes next — integration, a commit,
+    // the next task — is what the stop was asking Yardlet not to do. The loop
+    // checks `try_wait` before the flag, so without this a fast worker (or one
+    // that exits between spawn and the first poll) wins the race and the task can
+    // land Done despite the Ctrl-C.
+    let stopped = stopped || crate::signals::stop_requested();
 
     Ok(WorkerOutcome {
         exit_ok: status.success() && !timed_out && !stopped,

@@ -33,10 +33,19 @@ static INSTALLED: AtomicBool = AtomicBool::new(false);
 pub fn install_stop_handler() -> bool {
     INSTALL.call_once(|| {
         let installed = ctrlc::set_handler(|| {
-            // Signal-handler context: set a flag and return. The teardown that
-            // follows takes locks and spawns processes, neither of which is safe
-            // here, so the polling side does that work.
-            REQUESTED.store(true, Ordering::SeqCst);
+            // The FIRST request asks for an orderly stop: set a flag and let the
+            // polling side do the teardown, which takes locks and signals
+            // processes.
+            //
+            // The SECOND means the operator is done waiting, and must actually
+            // work. Replacing the default disposition otherwise makes Ctrl-C
+            // unable to end the process at all — during the stop grace period, or
+            // if a teardown ever wedges. `ctrlc` runs this on its own thread, not
+            // in a raw handler, so exiting from here is allowed.
+            if REQUESTED.swap(true, Ordering::SeqCst) {
+                eprintln!("\nyardlet: second interrupt — exiting now, workers may be left running");
+                std::process::exit(130); // 128 + SIGINT, what a shell reports
+            }
         })
         .is_ok();
         INSTALLED.store(installed, Ordering::SeqCst);

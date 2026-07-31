@@ -2630,16 +2630,6 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
 
 fn cmd_run(cwd: &std::path::Path, args: RunArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
-    // A worker leads its own process group so it survives the terminal (#52),
-    // which also means no signal the operator sends can reach it. Yardlet holds
-    // the only handle, so it has to be the one that takes the worker down when
-    // it is asked to stop (issue #107).
-    if !crate::signals::install_stop_handler() {
-        eprintln!(
-            "yardlet: could not install a stop handler; interrupting this run may \
-             leave its worker running"
-        );
-    }
     let _ = (args.next, args.headless); // --next is implied; --task targets one
     if args.auto {
         run::run_auto(

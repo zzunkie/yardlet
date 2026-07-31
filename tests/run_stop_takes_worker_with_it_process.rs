@@ -181,10 +181,156 @@ fn stopping_yardlet_takes_the_worker_it_started_with_it() {
     );
     yardlet.shutdown(Duration::from_secs(15), || {});
 
-    // The stop must not be recorded as the task finishing.
+    // The stop must not be recorded as the task finishing — and "not done" is too
+    // weak on its own, because a stopped run that fell through to failover lands
+    // Failed, which also is not done and which `run --auto` then RETRIES. An
+    // independent review caught exactly that. The task has to be back where it
+    // can be picked up deliberately, not driven onward.
     let queue = fs::read_to_string(root.join(".agents/work-queue.yaml")).unwrap_or_default();
     assert!(
         !queue.contains("state: done"),
         "an interrupted run reported its task as done:\n{queue}"
+    );
+    assert!(
+        !queue.contains("state: failed"),
+        "an interrupted run was recorded as a failure, which `run --auto` treats \
+         as transient and retries — the stop would start another worker:\n{queue}"
+    );
+
+    // And nothing may have been started in its place.
+    let runs = fs::read_dir(root.join(".agents/runs"))
+        .map(|entries| entries.filter_map(Result::ok).count())
+        .unwrap_or(0);
+    assert_eq!(
+        runs, 1,
+        "a stop must not fail over to a replacement worker; {runs} runs exist"
+    );
+}
+
+/// The stop path has to reach the whole tree, not just the process Yardlet
+/// spawned. A launcher that handles SIGTERM exits while the agent CLI it started
+/// ignores it and keeps the inherited pipes open: the grandchild survives, and
+/// Yardlet blocks forever waiting for an EOF that cannot come. Same shape as #52,
+/// reached through the stop path.
+#[test]
+fn stopping_reaches_a_grandchild_whose_launcher_exits_first() {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let workspace = common::WorkspaceGuard::create(std::env::temp_dir().join(format!(
+        "yardlet-run-stop-tree-{}-{nonce}",
+        std::process::id()
+    )));
+    let root = workspace.path().to_path_buf();
+    must_succeed(&root, Path::new("git"), &["init", "-q"]);
+    must_succeed(&root, Path::new("git"), &["config", "user.name", "fixture"]);
+    must_succeed(
+        &root,
+        Path::new("git"),
+        &["config", "user.email", "fixture@example.invalid"],
+    );
+    fs::write(root.join("README.md"), "fixture\n").unwrap();
+    must_succeed(&root, Path::new("git"), &["add", "README.md"]);
+    must_succeed(&root, Path::new("git"), &["commit", "-qm", "fixture"]);
+    must_succeed(&root, &binary, &["init"]);
+
+    // The launcher dies on SIGTERM; the grandchild ignores it and holds the pipes.
+    let worker = root.join("fixture-launcher.sh");
+    let ids = root.join("grandchild-pid");
+    fs::write(
+        &worker,
+        format!(
+            "#!/bin/sh\n\
+             set -eu\n\
+             if [ \"${{1:-}}\" = \"--version\" ]; then\n\
+             \x20 printf 'fixture-launcher 1.0\\n'\n\
+             \x20 exit 0\n\
+             fi\n\
+             cat >/dev/null\n\
+             sh -c 'trap \"\" TERM; printf \"%s\\n\" \"$$\" >\"{}\"; while :; do sleep 1; done' &\n\
+             wait\n",
+            ids.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&worker).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&worker, permissions).unwrap();
+
+    fs::write(
+        root.join(".agents/intent-contract.yaml"),
+        "schema_version: 1\nid: intent-tree\nsummary: stop tree fixture\nstatus: accepted\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agents/work-queue.yaml"),
+        "schema_version: 1\nqueue_id: queue-tree\nintent_id: intent-tree\ntasks:\n  - id: YARD-001\n    title: stop tree fixture\n    state: queued\n    priority: 10\n    risk: low\n    kind: implementation\n    preferred_worker: fixture\n    acceptance: [stopping reaches the whole tree]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agents/workers.yaml"),
+        format!(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: {}\n      args: ['{{run_dir}}']\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 10\n      max_retries: 0\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n",
+            worker.display()
+        ),
+    )
+    .unwrap();
+
+    let yardlet = Command::new(&binary)
+        .args(["run", "--task", "YARD-001", "--execute"])
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(
+            fs::File::create(root.join("yardlet.err")).unwrap(),
+        ))
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let yardlet_pid = yardlet.id() as i32;
+    let mut yardlet = common::ChildGuard::new(yardlet);
+
+    assert!(
+        wait_for(&ids, Duration::from_secs(60)),
+        "the grandchild never started; yardlet said:\n{}",
+        fs::read_to_string(root.join("yardlet.err")).unwrap_or_default()
+    );
+    let grandchild: i32 = fs::read_to_string(&ids)
+        .unwrap()
+        .trim()
+        .parse()
+        .expect("numeric grandchild pid");
+
+    assert_eq!(
+        unsafe { libc::kill(yardlet_pid, libc::SIGINT) },
+        0,
+        "could not signal Yardlet"
+    );
+
+    assert!(
+        wait_until_gone(grandchild, Duration::from_secs(30)),
+        "the grandchild ignored SIGTERM and was never escalated to, so it still \
+         holds Yardlet's pipes"
+    );
+    // `kill(pid, 0)` is NOT the check: Yardlet is this test's child, so once it
+    // exits it stays a reapable zombie and a liveness probe keeps succeeding.
+    // `try_wait` distinguishes "still running" from "exited". (Third time this
+    // trap was walked into on this branch — it is why the guard tests assert on
+    // status rather than liveness.)
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut exited = false;
+    while Instant::now() < deadline {
+        if matches!(yardlet.as_mut().try_wait(), Ok(Some(_))) {
+            exited = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        exited,
+        "Yardlet is still waiting on a stream its grandchild never closed; it said:\n{}",
+        fs::read_to_string(root.join("yardlet.err")).unwrap_or_default()
     );
 }

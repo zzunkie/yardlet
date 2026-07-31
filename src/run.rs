@@ -2233,6 +2233,11 @@ pub(crate) fn prepare_answer_action_with_deviations(
 }
 
 pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
+    // Installed at the entry point, not at each caller: `yardlet goal` reaches
+    // `run_auto` without going through `cmd_run`, and an independent review found
+    // exactly that path still orphaning its worker. Every route that can start a
+    // worker passes through here or `run_next` (issue #107).
+    crate::signals::install_stop_handler();
     // Serialize queue selection and the first runtime transition against a
     // planning confirmation. Once Running is canonical, confirm observes it
     // and fails closed; the worker itself never holds this lock.
@@ -3109,7 +3114,14 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     }
 
     let mut failover_note: Option<String> = None;
-    if !run_dir.join("result.json").exists() && output_contract_incident.is_none() {
+    // A stopped run must not fail over. "No result.json" is normally evidence the
+    // worker is unwell and another should try, but here the missing result is
+    // what the operator asked for, and spawning a replacement is the one thing a
+    // stop is meant to prevent (issue #107).
+    if !outcome.stopped
+        && !run_dir.join("result.json").exists()
+        && output_contract_incident.is_none()
+    {
         match routing::resolve_failover_worker_for_task(
             &workers,
             &billing,
@@ -3785,6 +3797,11 @@ pub fn run_auto<F: FnMut(&str)>(
     accept_ambiguity: bool,
     mut on_event: F,
 ) -> Result<Vec<String>> {
+    // Installed at the entry point, not at each caller: `yardlet goal` reaches
+    // `run_auto` without going through `cmd_run`, and an independent review found
+    // exactly that path still orphaning its worker. Every route that can start a
+    // worker passes through here or `run_next` (issue #107).
+    crate::signals::install_stop_handler();
     use std::collections::HashMap;
     let max_parallel = parallel
         .or_else(|| ws.load_config().ok().map(|c| c.max_parallel))
@@ -3832,6 +3849,14 @@ pub fn run_auto<F: FnMut(&str)>(
     }
 
     loop {
+        // An interrupt ends the drain, it does not just end the current task.
+        // Without this the loop reads the stopped task as Failed, calls that
+        // transient, and starts the next worker — after the operator asked
+        // Yardlet to stop (issue #107).
+        if crate::signals::stop_requested() {
+            emit("stopped at your request; the queue is unchanged".to_string());
+            break;
+        }
         // Graceful pause: stop between tasks (the current task, if any, has
         // already finished here). Resume by running auto again.
         if pause

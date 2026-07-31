@@ -184,7 +184,10 @@ impl Observer for LocalObserver {
                             Ok(Some(status)) => {
                                 break (Some(status), "command completed".to_string())
                             }
-                            Ok(None) if self.cancelled.load(Ordering::SeqCst) => {
+                            Ok(None)
+                                if self.cancelled.load(Ordering::SeqCst)
+                                    || crate::signals::stop_requested() =>
+                            {
                                 let _ = child.kill();
                                 break (child.wait().ok(), "command cancelled".to_string());
                             }
@@ -274,9 +277,12 @@ fn run_loop(
 ) -> (String, Vec<Observation>, String) {
     let mut observations = Vec::new();
     for attempt in 1..=options.max_runs {
-        // The signal now lands on a process-wide flag (one handler per process),
-        // so carry it into the flag this loop and its observer already share.
-        // Tests set that flag directly and must keep working without a signal.
+        // The signal lands on a process-wide flag (one handler per process), so
+        // carry it into the flag this loop and its observer share. The observer
+        // ALSO reads the global directly: mirroring only here left a Ctrl-C
+        // during a long observation unnoticed until that observation finished,
+        // which an independent review caught by sending two of them mid-`sleep`.
+        // Tests set the local flag directly and must keep working without a signal.
         if crate::signals::stop_requested() {
             cancelled.store(true, Ordering::SeqCst);
         }
