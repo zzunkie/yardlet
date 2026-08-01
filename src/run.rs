@@ -3746,6 +3746,99 @@ fn no_change_contradiction(
     None
 }
 
+/// Declared outputs that exist on disk but did NOT reach the integration commit.
+///
+/// #55 closed the all-or-nothing case: integration finding nothing to commit
+/// while the run still claims output. This is the partial one (#91) — some of
+/// the declared outputs were integrated and the rest were left behind, which
+/// `Integration::Merged` accepted because change evidence was non-empty.
+///
+/// The distinction that makes this safe to gate on is between three cases, not
+/// two:
+///
+/// - declared, on disk, in the commit — the normal case;
+/// - declared, on disk, NOT in the commit — the defect. The work exists and was
+///   not delivered, so Done would be false;
+/// - declared, NOT on disk at all — the worker named a path it never wrote.
+///   That is a mis-declaration, a different fault, and not this guard's to
+///   punish. Excluding it is why gating here does not turn a worker's typo into
+///   a failed run.
+fn unintegrated_declared_outputs(
+    ws_root: &std::path::Path,
+    committed: &[String],
+    result: Option<&RunResult>,
+    roots: &DeclaredPathRoots<'_>,
+    core_input_overlays: &[state::SerialInputOverlay],
+    dependency_input_overlays: &[state::DependencyInputOverlay],
+) -> Vec<String> {
+    let declared = declared_integratable_outputs(
+        result,
+        roots,
+        core_input_overlays,
+        dependency_input_overlays,
+    );
+    let committed: std::collections::BTreeSet<&str> =
+        committed.iter().map(String::as_str).collect();
+    let mut missing: Vec<String> = declared
+        .into_iter()
+        .filter(|path| {
+            // In the commit itself, or under a directory the commit carries.
+            let prefix = format!("{path}/");
+            !committed.contains(path.as_str()) && !committed.iter().any(|c| c.starts_with(&prefix))
+        })
+        // On disk: a path that was never written is a mis-declaration, not an
+        // undelivered deliverable.
+        .filter(|path| ws_root.join(path).exists())
+        .collect();
+    missing.sort();
+    missing.dedup();
+    missing
+}
+
+/// The repository paths an integration commit actually carries.
+fn committed_paths_for(ws_root: &std::path::Path, oid: &str) -> Vec<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(ws_root)
+        .args(["show", "--name-only", "--format=", "-m", oid])
+        .env("LC_ALL", "C")
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let mut paths: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Operator-facing explanation for a partially integrated run.
+fn partial_integration_note(paths: &[String], wt: &std::path::Path) -> String {
+    format!(
+        "\n## Partial integration refused\n\nThe integration commit carries some of this run's \
+         declared outputs but not all of them. These exist in the workspace and are NOT in the \
+         commit:\n\n{}\n\nRecording Done here would report the task finished while part of its \
+         deliverable stayed out of Git — the same harm as issue #55, narrowed to the case where \
+         SOME of the work landed. The run is Partial and the worktree is kept at `{}`. Check \
+         whether the output was written outside the run-owned worktree, then integrate it and \
+         `yardlet resolve` the task.\n",
+        paths
+            .iter()
+            .map(|path| format!("- `{path}`"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        wt.display()
+    )
+}
+
 /// Operator-facing explanation for a refused no-change integration.
 fn no_change_contradiction_note(reason: &str, paths: &[String], wt: &std::path::Path) -> String {
     let source = if reason == "no_change_contradicts_change_evidence" {
@@ -7523,6 +7616,14 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         "{}: merged {} into the workspace",
                         task.id, m.branch
                     ));
+                    let unintegrated = unintegrated_declared_outputs(
+                        &ws.root,
+                        &committed_paths_for(&ws.root, &oid),
+                        result.as_ref(),
+                        &declared_path_roots,
+                        m.core_input_overlays,
+                        m.dependency_input_overlays,
+                    );
                     if let Some(reason) =
                         serial_input_overlay_parity_failure(&ws.root, m.core_input_overlays)
                     {
@@ -7531,6 +7632,24 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
                         lines.push(format!(
                             "{}: serial input overlay parity failed after integration: {reason}",
                             task.id
+                        ));
+                    } else if !unintegrated.is_empty() {
+                        // Some of the declared output landed and some did not.
+                        // Done would say the task is finished while part of its
+                        // deliverable is still outside Git (issue #91).
+                        next_state = TaskState::Partial;
+                        state::write_str(
+                            &run_dir.join("partial-reason"),
+                            "declared_outputs_not_integrated",
+                        )?;
+                        let hp = run_dir.join("handoff.md");
+                        let mut existing = std::fs::read_to_string(&hp).unwrap_or_default();
+                        existing.push_str(&partial_integration_note(&unintegrated, m.wt_path));
+                        let _ = state::write_str(&hp, &existing);
+                        lines.push(format!(
+                            "{}: declared output(s) not in the integration commit: {}",
+                            task.id,
+                            unintegrated.join(", ")
                         ));
                     } else {
                         let cleanup = crate::parallel::cleanup_integrated_worktree(
@@ -12621,6 +12740,98 @@ printf "# worker handoff
 
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// Issue #91: SOME of the declared output reaching the commit is not the
+    /// same as all of it. The guard has to split three cases, and the middle one
+    /// is the defect.
+    #[test]
+    fn partial_integration_flags_only_output_that_exists_and_was_not_committed() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-partial-integration-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        // Both were written; only one reached the commit.
+        std::fs::write(root.join("src/a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(root.join("docs/b.md"), "b\n").unwrap();
+
+        let result = RunResult {
+            schema_version: 1,
+            run_id: "run-test".into(),
+            task_id: "YARD-001".into(),
+            status: "done".into(),
+            intent_adherence: Default::default(),
+            changes: crate::schemas::Changes {
+                files_created: vec![
+                    "src/a.rs".into(),
+                    "docs/b.md".into(),
+                    // Declared but never written: a mis-declaration, which is a
+                    // different fault and must NOT make this run Partial —
+                    // otherwise a worker's typo fails correct work.
+                    "docs/never-written.md".into(),
+                ],
+                files_modified: vec![],
+                files_deleted: vec![],
+            },
+            validation: Default::default(),
+            question_for_user: None,
+            compact_summary: String::new(),
+            verdict: vec![],
+            harness_suggestions: vec![],
+            follow_up_tasks: vec![],
+            artifacts: vec![],
+            resources: vec![],
+        };
+        let worktree = root.join(".agents/worktrees/run-test");
+        let roots = DeclaredPathRoots {
+            worktree: &worktree,
+            workspace: &root,
+        };
+
+        let missing = unintegrated_declared_outputs(
+            &root,
+            &["src/a.rs".to_string()],
+            Some(&result),
+            &roots,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            missing,
+            vec!["docs/b.md".to_string()],
+            "only the declared output that exists on disk and is absent from the \
+             commit may hold the run back"
+        );
+
+        // Everything committed: nothing to hold back.
+        assert!(unintegrated_declared_outputs(
+            &root,
+            &["src/a.rs".to_string(), "docs/b.md".to_string()],
+            Some(&result),
+            &roots,
+            &[],
+            &[],
+        )
+        .is_empty());
+
+        // A committed DIRECTORY covers what is under it.
+        assert!(unintegrated_declared_outputs(
+            &root,
+            &["src/a.rs".to_string(), "docs/b.md/inner".to_string()],
+            Some(&result),
+            &roots,
+            &[],
+            &[],
+        )
+        .is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
