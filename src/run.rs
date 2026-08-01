@@ -3017,11 +3017,18 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         });
     }
 
-    // A stop cancels recovery too. This spawns a fresh attempt on a typed
+    // A stop cancels recovery too: this spawns a fresh attempt on a typed
     // refusal, which is right when the worker is unwell and wrong when the
-    // operator has asked Yardlet to stop — an independent review reproduced
-    // `attempt-2` being created after a SIGINT (issue #107).
-    if run_dir.join("cancelled").is_file() {
+    // operator has asked Yardlet to stop (issue #107).
+    //
+    // Keyed on the OUTCOME, not on the `cancelled` marker. `yardlet redirect`
+    // writes that same marker to stop a run, so reading it here made a redirect
+    // look like a process stop and changed the path it takes — the full suite
+    // caught it as `redirect_ignores_decoy_pid_and_signals_verified_worker`
+    // failing under load while main passed. The marker means "this run was
+    // stopped, do not resume it", which redirect also wants; it does not mean
+    // "this process is shutting down", which is what these two branches need.
+    if outcome.stopped {
         output_contract_incident = None;
     }
     if let Some(mut incident) = output_contract_incident.take() {
@@ -3137,7 +3144,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // worker is unwell and another should try, but here the missing result is
     // what the operator asked for, and spawning a replacement is the one thing a
     // stop is meant to prevent (issue #107).
-    if !run_dir.join("cancelled").is_file()
+    if !outcome.stopped
         && !run_dir.join("result.json").exists()
         && output_contract_incident.is_none()
     {
@@ -7181,27 +7188,6 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             task.id
         ));
         next_state = TaskState::Done;
-    }
-    // An interrupted run cannot finish a task, whichever attempt produced the
-    // result and whichever path got here.
-    //
-    // This is the ONE place that decides, deliberately. Marking the spawn sites
-    // instead left three holes an independent review walked through: a serial
-    // FAILOVER worker never wrote the marker, the parallel path never wrote it
-    // at all, and the marker itself was deleted before the queue transition was
-    // durable — so a save that failed left `recover` finalizing the task Done.
-    // Every one of those routes passes through here.
-    //
-    // Reads the process flag rather than a file: the flag cannot be deleted by
-    // an intervening step, and it is true for exactly the runs this process was
-    // asked to abandon. Partial, not Failed — the work may well be usable, and
-    // `run --auto` retries Failed, which would restart what the operator stopped.
-    if crate::signals::stop_requested() && next_state == TaskState::Done {
-        lines.push(format!(
-            "{}: interrupted before it could be finished; left Partial",
-            task.id
-        ));
-        next_state = TaskState::Partial;
     }
     // Preserve the worker/evaluator outcome before Git integration can turn a
     // passing Done into a manual-integration Partial. Review remediation is

@@ -1262,14 +1262,30 @@ fn spawn_internal(
     // can tail the worker live. Worker CLIs often route progress to stderr or
     // block-buffer stdout on a pipe, so capturing stderr live (not only after
     // exit) is what keeps the monitor non-empty during a run.
-    let combined = if attempt_capture.is_some() {
-        if let Some(parent) = output_log.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+    // Failing here must not leave the worker running. These `?`s returned with a
+    // live child that nothing else could reach — an independent review made
+    // `worker-output.log` a directory and watched Yardlet exit 1 while its worker
+    // kept going, which is the orphan #107 is about arriving through an error
+    // path instead of a signal.
+    let open_log = || -> Result<Option<std::fs::File>> {
+        if attempt_capture.is_some() {
+            if let Some(parent) = output_log.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            Ok(Some(crate::state::append_private_file(output_log)?))
+        } else {
+            Ok(std::fs::File::create(output_log).ok())
         }
-        Some(crate::state::append_private_file(output_log)?)
-    } else {
-        std::fs::File::create(output_log).ok()
+    };
+    let combined = match open_log() {
+        Ok(combined) => combined,
+        Err(error) => {
+            terminate_worker_tree(child.id(), Signal::Kill);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
     };
     let log_file = std::sync::Arc::new(std::sync::Mutex::new(combined));
     let captured_session = std::sync::Arc::new(std::sync::Mutex::new(None));

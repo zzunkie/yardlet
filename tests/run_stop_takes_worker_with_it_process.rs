@@ -378,6 +378,7 @@ fn a_result_written_before_the_interrupt_does_not_finish_the_task() {
          ids=\"$2\"\n\
          cat >/dev/null\n\
          run_id=\"$(basename \"$run_dir\")\"\n\
+         printf 'fixture handoff\\n' >\"$run_dir/handoff.md\"\n\
          printf '{\"schema_version\":1,\"run_id\":\"%s\",\"task_id\":\"YARD-001\",\"status\":\"done\",\"compact_summary\":\"fixture finished early\"}' \"$run_id\" >\"$run_dir/result.json\"\n\
          printf '%s\\n' \"$$\" >\"$ids\"\n\
          sleep 300\n",
