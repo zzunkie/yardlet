@@ -120,8 +120,75 @@ pub fn ready_independent(queue: &WorkQueue, max: usize) -> Vec<usize> {
     } else {
         max
     };
-    ready.truncate(cap);
-    ready
+    admit_disjoint_scopes(queue, ready, cap)
+}
+
+/// Take the highest-priority runnable tasks whose declared scopes do not
+/// overlap, and leave the rest for a later wave.
+///
+/// `docs/parallel-queue.md` states the contract as "independent tasks (disjoint
+/// allowed_scope, no depends_on edges) may run concurrently", and the operator's
+/// mental model matches it — but nothing enforced the disjointness half. It was
+/// a planner-side convention, so when the planner emitted dependency-free tasks
+/// with overlapping scopes (observed 2026-07-24: four TUI fixes, two sharing
+/// `src/ui/mod.rs` and two sharing `src/ui/view.rs`) a parallel drain admitted
+/// them all and the conflict surfaced only at sequential integration, as a
+/// merge-conflict Partial with the worker runs already spent (issue #50).
+///
+/// Deferring rather than failing: the task is untouched and the next wave picks
+/// it up, which is what "run the highest-priority one first" already means.
+///
+/// A task that declares NO scope is not held back and does not hold anything
+/// back. It has expressed no boundary to overlap, and treating silence as
+/// "touches everything" would serialize every queue whose tasks omit the field.
+fn admit_disjoint_scopes(queue: &WorkQueue, ready: Vec<usize>, cap: usize) -> Vec<usize> {
+    let mut admitted: Vec<usize> = Vec::new();
+    let mut claimed: Vec<String> = Vec::new();
+    for index in ready {
+        if admitted.len() == cap {
+            break;
+        }
+        let scope = normalized_scope(&queue.tasks[index].allowed_scope);
+        if scope
+            .iter()
+            .any(|want| claimed.iter().any(|held| scopes_overlap(held, want)))
+        {
+            continue;
+        }
+        claimed.extend(scope);
+        admitted.push(index);
+    }
+    admitted
+}
+
+/// Declared scope entries reduced to comparable directory-or-file paths.
+///
+/// Globs are boundaries, not patterns, for this purpose: `src/ui/**` and
+/// `src/ui/mod.rs` are the same region as far as two workers editing it are
+/// concerned, so the suffix is dropped and the prefix compared.
+fn normalized_scope(scope: &[String]) -> Vec<String> {
+    scope
+        .iter()
+        .map(|entry| {
+            let entry = entry.trim();
+            let entry = entry.strip_prefix("./").unwrap_or(entry);
+            let entry = entry
+                .split('*')
+                .next()
+                .unwrap_or(entry)
+                .trim_end_matches('/');
+            entry.to_string()
+        })
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+/// Do two normalized scope entries name overlapping regions?
+///
+/// Equal, or one is a directory containing the other. Compared on path
+/// boundaries so `src/ui` does not swallow `src/ui-helpers`.
+fn scopes_overlap(a: &str, b: &str) -> bool {
+    a == b || b.starts_with(&format!("{a}/")) || a.starts_with(&format!("{b}/"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2370,6 +2437,75 @@ mod tests {
     use super::*;
     use crate::schemas::{SelectionPolicy, WorkQueue};
     use crate::state::Workspace;
+
+    /// Issue #50, from the queue that produced it on 2026-07-24: four
+    /// dependency-free TUI fixes, two sharing `src/ui/mod.rs` and two sharing
+    /// `src/ui/view.rs`. A parallel drain admitted all four and the conflict
+    /// surfaced at sequential integration, as a merge-conflict Partial with the
+    /// worker runs already spent.
+    #[test]
+    fn overlapping_scopes_are_admitted_one_wave_at_a_time() {
+        let scoped = |id: &str, priority: i64, scope: &[&str]| {
+            let mut t = task(id, TaskState::Queued, priority, vec![]);
+            t.allowed_scope = scope.iter().map(|s| s.to_string()).collect();
+            t
+        };
+        let q = queue(vec![
+            scoped("YARD-001", 10, &["src/ui/mod.rs"]),
+            scoped("YARD-002", 20, &["src/ui/mod.rs"]),
+            scoped("YARD-003", 30, &["src/ui/view.rs"]),
+            scoped("YARD-004", 40, &["src/ui/view.rs"]),
+        ]);
+
+        // One per contested file, highest priority first; the other two wait.
+        assert_eq!(
+            ready_independent(&q, 4),
+            vec![0, 2],
+            "two tasks editing the same file must not be started together"
+        );
+
+        // With the winners gone, the deferred pair becomes the next wave — they
+        // were held back, not dropped.
+        let q = queue(vec![
+            scoped("YARD-002", 20, &["src/ui/mod.rs"]),
+            scoped("YARD-004", 40, &["src/ui/view.rs"]),
+        ]);
+        assert_eq!(ready_independent(&q, 4), vec![0, 1]);
+    }
+
+    /// A directory scope contains the files under it, and a glob is a boundary
+    /// rather than a pattern here. But `src/ui` must not swallow a sibling whose
+    /// name merely starts with the same characters.
+    #[test]
+    fn scope_overlap_is_decided_on_path_boundaries() {
+        let scoped = |id: &str, priority: i64, scope: &[&str]| {
+            let mut t = task(id, TaskState::Queued, priority, vec![]);
+            t.allowed_scope = scope.iter().map(|s| s.to_string()).collect();
+            t
+        };
+
+        // `src/ui/**` contains `src/ui/view.rs`.
+        let q = queue(vec![
+            scoped("YARD-001", 10, &["src/ui/**"]),
+            scoped("YARD-002", 20, &["src/ui/view.rs"]),
+        ]);
+        assert_eq!(ready_independent(&q, 4), vec![0]);
+
+        // `src/ui` does not contain `src/ui-helpers`.
+        let q = queue(vec![
+            scoped("YARD-001", 10, &["src/ui/"]),
+            scoped("YARD-002", 20, &["src/ui-helpers/"]),
+        ]);
+        assert_eq!(ready_independent(&q, 4), vec![0, 1]);
+
+        // Silence is not a claim: a task that declares no scope neither waits
+        // nor makes anything else wait.
+        let q = queue(vec![
+            task("YARD-001", TaskState::Queued, 10, vec![]),
+            task("YARD-002", TaskState::Queued, 20, vec![]),
+        ]);
+        assert_eq!(ready_independent(&q, 4), vec![0, 1]);
+    }
 
     fn task(id: &str, state: TaskState, priority: i64, deps: Vec<String>) -> Task {
         Task {
