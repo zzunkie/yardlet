@@ -318,6 +318,7 @@ pub fn scout(ws: &Workspace) -> Result<ScoutCommandReport> {
                         &[],
                         None,
                         false,
+                        &[],
                     )?;
                     let result_path = report_dir.join("scout-result.json");
                     let raw = std::fs::read_to_string(&result_path).with_context(|| {
@@ -525,6 +526,7 @@ fn draft(
         &[],
         None,
         false,
+        &[],
     )?;
 
     let result_path = run_dir.join("memory-result.json");

@@ -2850,6 +2850,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         &images,
         session_id.as_deref(),
         effective_chained,
+        &sandbox_writable_roots(&task, &ws.root),
     ) {
         Ok(outcome) => outcome,
         Err(error) => {
@@ -2958,6 +2959,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             &images,
             session_id.as_deref(),
             true,
+            &sandbox_writable_roots(&task, &ws.root),
         ) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -3115,6 +3117,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             &images,
             session_id.as_deref(),
             false,
+            &sandbox_writable_roots(&task, &ws.root),
         ) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -3245,6 +3248,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                     &images,
                     session_id.as_deref(),
                     false,
+                    &sandbox_writable_roots(&task, &ws.root),
                 ) {
                     Ok(outcome) => outcome,
                     Err(error) => {
@@ -3744,6 +3748,58 @@ fn no_change_contradiction(
         return Some(("no_change_contradicts_declared_outputs", declared));
     }
     None
+}
+
+/// Workspace directories the task's confirmed contract says it may write, which
+/// the sandbox would otherwise refuse.
+///
+/// A worker runs under `workspace-write`, and that sandbox treats the hidden
+/// `.agents/` tree as read-only. So a task whose `allowed_scope` grants it a
+/// skill package could not write there: the worker reported `needs_user` and
+/// asked the operator to authorize what the confirmed contract had already
+/// granted (issue #19).
+///
+/// Only `.agents/` entries are lifted. Everything else in a scope is ordinary
+/// workspace content the sandbox already allows, and widening beyond what the
+/// sandbox actually blocks would hand out permission nobody needed.
+///
+/// A glob is truncated to the directory that contains it, because `--add-dir`
+/// takes roots rather than patterns. That is wider than the declared scope for
+/// something like `.agents/skills/x/**` excluding `archive/v1/**` — the sandbox
+/// cannot express that split. The narrower contract is still enforced, by the
+/// evaluator's forbidden-path check after the fact, which is the same
+/// belt-and-braces shape the danger-list already uses: the sandbox bounds what
+/// is reachable, the evaluator judges what was touched.
+pub(crate) fn sandbox_writable_roots(
+    task: &crate::schemas::Task,
+    ws_root: &std::path::Path,
+) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = task
+        .allowed_scope
+        .iter()
+        .filter_map(|entry| {
+            let entry = entry.trim().trim_start_matches("./");
+            if !entry.starts_with(".agents/") {
+                return None;
+            }
+            let directory = entry
+                .split('*')
+                .next()
+                .unwrap_or(entry)
+                .trim_end_matches('/');
+            // A file entry contributes the directory holding it.
+            let directory = if directory.ends_with(".md") || directory.ends_with(".yaml") {
+                std::path::Path::new(directory).parent()?.to_str()?
+            } else {
+                directory
+            };
+            (!directory.is_empty() && directory != ".agents").then(|| ws_root.join(directory))
+        })
+        .filter(|path| path.exists())
+        .collect();
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 /// Declared outputs that exist on disk but did NOT reach the integration commit.
@@ -12740,6 +12796,63 @@ printf "# worker handoff
 
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// Issue #19: a task whose confirmed contract grants it a skill package
+    /// could not write there, because `workspace-write` treats the hidden
+    /// `.agents/` tree as read-only. The worker reported `needs_user` and asked
+    /// the operator to authorize what had already been authorized.
+    #[test]
+    fn sandbox_roots_lift_only_the_agents_scope_the_sandbox_would_refuse() {
+        fn scoped_task(scope: &[&str]) -> crate::schemas::Task {
+            let entries = scope
+                .iter()
+                .map(|s| format!("  - \"{s}\""))
+                .collect::<Vec<_>>()
+                .join("\n");
+            serde_yaml_ng::from_str(&format!(
+                "id: YARD-001\ntitle: t\nstate: queued\npriority: 10\nallowed_scope:\n{entries}\n"
+            ))
+            .expect("task fixture")
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "yard-sandbox-roots-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let package = root.join(".agents/skills/route-game-development");
+        std::fs::create_dir_all(package.join("fixtures")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+
+        // The package the contract granted (glob), ordinary workspace content
+        // the sandbox already allows, and a declared path that does not exist.
+        let task = scoped_task(&[
+            ".agents/skills/route-game-development/**",
+            "src/**",
+            ".agents/skills/never-created/**",
+        ]);
+
+        assert_eq!(
+            sandbox_writable_roots(&task, &root),
+            vec![package.clone()],
+            "only the `.agents/` scope that exists may be lifted"
+        );
+
+        // A file entry contributes the directory that holds it — `--add-dir`
+        // takes roots, not files.
+        let task = scoped_task(&[".agents/skills/route-game-development/SKILL.md"]);
+        assert_eq!(sandbox_writable_roots(&task, &root), vec![package]);
+
+        // `.agents` itself is never a root: that would hand the worker the whole
+        // canonical state, which is what the sandbox is protecting.
+        let task = scoped_task(&[".agents/**"]);
+        assert!(sandbox_writable_roots(&task, &root).is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Issue #91: SOME of the declared output reaching the commit is not the
