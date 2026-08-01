@@ -519,6 +519,10 @@ pub fn run_batch<F: FnMut(&str)>(
             state::save_yaml_atomic(
                 &p.run_dir.join("run.yaml"),
                 &run::RunRecord {
+                    // Parallel runs integrate through the same core policy, but this
+                    // record is written by the batch path; the projection a worker
+                    // reads is the serial one (issue #117).
+                    adoption: None,
                     schema_version: 1,
                     run_id: p.run_id.clone(),
                     task_id: p.task.id.clone(),
@@ -665,6 +669,7 @@ pub fn run_batch<F: FnMut(&str)>(
         state::save_yaml_atomic(
             &p.run_dir.join("run.yaml"),
             &run::RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: p.run_id.clone(),
                 task_id: p.task.id.clone(),

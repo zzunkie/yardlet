@@ -1092,6 +1092,23 @@ pub fn compile(inputs: &PacketInputs) -> String {
     // Output language.
     p.push_str(&language_directive(inputs.language));
 
+    // Where accepted output goes, and whether it goes there by itself. A
+    // preflight task could not answer that before doing semantic work: the
+    // worker-visible projection carried the worktree, branch and baseline but
+    // not the adoption policy, so proving the delivery path meant trusting task
+    // prose or failing closed (issue #117). Point at the core-written fact.
+    p.push_str("## Adoption policy\n\n");
+    p.push_str(&format!(
+        "The `adoption` section of `{rd}/run.yaml` is core-written before you start and states \
+         where accepted output lands: `auto_commit` (whether adoption is automatic), \
+         `owning_ref` (the ref integration updates), `push_target_ref` (the SEPARATE optional \
+         push destination \u{2014} an empty value means no push is configured, not that there \
+         is nowhere to adopt into), and `retention` (what happens when adoption is off). Read \
+         it rather than inferring delivery from this task's prose. Editing it changes nothing: \
+         integration reads core-owned config, never your copy.\n\n",
+        rd = inputs.run_dir_rel
+    ));
+
     // Output contract.
     p.push_str("## Required output\n\n");
     p.push_str(&format!(
