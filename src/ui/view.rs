@@ -154,7 +154,7 @@ fn collect_readable(v: &serde_json::Value, out: &mut Vec<String>) {
     }
 }
 
-fn render_monitor(frame: &mut Frame, app: &App) {
+fn render_monitor(frame: &mut Frame, app: &mut App) {
     // Renders entirely from App's MonitorCache: the event loop keeps the cache
     // current (stat per frame, file reads only on growth/run switch), so this
     // function does no filesystem work.
@@ -234,8 +234,23 @@ fn render_monitor(frame: &mut Frame, app: &App) {
     );
 
     let visible = chunks[1].height.saturating_sub(2) as usize;
-    let start = mc.log_lines.len().saturating_sub(visible);
-    let body = mc.log_lines[start..].join("\n");
+    // Recorded so key handling can page by the height the operator is actually
+    // looking at, rather than a guess.
+    let total = mc.log_lines.len();
+    app.monitor_visible = visible;
+    app.monitor_max_top = total.saturating_sub(visible);
+    // Following pins the window to the newest output; once the operator scrolls
+    // up, the top line is held so incoming output does not yank the viewport
+    // away mid-read (issue #54).
+    if app.monitor_follow {
+        app.monitor_top = app.monitor_max_top;
+    } else {
+        app.monitor_top = app.monitor_top.min(app.monitor_max_top);
+    }
+    let start = app.monitor_top;
+    let end = (start + visible).min(total);
+    let mc = &app.monitor;
+    let body = mc.log_lines[start..end].join("\n");
     frame.render_widget(
         Paragraph::new(body)
             .wrap(Wrap { trim: true })
@@ -1564,7 +1579,7 @@ mod tests {
             worker: "worker-keep".into(),
             recorded_state: "running".into(),
         });
-        let monitor = rendered_with(120, 12, |frame| render_monitor(frame, &app));
+        let monitor = rendered_with(120, 12, |frame| render_monitor(frame, &mut app));
         let monitor_compact = monitor.replace(' ', "");
         assert!(monitor_compact.contains("태스크YARD-KEEP"), "{monitor}");
         assert!(monitor_compact.contains("워커worker-keep"), "{monitor}");
