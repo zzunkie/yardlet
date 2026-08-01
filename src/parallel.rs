@@ -183,6 +183,16 @@ fn normalized_scope(scope: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Does a declared scope entry cover this exact path?
+///
+/// Shares the normalization the parallel admission filter uses, so "what a scope
+/// covers" means one thing in the scheduler and in the evidence guard.
+pub(crate) fn scope_covers(entry: &str, path: &str) -> bool {
+    normalized_scope(std::slice::from_ref(&entry.to_string()))
+        .iter()
+        .any(|normalized| scopes_overlap(normalized, path))
+}
+
 /// Do two normalized scope entries name overlapping regions?
 ///
 /// Equal, or one is a directory containing the other. Compared on path
