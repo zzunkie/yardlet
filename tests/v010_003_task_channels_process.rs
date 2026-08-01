@@ -1,3 +1,14 @@
+//! Slow process tier: gated behind the `slow-process-tests` feature (#105).
+//!
+//! CI runs it on every PR. A local `cargo test` does not, because this target
+//! spawns real binaries and waits on real timing — the four gated targets are
+//! 56% of a full run's wall clock.
+//!
+//! Skipping is never silent: with the feature off this file still compiles one
+//! test whose NAME says what was not verified, so a local run lists it.
+
+#![cfg(all(unix, feature = "slow-process-tests"))]
+
 #[cfg(unix)]
 #[path = "fixtures/support/process-binary-preflight.rs"]
 mod process_binary_preflight;

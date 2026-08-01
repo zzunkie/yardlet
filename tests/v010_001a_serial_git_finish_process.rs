@@ -1,3 +1,14 @@
+//! Slow process tier: gated behind the `slow-process-tests` feature (#105).
+//!
+//! CI runs it on every PR. A local `cargo test` does not, because this target
+//! spawns real binaries and waits on real timing — the four gated targets are
+//! 56% of a full run's wall clock.
+//!
+//! Skipping is never silent: with the feature off this file still compiles one
+//! test whose NAME says what was not verified, so a local run lists it.
+
+#![cfg(all(unix, feature = "slow-process-tests"))]
+
 #[cfg(unix)]
 #[test]
 fn yardlet_serial_chain_and_crash_recovery_converge_without_manual_git_finish() {

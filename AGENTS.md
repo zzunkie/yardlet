@@ -43,9 +43,21 @@ Rust 2021 (rustc ≥ 1.82) | Ratatui (TUI) | clap (CLI) | serde / serde_json / s
 ## Build / Test
 
 ```bash
-cargo build && cargo test     # keep the whole suite green
-cargo install --path .        # installs `yardlet` to ~/.cargo/bin
+cargo build && cargo test              # fast tier: units + fast integration
+cargo test --all-features              # everything, including the slow process tier
+cargo install --path .                 # installs `yardlet` to ~/.cargo/bin
 ```
+
+`cargo test` leaves out four process targets that are 56% of a full run's wall
+clock (issue #105). CI runs them on every PR with `--all-features`; locally they
+are opt-in. The skip is never silent — each gated target keeps a test whose name
+says so, e.g.
+`v010_001a_serial_git_finish_process_is_gated_off_run_with_features_slow_process_tests`,
+so a local run lists what it did not verify.
+
+**Before claiming a change is verified, run `--all-features`.** The gated tier is
+where the defects unit tests structurally cannot see get caught (#52, #64, #83,
+#91, #107 were all found or proven there).
 
 ## Operational rules
 
