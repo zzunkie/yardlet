@@ -249,6 +249,21 @@ pub struct App {
     pub pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Vertical scroll offset for the handoff/report screens.
     pub scroll: u16,
+    /// Monitor scroll-back: index of the first visible log line.
+    ///
+    /// Held separately from `scroll` because the monitor's content grows under
+    /// the viewport. An offset from the TOP stays put as output arrives; an
+    /// offset from the bottom would drift a frozen view downward on every write
+    /// (issue #54).
+    pub monitor_top: usize,
+    /// Is the monitor pinned to the newest output? True until the operator
+    /// scrolls up, true again the moment they return to the bottom.
+    pub monitor_follow: bool,
+    /// Log lines the last monitor frame could show, and the largest top index
+    /// that still fills it. Recorded by the renderer so paging uses the real
+    /// viewport rather than an assumed height.
+    pub monitor_visible: usize,
+    pub monitor_max_top: usize,
     /// Last rendered inner viewport for the active scrollable text screen.
     pub scroll_viewport: Option<ScrollViewport>,
     /// Selected row in the Home queue (for per-task handoff view).
@@ -509,6 +524,10 @@ impl App {
             replan: false,
             pause: None,
             scroll: 0,
+            monitor_top: 0,
+            monitor_follow: true,
+            monitor_visible: 0,
+            monitor_max_top: 0,
             scroll_viewport: None,
             selected: 0,
             reports: Vec::new(),
@@ -703,7 +722,11 @@ impl App {
         if self.monitor.log_path.as_ref() == Some(&path) && self.monitor.log_len == len {
             return;
         }
-        const TAIL: u64 = 128 * 1024;
+        // Scroll-back is only as deep as what was read. 128KB was sized for a
+        // live tail nobody could move, and it put a wall a few screens above the
+        // bottom the moment scrolling existed (issue #54). 4MB is still a
+        // bounded read of a local file, done only when the log grows.
+        const TAIL: u64 = 4 * 1024 * 1024;
         let raw = read_tail(&path, TAIL);
         self.monitor.log_lines = raw
             .lines()
@@ -1167,6 +1190,24 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
                     stop_running_worker(&mut app)
                 }
                 KeyCode::Char('p') => request_pause(&mut app),
+                // Scroll back through what the worker already printed. The
+                // operator asked for what a normal streaming session gives them
+                // (issue #54).
+                KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Home
+                | KeyCode::End => {
+                    let (top, follow) = monitor_scroll_to(
+                        code,
+                        app.monitor_top,
+                        app.monitor_max_top,
+                        app.monitor_visible,
+                    );
+                    app.monitor_top = top;
+                    app.monitor_follow = follow;
+                }
                 // Cycle which parallel run is being followed.
                 KeyCode::Tab | KeyCode::Right => {
                     let n = app.monitor.runs.len().max(1);
@@ -2455,6 +2496,31 @@ fn apply_scroll(app: &mut App, code: KeyCode) {
         _ => {}
     }
     clamp_scroll(app);
+}
+
+/// Where a monitor scroll key lands, and whether it resumes following.
+///
+/// Split out as a pure function because the branch is the part that can be
+/// wrong: the repo's own rule after the key-list defects is that TUI key logic
+/// is tested as data, not by driving a terminal.
+///
+/// Reaching the bottom resumes following rather than leaving the view frozen
+/// one line from live — a viewer that stops updating where it looks live is
+/// worse than one that never followed.
+fn monitor_scroll_to(code: KeyCode, top: usize, max_top: usize, visible: usize) -> (usize, bool) {
+    let page = visible.max(1);
+    let landed = match code {
+        KeyCode::Up => top.saturating_sub(1),
+        KeyCode::Down => (top + 1).min(max_top),
+        KeyCode::PageUp => top.saturating_sub(page),
+        KeyCode::PageDown => (top + page).min(max_top),
+        KeyCode::Home => 0,
+        KeyCode::End => max_top,
+        _ => top,
+    };
+    // At (or past) the newest line, follow again. `max_top == 0` means the log
+    // does not fill the viewport, so there is nothing to freeze.
+    (landed, landed >= max_top)
 }
 
 fn scroll_text(app: &App) -> Option<&str> {
@@ -5961,6 +6027,63 @@ tasks:
             action_for_key_with_enhancement(newline, KeyModifiers::NONE, false, editing),
             ReviewAction::InsertNewline,
         );
+    }
+
+    /// Issue #54: the operator asked to scroll back through a worker's output
+    /// the way a normal streaming session lets them.
+    #[test]
+    fn monitor_scroll_freezes_on_the_way_up_and_resumes_following_at_the_bottom() {
+        // 100 lines, 10 visible: the newest screen starts at line 90.
+        let (max_top, visible) = (90_usize, 10_usize);
+
+        // Up from the bottom freezes: following stops the moment they move.
+        assert_eq!(
+            monitor_scroll_to(KeyCode::Up, max_top, max_top, visible),
+            (89, false)
+        );
+        assert_eq!(
+            monitor_scroll_to(KeyCode::PageUp, max_top, max_top, visible),
+            (80, false)
+        );
+        // Home reaches the oldest line that was read.
+        assert_eq!(
+            monitor_scroll_to(KeyCode::Home, 42, max_top, visible),
+            (0, false)
+        );
+
+        // Coming back down resumes following, so a view that looks live IS live.
+        assert_eq!(
+            monitor_scroll_to(KeyCode::End, 0, max_top, visible),
+            (max_top, true)
+        );
+        assert_eq!(
+            monitor_scroll_to(KeyCode::Down, 89, max_top, visible),
+            (max_top, true)
+        );
+        assert_eq!(
+            monitor_scroll_to(KeyCode::PageDown, 85, max_top, visible),
+            (max_top, true)
+        );
+
+        // Neither end runs off: up from the top and down from the bottom stay.
+        assert_eq!(
+            monitor_scroll_to(KeyCode::Up, 0, max_top, visible),
+            (0, false)
+        );
+        assert_eq!(
+            monitor_scroll_to(KeyCode::PageUp, 3, max_top, visible),
+            (0, false)
+        );
+        assert_eq!(
+            monitor_scroll_to(KeyCode::Down, max_top, max_top, visible),
+            (max_top, true)
+        );
+
+        // A log shorter than the viewport has nothing to freeze: every key
+        // leaves it following.
+        for code in [KeyCode::Up, KeyCode::PageUp, KeyCode::Home] {
+            assert_eq!(monitor_scroll_to(code, 0, 0, visible), (0, true));
+        }
     }
 
     #[test]
