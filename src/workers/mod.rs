@@ -727,10 +727,56 @@ fn build_resume_command(
     cmd
 }
 
+/// Has the child exited, WITHOUT reaping it?
+///
+/// `try_wait` reaps, which frees the pid — and the pid is the process group id
+/// the teardown still needs. `WNOWAIT` leaves the child waitable so the group
+/// signal that follows still has a group to reach.
+#[cfg(unix)]
+fn exited_without_reaping(child: &std::process::Child) -> bool {
+    // `waitid`, not `waitpid`: WNOWAIT is a `waitid` option, and `waitpid`
+    // rejects it with EINVAL on both macOS and Linux. An independent review
+    // caught that — the first cut used `waitpid` and so reported "not exited"
+    // for every child, which silently turned the grace window into a fixed
+    // three-second wait.
+    //
+    // `waitid` returns 0 whether or not a child was found, so the answer is in
+    // `si_pid`: it stays 0 when nothing has exited yet.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id() as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if rc != 0 {
+        return false;
+    }
+    // SAFETY: `si_pid` is populated by the kernel for a WEXITED report.
+    unsafe { info.si_pid() != 0 }
+}
+
+#[cfg(not(unix))]
+fn exited_without_reaping(_child: &std::process::Child) -> bool {
+    false
+}
+
+/// How long a worker gets to stop on its own before Yardlet insists.
+///
+/// Long enough for an agent CLI to flush what it was writing, short enough that
+/// the operator's second Ctrl-C is not the one that finally works.
+const STOP_GRACE: Duration = Duration::from_secs(3);
+
 #[derive(Debug, Clone)]
 pub struct WorkerOutcome {
     pub exit_ok: bool,
     pub timed_out: bool,
+    /// The operator stopped Yardlet, and this worker was taken down with it
+    /// rather than left holding the run directory (issue #107). Distinct from a
+    /// timeout: nothing was exceeded, the run was interrupted.
+    pub stopped: bool,
     pub note: String,
     /// Live public events can be shed under sink backpressure because exact raw
     /// streams remain authoritative and must never stop draining.
@@ -1140,6 +1186,11 @@ fn spawn_internal(
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning worker '{}'", bin.display()))?;
+    // Tracked so an emergency exit can still take it down: `process::exit` runs
+    // no destructors, and a worker leads its own group, so nothing else could.
+    // RAII, so every return path below untracks — including the error ones that
+    // a hand-placed call missed.
+    let _tracked = crate::signals::TrackedWorker::new(child.id());
 
     let provenance_result = (|| -> Result<()> {
         let Some((run_id, attempt_id)) = provenance_identity.as_ref() else {
@@ -1211,14 +1262,30 @@ fn spawn_internal(
     // can tail the worker live. Worker CLIs often route progress to stderr or
     // block-buffer stdout on a pipe, so capturing stderr live (not only after
     // exit) is what keeps the monitor non-empty during a run.
-    let combined = if attempt_capture.is_some() {
-        if let Some(parent) = output_log.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+    // Failing here must not leave the worker running. These `?`s returned with a
+    // live child that nothing else could reach — an independent review made
+    // `worker-output.log` a directory and watched Yardlet exit 1 while its worker
+    // kept going, which is the orphan #107 is about arriving through an error
+    // path instead of a signal.
+    let open_log = || -> Result<Option<std::fs::File>> {
+        if attempt_capture.is_some() {
+            if let Some(parent) = output_log.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            Ok(Some(crate::state::append_private_file(output_log)?))
+        } else {
+            Ok(std::fs::File::create(output_log).ok())
         }
-        Some(crate::state::append_private_file(output_log)?)
-    } else {
-        std::fs::File::create(output_log).ok()
+    };
+    let combined = match open_log() {
+        Ok(combined) => combined,
+        Err(error) => {
+            terminate_worker_tree(child.id(), Signal::Kill);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
     };
     let log_file = std::sync::Arc::new(std::sync::Mutex::new(combined));
     let captured_session = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -1384,9 +1451,34 @@ fn spawn_internal(
 
     let start = Instant::now();
     let mut timed_out = false;
+    let mut stopped = false;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
+        }
+        if crate::signals::stop_requested() {
+            // The operator asked THIS process to stop, and the worker leads its
+            // own process group so nothing else can reach it (issue #107). Ask
+            // first, then insist: a worker given SIGTERM can close its own files
+            // and stop cleanly, which a SIGKILL denies it.
+            terminate_worker_tree(child.id(), Signal::Term);
+            let grace = Instant::now();
+            while grace.elapsed() < STOP_GRACE && !exited_without_reaping(&child) {
+                thread::sleep(Duration::from_millis(50));
+            }
+            // ALWAYS group-kill, even when the direct child has already gone. A
+            // launcher that handles SIGTERM exits while the agent CLI it spawned
+            // ignores it and keeps the inherited pipe ends open — the grandchild
+            // survives and the reader joins below never see EOF, so this function
+            // hangs. That is the same shape as #52, reached through the stop path.
+            //
+            // Safe here precisely because the grace loop does not reap: an
+            // unreaped child still holds its pid, so `-pid` is still this group
+            // and cannot be a recycled one.
+            terminate_worker_tree(child.id(), Signal::Kill);
+            let _ = child.kill();
+            stopped = true;
+            break child.wait()?;
         }
         if start.elapsed() >= timeout {
             // Kill the GROUP, not just the direct child. A worker profile whose
@@ -1459,12 +1551,23 @@ fn spawn_internal(
         .ok()
         .and_then(|captured| captured.clone());
 
+    // A worker that finished in the same instant the operator interrupted still
+    // belongs to an interrupted run: whatever comes next — integration, a commit,
+    // the next task — is what the stop was asking Yardlet not to do. The loop
+    // checks `try_wait` before the flag, so without this a fast worker (or one
+    // that exits between spawn and the first poll) wins the race and the task can
+    // land Done despite the Ctrl-C.
+    let stopped = stopped || crate::signals::stop_requested();
+
     Ok(WorkerOutcome {
-        exit_ok: status.success() && !timed_out,
+        exit_ok: status.success() && !timed_out && !stopped,
         timed_out,
+        stopped,
         session_id,
         public_events_dropped: public_events_dropped.load(std::sync::atomic::Ordering::Relaxed),
-        note: if timed_out {
+        note: if stopped {
+            "worker stopped with Yardlet at the operator's request".to_string()
+        } else if timed_out {
             "worker exceeded wall-clock limit and was stopped".to_string()
         } else {
             format!("worker exited (success={})", status.success())

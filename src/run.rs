@@ -1727,6 +1727,12 @@ fn worker_attempt_result(
     if run_dir.join("cancelled").is_file() {
         return "cancelled";
     }
+    // Checked before `result.json`: an interrupted worker may already have
+    // written a result it had not finished acting on, and recording that as a
+    // success would tell the operator their Ctrl-C completed the task.
+    if outcome.stopped {
+        return "stopped";
+    }
     if outcome.timed_out {
         return "timed_out";
     }
@@ -2227,6 +2233,11 @@ pub(crate) fn prepare_answer_action_with_deviations(
 }
 
 pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
+    // Installed at the entry point, not at each caller: `yardlet goal` reaches
+    // `run_auto` without going through `cmd_run`, and an independent review found
+    // exactly that path still orphaning its worker. Every route that can start a
+    // worker passes through here or `run_next` (issue #107).
+    crate::signals::install_stop_handler();
     // Serialize queue selection and the first runtime transition against a
     // planning confirmation. Once Running is canonical, confirm observes it
     // and fails closed; the worker itself never holds this lock.
@@ -2846,6 +2857,18 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
             return Err(error);
         }
     };
+    // A stop joins the convention the TUI's Esc already uses. The marker is what
+    // the rest of this function reads: it stops the resume loop, it stops typed
+    // output-contract recovery and failover from starting a REPLACEMENT worker,
+    // and it makes the attempt's outcome `cancelled` rather than a success
+    // finalized from whatever the interrupted worker had written (issue #107).
+    //
+    // Written durably before any of those decisions, so a crash in this window
+    // leaves the same answer on disk that this process would have given.
+    if outcome.stopped || crate::signals::stop_requested() {
+        outcome.stopped = true;
+        crate::state::write_str_atomic(&run_dir.join("cancelled"), "stopped\n")?;
+    }
     // From this point the worktree may contain completed or partially completed
     // worker work. Any import/finalization error must retain it for recovery;
     // the guard is only for failures before a worker actually ran.
@@ -2994,6 +3017,20 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         });
     }
 
+    // A stop cancels recovery too: this spawns a fresh attempt on a typed
+    // refusal, which is right when the worker is unwell and wrong when the
+    // operator has asked Yardlet to stop (issue #107).
+    //
+    // Keyed on the OUTCOME, not on the `cancelled` marker. `yardlet redirect`
+    // writes that same marker to stop a run, so reading it here made a redirect
+    // look like a process stop and changed the path it takes — the full suite
+    // caught it as `redirect_ignores_decoy_pid_and_signals_verified_worker`
+    // failing under load while main passed. The marker means "this run was
+    // stopped, do not resume it", which redirect also wants; it does not mean
+    // "this process is shutting down", which is what these two branches need.
+    if outcome.stopped {
+        output_contract_incident = None;
+    }
     if let Some(mut incident) = output_contract_incident.take() {
         // Consume the one-shot budget durably BEFORE spawning. If Yardlet dies
         // in this crash window, orphan recovery reads this receipt and parks
@@ -3103,7 +3140,14 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     }
 
     let mut failover_note: Option<String> = None;
-    if !run_dir.join("result.json").exists() && output_contract_incident.is_none() {
+    // A stopped run must not fail over. "No result.json" is normally evidence the
+    // worker is unwell and another should try, but here the missing result is
+    // what the operator asked for, and spawning a replacement is the one thing a
+    // stop is meant to prevent (issue #107).
+    if !outcome.stopped
+        && !run_dir.join("result.json").exists()
+        && output_contract_incident.is_none()
+    {
         match routing::resolve_failover_worker_for_task(
             &workers,
             &billing,
@@ -3779,6 +3823,11 @@ pub fn run_auto<F: FnMut(&str)>(
     accept_ambiguity: bool,
     mut on_event: F,
 ) -> Result<Vec<String>> {
+    // Installed at the entry point, not at each caller: `yardlet goal` reaches
+    // `run_auto` without going through `cmd_run`, and an independent review found
+    // exactly that path still orphaning its worker. Every route that can start a
+    // worker passes through here or `run_next` (issue #107).
+    crate::signals::install_stop_handler();
     use std::collections::HashMap;
     let max_parallel = parallel
         .or_else(|| ws.load_config().ok().map(|c| c.max_parallel))
@@ -3826,6 +3875,14 @@ pub fn run_auto<F: FnMut(&str)>(
     }
 
     loop {
+        // An interrupt ends the drain, it does not just end the current task.
+        // Without this the loop reads the stopped task as Failed, calls that
+        // transient, and starts the next worker — after the operator asked
+        // Yardlet to stop (issue #107).
+        if crate::signals::stop_requested() {
+            emit("stopped at your request; the queue is unchanged".to_string());
+            break;
+        }
         // Graceful pause: stop between tasks (the current task, if any, has
         // already finished here). Resume by running auto again.
         if pause
@@ -4327,7 +4384,12 @@ pub(crate) fn gen_session_uuid(seed: &str) -> String {
 /// A transient (likely network/infra) failure: the worker did not exit cleanly,
 /// left no result, and was not stopped by us — worth resuming rather than redoing.
 fn is_transient_failure(outcome: &workers::WorkerOutcome, run_dir: &std::path::Path) -> bool {
-    !outcome.exit_ok && !outcome.timed_out && !run_dir.join("result.json").exists()
+    // A run the operator stopped is not transient infrastructure trouble, and
+    // resuming it automatically would undo the stop they asked for.
+    !outcome.exit_ok
+        && !outcome.timed_out
+        && !outcome.stopped
+        && !run_dir.join("result.json").exists()
 }
 
 /// Validation commands configured on a task: `validation: { commands: [..] }`

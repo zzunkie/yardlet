@@ -757,7 +757,9 @@ pub fn run_batch<F: FnMut(&str)>(
             continue;
         }
 
-        if !p.run_dir.join("result.json").exists() {
+        // Same rule as the serial path: a stop is not a worker being unwell, so
+        // it must not start a replacement (issue #107).
+        if !crate::signals::stop_requested() && !p.run_dir.join("result.json").exists() {
             match routing::resolve_failover_worker_for_task(
                 &workers_file,
                 &billing,

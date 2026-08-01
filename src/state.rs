@@ -3704,7 +3704,10 @@ impl Workspace {
                         Some("needs_user") => AttemptState::NeedsUser,
                         Some("succeeded") => AttemptState::Succeeded,
                         Some("timed_out") => AttemptState::TimedOut,
-                        Some("cancelled") => AttemptState::Cancelled,
+                        // The operator stopping Yardlet cancels the attempt; it
+                        // is the same outcome as an explicit cancel, reached by
+                        // Ctrl-C rather than by a command (issue #107).
+                        Some("cancelled" | "stopped") => AttemptState::Cancelled,
                         Some("abandoned") => AttemptState::Abandoned,
                         _ => AttemptState::Failed,
                     }

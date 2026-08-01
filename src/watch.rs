@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use chrono::Local;
 use serde::Serialize;
 
@@ -184,7 +184,10 @@ impl Observer for LocalObserver {
                             Ok(Some(status)) => {
                                 break (Some(status), "command completed".to_string())
                             }
-                            Ok(None) if self.cancelled.load(Ordering::SeqCst) => {
+                            Ok(None)
+                                if self.cancelled.load(Ordering::SeqCst)
+                                    || crate::signals::stop_requested() =>
+                            {
                                 let _ = child.kill();
                                 break (child.wait().ok(), "command cancelled".to_string());
                             }
@@ -274,6 +277,15 @@ fn run_loop(
 ) -> (String, Vec<Observation>, String) {
     let mut observations = Vec::new();
     for attempt in 1..=options.max_runs {
+        // The signal lands on a process-wide flag (one handler per process), so
+        // carry it into the flag this loop and its observer share. The observer
+        // ALSO reads the global directly: mirroring only here left a Ctrl-C
+        // during a long observation unnoticed until that observation finished,
+        // which an independent review caught by sending two of them mid-`sleep`.
+        // Tests set the local flag directly and must keep working without a signal.
+        if crate::signals::stop_requested() {
+            cancelled.store(true, Ordering::SeqCst);
+        }
         if cancelled.load(Ordering::SeqCst) {
             return (
                 "cancelled".into(),
@@ -291,6 +303,19 @@ fn run_loop(
         let observation = observer.observe(attempt);
         let met = observation.condition_met;
         observations.push(observation);
+        // Cancellation is decided BEFORE a met condition is accepted. The
+        // observed command can be the very thing that raises the signal, and an
+        // independent review reproduced it: `watch --until success -- sh -c 'kill
+        // -INT "$PPID"'` recorded `satisfied`, so the interrupt read as the run
+        // finishing on its own terms.
+        if crate::signals::stop_requested() || cancelled.load(Ordering::SeqCst) {
+            cancelled.store(true, Ordering::SeqCst);
+            return (
+                "cancelled".into(),
+                observations,
+                "cancel signal received".into(),
+            );
+        }
         if met {
             return (
                 "satisfied".into(),
@@ -364,9 +389,14 @@ pub fn run(ws: &Workspace, options: WatchOptions) -> Result<(String, WatchResult
     let (run_id, run_dir) = ws.claim_run_dir(&base)?;
     let started_at = Local::now().to_rfc3339();
     let cancelled = Arc::new(AtomicBool::new(false));
-    let signal = Arc::clone(&cancelled);
-    ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst))
-        .context("installing foreground watch cancel handler")?;
+    // Through the shared installer, not `ctrlc::set_handler` directly: only one
+    // handler may exist per process, and `run` needs one too now that stopping
+    // Yardlet has to take its worker with it (issue #107). A second direct
+    // registration is an error, which is how this first showed up — as a test
+    // failing because another test had already registered.
+    if !crate::signals::install_stop_handler() {
+        eprintln!("yardlet: could not install a cancel handler; Ctrl-C will not stop this watch");
+    }
     let mut observer = LocalObserver::new(
         &ws.root,
         options.until.clone(),
