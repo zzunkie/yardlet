@@ -189,6 +189,21 @@ fn prepare_serial_worktree(
             .ok_or_else(|| anyhow!("task {task_id} disappeared during worktree preparation"))?;
         let dependency_input_overlays =
             state::materialize_resolved_dependency_outputs(ws, &queue, task, &path)?;
+        // Refuse BEFORE a worker starts. A dependency overlay pins an upstream
+        // output by digest precisely so downstream work can rely on it; granting
+        // that same path as writable scope authorizes the task to invalidate the
+        // evidence it was handed. Today that is only discovered after the task
+        // has passed its own evaluation and integrated, when a later review finds
+        // the pinned digest no longer reproduces (issue #15) — the whole run, and
+        // the one after it, spent before anyone notices.
+        if let Some(conflict) = scope_conflicts_with_pinned_evidence(
+            task,
+            &core_input_overlays,
+            &dependency_input_overlays,
+        ) {
+            crate::parallel::remove_worktree(&ws.root, &path, &branch);
+            return Err(anyhow!("{conflict}"));
+        }
         let worker_run_dir = wt_agents.join("runs").join(run_id);
         std::fs::create_dir_all(&worker_run_dir)?;
         Ok(SerialWorktree {
@@ -3746,6 +3761,52 @@ fn no_change_contradiction(
     );
     if !declared.is_empty() {
         return Some(("no_change_contradicts_declared_outputs", declared));
+    }
+    None
+}
+
+/// A task's writable scope overlapping evidence that is pinned by digest.
+///
+/// Both overlay kinds exist to make an input reproducible: the core seed for a
+/// serial run, and an upstream task's output for a downstream one. A scope that
+/// covers a pinned path hands the task permission to break the guarantee it was
+/// given, and the breakage surfaces late — the task passes, integrates, and a
+/// later review finds the digest no longer reproduces (issue #15).
+///
+/// Reported as a refusal rather than a silent narrowing: the plan said this task
+/// may edit that file and something upstream said it may not change, and only a
+/// human can decide which was meant. The message names both sides so the fix —
+/// reroute the change to an evidence-disjoint file, or schedule a successor that
+/// re-pins it — is obvious from the error.
+fn scope_conflicts_with_pinned_evidence(
+    task: &crate::schemas::Task,
+    core: &[state::SerialInputOverlay],
+    dependencies: &[state::DependencyInputOverlay],
+) -> Option<String> {
+    let pinned: Vec<(&str, String)> = core
+        .iter()
+        .map(|overlay| (overlay.path.as_str(), "the run's core seed".to_string()))
+        .chain(dependencies.iter().map(|overlay| {
+            (
+                overlay.path.as_str(),
+                format!("dependency {}", overlay.dependency_task_id),
+            )
+        }))
+        .collect();
+    for (path, source) in pinned {
+        if task
+            .allowed_scope
+            .iter()
+            .any(|entry| crate::parallel::scope_covers(entry, path))
+        {
+            return Some(format!(
+                "task {} is allowed to write `{path}`, which {source} pins by content digest. \
+                 Editing it would invalidate evidence this run was given as reproducible, and \
+                 that only surfaces after the task has passed and integrated. Route the change \
+                 to a file the evidence does not bind, or schedule a successor that re-pins it.",
+                task.id
+            ));
+        }
     }
     None
 }
@@ -12796,6 +12857,75 @@ printf "# worker handoff
 
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// Issue #15: a downstream task granted write scope over a path that a
+    /// dependency pins by digest. It passed, integrated, and only a later review
+    /// found the pinned evidence no longer reproduced — two runs spent.
+    #[test]
+    fn a_scope_over_pinned_evidence_is_refused_before_the_worker_starts() {
+        fn scoped_task(scope: &[&str]) -> crate::schemas::Task {
+            let entries = scope
+                .iter()
+                .map(|s| format!("  - \"{s}\""))
+                .collect::<Vec<_>>()
+                .join("\n");
+            serde_yaml_ng::from_str(&format!(
+                "id: YARD-003\ntitle: t\nstate: queued\npriority: 10\nallowed_scope:\n{entries}\n"
+            ))
+            .expect("task fixture")
+        }
+        let dependency = state::DependencyInputOverlay {
+            dependency_task_id: "YARD-001".into(),
+            path: "tests/yard007_tests.gd".into(),
+            content_digest: "0a7f0a8d".into(),
+        };
+        let core = state::SerialInputOverlay {
+            path: ".agents/skills/seeded/SKILL.md".into(),
+            content_digest: "digest".into(),
+        };
+
+        // The reported case: the exact pinned file is in scope.
+        let conflict = scope_conflicts_with_pinned_evidence(
+            &scoped_task(&["tests/yard007_tests.gd"]),
+            &[],
+            std::slice::from_ref(&dependency),
+        )
+        .expect("a scope over a dependency-pinned path must be refused");
+        assert!(
+            conflict.contains("tests/yard007_tests.gd") && conflict.contains("YARD-001"),
+            "the refusal must name both the path and what pins it: {conflict}"
+        );
+
+        // A directory scope covering it counts too — the conflict is the file
+        // being writable, not how the scope spelled it.
+        assert!(scope_conflicts_with_pinned_evidence(
+            &scoped_task(&["tests/**"]),
+            &[],
+            std::slice::from_ref(&dependency),
+        )
+        .is_some());
+
+        // The core seed is pinned for the same reason.
+        assert!(scope_conflicts_with_pinned_evidence(
+            &scoped_task(&[".agents/skills/seeded/**"]),
+            std::slice::from_ref(&core),
+            &[],
+        )
+        .is_some());
+
+        // A neighbouring path is not the pinned one.
+        assert!(scope_conflicts_with_pinned_evidence(
+            &scoped_task(&["tests/yard007_regression.gd"]),
+            &[],
+            std::slice::from_ref(&dependency),
+        )
+        .is_none());
+
+        // Nothing pinned: nothing to conflict with.
+        assert!(
+            scope_conflicts_with_pinned_evidence(&scoped_task(&["tests/**"]), &[], &[]).is_none()
+        );
     }
 
     /// Issue #19: a task whose confirmed contract grants it a skill package
