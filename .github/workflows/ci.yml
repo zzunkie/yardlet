@@ -46,7 +46,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
+      # `--all-features` so the gated slow tier is linted too, not just the
+      # targets a default build happens to compile (issue #105).
+      - run: cargo clippy --all-targets --all-features -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -64,5 +66,9 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: cargo build --all-targets
-      - run: cargo test
+      - run: cargo build --all-targets --all-features
+      # `--all-features` is what runs the slow process tier (issue #105). It is
+      # off by default so a LOCAL `cargo test` stays usable; CI must never make
+      # that same trade, because the tier is where the defects unit tests cannot
+      # see get caught.
+      - run: cargo test --all-features

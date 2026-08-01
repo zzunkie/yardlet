@@ -42,6 +42,17 @@ unicode-width = "0.2"
 ctrlc = "3"
 libc = "0.2"
 
+[features]
+# The slow process fixtures: they spawn real binaries, open PTYs, and wait on
+# real timing. They are 56% of a full test run's wall clock and they are what
+# catches the defects unit tests structurally cannot (#52, #64, #83, #91, #107
+# were all found or proven there), so they run in CI on every PR — this feature
+# only decides whether a LOCAL `cargo test` pays for them (issue #105).
+#
+# Off by default, and never silently: each gated target keeps a test whose NAME
+# says it is gated, so a local run lists what it did not verify.
+slow-process-tests = []
+
 [profile.test]
 # Line tables keep backtraces and panic locations readable while dropping the
 # full type/variable debug info. That info is what made the test artifacts
