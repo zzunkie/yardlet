@@ -619,6 +619,7 @@ fn invoke_planning_scout(
         &[],
         None,
         false,
+        &[],
     );
 
     let active_after = active_snapshot_digest(ws)?;
@@ -1449,6 +1450,7 @@ fn plan_core(
         images,
         None,
         false,
+        &[],
     )?;
     lines.push(format!("worker outcome: {}", outcome.note));
 
@@ -1657,6 +1659,7 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
         &images,
         None,
         false,
+        &[],
     )?;
     lines.push(format!("worker outcome: {}", outcome.note));
     let result_path = run_dir.join("planning-result.json");

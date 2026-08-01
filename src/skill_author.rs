@@ -90,6 +90,7 @@ fn draft(
         &[],
         None,
         false,
+        &[],
     )?;
 
     let result_path = run_dir.join("skill-result.json");

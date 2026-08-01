@@ -752,6 +752,10 @@ pub fn run_batch<F: FnMut(&str)>(
         let timeout = Duration::from_secs(p.profile.limits.max_wall_minutes as u64 * 60);
         let images = images.clone();
         let session = p.session.clone();
+        // Computed before the thread: the sandbox roots come from the task's
+        // confirmed contract and the workspace, neither of which may be borrowed
+        // across the spawn (issue #19).
+        let writable_roots = run::sandbox_writable_roots(&p.task, &ws.root);
         handles.push(std::thread::spawn(move || {
             let started = std::time::Instant::now();
             let outcome = workers::spawn_resolved_attempt(
@@ -768,6 +772,7 @@ pub fn run_batch<F: FnMut(&str)>(
                 &images,
                 session.as_deref(),
                 false,
+                &writable_roots,
             );
             let _ = tx.send(Finished {
                 prep_idx: i,
@@ -917,6 +922,7 @@ pub fn run_batch<F: FnMut(&str)>(
                             &images,
                             session.as_deref(),
                             false,
+                            &run::sandbox_writable_roots(&p.task, &ws.root),
                         ) {
                             Ok(completed) => completed,
                             Err(error) => {

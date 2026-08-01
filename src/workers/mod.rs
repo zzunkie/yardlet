@@ -552,6 +552,7 @@ pub fn build_command(
     model: &str,
     effort: &str,
     images: &[String],
+    writable_roots: &[PathBuf],
 ) -> Command {
     let mut cmd = Command::new(bin);
     // The worker must be able to write its artifacts into the run directory.
@@ -586,6 +587,14 @@ pub fn build_command(
                 cmd.arg("-i").arg(img);
             }
             cmd.arg("--add-dir").arg(run_dir);
+            // The task's own declared writable scope. Codex's workspace-write
+            // sandbox treats the hidden `.agents/` tree as read-only, so a task
+            // whose confirmed contract grants it a skill package could not write
+            // there and asked the operator to re-authorize work already approved
+            // (issue #19).
+            for root in writable_roots {
+                cmd.arg("--add-dir").arg(root);
+            }
         }
         "claude-code" => {
             if full_access {
@@ -604,6 +613,9 @@ pub fn build_command(
                 cmd.arg("--effort").arg(effort);
             }
             cmd.arg("--add-dir").arg(run_dir);
+            for root in writable_roots {
+                cmd.arg("--add-dir").arg(root);
+            }
         }
         _ => {}
     }
@@ -851,6 +863,7 @@ pub fn spawn(
     images: &[String],
     session: Option<&str>,
     resume: bool,
+    writable_roots: &[PathBuf],
 ) -> Result<WorkerOutcome> {
     spawn_internal(
         profile,
@@ -868,6 +881,7 @@ pub fn spawn(
         images,
         session,
         resume,
+        writable_roots,
     )
 }
 
@@ -886,6 +900,7 @@ pub fn spawn_attempt(
     images: &[String],
     session: Option<&str>,
     resume: bool,
+    writable_roots: &[PathBuf],
 ) -> Result<WorkerOutcome> {
     spawn_attempt_with_sink(
         profile,
@@ -901,6 +916,7 @@ pub fn spawn_attempt(
         images,
         session,
         resume,
+        writable_roots,
     )
 }
 
@@ -920,6 +936,7 @@ pub fn spawn_attempt_with_sink(
     images: &[String],
     session: Option<&str>,
     resume: bool,
+    writable_roots: &[PathBuf],
 ) -> Result<WorkerOutcome> {
     spawn_internal(
         profile,
@@ -937,6 +954,7 @@ pub fn spawn_attempt_with_sink(
         images,
         session,
         resume,
+        writable_roots,
     )
 }
 
@@ -955,6 +973,7 @@ pub fn spawn_resolved_attempt(
     images: &[String],
     session: Option<&str>,
     resume: bool,
+    writable_roots: &[PathBuf],
 ) -> Result<WorkerOutcome> {
     spawn_resolved_attempt_with_sink(
         profile,
@@ -971,6 +990,7 @@ pub fn spawn_resolved_attempt(
         images,
         session,
         resume,
+        writable_roots,
     )
 }
 
@@ -990,6 +1010,7 @@ pub fn spawn_resolved_attempt_with_sink(
     images: &[String],
     session: Option<&str>,
     resume: bool,
+    writable_roots: &[PathBuf],
 ) -> Result<WorkerOutcome> {
     spawn_internal(
         profile,
@@ -1007,6 +1028,7 @@ pub fn spawn_resolved_attempt_with_sink(
         images,
         session,
         resume,
+        writable_roots,
     )
 }
 
@@ -1027,6 +1049,7 @@ fn spawn_internal(
     images: &[String],
     session: Option<&str>,
     resume: bool,
+    writable_roots: &[PathBuf],
 ) -> Result<WorkerOutcome> {
     use std::io::{Read, Write};
 
@@ -1057,6 +1080,7 @@ fn spawn_internal(
                 &profile.model,
                 &profile.effort,
                 images,
+                writable_roots,
             ),
             // Anything else: the profile's own invocation template.
             _ => build_generic_command(
@@ -2071,10 +2095,30 @@ image_args: ["-i", "{image}"]
     #[test]
     fn codex_sandbox_toggles_with_full_access() {
         let (bin, run, cwd) = (Path::new("codex"), Path::new("/tmp/r"), Path::new("/tmp"));
-        let safe = args_of(&build_command("codex", bin, run, cwd, false, "", "", &[]));
+        let safe = args_of(&build_command(
+            "codex",
+            bin,
+            run,
+            cwd,
+            false,
+            "",
+            "",
+            &[],
+            &[],
+        ));
         assert!(safe.iter().any(|a| a == "workspace-write"));
         assert!(!safe.iter().any(|a| a == "danger-full-access"));
-        let full = args_of(&build_command("codex", bin, run, cwd, true, "", "", &[]));
+        let full = args_of(&build_command(
+            "codex",
+            bin,
+            run,
+            cwd,
+            true,
+            "",
+            "",
+            &[],
+            &[],
+        ));
         assert!(full.iter().any(|a| a == "danger-full-access"));
     }
 
@@ -2085,7 +2129,7 @@ image_args: ["-i", "{image}"]
             Path::new("/tmp/run"),
             Path::new("/tmp/declared-worktree"),
         );
-        let fresh = build_command("codex", bin, run, cwd, true, "", "", &[]);
+        let fresh = build_command("codex", bin, run, cwd, true, "", "", &[], &[]);
         let fresh_args = args_of(&fresh);
         assert_eq!(fresh.get_current_dir(), Some(cwd));
         assert!(fresh_args.windows(2).any(|args| {
@@ -2121,6 +2165,7 @@ image_args: ["-i", "{image}"]
             "",
             "",
             &[],
+            &[],
         ));
         assert!(safe.iter().any(|a| a == "acceptEdits"));
         let full = args_of(&build_command(
@@ -2131,6 +2176,7 @@ image_args: ["-i", "{image}"]
             true,
             "",
             "",
+            &[],
             &[],
         ));
         assert!(full.iter().any(|a| a == "--dangerously-skip-permissions"));
@@ -2148,6 +2194,7 @@ image_args: ["-i", "{image}"]
             "gpt-5",
             "high",
             &[],
+            &[],
         ));
         assert!(cx.windows(2).any(|w| w[0] == "-m" && w[1] == "gpt-5"));
         assert!(cx
@@ -2162,16 +2209,80 @@ image_args: ["-i", "{image}"]
             "opus",
             "high",
             &[],
+            &[],
         ));
         assert!(cl.windows(2).any(|w| w[0] == "--model" && w[1] == "opus"));
         assert!(cl.windows(2).any(|w| w[0] == "--effort" && w[1] == "high"));
+    }
+
+    /// The helper deciding the roots is only half of it: the command has to
+    /// carry them, for both built-in adapters (issue #19).
+    #[test]
+    fn declared_writable_roots_reach_the_sandbox_arguments() {
+        let bin = Path::new("/bin/true");
+        let run = Path::new("/ws/.agents/runs/run-1");
+        let cwd = Path::new("/ws");
+        let package = PathBuf::from("/ws/.agents/skills/route-game-development");
+
+        for worker in ["codex", "claude-code"] {
+            let with = args_of(&build_command(
+                worker,
+                bin,
+                run,
+                cwd,
+                false,
+                "",
+                "",
+                &[],
+                std::slice::from_ref(&package),
+            ));
+            assert!(
+                with.windows(2)
+                    .any(|pair| pair[0] == "--add-dir" && pair[1] == package.to_string_lossy()),
+                "{worker} did not receive the task's declared writable root: {with:?}"
+            );
+            // The run directory stays writable regardless — that is what the
+            // worker writes its own artifacts into.
+            assert!(
+                with.windows(2)
+                    .any(|pair| pair[0] == "--add-dir" && pair[1] == run.to_string_lossy()),
+                "{worker} lost the run directory root: {with:?}"
+            );
+
+            let without = args_of(&build_command(
+                worker,
+                bin,
+                run,
+                cwd,
+                false,
+                "",
+                "",
+                &[],
+                &[],
+            ));
+            assert_eq!(
+                without.iter().filter(|a| *a == "--add-dir").count(),
+                1,
+                "{worker} added a root nothing asked for: {without:?}"
+            );
+        }
     }
 
     #[test]
     fn codex_attaches_images() {
         let (bin, run, cwd) = (Path::new("codex"), Path::new("/tmp/r"), Path::new("/tmp"));
         let imgs = vec!["a.png".to_string(), "b.jpg".to_string()];
-        let cx = args_of(&build_command("codex", bin, run, cwd, false, "", "", &imgs));
+        let cx = args_of(&build_command(
+            "codex",
+            bin,
+            run,
+            cwd,
+            false,
+            "",
+            "",
+            &imgs,
+            &[],
+        ));
         assert!(cx.windows(2).any(|w| w[0] == "-i" && w[1] == "a.png"));
         assert!(cx.windows(2).any(|w| w[0] == "-i" && w[1] == "b.jpg"));
     }
@@ -2249,6 +2360,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
             &[],
             None,
             false,
+            &[],
         )
         .unwrap();
 
@@ -2301,6 +2413,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
             &[],
             None,
             false,
+            &[],
         )
         .unwrap();
 
@@ -2323,6 +2436,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
                 model,
                 effort,
                 &[],
+                &[],
             ));
             assert!(
                 !cx.iter().any(|a| a == "-m"),
@@ -2340,6 +2454,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
                 false,
                 model,
                 effort,
+                &[],
                 &[],
             ));
             assert!(
@@ -2456,6 +2571,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
             &[],
             None,
             false,
+            &[],
         )
         .unwrap();
 
@@ -2547,6 +2663,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
             &[],
             None,
             false,
+            &[],
         )
         .unwrap();
         let elapsed = started.elapsed();
@@ -2636,6 +2753,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
                 &[],
                 resume.then_some("11111111-1111-4111-8111-111111111111"),
                 resume,
+                &[],
             )
             .unwrap();
             assert!(outcome.exit_ok);
@@ -2752,6 +2870,7 @@ limits: {max_wall_minutes: 1}
             &[],
             None,
             false,
+            &[],
         )
         .unwrap();
         assert!(outcome.exit_ok);
@@ -2780,6 +2899,7 @@ limits: {max_wall_minutes: 1}
             &[],
             None,
             false,
+            &[],
         )
         .unwrap_err();
         assert!(error
