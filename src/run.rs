@@ -1111,6 +1111,74 @@ fn task_state_progress_line(lang: Lang, task_id: &str, state: TaskState) -> Stri
 // Every field defaults so a partial run.yaml (e.g. an older or hand-written one
 // that only carries run_id/task_id/worker) still deserializes — both
 // `seal_run_record` and `run_worker` read it through `state::load_yaml`.
+/// Read the adoption policy off core-owned config, for the projection a worker
+/// gets to read before it does semantic work (issue #117).
+fn adoption_policy_for(ws: &Workspace) -> Option<AdoptionPolicy> {
+    // The owning ref is where integration will land: the branch the workspace is
+    // on right now, read from git rather than assumed, because a dogfood session
+    // is routinely on something other than main.
+    let owning_ref = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&ws.root)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .env("LC_ALL", "C")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("refs/heads/{name}"))
+        .unwrap_or_else(|| "<unresolved-head>".to_string());
+    let owning_ref = owning_ref.as_str();
+    // No projection rather than a guessed one. Reporting `auto_commit: false`
+    // because the config could not be read would state a policy nobody chose,
+    // and a worker reading it would prove the wrong delivery path. An absent
+    // section makes a preflight fail closed, which is the honest outcome.
+    let config = ws.load_config().ok()?;
+    let auto_commit = config.auto_commit;
+    let push_target_ref = config.git_finish.target_ref.clone();
+    Some(AdoptionPolicy {
+        auto_commit,
+        owning_ref: owning_ref.to_string(),
+        push_target_ref,
+        retention: if auto_commit {
+            "accepted output is adopted into the owning ref by serial integration".to_string()
+        } else {
+            "automatic adoption is disabled; the run-owned worktree is retained and the \
+             operator integrates it, then `yardlet resolve` settles the task"
+                .to_string()
+        },
+    })
+}
+
+/// What will happen to this run's accepted output, decided by the core before
+/// the worker starts.
+///
+/// A serial worker could see its worktree, its run-owned branch, its baseline
+/// and its integration provenance — and still not know whether accepted output
+/// would be adopted at all, or into what. A preflight task asked to prove the
+/// adoption path had nothing to read, so it either trusted prose from whoever
+/// wrote the task or failed closed (issue #117). It failed closed, which was
+/// right, and which is why the missing contract was worth adding.
+///
+/// Read-only by construction: the core writes this before spawn and reads its
+/// own config at finalization. A worker editing its projection changes what it
+/// believes, never what happens.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct AdoptionPolicy {
+    /// Will accepted integratable output be adopted without asking?
+    pub auto_commit: bool,
+    /// The ref serial integration will update. Where the work LANDS.
+    pub owning_ref: String,
+    /// `git_finish.target_ref`, the optional push destination. Separate from
+    /// `owning_ref` on purpose: an empty push target means "no push configured",
+    /// which is not the same as "nowhere to adopt into", and conflating them is
+    /// how a worker would read local adoption as disabled.
+    pub push_target_ref: String,
+    /// What happens when `auto_commit` is false, named rather than implied.
+    pub retention: String,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct RunRecord {
     #[serde(default)]
@@ -1153,6 +1221,10 @@ pub(crate) struct RunRecord {
     /// Run-unique branch used by an isolated worktree.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub worktree_branch: String,
+    /// Core-derived answer to "where does accepted output go, and does it go
+    /// there by itself?", written before the worker starts (issue #117).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adoption: Option<AdoptionPolicy>,
     /// Merge commit attributed to this run, persisted before finish/push.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub integration_oid: String,
@@ -2583,6 +2655,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // ---- run record ------------------------------------------------------
     let record = RunRecord {
         schema_version: 1,
+        adoption: adoption_policy_for(ws),
         run_id: run_id.clone(),
         task_id: task.id.clone(),
         intent_id: queue.intent_id.clone(),
@@ -8281,6 +8354,7 @@ fn seal_run_record(
 ) {
     let path = run_dir.join("run.yaml");
     let mut rec: RunRecord = state::load_yaml(&path).unwrap_or(RunRecord {
+        adoption: None,
         schema_version: 1,
         run_id: run_id.to_string(),
         task_id: task.id.clone(),
@@ -9572,6 +9646,7 @@ mod tests {
             state::save_yaml(
                 &run_dir.join("run.yaml"),
                 &RunRecord {
+                    adoption: None,
                     schema_version: 1,
                     run_id: run_id.clone(),
                     task_id: task_id.into(),
@@ -9652,6 +9727,7 @@ mod tests {
             state::save_yaml(
                 &run_dir.join("run.yaml"),
                 &RunRecord {
+                    adoption: None,
                     schema_version: 1,
                     run_id: run_id.clone(),
                     task_id: task_id.into(),
@@ -11068,6 +11144,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         state::save_yaml(
             &previous_run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: previous_run_id.into(),
                 task_id: previous_task_id.into(),
@@ -12857,6 +12934,91 @@ printf "# worker handoff
 
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// Issue #117: a serial worker could see its worktree, branch and baseline
+    /// and still not know whether accepted output would be adopted, or into
+    /// what. A preflight task asked to prove the delivery path had nothing to
+    /// read but the prose of the task that asked.
+    #[test]
+    fn the_adoption_projection_answers_where_accepted_output_goes() {
+        for (auto_commit, branch) in [
+            (true, "agent/replan-from-first-principles"),
+            (false, "main"),
+        ] {
+            let root = std::env::temp_dir().join(format!(
+                "yard-adoption-{}-{}-{}",
+                auto_commit,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            let git = |args: &[&str]| {
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&root)
+                    .args(args)
+                    .output()
+                    .unwrap();
+            };
+            git(&["init", "-q"]);
+            git(&["config", "user.name", "fixture"]);
+            git(&["config", "user.email", "fixture@example.invalid"]);
+            std::fs::write(root.join("README.md"), "fixture\n").unwrap();
+            git(&["add", "README.md"]);
+            git(&["commit", "-qm", "base"]);
+            git(&["checkout", "-q", "-b", branch]);
+
+            let ws = Workspace::at(&root);
+            // Written through init so the fixture matches the real schema
+            // rather than a hand-rolled subset that silently fails to parse.
+            crate::init::ensure_initialized(&root).expect("init the fixture workspace");
+            let config_path = ws.agents_dir().join("yardlet.yaml");
+            let config = std::fs::read_to_string(&config_path).unwrap();
+            let config = config
+                .lines()
+                .map(|line| {
+                    if line.starts_with("auto_commit:") {
+                        format!("auto_commit: {auto_commit}")
+                    } else {
+                        line.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            std::fs::write(&config_path, format!("{config}\n")).unwrap();
+
+            let policy =
+                adoption_policy_for(&ws).expect("a readable config must yield a projection");
+            assert_eq!(
+                policy.auto_commit, auto_commit,
+                "the projection must carry the spawn-time value, not a default"
+            );
+            assert_eq!(
+                policy.owning_ref,
+                format!("refs/heads/{branch}"),
+                "the owning ref is where integration lands, and a dogfood session is \
+                 routinely not on main"
+            );
+            // An empty push target is not "nowhere to adopt into". Conflating
+            // them is how a worker would read local adoption as disabled.
+            assert!(policy.push_target_ref.is_empty());
+            assert!(!policy.owning_ref.is_empty());
+            if auto_commit {
+                assert!(policy.retention.contains("adopted"));
+            } else {
+                assert!(
+                    policy.retention.contains("retained") && policy.retention.contains("resolve"),
+                    "with adoption off the projection must NAME the manual path: {}",
+                    policy.retention
+                );
+            }
+
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 
     /// Issue #15: a downstream task granted write scope over a path that a
@@ -15228,6 +15390,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: run_id.into(),
                 task_id: task_id.into(),
@@ -15347,6 +15510,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: run_id.into(),
                 task_id: task_id.into(),
@@ -15838,6 +16002,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: run_id.into(),
                 task_id: "YARD-001".into(),
@@ -15920,6 +16085,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: run_id.into(),
                 task_id: task_id.into(),
@@ -16032,6 +16198,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: run_id.into(),
                 task_id: task_id.into(),
@@ -16184,6 +16351,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: run_id.into(),
                 task_id: "YARD-STAGED".into(),
@@ -16337,6 +16505,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id,
                 task_id: task_id.into(),
@@ -16471,6 +16640,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: run_id.into(),
                 task_id: task_id.into(),
@@ -16618,6 +16788,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: run_id.clone(),
                 task_id: task_id.into(),
@@ -16834,6 +17005,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id,
                 task_id: task_id.into(),
@@ -17687,6 +17859,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: run_id.into(),
                 task_id: "YARD-001".into(),
@@ -17958,6 +18131,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: run_id.into(),
                 task_id: task_id.into(),
@@ -18169,6 +18343,7 @@ exit 1
         state::save_yaml(
             &run_dir.join("run.yaml"),
             &RunRecord {
+                adoption: None,
                 schema_version: 1,
                 run_id: run_id.into(),
                 task_id: task_id.into(),
@@ -18446,6 +18621,7 @@ exit 1
             state::save_yaml(
                 &run_dir.join("run.yaml"),
                 &RunRecord {
+                    adoption: None,
                     schema_version: 1,
                     run_id: run_id.clone(),
                     task_id: task_id.into(),
