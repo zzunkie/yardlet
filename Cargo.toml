@@ -42,6 +42,17 @@ unicode-width = "0.2"
 ctrlc = "3"
 libc = "0.2"
 
+[profile.test]
+# Line tables keep backtraces and panic locations readable while dropping the
+# full type/variable debug info. That info is what made the test artifacts
+# dominate the build cache: every one of the integration test binaries carries
+# its own complete copy (issue #105).
+debug = "line-tables-only"
+
+[profile.dev]
+# Same reasoning for the binary the process tests spawn.
+debug = "line-tables-only"
+
 [profile.release]
 strip = true
 lto = true
