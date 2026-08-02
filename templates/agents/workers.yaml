@@ -106,6 +106,31 @@ workers:
       max_wall_minutes: 45
       max_retries: 1
 
+  # Generic CLI example. Uncomment and customize the whole block.
+  # Existing profiles may omit prompt_transport to send the packet on stdin
+  # and omit version_args to probe with --version.
+  # - id: mytool
+  #   kind: cli_worker
+  #   best_for: "tasks this CLI handles well"
+  #   billing:
+  #     mode: subscription_backed_only
+  #   invocation:
+  #     command: mytool
+  #     supports_noninteractive: true
+  #     output_contract: files
+  #     version_args: ["version", "--offline"]
+  #     prompt_transport: argument
+  #     # {prompt} is exactly one argv item. Yardlet never builds a shell string.
+  #     args: ["run", "--out", "{run_dir}", "--prompt", "{prompt}"]
+  #     sandbox_args: ["--sandbox"]
+  #     full_access_args: ["--full-access"]
+  #     model_args: ["--model", "{model}"]
+  #     effort_args: ["--effort", "{effort}"]
+  #     image_args: ["--image", "{image}"]
+  #   limits:
+  #     max_wall_minutes: 45
+  #     max_retries: 1
+
 routing:
   # The human cost dial the planner weighs: cheap | balanced | quality.
   cost_bias: balanced

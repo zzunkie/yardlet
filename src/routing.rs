@@ -125,9 +125,9 @@ pub fn resolve_worker_for_task(
             candidate.reason,
             std::slice::from_ref(&pinned),
         )
-        .map_err(|_| {
+        .map_err(|error| {
             anyhow!(
-                "preferred worker '{pinned}' is not invocable; cross-worker fallback requires explicit opt-in with routing.allow_preferred_worker_failover"
+                "preferred worker '{pinned}' is not invocable: {error}; cross-worker fallback requires explicit opt-in with routing.allow_preferred_worker_failover"
             )
         })?
     } else {
@@ -369,6 +369,7 @@ fn resolve_order(
     order: &[String],
 ) -> Result<Resolved> {
     let mut tried = Vec::new();
+    let mut failures = Vec::new();
     for id in order {
         let Some(profile) = workers.workers.iter().find(|w| &w.id == id) else {
             continue;
@@ -395,9 +396,10 @@ fn resolve_order(
                 });
             }
         }
+        failures.push(format!("{id}: {}", status.detail));
     }
     Err(anyhow!(
-        "no invocable worker among {tried:?}. Run `yardlet worker status` to diagnose. \
+        "no invocable worker among {tried:?} ({failures:?}). Run `yardlet worker status` to diagnose. \
          Yardlet did not call an AI API and did not ask for an API key."
     ))
 }
@@ -630,7 +632,7 @@ mod tests {
     #[test]
     fn dispatch_rejects_exact_lineage_worker_model_and_fallback_conflicts() {
         let workers: WorkersFile = crate::yaml::from_str(
-            "schema_version: 1\nrouting:\n  default_worker: codex\n  fallback_order: [codex]\nworkers:\n  - id: codex\n    model: gpt-5.6-sol\n    invocation: { command: bash }\n",
+            "schema_version: 1\nrouting:\n  default_worker: codex\n  fallback_order: [codex]\nworkers:\n  - id: codex\n    model: gpt-5.6-sol\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n",
         )
         .unwrap();
         let exact = || -> Task {
@@ -759,7 +761,7 @@ mod tests {
     #[test]
     fn failover_excludes_failed_worker_and_keeps_capability_gate() {
         let w: WorkersFile = crate::yaml::from_str(
-            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, second, third]\nworkers:\n  - id: first\n    capabilities: [image_generation]\n    invocation: { command: bash }\n  - id: second\n    capabilities: [image_generation]\n    invocation: { command: bash }\n  - id: third\n    invocation: { command: bash }\n",
+            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, second, third]\nworkers:\n  - id: first\n    capabilities: [image_generation]\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n  - id: second\n    capabilities: [image_generation]\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n  - id: third\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n",
         )
         .unwrap();
         let task: Task =
@@ -772,7 +774,7 @@ mod tests {
         assert_eq!(resolved.worker_id, "second");
 
         let w_without_alternate: WorkersFile = crate::yaml::from_str(
-            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, third]\nworkers:\n  - id: first\n    capabilities: [image_generation]\n    invocation: { command: bash }\n  - id: third\n    invocation: { command: bash }\n",
+            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, third]\nworkers:\n  - id: first\n    capabilities: [image_generation]\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n  - id: third\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n",
         )
         .unwrap();
         let err = resolve_failover_worker_for_task(
@@ -792,7 +794,7 @@ mod tests {
     #[test]
     fn preferred_worker_failover_requires_explicit_opt_in() {
         let mut w: WorkersFile = crate::yaml::from_str(
-            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, second]\nworkers:\n  - id: first\n    invocation: { command: bash }\n  - id: second\n    invocation: { command: bash }\n",
+            "schema_version: 1\nrouting:\n  default_worker: first\n  fallback_order: [first, second]\nworkers:\n  - id: first\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n  - id: second\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n",
         )
         .unwrap();
         let task: Task = crate::yaml::from_str(
@@ -819,7 +821,7 @@ mod tests {
     #[test]
     fn preferred_worker_initial_resolution_requires_explicit_fallback_opt_in() {
         let mut workers: WorkersFile = crate::yaml::from_str(
-            "schema_version: 1\nrouting:\n  default_worker: ready\n  fallback_order: [missing, ready]\nworkers:\n  - id: missing\n    invocation: { command: yardlet-definitely-missing-worker-command }\n  - id: ready\n    invocation: { command: bash }\n",
+            "schema_version: 1\nrouting:\n  default_worker: ready\n  fallback_order: [missing, ready]\nworkers:\n  - id: missing\n    invocation: { command: yardlet-definitely-missing-worker-command, supports_noninteractive: true, output_contract: files }\n  - id: ready\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n",
         )
         .unwrap();
         let task: Task = crate::yaml::from_str(
@@ -851,7 +853,7 @@ mod tests {
     #[test]
     fn failover_uses_remaining_order_for_readiness_without_readding_failed_worker() {
         let w: WorkersFile = crate::yaml::from_str(
-            "schema_version: 1\nrouting:\n  default_worker: failed\n  fallback_order: [failed, missing, ready]\nworkers:\n  - id: failed\n    invocation: { command: bash }\n  - id: missing\n    invocation: { command: yardlet-definitely-missing-worker-command }\n  - id: ready\n    invocation: { command: bash }\n",
+            "schema_version: 1\nrouting:\n  default_worker: failed\n  fallback_order: [failed, missing, ready]\nworkers:\n  - id: failed\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n  - id: missing\n    invocation: { command: yardlet-definitely-missing-worker-command, supports_noninteractive: true, output_contract: files }\n  - id: ready\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n",
         )
         .unwrap();
         let task: Task = crate::yaml::from_str("id: T\ntitle: t\n").unwrap();

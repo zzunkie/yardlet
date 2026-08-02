@@ -3122,7 +3122,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             fs::write(
                 &workers_path,
                 format!(
-                    "schema_version: 1\nworkers:\n  - id: fixture-fallback-a\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"] }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\n  - id: fixture-fallback-b\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"] }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\nrouting:\n  default_worker: fixture-fallback-a\n  fallback_order: [fixture-fallback-b]\n  allow_preferred_worker_failover: true\n",
+                    "schema_version: 1\nworkers:\n  - id: fixture-fallback-a\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"], supports_noninteractive: true, output_contract: files }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\n  - id: fixture-fallback-b\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"], supports_noninteractive: true, output_contract: files }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\nrouting:\n  default_worker: fixture-fallback-a\n  fallback_order: [fixture-fallback-b]\n  allow_preferred_worker_failover: true\n",
                     producer_command.display(),
                     worker.display()
                 ),

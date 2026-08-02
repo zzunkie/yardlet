@@ -3031,7 +3031,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", YARD-PAR-CANON]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n      args: [\"{{run_dir}}\", YARD-PAR-CANON]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             yaml_string(&worker)
         );
         let mut offender = task("YARD-PAR-CANON", TaskState::Queued, 10, vec![]);
@@ -3597,7 +3597,7 @@ printf "# handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             yaml_string(&worker),
             yaml_string(&spawn_marker)
         );
@@ -3820,7 +3820,7 @@ exit 0
 "#,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, builder]\nworkers:\n  - id: dead\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, builder]\nworkers:\n  - id: dead\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: builder\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             yaml_string(&dead),
             yaml_string(&dead_attempts),
             yaml_string(&builder),
@@ -3913,7 +3913,7 @@ exit 0
 "#,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n      args: [\"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             yaml_string(&builder)
         );
         let ws = setup_workspace(
@@ -3998,7 +3998,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", {task_id}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n      args: [\"{{run_dir}}\", {task_id}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             yaml_string(&worker)
         );
         let mut queued = task(task_id, TaskState::Queued, 10, vec![]);
@@ -4180,7 +4180,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", YARD-PAR-DOWN]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n      args: [\"{{run_dir}}\", YARD-PAR-DOWN]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             yaml_string(&worker)
         );
         let upstream = task("YARD-UP", TaskState::Done, 5, vec![]);
@@ -4378,7 +4378,7 @@ exit 0
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n      args: [\"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             yaml_string(&builder),
             yaml_string(&spawn_marker)
         );

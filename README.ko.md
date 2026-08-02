@@ -336,16 +336,22 @@ Enter/Space). 비활성화된 워커는 라우팅과 계획에서 건너뜁니�
 
 Codex와 Claude Code는 내장 어댑터를 가집니다. 다른 모든 구독 기반 CLI는
 `.agents/workers.yaml`만으로 추가할 수 있습니다. 호출 템플릿을 주면 Yardlet이 동일한
-계약(stdin으로 패킷 -> 결과 파일 출력)을 통해 그것을 구동합니다. 플레이스홀더:
-`{run_dir}`, `{model}`, `{effort}`, `{image}`.
+결과 파일 계약으로 그것을 구동합니다. 제네릭 워커는 활성 상태이고 실행 파일과 설정된
+오프라인 프로브가 동작하며, `supports_noninteractive`가 `true`,
+`output_contract`가 `files`이고, 프롬프트 전달이 유효하며, strict billing 정책이
+차단하지 않을 때만 실행 가능합니다. 라우팅, 계획, capability projection, 워커 상태,
+TUI는 모두 같은 판정을 사용합니다.
 
 ```yaml
 - id: mytool
   best_for: "..."            # 플래너 루브릭
   invocation:
-    command: mytool          # --version 지원 필요 (준비 상태 프로브)
+    command: mytool
     supports_noninteractive: true
-    args: ["run", "--json", "--out", "{run_dir}"]
+    output_contract: files
+    version_args: ["version", "--offline"] # 기본값: ["--version"]
+    prompt_transport: argument              # 기본값: stdin
+    args: ["run", "--out", "{run_dir}", "--prompt", "{prompt}"]
     sandbox_args: ["--sandbox"]        # 기본 접근 수준
     full_access_args: ["--yolo"]       # 풀 액세스가 허용될 때만
     model_args: ["--model", "{model}"] # 모델이 설정되면 추가됨
@@ -353,9 +359,18 @@ Codex와 Claude Code는 내장 어댑터를 가집니다. 다른 모든 구독 �
     image_args: ["-i", "{image}"]      # 첨부 이미지마다 반복됨
 ```
 
-워커는 워크스페이스에 파일을 쓸 수 있어야 합니다(그것이 결과가 돌아오는
-방식입니다). 그 서브프로세스 env는 프로필이 `pass_env`로 변수를 다시 옵트인하지
-않는 한 정화됩니다.
+기존 제네릭 프로필은 하위 호환됩니다. `prompt_transport`를 생략하면 전체 패킷을
+stdin으로 보내고, `version_args`를 생략하면 `--version`을 실행합니다. 인자 전달을
+사용하려면 `prompt_transport: argument`를 설정하고 `args`에 `{prompt}`를 정확히 한 번
+넣으세요. Yardlet은 셸 문자열을 만들지 않고 하나의 `Command` 인자로 치환하여 인자
+경계를 보존합니다. stdin 전달에는 `{prompt}`를 넣으면 안 됩니다. 그 밖의 호출
+플레이스홀더는 `{run_dir}`, `{model}`, `{effort}`, `{image}`입니다.
+
+워커는 실행 디렉터리에 `result.json`과 `handoff.md`를 작성해야 합니다. 실행 env는
+프로필이 `pass_env`로 변수를 다시 옵트인하지 않는 한 정화됩니다. 버전 프로브도 정화된
+환경에서 로컬로만 실행됩니다. 설정한 실행 파일과 프로브 인자를 네트워크나 공급자 호출
+없이 확인하지만 로그인 또는 API 인증까지 증명할 수는 없습니다. 따라서 실제 워커가
+시작될 때 인증이 실패할 수 있습니다.
 
 생태계의 에이전트들이 Yardlet의 공급 측입니다.
 [oh-my-pi](https://github.com/can1357/oh-my-pi)(`omp`), OpenCode, Gemini CLI,

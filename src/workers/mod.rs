@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use crate::guard;
 use crate::schemas::{
     ChannelEventType, Invocation, OutputContractCause, RawEventRef, ResolvedWorkerSelection,
     RoutingProvenance, WorkerOutputLogSpan, WorkerProfile,
@@ -626,24 +627,28 @@ pub fn build_command(
 
 /// Build the command for a worker WITHOUT a built-in adapter, from the
 /// invocation template in its workers.yaml profile. This is what makes a
-/// third worker a pure-config addition: packet on stdin, args from the
-/// template, placeholders expanded.
+/// third worker a pure-config addition: packet on stdin or in one argument,
+/// args from the template, placeholders expanded without a shell.
 #[allow(clippy::too_many_arguments)]
 pub fn build_generic_command(
     inv: &Invocation,
     bin: &Path,
+    packet: &str,
     run_dir: &Path,
     cwd: &Path,
     full_access: bool,
     model: &str,
     effort: &str,
     images: &[String],
-) -> Command {
+) -> Result<Command> {
+    inv.validate_generic("generic worker")
+        .map_err(anyhow::Error::msg)?;
     let expand = |arg: &str, image: &str| -> String {
         arg.replace("{run_dir}", &run_dir.display().to_string())
             .replace("{model}", model)
             .replace("{effort}", effort)
             .replace("{image}", image)
+            .replace("{prompt}", packet)
     };
     let mut cmd = Command::new(bin);
     for a in &inv.args {
@@ -674,7 +679,7 @@ pub fn build_generic_command(
     }
     cmd.current_dir(cwd);
     cmd.env_clear();
-    cmd
+    Ok(cmd)
 }
 
 /// Build the command to RESUME an existing worker session (continue, not redo).
@@ -1057,6 +1062,10 @@ fn spawn_internal(
     // while `output_log` and worker.pid remain owned by the main Yardlet
     // process in the canonical run directory.
     let control_run_dir = output_log.parent().unwrap_or(cwd);
+    guard::invocation_contract(profile).map_err(anyhow::Error::msg)?;
+    let packet_on_stdin = resume
+        || matches!(profile.id.as_str(), "codex" | "claude-code")
+        || profile.invocation.prompt_on_stdin();
     let mut cmd = if resume {
         build_resume_command(
             &profile.id,
@@ -1086,13 +1095,14 @@ fn spawn_internal(
             _ => build_generic_command(
                 &profile.invocation,
                 bin,
+                packet,
                 worker_run_dir,
                 cwd,
                 full_access,
                 &profile.model,
                 &profile.effort,
                 images,
-            ),
+            )?,
         };
         // Set a stable session id on a fresh claude run so a transient failure
         // can resume the same conversation instead of redoing the work.
@@ -1110,7 +1120,11 @@ fn spawn_internal(
     // not a security boundary, but avoids a stale inherited PWD pointing
     // relative worker operations at the Yardlet parent workspace.
     cmd.env("PWD", cwd);
-    cmd.stdin(Stdio::piped());
+    if packet_on_stdin {
+        cmd.stdin(Stdio::piped());
+    } else {
+        cmd.stdin(Stdio::null());
+    }
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     // A worker must outlive the terminal that started it. Yardlet's contract is
@@ -1277,9 +1291,11 @@ fn spawn_internal(
         return Err(error).context("recording worker PID projection");
     }
 
-    if let Some(mut stdin) = child.stdin.take() {
-        // Best-effort: a worker that ignores stdin will simply not receive it.
-        let _ = stdin.write_all(packet.as_bytes());
+    if packet_on_stdin {
+        if let Some(mut stdin) = child.stdin.take() {
+            // Best-effort: a worker that ignores stdin will simply not receive it.
+            let _ = stdin.write_all(packet.as_bytes());
+        }
     }
 
     // Stream BOTH stdout and stderr to the log as they arrive, so a Run Monitor
@@ -2009,6 +2025,7 @@ mod tests {
             r#"
 command: mytool
 supports_noninteractive: true
+output_contract: files
 args: ["run", "--json", "--out", "{run_dir}"]
 sandbox_args: ["--sandbox"]
 full_access_args: ["--yolo"]
@@ -2020,16 +2037,20 @@ image_args: ["-i", "{image}"]
         .unwrap();
         let (bin, run, cwd) = (Path::new("mytool"), Path::new("/tmp/r"), Path::new("/tmp"));
 
-        let sandboxed = args_of(&build_generic_command(
-            &inv,
-            bin,
-            run,
-            cwd,
-            false,
-            "m-1",
-            "high",
-            &["a.png".to_string()],
-        ));
+        let sandboxed = args_of(
+            &build_generic_command(
+                &inv,
+                bin,
+                "packet",
+                run,
+                cwd,
+                false,
+                "m-1",
+                "high",
+                &["a.png".to_string()],
+            )
+            .unwrap(),
+        );
         assert_eq!(
             sandboxed,
             vec![
@@ -2048,16 +2069,9 @@ image_args: ["-i", "{image}"]
         );
 
         // Full access swaps the access args; auto model/effort add nothing.
-        let full = args_of(&build_generic_command(
-            &inv,
-            bin,
-            run,
-            cwd,
-            true,
-            "auto",
-            "",
-            &[],
-        ));
+        let full = args_of(
+            &build_generic_command(&inv, bin, "packet", run, cwd, true, "auto", "", &[]).unwrap(),
+        );
         assert_eq!(full, vec!["run", "--json", "--out", "/tmp/r", "--yolo"]);
     }
 
@@ -2343,7 +2357,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
         std::fs::set_permissions(&fake_codex, permissions).unwrap();
 
         let profile: WorkerProfile = crate::yaml::from_str(
-            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+            "id: codex\ninvocation: {command: codex, supports_noninteractive: true, output_contract: files}\nlimits: {max_wall_minutes: 1}\n",
         )
         .unwrap();
         let log = root.join("worker-output.log");
@@ -2397,7 +2411,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
         std::fs::set_permissions(&fake_codex, permissions).unwrap();
 
         let profile: WorkerProfile = crate::yaml::from_str(
-            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+            "id: codex\ninvocation: {command: codex, supports_noninteractive: true, output_contract: files}\nlimits: {max_wall_minutes: 1}\n",
         )
         .unwrap();
         let outcome = spawn(
@@ -2538,7 +2552,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
         std::fs::set_permissions(&fake_codex, permissions).unwrap();
 
         let profile: WorkerProfile = crate::yaml::from_str(
-            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+            "id: codex\ninvocation: {command: codex, supports_noninteractive: true, output_contract: files}\nlimits: {max_wall_minutes: 1}\n",
         )
         .unwrap();
         let capture = AttemptCapture {
@@ -2629,7 +2643,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
         std::fs::set_permissions(&fake_codex, permissions).unwrap();
 
         let profile: WorkerProfile = crate::yaml::from_str(
-            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+            "id: codex\ninvocation: {command: codex, supports_noninteractive: true, output_contract: files}\nlimits: {max_wall_minutes: 1}\n",
         )
         .unwrap();
         let capture = AttemptCapture {
@@ -2718,7 +2732,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
         ));
         std::fs::create_dir_all(&root).unwrap();
         let profile: WorkerProfile = crate::yaml::from_str(
-            "id: codex\ninvocation: {command: codex}\nlimits: {max_wall_minutes: 1}\n",
+            "id: codex\ninvocation: {command: codex, supports_noninteractive: true, output_contract: files}\nlimits: {max_wall_minutes: 1}\n",
         )
         .unwrap();
 
@@ -2847,6 +2861,8 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
 id: fixture
 invocation:
   command: sh
+  supports_noninteractive: true
+  output_contract: files
   args: ["-c", "printf stdout-only; printf stderr-only >&2"]
 limits: {max_wall_minutes: 1}
 "#,

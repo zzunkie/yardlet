@@ -4479,12 +4479,14 @@ routing:
     }
 
     fn cached_snapshot(ws: &Workspace) -> Snapshot {
+        let billing = ws.load_billing().unwrap();
         let workers = ws
             .load_workers()
             .unwrap()
             .workers
             .into_iter()
             .map(|worker| crate::snapshot::WorkerLine {
+                readiness_cache_key: crate::guard::readiness_cache_key(&worker, &billing),
                 id: worker.id,
                 readiness: "invocable".into(),
                 version: Some("fixture 1.0".into()),
@@ -4524,7 +4526,7 @@ routing:
         std::fs::write(
             ws.workers_path(),
             format!(
-                "schema_version: 1\nworkers:\n  - id: fixture\n    enabled: true\n    invocation:\n      command: {}\nrouting: {{}}\n",
+                "schema_version: 1\nworkers:\n  - id: fixture\n    enabled: true\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\nrouting: {{}}\n",
                 probe.display()
             ),
         )
@@ -4550,6 +4552,39 @@ routing:
             Some("fixture 2.0"),
             "explicit refresh must run a fresh readiness probe"
         );
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cheap_reload_invalidates_readiness_when_the_invocation_contract_changes() {
+        let ws = workspace_with_user_config("invocation-contract-cache");
+        let probe = ws.root.join("fixture-worker");
+        write_version_probe(&probe, "fixture 1.0");
+        let workers = |supports_noninteractive: bool| {
+            format!(
+                "schema_version: 1\nworkers:\n  - id: fixture\n    enabled: true\n    invocation:\n      command: {}\n      supports_noninteractive: {}\n      output_contract: files\nrouting: {{}}\n",
+                probe.display(), supports_noninteractive
+            )
+        };
+        std::fs::write(ws.workers_path(), workers(true)).unwrap();
+
+        let mut app = App::new(ws.clone());
+        assert_eq!(
+            app.snapshot.as_ref().unwrap().workers[0].readiness,
+            "invocable"
+        );
+
+        std::fs::write(ws.workers_path(), workers(false)).unwrap();
+        app.reload();
+        assert_eq!(
+            app.snapshot.as_ref().unwrap().workers[0].readiness,
+            "not ready",
+            "a changed static invocation contract must not inherit cached ready state"
+        );
+        assert!(app.snapshot.as_ref().unwrap().workers[0]
+            .detail
+            .contains("supports_noninteractive"));
         let _ = std::fs::remove_dir_all(ws.root);
     }
 
