@@ -8020,6 +8020,10 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
 
     // Git finish runs only after evaluation and worktree integration. The OID
     // is supplied only by the successful merge branch above, so a serial run,
+    // Captured before `ownership` is consumed below: whether this run put a
+    // merge into the repository is what decides, on an interrupt, between
+    // "unstarted again" and "already landed, do not run twice" (issue #110).
+    let run_integrated = ownership.is_some();
     // no-op, conflict, or unrelated existing commit cannot acquire ownership.
     let git_finish = if git_finish_not_needed {
         crate::git_finish::finish_no_change_run(ws, run_dir, run_id, &task.id, next_state)?
@@ -8042,6 +8046,44 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // every later startup (issue #43).
     if git_finish_not_needed && git_finish.status.verified_complete() {
         let _ = ws.archive_no_change_receipt(run_id);
+    }
+    // The interruption verdict, applied at the LAST point before the queue
+    // transition and after every other decision has been made (issue #110).
+    //
+    // Not at spawn: there is more than one place a worker starts — initial,
+    // failover, parallel — and marking them missed two of the three. Not at
+    // finalization entry either: the interrupt routinely arrives DURING
+    // finalization, after any entry check has passed. Everything funnels here.
+    //
+    // Recorded in core-owned state rather than the run directory, because a
+    // parallel worker is handed that directory and a review had one forge the
+    // record. And read back from there, so `recover` in a fresh process — where
+    // the process flag no longer exists — reaches the same verdict.
+    if crate::signals::stop_requested() {
+        let _ = ws.record_run_interrupted(run_id, "operator_interrupt");
+    }
+    if ws.run_interruption_cause(run_id).is_some() {
+        // Two different facts, and one state cannot carry both. If integration
+        // already happened the output IS in the repository, and requeuing would
+        // run the work a second time — a review proved that repeats external
+        // effects, not just wasted compute. If it did not, the task is simply
+        // unstarted work again.
+        let integrated = run_integrated;
+        next_state = if integrated {
+            let _ = state::write_str(&run_dir.join("partial-reason"), "stopped_after_integration");
+            lines.push(format!(
+                "{}: interrupted after its output was integrated; left Partial so it is \
+                 not run again",
+                task.id
+            ));
+            TaskState::Partial
+        } else {
+            lines.push(format!(
+                "{}: interrupted before integration; returned to the queue",
+                task.id
+            ));
+            TaskState::Queued
+        };
     }
     let projected_state = state_after_git_finish(next_state, &git_finish);
     if projected_state != next_state {
@@ -12934,6 +12976,57 @@ printf "# worker handoff
 
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// Issue #110: the interruption verdict has to survive the process that made
+    /// it. `recover` runs later, in a different process where a stop flag no
+    /// longer exists — and it calls the same finalizer, which is how a stopped
+    /// run came to be recorded `done` with no marker anywhere.
+    #[test]
+    fn the_interruption_record_is_core_owned_and_survives_the_process() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-stop-core-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let ws = Workspace::at(&root);
+
+        assert!(ws.run_interruption_cause("run-a").is_none());
+        ws.record_run_interrupted("run-a", "operator_interrupt")
+            .unwrap();
+        assert_eq!(
+            ws.run_interruption_cause("run-a").as_deref(),
+            Some("operator_interrupt"),
+            "a later process must reach the verdict the interrupted one recorded"
+        );
+        // Per-run: one run's verdict says nothing about another. That is what
+        // stops a long-lived TUI condemning its next run, and one stopped worker
+        // in a parallel batch condemning a sibling that finished correctly.
+        assert!(ws.run_interruption_cause("run-b").is_none());
+
+        // The cause is carried, not just the fact, so a `yardlet redirect` stop
+        // can never be read as an operator interrupt.
+        ws.record_run_interrupted("run-c", "redirect").unwrap();
+        assert_eq!(
+            ws.run_interruption_cause("run-c").as_deref(),
+            Some("redirect")
+        );
+
+        // Outside the run directory, which a parallel worker is handed to write
+        // into — a review forged the record when it lived there.
+        assert!(
+            ws.stopped_runs_dir().starts_with(ws.agents_dir())
+                && !ws
+                    .stopped_runs_dir()
+                    .starts_with(ws.agents_dir().join("runs")),
+            "the record must not live where a worker can write"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Issue #117: a serial worker could see its worktree, branch and baseline

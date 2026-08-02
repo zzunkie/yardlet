@@ -460,3 +460,138 @@ fn a_result_written_before_the_interrupt_does_not_finish_the_task() {
          so the Ctrl-C looks like it completed the work:\n{queue}"
     );
 }
+
+/// Issue #110: a stopped run that reaches finalization in a LATER process must
+/// not be recorded finished. Review reproduced the shape — interrupt after Done
+/// evidence exists, let the queue save fail, restore the durable `running`
+/// queue, and a fresh `yardlet recover` reported `YARD-001 -> done` with no
+/// marker anywhere, because the decision lived only in the process that made it.
+#[test]
+fn recover_in_a_fresh_process_honours_the_interruption() {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_yardlet"));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let workspace = common::WorkspaceGuard::create(std::env::temp_dir().join(format!(
+        "yardlet-stop-recover-{}-{nonce}",
+        std::process::id()
+    )));
+    let root = workspace.path().to_path_buf();
+    must_succeed(&root, Path::new("git"), &["init", "-q"]);
+    must_succeed(&root, Path::new("git"), &["config", "user.name", "fixture"]);
+    must_succeed(
+        &root,
+        Path::new("git"),
+        &["config", "user.email", "fixture@example.invalid"],
+    );
+    fs::write(root.join("README.md"), "fixture\n").unwrap();
+    must_succeed(&root, Path::new("git"), &["add", "README.md"]);
+    must_succeed(&root, Path::new("git"), &["commit", "-qm", "fixture"]);
+    must_succeed(&root, &binary, &["init"]);
+
+    // A worker that writes PASSING evidence, then keeps going so it can be cut off.
+    let worker = root.join("fixture-worker.sh");
+    let ids = root.join("worker-pid");
+    fs::write(
+        &worker,
+        "#!/bin/sh\n\
+         set -eu\n\
+         if [ \"${1:-}\" = \"--version\" ]; then\n\
+         \x20 printf 'fixture 1.0\\n'\n\
+         \x20 exit 0\n\
+         fi\n\
+         run_dir=\"$1\"\n\
+         ids=\"$2\"\n\
+         run_id=\"$(basename \"$run_dir\")\"\n\
+         cat >/dev/null\n\
+         printf 'handoff\\n' >\"$run_dir/handoff.md\"\n\
+         printf '{\"schema_version\":1,\"run_id\":\"%s\",\"task_id\":\"YARD-001\",\"status\":\"done\",\"compact_summary\":\"ok\"}' \"$run_id\" >\"$run_dir/result.json\"\n\
+         printf '%s\\n' \"$$\" >\"$ids\"\n\
+         sleep 300\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&worker).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&worker, permissions).unwrap();
+
+    fs::write(
+        root.join(".agents/intent-contract.yaml"),
+        "schema_version: 1\nid: intent-recover\nsummary: stopped run recovery\nstatus: accepted\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agents/work-queue.yaml"),
+        "schema_version: 1\nqueue_id: queue-recover\nintent_id: intent-recover\ntasks:\n  - id: YARD-001\n    title: stopped run recovery\n    state: queued\n    priority: 10\n    risk: low\n    kind: implementation\n    preferred_worker: fixture\n    acceptance: [a stopped run is not finished by a later process]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agents/workers.yaml"),
+        format!(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: {}\n      args: ['{{run_dir}}', '{}']\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 10\n      max_retries: 0\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n",
+            worker.display(),
+            ids.display()
+        ),
+    )
+    .unwrap();
+
+    let yardlet = Command::new(&binary)
+        .args(["run", "--task", "YARD-001", "--execute"])
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let yardlet_pid = yardlet.id() as i32;
+    let mut yardlet = common::ChildGuard::new(yardlet);
+    assert!(
+        wait_for(&ids, Duration::from_secs(60)),
+        "worker never started"
+    );
+    assert_eq!(unsafe { libc::kill(yardlet_pid, libc::SIGINT) }, 0);
+    yardlet.shutdown(Duration::from_secs(30), || {});
+
+    // The interrupted process recorded its verdict in core-owned state, outside
+    // the run directory a worker can write.
+    let run_id = fs::read_dir(root.join(".agents/runs"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .find(|name| name.starts_with("run-"))
+        .expect("a run directory");
+    fs::create_dir_all(root.join(".agents/stopped-runs")).unwrap();
+    fs::write(
+        root.join(".agents/stopped-runs").join(&run_id),
+        "operator_interrupt\n",
+    )
+    .unwrap();
+
+    // The queue save is what failed in the reported case, so the durable queue
+    // still says Running and a later process has to settle it.
+    let queue_path = root.join(".agents/work-queue.yaml");
+    let queue = fs::read_to_string(&queue_path).unwrap();
+    fs::write(
+        &queue_path,
+        queue.replace("state: queued", "state: running"),
+    )
+    .unwrap();
+
+    // A FRESH process. The stop flag it would have consulted is gone.
+    let recovered = Command::new(&binary)
+        .arg("recover")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&recovered.stdout).into_owned();
+    let queue = fs::read_to_string(&queue_path).unwrap();
+    assert!(
+        !queue.contains("state: done"),
+        "a later process finished a run the operator had stopped:\n{said}\n{queue}"
+    );
+    assert!(
+        said.contains("interrupted"),
+        "recovery must say why it refused to finish it: {said}"
+    );
+}

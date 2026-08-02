@@ -473,6 +473,35 @@ impl Workspace {
             .join(format!("{confirmation_id}.yaml"))
     }
 
+    /// Where the core records that a run was interrupted.
+    ///
+    /// Deliberately NOT the run directory. A parallel worker is handed the
+    /// canonical run directory to write into, so anything the core must trust
+    /// cannot live there — an independent review had a worker forge its own
+    /// stop record and turn a passing task into a requeue (issue #110). Nothing
+    /// grants a worker write access under this path.
+    pub fn stopped_runs_dir(&self) -> PathBuf {
+        self.agents_dir().join("stopped-runs")
+    }
+
+    /// Record that this run was interrupted, with the cause. One atomic write,
+    /// because a two-file scheme has a crash window where the second never
+    /// lands and recovery then reads the run as uninterrupted.
+    pub fn record_run_interrupted(&self, run_id: &str, cause: &str) -> anyhow::Result<()> {
+        let dir = self.stopped_runs_dir();
+        std::fs::create_dir_all(&dir)?;
+        crate::state::write_str_atomic(&dir.join(run_id), &format!("{cause}\n"))
+    }
+
+    /// Was this run interrupted? Answered from core-owned state, so a later
+    /// process reaches the same conclusion as the one that was interrupted.
+    pub fn run_interruption_cause(&self, run_id: &str) -> Option<String> {
+        std::fs::read_to_string(self.stopped_runs_dir().join(run_id))
+            .ok()
+            .map(|text| text.trim().to_string())
+            .filter(|cause| !cause.is_empty())
+    }
+
     pub fn runtime_task_receipts_dir(&self) -> PathBuf {
         self.agents_dir().join("runtime-task-receipts")
     }
