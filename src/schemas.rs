@@ -1959,6 +1959,9 @@ pub const MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES: usize = 256;
 impl WorkersFile {
     pub fn validate(&self) -> Result<(), String> {
         for worker in &self.workers {
+            if !matches!(worker.id.as_str(), "codex" | "claude-code") {
+                worker.invocation.validate_generic(&worker.id)?;
+            }
             validate_output_contract_patterns(
                 &worker.id,
                 "provider refusal",
@@ -2176,11 +2179,27 @@ pub struct Invocation {
     pub output_contract: String,
     /// Generic adapter template for workers without a built-in adapter
     /// (codex and claude-code have first-class ones; any other id uses these).
-    /// Placeholders: `{run_dir}`, `{model}`, `{effort}`, `{image}`. The task
-    /// packet always arrives on stdin; the binary must support `--version`
-    /// (the readiness probe) and be able to write files in the workspace.
+    /// Placeholders: `{run_dir}`, `{model}`, `{effort}`, `{image}`, and, for
+    /// argument prompt transport, exactly one `{prompt}`. The binary must be
+    /// able to write result files in the workspace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// How a generic adapter receives the compiled task packet: `stdin`
+    /// (legacy/default) or `argument` (`arg` is accepted as an alias). Argument
+    /// transport expands exactly one `{prompt}` in `args` without a shell.
+    #[serde(
+        default = "default_prompt_transport",
+        skip_serializing_if = "is_default_prompt_transport"
+    )]
+    pub prompt_transport: String,
+    /// Arguments for the local, offline readiness probe. Missing keeps the
+    /// legacy `--version` behavior. An explicitly empty list is invalid because
+    /// Yardlet must not guess whether a bare command is a safe offline probe.
+    #[serde(
+        default = "default_version_args",
+        skip_serializing_if = "is_default_version_args"
+    )]
+    pub version_args: Vec<String>,
     /// Appended when running sandboxed (the default access level).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sandbox_args: Vec<String>,
@@ -2202,6 +2221,101 @@ pub struct Invocation {
     /// itself never reads or stores the values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pass_env: Vec<String>,
+}
+
+fn default_prompt_transport() -> String {
+    "stdin".to_string()
+}
+
+fn is_default_prompt_transport(transport: &String) -> bool {
+    transport == "stdin"
+}
+
+fn default_version_args() -> Vec<String> {
+    vec!["--version".to_string()]
+}
+
+fn is_default_version_args(args: &Vec<String>) -> bool {
+    args == &["--version"]
+}
+
+impl Invocation {
+    pub fn prompt_on_stdin(&self) -> bool {
+        self.prompt_transport.trim() == "stdin"
+    }
+
+    /// Validate only the generic adapter's structural template. Runtime
+    /// invocability (`supports_noninteractive`, output contract, binary,
+    /// offline probe, billing policy) belongs to the shared guard so status,
+    /// routing, planning, capability projection, and the TUI see one verdict.
+    pub fn validate_generic(&self, worker_id: &str) -> Result<(), String> {
+        if self.command.trim().is_empty() {
+            return Err(format!(
+                "worker '{worker_id}' generic invocation command must not be empty"
+            ));
+        }
+        if self.version_args.is_empty() || self.version_args.iter().any(|arg| arg.is_empty()) {
+            return Err(format!(
+                "worker '{worker_id}' generic version_args must contain a configured offline probe"
+            ));
+        }
+        validate_invocation_args(worker_id, "version_args", &self.version_args, false, false)?;
+        validate_invocation_args(worker_id, "args", &self.args, true, true)?;
+        for (label, args) in [
+            ("sandbox_args", &self.sandbox_args),
+            ("full_access_args", &self.full_access_args),
+            ("image_args", &self.image_args),
+            ("model_args", &self.model_args),
+            ("effort_args", &self.effort_args),
+        ] {
+            validate_invocation_args(worker_id, label, args, true, false)?;
+        }
+
+        let prompt_count = self
+            .args
+            .iter()
+            .map(|arg| arg.matches("{prompt}").count())
+            .sum::<usize>();
+        match self.prompt_transport.trim() {
+            "stdin" if prompt_count == 0 => Ok(()),
+            "stdin" => Err(format!(
+                "worker '{worker_id}' uses prompt_transport stdin, so args must not contain {{prompt}}"
+            )),
+            "argument" | "arg" if prompt_count == 1 => Ok(()),
+            "argument" | "arg" => Err(format!(
+                "worker '{worker_id}' argument prompt transport requires exactly one {{prompt}} placeholder in args"
+            )),
+            other => Err(format!(
+                "worker '{worker_id}' has unsupported prompt_transport '{other}'; expected stdin or argument"
+            )),
+        }
+    }
+}
+
+fn validate_invocation_args(
+    worker_id: &str,
+    label: &str,
+    args: &[String],
+    allow_runtime_placeholders: bool,
+    allow_prompt: bool,
+) -> Result<(), String> {
+    for arg in args {
+        let mut remainder = arg.clone();
+        if allow_runtime_placeholders {
+            for placeholder in ["{run_dir}", "{model}", "{effort}", "{image}"] {
+                remainder = remainder.replace(placeholder, "");
+            }
+        }
+        if allow_prompt {
+            remainder = remainder.replace("{prompt}", "");
+        }
+        if remainder.contains('{') || remainder.contains('}') {
+            return Err(format!(
+                "worker '{worker_id}' {label} contains an unknown placeholder in {arg:?}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3733,6 +3847,51 @@ delivery: auto
         workers.workers[0].provider_response_refusal_patterns =
             vec!["x".repeat(MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES + 1)];
         assert!(workers.validate().is_err());
+    }
+
+    #[test]
+    fn generic_prompt_transport_schema_rejects_ambiguous_packet_delivery() {
+        let valid_legacy: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      supports_noninteractive: true\n      output_contract: files\n      args: [run]\n",
+        )
+        .unwrap();
+        valid_legacy.validate().unwrap();
+        assert_eq!(valid_legacy.workers[0].invocation.prompt_transport, "stdin");
+        assert_eq!(
+            valid_legacy.workers[0].invocation.version_args,
+            ["--version"]
+        );
+
+        let valid_argument: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      supports_noninteractive: true\n      output_contract: files\n      prompt_transport: argument\n      args: [run, '{prompt}']\n",
+        )
+        .unwrap();
+        valid_argument.validate().unwrap();
+
+        for (yaml, expected) in [
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      supports_noninteractive: true\n      output_contract: files\n      prompt_transport: shell\n      args: [run]\n",
+                "prompt_transport",
+            ),
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      supports_noninteractive: true\n      output_contract: files\n      prompt_transport: argument\n      args: [run]\n",
+                "exactly one {prompt}",
+            ),
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      supports_noninteractive: true\n      output_contract: files\n      prompt_transport: stdin\n      args: [run, '{prompt}']\n",
+                "stdin",
+            ),
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      supports_noninteractive: true\n      output_contract: files\n      args: [run, '{unknown_packet}']\n",
+                "unknown placeholder",
+            ),
+        ] {
+            let workers: WorkersFile = crate::yaml::from_str(yaml).unwrap();
+            let error = workers
+                .validate()
+                .expect_err("ambiguous generic prompt transport must fail validation");
+            assert!(error.contains(expected), "{error:?} does not contain {expected:?}");
+        }
     }
 
     #[test]

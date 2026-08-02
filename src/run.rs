@@ -11067,7 +11067,7 @@ fi
         let root = std::env::temp_dir().join(format!("yard-feedback-auto-{}", std::process::id()));
         let attempts = root.join("attempts");
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}, {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", {}, {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&worker),
             shell_literal(&attempts),
             shell_literal(&root)
@@ -11077,7 +11077,7 @@ fi
         // Rebuild the profile with paths inside the actual workspace returned
         // by init_test_workspace.
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}, {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", {}, {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&worker),
             shell_literal(&attempts),
             shell_literal(&ws.root)
@@ -11192,7 +11192,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", \"YARD-012\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", \"YARD-012\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&builder),
             shell_literal(&spawn_marker)
         );
@@ -11467,7 +11467,7 @@ printf "# handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&builder)
         );
         let ws = init_test_workspace("intentless-serial-run", &worker_yaml);
@@ -11635,7 +11635,7 @@ printf "# handoff\n" > "$run_dir/handoff.md"
 
         let ws = init_test_workspace(
             &format!("serial-post-create-error-cleanup-{attempt}"),
-            "schema_version: 1\nrouting: {default_worker: builder}\nworkers:\n  - id: builder\n    invocation: {command: bash}\n",
+            "schema_version: 1\nrouting: {default_worker: builder}\nworkers:\n  - id: builder\n    invocation: {command: bash, supports_noninteractive: true, output_contract: files}\n",
         );
         ws.save_queue(&queue(vec![task(
             "YARD-POST-CREATE-ERR",
@@ -11729,7 +11729,7 @@ exit 0
         write_str(
             &ws.workers_path(),
             &format!(
-                "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+                "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
                 shell_literal(&worker)
             ),
         )
@@ -11777,7 +11777,7 @@ exit 0
 "#,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&worker)
         );
         let ws = init_test_workspace("serial-import-error-cleanup", &worker_yaml);
@@ -11847,7 +11847,7 @@ printf '# handoff\n' > "$run_dir/handoff.md"
 "#,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&worker)
         );
         let ws = init_test_workspace("receipt-persist-error", &worker_yaml);
@@ -11964,7 +11964,7 @@ exit 1
         write_str(
             &ws.workers_path(),
             &format!(
-                "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+                "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
                 shell_literal(&worker),
                 shell_literal(&ws.runs_dir())
             ),
@@ -12035,7 +12035,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&builder),
             shell_literal(&payload)
         );
@@ -12272,7 +12272,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}, {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", {}, {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&builder), task_id, mode
         );
         let ws = init_test_workspace(name, &worker_yaml);
@@ -12517,7 +12517,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&worker),
             shell_literal(&spawn_marker)
         );
@@ -12738,7 +12738,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&worker),
             shell_literal(&owning_root)
         );
@@ -12903,7 +12903,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&worker),
             shell_literal(&owning_root)
         );
@@ -12998,7 +12998,7 @@ printf "# worker handoff
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&worker)
         );
         let ws = init_test_workspace("review-artifact", &worker_yaml);
@@ -13873,7 +13873,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&worker),
             shell_literal(&spawn_marker)
         );
@@ -14430,7 +14430,7 @@ printf "# worker handoff\n" > "$run_dir/handoff.md"
         );
         let run_case = |name: &str, task_id: &str, mutate_seed: &str| {
             let worker_yaml = format!(
-                "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}, {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+                "schema_version: 1\nrouting:\n  default_worker: builder\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", {}, {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
                 shell_literal(&builder), task_id, mutate_seed
             );
             let ws = init_test_workspace(name, &worker_yaml);
@@ -14558,7 +14558,7 @@ exit 0
         std::fs::set_permissions(&fake_codex, permissions).unwrap();
 
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: codex\n  fallback_order: [codex]\nworkers:\n  - id: codex\n    invocation:\n      command: {}\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: codex\n  fallback_order: [codex]\nworkers:\n  - id: codex\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&fake_codex)
         );
         let ws = init_test_workspace("codex-session-report", &worker_yaml);
@@ -14629,7 +14629,7 @@ printf "merge_conflict\n" > "$run_dir/partial-reason"
 "##,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting: {{default_worker: builder}}\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&builder)
         );
         let ws = init_test_workspace("worker-forged-cancel", &worker_yaml);
@@ -14714,7 +14714,7 @@ exit 0
 "#,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, builder]\nworkers:\n  - id: dead\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, builder]\nworkers:\n  - id: dead\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&dead),
             shell_literal(&builder)
         );
@@ -14809,7 +14809,7 @@ exit 0
             ),
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\n  fallback_order: [builder]\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\n  fallback_order: [builder]\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&builder)
         );
         let ws = init_test_workspace("approval-gate", &worker_yaml);
@@ -14925,7 +14925,7 @@ exit 0
             ),
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: builder\n  fallback_order: [builder]\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: builder\n  fallback_order: [builder]\nworkers:\n  - id: builder\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&builder)
         );
         let ws = init_test_workspace("auto-approval-retry", &worker_yaml);
@@ -15033,7 +15033,7 @@ exit 0
             ),
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: bad-result\n  fallback_order: [bad-result, fallback]\nworkers:\n  - id: bad-result\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fallback\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: bad-result\n  fallback_order: [bad-result, fallback]\nworkers:\n  - id: bad-result\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fallback\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\"]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&bad),
             shell_literal(&fallback)
         );
@@ -15095,7 +15095,7 @@ exit 1
 "#,
         );
         let worker_yaml = format!(
-            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, missing]\nworkers:\n  - id: dead\n    invocation:\n      command: bash\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: missing\n    invocation:\n      command: yardlet-definitely-missing-worker-command\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
+            "schema_version: 1\nrouting:\n  default_worker: dead\n  fallback_order: [dead, missing]\nworkers:\n  - id: dead\n    invocation:\n      command: bash\n      supports_noninteractive: true\n      output_contract: files\n      args: [{}, \"{{run_dir}}\", {}]\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: missing\n    invocation:\n      command: yardlet-definitely-missing-worker-command\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n",
             shell_literal(&dead),
             shell_literal(&attempts)
         );

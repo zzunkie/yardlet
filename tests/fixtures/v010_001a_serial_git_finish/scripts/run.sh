@@ -278,21 +278,29 @@ workers:
   - id: builder
     invocation:
       command: bash
+      supports_noninteractive: true
+      output_contract: files
       args: [$WRAPPER_DIR/worker.sh, "{run_dir}", YARD-001, builder, $scenario/attempts, $scenario/packets, $STERILE_HOME]
     limits: {max_wall_minutes: 1, max_retries: 0}
   - id: reviewer
     invocation:
       command: bash
+      supports_noninteractive: true
+      output_contract: files
       args: [$WRAPPER_DIR/worker.sh, "{run_dir}", YARD-002, reviewer, $scenario/attempts, $scenario/packets, $STERILE_HOME]
     limits: {max_wall_minutes: 1, max_retries: 0}
   - id: remediator
     invocation:
       command: bash
+      supports_noninteractive: true
+      output_contract: files
       args: [$WRAPPER_DIR/worker.sh, "{run_dir}", YARD-004, remediator, $scenario/attempts, $scenario/packets, $STERILE_HOME]
     limits: {max_wall_minutes: 1, max_retries: 0}
   - id: rereviewer
     invocation:
       command: bash
+      supports_noninteractive: true
+      output_contract: files
       args: [$WRAPPER_DIR/worker.sh, "{run_dir}", YARD-003, rereviewer, $scenario/attempts, $scenario/packets, $STERILE_HOME]
     limits: {max_wall_minutes: 1, max_retries: 0}
 EOF
