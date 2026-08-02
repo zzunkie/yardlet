@@ -3884,6 +3884,27 @@ fn scope_conflicts_with_pinned_evidence(
     None
 }
 
+/// A scope path reduced to comparable form: `.` and `..` resolved lexically,
+/// empty segments dropped, case folded.
+///
+/// Lexical rather than `canonicalize`, because a declared scope may name a
+/// directory that does not exist yet and canonicalization fails on those. Case
+/// is folded because the filesystems this runs on are routinely
+/// case-insensitive, so two spellings reach the same inode.
+fn normalize_scope_path(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/").to_lowercase()
+}
+
 /// Workspace directories the task's confirmed contract says it may write, which
 /// the sandbox would otherwise refuse.
 ///
@@ -3922,6 +3943,33 @@ pub(crate) fn sandbox_writable_roots(
                 .unwrap_or(entry)
                 .trim_end_matches('/');
             // A file entry contributes the directory holding it.
+            // Core-only subtrees are never liftable, whatever a scope says. The
+            // stop record decides whether an interrupted run may run again, so a
+            // worker that could write it could requeue its own passing task — an
+            // independent review did exactly that through a worker-proposed
+            // follow-up's allowed_scope (issues #19 and #110).
+            const CORE_ONLY: [&str; 5] = [
+                ".agents/stopped-runs",
+                ".agents/runtime-task-receipts",
+                ".agents/checkpoints",
+                ".agents/telemetry",
+                // Run directories decide each other's fate: a worker handed the
+                // whole tree wrote `cancelled` into a SIBLING run and had it
+                // stopped and requeued. The run's OWN directory is still granted
+                // explicitly at spawn; what is refused is claiming the tree
+                // through scope.
+                ".agents/runs",
+            ];
+            // Compared on normalized components, not the raw string. `..` and a
+            // differing case both name the same directory on the filesystems
+            // this runs on, and a prefix test on the literal text let both past.
+            let normalized = normalize_scope_path(directory);
+            if CORE_ONLY.iter().any(|core| {
+                let core = normalize_scope_path(core);
+                normalized == core || normalized.starts_with(&format!("{core}/"))
+            }) {
+                return None;
+            }
             let directory = if directory.ends_with(".md") || directory.ends_with(".yaml") {
                 std::path::Path::new(directory).parent()?.to_str()?
             } else {
@@ -8020,6 +8068,10 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
 
     // Git finish runs only after evaluation and worktree integration. The OID
     // is supplied only by the successful merge branch above, so a serial run,
+    // Captured before `ownership` is consumed below: whether this run put a
+    // merge into the repository is what decides, on an interrupt, between
+    // "unstarted again" and "already landed, do not run twice" (issue #110).
+    let run_integrated = ownership.is_some();
     // no-op, conflict, or unrelated existing commit cannot acquire ownership.
     let git_finish = if git_finish_not_needed {
         crate::git_finish::finish_no_change_run(ws, run_dir, run_id, &task.id, next_state)?
@@ -8042,6 +8094,50 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     // every later startup (issue #43).
     if git_finish_not_needed && git_finish.status.verified_complete() {
         let _ = ws.archive_no_change_receipt(run_id);
+    }
+    // A run that changed no files still DID its work — a review's report, a
+    // deploy, anything whose effect is outside the repository. `ownership` only
+    // marks a merge, so reducing "already accounted for" to it requeued a
+    // stopped no-change run and repeated its external effect: a review measured
+    // a modeled counter going from one to two (issue #110).
+    let settled_no_change = git_finish_not_needed && result.is_some();
+    // The interruption verdict, applied at the LAST point before the queue
+    // transition and after every other decision has been made (issue #110).
+    //
+    // Not at spawn: there is more than one place a worker starts — initial,
+    // failover, parallel — and marking them missed two of the three. Not at
+    // finalization entry either: the interrupt routinely arrives DURING
+    // finalization, after any entry check has passed. Everything funnels here.
+    //
+    // Recorded in core-owned state rather than the run directory, because a
+    // parallel worker is handed that directory and a review had one forge the
+    // record. And read back from there, so `recover` in a fresh process — where
+    // the process flag no longer exists — reaches the same verdict.
+    if crate::signals::stop_requested() {
+        let _ = ws.record_run_interrupted(run_id, "operator_interrupt");
+    }
+    if ws.run_interruption_cause(run_id).is_some() {
+        // Two different facts, and one state cannot carry both. If integration
+        // already happened the output IS in the repository, and requeuing would
+        // run the work a second time — a review proved that repeats external
+        // effects, not just wasted compute. If it did not, the task is simply
+        // unstarted work again.
+        let integrated = run_integrated || settled_no_change;
+        next_state = if integrated {
+            let _ = state::write_str(&run_dir.join("partial-reason"), "stopped_after_integration");
+            lines.push(format!(
+                "{}: interrupted after its output was integrated; left Partial so it is \
+                 not run again",
+                task.id
+            ));
+            TaskState::Partial
+        } else {
+            lines.push(format!(
+                "{}: interrupted before integration; returned to the queue",
+                task.id
+            ));
+            TaskState::Queued
+        };
     }
     let projected_state = state_after_git_finish(next_state, &git_finish);
     if projected_state != next_state {
@@ -8114,6 +8210,25 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     } else {
         Vec::new()
     };
+    // Sampled AGAIN, immediately before the queue is written. The earlier check
+    // runs before the planning lock, and an interrupt arriving in that window was
+    // still recorded as finished by a later `recover` — the window is small and
+    // it is exactly where a long finalization sits (issue #110).
+    let interrupted_now =
+        crate::signals::stop_requested() || ws.run_interruption_cause(run_id).is_some();
+    if interrupted_now && next_state == TaskState::Done {
+        let _ = ws.record_run_interrupted(run_id, "operator_interrupt");
+        next_state = if run_integrated || settled_no_change {
+            let _ = state::write_str(&run_dir.join("partial-reason"), "stopped_after_integration");
+            TaskState::Partial
+        } else {
+            TaskState::Queued
+        };
+        lines.push(format!(
+            "{}: interrupted during finalization; not recorded as finished",
+            task.id
+        ));
+    }
     let governing_selection = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
         .ok()
         .and_then(|record| record.resolved_selection());
@@ -12934,6 +13049,134 @@ printf "# worker handoff
 
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// A worker must not be able to write the record that decides whether its
+    /// own run may run again. The #19 sandbox work lifts declared `.agents/`
+    /// scope into writable roots, and a review used a worker-proposed follow-up
+    /// to claim `.agents/stopped-runs` that way, then forged an interrupt and
+    /// requeued its own passing task (issue #110).
+    #[test]
+    fn core_only_state_is_never_lifted_into_a_writable_root() {
+        fn scoped_task(scope: &[&str]) -> crate::schemas::Task {
+            let entries = scope
+                .iter()
+                .map(|s| format!("  - \"{s}\""))
+                .collect::<Vec<_>>()
+                .join("\n");
+            serde_yaml_ng::from_str(&format!(
+                "id: YARD-001\ntitle: t\nstate: queued\npriority: 10\nallowed_scope:\n{entries}\n"
+            ))
+            .expect("task fixture")
+        }
+        let root = std::env::temp_dir().join(format!(
+            "yard-core-only-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for dir in [
+            ".agents/stopped-runs",
+            ".agents/runtime-task-receipts",
+            ".agents/checkpoints",
+            ".agents/telemetry",
+            ".agents/skills/legitimate",
+            ".agents/runs",
+            ".agents/stopped-runs-notes",
+        ] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+
+        for core in [
+            ".agents/stopped-runs",
+            ".agents/stopped-runs/**",
+            ".agents/runtime-task-receipts/**",
+            ".agents/checkpoints/**",
+            ".agents/telemetry/**",
+            // Run directories: a worker handed the tree wrote `cancelled` into a
+            // sibling's run and had that task stopped and requeued.
+            ".agents/runs/**",
+            // The same directories under equivalent spellings. A prefix test on
+            // the raw string let both of these past.
+            ".agents/skills/../stopped-runs/**",
+            ".agents/Stopped-Runs/**",
+            "./.agents/stopped-runs/**",
+            ".agents/stopped-runs/",
+        ] {
+            assert!(
+                sandbox_writable_roots(&scoped_task(&[core]), &root).is_empty(),
+                "{core} was lifted into a writable root; a worker could then decide \
+                 whether its own run counts as interrupted"
+            );
+        }
+
+        // The legitimate case still works — this must not become a blanket
+        // refusal of `.agents/` scope, which is what #19 was about.
+        assert_eq!(
+            sandbox_writable_roots(&scoped_task(&[".agents/skills/legitimate/**"]), &root),
+            vec![root.join(".agents/skills/legitimate")]
+        );
+        // And a name that merely SHARES A PREFIX with a protected one is not
+        // protected: matching has to be on path boundaries, not on text.
+        assert_eq!(
+            sandbox_writable_roots(&scoped_task(&[".agents/stopped-runs-notes/**"]), &root),
+            vec![root.join(".agents/stopped-runs-notes")]
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Issue #110: the interruption verdict has to survive the process that made
+    /// it. `recover` runs later, in a different process where a stop flag no
+    /// longer exists — and it calls the same finalizer, which is how a stopped
+    /// run came to be recorded `done` with no marker anywhere.
+    #[test]
+    fn the_interruption_record_is_core_owned_and_survives_the_process() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-stop-core-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let ws = Workspace::at(&root);
+
+        assert!(ws.run_interruption_cause("run-a").is_none());
+        ws.record_run_interrupted("run-a", "operator_interrupt")
+            .unwrap();
+        assert_eq!(
+            ws.run_interruption_cause("run-a").as_deref(),
+            Some("operator_interrupt"),
+            "a later process must reach the verdict the interrupted one recorded"
+        );
+        // Per-run: one run's verdict says nothing about another. That is what
+        // stops a long-lived TUI condemning its next run, and one stopped worker
+        // in a parallel batch condemning a sibling that finished correctly.
+        assert!(ws.run_interruption_cause("run-b").is_none());
+
+        // The cause is carried, not just the fact, so a `yardlet redirect` stop
+        // can never be read as an operator interrupt.
+        ws.record_run_interrupted("run-c", "redirect").unwrap();
+        assert_eq!(
+            ws.run_interruption_cause("run-c").as_deref(),
+            Some("redirect")
+        );
+
+        // Outside the run directory, which a parallel worker is handed to write
+        // into — a review forged the record when it lived there.
+        assert!(
+            ws.stopped_runs_dir().starts_with(ws.agents_dir())
+                && !ws
+                    .stopped_runs_dir()
+                    .starts_with(ws.agents_dir().join("runs")),
+            "the record must not live where a worker can write"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Issue #117: a serial worker could see its worktree, branch and baseline
