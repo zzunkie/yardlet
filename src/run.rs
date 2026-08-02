@@ -3884,6 +3884,27 @@ fn scope_conflicts_with_pinned_evidence(
     None
 }
 
+/// A scope path reduced to comparable form: `.` and `..` resolved lexically,
+/// empty segments dropped, case folded.
+///
+/// Lexical rather than `canonicalize`, because a declared scope may name a
+/// directory that does not exist yet and canonicalization fails on those. Case
+/// is folded because the filesystems this runs on are routinely
+/// case-insensitive, so two spellings reach the same inode.
+fn normalize_scope_path(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/").to_lowercase()
+}
+
 /// Workspace directories the task's confirmed contract says it may write, which
 /// the sandbox would otherwise refuse.
 ///
@@ -3927,16 +3948,26 @@ pub(crate) fn sandbox_writable_roots(
             // worker that could write it could requeue its own passing task — an
             // independent review did exactly that through a worker-proposed
             // follow-up's allowed_scope (issues #19 and #110).
-            const CORE_ONLY: [&str; 4] = [
+            const CORE_ONLY: [&str; 5] = [
                 ".agents/stopped-runs",
                 ".agents/runtime-task-receipts",
                 ".agents/checkpoints",
                 ".agents/telemetry",
+                // Run directories decide each other's fate: a worker handed the
+                // whole tree wrote `cancelled` into a SIBLING run and had it
+                // stopped and requeued. The run's OWN directory is still granted
+                // explicitly at spawn; what is refused is claiming the tree
+                // through scope.
+                ".agents/runs",
             ];
-            if CORE_ONLY
-                .iter()
-                .any(|core| entry == *core || entry.starts_with(&format!("{core}/")))
-            {
+            // Compared on normalized components, not the raw string. `..` and a
+            // differing case both name the same directory on the filesystems
+            // this runs on, and a prefix test on the literal text let both past.
+            let normalized = normalize_scope_path(directory);
+            if CORE_ONLY.iter().any(|core| {
+                let core = normalize_scope_path(core);
+                normalized == core || normalized.starts_with(&format!("{core}/"))
+            }) {
                 return None;
             }
             let directory = if directory.ends_with(".md") || directory.ends_with(".yaml") {
@@ -13052,6 +13083,8 @@ printf "# worker handoff
             ".agents/checkpoints",
             ".agents/telemetry",
             ".agents/skills/legitimate",
+            ".agents/runs",
+            ".agents/stopped-runs-notes",
         ] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
@@ -13062,6 +13095,15 @@ printf "# worker handoff
             ".agents/runtime-task-receipts/**",
             ".agents/checkpoints/**",
             ".agents/telemetry/**",
+            // Run directories: a worker handed the tree wrote `cancelled` into a
+            // sibling's run and had that task stopped and requeued.
+            ".agents/runs/**",
+            // The same directories under equivalent spellings. A prefix test on
+            // the raw string let both of these past.
+            ".agents/skills/../stopped-runs/**",
+            ".agents/Stopped-Runs/**",
+            "./.agents/stopped-runs/**",
+            ".agents/stopped-runs/",
         ] {
             assert!(
                 sandbox_writable_roots(&scoped_task(&[core]), &root).is_empty(),
@@ -13075,6 +13117,12 @@ printf "# worker handoff
         assert_eq!(
             sandbox_writable_roots(&scoped_task(&[".agents/skills/legitimate/**"]), &root),
             vec![root.join(".agents/skills/legitimate")]
+        );
+        // And a name that merely SHARES A PREFIX with a protected one is not
+        // protected: matching has to be on path boundaries, not on text.
+        assert_eq!(
+            sandbox_writable_roots(&scoped_task(&[".agents/stopped-runs-notes/**"]), &root),
+            vec![root.join(".agents/stopped-runs-notes")]
         );
 
         let _ = std::fs::remove_dir_all(&root);
