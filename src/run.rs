@@ -961,7 +961,7 @@ pub(crate) fn capture_serial_input_overlays(
 const PROVIDER_REFUSAL_CLASSIFICATION_SKIPS_FILE: &str =
     "provider-refusal-classification-skips.yaml";
 
-const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 19] = [
+const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 20] = [
     "run.yaml",
     "task-packet.md",
     "worker.pid",
@@ -972,6 +972,7 @@ const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 19] = [
     "feedback.json",
     "canonical-state-seed",
     "cancelled",
+    "stopped-reason",
     "partial-reason",
     "failover.json",
     "evaluation.json",
@@ -1111,6 +1112,15 @@ fn task_state_progress_line(lang: Lang, task_id: &str, state: TaskState) -> Stri
 // Every field defaults so a partial run.yaml (e.g. an older or hand-written one
 // that only carries run_id/task_id/worker) still deserializes — both
 // `seal_run_record` and `run_worker` read it through `state::load_yaml`.
+/// Did the operator interrupt THIS run?
+///
+/// Durable and per-run: read from the run's own directory rather than a process
+/// flag, so `finalize_run` and a later `recover` in a different process reach
+/// the same answer (issue #110).
+pub(crate) fn run_was_interrupted(run_dir: &std::path::Path) -> bool {
+    run_dir.join("stopped-reason").is_file()
+}
+
 /// Read the adoption policy off core-owned config, for the projection a worker
 /// gets to read before it does semantic work (issue #117).
 fn adoption_policy_for(ws: &Workspace) -> Option<AdoptionPolicy> {
@@ -2956,7 +2966,22 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
     // leaves the same answer on disk that this process would have given.
     if outcome.stopped || crate::signals::stop_requested() {
         outcome.stopped = true;
+        // Two records, because they answer different questions and one file
+        // could not answer both (issue #110).
+        //
+        // `cancelled` is the existing convention `yardlet redirect` also writes:
+        // "do not resume this run". Reusing it alone made a redirect look like a
+        // process stop.
+        //
+        // `stopped-reason` is this run's own durable answer to "was the operator
+        // interrupting?" — written before any terminal transition, in the run's
+        // OWN directory, so a later `recover` in a different process reaches the
+        // same conclusion instead of consulting a process flag that no longer
+        // exists. Per-run is the point: a long-lived TUI must not condemn its
+        // next run, and one stopped worker in a parallel batch must not condemn
+        // a sibling that finished correctly.
         crate::state::write_str_atomic(&run_dir.join("cancelled"), "stopped\n")?;
+        crate::state::write_str_atomic(&run_dir.join("stopped-reason"), "operator_interrupt\n")?;
     }
     // From this point the worktree may contain completed or partially completed
     // worker work. Any import/finalization error must retain it for recovery;
@@ -7415,6 +7440,22 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         })
         .flatten();
     let mut next_state = eval.next_task_state;
+    // An interrupted run cannot finish a task, whichever attempt produced the
+    // evidence and whichever process is finalizing (issue #110). Read from this
+    // run's own durable record rather than a process flag: `recover` runs later,
+    // in another process, where the flag is gone and the answer must be the same.
+    //
+    // Back to Queued, not Partial and not Failed, and each alternative was tried
+    // and was wrong. Partial is read as review failure for a review task, so a
+    // review whose evidence all passed got escalated to needs_user. Failed is
+    // treated as transient by `run --auto`, which would restart the very work
+    // the operator stopped. Queued claims nothing, retries nothing on its own,
+    // and leaves the run's evidence and retained worktree for the operator to
+    // pick up deliberately.
+    let interrupted = run_was_interrupted(run_dir);
+    if interrupted {
+        next_state = TaskState::Queued;
+    }
     if let Some(f) = &feedback {
         let _ = state::write_str(
             &run_dir.join("feedback.json"),
@@ -7470,7 +7511,11 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
             "{}: retained Done while repairing its verified Git finish projection",
             task.id
         ));
-        next_state = TaskState::Done;
+        next_state = if interrupted {
+            TaskState::Queued
+        } else {
+            TaskState::Done
+        };
     }
     // Preserve the worker/evaluator outcome before Git integration can turn a
     // passing Done into a manual-integration Partial. Review remediation is
@@ -12934,6 +12979,59 @@ printf "# worker handoff
 
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// Issue #110: the stop decision has to survive the process that made it.
+    /// A flag in memory cannot answer `recover` running later, and reusing the
+    /// `cancelled` marker cannot tell an interrupt from a `yardlet redirect`.
+    #[test]
+    fn the_interrupt_record_is_durable_per_run_and_distinct_from_redirect() {
+        let root = std::env::temp_dir().join(format!(
+            "yard-stop-record-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let interrupted = root.join("run-interrupted");
+        let redirected = root.join("run-redirected");
+        let untouched = root.join("run-untouched");
+        for dir in [&interrupted, &redirected, &untouched] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+
+        // What a stop writes: both markers.
+        std::fs::write(interrupted.join("cancelled"), "stopped\n").unwrap();
+        std::fs::write(interrupted.join("stopped-reason"), "operator_interrupt\n").unwrap();
+        // What `yardlet redirect` writes: the shared marker only.
+        std::fs::write(redirected.join("cancelled"), "redirect\n").unwrap();
+
+        assert!(
+            run_was_interrupted(&interrupted),
+            "a stopped run must be recognizable from its own directory, with no \
+             process state involved"
+        );
+        assert!(
+            !run_was_interrupted(&redirected),
+            "a redirect writes `cancelled` for its own reasons; reading that as an \
+             interrupt is what broke the redirect path"
+        );
+        assert!(!run_was_interrupted(&untouched));
+
+        // Per-run: one run's record says nothing about its sibling. That is what
+        // keeps a stopped worker in a parallel batch from condemning one that
+        // finished correctly, and a long-lived TUI from condemning its next run.
+        assert!(run_was_interrupted(&interrupted) && !run_was_interrupted(&untouched));
+
+        // The record is core-owned, so a worker cannot forge or erase it through
+        // the normal artifact import path.
+        assert!(
+            MAIN_OWNED_RUN_ARTIFACT_NAMES.contains(&"stopped-reason"),
+            "the interrupt record must be core-owned like the other verdicts"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Issue #117: a serial worker could see its worktree, branch and baseline
