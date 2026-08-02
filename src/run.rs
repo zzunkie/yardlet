@@ -3922,6 +3922,23 @@ pub(crate) fn sandbox_writable_roots(
                 .unwrap_or(entry)
                 .trim_end_matches('/');
             // A file entry contributes the directory holding it.
+            // Core-only subtrees are never liftable, whatever a scope says. The
+            // stop record decides whether an interrupted run may run again, so a
+            // worker that could write it could requeue its own passing task — an
+            // independent review did exactly that through a worker-proposed
+            // follow-up's allowed_scope (issues #19 and #110).
+            const CORE_ONLY: [&str; 4] = [
+                ".agents/stopped-runs",
+                ".agents/runtime-task-receipts",
+                ".agents/checkpoints",
+                ".agents/telemetry",
+            ];
+            if CORE_ONLY
+                .iter()
+                .any(|core| entry == *core || entry.starts_with(&format!("{core}/")))
+            {
+                return None;
+            }
             let directory = if directory.ends_with(".md") || directory.ends_with(".yaml") {
                 std::path::Path::new(directory).parent()?.to_str()?
             } else {
@@ -8047,6 +8064,12 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     if git_finish_not_needed && git_finish.status.verified_complete() {
         let _ = ws.archive_no_change_receipt(run_id);
     }
+    // A run that changed no files still DID its work — a review's report, a
+    // deploy, anything whose effect is outside the repository. `ownership` only
+    // marks a merge, so reducing "already accounted for" to it requeued a
+    // stopped no-change run and repeated its external effect: a review measured
+    // a modeled counter going from one to two (issue #110).
+    let settled_no_change = git_finish_not_needed && result.is_some();
     // The interruption verdict, applied at the LAST point before the queue
     // transition and after every other decision has been made (issue #110).
     //
@@ -8068,7 +8091,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         // run the work a second time — a review proved that repeats external
         // effects, not just wasted compute. If it did not, the task is simply
         // unstarted work again.
-        let integrated = run_integrated;
+        let integrated = run_integrated || settled_no_change;
         next_state = if integrated {
             let _ = state::write_str(&run_dir.join("partial-reason"), "stopped_after_integration");
             lines.push(format!(
@@ -8156,6 +8179,25 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     } else {
         Vec::new()
     };
+    // Sampled AGAIN, immediately before the queue is written. The earlier check
+    // runs before the planning lock, and an interrupt arriving in that window was
+    // still recorded as finished by a later `recover` — the window is small and
+    // it is exactly where a long finalization sits (issue #110).
+    let interrupted_now =
+        crate::signals::stop_requested() || ws.run_interruption_cause(run_id).is_some();
+    if interrupted_now && next_state == TaskState::Done {
+        let _ = ws.record_run_interrupted(run_id, "operator_interrupt");
+        next_state = if run_integrated || settled_no_change {
+            let _ = state::write_str(&run_dir.join("partial-reason"), "stopped_after_integration");
+            TaskState::Partial
+        } else {
+            TaskState::Queued
+        };
+        lines.push(format!(
+            "{}: interrupted during finalization; not recorded as finished",
+            task.id
+        ));
+    }
     let governing_selection = state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
         .ok()
         .and_then(|record| record.resolved_selection());
@@ -12976,6 +13018,66 @@ printf "# worker handoff
 
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// A worker must not be able to write the record that decides whether its
+    /// own run may run again. The #19 sandbox work lifts declared `.agents/`
+    /// scope into writable roots, and a review used a worker-proposed follow-up
+    /// to claim `.agents/stopped-runs` that way, then forged an interrupt and
+    /// requeued its own passing task (issue #110).
+    #[test]
+    fn core_only_state_is_never_lifted_into_a_writable_root() {
+        fn scoped_task(scope: &[&str]) -> crate::schemas::Task {
+            let entries = scope
+                .iter()
+                .map(|s| format!("  - \"{s}\""))
+                .collect::<Vec<_>>()
+                .join("\n");
+            serde_yaml_ng::from_str(&format!(
+                "id: YARD-001\ntitle: t\nstate: queued\npriority: 10\nallowed_scope:\n{entries}\n"
+            ))
+            .expect("task fixture")
+        }
+        let root = std::env::temp_dir().join(format!(
+            "yard-core-only-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for dir in [
+            ".agents/stopped-runs",
+            ".agents/runtime-task-receipts",
+            ".agents/checkpoints",
+            ".agents/telemetry",
+            ".agents/skills/legitimate",
+        ] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+
+        for core in [
+            ".agents/stopped-runs",
+            ".agents/stopped-runs/**",
+            ".agents/runtime-task-receipts/**",
+            ".agents/checkpoints/**",
+            ".agents/telemetry/**",
+        ] {
+            assert!(
+                sandbox_writable_roots(&scoped_task(&[core]), &root).is_empty(),
+                "{core} was lifted into a writable root; a worker could then decide \
+                 whether its own run counts as interrupted"
+            );
+        }
+
+        // The legitimate case still works — this must not become a blanket
+        // refusal of `.agents/` scope, which is what #19 was about.
+        assert_eq!(
+            sandbox_writable_roots(&scoped_task(&[".agents/skills/legitimate/**"]), &root),
+            vec![root.join(".agents/skills/legitimate")]
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Issue #110: the interruption verdict has to survive the process that made
