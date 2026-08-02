@@ -353,17 +353,23 @@ planning.
 
 Codex and Claude Code have built-in adapters. Any other subscription-backed
 CLI can be added in `.agents/workers.yaml` alone: give it an invocation
-template and Yardlet drives it through the same contract (packet on stdin →
-result files out). Placeholders: `{run_dir}`, `{model}`, `{effort}`,
-`{image}`.
+template and Yardlet drives it through the same result-file contract. Generic
+workers become invocable only when they are enabled, their executable and
+configured offline probe work, `supports_noninteractive` is `true`,
+`output_contract` is `files`, prompt delivery is valid, and strict billing
+policy does not block them. Routing, planning, capability projection, worker
+status, and the TUI all use that same decision.
 
 ```yaml
 - id: mytool
   best_for: "..."            # planner rubric
   invocation:
-    command: mytool          # must support --version (readiness probe)
+    command: mytool
     supports_noninteractive: true
-    args: ["run", "--json", "--out", "{run_dir}"]
+    output_contract: files
+    version_args: ["version", "--offline"] # default: ["--version"]
+    prompt_transport: argument              # default: stdin
+    args: ["run", "--out", "{run_dir}", "--prompt", "{prompt}"]
     sandbox_args: ["--sandbox"]        # default access level
     full_access_args: ["--yolo"]       # only when full access is granted
     model_args: ["--model", "{model}"] # added when a model is set
@@ -371,9 +377,21 @@ result files out). Placeholders: `{run_dir}`, `{model}`, `{effort}`,
     image_args: ["-i", "{image}"]      # repeated per attached image
 ```
 
-The worker must be able to write files in the workspace (that is how results
-come back); its subprocess env is sanitized unless the profile opts vars
-back in with `pass_env`.
+Existing generic profiles remain backward compatible: omitting
+`prompt_transport` sends the complete packet on stdin, and omitting
+`version_args` runs `--version`. For argument delivery, set
+`prompt_transport: argument` and put `{prompt}` exactly once in `args`.
+Yardlet substitutes it as one `Command` argument, preserving argument
+boundaries without constructing a shell string. Stdin delivery must not include
+`{prompt}`. The other invocation placeholders are `{run_dir}`, `{model}`,
+`{effort}`, and `{image}`.
+
+The worker must write `result.json` and `handoff.md` in the run directory. Its
+execution env is sanitized unless the profile opts variables back in with
+`pass_env`. The version probe is also sanitized and local-only: it verifies the
+configured executable and probe arguments without network or provider calls,
+but it cannot prove login or API authentication. Authentication can therefore
+still fail when the actual worker starts.
 
 The ecosystem's agents are Yardlet's supply side: terminal agents like
 [oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`), OpenCode, Gemini

@@ -22,7 +22,7 @@ pub enum Readiness {
     NotReady,
     /// The worker is configured but explicitly disabled in workers.yaml.
     Disabled,
-    /// Binary is present but its offline `--version` probe failed, so the
+    /// Binary is present but its configured offline version probe failed, so the
     /// resolved CLI or its runtime cannot be confirmed. Yardlet stops rather than
     /// guess (it never risks a billed call to verify auth).
     Ambiguous,
@@ -47,6 +47,9 @@ pub struct WorkerStatus {
     pub version: Option<String>,
     /// Names (never values) of billing env vars present in the parent process.
     pub billing_env_present: Vec<String>,
+    /// Static generic invocation contract failure. Kept separate so staged
+    /// status can report why no version subprocess was started.
+    pub contract_error: Option<String>,
     pub readiness: Readiness,
     pub detail: String,
 }
@@ -76,6 +79,24 @@ pub fn capability_readiness_projection(
             capabilities: profile.capabilities.clone(),
         })
         .collect()
+}
+
+/// Cache identity for the inputs that can change an offline readiness verdict.
+/// It contains configuration and billing-variable names/presence only, never
+/// secret values. Snapshot/TUI cheap reloads use this to avoid carrying a ready
+/// verdict across an edited invocation contract or billing posture.
+pub fn readiness_cache_key(profile: &WorkerProfile, billing: &BillingPolicy) -> String {
+    let invocation = serde_json::to_string(&profile.invocation)
+        .unwrap_or_else(|_| format!("{:?}", profile.invocation));
+    let present = present_billing_env(&billing.blocked_worker_env_names);
+    format!(
+        "{}|{}|{}|{}|{}",
+        profile.id,
+        profile.enabled,
+        billing.worker_invocation.ai_billing_env_policy,
+        present.join(","),
+        invocation
+    )
 }
 
 /// Validate the sandbox declaration used by a planning capability scout.
@@ -199,6 +220,31 @@ pub fn billing_blocked(policy: &str, billing_env_present: usize) -> bool {
     policy == "block" && billing_env_present > 0
 }
 
+/// Static gates that must hold before Yardlet starts either the worker or its
+/// offline version probe. Built-in adapters keep their core-owned command
+/// shapes, while generic workers must also have a structurally valid template.
+pub fn invocation_contract(profile: &WorkerProfile) -> Result<(), String> {
+    if !profile.invocation.supports_noninteractive {
+        return Err(format!(
+            "worker '{}' invocation supports_noninteractive must be true",
+            profile.id
+        ));
+    }
+    let output = profile.invocation.output_contract.trim();
+    match profile.id.as_str() {
+        "codex" | "claude-code" if matches!(output, "files" | "json_or_files") => Ok(()),
+        "codex" | "claude-code" => Err(format!(
+            "worker '{}' has unsupported output_contract '{}'; expected files or json_or_files",
+            profile.id, output
+        )),
+        _ if output != "files" => Err(format!(
+            "worker '{}' generic invocation has unsupported output_contract '{}'; expected files",
+            profile.id, output
+        )),
+        _ => profile.invocation.validate_generic(&profile.id),
+    }
+}
+
 impl WorkerStatus {
     /// The readiness gates as a staged checklist for `yardlet worker status`.
     ///
@@ -213,6 +259,19 @@ impl WorkerStatus {
                 note: "disabled in .agents/workers.yaml".to_string(),
             }];
         }
+
+        let contract = match &self.contract_error {
+            Some(error) => StatusStage {
+                label: "contract",
+                mark: StageMark::Fail,
+                note: error.clone(),
+            },
+            None => StatusStage {
+                label: "contract",
+                mark: StageMark::Pass,
+                note: "non-interactive file-result invocation contract is valid".to_string(),
+            },
+        };
 
         let binary = match &self.binary_path {
             Some(p) => StatusStage {
@@ -230,7 +289,22 @@ impl WorkerStatus {
             },
         };
 
-        let version = match (&self.binary_path, &self.version) {
+        let policy = billing.worker_invocation.ai_billing_env_policy.as_str();
+        let blocked = billing_blocked(policy, self.billing_env_present.len());
+        let version = if self.contract_error.is_some() {
+            StatusStage {
+                label: "version",
+                mark: StageMark::Skipped,
+                note: "invocation contract failed; offline probe was not started".to_string(),
+            }
+        } else if blocked {
+            StatusStage {
+                label: "version",
+                mark: StageMark::Skipped,
+                note: "strict billing policy blocked the offline probe before spawn".to_string(),
+            }
+        } else {
+            match (&self.binary_path, &self.version) {
             (Some(_), Some(v)) => StatusStage {
                 label: "version",
                 mark: StageMark::Pass,
@@ -239,7 +313,7 @@ impl WorkerStatus {
             (Some(_), None) => StatusStage {
                 label: "version",
                 mark: StageMark::Fail,
-                note: "offline `--version` probe failed; resolved CLI or its runtime is unverified"
+                note: "configured offline version probe failed; resolved CLI or its runtime is unverified"
                     .to_string(),
             },
             (None, _) => StatusStage {
@@ -247,9 +321,9 @@ impl WorkerStatus {
                 mark: StageMark::Skipped,
                 note: "no binary to probe".to_string(),
             },
+            }
         };
 
-        let policy = billing.worker_invocation.ai_billing_env_policy.as_str();
         let billing_env = if self.billing_env_present.is_empty() {
             StatusStage {
                 label: "billing-env",
@@ -285,7 +359,7 @@ impl WorkerStatus {
             note: "not verified offline; Yardlet never makes a billed call to check, it relies on the worker's own subscription login".to_string(),
         };
 
-        vec![binary, version, billing_env, auth]
+        vec![contract, binary, version, billing_env, auth]
     }
 
     /// One-line verdict framed as invocation safety under the current policy,
@@ -293,17 +367,21 @@ impl WorkerStatus {
     pub fn invocation_verdict(&self, billing: &BillingPolicy) -> String {
         let policy = billing.worker_invocation.ai_billing_env_policy.as_str();
         match self.readiness {
-            Readiness::Ready if billing_blocked(policy, self.billing_env_present.len()) => {
+            _ if billing_blocked(policy, self.billing_env_present.len()) => {
                 "blocked: strict billing policy refuses to run while AI-billing env is set"
                     .to_string()
             }
+            _ if self.contract_error.is_some() => format!(
+                "not invocable: {}",
+                self.contract_error.as_deref().unwrap_or_default()
+            ),
             Readiness::Ready => {
                 "safe to invoke under current policy (auth not verified offline)".to_string()
             }
             Readiness::Ambiguous => {
                 "not invocable: binary found but unverified (see version gate)".to_string()
             }
-            Readiness::NotReady => "not invocable: worker CLI not installed".to_string(),
+            Readiness::NotReady => format!("not invocable: {}", self.detail),
             Readiness::Disabled => {
                 "not invocable: worker is disabled in .agents/workers.yaml".to_string()
             }
@@ -316,7 +394,7 @@ pub fn find_binary(command: &str) -> Option<PathBuf> {
     // An explicit path is honored as-is.
     if command.contains('/') {
         let p = PathBuf::from(command);
-        return if p.is_file() { Some(p) } else { None };
+        return if is_executable(&p) { Some(p) } else { None };
     }
     let path = env::var_os("PATH")?;
     for dir in env::split_paths(&path) {
@@ -352,7 +430,7 @@ pub fn present_billing_env(blocked: &[String]) -> Vec<String> {
 }
 
 /// Well-known local install locations to fall back to when the PATH-resolved
-/// binary is missing or its `--version` probe fails (e.g. a shell alias or a
+/// binary is missing or its offline version probe fails (e.g. a shell alias or a
 /// wrapper shadows the real CLI in non-interactive shells). These are the
 /// official local install paths for each worker, not host-specific guesses.
 fn fallback_paths(worker_id: &str) -> Vec<PathBuf> {
@@ -371,9 +449,10 @@ fn fallback_paths(worker_id: &str) -> Vec<PathBuf> {
 }
 
 /// Probe one worker's readiness. Does not invoke any provider API. Version
-/// probing runs the local CLI's own `--version`, which is offline.
+/// probing runs the local CLI's configured arguments, which must be offline.
+/// Built-in adapters retain their core-owned `--version` probe.
 ///
-/// Resolution prefers the first candidate whose `--version` succeeds: the
+/// Resolution prefers the first candidate whose version probe succeeds: the
 /// PATH-resolved binary first, then well-known fallback paths. This keeps a
 /// worker usable even when a wrapper shadows the real CLI on PATH.
 pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
@@ -387,6 +466,7 @@ pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
             binary_path: None,
             version: None,
             billing_env_present,
+            contract_error: None,
             readiness: Readiness::Disabled,
             detail: "disabled in .agents/workers.yaml".to_string(),
         };
@@ -402,10 +482,49 @@ pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
         }
     }
 
-    // Prefer a candidate that passes the offline version probe.
+    let contract_error = invocation_contract(profile).err();
+    if let Some(error) = contract_error {
+        return WorkerStatus {
+            id: profile.id.clone(),
+            command,
+            binary_path: candidates.into_iter().next(),
+            version: None,
+            billing_env_present,
+            contract_error: Some(error.clone()),
+            readiness: Readiness::NotReady,
+            detail: error,
+        };
+    }
+
+    if billing_blocked(
+        &billing.worker_invocation.ai_billing_env_policy,
+        billing_env_present.len(),
+    ) {
+        return WorkerStatus {
+            id: profile.id.clone(),
+            command,
+            binary_path: candidates.into_iter().next(),
+            version: None,
+            billing_env_present,
+            contract_error: None,
+            readiness: Readiness::NotReady,
+            detail: "strict billing policy refuses to start any worker subprocess while AI-billing env is set"
+                .to_string(),
+        };
+    }
+
+    // Prefer a candidate that passes the offline version probe. Generic
+    // profiles own their probe arguments; built-in adapter behavior stays
+    // core-owned and unchanged.
+    let built_in_version_args = vec!["--version".to_string()];
+    let version_args = if matches!(profile.id.as_str(), "codex" | "claude-code") {
+        &built_in_version_args
+    } else {
+        &profile.invocation.version_args
+    };
     let verified = candidates
         .iter()
-        .find_map(|p| read_version(p).map(|v| (p.clone(), v)));
+        .find_map(|p| read_version(p, version_args, billing).map(|v| (p.clone(), v)));
 
     let (binary_path, version, readiness, detail) = match verified {
         Some((path, version)) => {
@@ -423,15 +542,15 @@ pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
             (Some(path), Some(version), Readiness::Ready, detail)
         }
         None => match candidates.into_iter().next() {
-            // A binary exists but no candidate passed `--version`: ambiguous.
+            // A binary exists but no candidate passed its version probe: ambiguous.
             Some(path) => (
                 Some(path.clone()),
                 None,
                 Readiness::Ambiguous,
                 format!(
-                    "binary resolved to {} but `--version` failed; the resolved CLI or its runtime \
+                    "binary resolved to {} but the configured offline version probe failed; the resolved CLI or its runtime \
                      is unverified. Set an explicit `command:` path in .agents/workers.yaml or fix \
-                     the login, then retry. Yardlet did not call an AI API and did not ask for an API key.",
+                     the local CLI runtime, then retry. Yardlet did not call an AI API and did not ask for an API key.",
                     path.display()
                 ),
             ),
@@ -455,13 +574,24 @@ pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
         binary_path,
         version,
         billing_env_present,
+        contract_error: None,
         readiness,
         detail,
     }
 }
 
-fn read_version(path: &std::path::Path) -> Option<String> {
-    let out = Command::new(path).arg("--version").output().ok()?;
+fn read_version(
+    path: &std::path::Path,
+    version_args: &[String],
+    billing: &BillingPolicy,
+) -> Option<String> {
+    let env = sanitized_worker_env_for(billing, &[]).ok()?;
+    let mut command = Command::new(path);
+    command.args(version_args).env_clear();
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let out = command.output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -584,6 +714,7 @@ mod tests {
             binary_path: Some(PathBuf::from("/usr/local/bin/codex")),
             version: Some("codex 1.0.0".into()),
             billing_env_present,
+            contract_error: None,
             readiness: Readiness::Ready,
             detail: String::new(),
         }
@@ -620,6 +751,37 @@ invocation:
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].label, "enabled");
         assert_eq!(stages[0].mark, StageMark::Disabled);
+    }
+
+    #[test]
+    fn generic_invocation_contract_blocks_false_ready_profiles() {
+        for (yaml, expected) in [
+            (
+                r#"
+id: generic
+invocation:
+  command: bash
+  supports_noninteractive: false
+  output_contract: files
+"#,
+                "supports_noninteractive",
+            ),
+            (
+                r#"
+id: generic
+invocation:
+  command: bash
+  supports_noninteractive: true
+  output_contract: stdout_json
+"#,
+                "output_contract",
+            ),
+        ] {
+            let profile: WorkerProfile = crate::yaml::from_str(yaml).unwrap();
+            let status = probe(&profile, &BillingPolicy::default());
+            assert_eq!(status.readiness, Readiness::NotReady, "{}", status.detail);
+            assert!(status.detail.contains(expected), "{}", status.detail);
+        }
     }
 
     #[test]
@@ -665,7 +827,7 @@ invocation:
     #[test]
     fn capability_readiness_projection_keeps_ready_not_ready_and_disabled_distinct() {
         let workers: crate::schemas::WorkersFile = crate::yaml::from_str(
-            "schema_version: 1\nworkers:\n  - id: ready\n    capabilities: [Shell Tool]\n    invocation: { command: bash }\n  - id: absent\n    capabilities: [browser]\n    invocation: { command: yardlet-definitely-missing-command }\n  - id: disabled\n    enabled: false\n    capabilities: [image-generation]\n    invocation: { command: bash }\n",
+            "schema_version: 1\nworkers:\n  - id: ready\n    capabilities: [Shell Tool]\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n  - id: absent\n    capabilities: [browser]\n    invocation: { command: yardlet-definitely-missing-command, supports_noninteractive: true, output_contract: files }\n  - id: disabled\n    enabled: false\n    capabilities: [image-generation]\n    invocation: { command: bash }\n",
         )
         .unwrap();
         let projection = capability_readiness_projection(&workers, &BillingPolicy::default());
@@ -674,6 +836,19 @@ invocation:
         assert_eq!(projection[1].readiness, Readiness::NotReady);
         assert_eq!(projection[2].readiness, Readiness::Disabled);
         assert_eq!(projection[0].capabilities, vec!["Shell Tool"]);
+    }
+
+    #[test]
+    fn built_in_adapters_keep_their_existing_file_contracts_invocable() {
+        for (id, output_contract) in [("codex", "files"), ("claude-code", "json_or_files")] {
+            let profile: WorkerProfile = crate::yaml::from_str(&format!(
+                "id: {id}\ninvocation:\n  command: bash\n  supports_noninteractive: true\n  output_contract: {output_contract}\n  version_args: [definitely-not-a-built-in-version-flag]\n"
+            ))
+            .unwrap();
+            let status = probe(&profile, &BillingPolicy::default());
+            assert_eq!(status.readiness, Readiness::Ready, "{}", status.detail);
+            assert!(status.contract_error.is_none());
+        }
     }
 
     #[test]
@@ -695,6 +870,8 @@ invocation:
                 supports_noninteractive: true,
                 output_contract: "files".into(),
                 args: vec!["{run_dir}".into()],
+                prompt_transport: "stdin".into(),
+                version_args: vec!["--version".into()],
                 sandbox_args: sandbox_args.iter().map(|arg| (*arg).into()).collect(),
                 full_access_args: full_access_args.iter().map(|arg| (*arg).into()).collect(),
                 image_args: vec![],

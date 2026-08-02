@@ -208,6 +208,11 @@ pub struct WorkerLine {
     pub model: String,
     pub detail: String,
     pub enabled: bool,
+    /// Non-public cache identity for the invocation/billing inputs that produced
+    /// this readiness result. Prevents a cheap TUI reload from reusing stale
+    /// ready state after workers.yaml or billing posture changes.
+    #[serde(skip)]
+    pub readiness_cache_key: String,
 }
 
 impl Snapshot {
@@ -268,6 +273,7 @@ impl Snapshot {
             .workers
             .iter()
             .map(|p| {
+                let readiness_cache_key = guard::readiness_cache_key(p, &billing);
                 if !p.enabled {
                     return WorkerLine {
                         id: p.id.clone(),
@@ -278,16 +284,21 @@ impl Snapshot {
                         model: p.model.clone(),
                         detail: "disabled (toggle on the Home workers panel)".to_string(),
                         enabled: false,
+                        readiness_cache_key,
                     };
                 }
                 if let Some(c) = cached_workers.as_ref().and_then(|cw| {
-                    cw.iter()
-                        .find(|w| w.id == p.id && w.readiness != "disabled")
+                    cw.iter().find(|w| {
+                        w.id == p.id
+                            && w.readiness != "disabled"
+                            && w.readiness_cache_key == readiness_cache_key
+                    })
                 }) {
                     return WorkerLine {
                         enabled: true,
                         model: p.model.clone(),
                         billing_blocked: guard::billing_blocked(&policy, c.billing_env_present),
+                        readiness_cache_key,
                         ..c.clone()
                     };
                 }
@@ -302,6 +313,7 @@ impl Snapshot {
                     model: p.model.clone(),
                     detail: s.detail,
                     enabled: true,
+                    readiness_cache_key,
                 }
             })
             .collect();
@@ -800,6 +812,7 @@ current_intent: ""
                 binary_path: Some("/fixture/slow".into()),
                 version: Some("fixture 1.0".into()),
                 billing_env_present: Vec::new(),
+                contract_error: None,
                 readiness: crate::guard::Readiness::Ready,
                 detail: "injected readiness".into(),
             }

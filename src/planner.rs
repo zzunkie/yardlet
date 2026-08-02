@@ -2715,6 +2715,7 @@ pub(crate) fn pick_ready_worker(
     order.push("codex".to_string());
 
     let mut tried = Vec::new();
+    let mut failures = Vec::new();
     for id in order {
         if tried.contains(&id) {
             continue;
@@ -2732,10 +2733,11 @@ pub(crate) fn pick_ready_worker(
                 return Ok((profile.clone(), bin, id));
             }
         }
+        failures.push(format!("{id}: {}", status.detail));
     }
 
     Err(anyhow!(
-        "no invocable planning worker among {tried:?}. Run `yardlet worker status` to diagnose. \
+        "no invocable planning worker among {tried:?} ({failures:?}). Run `yardlet worker status` to diagnose. \
          Yardlet did not call an AI API and did not ask for an API key."
     ))
 }
@@ -2954,6 +2956,33 @@ invocation: { command: codex }
         );
         assert_eq!(mixed.model, "gpt-run");
         assert_eq!(mixed.effort, "low");
+    }
+
+    #[test]
+    fn planning_worker_selection_preserves_the_shared_guard_failure_reason() {
+        let workers: WorkersFile = crate::yaml::from_str(
+            r#"
+schema_version: 1
+workers:
+  - id: generic-planner
+    invocation:
+      command: bash
+      supports_noninteractive: false
+      output_contract: files
+routing:
+  planning_gate:
+    primary: generic-planner
+    fallback: ""
+"#,
+        )
+        .unwrap();
+
+        let error = pick_ready_worker(&workers, &crate::schemas::BillingPolicy::default(), None)
+            .expect_err("non-interactive contract failure must block planning selection");
+        assert!(
+            error.to_string().contains("supports_noninteractive"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -3410,6 +3439,8 @@ workers:
     capabilities: []
     invocation:
       command: '{}'
+      supports_noninteractive: true
+      output_contract: files
       args: ['{{run_dir}}']
       sandbox_args: [sandboxed]
       full_access_args: [full]
@@ -3524,6 +3555,8 @@ workers:
     capabilities: []
     invocation:
       command: '{}'
+      supports_noninteractive: true
+      output_contract: files
       args: ['{{run_dir}}']
       sandbox_args: [sandboxed]
       full_access_args: [full]
@@ -3894,6 +3927,8 @@ workers:
     capabilities: []
     invocation:
       command: '{}'
+      supports_noninteractive: true
+      output_contract: files
       args: ['{{run_dir}}']
       sandbox_args: [sandboxed]
       full_access_args: [full]
