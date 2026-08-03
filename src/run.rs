@@ -2300,6 +2300,8 @@ pub(crate) fn prepare_answer_action_with_deviations(
     let billing = ws.load_billing()?;
     let selected = routing::resolve_worker_for_task(ws, &workers_file, &billing, None, task)?;
     let same_worker = selected.worker_id == producer.worker_id;
+    let selected_profile = find_worker(&workers_file.workers, &selected.worker_id)?;
+    let supports_native_resume = same_worker && workers::supports_native_resume(selected_profile);
     ws.answer_question(&AnswerActionRequest {
         continuation_attempt_id: action_attempt_id(&action_id),
         answer_id: format!("ans-{}", action_attempt_id(&action_id)),
@@ -2314,7 +2316,7 @@ pub(crate) fn prepare_answer_action_with_deviations(
         worker_session_ref: same_worker
             .then(|| producer.worker_session_ref.clone())
             .flatten(),
-        supports_native_resume: same_worker && workers::supports_native_resume(&selected.worker_id),
+        supports_native_resume,
     })?;
     Ok(true)
 }
