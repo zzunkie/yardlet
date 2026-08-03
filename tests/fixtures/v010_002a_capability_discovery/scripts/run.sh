@@ -470,17 +470,21 @@ EOF
 
     closed_root="$(mktemp -d "$EVIDENCE_DIR/active-isolation-empty-contract.XXXXXX")"
     setup_workspace "$closed_root" absent
-    run_in "$closed_root" goal "baseline covered goal" --plan-only >/dev/null
     closed_before="$(active_digest "$closed_root")"
-    run_in "$closed_root" new "fixture:active_state_isolation 리서치" --worker fixture-worker \
-      >"$EVIDENCE_DIR/active-isolation-empty-contract.out"
+    # Issue #123: a generic profile with no sandbox declaration now fails the
+    # shared invocability verdict before planning-worker selection, which is
+    # strictly earlier than the scout sandbox gate this scenario used to hit.
+    if run_in "$closed_root" new "fixture:active_state_isolation 리서치" --worker fixture-worker \
+      >"$EVIDENCE_DIR/active-isolation-empty-contract.out" 2>&1; then
+      fail "empty sandbox contract unexpectedly selected a planning worker"
+    fi
     [[ "$(active_digest "$closed_root")" == "$closed_before" ]] || \
       fail "empty sandbox contract changed active state"
     [[ "$(scout_count "$closed_root")" == "0" ]] || fail "empty sandbox contract spawned a scout"
-    grep -q 'sandbox contract failed closed' "$EVIDENCE_DIR/active-isolation-empty-contract.out" || \
+    grep -q 'cannot honor sandboxed access' "$EVIDENCE_DIR/active-isolation-empty-contract.out" || \
       fail "empty sandbox contract did not report fail-closed disposition"
 
-    write_summary "adversarial scout는 live 경로 없이 disposable copy에서 1회 실행됐고 빈 generic sandbox 계약은 spawn 전에 fail closed함"
+    write_summary "adversarial scout는 live 경로 없이 disposable copy에서 1회 실행됐고 빈 generic sandbox 계약은 워커 선정 전에 fail closed함"
     ;;
 
   missing_capability_dogfood)

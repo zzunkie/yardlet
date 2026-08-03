@@ -2524,13 +2524,14 @@ fn cmd_worker(cwd: &std::path::Path, args: WorkerArgs) -> Result<()> {
             let ws = init::ensure_initialized(cwd)?.0;
             let billing = ws.load_billing()?;
             let workers = ws.load_workers()?;
+            let requested_access = ws.requested_access();
             println!("Zero-key policy: {}", billing.mode);
             println!(
                 "Billing env policy: {}\n",
                 billing.worker_invocation.ai_billing_env_policy
             );
             for p in &workers.workers {
-                let s = guard::probe(p, &billing);
+                let s = guard::probe(p, &billing, &requested_access);
                 println!("{} [{}]", s.id, s.readiness.label());
                 println!("  command: {}", s.command);
                 // Staged checklist: each readiness gate, with auth reported as

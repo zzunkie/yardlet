@@ -342,6 +342,14 @@ Codex와 Claude Code는 내장 어댑터를 가집니다. 다른 모든 구독 �
 차단하지 않을 때만 실행 가능합니다. 라우팅, 계획, capability projection, 워커 상태,
 TUI는 모두 같은 판정을 사용합니다.
 
+기본 접근 수준인 `sandboxed`에서는 제네릭 프로필이 `sandbox_args`도 선언해야
+합니다. 내장 어댑터의 샌드박스 플래그는 Yardlet이 직접 붙이고 그 의미를 알지만,
+자신이 소유하지 않은 샌드박스는 검증할 수 없습니다. 제네릭 워커의 선언은 적힌
+그대로 신뢰되며, 워커 상태에는 "profile-declared, not verified by Yardlet"로
+표시됩니다. 쓰기를 제한할 방법을 선언하지 않은 프로필은 `sandbox_args`를
+추가하거나 풀 액세스를 명시적으로 허용(`yardlet access full`)하기 전까지 실행
+가능 판정을 받지 못합니다.
+
 ```yaml
 - id: mytool
   best_for: "..."            # 플래너 루브릭

@@ -122,6 +122,9 @@ workers:
   #     prompt_transport: argument
   #     # {prompt} is exactly one argv item. Yardlet never builds a shell string.
   #     args: ["run", "--out", "{run_dir}", "--prompt", "{prompt}"]
+  #     # Required under sandboxed access: Yardlet cannot verify a sandbox it
+  #     # does not own, so a generic profile must declare one (or the workspace
+  #     # must grant full access explicitly with `yardlet access full`).
   #     sandbox_args: ["--sandbox"]
   #     full_access_args: ["--full-access"]
   #     model_args: ["--model", "{model}"]

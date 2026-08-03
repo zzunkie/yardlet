@@ -48,7 +48,8 @@ fn draft(
     let billing = ws.load_billing()?;
     let config = ws.load_config()?;
 
-    let (profile, bin, worker_id) = crate::planner::pick_ready_worker(&workers, &billing, None)?;
+    let (profile, bin, worker_id) =
+        crate::planner::pick_ready_worker(&workers, &billing, None, &config.default_access)?;
 
     let base_run_id = format!("skill-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let (run_id, run_dir) = ws.claim_run_dir(&base_run_id)?;

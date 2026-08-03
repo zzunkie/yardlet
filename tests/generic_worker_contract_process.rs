@@ -207,7 +207,7 @@ fn argv(path: &Path) -> Vec<String> {
 fn generic_argument_transport_preserves_argv_boundaries_and_delivers_the_packet_once() {
     let fixture = Fixture::new("argument");
     fixture.configure(
-        "      supports_noninteractive: true\n      output_contract: files\n      version_args: [probe, offline]\n      prompt_transport: argument\n      args: [execute, '{run_dir}', '{prompt}', 'literal with spaces']\n",
+        "      supports_noninteractive: true\n      output_contract: files\n      version_args: [probe, offline]\n      prompt_transport: argument\n      args: [execute, '{run_dir}', '{prompt}', 'literal with spaces']\n      sandbox_args: ['--fixture-sandbox']\n",
         "scrub_or_block",
     );
 
@@ -253,7 +253,7 @@ fn generic_argument_transport_preserves_argv_boundaries_and_delivers_the_packet_
 fn legacy_stdin_transport_and_default_offline_probe_remain_invocable() {
     let fixture = Fixture::new("stdin");
     fixture.configure(
-        "      supports_noninteractive: true\n      output_contract: files\n      args: [execute, '{run_dir}']\n",
+        "      supports_noninteractive: true\n      output_contract: files\n      args: [execute, '{run_dir}']\n      sandbox_args: ['--fixture-sandbox']\n",
         "scrub_or_block",
     );
 
@@ -270,9 +270,12 @@ fn legacy_stdin_transport_and_default_offline_probe_remain_invocable() {
         fs::read_to_string(fixture.capture.join("stdin")).unwrap(),
         packet
     );
-    assert!(fs::read_to_string(fixture.capture.join("prompt-argument"))
-        .unwrap()
-        .is_empty());
+    // argv position 3 carries the declared sandbox flag, never the packet:
+    // stdin transport must not duplicate the prompt into an argument.
+    assert_eq!(
+        fs::read_to_string(fixture.capture.join("prompt-argument")).unwrap(),
+        "--fixture-sandbox"
+    );
     assert_eq!(argv(&fixture.capture.join("probe-argv")), ["--version"]);
     assert_eq!(
         fs::read_to_string(fixture.capture.join("last-secret")).unwrap(),
@@ -309,7 +312,7 @@ fn invalid_contract_and_strict_billing_are_rejected_before_probe_or_worker_spawn
         ),
         (
             "strict-billing",
-            "      supports_noninteractive: true\n      output_contract: files\n      args: [execute, '{run_dir}']\n",
+            "      supports_noninteractive: true\n      output_contract: files\n      args: [execute, '{run_dir}']\n      sandbox_args: ['--fixture-sandbox']\n",
             "block",
             "strict billing policy",
         ),
@@ -336,7 +339,7 @@ fn invalid_contract_and_strict_billing_are_rejected_before_probe_or_worker_spawn
 fn failed_offline_probe_rejects_routing_before_the_worker_invocation() {
     let fixture = Fixture::new("failed-probe");
     fixture.configure(
-        "      supports_noninteractive: true\n      output_contract: files\n      version_args: [probe, fail]\n      args: [execute, '{run_dir}']\n",
+        "      supports_noninteractive: true\n      output_contract: files\n      version_args: [probe, fail]\n      args: [execute, '{run_dir}']\n      sandbox_args: ['--fixture-sandbox']\n",
         "scrub_or_block",
     );
 
@@ -356,4 +359,41 @@ fn failed_offline_probe_rejects_routing_before_the_worker_invocation() {
         !fixture.capture.join("invoked").exists(),
         "the failed probe must not fall through to the worker invocation"
     );
+}
+
+// Issue #123: a generic profile that declares no way to bound writes is not
+// invocable while the workspace asks for sandboxed access (the init default).
+// It must be rejected before any probe or worker subprocess starts, with a
+// message naming the missing declaration and the explicit alternatives.
+#[test]
+fn generic_worker_without_sandbox_declaration_is_rejected_under_sandboxed_access() {
+    let fixture = Fixture::new("no-sandbox-declaration");
+    fixture.configure(
+        "      supports_noninteractive: true\n      output_contract: files\n      args: [execute, '{run_dir}']\n",
+        "scrub_or_block",
+    );
+
+    let output = fixture.run_with_secret(&["run", "--task", "YARD-001", "--execute"]);
+    assert!(
+        !output.status.success(),
+        "an undeclared sandbox unexpectedly ran under sandboxed access"
+    );
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("cannot honor sandboxed access"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("sandbox_args") && combined.contains("yardlet access full"),
+        "the rejection must name both explicit ways out: {combined}"
+    );
+    assert!(
+        !fixture.capture.join("last-argv").exists(),
+        "rejection must happen before any probe or worker spawn"
+    );
+    assert!(!fixture.capture.join("invoked").exists());
 }

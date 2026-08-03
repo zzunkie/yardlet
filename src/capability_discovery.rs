@@ -592,7 +592,8 @@ mod tests {
         let billing = crate::schemas::BillingPolicy::default();
         let policy = crate::templates::research_policy();
         // The same real projections the planner composes feed the pure core.
-        let worker_readiness = crate::guard::capability_readiness_projection(&workers, &billing);
+        let worker_readiness =
+            crate::guard::capability_readiness_projection(&workers, &billing, "full");
         let ready_capabilities =
             crate::routing::ready_capabilities_from_projection(&worker_readiness);
         let input = CapabilityDiscoveryInput {
