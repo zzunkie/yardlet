@@ -378,6 +378,9 @@ access explicitly (`yardlet access full`).
     version_args: ["version", "--offline"] # default: ["--version"]
     prompt_transport: argument              # default: stdin
     args: ["run", "--out", "{run_dir}", "--prompt", "{prompt}"]
+    session:                                # optional native resume contract
+      capture: {stream: stdout, prefix: "SESSION_REF="}
+      resume_args: ["resume", "--session", "{session}", "--prompt", "{prompt}"]
     sandbox_args: ["--sandbox"]        # default access level
     full_access_args: ["--yolo"]       # only when full access is granted
     model_args: ["--model", "{model}"] # added when a model is set
@@ -393,6 +396,22 @@ Yardlet substitutes it as one `Command` argument, preserving argument
 boundaries without constructing a shell string. Stdin delivery must not include
 `{prompt}`. The other invocation placeholders are `{run_dir}`, `{model}`,
 `{effort}`, and `{image}`.
+
+Generic native resume is backward-compatible and opt-in. Omit `session` to keep
+the existing `ExplicitPacket` answer continuation. When `session` is present,
+`capture.stream` must be `stdout` or `stderr`, `capture.prefix` must be a
+non-empty single-line prefix, and `resume_args` must contain exactly one
+`{session}`. The first non-empty suffix after that exact prefix in the fresh
+child's selected raw stream becomes the opaque `worker_session_ref`. Yardlet
+does not inspect global session files or infer a reference from another attempt.
+
+The resume template uses the same `command`, access, model, effort, image, and
+sanitized environment contract as the fresh generic invocation. `{prompt}`
+follows `prompt_transport`: omit it from `resume_args` for `stdin`, or include it
+exactly once for `argument`. Each template item becomes one `Command` argument,
+so `{session}` and `{prompt}` retain their argv boundaries. If the session block
+is absent, the fresh child emits no non-empty ref, or answer routing selects a
+different worker, Yardlet safely uses `ExplicitPacket` instead of native resume.
 
 The worker must write `result.json` and `handoff.md` in the run directory. Its
 execution env is sanitized unless the profile opts variables back in with

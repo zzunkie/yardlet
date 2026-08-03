@@ -372,6 +372,7 @@ case "$task_id" in
       printf 'fallback worker explicit continuation\n'
       write_done "fallback worker completed explicit continuation"
     else
+      printf 'SESSION_REF=producer-session-ref\n'
       printf 'producer worker question context\n'
       write_question "continue with a fallback worker?"
     fi

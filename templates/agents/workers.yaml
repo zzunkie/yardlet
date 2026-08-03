@@ -108,7 +108,9 @@ workers:
 
   # Generic CLI example. Uncomment and customize the whole block.
   # Existing profiles may omit prompt_transport to send the packet on stdin
-  # and omit version_args to probe with --version.
+  # and omit version_args to probe with --version. Native session resume is
+  # also backward-compatible and opt-in: omit the whole session block to keep
+  # ExplicitPacket answer continuation.
   # - id: mytool
   #   kind: cli_worker
   #   best_for: "tasks this CLI handles well"
@@ -122,6 +124,12 @@ workers:
   #     prompt_transport: argument
   #     # {prompt} is exactly one argv item. Yardlet never builds a shell string.
   #     args: ["run", "--out", "{run_dir}", "--prompt", "{prompt}"]
+  #     session:
+  #       # The non-empty suffix after this exact fresh-child raw line prefix
+  #       # becomes the opaque session ref. stream is stdout or stderr.
+  #       capture: { stream: stdout, prefix: "SESSION_REF=" }
+  #       # Exactly one {session}; {prompt} follows prompt_transport above.
+  #       resume_args: ["resume", "--session", "{session}", "--prompt", "{prompt}"]
   #     # Required under sandboxed access: Yardlet cannot verify a sandbox it
   #     # does not own, so a generic profile must declare one (or the workspace
   #     # must grant full access explicitly with `yardlet access full`).

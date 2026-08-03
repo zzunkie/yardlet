@@ -3122,7 +3122,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             fs::write(
                 &workers_path,
                 format!(
-                    "schema_version: 1\nworkers:\n  - id: fixture-fallback-a\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"], supports_noninteractive: true, output_contract: files, sandbox_args: ['--fixture-sandbox'] }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\n  - id: fixture-fallback-b\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"], supports_noninteractive: true, output_contract: files, sandbox_args: ['--fixture-sandbox'] }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\nrouting:\n  default_worker: fixture-fallback-a\n  fallback_order: [fixture-fallback-b]\n  allow_preferred_worker_failover: true\n",
+                    "schema_version: 1\nworkers:\n  - id: fixture-fallback-a\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n      session:\n        capture: {{ stream: stdout, prefix: 'SESSION_REF=' }}\n        resume_args: [\"{{run_dir}}\", \"{{session}}\"]\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\n  - id: fixture-fallback-b\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n      session:\n        capture: {{ stream: stdout, prefix: 'SESSION_REF=' }}\n        resume_args: [\"{{run_dir}}\", \"{{session}}\"]\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\nrouting:\n  default_worker: fixture-fallback-a\n  fallback_order: [fixture-fallback-b]\n  allow_preferred_worker_failover: true\n",
                     producer_command.display(),
                     worker.display()
                 ),
@@ -3151,6 +3151,23 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             .find(|attempt| string(attempt, "continuation") == "explicit_packet")
             .unwrap();
         assert_eq!(string(continuation, "worker_id"), "fixture-fallback-b");
+        assert!(continuation["worker_session_ref"].is_null());
+        let producer = attempts
+            .iter()
+            .find(|attempt| string(attempt, "worker_id") == "fixture-fallback-a")
+            .unwrap();
+        let events = yaml_dir(&channel.join("events"));
+        let producer_completed = events
+            .iter()
+            .find(|event| {
+                string(event, "event_type") == "worker.completed"
+                    && event["attempt_id"] == producer["attempt_id"]
+            })
+            .unwrap();
+        assert_eq!(
+            string(&producer_completed["payload"], "worker_session_ref"),
+            "producer-session-ref"
+        );
         assert_eq!(
             string(continuation, "caused_by_action_id"),
             "act-fallback-answer"

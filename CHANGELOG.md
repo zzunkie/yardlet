@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- **Opt-in native session resume for generic workers.** A generic profile can
+  declare a `session` contract: a capture rule (stream + exact line prefix)
+  that turns a fresh child's own output into an opaque session ref, and a
+  `resume_args` template with exactly one `{session}`. When the profile
+  declares it and the questioning attempt actually captured a ref, `yardlet
+  answer` resumes that same worker session natively; otherwise it falls back
+  to the existing explicit-packet continuation. Resume eligibility is decided
+  by the selected profile's contract and the captured ref, never by worker id
+  strings or guessed session files, and resume argv preserves argument
+  boundaries without shell parsing. Profiles that omit the block keep today's
+  behavior unchanged.
+
 ### Changed
 
 - **`sandboxed` access is no longer an unverified claim for generic workers.**

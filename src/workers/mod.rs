@@ -506,8 +506,8 @@ fn explicit(v: &str) -> bool {
     !v.trim().is_empty() && !v.eq_ignore_ascii_case("auto")
 }
 
-pub fn supports_native_resume(worker_id: &str) -> bool {
-    matches!(worker_id, "codex" | "claude-code")
+pub fn supports_native_resume(profile: &WorkerProfile) -> bool {
+    matches!(profile.id.as_str(), "codex" | "claude-code") || profile.invocation.session.is_some()
 }
 
 /// The profile a task actually runs with. A per-task `model`/`effort` overrides
@@ -682,6 +682,72 @@ pub fn build_generic_command(
     Ok(cmd)
 }
 
+/// Build a generic worker's opt-in native resume command from the same binary
+/// and invocation profile as its fresh child. Placeholder expansion writes
+/// directly to `Command` argv, so the opaque session ref and prompt each retain
+/// their declared argument boundary without shell parsing.
+#[allow(clippy::too_many_arguments)]
+fn build_generic_resume_command(
+    inv: &Invocation,
+    bin: &Path,
+    packet: &str,
+    session_ref: &str,
+    run_dir: &Path,
+    cwd: &Path,
+    full_access: bool,
+    model: &str,
+    effort: &str,
+    images: &[String],
+) -> Result<Command> {
+    inv.validate_generic("generic worker")
+        .map_err(anyhow::Error::msg)?;
+    if session_ref.trim().is_empty() {
+        anyhow::bail!("generic native resume requires a non-empty session ref");
+    }
+    let session = inv
+        .session
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("generic worker has no native session contract"))?;
+    let expand = |arg: &str, image: &str| -> String {
+        arg.replace("{run_dir}", &run_dir.display().to_string())
+            .replace("{model}", model)
+            .replace("{effort}", effort)
+            .replace("{image}", image)
+            .replace("{session}", session_ref)
+            .replace("{prompt}", packet)
+    };
+    let mut cmd = Command::new(bin);
+    for arg in &session.resume_args {
+        cmd.arg(expand(arg, ""));
+    }
+    let access = if full_access {
+        &inv.full_access_args
+    } else {
+        &inv.sandbox_args
+    };
+    for arg in access {
+        cmd.arg(expand(arg, ""));
+    }
+    if explicit(model) {
+        for arg in &inv.model_args {
+            cmd.arg(expand(arg, ""));
+        }
+    }
+    if explicit(effort) {
+        for arg in &inv.effort_args {
+            cmd.arg(expand(arg, ""));
+        }
+    }
+    for image in images {
+        for arg in &inv.image_args {
+            cmd.arg(expand(arg, image));
+        }
+    }
+    cmd.current_dir(cwd);
+    cmd.env_clear();
+    Ok(cmd)
+}
+
 /// Build the command to RESUME an existing worker session (continue, not redo).
 /// claude: `-p --resume <id>`; codex: `exec resume <id> -` (prompt on stdin).
 /// Note: codex `resume` has no `--sandbox`/`--add-dir`; full-access bypasses the
@@ -844,6 +910,70 @@ fn capture_codex_thread_id(
     }
     // `thread.started` is a small leading event. Fail closed instead of
     // retaining unbounded non-JSON output while waiting for it.
+    if pending.len() > 64 * 1024 {
+        pending.clear();
+    }
+}
+
+#[derive(Clone)]
+enum SessionCaptureRule {
+    CodexThread,
+    Prefixed(String),
+}
+
+fn session_capture_rule(
+    profile: &WorkerProfile,
+    stream: RawStreamKind,
+    resume: bool,
+) -> Option<SessionCaptureRule> {
+    if resume {
+        return None;
+    }
+    if profile.id == "codex" && stream == RawStreamKind::Stdout {
+        return Some(SessionCaptureRule::CodexThread);
+    }
+    if matches!(profile.id.as_str(), "codex" | "claude-code") {
+        return None;
+    }
+    let capture = &profile.invocation.session.as_ref()?.capture;
+    let selected_stream = match capture.stream.trim() {
+        "stdout" => RawStreamKind::Stdout,
+        "stderr" => RawStreamKind::Stderr,
+        _ => return None,
+    };
+    (selected_stream == stream).then(|| SessionCaptureRule::Prefixed(capture.prefix.clone()))
+}
+
+fn prefixed_session_ref_from_line(line: &[u8], prefix: &str) -> Option<String> {
+    let line = std::str::from_utf8(line)
+        .ok()?
+        .trim_end_matches(['\r', '\n']);
+    line.strip_prefix(prefix)
+        .map(str::trim)
+        .filter(|session_ref| !session_ref.is_empty())
+        .map(str::to_string)
+}
+
+fn capture_prefixed_session_ref(
+    pending: &mut Vec<u8>,
+    chunk: &[u8],
+    prefix: &str,
+    captured: &std::sync::Arc<std::sync::Mutex<Option<String>>>,
+) {
+    if captured.lock().is_ok_and(|guard| guard.is_some()) {
+        return;
+    }
+    pending.extend_from_slice(chunk);
+    while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+        let line: Vec<u8> = pending.drain(..=newline).collect();
+        if let Some(session_ref) = prefixed_session_ref_from_line(&line, prefix) {
+            if let Ok(mut guard) = captured.lock() {
+                *guard = Some(session_ref);
+            }
+            pending.clear();
+            return;
+        }
+    }
     if pending.len() > 64 * 1024 {
         pending.clear();
     }
@@ -1068,20 +1198,35 @@ fn spawn_internal(
     // must never start sandboxed on an unverifiable sandbox claim (issue #123).
     let spawn_access = if full_access { "full" } else { "sandboxed" };
     guard::access_contract(profile, spawn_access).map_err(anyhow::Error::msg)?;
-    let packet_on_stdin = resume
-        || matches!(profile.id.as_str(), "codex" | "claude-code")
+    let packet_on_stdin = matches!(profile.id.as_str(), "codex" | "claude-code")
         || profile.invocation.prompt_on_stdin();
     let mut cmd = if resume {
-        build_resume_command(
-            &profile.id,
-            bin,
-            worker_run_dir,
-            cwd,
-            full_access,
-            &profile.model,
-            images,
-            session,
-        )
+        match profile.id.as_str() {
+            "codex" | "claude-code" => build_resume_command(
+                &profile.id,
+                bin,
+                worker_run_dir,
+                cwd,
+                full_access,
+                &profile.model,
+                images,
+                session,
+            ),
+            _ => build_generic_resume_command(
+                &profile.invocation,
+                bin,
+                packet,
+                session.ok_or_else(|| {
+                    anyhow::anyhow!("generic native resume requires an exact session ref")
+                })?,
+                worker_run_dir,
+                cwd,
+                full_access,
+                &profile.model,
+                &profile.effort,
+                images,
+            )?,
+        }
     } else {
         let mut c = match profile.id.as_str() {
             // Built-in adapters with verified flags.
@@ -1349,12 +1494,18 @@ fn spawn_internal(
             .and_then(Path::file_name)
             .and_then(|name| name.to_str())
     });
-    type StreamSource = (Box<dyn Read + Send>, bool, RawSink, RawStreamKind, String);
+    type StreamSource = (
+        Box<dyn Read + Send>,
+        Option<SessionCaptureRule>,
+        RawSink,
+        RawStreamKind,
+        String,
+    );
     let mut sources: Vec<StreamSource> = Vec::new();
     if let Some(o) = child.stdout.take() {
         sources.push((
             Box::new(o),
-            profile.id == "codex" && !resume,
+            session_capture_rule(profile, RawStreamKind::Stdout, resume),
             stdout_raw,
             RawStreamKind::Stdout,
             format!("raw_{}_stdout", attempt_id.unwrap_or("unknown")),
@@ -1363,7 +1514,7 @@ fn spawn_internal(
     if let Some(e) = child.stderr.take() {
         sources.push((
             Box::new(e),
-            false,
+            session_capture_rule(profile, RawStreamKind::Stderr, resume),
             stderr_raw,
             RawStreamKind::Stderr,
             format!("raw_{}_stderr", attempt_id.unwrap_or("unknown")),
@@ -1422,10 +1573,19 @@ fn spawn_internal(
                     loop {
                         match src.read(&mut buf) {
                             Ok(0) => {
-                                if capture_session && !pending.is_empty() {
-                                    if let Some(id) = codex_thread_id_from_json_line(&pending) {
+                                if !pending.is_empty() {
+                                    let session_ref = match &capture_session {
+                                        Some(SessionCaptureRule::CodexThread) => {
+                                            codex_thread_id_from_json_line(&pending)
+                                        }
+                                        Some(SessionCaptureRule::Prefixed(prefix)) => {
+                                            prefixed_session_ref_from_line(&pending, prefix)
+                                        }
+                                        None => None,
+                                    };
+                                    if let Some(session_ref) = session_ref {
                                         if let Ok(mut guard) = captured.lock() {
-                                            *guard = Some(id);
+                                            *guard = Some(session_ref);
                                         }
                                     }
                                 }
@@ -1452,8 +1612,19 @@ fn spawn_internal(
                             }
                             Err(error) => return Err(error),
                             Ok(n) => {
-                                if capture_session {
-                                    capture_codex_thread_id(&mut pending, &buf[..n], &captured);
+                                match &capture_session {
+                                    Some(SessionCaptureRule::CodexThread) => {
+                                        capture_codex_thread_id(&mut pending, &buf[..n], &captured);
+                                    }
+                                    Some(SessionCaptureRule::Prefixed(prefix)) => {
+                                        capture_prefixed_session_ref(
+                                            &mut pending,
+                                            &buf[..n],
+                                            prefix,
+                                            &captured,
+                                        );
+                                    }
+                                    None => {}
                                 }
                                 if let Some(raw_sink) = &raw_sink {
                                     if let Ok(mut raw) = raw_sink.lock() {
@@ -2337,6 +2508,62 @@ image_args: ["-i", "{image}"]
         ));
         assert!(cl.windows(2).any(|w| w[0] == "--resume" && w[1] == "SID"));
         assert!(cl.windows(2).any(|w| w[0] == "--model" && w[1] == "opus"));
+    }
+
+    #[test]
+    fn generic_resume_uses_the_profile_command_and_preserves_each_argument_boundary() {
+        let profile: WorkerProfile = crate::yaml::from_str(
+            r#"
+id: fixture
+model: fixture-model
+effort: high
+invocation:
+  command: fixture
+  prompt_transport: argument
+  args: [fresh, '{prompt}']
+  sandbox_args: ['safe mode']
+  full_access_args: ['full mode']
+  model_args: [--model, '{model}']
+  effort_args: [--effort, '{effort}']
+  image_args: [--image, '{image}']
+  session:
+    capture: {stream: stdout, prefix: 'SESSION_REF='}
+    resume_args: [resume, '{session}', '{prompt}']
+"#,
+        )
+        .unwrap();
+        let packet = "answer with spaces; $(must stay literal)";
+        let command = build_generic_resume_command(
+            &profile.invocation,
+            Path::new("fixture"),
+            packet,
+            "session ref with spaces",
+            Path::new("/tmp/run"),
+            Path::new("/tmp/work tree"),
+            false,
+            &profile.model,
+            &profile.effort,
+            &["image one.png".to_string()],
+        )
+        .unwrap();
+        assert_eq!(
+            args_of(&command),
+            [
+                "resume",
+                "session ref with spaces",
+                packet,
+                "safe mode",
+                "--model",
+                "fixture-model",
+                "--effort",
+                "high",
+                "--image",
+                "image one.png",
+            ]
+        );
+        assert_eq!(command.get_program(), Path::new("fixture"));
+        assert_eq!(command.get_current_dir(), Some(Path::new("/tmp/work tree")));
+        assert!(supports_native_resume(&profile));
     }
 
     #[cfg(unix)]

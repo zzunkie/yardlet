@@ -2221,6 +2221,32 @@ pub struct Invocation {
     /// itself never reads or stores the values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pass_env: Vec<String>,
+    /// Opt-in native session continuation for a generic adapter. Existing
+    /// profiles omit this and keep ExplicitPacket answer continuation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<GenericSessionInvocation>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GenericSessionInvocation {
+    /// Exact fresh-child raw stream marker used to capture the provider's
+    /// opaque session reference. Yardlet never consults global session state.
+    #[serde(default)]
+    pub capture: GenericSessionCapture,
+    /// Generic resume argv template. It uses the invocation's prompt transport
+    /// and must contain exactly one `{session}` placeholder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resume_args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GenericSessionCapture {
+    /// Raw child stream containing the marker: `stdout` or `stderr`.
+    #[serde(default)]
+    pub stream: String,
+    /// Exact line prefix. The non-empty trimmed suffix is the session ref.
+    #[serde(default)]
+    pub prefix: String,
 }
 
 fn default_prompt_transport() -> String {
@@ -2259,8 +2285,15 @@ impl Invocation {
                 "worker '{worker_id}' generic version_args must contain a configured offline probe"
             ));
         }
-        validate_invocation_args(worker_id, "version_args", &self.version_args, false, false)?;
-        validate_invocation_args(worker_id, "args", &self.args, true, true)?;
+        validate_invocation_args(
+            worker_id,
+            "version_args",
+            &self.version_args,
+            false,
+            false,
+            false,
+        )?;
+        validate_invocation_args(worker_id, "args", &self.args, true, true, false)?;
         for (label, args) in [
             ("sandbox_args", &self.sandbox_args),
             ("full_access_args", &self.full_access_args),
@@ -2268,7 +2301,7 @@ impl Invocation {
             ("model_args", &self.model_args),
             ("effort_args", &self.effort_args),
         ] {
-            validate_invocation_args(worker_id, label, args, true, false)?;
+            validate_invocation_args(worker_id, label, args, true, false, false)?;
         }
 
         let prompt_count = self
@@ -2277,17 +2310,75 @@ impl Invocation {
             .map(|arg| arg.matches("{prompt}").count())
             .sum::<usize>();
         match self.prompt_transport.trim() {
-            "stdin" if prompt_count == 0 => Ok(()),
-            "stdin" => Err(format!(
+            "stdin" if prompt_count == 0 => {}
+            "stdin" => {
+                return Err(format!(
                 "worker '{worker_id}' uses prompt_transport stdin, so args must not contain {{prompt}}"
-            )),
-            "argument" | "arg" if prompt_count == 1 => Ok(()),
-            "argument" | "arg" => Err(format!(
+            ))
+            }
+            "argument" | "arg" if prompt_count == 1 => {}
+            "argument" | "arg" => {
+                return Err(format!(
                 "worker '{worker_id}' argument prompt transport requires exactly one {{prompt}} placeholder in args"
-            )),
-            other => Err(format!(
+            ))
+            }
+            other => {
+                return Err(format!(
                 "worker '{worker_id}' has unsupported prompt_transport '{other}'; expected stdin or argument"
+            ))
+            }
+        }
+
+        let Some(session) = &self.session else {
+            return Ok(());
+        };
+        match session.capture.stream.trim() {
+            "stdout" | "stderr" => {}
+            other => {
+                return Err(format!(
+                    "worker '{worker_id}' generic session capture stream '{other}' is invalid; expected stdout or stderr"
+                ))
+            }
+        }
+        if session.capture.prefix.trim().is_empty() || session.capture.prefix.contains(['\n', '\r'])
+        {
+            return Err(format!(
+                "worker '{worker_id}' generic session capture prefix must be non-empty and single-line"
+            ));
+        }
+        validate_invocation_args(
+            worker_id,
+            "session.resume_args",
+            &session.resume_args,
+            true,
+            true,
+            true,
+        )?;
+        let session_count = session
+            .resume_args
+            .iter()
+            .map(|arg| arg.matches("{session}").count())
+            .sum::<usize>();
+        if session_count != 1 {
+            return Err(format!(
+                "worker '{worker_id}' generic session resume_args require exactly one {{session}} placeholder"
+            ));
+        }
+        let resume_prompt_count = session
+            .resume_args
+            .iter()
+            .map(|arg| arg.matches("{prompt}").count())
+            .sum::<usize>();
+        match self.prompt_transport.trim() {
+            "stdin" if resume_prompt_count == 0 => Ok(()),
+            "stdin" => Err(format!(
+                "worker '{worker_id}' uses prompt_transport stdin, so session.resume_args must not contain {{prompt}}"
             )),
+            "argument" | "arg" if resume_prompt_count == 1 => Ok(()),
+            "argument" | "arg" => Err(format!(
+                "worker '{worker_id}' argument prompt transport requires exactly one {{prompt}} placeholder in session.resume_args"
+            )),
+            _ => unreachable!("prompt transport was validated above"),
         }
     }
 }
@@ -2298,6 +2389,7 @@ fn validate_invocation_args(
     args: &[String],
     allow_runtime_placeholders: bool,
     allow_prompt: bool,
+    allow_session: bool,
 ) -> Result<(), String> {
     for arg in args {
         let mut remainder = arg.clone();
@@ -2308,6 +2400,9 @@ fn validate_invocation_args(
         }
         if allow_prompt {
             remainder = remainder.replace("{prompt}", "");
+        }
+        if allow_session {
+            remainder = remainder.replace("{session}", "");
         }
         if remainder.contains('{') || remainder.contains('}') {
             return Err(format!(
@@ -3890,6 +3985,51 @@ delivery: auto
             let error = workers
                 .validate()
                 .expect_err("ambiguous generic prompt transport must fail validation");
+            assert!(error.contains(expected), "{error:?} does not contain {expected:?}");
+        }
+    }
+
+    #[test]
+    fn generic_session_contract_is_opt_in_and_rejects_incomplete_templates() {
+        let legacy: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation: {command: fixture}\n",
+        )
+        .unwrap();
+        legacy.validate().unwrap();
+        assert!(legacy.workers[0].invocation.session.is_none());
+
+        let configured: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      prompt_transport: argument\n      args: [run, '{prompt}']\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: [resume, '{session}', '{prompt}']\n",
+        )
+        .unwrap();
+        configured.validate().unwrap();
+
+        for (yaml, expected) in [
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      session: {}\n",
+                "session capture stream",
+            ),
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      session:\n        capture: {stream: stdout}\n        resume_args: [resume, '{session}']\n",
+                "session capture prefix",
+            ),
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: [resume]\n",
+                "exactly one {session}",
+            ),
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: [resume, '{session}', '{session}']\n",
+                "exactly one {session}",
+            ),
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      prompt_transport: argument\n      args: [run, '{prompt}']\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: [resume, '{session}']\n",
+                "exactly one {prompt}",
+            ),
+        ] {
+            let workers: WorkersFile = crate::yaml::from_str(yaml).unwrap();
+            let error = workers
+                .validate()
+                .expect_err("incomplete generic session contract must fail validation");
             assert!(error.contains(expected), "{error:?} does not contain {expected:?}");
         }
     }
