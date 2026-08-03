@@ -322,6 +322,9 @@ pub struct MonitorCache {
     pub log_len: u64,
     /// Pretty-printed log lines (already filtered through pretty_event_line).
     pub log_lines: Vec<String>,
+    /// True when `m` opened the selected Failed/Partial task's exact attempt
+    /// streams instead of the live run tail.
+    pub diagnostic: bool,
 }
 
 pub struct MonitorHeader {
@@ -675,6 +678,9 @@ impl App {
     /// Rebuild the Monitor's task→run-dir map (a runs-directory scan per
     /// running task — done here, on reload/entry, never per frame).
     fn refresh_monitor_runs(&mut self) {
+        if self.monitor.diagnostic {
+            return;
+        }
         let mut runs = Vec::new();
         if let Some(s) = &self.snapshot {
             for t in &s.queue.tasks {
@@ -702,6 +708,9 @@ impl App {
     /// open, but cheap: stat the file and re-read (the tail only) when it grew
     /// or the followed run changed.
     fn refresh_monitor_log(&mut self) {
+        if self.monitor.diagnostic {
+            return;
+        }
         let dir = if self.monitor.runs.is_empty() {
             self.monitor.fallback.clone()
         } else {
@@ -1559,8 +1568,9 @@ fn handle_home_key(app: &mut App, code: KeyCode) -> bool {
         }
         // Settings can be opened mid-run; saved changes apply to the next task.
         HomeKey::Settings => open_settings(app),
-        // Monitor can be opened mid-run to watch the worker's live output.
-        HomeKey::Monitor => app.screen = Screen::Monitor,
+        // Monitor can be opened mid-run. A selected Failed/Partial task opens
+        // its exact latest failed attempt; other rows keep the live view.
+        HomeKey::Monitor => open_home_monitor(app),
         // Refresh is safe mid-run and lets you re-read the live queue/snapshot.
         // Explicit refresh re-probes worker readiness too (the only reload
         // that does — it spawns each worker CLI, so it is on-demand only).
@@ -1669,6 +1679,26 @@ enum HomeEnterAction {
     DeferredHint,
     /// A worker is already running; a new run/answer can't start yet.
     Busy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HomeMonitorAction {
+    SelectedFailure,
+    Live,
+}
+
+/// `m` is always read-only. Failed and Partial rows select their exact task
+/// channel; every other row preserves the existing live/global Monitor.
+fn home_monitor_action(
+    state: Option<TaskState>,
+    _approval_pending: bool,
+    _busy: bool,
+) -> HomeMonitorAction {
+    if matches!(state, Some(TaskState::Failed | TaskState::Partial)) {
+        HomeMonitorAction::SelectedFailure
+    } else {
+        HomeMonitorAction::Live
+    }
 }
 
 /// Why the active queue may or may not be replaced by a same-intent replan.
@@ -1860,6 +1890,7 @@ fn handle_home_enter(app: &mut App) {
             app.toast = Some((true, format!("{id}: {}", app.lang.l().approval_enter_hint)));
         }
         HomeEnterAction::Monitor => {
+            prepare_live_monitor(app);
             focus_monitor_on(app, &id);
             app.screen = Screen::Monitor;
         }
@@ -1873,6 +1904,183 @@ fn handle_home_enter(app: &mut App) {
         }
         HomeEnterAction::Busy => app.toast = Some((true, app.lang.l().busy.into())),
     }
+}
+
+fn prepare_live_monitor(app: &mut App) {
+    app.monitor.diagnostic = false;
+    app.refresh_monitor_runs();
+}
+
+fn open_home_monitor(app: &mut App) {
+    let selected = app.snapshot.as_ref().and_then(|snapshot| {
+        snapshot.queue.tasks.get(app.selected).map(|task| {
+            (
+                task.id.clone(),
+                task.state,
+                snapshot
+                    .approvals_needed
+                    .iter()
+                    .any(|approval| approval == &task.id),
+            )
+        })
+    });
+    let action = home_monitor_action(
+        selected.as_ref().map(|(_, state, _)| *state),
+        selected
+            .as_ref()
+            .is_some_and(|(_, _, approval_pending)| *approval_pending),
+        app.is_busy(),
+    );
+    match (action, selected) {
+        (HomeMonitorAction::SelectedFailure, Some((task_id, _, _))) => {
+            load_failed_attempt_monitor(app, &task_id);
+        }
+        _ => prepare_live_monitor(app),
+    }
+    app.screen = Screen::Monitor;
+}
+
+fn resolve_attempt_ref(ws: &Workspace, reference: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(reference);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else if let Ok(relative) = path.strip_prefix(".agents") {
+        ws.agents_dir().join(relative)
+    } else if reference.starts_with("task-channels/") {
+        ws.agents_dir().join(path)
+    } else {
+        ws.root.join(path)
+    }
+}
+
+fn append_raw_attempt_stream(
+    lines: &mut Vec<String>,
+    label: &str,
+    reference: &str,
+    ws: &Workspace,
+    l: &i18n::L,
+) {
+    lines.push(format!("{label}: {reference}"));
+    match std::fs::read(resolve_attempt_ref(ws, reference)) {
+        Ok(raw) if raw.is_empty() => lines.push(l.monitor_empty_stream.to_string()),
+        Ok(raw) => lines.extend(
+            String::from_utf8_lossy(&raw)
+                .split_terminator('\n')
+                .map(str::to_string),
+        ),
+        Err(error) => lines.push(format!("{}: {error}", l.monitor_read_failed)),
+    }
+}
+
+fn load_failed_attempt_monitor(app: &mut App, task_id: &str) {
+    let l = app.lang.l();
+    app.monitor.diagnostic = true;
+    app.monitor.runs.clear();
+    app.monitor.fallback = None;
+    app.monitor_sel = 0;
+    app.monitor_top = 0;
+    app.monitor_follow = false;
+    let Some(intent_id) = app
+        .snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.queue.intent_id.clone())
+        .filter(|intent_id| !intent_id.is_empty())
+    else {
+        set_missing_failed_attempt_monitor(app, l);
+        return;
+    };
+    let Ok(channel) = app.ws.load_task_channel(&intent_id, task_id) else {
+        set_missing_failed_attempt_monitor(app, l);
+        return;
+    };
+    let Some(attempt) = channel.attempts.iter().rev().find(|attempt| {
+        matches!(
+            attempt.state,
+            crate::schemas::AttemptState::Failed
+                | crate::schemas::AttemptState::TimedOut
+                | crate::schemas::AttemptState::Cancelled
+                | crate::schemas::AttemptState::Abandoned
+        )
+    }) else {
+        set_missing_failed_attempt_monitor(app, l);
+        return;
+    };
+    let completion = channel.events.iter().rev().find(|event| {
+        event.event_type == crate::schemas::ChannelEventType::WorkerCompleted
+            && event.attempt_id.as_deref() == Some(attempt.attempt_id.as_str())
+    });
+    let payload = completion.map(|event| &event.payload);
+    let result = payload
+        .and_then(|payload| payload.get("result"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("failed");
+    let result = i18n::recorded_state_label(l, result);
+    let exit_code = diagnostic_payload_value(payload, "exit_code", l.monitor_none);
+    let exit_signal = diagnostic_payload_value(payload, "exit_signal", l.monitor_none);
+    let exit_ok = diagnostic_payload_value(payload, "exit_ok", l.monitor_none);
+    let timed_out = diagnostic_payload_value(payload, "timed_out", l.monitor_none);
+    let mut lines = vec![
+        format!("{}: {}", l.monitor_attempt, attempt.attempt_id),
+        format!(
+            "{}: result={result}, code={exit_code}, signal={exit_signal}, exit_ok={exit_ok}, timed_out={timed_out}",
+            l.monitor_exit
+        ),
+        String::new(),
+    ];
+    append_raw_attempt_stream(
+        &mut lines,
+        l.monitor_stdout,
+        &attempt.raw_stdout_ref,
+        &app.ws,
+        l,
+    );
+    lines.push(String::new());
+    append_raw_attempt_stream(
+        &mut lines,
+        l.monitor_stderr,
+        &attempt.raw_stderr_ref,
+        &app.ws,
+        l,
+    );
+
+    let stdout_path = resolve_attempt_ref(&app.ws, &attempt.raw_stdout_ref);
+    let run_name = stdout_path
+        .ancestors()
+        .nth(3)
+        .and_then(std::path::Path::file_name)
+        .and_then(|name| name.to_str())
+        .unwrap_or(&attempt.attempt_id)
+        .to_string();
+    app.monitor.header = Some(MonitorHeader {
+        run_name,
+        task_id: task_id.to_string(),
+        worker: attempt.worker_id.clone(),
+        recorded_state: "failed".to_string(),
+    });
+    app.monitor.log_len = std::fs::metadata(&stdout_path).map_or(0, |metadata| metadata.len())
+        + std::fs::metadata(resolve_attempt_ref(&app.ws, &attempt.raw_stderr_ref))
+            .map_or(0, |metadata| metadata.len());
+    app.monitor.log_path = Some(stdout_path);
+    app.monitor.log_lines = lines;
+}
+
+fn diagnostic_payload_value(
+    payload: Option<&serde_json::Value>,
+    key: &str,
+    missing: &str,
+) -> String {
+    payload
+        .and_then(|payload| payload.get(key))
+        .filter(|value| !value.is_null())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| missing.to_string())
+}
+
+fn set_missing_failed_attempt_monitor(app: &mut App, l: &i18n::L) {
+    app.monitor.header = None;
+    app.monitor.log_path = None;
+    app.monitor.log_len = 0;
+    app.monitor.log_lines = vec![l.monitor_no_failed_attempt.to_string()];
 }
 
 /// Point the Run Monitor at this task's run. Best-effort: the index matches the
@@ -4504,6 +4712,82 @@ routing:
         Snapshot::load_reusing_workers(ws, workers).unwrap()
     }
 
+    fn record_monitor_attempt(
+        ws: &Workspace,
+        intent_id: &str,
+        attempt_id: &str,
+        stdout_ref: &std::path::Path,
+        stderr_ref: &std::path::Path,
+        result: &str,
+        exit: (Option<i32>, Option<i32>),
+    ) {
+        let task_id = "TARGET";
+        let session_id = format!("session-{intent_id}");
+        let (exit_code, exit_signal) = exit;
+        let attempt = crate::schemas::WorkerAttempt {
+            schema_version: 1,
+            attempt_id: attempt_id.into(),
+            session_id: session_id.clone(),
+            intent_id: intent_id.into(),
+            task_id: task_id.into(),
+            worker_id: "fixture".into(),
+            worker_session_ref: None,
+            state: crate::schemas::AttemptState::Prepared,
+            continuation: crate::schemas::ContinuationMode::Fresh,
+            caused_by_event_id: None,
+            caused_by_action_id: None,
+            raw_stdout_ref: stdout_ref.display().to_string(),
+            raw_stderr_ref: stderr_ref.display().to_string(),
+        };
+        ws.record_worker_attempt(&attempt).unwrap();
+        for (event_type, payload) in [
+            (
+                crate::schemas::ChannelEventType::AttemptPrepared,
+                serde_json::json!({"worker_id": "fixture"}),
+            ),
+            (
+                crate::schemas::ChannelEventType::WorkerStarted,
+                serde_json::json!({"worker_id": "fixture"}),
+            ),
+            (
+                crate::schemas::ChannelEventType::WorkerCompleted,
+                serde_json::json!({
+                    "result": result,
+                    "exit_ok": exit_code == Some(0) && exit_signal.is_none(),
+                    "exit_code": exit_code,
+                    "exit_signal": exit_signal,
+                    "timed_out": false,
+                    "raw_stdout_ref": attempt.raw_stdout_ref,
+                    "raw_stderr_ref": attempt.raw_stderr_ref
+                }),
+            ),
+        ] {
+            ws.record_task_event(
+                intent_id,
+                crate::schemas::ChannelEvent {
+                    schema_version: 1,
+                    event_id: String::new(),
+                    session_id: session_id.clone(),
+                    seq: 0,
+                    event_type,
+                    recorded_at: "2026-08-03T00:00:00Z".into(),
+                    actor: crate::schemas::EventActor {
+                        kind: crate::schemas::EventActorKind::System,
+                        id: String::new(),
+                    },
+                    action_id: None,
+                    causation_id: None,
+                    correlation_id: format!("cor-{session_id}"),
+                    task_id: task_id.into(),
+                    attempt_id: Some(attempt_id.into()),
+                    payload,
+                    raw_ref: None,
+                },
+            )
+            .unwrap();
+        }
+    }
+
     #[cfg(unix)]
     fn write_version_probe(path: &std::path::Path, version: &str) {
         use std::os::unix::fs::PermissionsExt;
@@ -4989,6 +5273,30 @@ routing:
             home_enter_action(TaskState::Deferred, false, true),
             DeferredHint
         );
+    }
+
+    #[test]
+    fn home_monitor_action_is_read_only_across_busy_and_approval_gates() {
+        use HomeMonitorAction::*;
+        for state in [TaskState::Failed, TaskState::Partial] {
+            for approval_pending in [false, true] {
+                for busy in [false, true] {
+                    assert_eq!(
+                        home_monitor_action(Some(state), approval_pending, busy),
+                        SelectedFailure
+                    );
+                }
+            }
+        }
+        for state in [
+            None,
+            Some(TaskState::Queued),
+            Some(TaskState::Running),
+            Some(TaskState::Done),
+            Some(TaskState::NeedsUser),
+        ] {
+            assert_eq!(home_monitor_action(state, false, false), Live);
+        }
     }
 
     #[test]
@@ -6123,6 +6431,138 @@ tasks:
         for code in [KeyCode::Up, KeyCode::PageUp, KeyCode::Home] {
             assert_eq!(monitor_scroll_to(code, 0, 0, visible), (0, true));
         }
+    }
+
+    #[test]
+    fn home_monitor_uses_selected_failed_task_latest_failure_in_current_intent() {
+        let ws = workspace_with_user_config("selected-failed-monitor");
+        let mut task: crate::schemas::Task =
+            crate::yaml::from_str("id: TARGET\ntitle: selected failure\nstate: failed\n").unwrap();
+        task.state = TaskState::Failed;
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.intent_id = "intent-current".into();
+        queue.tasks.push(task);
+        ws.save_queue(&queue).unwrap();
+
+        let current_old = ws.runs_dir().join("run-current-old");
+        let current_new = ws.runs_dir().join("run-current-new");
+        let wrong_newest = ws.runs_dir().join("run-wrong-newest");
+        for dir in [&current_old, &current_new, &wrong_newest] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let old_stdout = current_old.join("attempts/att-current-old/stdout.log");
+        let old_stderr = current_old.join("attempts/att-current-old/stderr.log");
+        std::fs::create_dir_all(old_stdout.parent().unwrap()).unwrap();
+        std::fs::write(&old_stdout, "current old stdout\n").unwrap();
+        std::fs::write(&old_stderr, "current old stderr\n").unwrap();
+        record_monitor_attempt(
+            &ws,
+            "intent-current",
+            "att-current-old",
+            &old_stdout,
+            &old_stderr,
+            "failed",
+            (Some(12), None),
+        );
+
+        let current_stdout = current_new.join("attempts/att-current-new/stdout.log");
+        let current_stderr = current_new.join("attempts/att-current-new/stderr.log");
+        std::fs::create_dir_all(current_stdout.parent().unwrap()).unwrap();
+        std::fs::write(&current_stdout, "current newest stdout\n").unwrap();
+        std::fs::write(&current_stderr, "current newest stderr\n").unwrap();
+        record_monitor_attempt(
+            &ws,
+            "intent-current",
+            "att-current-new",
+            &current_stdout,
+            &current_stderr,
+            "failed",
+            (None, Some(15)),
+        );
+
+        let wrong_stdout = wrong_newest.join("attempts/att-wrong/stdout.log");
+        let wrong_stderr = wrong_newest.join("attempts/att-wrong/stderr.log");
+        std::fs::create_dir_all(wrong_stdout.parent().unwrap()).unwrap();
+        std::fs::write(&wrong_stdout, "wrong intent stdout\n").unwrap();
+        std::fs::write(&wrong_stderr, "wrong intent stderr\n").unwrap();
+        std::fs::write(wrong_newest.join("worker-output.log"), "wrong newest run\n").unwrap();
+        record_monitor_attempt(
+            &ws,
+            "intent-old",
+            "att-wrong",
+            &wrong_stdout,
+            &wrong_stderr,
+            "failed",
+            (Some(99), None),
+        );
+
+        let mut app = App::new(ws.clone());
+        app.snapshot = Some(cached_snapshot(&ws));
+        app.selected = 0;
+        app.lang = i18n::Lang::Ko;
+        assert!(!handle_home_key(&mut app, KeyCode::Char('m')));
+        assert_eq!(app.screen, Screen::Monitor);
+        assert!(
+            matches!(app.job, Job::Idle),
+            "Monitor must not rerun the task"
+        );
+        app.refresh_monitor_log();
+        let diagnostic = app.monitor.log_lines.join("\n");
+        assert!(diagnostic.contains("att-current-new"), "{diagnostic}");
+        assert!(diagnostic.contains("current newest stdout"), "{diagnostic}");
+        assert!(diagnostic.contains("current newest stderr"), "{diagnostic}");
+        assert!(diagnostic.contains("signal=15"), "{diagnostic}");
+        assert!(diagnostic.contains("result=실패"), "{diagnostic}");
+        assert!(!diagnostic.contains("result=failed"), "{diagnostic}");
+        assert!(!diagnostic.contains("current old stdout"), "{diagnostic}");
+        assert!(!diagnostic.contains("wrong intent stdout"), "{diagnostic}");
+        assert!(!diagnostic.contains("wrong newest run"), "{diagnostic}");
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn failed_attempt_monitor_shows_empty_stream_and_exact_read_error_path() {
+        let ws = workspace_with_user_config("failed-monitor-stream-errors");
+        let task: crate::schemas::Task =
+            crate::yaml::from_str("id: TARGET\ntitle: partial task\nstate: partial\n").unwrap();
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.intent_id = "intent-current".into();
+        queue.tasks.push(task);
+        ws.save_queue(&queue).unwrap();
+
+        let run_dir = ws.runs_dir().join("run-partial");
+        let stdout_ref = run_dir.join("attempts/att-partial/stdout.log");
+        let stderr_ref = run_dir.join("attempts/att-partial/stderr.log");
+        std::fs::create_dir_all(stdout_ref.parent().unwrap()).unwrap();
+        std::fs::write(&stdout_ref, []).unwrap();
+        record_monitor_attempt(
+            &ws,
+            "intent-current",
+            "att-partial",
+            &stdout_ref,
+            &stderr_ref,
+            "failed",
+            (Some(7), None),
+        );
+
+        let mut app = App::new(ws.clone());
+        app.snapshot = Some(cached_snapshot(&ws));
+        assert!(!handle_home_key(&mut app, KeyCode::Char('m')));
+        app.refresh_monitor_log();
+        let diagnostic = app.monitor.log_lines.join("\n");
+        assert!(
+            diagnostic.contains(&stdout_ref.display().to_string()),
+            "{diagnostic}"
+        );
+        assert!(diagnostic.contains("(empty stream)"), "{diagnostic}");
+        assert!(
+            diagnostic.contains(&stderr_ref.display().to_string()),
+            "{diagnostic}"
+        );
+        assert!(diagnostic.contains("read failed"), "{diagnostic}");
+
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     #[test]
