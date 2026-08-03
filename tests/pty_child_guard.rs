@@ -168,6 +168,38 @@ fn write_idle_script(path: &std::path::Path, marker: &str) {
     std::fs::set_permissions(path, permissions).expect("chmod the idle script");
 }
 
+fn wait_for_pid_file(path: &std::path::Path, within: Duration) -> bool {
+    let has_numeric_contents = || {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|contents| contents.trim().parse::<u32>().ok())
+            .is_some()
+    };
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        if has_numeric_contents() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    has_numeric_contents()
+}
+
+#[test]
+fn pid_file_is_ready_only_with_numeric_contents() {
+    let workspace = common::WorkspaceGuard::create(scratch("pid-file-ready"));
+    let pid_path = workspace.join("fixture.pid");
+
+    std::fs::write(&pid_path, "").expect("write an empty pid file");
+    assert!(!wait_for_pid_file(&pid_path, Duration::ZERO));
+
+    std::fs::write(&pid_path, "not-a-pid\n").expect("write an invalid pid file");
+    assert!(!wait_for_pid_file(&pid_path, Duration::ZERO));
+
+    std::fs::write(&pid_path, "1234\n").expect("write a numeric pid file");
+    assert!(wait_for_pid_file(&pid_path, Duration::ZERO));
+}
+
 #[test]
 fn the_pid_file_guard_reaps_a_process_that_never_removed_its_pid_file() {
     // The leak this exists for: a hook still polling when an assertion fires. It
@@ -186,10 +218,10 @@ fn the_pid_file_guard_reaps_a_process_that_never_removed_its_pid_file() {
             .spawn()
             .expect("spawn the idle fixture"),
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline && !pid_path.exists() {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        wait_for_pid_file(&pid_path, Duration::from_secs(5)),
+        "the fixture never wrote its pid"
+    );
     let pid: u32 = std::fs::read_to_string(&pid_path)
         .expect("the fixture never wrote its pid")
         .trim()
@@ -248,10 +280,10 @@ fn the_pid_file_guard_leaves_a_pid_that_is_not_the_process_it_was_watching() {
             .spawn()
             .expect("spawn the bystander"),
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline && !pid_path.exists() {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    assert!(
+        wait_for_pid_file(&pid_path, Duration::from_secs(5)),
+        "the bystander never wrote its pid"
+    );
     let pid: u32 = std::fs::read_to_string(&pid_path)
         .expect("the bystander never wrote its pid")
         .trim()
