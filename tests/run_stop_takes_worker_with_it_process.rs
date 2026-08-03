@@ -69,14 +69,42 @@ fn write_worker(path: &Path) {
 }
 
 fn wait_for(path: &Path, within: Duration) -> bool {
+    let has_numeric_contents = || {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|contents| contents.trim().parse::<i32>().ok())
+            .is_some()
+    };
     let deadline = Instant::now() + within;
     while Instant::now() < deadline {
-        if path.exists() {
+        if has_numeric_contents() {
             return true;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    path.exists()
+    has_numeric_contents()
+}
+
+#[test]
+fn pid_file_is_ready_only_with_numeric_contents() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let workspace = common::WorkspaceGuard::create(std::env::temp_dir().join(format!(
+        "yardlet-run-stop-pid-ready-{}-{nonce}",
+        std::process::id()
+    )));
+    let pid_file = workspace.path().join("worker-pid");
+
+    fs::write(&pid_file, "").unwrap();
+    assert!(!wait_for(&pid_file, Duration::ZERO));
+
+    fs::write(&pid_file, "not-a-pid\n").unwrap();
+    assert!(!wait_for(&pid_file, Duration::ZERO));
+
+    fs::write(&pid_file, "1234\n").unwrap();
+    assert!(wait_for(&pid_file, Duration::ZERO));
 }
 
 fn wait_until_gone(pid: i32, within: Duration) -> bool {
