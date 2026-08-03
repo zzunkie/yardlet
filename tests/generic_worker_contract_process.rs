@@ -393,19 +393,19 @@ fn invalid_contract_and_strict_billing_are_rejected_before_probe_or_worker_spawn
         ),
         (
             "session-capture",
-            "      supports_noninteractive: true\n      output_contract: files\n      args: [execute, '{run_dir}']\n      session:\n        capture: {}\n        resume_args: ['{run_dir}', '{session}']\n",
+            "      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n      args: [execute, '{run_dir}']\n      session:\n        capture: {}\n        resume_args: ['{run_dir}', '{session}']\n",
             "scrub_or_block",
             "session capture stream",
         ),
         (
             "session-resume-ref",
-            "      supports_noninteractive: true\n      output_contract: files\n      args: [execute, '{run_dir}']\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: ['{run_dir}']\n",
+            "      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n      args: [execute, '{run_dir}']\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: ['{run_dir}']\n",
             "scrub_or_block",
             "exactly one {session}",
         ),
         (
             "session-resume-prompt",
-            "      supports_noninteractive: true\n      output_contract: files\n      prompt_transport: argument\n      args: [execute, '{run_dir}', '{prompt}']\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: ['{run_dir}', '{session}']\n",
+            "      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n      prompt_transport: argument\n      args: [execute, '{run_dir}', '{prompt}']\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: ['{run_dir}', '{session}']\n",
             "scrub_or_block",
             "exactly one {prompt}",
         ),
@@ -464,7 +464,7 @@ fn failed_offline_probe_rejects_routing_before_the_worker_invocation() {
 fn generic_answer_uses_captured_session_ref_and_declared_native_resume_template() {
     let fixture = Fixture::new("native-resume");
     fixture.configure(
-        "      supports_noninteractive: true\n      output_contract: files\n      version_args: [probe, offline]\n      prompt_transport: argument\n      args: [ask, '{run_dir}', '{prompt}']\n      session:\n        capture:\n          stream: stdout\n          prefix: 'SESSION_REF='\n        resume_args: [resume, '{run_dir}', '{session}', '{prompt}', 'literal with spaces']\n",
+        "      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n      version_args: [probe, offline]\n      prompt_transport: argument\n      args: [ask, '{run_dir}', '{prompt}']\n      session:\n        capture:\n          stream: stdout\n          prefix: 'SESSION_REF='\n        resume_args: [resume, '{run_dir}', '{session}', '{prompt}', 'literal with spaces']\n",
         "scrub_or_block",
     );
 
@@ -541,7 +541,7 @@ fn generic_answer_uses_captured_session_ref_and_declared_native_resume_template(
 fn generic_answer_without_a_captured_session_ref_uses_explicit_packet_fallback() {
     let fixture = Fixture::new("missing-session-ref");
     fixture.configure(
-        "      supports_noninteractive: true\n      output_contract: files\n      version_args: [probe, offline]\n      prompt_transport: argument\n      args: [ask-without-session, '{run_dir}', '{prompt}']\n      session:\n        capture:\n          stream: stdout\n          prefix: 'SESSION_REF='\n        resume_args: [resume, '{run_dir}', '{session}', '{prompt}']\n",
+        "      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n      version_args: [probe, offline]\n      prompt_transport: argument\n      args: [ask-without-session, '{run_dir}', '{prompt}']\n      session:\n        capture:\n          stream: stdout\n          prefix: 'SESSION_REF='\n        resume_args: [resume, '{run_dir}', '{session}', '{prompt}']\n",
         "scrub_or_block",
     );
 
