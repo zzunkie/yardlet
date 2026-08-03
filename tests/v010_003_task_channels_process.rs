@@ -101,7 +101,7 @@ mod unix {
             fs::write(
                 root.join(".agents/workers.yaml"),
                 format!(
-                    "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-ask\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-drain\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: codex\n    invocation:\n      command: {0}\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n",
+                    "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-ask\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-drain\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: codex\n    invocation:\n      command: {0}\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n",
                     worker.display(),
                 ),
             )
@@ -385,7 +385,7 @@ fi
         fs::write(
             fixture.root.join(".agents/workers.yaml"),
             format!(
-                "schema_version: 1\nworkers:\n  - id: codex\n    model: gpt-5.6-sol\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: {}\nrouting:\n  default_worker: codex\n  fallback_order: [codex]\n  allow_preferred_worker_failover: false\n",
+                "schema_version: 1\nworkers:\n  - id: codex\n    model: gpt-5.6-sol\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: {}\nrouting:\n  default_worker: codex\n  fallback_order: [codex]\n  allow_preferred_worker_failover: false\n",
                 worker_path(fixture).display(),
                 max_retries
             ),
@@ -441,7 +441,7 @@ JSON
         fs::write(
             fixture.root.join(".agents/workers.yaml"),
             format!(
-                "schema_version: 1\nworkers:\n  - id: fixture-planner\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-planner\n  fallback_order: [fixture-planner]\n  planning_gate:\n    primary: fixture-planner\n    fallback: \"\"\n",
+                "schema_version: 1\nworkers:\n  - id: fixture-planner\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-planner\n  fallback_order: [fixture-planner]\n  planning_gate:\n    primary: fixture-planner\n    fallback: \"\"\n",
                 planner.display()
             ),
         )
@@ -528,7 +528,7 @@ JSON
         fs::write(
             fixture.root.join(".agents/workers.yaml"),
             format!(
-                "schema_version: 1\nworkers:\n  - id: fixture-planner\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-planner\n  fallback_order: [fixture-planner]\n  planning_gate:\n    primary: fixture-planner\n    fallback: \"\"\n",
+                "schema_version: 1\nworkers:\n  - id: fixture-planner\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-planner\n  fallback_order: [fixture-planner]\n  planning_gate:\n    primary: fixture-planner\n    fallback: \"\"\n",
                 planner.display()
             ),
         )
@@ -616,7 +616,7 @@ printf '# Handoff\n\nPolicy-authorized failover completed.\n' >"$run_dir/handoff
         fs::write(
             fixture.root.join(".agents/workers.yaml"),
             format!(
-                "schema_version: 1\nworkers:\n  - id: fixture-primary\n    model: primary-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-fallback\n    model: fallback-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-primary\n  fallback_order: [fixture-fallback]\n  allow_preferred_worker_failover: true\n",
+                "schema_version: 1\nworkers:\n  - id: fixture-primary\n    model: primary-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-fallback\n    model: fallback-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-primary\n  fallback_order: [fixture-fallback]\n  allow_preferred_worker_failover: true\n",
                 primary.display(),
                 fallback.display()
             ),
@@ -992,7 +992,7 @@ printf '# Handoff\n\nFailover fixture completed.\n' >"$run_dir/handoff.md"
         fs::write(
             fixture.root.join(".agents/workers.yaml"),
             format!(
-                "schema_version: 1\nworkers:\n  - id: fixture-primary\n    model: primary-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-fallback\n    model: fallback-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-primary\n  fallback_order: [fixture-fallback]\n  allow_preferred_worker_failover: true\n",
+                "schema_version: 1\nworkers:\n  - id: fixture-primary\n    model: primary-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-fallback\n    model: fallback-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-primary\n  fallback_order: [fixture-fallback]\n  allow_preferred_worker_failover: true\n",
                 primary.display(),
                 fallback.display()
             ),
@@ -1247,7 +1247,7 @@ printf 'primary intentionally omitted result.json\n' >&2
         fs::write(
             root.join(".agents/workers.yaml"),
             format!(
-                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n",
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n",
                 worker.display()
             ),
         )
@@ -1369,7 +1369,7 @@ printf 'primary intentionally omitted result.json\n' >&2
         fs::write(
             fixture.root.join(".agents/workers.yaml"),
             format!(
-                "schema_version: 1\nworkers:\n  - id: fixture\n    model: fixture-model\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-ask\n    model: fixture-model\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-drain\n    model: fixture-model\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n",
+                "schema_version: 1\nworkers:\n  - id: fixture\n    model: fixture-model\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-ask\n    model: fixture-model\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-drain\n    model: fixture-model\n    invocation:\n      command: {0}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n",
                 worker_path(&fixture).display(),
             ),
         )
@@ -1517,7 +1517,7 @@ printf '# Handoff\n\nSibling task drained.\n' >"$run_dir/handoff.md"
         fs::write(
             fixture.root.join(".agents/workers.yaml"),
             format!(
-                "schema_version: 1\nworkers:\n  - id: fixture-primary\n    model: primary-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-fallback\n    model: fallback-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-drain\n    model: drain-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-primary\n  fallback_order: [fixture-fallback]\n  allow_preferred_worker_failover: true\n",
+                "schema_version: 1\nworkers:\n  - id: fixture-primary\n    model: primary-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-fallback\n    model: fallback-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-drain\n    model: drain-model\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-primary\n  fallback_order: [fixture-fallback]\n  allow_preferred_worker_failover: true\n",
                 primary.display(),
                 fallback.display(),
                 drain.display()
@@ -1693,7 +1693,7 @@ printf '# Handoff\n\nSibling task drained.\n' >"$run_dir/handoff.md"
         fs::write(
             fixture.root.join(".agents/workers.yaml"),
             format!(
-                "schema_version: 1\nworkers:\n  - id: fixture-nomodel\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-drain\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-nomodel\n  fallback_order: [fixture-nomodel]\n",
+                "schema_version: 1\nworkers:\n  - id: fixture-nomodel\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\n  - id: fixture-drain\n    invocation:\n      command: {}\n      args: [\"{{run_dir}}\"]\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 0\nrouting:\n  default_worker: fixture-nomodel\n  fallback_order: [fixture-nomodel]\n",
                 primary.display(),
                 drain.display()
             ),
@@ -3122,7 +3122,7 @@ mv "$YARD_RUN_DIR/run.yaml.tmp" "$YARD_RUN_DIR/run.yaml"
             fs::write(
                 &workers_path,
                 format!(
-                    "schema_version: 1\nworkers:\n  - id: fixture-fallback-a\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"], supports_noninteractive: true, output_contract: files }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\n  - id: fixture-fallback-b\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"], supports_noninteractive: true, output_contract: files }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\nrouting:\n  default_worker: fixture-fallback-a\n  fallback_order: [fixture-fallback-b]\n  allow_preferred_worker_failover: true\n",
+                    "schema_version: 1\nworkers:\n  - id: fixture-fallback-a\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"], supports_noninteractive: true, output_contract: files, sandbox_args: ['--fixture-sandbox'] }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\n  - id: fixture-fallback-b\n    invocation: {{ command: {}, args: [\"{{run_dir}}\"], supports_noninteractive: true, output_contract: files, sandbox_args: ['--fixture-sandbox'] }}\n    limits: {{ max_wall_minutes: 1, max_retries: 0 }}\nrouting:\n  default_worker: fixture-fallback-a\n  fallback_order: [fixture-fallback-b]\n  allow_preferred_worker_failover: true\n",
                     producer_command.display(),
                     worker.display()
                 ),

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Changed
+
+- **`sandboxed` access is no longer an unverified claim for generic workers.**
+  Built-in adapters keep their core-owned, enforced sandbox flags. A generic
+  worker's sandbox was only ever its profile's own declaration, and a profile
+  with empty `sandbox_args` ran unbounded while the workspace believed writes
+  were bounded. The shared invocability verdict now fails closed: under
+  `sandboxed` access a generic profile must declare a real sandbox contract
+  (non-empty `sandbox_args`, distinct from `full_access_args`, no elevation
+  markers or unknown placeholders), the rejection names both explicit ways out
+  (declare `sandbox_args`, or `yardlet access full`), and a ready generic
+  worker's status labels its sandbox "profile-declared, not verified by
+  Yardlet". Existing generic profiles without `sandbox_args` become
+  not-invocable under sandboxed access until they declare one. (#123)
+
 ### Fixed
 
 - **The report no longer calls a delivered run "disabled".** A `Disabled`

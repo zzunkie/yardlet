@@ -4486,7 +4486,11 @@ routing:
             .workers
             .into_iter()
             .map(|worker| crate::snapshot::WorkerLine {
-                readiness_cache_key: crate::guard::readiness_cache_key(&worker, &billing),
+                readiness_cache_key: crate::guard::readiness_cache_key(
+                    &worker,
+                    &billing,
+                    "sandboxed",
+                ),
                 id: worker.id,
                 readiness: "invocable".into(),
                 version: Some("fixture 1.0".into()),
@@ -4526,7 +4530,7 @@ routing:
         std::fs::write(
             ws.workers_path(),
             format!(
-                "schema_version: 1\nworkers:\n  - id: fixture\n    enabled: true\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\nrouting: {{}}\n",
+                "schema_version: 1\nworkers:\n  - id: fixture\n    enabled: true\n    invocation:\n      command: {}\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\nrouting: {{}}\n",
                 probe.display()
             ),
         )
@@ -4563,7 +4567,7 @@ routing:
         write_version_probe(&probe, "fixture 1.0");
         let workers = |supports_noninteractive: bool| {
             format!(
-                "schema_version: 1\nworkers:\n  - id: fixture\n    enabled: true\n    invocation:\n      command: {}\n      supports_noninteractive: {}\n      output_contract: files\nrouting: {{}}\n",
+                "schema_version: 1\nworkers:\n  - id: fixture\n    enabled: true\n    invocation:\n      command: {}\n      supports_noninteractive: {}\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\nrouting: {{}}\n",
                 probe.display(), supports_noninteractive
             )
         };

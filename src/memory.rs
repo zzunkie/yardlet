@@ -272,8 +272,12 @@ pub struct ScoutCommandReport {
 pub fn scout(ws: &Workspace) -> Result<ScoutCommandReport> {
     let worker_profiles = ws.load_workers()?;
     let billing = ws.load_billing()?;
-    let (profile, bin, worker_id) =
-        crate::planner::pick_ready_worker(&worker_profiles, &billing, None)?;
+    let (profile, bin, worker_id) = crate::planner::pick_ready_worker(
+        &worker_profiles,
+        &billing,
+        None,
+        &ws.requested_access(),
+    )?;
     let env = guard::sanitized_worker_env_for(&billing, &profile.invocation.pass_env)
         .map_err(|e| anyhow!(e))?;
     let timeout = Duration::from_secs(profile.limits.max_wall_minutes as u64 * 60);
@@ -484,8 +488,12 @@ fn draft(
     let worker_profiles = ws.load_workers()?;
     let billing = ws.load_billing()?;
     let config = ws.load_config()?;
-    let (profile, bin, worker_id) =
-        crate::planner::pick_ready_worker(&worker_profiles, &billing, None)?;
+    let (profile, bin, worker_id) = crate::planner::pick_ready_worker(
+        &worker_profiles,
+        &billing,
+        None,
+        &config.default_access,
+    )?;
 
     let base_run_id = format!("memory-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let (run_id, run_dir) = ws.claim_run_dir(&base_run_id)?;

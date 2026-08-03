@@ -2429,6 +2429,14 @@ impl Workspace {
         load_yaml(&self.config_path())
     }
 
+    /// The workspace's requested worker access level for readiness verdicts.
+    /// Unreadable config fails closed to "sandboxed", the stricter posture.
+    pub fn requested_access(&self) -> String {
+        self.load_config()
+            .map(|config| config.default_access)
+            .unwrap_or_else(|_| "sandboxed".to_string())
+    }
+
     pub fn load_planning_worker_config(&self) -> Result<PlanningWorkerConfig> {
         load_yaml(&self.config_path())
     }

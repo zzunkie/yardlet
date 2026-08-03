@@ -685,7 +685,8 @@ fn audit_planning_content(
     let policy = bounded_research_policy(ws.load_research_policy()?);
     let library = crate::skills::Library::open(skill_library)
         .ok_or_else(|| anyhow!("skill library projection is unavailable"))?;
-    let readiness = guard::capability_readiness_projection(workers_file, billing);
+    let readiness =
+        guard::capability_readiness_projection(workers_file, billing, &ws.requested_access());
     let catalog = catalog_with_usability(ws, &library, &readiness);
     let classification = crate::skills::classify_repo(summary, request);
     let base_signals = request_capability_signals(request, fixture_signal_markers_enabled());
@@ -869,7 +870,8 @@ fn content_requires_scout(
     let policy = bounded_research_policy(ws.load_research_policy()?);
     let library = crate::skills::Library::open(skill_library)
         .ok_or_else(|| anyhow!("skill library projection is unavailable"))?;
-    let readiness = guard::capability_readiness_projection(workers_file, billing);
+    let readiness =
+        guard::capability_readiness_projection(workers_file, billing, &ws.requested_access());
     let catalog = catalog_with_usability(ws, &library, &readiness);
     let classification = crate::skills::classify_repo(summary, request);
     let base_signals = request_capability_signals(request, fixture_signal_markers_enabled());
@@ -1089,12 +1091,17 @@ pub fn plan_goal_with_report(
     content.intent.id = session.intent_id.clone();
     content.queue.intent_id = session.intent_id.clone();
     content.queue.queue_id = session.queue_id.clone();
-    let scout_selection = pick_ready_worker(&workers_file, &billing, worker_override)
-        .ok()
-        .map(|(base, bin, _)| {
-            let planning = ws.load_planning_worker_config().unwrap_or_default();
-            (planning_worker_profile(&base, &planning), bin)
-        });
+    let scout_selection = pick_ready_worker(
+        &workers_file,
+        &billing,
+        worker_override,
+        &ws.requested_access(),
+    )
+    .ok()
+    .map(|(base, bin, _)| {
+        let planning = ws.load_planning_worker_config().unwrap_or_default();
+        (planning_worker_profile(&base, &planning), bin)
+    });
     let attempt_id = format!("express-goal-{}", turn.request_event_id);
     let mut lines = Vec::new();
     let _audit = audit_planning_content(
@@ -1335,7 +1342,8 @@ fn plan_core(
     let planning_config = ws.load_planning_worker_config()?;
 
     // Choose a ready planning worker.
-    let (base_profile, bin, worker_id) = pick_ready_worker(workers, billing, worker_override)?;
+    let (base_profile, bin, worker_id) =
+        pick_ready_worker(workers, billing, worker_override, &config.default_access)?;
     let profile = planning_worker_profile(&base_profile, &planning_config);
 
     let base_run_id = format!("plan-{}", Local::now().format("%Y%m%d-%H%M%S"));
@@ -1601,7 +1609,8 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
     let planning_config = ws.load_planning_worker_config()?;
     let language = packet::resolve_language(&config.language, &ctx);
     let images: Vec<String> = Vec::new();
-    let (base_profile, bin, worker_id) = pick_ready_worker(&workers, &billing, None)?;
+    let (base_profile, bin, worker_id) =
+        pick_ready_worker(&workers, &billing, None, &config.default_access)?;
     let profile = planning_worker_profile(&base_profile, &planning_config);
     let base_run_id = format!("plan-{}", Local::now().format("%Y%m%d-%H%M%S"));
     let (run_id, run_dir) = ws.claim_run_dir(&base_run_id)?;
@@ -2423,13 +2432,12 @@ pub fn recover_unconsumed_plan(ws: &Workspace) -> Result<Option<String>> {
         .load_config()
         .map(|config| config.skill_library)
         .unwrap_or_default();
-    let scout_selection =
-        pick_ready_worker(&workers_file, &billing, None)
-            .ok()
-            .map(|(base, bin, _)| {
-                let planning = ws.load_planning_worker_config().unwrap_or_default();
-                (planning_worker_profile(&base, &planning), bin)
-            });
+    let scout_selection = pick_ready_worker(&workers_file, &billing, None, &ws.requested_access())
+        .ok()
+        .map(|(base, bin, _)| {
+            let planning = ws.load_planning_worker_config().unwrap_or_default();
+            (planning_worker_profile(&base, &planning), bin)
+        });
     let mut audit_lines = Vec::new();
     let _audit = audit_planning_content(
         ws,
@@ -2701,6 +2709,7 @@ pub(crate) fn pick_ready_worker(
     workers: &WorkersFile,
     billing: &crate::schemas::BillingPolicy,
     worker_override: Option<&str>,
+    requested_access: &str,
 ) -> Result<(WorkerProfile, std::path::PathBuf, String)> {
     let mut order: Vec<String> = Vec::new();
     if let Some(o) = worker_override {
@@ -2727,7 +2736,7 @@ pub(crate) fn pick_ready_worker(
         if !profile.enabled {
             continue;
         }
-        let status = guard::probe(profile, billing);
+        let status = guard::probe(profile, billing, requested_access);
         if status.readiness == Readiness::Ready {
             if let Some(bin) = status.binary_path {
                 return Ok((profile.clone(), bin, id));
@@ -2977,8 +2986,13 @@ routing:
         )
         .unwrap();
 
-        let error = pick_ready_worker(&workers, &crate::schemas::BillingPolicy::default(), None)
-            .expect_err("non-interactive contract failure must block planning selection");
+        let error = pick_ready_worker(
+            &workers,
+            &crate::schemas::BillingPolicy::default(),
+            None,
+            "full",
+        )
+        .expect_err("non-interactive contract failure must block planning selection");
         assert!(
             error.to_string().contains("supports_noninteractive"),
             "{error}"

@@ -153,6 +153,7 @@ workers:
       command: $PLANNER
       supports_noninteractive: true
       output_contract: files
+      sandbox_args: ['--fixture-sandbox']
       args: ["{run_dir}"]
     limits:
       max_wall_minutes: 1

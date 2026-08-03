@@ -200,6 +200,7 @@ fn an_accepted_unconfirmed_plan_is_reachable_from_home_after_a_restart() {
              \x20 \x20 \x20 command: {}\n\
              \x20 \x20 \x20 supports_noninteractive: true\n\
              \x20 \x20 \x20 output_contract: files\n\
+             \x20 \x20 \x20 sandbox_args: ['--fixture-sandbox']\n\
              \x20 \x20 \x20 args: [\"{{run_dir}}\"]\n\
              \x20 \x20 limits:\n\
              \x20 \x20 \x20 max_wall_minutes: 1\n\
