@@ -258,7 +258,12 @@ fn render_monitor(frame: &mut Frame, app: &mut App) {
         chunks[1],
     );
 
-    render_footer(frame, chunks[2], l.footer_monitor);
+    let footer = if app.monitor.diagnostic {
+        l.footer_monitor_diagnostic
+    } else {
+        l.footer_monitor
+    };
+    render_footer(frame, chunks[2], footer);
 }
 
 fn render_settings(frame: &mut Frame, app: &App) {

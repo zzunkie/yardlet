@@ -855,6 +855,10 @@ const STOP_GRACE: Duration = Duration::from_secs(3);
 #[derive(Debug, Clone)]
 pub struct WorkerOutcome {
     pub exit_ok: bool,
+    /// Exact subprocess termination metadata. A signal has no exit code on
+    /// Unix; a normal exit has no signal.
+    pub exit_code: Option<i32>,
+    pub exit_signal: Option<i32>,
     pub timed_out: bool,
     /// The operator stopped Yardlet, and this worker was taken down with it
     /// rather than left holding the run directory (issue #107). Distinct from a
@@ -1775,8 +1779,19 @@ fn spawn_internal(
     // land Done despite the Ctrl-C.
     let stopped = stopped || crate::signals::stop_requested();
 
+    let exit_code = status.code();
+    #[cfg(unix)]
+    let exit_signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    };
+    #[cfg(not(unix))]
+    let exit_signal = None;
+
     Ok(WorkerOutcome {
         exit_ok: status.success() && !timed_out && !stopped,
+        exit_code,
+        exit_signal,
         timed_out,
         stopped,
         session_id,
