@@ -228,6 +228,7 @@ impl Snapshot {
         probe: impl FnMut(
             &crate::schemas::WorkerProfile,
             &crate::schemas::BillingPolicy,
+            &str,
         ) -> crate::guard::WorkerStatus,
     ) -> Result<Snapshot> {
         Self::load_inner_with_probe(ws, None, probe)
@@ -250,6 +251,7 @@ impl Snapshot {
         mut probe: impl FnMut(
             &crate::schemas::WorkerProfile,
             &crate::schemas::BillingPolicy,
+            &str,
         ) -> crate::guard::WorkerStatus,
     ) -> Result<Snapshot> {
         // A snapshot is a trusted projection used by both status and every TUI
@@ -265,6 +267,7 @@ impl Snapshot {
         let billing = ws.load_billing()?;
         let workers_file = ws.load_workers()?;
         let policy = billing.worker_invocation.ai_billing_env_policy.clone();
+        let requested_access = config.default_access.clone();
 
         // The enabled flag, model, and billing-policy posture are always re-read
         // from config (cheap and user-editable); only the expensive probe
@@ -273,7 +276,8 @@ impl Snapshot {
             .workers
             .iter()
             .map(|p| {
-                let readiness_cache_key = guard::readiness_cache_key(p, &billing);
+                let readiness_cache_key =
+                    guard::readiness_cache_key(p, &billing, &requested_access);
                 if !p.enabled {
                     return WorkerLine {
                         id: p.id.clone(),
@@ -302,7 +306,7 @@ impl Snapshot {
                         ..c.clone()
                     };
                 }
-                let s = probe(p, &billing);
+                let s = probe(p, &billing, &requested_access);
                 let present = s.billing_env_present.len();
                 WorkerLine {
                     id: s.id,
@@ -804,7 +808,7 @@ current_intent: ""
         ws.save_queue(&WorkQueue::empty()).unwrap();
 
         let calls = AtomicUsize::new(0);
-        let snapshot = Snapshot::load_with_probe(&ws, |profile, _billing| {
+        let snapshot = Snapshot::load_with_probe(&ws, |profile, _billing, _access| {
             calls.fetch_add(1, Ordering::SeqCst);
             crate::guard::WorkerStatus {
                 id: profile.id.clone(),

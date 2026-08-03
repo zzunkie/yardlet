@@ -360,6 +360,14 @@ configured offline probe work, `supports_noninteractive` is `true`,
 policy does not block them. Routing, planning, capability projection, worker
 status, and the TUI all use that same decision.
 
+Under the default `sandboxed` access level a generic profile must also declare
+`sandbox_args`. Yardlet appends the built-in adapters' sandbox flags itself and
+knows what they mean, but it cannot verify a sandbox it does not own: for a
+generic worker the declaration is trusted as written, worker status labels it
+"profile-declared, not verified by Yardlet", and a profile that declares no way
+to bound writes is not invocable until you add `sandbox_args` or grant full
+access explicitly (`yardlet access full`).
+
 ```yaml
 - id: mytool
   best_for: "..."            # planner rubric

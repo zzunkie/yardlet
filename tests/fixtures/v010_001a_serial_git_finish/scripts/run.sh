@@ -280,6 +280,7 @@ workers:
       command: bash
       supports_noninteractive: true
       output_contract: files
+      sandbox_args: ['--fixture-sandbox']
       args: [$WRAPPER_DIR/worker.sh, "{run_dir}", YARD-001, builder, $scenario/attempts, $scenario/packets, $STERILE_HOME]
     limits: {max_wall_minutes: 1, max_retries: 0}
   - id: reviewer
@@ -287,6 +288,7 @@ workers:
       command: bash
       supports_noninteractive: true
       output_contract: files
+      sandbox_args: ['--fixture-sandbox']
       args: [$WRAPPER_DIR/worker.sh, "{run_dir}", YARD-002, reviewer, $scenario/attempts, $scenario/packets, $STERILE_HOME]
     limits: {max_wall_minutes: 1, max_retries: 0}
   - id: remediator
@@ -294,6 +296,7 @@ workers:
       command: bash
       supports_noninteractive: true
       output_contract: files
+      sandbox_args: ['--fixture-sandbox']
       args: [$WRAPPER_DIR/worker.sh, "{run_dir}", YARD-004, remediator, $scenario/attempts, $scenario/packets, $STERILE_HOME]
     limits: {max_wall_minutes: 1, max_retries: 0}
   - id: rereviewer
@@ -301,6 +304,7 @@ workers:
       command: bash
       supports_noninteractive: true
       output_contract: files
+      sandbox_args: ['--fixture-sandbox']
       args: [$WRAPPER_DIR/worker.sh, "{run_dir}", YARD-003, rereviewer, $scenario/attempts, $scenario/packets, $STERILE_HOME]
     limits: {max_wall_minutes: 1, max_retries: 0}
 EOF

@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **`sandboxed` access is no longer an unverified claim for generic workers.**
+  Built-in adapters keep their core-owned, enforced sandbox flags. A generic
+  worker's sandbox was only ever its profile's own declaration, and a profile
+  with empty `sandbox_args` ran unbounded while the workspace believed writes
+  were bounded. The shared invocability verdict now fails closed: under
+  `sandboxed` access a generic profile must declare a real sandbox contract
+  (non-empty `sandbox_args`, distinct from `full_access_args`, no elevation
+  markers or unknown placeholders), the rejection names both explicit ways out
+  (declare `sandbox_args`, or `yardlet access full`), and a ready generic
+  worker's status labels its sandbox "profile-declared, not verified by
+  Yardlet". Existing generic profiles without `sandbox_args` become
+  not-invocable under sandboxed access until they declare one. (#123)
+
+### Fixed
+
+- **The report no longer calls a delivered run "disabled".** A `Disabled`
+  Git-finish record only ever meant the push was disabled by policy, but the
+  per-task report line read as if nothing was delivered. The line now reports
+  the local integration (with its commit) when the run's merge landed, says
+  "no changes to deliver" for no-change runs, and claims only the push
+  otherwise. (#125)
+
 ## 0.10.3 - 2026-07-25
 
 ### Added

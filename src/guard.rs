@@ -69,13 +69,14 @@ pub struct WorkerCapabilityReadiness {
 pub fn capability_readiness_projection(
     workers: &crate::schemas::WorkersFile,
     billing: &BillingPolicy,
+    requested_access: &str,
 ) -> Vec<WorkerCapabilityReadiness> {
     workers
         .workers
         .iter()
         .map(|profile| WorkerCapabilityReadiness {
             worker_id: profile.id.clone(),
-            readiness: probe(profile, billing).readiness,
+            readiness: probe(profile, billing, requested_access).readiness,
             capabilities: profile.capabilities.clone(),
         })
         .collect()
@@ -84,47 +85,41 @@ pub fn capability_readiness_projection(
 /// Cache identity for the inputs that can change an offline readiness verdict.
 /// It contains configuration and billing-variable names/presence only, never
 /// secret values. Snapshot/TUI cheap reloads use this to avoid carrying a ready
-/// verdict across an edited invocation contract or billing posture.
-pub fn readiness_cache_key(profile: &WorkerProfile, billing: &BillingPolicy) -> String {
+/// verdict across an edited invocation contract, billing posture, or access
+/// level (a generic worker's verdict depends on the requested access).
+pub fn readiness_cache_key(
+    profile: &WorkerProfile,
+    billing: &BillingPolicy,
+    requested_access: &str,
+) -> String {
     let invocation = serde_json::to_string(&profile.invocation)
         .unwrap_or_else(|_| format!("{:?}", profile.invocation));
     let present = present_billing_env(&billing.blocked_worker_env_names);
     format!(
-        "{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}",
         profile.id,
         profile.enabled,
         billing.worker_invocation.ai_billing_env_policy,
         present.join(","),
+        requested_access,
         invocation
     )
 }
 
-/// Validate the sandbox declaration used by a planning capability scout.
-///
-/// Built-in adapters have a core-owned sandbox argument shape. A generic
-/// adapter must provide a distinct, non-empty, syntactically checkable
-/// sandbox contract. Yardlet cannot infer a missing flag or guess the meaning
-/// of an unknown placeholder, so those profiles fail closed before scout
-/// spawn. The disposable workspace remains the filesystem isolation boundary.
-pub fn scout_sandbox_contract(profile: &WorkerProfile) -> Result<(), String> {
-    if matches!(profile.id.as_str(), "codex" | "claude-code") {
-        return Ok(());
-    }
-
+/// Validate that a generic profile's `sandbox_args` actually declare a
+/// bounded-write sandbox contract: non-empty, distinct from the full-access
+/// arguments, free of elevation markers and unknown placeholders, and carrying
+/// at least one literal flag. Yardlet cannot infer a missing flag or guess the
+/// meaning of an unknown placeholder, so callers fail closed on Err.
+pub fn generic_sandbox_declaration(profile: &WorkerProfile) -> Result<(), String> {
     let sandbox = &profile.invocation.sandbox_args;
     if sandbox.is_empty() || sandbox.iter().any(|arg| arg.trim().is_empty()) {
-        return Err(
-            "generic planning scout sandbox contract failed closed: sandbox_args must be non-empty"
-                .to_string(),
-        );
+        return Err("sandbox_args must be non-empty".to_string());
     }
     if !profile.invocation.full_access_args.is_empty()
         && sandbox == &profile.invocation.full_access_args
     {
-        return Err(
-            "generic planning scout sandbox contract failed closed: sandbox and full-access arguments are identical"
-                .to_string(),
-        );
+        return Err("sandbox and full-access arguments are identical".to_string());
     }
 
     let mut has_literal_contract = false;
@@ -141,10 +136,7 @@ pub fn scout_sandbox_contract(profile: &WorkerProfile) -> Result<(), String> {
         .iter()
         .any(|marker| lower.contains(marker))
         {
-            return Err(
-                "generic planning scout sandbox contract failed closed: sandbox_args contain an elevation marker"
-                    .to_string(),
-            );
+            return Err("sandbox_args contain an elevation marker".to_string());
         }
         let remainder = ["{run_dir}", "{model}", "{effort}", "{image}"]
             .iter()
@@ -152,20 +144,54 @@ pub fn scout_sandbox_contract(profile: &WorkerProfile) -> Result<(), String> {
                 value.replace(placeholder, "")
             });
         if remainder.contains('{') || remainder.contains('}') {
-            return Err(
-                "generic planning scout sandbox contract failed closed: sandbox_args contain an unknown placeholder"
-                    .to_string(),
-            );
+            return Err("sandbox_args contain an unknown placeholder".to_string());
         }
         has_literal_contract |= !remainder.trim().is_empty();
     }
     if !has_literal_contract {
-        return Err(
-            "generic planning scout sandbox contract failed closed: sandbox_args do not declare a sandbox mode"
-                .to_string(),
-        );
+        return Err("sandbox_args do not declare a sandbox mode".to_string());
     }
     Ok(())
+}
+
+/// Validate the sandbox declaration used by a planning capability scout.
+///
+/// Built-in adapters have a core-owned sandbox argument shape. A generic
+/// adapter must provide a distinct, non-empty, syntactically checkable
+/// sandbox contract. Those profiles fail closed before scout spawn. The
+/// disposable workspace remains the filesystem isolation boundary.
+pub fn scout_sandbox_contract(profile: &WorkerProfile) -> Result<(), String> {
+    if matches!(profile.id.as_str(), "codex" | "claude-code") {
+        return Ok(());
+    }
+    generic_sandbox_declaration(profile).map_err(|reason| {
+        format!("generic planning scout sandbox contract failed closed: {reason}")
+    })
+}
+
+/// Whether this profile can honor the requested access level (issue #123).
+///
+/// `sandboxed` is an enforced boundary for the built-in adapters, whose
+/// sandbox flags are core-owned; for a generic worker it is only ever the
+/// profile's own declaration. A generic profile that declares no sandbox
+/// contract cannot honor `sandboxed`, so it fails closed here instead of
+/// running unbounded while the workspace believes writes are bounded.
+pub fn access_contract(profile: &WorkerProfile, requested_access: &str) -> Result<(), String> {
+    if requested_access != "sandboxed" {
+        return Ok(());
+    }
+    if matches!(profile.id.as_str(), "codex" | "claude-code") {
+        return Ok(());
+    }
+    generic_sandbox_declaration(profile).map_err(|reason| {
+        format!(
+            "worker '{}' cannot honor sandboxed access: {reason}. Yardlet cannot verify a \
+             sandbox it does not own, so this profile is not invocable while the workspace \
+             asks for sandboxed access; declare a real sandbox in invocation.sandbox_args \
+             or grant full access explicitly (yardlet access full)",
+            profile.id
+        )
+    })
 }
 
 /// The outcome of one readiness gate in the staged worker-status display.
@@ -455,7 +481,11 @@ fn fallback_paths(worker_id: &str) -> Vec<PathBuf> {
 /// Resolution prefers the first candidate whose version probe succeeds: the
 /// PATH-resolved binary first, then well-known fallback paths. This keeps a
 /// worker usable even when a wrapper shadows the real CLI on PATH.
-pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
+pub fn probe(
+    profile: &WorkerProfile,
+    billing: &BillingPolicy,
+    requested_access: &str,
+) -> WorkerStatus {
     let command = profile.invocation.command.clone();
     let billing_env_present = present_billing_env(&billing.blocked_worker_env_names);
 
@@ -482,7 +512,9 @@ pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
         }
     }
 
-    let contract_error = invocation_contract(profile).err();
+    let contract_error = invocation_contract(profile)
+        .and_then(|()| access_contract(profile, requested_access))
+        .err();
     if let Some(error) = contract_error {
         return WorkerStatus {
             id: profile.id.clone(),
@@ -528,7 +560,7 @@ pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
 
     let (binary_path, version, readiness, detail) = match verified {
         Some((path, version)) => {
-            let detail = if billing_env_present.is_empty() {
+            let mut detail = if billing_env_present.is_empty() {
                 "binary found; version ok; AI-billing env clean; will run with sanitized environment"
                     .to_string()
             } else {
@@ -539,6 +571,16 @@ pub fn probe(profile: &WorkerProfile, billing: &BillingPolicy) -> WorkerStatus {
                     billing.worker_invocation.ai_billing_env_policy
                 )
             };
+            // An operator reading "sandboxed" must be able to tell an enforced
+            // boundary from a declared one (issue #123): the generic sandbox
+            // passed the declaration check above, but Yardlet does not own it.
+            if requested_access == "sandboxed"
+                && !matches!(profile.id.as_str(), "codex" | "claude-code")
+            {
+                detail.push_str(
+                    "; sandbox is profile-declared, not verified by Yardlet",
+                );
+            }
             (Some(path), Some(version), Readiness::Ready, detail)
         }
         None => match candidates.into_iter().next() {
@@ -742,7 +784,7 @@ invocation:
         .unwrap();
         let billing = BillingPolicy::default();
 
-        let status = probe(&profile, &billing);
+        let status = probe(&profile, &billing, "full");
 
         assert_ne!(status.readiness, Readiness::Ready);
         assert_eq!(status.readiness.label(), "disabled");
@@ -778,7 +820,7 @@ invocation:
             ),
         ] {
             let profile: WorkerProfile = crate::yaml::from_str(yaml).unwrap();
-            let status = probe(&profile, &BillingPolicy::default());
+            let status = probe(&profile, &BillingPolicy::default(), "full");
             assert_eq!(status.readiness, Readiness::NotReady, "{}", status.detail);
             assert!(status.detail.contains(expected), "{}", status.detail);
         }
@@ -830,7 +872,8 @@ invocation:
             "schema_version: 1\nworkers:\n  - id: ready\n    capabilities: [Shell Tool]\n    invocation: { command: bash, supports_noninteractive: true, output_contract: files }\n  - id: absent\n    capabilities: [browser]\n    invocation: { command: yardlet-definitely-missing-command, supports_noninteractive: true, output_contract: files }\n  - id: disabled\n    enabled: false\n    capabilities: [image-generation]\n    invocation: { command: bash }\n",
         )
         .unwrap();
-        let projection = capability_readiness_projection(&workers, &BillingPolicy::default());
+        let projection =
+            capability_readiness_projection(&workers, &BillingPolicy::default(), "full");
         assert_eq!(projection.len(), 3);
         assert_eq!(projection[0].readiness, Readiness::Ready);
         assert_eq!(projection[1].readiness, Readiness::NotReady);
@@ -845,10 +888,100 @@ invocation:
                 "id: {id}\ninvocation:\n  command: bash\n  supports_noninteractive: true\n  output_contract: {output_contract}\n  version_args: [definitely-not-a-built-in-version-flag]\n"
             ))
             .unwrap();
-            let status = probe(&profile, &BillingPolicy::default());
+            let status = probe(&profile, &BillingPolicy::default(), "full");
             assert_eq!(status.readiness, Readiness::Ready, "{}", status.detail);
             assert!(status.contract_error.is_none());
         }
+    }
+
+    // Issue #123: `sandboxed` must not be an unverified claim for generic
+    // workers. A profile that declares no way to bound writes is not invocable
+    // while the workspace asks for sandboxed access, and stays invocable under
+    // explicit full access.
+    #[test]
+    fn generic_worker_without_sandbox_declaration_is_not_invocable_under_sandboxed_access() {
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: generic-fixture\ninvocation: { command: bash, supports_noninteractive: true, output_contract: files }\n",
+        )
+        .unwrap();
+        let billing = BillingPolicy::default();
+
+        let sandboxed = probe(&profile, &billing, "sandboxed");
+        assert_eq!(
+            sandboxed.readiness,
+            Readiness::NotReady,
+            "{}",
+            sandboxed.detail
+        );
+        assert!(
+            sandboxed.detail.contains("cannot honor sandboxed access"),
+            "{}",
+            sandboxed.detail
+        );
+
+        let full = probe(&profile, &billing, "full");
+        assert_eq!(full.readiness, Readiness::Ready, "{}", full.detail);
+    }
+
+    #[test]
+    fn generic_worker_with_declared_sandbox_is_ready_but_labeled_declared_not_verified() {
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: generic-fixture\ninvocation: { command: bash, supports_noninteractive: true, output_contract: files, sandbox_args: ['--restricted'] }\n",
+        )
+        .unwrap();
+        let status = probe(&profile, &BillingPolicy::default(), "sandboxed");
+        assert_eq!(status.readiness, Readiness::Ready, "{}", status.detail);
+        assert!(
+            status.detail.contains("profile-declared, not verified"),
+            "{}",
+            status.detail
+        );
+    }
+
+    #[test]
+    fn built_in_adapters_stay_invocable_under_sandboxed_access_without_declared_label() {
+        for id in ["codex", "claude-code"] {
+            let profile: WorkerProfile = crate::yaml::from_str(&format!(
+                "id: {id}\ninvocation: {{ command: bash, supports_noninteractive: true, output_contract: files }}\n"
+            ))
+            .unwrap();
+            let status = probe(&profile, &BillingPolicy::default(), "sandboxed");
+            assert_eq!(status.readiness, Readiness::Ready, "{}", status.detail);
+            assert!(
+                !status.detail.contains("profile-declared"),
+                "{}",
+                status.detail
+            );
+        }
+    }
+
+    #[test]
+    fn access_contract_rejects_elevation_markers_and_identical_full_args_under_sandboxed() {
+        let base = "id: generic-fixture\ninvocation: { command: bash, supports_noninteractive: true, output_contract: files, sandbox_args: ['--dangerously-bypass'] }\n";
+        let profile: WorkerProfile = crate::yaml::from_str(base).unwrap();
+        let error = access_contract(&profile, "sandboxed").unwrap_err();
+        assert!(error.contains("elevation marker"), "{error}");
+        assert!(access_contract(&profile, "full").is_ok());
+
+        let identical: WorkerProfile = crate::yaml::from_str(
+            "id: generic-fixture\ninvocation: { command: bash, supports_noninteractive: true, output_contract: files, sandbox_args: ['--x'], full_access_args: ['--x'] }\n",
+        )
+        .unwrap();
+        let error = access_contract(&identical, "sandboxed").unwrap_err();
+        assert!(error.contains("identical"), "{error}");
+    }
+
+    #[test]
+    fn readiness_cache_key_changes_with_requested_access() {
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: generic-fixture\ninvocation: { command: bash, supports_noninteractive: true, output_contract: files }\n",
+        )
+        .unwrap();
+        let billing = BillingPolicy::default();
+        assert_ne!(
+            readiness_cache_key(&profile, &billing, "sandboxed"),
+            readiness_cache_key(&profile, &billing, "full")
+        );
     }
 
     #[test]

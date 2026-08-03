@@ -111,7 +111,33 @@ pub struct GitFinishRecord {
 impl GitFinishRecord {
     pub fn user_line(&self) -> String {
         match self.status {
-            GitFinishStatus::Disabled => "git finish: disabled by workspace policy".to_string(),
+            // Disabled only ever means the push was disabled; local integration
+            // may still have happened, and ownership evidence is the record of
+            // that (it is supplied only by a successful merge).
+            GitFinishStatus::Disabled => {
+                let integrated = self
+                    .expected_oid
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|oid| !oid.is_empty());
+                if let Some(oid) = integrated {
+                    let short = &oid[..oid.len().min(12)];
+                    let target = if self.policy.target_ref.is_empty() {
+                        "the owning checkout"
+                    } else {
+                        self.policy.target_ref.as_str()
+                    };
+                    format!(
+                        "git finish: integrated {short} into {target} locally; \
+                         push disabled by workspace policy"
+                    )
+                } else if self.reason == "policy_disabled:no_changes" {
+                    "git finish: no changes to deliver; push disabled by workspace policy"
+                        .to_string()
+                } else {
+                    "git finish: push disabled by workspace policy".to_string()
+                }
+            }
             GitFinishStatus::NotNeeded => "git finish: not needed (no changes)".to_string(),
             GitFinishStatus::Prepared => "git finish: prepared but push not started".to_string(),
             GitFinishStatus::Pushed => format!(
@@ -819,6 +845,9 @@ pub fn finish_no_change_run(
     }
     let mut record = base_record(run_id, task_id, &policy, None);
     if !policy.auto_push {
+        // Still a Disabled record, but keep the no-change fact visible: the
+        // user line must not suggest work was withheld by policy (issue #125).
+        record.reason = "policy_disabled:no_changes".to_string();
         return persist_and_return(ws, run_dir, record);
     }
     if task_state != TaskState::Done {
@@ -2348,6 +2377,44 @@ mod tests {
         assert_eq!(
             remote_oid(&f.root, "fixture", "refs/heads/main").unwrap(),
             Some(f.initial_oid.clone())
+        );
+    }
+
+    // Issue #125: a Disabled record only means the push was disabled. When the
+    // run's merge already landed in the owning checkout (ownership present),
+    // the user line must say so instead of reading as if nothing was delivered.
+    #[test]
+    fn disabled_push_user_line_reports_the_local_integration() {
+        let f = Fixture::new("disabled-line-integrated");
+        let oid = f.commit("owned");
+        let record = f.finish(Some(oid.clone()));
+        assert_eq!(record.status, GitFinishStatus::Disabled);
+        let line = record.user_line();
+        assert!(line.contains("integrated"), "{line}");
+        assert!(line.contains(&oid[..12]), "{line}");
+        assert!(line.contains("push disabled by workspace policy"), "{line}");
+    }
+
+    #[test]
+    fn disabled_push_user_line_distinguishes_no_change_runs() {
+        let f = Fixture::new("disabled-line-no-change");
+        let record =
+            finish_no_change_run(&f.ws, &f.run_dir, "run-test", "YARD-001", TaskState::Done)
+                .unwrap();
+        assert_eq!(record.status, GitFinishStatus::Disabled);
+        let line = record.user_line();
+        assert!(line.contains("no changes"), "{line}");
+        assert!(line.contains("push disabled by workspace policy"), "{line}");
+        assert!(!line.contains("integrated"), "{line}");
+    }
+
+    #[test]
+    fn disabled_push_user_line_without_evidence_claims_only_the_push() {
+        let record = base_record("run-test", "YARD-001", &GitFinishPolicy::default(), None);
+        assert_eq!(record.status, GitFinishStatus::Disabled);
+        assert_eq!(
+            record.user_line(),
+            "git finish: push disabled by workspace policy"
         );
     }
 

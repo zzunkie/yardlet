@@ -72,7 +72,7 @@ mod unix {
             fs::write(
                 root.join(".agents/workers.yaml"),
                 format!(
-                    "schema_version: 1\nworkers:\n  - id: fixture\n    model: fixture-model\n    provider_response_refusal_patterns: ['provider declined response']\n    invocation:\n      command: {}\n      args: ['{{run_dir}}', '{}', 'YARD-001']\n      supports_noninteractive: true\n      output_contract: files\n    limits:\n      max_wall_minutes: 1\n      max_retries: 3\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n  allow_preferred_worker_failover: false\n",
+                    "schema_version: 1\nworkers:\n  - id: fixture\n    model: fixture-model\n    provider_response_refusal_patterns: ['provider declined response']\n    invocation:\n      command: {}\n      args: ['{{run_dir}}', '{}', 'YARD-001']\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits:\n      max_wall_minutes: 1\n      max_retries: 3\nrouting:\n  default_worker: fixture\n  fallback_order: [fixture]\n  allow_preferred_worker_failover: false\n",
                     worker.display(),
                     scenario
                 ),
@@ -300,7 +300,7 @@ mod unix {
         fs::write(
             fixture.root.join(".agents/workers.yaml"),
             format!(
-                "schema_version: 1\nworkers:\n  - id: primary\n    model: fixture-model\n    provider_response_refusal_patterns: ['provider declined response']\n    invocation:\n      command: {0}\n      args: ['{{run_dir}}', 'unclassified', 'YARD-001']\n      supports_noninteractive: true\n      output_contract: files\n    limits: {{max_wall_minutes: 1, max_retries: 0}}\n  - id: alternate\n    model: fixture-model\n    provider_response_refusal_patterns: ['provider declined response']\n    invocation:\n      command: {0}\n      args: ['{{run_dir}}', 'alternate_success', 'YARD-001']\n      supports_noninteractive: true\n      output_contract: files\n    limits: {{max_wall_minutes: 1, max_retries: 0}}\nrouting:\n  default_worker: primary\n  fallback_order: [primary, alternate]\n  allow_preferred_worker_failover: true\n",
+                "schema_version: 1\nworkers:\n  - id: primary\n    model: fixture-model\n    provider_response_refusal_patterns: ['provider declined response']\n    invocation:\n      command: {0}\n      args: ['{{run_dir}}', 'unclassified', 'YARD-001']\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits: {{max_wall_minutes: 1, max_retries: 0}}\n  - id: alternate\n    model: fixture-model\n    provider_response_refusal_patterns: ['provider declined response']\n    invocation:\n      command: {0}\n      args: ['{{run_dir}}', 'alternate_success', 'YARD-001']\n      supports_noninteractive: true\n      output_contract: files\n      sandbox_args: ['--fixture-sandbox']\n    limits: {{max_wall_minutes: 1, max_retries: 0}}\nrouting:\n  default_worker: primary\n  fallback_order: [primary, alternate]\n  allow_preferred_worker_failover: true\n",
                 worker.display()
             ),
         )

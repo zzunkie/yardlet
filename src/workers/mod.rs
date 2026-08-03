@@ -1193,6 +1193,11 @@ fn spawn_internal(
     // process in the canonical run directory.
     let control_run_dir = output_log.parent().unwrap_or(cwd);
     guard::invocation_contract(profile).map_err(anyhow::Error::msg)?;
+    // Defensive re-check with the access this spawn actually uses: routing
+    // already gated on the workspace's requested access, but a generic worker
+    // must never start sandboxed on an unverifiable sandbox claim (issue #123).
+    let spawn_access = if full_access { "full" } else { "sandboxed" };
+    guard::access_contract(profile, spawn_access).map_err(anyhow::Error::msg)?;
     let packet_on_stdin = matches!(profile.id.as_str(), "codex" | "claude-code")
         || profile.invocation.prompt_on_stdin();
     let mut cmd = if resume {
@@ -3091,6 +3096,7 @@ invocation:
   supports_noninteractive: true
   output_contract: files
   args: ["-c", "printf stdout-only; printf stderr-only >&2"]
+  sandbox_args: ["--fixture-sandbox"]
 limits: {max_wall_minutes: 1}
 "#,
         )

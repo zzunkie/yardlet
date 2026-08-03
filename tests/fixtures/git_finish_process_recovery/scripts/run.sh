@@ -134,6 +134,7 @@ workers:
       command: $WRAPPER_DIR/worker-sentinel
       supports_noninteractive: true
       output_contract: files
+      sandbox_args: ['--fixture-sandbox']
 routing:
   default_worker: fixture-worker
   fallback_order: [fixture-worker]

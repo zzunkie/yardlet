@@ -73,6 +73,7 @@ pub fn resolve_worker_for_task(
         task.preferred_worker.trim().is_empty() || workers.routing.allow_preferred_worker_failover
     });
     validate_recorded_lineage(task, override_w, fallback_enabled)?;
+    let requested_access = ws.requested_access();
     let overrides = load_overrides(ws);
     let required: Vec<String> = task
         .required_capabilities
@@ -121,6 +122,7 @@ pub fn resolve_worker_for_task(
         resolve_order(
             workers,
             billing,
+            &requested_access,
             pinned.clone(),
             candidate.reason,
             std::slice::from_ref(&pinned),
@@ -134,6 +136,7 @@ pub fn resolve_worker_for_task(
         resolve_candidate(
             workers,
             billing,
+            &requested_access,
             candidate.worker_id,
             candidate.reason,
             &required,
@@ -145,6 +148,7 @@ pub fn resolve_worker_for_task(
 pub fn resolve_failover_worker_for_task(
     workers: &WorkersFile,
     billing: &BillingPolicy,
+    requested_access: &str,
     failed_worker: &str,
     task: &Task,
 ) -> Result<Resolved> {
@@ -189,7 +193,14 @@ pub fn resolve_failover_worker_for_task(
             "no alternate worker{cap_note} after excluding '{failed_worker}'"
         ));
     }
-    let resolved = resolve_order(workers, billing, order[0].clone(), "failover", &order)?;
+    let resolved = resolve_order(
+        workers,
+        billing,
+        requested_access,
+        order[0].clone(),
+        "failover",
+        &order,
+    )?;
     complete_resolution(workers, task, resolved, fallback_enabled)
 }
 
@@ -334,6 +345,7 @@ fn complete_resolution(
 fn resolve_candidate(
     workers: &WorkersFile,
     billing: &BillingPolicy,
+    requested_access: &str,
     candidate: String,
     source: &'static str,
     required: &[String],
@@ -358,12 +370,20 @@ fn resolve_candidate(
         ));
     }
 
-    resolve_order(workers, billing, candidate, source, &order)
+    resolve_order(
+        workers,
+        billing,
+        requested_access,
+        candidate,
+        source,
+        &order,
+    )
 }
 
 fn resolve_order(
     workers: &WorkersFile,
     billing: &BillingPolicy,
+    requested_access: &str,
     candidate: String,
     source: &'static str,
     order: &[String],
@@ -378,7 +398,7 @@ fn resolve_order(
             continue;
         }
         tried.push(id.clone());
-        let status = guard::probe(profile, billing);
+        let status = guard::probe(profile, billing, requested_access);
         if status.readiness == Readiness::Ready {
             if let Some(bin) = status.binary_path {
                 let reason = if id == &candidate {
@@ -647,6 +667,12 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let ws = Workspace::at(&root);
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        std::fs::write(
+            root.join(".agents/yardlet.yaml"),
+            "schema_version: 1\nproduct: yardlet\nworkspace_id: test\ncreated_at: \"2026-07-03T00:00:00Z\"\nstate_dir: .agents\ndefault_interface: tui\ncanonical_queue: work-queue.yaml\ncurrent_intent: intent-contract.yaml\ndefault_access: full\n",
+        )
+        .unwrap();
         let billing = BillingPolicy::default();
 
         let resolved = resolve_worker_for_task(&ws, &workers, &billing, None, &exact()).unwrap();
@@ -703,6 +729,12 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let ws = Workspace::at(&root);
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        std::fs::write(
+            root.join(".agents/yardlet.yaml"),
+            "schema_version: 1\nproduct: yardlet\nworkspace_id: test\ncreated_at: \"2026-07-03T00:00:00Z\"\nstate_dir: .agents\ndefault_interface: tui\ncanonical_queue: work-queue.yaml\ncurrent_intent: intent-contract.yaml\ndefault_access: full\n",
+        )
+        .unwrap();
 
         let error = resolve_worker_for_task(&ws, &workers, &BillingPolicy::default(), None, &task)
             .unwrap_err();
@@ -769,7 +801,7 @@ mod tests {
                 .unwrap();
 
         let resolved =
-            resolve_failover_worker_for_task(&w, &BillingPolicy::default(), "first", &task)
+            resolve_failover_worker_for_task(&w, &BillingPolicy::default(), "full", "first", &task)
                 .unwrap();
         assert_eq!(resolved.worker_id, "second");
 
@@ -780,6 +812,7 @@ mod tests {
         let err = resolve_failover_worker_for_task(
             &w_without_alternate,
             &BillingPolicy::default(),
+            "full",
             "first",
             &task,
         )
@@ -802,9 +835,10 @@ mod tests {
         )
         .unwrap();
 
-        let error = resolve_failover_worker_for_task(&w, &BillingPolicy::default(), "first", &task)
-            .unwrap_err()
-            .to_string();
+        let error =
+            resolve_failover_worker_for_task(&w, &BillingPolicy::default(), "full", "first", &task)
+                .unwrap_err()
+                .to_string();
 
         assert!(
             error.contains("preferred worker") && error.contains("opt-in"),
@@ -813,7 +847,7 @@ mod tests {
 
         w.routing.allow_preferred_worker_failover = true;
         let resolved =
-            resolve_failover_worker_for_task(&w, &BillingPolicy::default(), "first", &task)
+            resolve_failover_worker_for_task(&w, &BillingPolicy::default(), "full", "first", &task)
                 .unwrap();
         assert_eq!(resolved.worker_id, "second");
     }
@@ -835,6 +869,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let workspace = Workspace::at(&root);
+        std::fs::create_dir_all(root.join(".agents")).unwrap();
+        std::fs::write(
+            root.join(".agents/yardlet.yaml"),
+            "schema_version: 1\nproduct: yardlet\nworkspace_id: test\ncreated_at: \"2026-07-03T00:00:00Z\"\nstate_dir: .agents\ndefault_interface: tui\ncanonical_queue: work-queue.yaml\ncurrent_intent: intent-contract.yaml\ndefault_access: full\n",
+        )
+        .unwrap();
 
         let error =
             resolve_worker_for_task(&workspace, &workers, &BillingPolicy::default(), None, &task)
@@ -858,9 +898,14 @@ mod tests {
         .unwrap();
         let task: Task = crate::yaml::from_str("id: T\ntitle: t\n").unwrap();
 
-        let resolved =
-            resolve_failover_worker_for_task(&w, &BillingPolicy::default(), "failed", &task)
-                .unwrap();
+        let resolved = resolve_failover_worker_for_task(
+            &w,
+            &BillingPolicy::default(),
+            "full",
+            "failed",
+            &task,
+        )
+        .unwrap();
 
         assert_eq!(resolved.worker_id, "ready");
         assert_eq!(resolved.reason, "fallback (missing not invocable)");

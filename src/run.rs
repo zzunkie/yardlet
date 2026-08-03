@@ -3244,6 +3244,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         match routing::resolve_failover_worker_for_task(
             &workers,
             &billing,
+            &ws.requested_access(),
             &active_worker_id,
             &failover_task,
         ) {
@@ -10207,7 +10208,7 @@ mod tests {
         }
         write_str(
             &ws.config_path(),
-            "schema_version: 1\nproduct: yardlet\nworkspace_id: test\ncreated_at: \"2026-07-03T00:00:00Z\"\nstate_dir: .agents\ndefault_interface: tui\ncanonical_queue: work-queue.yaml\ncurrent_intent: intent-contract.yaml\n",
+            "schema_version: 1\nproduct: yardlet\nworkspace_id: test\ncreated_at: \"2026-07-03T00:00:00Z\"\nstate_dir: .agents\ndefault_interface: tui\ncanonical_queue: work-queue.yaml\ncurrent_intent: intent-contract.yaml\n# unit fixtures opt into full access explicitly: they exercise run/parallel\n# mechanics with bash fixture workers that declare no sandbox contract\ndefault_access: full\n",
         )
         .unwrap();
         write_str(&ws.billing_path(), "schema_version: 1\n").unwrap();
