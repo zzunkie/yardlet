@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The report no longer calls a delivered run "disabled".** A `Disabled`
+  Git-finish record only ever meant the push was disabled by policy, but the
+  per-task report line read as if nothing was delivered. The line now reports
+  the local integration (with its commit) when the run's merge landed, says
+  "no changes to deliver" for no-change runs, and claims only the push
+  otherwise. (#125)
+
 ## 0.10.3 - 2026-07-25
 
 ### Added
