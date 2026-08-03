@@ -221,6 +221,7 @@ EOF
 fi
 if [ "${{1:-}}" = resume ]; then
   cp "$capture/last-argv" "$capture/resume-argv"
+  cp "$capture/last-secret" "$capture/resume-secret"
   printf '%s' "${{4:-}}" > "$capture/resume-prompt"
   cat > "$capture/resume-stdin"
   if [ "${{3:-}}" != 'fixture session ref' ]; then
@@ -500,6 +501,11 @@ fn generic_answer_uses_captured_session_ref_and_declared_native_resume_template(
             .unwrap()
             .is_empty(),
         "argument resume transport must not duplicate the prompt on stdin"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.capture.join("resume-secret")).unwrap(),
+        "absent",
+        "native resume must reach the worker across the same billing-env sanitation boundary as its fresh child"
     );
 
     let channel_root = fixture.root.join(".agents/task-channels");
