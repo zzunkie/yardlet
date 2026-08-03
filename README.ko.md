@@ -352,6 +352,9 @@ TUI는 모두 같은 판정을 사용합니다.
     version_args: ["version", "--offline"] # 기본값: ["--version"]
     prompt_transport: argument              # 기본값: stdin
     args: ["run", "--out", "{run_dir}", "--prompt", "{prompt}"]
+    session:                                # 선택적 native resume 계약
+      capture: {stream: stdout, prefix: "SESSION_REF="}
+      resume_args: ["resume", "--session", "{session}", "--prompt", "{prompt}"]
     sandbox_args: ["--sandbox"]        # 기본 접근 수준
     full_access_args: ["--yolo"]       # 풀 액세스가 허용될 때만
     model_args: ["--model", "{model}"] # 모델이 설정되면 추가됨
@@ -365,6 +368,21 @@ stdin으로 보내고, `version_args`를 생략하면 `--version`을 실행합�
 넣으세요. Yardlet은 셸 문자열을 만들지 않고 하나의 `Command` 인자로 치환하여 인자
 경계를 보존합니다. stdin 전달에는 `{prompt}`를 넣으면 안 됩니다. 그 밖의 호출
 플레이스홀더는 `{run_dir}`, `{model}`, `{effort}`, `{image}`입니다.
+
+제네릭 native resume은 하위 호환 opt-in입니다. `session`을 생략하면 기존
+`ExplicitPacket` 답변 continuation을 유지합니다. `session`이 있으면
+`capture.stream`은 `stdout` 또는 `stderr`여야 하고, `capture.prefix`는 비어 있지 않은
+단일 행 prefix여야 하며, `resume_args`에는 `{session}`이 정확히 한 번 있어야 합니다.
+fresh child의 선택된 raw stream에서 이 정확한 prefix 뒤에 처음 나온 비어 있지 않은
+suffix가 opaque `worker_session_ref`가 됩니다. Yardlet은 전역 session 파일을 읽거나 다른
+attempt의 참조를 추론하지 않습니다.
+
+resume template은 fresh generic invocation과 같은 `command`, access, model, effort, image,
+정화된 환경 계약을 사용합니다. `{prompt}`는 `prompt_transport`를 따릅니다. `stdin`이면
+`resume_args`에서 생략하고, `argument`이면 정확히 한 번 넣습니다. 각 template 항목은
+하나의 `Command` 인자가 되므로 `{session}`과 `{prompt}`의 argv 경계가 유지됩니다.
+session block이 없거나, fresh child가 비어 있지 않은 ref를 내지 않거나, answer routing이
+다른 worker를 선택하면 Yardlet은 native resume 대신 안전하게 `ExplicitPacket`을 사용합니다.
 
 워커는 실행 디렉터리에 `result.json`과 `handoff.md`를 작성해야 합니다. 실행 env는
 프로필이 `pass_env`로 변수를 다시 옵트인하지 않는 한 정화됩니다. 버전 프로브도 정화된

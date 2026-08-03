@@ -878,6 +878,7 @@ invocation:
                 model_args: vec![],
                 effort_args: vec![],
                 pass_env: vec![],
+                session: None,
             },
             limits: crate::schemas::Limits::default(),
             provider_response_refusal_patterns: vec![],

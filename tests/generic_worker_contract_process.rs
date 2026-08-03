@@ -165,9 +165,89 @@ if [ "${{1:-}}" = --version ]; then
 fi
 printf invoked > "$capture/invoked"
 run_dir="$2"
+run_id="$(basename "$run_dir")"
+if [ "${{1:-}}" = ask ]; then
+  cp "$capture/last-argv" "$capture/fresh-argv"
+  printf '%s' "${{3:-}}" > "$capture/prompt-argument"
+  cat > "$capture/stdin"
+  printf 'SESSION_REF=fixture session ref\n'
+  cat > "$run_dir/result.json" <<EOF
+{{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-001",
+  "status": "needs_user",
+  "intent_adherence": {{"drift_detected": false, "notes": ""}},
+  "changes": {{"files_modified": [], "files_created": [], "files_deleted": []}},
+  "validation": {{"commands_run": [], "passed": true, "failures": []}},
+  "question_for_user": "Continue in the same generic session?",
+  "compact_summary": "generic fixture needs an answer",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}}
+EOF
+  printf '# Generic worker question\n' > "$run_dir/handoff.md"
+  exit 0
+fi
+if [ "${{1:-}}" = ask-without-session ]; then
+  printf '%s' "${{3:-}}" > "$capture/prompt-argument"
+  cat > "$capture/stdin"
+  if grep -q 'Explicit continuation packet' "$capture/prompt-argument"; then
+    cat > "$run_dir/result.json" <<EOF
+{{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-001",
+  "status": "done",
+  "compact_summary": "generic explicit fallback complete"
+}}
+EOF
+    printf '# Generic worker explicit fallback\n' > "$run_dir/handoff.md"
+  else
+    cat > "$run_dir/result.json" <<EOF
+{{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-001",
+  "status": "needs_user",
+  "question_for_user": "Continue without a captured session ref?",
+  "compact_summary": "generic fixture omitted its session ref"
+}}
+EOF
+    printf '# Generic worker omitted session ref\n' > "$run_dir/handoff.md"
+  fi
+  exit 0
+fi
+if [ "${{1:-}}" = resume ]; then
+  cp "$capture/last-argv" "$capture/resume-argv"
+  printf '%s' "${{4:-}}" > "$capture/resume-prompt"
+  cat > "$capture/resume-stdin"
+  if [ "${{3:-}}" != 'fixture session ref' ]; then
+    printf 'wrong session ref: %s\n' "${{3:-}}" >&2
+    exit 64
+  fi
+  cat > "$run_dir/result.json" <<EOF
+{{
+  "schema_version": 1,
+  "run_id": "$run_id",
+  "task_id": "YARD-001",
+  "status": "done",
+  "intent_adherence": {{"drift_detected": false, "notes": ""}},
+  "changes": {{"files_modified": [], "files_created": [], "files_deleted": []}},
+  "validation": {{"commands_run": [], "passed": true, "failures": []}},
+  "question_for_user": null,
+  "compact_summary": "generic native resume complete",
+  "verdict": [],
+  "harness_suggestions": [],
+  "follow_up_tasks": []
+}}
+EOF
+  printf '# Generic worker resumed\n' > "$run_dir/handoff.md"
+  exit 0
+fi
 printf '%s' "${{3:-}}" > "$capture/prompt-argument"
 cat > "$capture/stdin"
-run_id="$(basename "$run_dir")"
 cat > "$run_dir/result.json" <<EOF
 {{
   "schema_version": 1,
@@ -308,6 +388,24 @@ fn invalid_contract_and_strict_billing_are_rejected_before_probe_or_worker_spawn
             "exactly one {prompt}",
         ),
         (
+            "session-capture",
+            "      supports_noninteractive: true\n      output_contract: files\n      args: [execute, '{run_dir}']\n      session:\n        capture: {}\n        resume_args: ['{run_dir}', '{session}']\n",
+            "scrub_or_block",
+            "session capture stream",
+        ),
+        (
+            "session-resume-ref",
+            "      supports_noninteractive: true\n      output_contract: files\n      args: [execute, '{run_dir}']\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: ['{run_dir}']\n",
+            "scrub_or_block",
+            "exactly one {session}",
+        ),
+        (
+            "session-resume-prompt",
+            "      supports_noninteractive: true\n      output_contract: files\n      prompt_transport: argument\n      args: [execute, '{run_dir}', '{prompt}']\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: ['{run_dir}', '{session}']\n",
+            "scrub_or_block",
+            "exactly one {prompt}",
+        ),
+        (
             "strict-billing",
             "      supports_noninteractive: true\n      output_contract: files\n      args: [execute, '{run_dir}']\n",
             "block",
@@ -356,4 +454,131 @@ fn failed_offline_probe_rejects_routing_before_the_worker_invocation() {
         !fixture.capture.join("invoked").exists(),
         "the failed probe must not fall through to the worker invocation"
     );
+}
+
+#[test]
+fn generic_answer_uses_captured_session_ref_and_declared_native_resume_template() {
+    let fixture = Fixture::new("native-resume");
+    fixture.configure(
+        "      supports_noninteractive: true\n      output_contract: files\n      version_args: [probe, offline]\n      prompt_transport: argument\n      args: [ask, '{run_dir}', '{prompt}']\n      session:\n        capture:\n          stream: stdout\n          prefix: 'SESSION_REF='\n        resume_args: [resume, '{run_dir}', '{session}', '{prompt}', 'literal with spaces']\n",
+        "scrub_or_block",
+    );
+
+    let first = fixture.run_with_secret(&["run", "--task", "YARD-001", "--execute"]);
+    assert!(
+        first.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let answer = fixture.run_with_secret(&[
+        "answer",
+        "native answer with spaces",
+        "--task",
+        "YARD-001",
+        "--action-id",
+        "act-generic-native-answer",
+    ]);
+    assert!(
+        answer.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&answer.stdout),
+        String::from_utf8_lossy(&answer.stderr)
+    );
+
+    let resume_argv = argv(&fixture.capture.join("resume-argv"));
+    assert_eq!(resume_argv[0], "resume");
+    assert_eq!(resume_argv[2], "fixture session ref");
+    assert_eq!(resume_argv[4], "literal with spaces");
+    let resume_prompt = fs::read_to_string(fixture.capture.join("resume-prompt")).unwrap();
+    assert_eq!(
+        resume_prompt.matches("native answer with spaces").count(),
+        1
+    );
+    assert!(
+        fs::read(fixture.capture.join("resume-stdin"))
+            .unwrap()
+            .is_empty(),
+        "argument resume transport must not duplicate the prompt on stdin"
+    );
+
+    let channel_root = fixture.root.join(".agents/task-channels");
+    let attempt_records = files_below(&channel_root, ".yaml")
+        .into_iter()
+        .filter(|path| path.to_string_lossy().contains("/attempts/"))
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect::<Vec<_>>();
+    assert!(attempt_records.iter().any(|record| {
+        record.contains("continuation: native_resume")
+            && record.contains("worker_session_ref: fixture session ref")
+    }));
+    let event_records = files_below(&channel_root, ".yaml")
+        .into_iter()
+        .filter(|path| path.to_string_lossy().contains("/events/"))
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        event_records.iter().any(|record| {
+            record.contains("type: worker.completed")
+                && record.contains("worker_session_ref: fixture session ref")
+        }),
+        "worker.completed did not retain the generic session ref: {event_records:#?}"
+    );
+    let latest_packet = fs::read_to_string(fixture.latest_run().join("task-packet.md")).unwrap();
+    assert!(!latest_packet.contains("Explicit continuation packet"));
+}
+
+#[test]
+fn generic_answer_without_a_captured_session_ref_uses_explicit_packet_fallback() {
+    let fixture = Fixture::new("missing-session-ref");
+    fixture.configure(
+        "      supports_noninteractive: true\n      output_contract: files\n      version_args: [probe, offline]\n      prompt_transport: argument\n      args: [ask-without-session, '{run_dir}', '{prompt}']\n      session:\n        capture:\n          stream: stdout\n          prefix: 'SESSION_REF='\n        resume_args: [resume, '{run_dir}', '{session}', '{prompt}']\n",
+        "scrub_or_block",
+    );
+
+    must_succeed(
+        &fixture.root,
+        &fixture.binary,
+        &["run", "--task", "YARD-001", "--execute"],
+    );
+    must_succeed(
+        &fixture.root,
+        &fixture.binary,
+        &[
+            "answer",
+            "fallback answer",
+            "--task",
+            "YARD-001",
+            "--action-id",
+            "act-generic-fallback-answer",
+        ],
+    );
+
+    assert!(!fixture.capture.join("resume-argv").exists());
+    let packet = fs::read_to_string(fixture.latest_run().join("task-packet.md")).unwrap();
+    assert!(packet.contains("Explicit continuation packet"));
+    let attempt_records = files_below(&fixture.root.join(".agents/task-channels"), ".yaml")
+        .into_iter()
+        .filter(|path| path.to_string_lossy().contains("/attempts/"))
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect::<Vec<_>>();
+    assert!(attempt_records
+        .iter()
+        .any(|record| record.contains("continuation: explicit_packet")));
+}
+
+fn files_below(root: &Path, suffix: &str) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files.extend(files_below(&path, suffix));
+            } else if path.to_string_lossy().ends_with(suffix) {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    files
 }
