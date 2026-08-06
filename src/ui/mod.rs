@@ -1194,11 +1194,19 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
                 KeyCode::Esc | KeyCode::Char('q') => app.screen = Screen::Home,
                 // Stop/pause work here too, so the monitor isn't a dead end:
                 // `x` stops the running worker, `p` pauses a drain (both also on
-                // Home). Esc/q stays "back to Home".
-                KeyCode::Char('x') if app.is_busy() || has_running_task(&app) => {
-                    stop_running_worker(&mut app)
-                }
-                KeyCode::Char('p') => request_pause(&mut app),
+                // Home). Esc/q stays "back to Home". The diagnostic Monitor
+                // (opened on a Failed/Partial attempt via `m`) is a read-only
+                // postmortem with no live worker to stop or drain to pause, so
+                // both keys are inert there; the live Monitor keeps them.
+                KeyCode::Char('x') | KeyCode::Char('p') => match monitor_control_action(
+                    code,
+                    app.monitor.diagnostic,
+                    app.is_busy() || has_running_task(&app),
+                ) {
+                    MonitorControl::Stop => stop_running_worker(&mut app),
+                    MonitorControl::Pause => request_pause(&mut app),
+                    MonitorControl::Ignore => {}
+                },
                 // Scroll back through what the worker already printed. The
                 // operator asked for what a normal streaming session gives them
                 // (issue #54).
@@ -2715,6 +2723,33 @@ fn apply_scroll(app: &mut App, code: KeyCode) {
 /// Reaching the bottom resumes following rather than leaving the view frozen
 /// one line from live — a viewer that stops updating where it looks live is
 /// worse than one that never followed.
+/// What Monitor's worker-control keys (`x` stop / `p` pause) should do. Pure so
+/// the diagnostic gate is unit-tested without a live event loop.
+///
+/// The diagnostic Monitor is opened on a selected Failed/Partial task's exact
+/// attempt streams (`m`): a read-only postmortem with no live worker to stop
+/// and no drain to pause, so both keys are inert there. The live Monitor keeps
+/// them, matching Home. `can_stop` mirrors the live `x` guard
+/// (`is_busy() || has_running_task`); when it is false `x` is a no-op, exactly
+/// as it was before this seam existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MonitorControl {
+    Stop,
+    Pause,
+    Ignore,
+}
+
+fn monitor_control_action(code: KeyCode, diagnostic: bool, can_stop: bool) -> MonitorControl {
+    if diagnostic {
+        return MonitorControl::Ignore;
+    }
+    match code {
+        KeyCode::Char('x') if can_stop => MonitorControl::Stop,
+        KeyCode::Char('p') => MonitorControl::Pause,
+        _ => MonitorControl::Ignore,
+    }
+}
+
 fn monitor_scroll_to(code: KeyCode, top: usize, max_top: usize, visible: usize) -> (usize, bool) {
     let page = visible.max(1);
     let landed = match code {
@@ -6430,6 +6465,46 @@ tasks:
         // leaves it following.
         for code in [KeyCode::Up, KeyCode::PageUp, KeyCode::Home] {
             assert_eq!(monitor_scroll_to(code, 0, 0, visible), (0, true));
+        }
+    }
+
+    /// The live Monitor's `x`/`p` still stop the worker and pause the drain; the
+    /// diagnostic Monitor (a read-only postmortem opened on a Failed/Partial
+    /// attempt) has no live worker, so both keys are inert there.
+    #[test]
+    fn monitor_control_gates_stop_and_pause_off_in_the_diagnostic_view() {
+        // Live Monitor, worker running: x stops, p pauses.
+        assert_eq!(
+            monitor_control_action(KeyCode::Char('x'), false, true),
+            MonitorControl::Stop,
+        );
+        assert_eq!(
+            monitor_control_action(KeyCode::Char('p'), false, true),
+            MonitorControl::Pause,
+        );
+        // Live Monitor, nothing running: x is a no-op (mirrors the live guard),
+        // but p still fires (request_pause reports "nothing to pause" itself).
+        assert_eq!(
+            monitor_control_action(KeyCode::Char('x'), false, false),
+            MonitorControl::Ignore,
+        );
+        assert_eq!(
+            monitor_control_action(KeyCode::Char('p'), false, false),
+            MonitorControl::Pause,
+        );
+
+        // Diagnostic Monitor: both keys are inert regardless of `can_stop`.
+        for can_stop in [true, false] {
+            assert_eq!(
+                monitor_control_action(KeyCode::Char('x'), true, can_stop),
+                MonitorControl::Ignore,
+                "diagnostic x must be a no-op (can_stop={can_stop})",
+            );
+            assert_eq!(
+                monitor_control_action(KeyCode::Char('p'), true, can_stop),
+                MonitorControl::Ignore,
+                "diagnostic p must be a no-op (can_stop={can_stop})",
+            );
         }
     }
 
