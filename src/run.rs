@@ -1953,7 +1953,11 @@ pub(crate) fn finish_worker_attempt(
             serde_json::json!({
                 "result": worker_attempt_result(run_dir, outcome),
                 "exit_ok": outcome.exit_ok,
+                "exit_code": outcome.exit_code,
+                "exit_signal": outcome.exit_signal,
                 "timed_out": outcome.timed_out,
+                "raw_stdout_ref": attempt.raw_stdout_ref,
+                "raw_stderr_ref": attempt.raw_stderr_ref,
                 "worker_session_ref": outcome.session_id
             }),
             None,
@@ -1995,6 +1999,10 @@ pub(crate) fn finish_worker_attempt_error(
         causation_id,
         serde_json::json!({
             "result": "failed",
+            "exit_code": serde_json::Value::Null,
+            "exit_signal": serde_json::Value::Null,
+            "raw_stdout_ref": attempt.raw_stdout_ref,
+            "raw_stderr_ref": attempt.raw_stderr_ref,
             "spawn_error": error.to_string(),
             "worker_session_ref": attempt.worker_session_ref
         }),

@@ -247,6 +247,16 @@ EOF
   printf '# Generic worker resumed\n' > "$run_dir/handoff.md"
   exit 0
 fi
+if [ "${{1:-}}" = signal-failure ]; then
+  printf 'generic signal stdout\n'
+  printf 'generic signal stderr\n' >&2
+  kill -TERM "$$"
+fi
+if [ "${{1:-}}" = missing-result ]; then
+  printf 'generic missing-result stdout\n'
+  printf 'generic missing-result stderr\n' >&2
+  exit 0
+fi
 printf '%s' "${{3:-}}" > "$capture/prompt-argument"
 cat > "$capture/stdin"
 cat > "$run_dir/result.json" <<EOF
@@ -590,6 +600,157 @@ fn files_below(root: &Path, suffix: &str) -> Vec<PathBuf> {
     }
     files.sort();
     files
+}
+
+fn attempt_and_completion(
+    run: &Path,
+    channel_root: &Path,
+) -> (serde_yaml_ng::Value, serde_yaml_ng::Value) {
+    let attempt_id = fs::read_to_string(run.join("latest-attempt")).unwrap();
+    let attempt_id = attempt_id.trim();
+    let attempt_path = files_below(channel_root, ".yaml")
+        .into_iter()
+        .find(|path| {
+            path.to_string_lossy().contains("/attempts/")
+                && path.file_stem().and_then(|stem| stem.to_str()) == Some(attempt_id)
+        })
+        .expect("latest attempt record exists");
+    let attempt: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&fs::read_to_string(attempt_path).unwrap()).unwrap();
+    let completion = files_below(channel_root, ".yaml")
+        .into_iter()
+        .filter(|path| path.to_string_lossy().contains("/events/"))
+        .filter_map(|path| {
+            serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&fs::read_to_string(path).ok()?).ok()
+        })
+        .find(|event| {
+            event.get("type").and_then(serde_yaml_ng::Value::as_str) == Some("worker.completed")
+                && event
+                    .get("attempt_id")
+                    .and_then(serde_yaml_ng::Value::as_str)
+                    == Some(attempt_id)
+        })
+        .expect("latest attempt completion exists");
+    (attempt, completion)
+}
+
+fn assert_failed_attempt_raw_evidence(
+    fixture: &Fixture,
+    run: &Path,
+    expected_stdout: &[u8],
+    expected_stderr: &[u8],
+    exit_code: Option<i64>,
+    exit_signal: Option<i64>,
+) {
+    assert!(!run.join("result.json").exists());
+    let (attempt, completion) =
+        attempt_and_completion(run, &fixture.root.join(".agents/task-channels"));
+    let attempt_id = attempt
+        .get("attempt_id")
+        .and_then(serde_yaml_ng::Value::as_str)
+        .unwrap();
+    let expected_stdout_ref = run
+        .join("attempts")
+        .join(attempt_id)
+        .join("stdout.log")
+        .display()
+        .to_string();
+    let expected_stderr_ref = run
+        .join("attempts")
+        .join(attempt_id)
+        .join("stderr.log")
+        .display()
+        .to_string();
+    let stdout_ref = attempt
+        .get("raw_stdout_ref")
+        .and_then(serde_yaml_ng::Value::as_str)
+        .unwrap();
+    let stderr_ref = attempt
+        .get("raw_stderr_ref")
+        .and_then(serde_yaml_ng::Value::as_str)
+        .unwrap();
+    assert_eq!(
+        fs::canonicalize(stdout_ref).unwrap(),
+        fs::canonicalize(&expected_stdout_ref).unwrap()
+    );
+    assert_eq!(
+        fs::canonicalize(stderr_ref).unwrap(),
+        fs::canonicalize(&expected_stderr_ref).unwrap()
+    );
+    assert_eq!(fs::read(stdout_ref).unwrap(), expected_stdout);
+    assert_eq!(fs::read(stderr_ref).unwrap(), expected_stderr);
+
+    let payload = completion.get("payload").expect("completion payload");
+    assert_eq!(
+        payload.get("result").and_then(serde_yaml_ng::Value::as_str),
+        Some("failed")
+    );
+    assert_eq!(
+        payload
+            .get("raw_stdout_ref")
+            .and_then(serde_yaml_ng::Value::as_str),
+        Some(stdout_ref),
+        "worker.completed must link the exact attempt stdout"
+    );
+    assert_eq!(
+        payload
+            .get("raw_stderr_ref")
+            .and_then(serde_yaml_ng::Value::as_str),
+        Some(stderr_ref),
+        "worker.completed must link the exact attempt stderr"
+    );
+    assert_eq!(
+        payload
+            .get("exit_code")
+            .and_then(serde_yaml_ng::Value::as_i64),
+        exit_code
+    );
+    assert_eq!(
+        payload
+            .get("exit_signal")
+            .and_then(serde_yaml_ng::Value::as_i64),
+        exit_signal
+    );
+}
+
+#[test]
+fn generic_signal_failure_preserves_and_links_exact_attempt_streams() {
+    let fixture = Fixture::new("signal-raw-evidence");
+    fixture.configure(
+        "      supports_noninteractive: true\n      output_contract: files\n      args: [signal-failure, '{run_dir}']\n      sandbox_args: ['--fixture-sandbox']\n",
+        "scrub_or_block",
+    );
+
+    let _ = fixture.run_with_secret(&["run", "--task", "YARD-001", "--execute"]);
+    let run = fixture.latest_run();
+    assert_failed_attempt_raw_evidence(
+        &fixture,
+        &run,
+        b"generic signal stdout\n",
+        b"generic signal stderr\n",
+        None,
+        Some(libc::SIGTERM.into()),
+    );
+}
+
+#[test]
+fn generic_zero_exit_without_result_preserves_and_links_exact_attempt_streams() {
+    let fixture = Fixture::new("missing-result-raw-evidence");
+    fixture.configure(
+        "      supports_noninteractive: true\n      output_contract: files\n      args: [missing-result, '{run_dir}']\n      sandbox_args: ['--fixture-sandbox']\n",
+        "scrub_or_block",
+    );
+
+    let _ = fixture.run_with_secret(&["run", "--task", "YARD-001", "--execute"]);
+    let run = fixture.latest_run();
+    assert_failed_attempt_raw_evidence(
+        &fixture,
+        &run,
+        b"generic missing-result stdout\n",
+        b"generic missing-result stderr\n",
+        Some(0),
+        None,
+    );
 }
 
 // Issue #123: a generic profile that declares no way to bound writes is not

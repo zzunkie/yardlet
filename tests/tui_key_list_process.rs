@@ -102,16 +102,27 @@ fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
         drain(&mut master, &mut sink);
     }
 
+    // Force a full repaint by resizing to a width the app is not already at.
+    // Ratatui writes only CHANGED cells, so on scrolled content a doc that
+    // shares a leading prefix with the row it replaced is emitted in pieces and
+    // is never a contiguous byte run; a genuine size change resets the buffer so
+    // the next frame re-emits every visible cell in reading order. The width
+    // must actually change: resizing back to the current 140 would coalesce into
+    // one SIGWINCH at an unchanged size and force no repaint at all. 139 does not
+    // wrap any doc line, so the scroll position is preserved and the tail keys
+    // stay in view.
     resize_pty(&master, ROWS, 139);
-    std::thread::sleep(Duration::from_millis(300));
-    drain(&mut master, &mut sink);
-    let after_repaint = sink.len();
-    resize_pty(&master, ROWS, 140);
-    std::thread::sleep(Duration::from_millis(300));
-    drain(&mut master, &mut sink);
 
     // The always-valid globals the issue named: each present with its meaning,
-    // on a surface the operator can reach without already knowing the key.
+    // on a surface the operator can reach without already knowing the key. Poll
+    // each phrase to a deadline exactly like `wait_for_marker`, rather than
+    // reading one partial frame after a fixed sleep. A longer key doc grows the
+    // bytes per repaint, so a single drain can catch the tail row mid-emission
+    // and miss it; the old fixed-sleep capture went flaky once a key doc was
+    // lengthened. Polling the first phrase also lets the 139 repaint land before
+    // the width is restored below. The pre-scroll assertion already proved the
+    // tail was below the fold, so a phrase arriving after the scroll is proof it
+    // came into view.
     for doc in [
         "reload the workspace",
         "open settings",
@@ -120,12 +131,11 @@ fn the_idle_footer_leads_to_a_list_of_every_working_home_key() {
         "show the intent contract",
         "reports and past intents",
     ] {
-        assert!(
-            seen(&sink[after_repaint..], doc),
-            "{doc:?} never came into view after scrolling at {ROWS} rows;\n{}",
-            recent(&sink)
-        );
+        wait_for_marker(&mut master, &mut sink, doc, Duration::from_secs(10));
     }
+
+    // Back to the contract width now that every phrase has been observed.
+    resize_pty(&master, ROWS, 140);
 
     // Esc returns to Home rather than dead-ending on the list. Match only what
     // arrives AFTER the keypress: the cumulative sink already holds every

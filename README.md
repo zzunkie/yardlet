@@ -235,7 +235,7 @@ session. From the Home screen:
 | `h` | View the latest handoff. |
 | `T` | Trust and autonomy panel (same numbers as `yardlet trust`). |
 | `R` | Reports and history browser. |
-| `m` | Monitor the worker's live output. |
+| `m` | Open Monitor: inspect the selected Failed/Partial task's latest failed attempt, or follow live worker output. |
 | `s` | Settings (can be opened mid-run). |
 | `g` | Refresh, re-probing worker readiness. |
 | `l` | Toggle language. |
@@ -245,6 +245,14 @@ session. From the Home screen:
 
 Korean keyboard layouts work without switching back to English: the Hangul jamo
 are mapped to the same shortcuts.
+
+For a selected Failed or Partial task, `m` opens the latest failed attempt from
+that task's channel in the current intent. Monitor shows the subprocess exit
+metadata plus the exact `stdout.log` and `stderr.log` paths and contents without
+rerunning the worker. An empty file is shown as an empty stream. If a file cannot
+be read, Monitor keeps the exact path visible and reports the read error instead
+of inventing output. On other rows, `m` keeps following the existing live Run
+Monitor.
 
 In the New Work, plan revision, and Answer input boxes:
 
