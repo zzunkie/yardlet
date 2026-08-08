@@ -43,6 +43,12 @@
   turns are unreachable by construction. Legacy top-level transcript files are
   left in place but never read. (#134)
 
+- **Confirm now leads somewhere.** Confirming a plan in the TUI used to leave
+  the operator on the review screen with no way to start the queue it had just
+  activated. A successful confirm now returns to Home and the toast names the
+  drain actions (A for the full queue, r for one task); the CLI's
+  `planning confirm` prints the equivalent next command. (#129)
+
 
 - **The report no longer calls a delivered run "disabled".** A `Disabled`
   Git-finish record only ever meant the push was disabled by policy, but the

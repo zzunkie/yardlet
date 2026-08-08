@@ -1415,6 +1415,10 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
                 "Confirmed {} with activation {}. The exact visible draft is now active.",
                 expected_head, activation.confirmation_id
             );
+            println!(
+                "Next: `yardlet run --auto --execute` drains the queue \
+                 (`yardlet run --next --execute` runs one task; add --execute or nothing runs)."
+            );
             Ok(())
         }
         PlanningCmd::Replan { message, worker } => {

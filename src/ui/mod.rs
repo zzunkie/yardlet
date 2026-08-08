@@ -3172,6 +3172,26 @@ fn review_gate(app: &App) -> planning_review::ReviewGate {
     }
 }
 
+/// A successful confirm ends the review screen's job: the queue is active and
+/// the drain actions live on Home, so land the operator there and name the
+/// next step instead of leaving a dead-end screen (issue #129).
+fn finish_planning_confirm(app: &mut App, result: Result<String>) {
+    match result {
+        Ok(message) => {
+            let _ = refresh_planning_review(app);
+            app.input_clear();
+            app.planning_review_editing = false;
+            app.screen = Screen::Home;
+            app.reload();
+            app.toast = Some((
+                true,
+                format!("{message} · {}", app.lang.l().planning_confirmed_next),
+            ));
+        }
+        Err(error) => finish_planning_review_action(app, Err(error)),
+    }
+}
+
 fn finish_planning_review_action(app: &mut App, result: Result<String>) {
     match result {
         Ok(message) => match refresh_planning_review(app) {
@@ -3394,7 +3414,7 @@ fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifi
                             activation.confirmation_id
                         )
                     });
-            finish_planning_review_action(app, result);
+            finish_planning_confirm(app, result);
         }
     }
 }
@@ -6039,6 +6059,40 @@ tasks:
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn confirm_success_lands_on_home_and_names_the_drain_actions() {
+        let ws = workspace_with_user_config("confirm-next-step");
+        let mut app = App::new(ws.clone());
+        app.screen = Screen::PlanningReview;
+        app.planning_review_editing = true;
+
+        finish_planning_confirm(&mut app, Ok("confirmed: cnf_x".to_string()));
+
+        assert_eq!(
+            app.screen,
+            Screen::Home,
+            "confirm must not dead-end on the review screen"
+        );
+        assert!(!app.planning_review_editing);
+        let (ok, toast) = app.toast.clone().expect("confirm sets a toast");
+        assert!(ok);
+        assert!(toast.contains("confirmed: cnf_x"), "{toast}");
+        assert!(
+            toast.contains(app.lang.l().planning_confirmed_next),
+            "the toast must name the next step: {toast}"
+        );
+
+        // A failed confirm keeps today's behavior: stay on the screen and
+        // surface the error.
+        app.screen = Screen::PlanningReview;
+        finish_planning_confirm(&mut app, Err(anyhow::anyhow!("stale head")));
+        assert_eq!(app.screen, Screen::PlanningReview);
+        let (ok, toast) = app.toast.clone().expect("error sets a toast");
+        assert!(!ok);
+        assert!(toast.contains("stale head"), "{toast}");
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     #[test]

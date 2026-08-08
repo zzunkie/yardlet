@@ -544,6 +544,7 @@ pub struct L {
     pub planning_accepted: &'static str,
     pub planning_rejected: &'static str,
     pub planning_confirmed: &'static str,
+    pub planning_confirmed_next: &'static str,
     // job-result prefixes (mixed with worker-authored content)
     pub planned_via: &'static str,
     pub tasks_word: &'static str,
@@ -810,6 +811,7 @@ pub const EN: L = L {
     planning_accepted: "Proposal accepted as visible draft",
     planning_rejected: "Proposal rejected",
     planning_confirmed: "Exact visible draft confirmed",
+    planning_confirmed_next: "queue is active: press A to drain it, or r to run the next task",
     planned_via: "Planned via",
     tasks_word: "tasks",
     planning_failed: "Planning failed:",
@@ -1075,6 +1077,7 @@ pub const KO: L = L {
     planning_accepted: "제안을 표시 초안으로 수락함",
     planning_rejected: "제안을 거절함",
     planning_confirmed: "표시된 정확한 초안을 확정함",
+    planning_confirmed_next: "큐가 활성화됨: A로 전체 드레인, r로 다음 작업 1개 실행",
     planned_via: "계획 완료 ·",
     tasks_word: "개 작업",
     planning_failed: "계획 실패:",
