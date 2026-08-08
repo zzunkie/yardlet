@@ -11,6 +11,12 @@ current_intent: .agents/intent-contract.yaml
 language: auto
 default_access: sandboxed
 max_parallel: 1
+# macOS only: switch to an ASCII input source when a shortcut screen gains
+# focus, and restore your IME on text screens. The switch happens only on a
+# screen transition; a manual 한/영 toggle afterwards is respected. If this
+# still fights your input-source tooling (e.g. Karabiner-Elements rules keyed
+# on the active source), set it to false. Trade-off when off: with a CJK IME
+# active, the first key on a shortcut screen is eaten by composition.
 auto_ime: true
 ambiguity_gate: true
 harness_discovery: true
