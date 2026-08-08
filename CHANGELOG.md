@@ -4,6 +4,15 @@
 
 ### Added
 
+- **One-command start for the unambiguous planning case.** `yardlet planning
+  start` accepts the sole fresh proposal when needed, confirms the exact visible
+  draft, and enters the existing auto-drain. The Planning Review screen exposes
+  the same path on `s`. Stable internal accept/confirm actions make interruption
+  retries idempotent, while multiple or stale proposals, high ambiguity, open
+  questions, unresolved planning actions, corrupt activation, and unfinished
+  active queues fail closed to the detailed review flow. Explicit
+  expected-head commands remain available and unchanged.
+
 - **Opt-in native session resume for generic workers.** A generic profile can
   declare a `session` contract: a capture rule (stream + exact line prefix)
   that turns a fresh child's own output into an opaque session ref, and a

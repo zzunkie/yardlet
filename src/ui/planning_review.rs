@@ -41,6 +41,7 @@ pub(super) enum ReviewAction {
     Accept,
     Reject,
     Confirm,
+    Start,
     Refresh,
     /// Move the accept/reject target to the next pending proposal (Tab).
     SelectNext,
@@ -95,6 +96,10 @@ pub(super) fn action_for_key_with_enhancement(
         KeyCode::Char('e') if !gate.confirmed => ReviewAction::BeginEdit,
         KeyCode::Char('a') if gate.has_pending_proposal && !gate.confirmed => ReviewAction::Accept,
         KeyCode::Char('r') if gate.has_pending_proposal && !gate.confirmed => ReviewAction::Reject,
+        // The core owns eligibility and actionable fallback. Mapping `s`
+        // independently of proposal count lets multiple/stale/question states
+        // explain why they refused instead of silently doing nothing.
+        KeyCode::Char('s') => ReviewAction::Start,
         // Target selection is only meaningful when the choice is ambiguous, i.e.
         // more than one proposal is pending. With one (or none) Tab is inert.
         KeyCode::Tab if gate.pending_count > 1 && !gate.confirmed => ReviewAction::SelectNext,
@@ -507,6 +512,66 @@ queue:
             action_for_key(KeyCode::Char('a'), KeyModifiers::NONE, accepted),
             ReviewAction::Noop
         );
+    }
+
+    #[test]
+    fn ac_005_review_start_key_is_pure_and_never_fires_while_busy_or_editing() {
+        let ready = ReviewGate {
+            busy: false,
+            editing: false,
+            has_pending_proposal: true,
+            has_visible_head: false,
+            confirmed: false,
+            pending_count: 1,
+        };
+        assert_eq!(
+            action_for_key(KeyCode::Char('s'), KeyModifiers::NONE, ready),
+            ReviewAction::Start
+        );
+        assert_eq!(
+            action_for_key(
+                KeyCode::Char('s'),
+                KeyModifiers::NONE,
+                ReviewGate {
+                    busy: true,
+                    ..ready
+                }
+            ),
+            ReviewAction::Noop
+        );
+        assert_eq!(
+            action_for_key(
+                KeyCode::Char('s'),
+                KeyModifiers::NONE,
+                ReviewGate {
+                    editing: true,
+                    ..ready
+                }
+            ),
+            ReviewAction::Insert('s')
+        );
+
+        let multiple = ReviewGate {
+            pending_count: 2,
+            ..ready
+        };
+        assert_eq!(
+            action_for_key(KeyCode::Char('s'), KeyModifiers::NONE, multiple),
+            ReviewAction::Start,
+            "the core fast-path must surface the actionable multiple-proposal fallback"
+        );
+        assert!(super::super::i18n::EN
+            .footer_planning_review
+            .contains("s start"));
+        assert!(super::super::i18n::KO
+            .footer_planning_review
+            .contains("s 시작"));
+        assert!(super::super::i18n::EN
+            .planning_start_failed
+            .contains("Start"));
+        assert!(super::super::i18n::KO
+            .planning_start_failed
+            .contains("시작"));
     }
 
     #[test]

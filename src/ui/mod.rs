@@ -3310,6 +3310,59 @@ fn start_planning_revision(app: &mut App) {
     };
 }
 
+fn start_planning_singleton(app: &mut App) {
+    let ws = app.ws.clone();
+    let lbl = app.lang.l();
+    let (failed, fallback, started) = (
+        lbl.planning_start_failed,
+        lbl.planning_start_fallback,
+        lbl.planning_started,
+    );
+    let run_word = lbl.run_word;
+    let auto_word = lbl.auto_word;
+    let pause = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pause_job = pause.clone();
+    let (tx, rx) = mpsc::channel();
+    let txp = tx.clone();
+    thread::spawn(move || {
+        let res = crate::planning::start_singleton(&ws).and_then(|outcome| {
+            run::run_auto(&ws, false, Some(pause), None, false, |line| {
+                let _ = txp.send(JobMsg::Progress(line.to_string()));
+            })
+            .map(|lines| (outcome, lines))
+        });
+        let result = match res {
+            Ok((outcome, lines)) => JobResult {
+                ok: true,
+                summary: format!(
+                    "{started}: {}{}",
+                    outcome.activation.confirmation_id,
+                    lines
+                        .last()
+                        .filter(|line| !line.is_empty())
+                        .map(|line| format!(" · {line}"))
+                        .unwrap_or_default()
+                ),
+            },
+            Err(error) => JobResult {
+                ok: false,
+                summary: format!("{failed} {error} {fallback}"),
+            },
+        };
+        let _ = tx.send(JobMsg::Done(result));
+    });
+    app.input_clear();
+    app.planning_review_editing = false;
+    app.screen = Screen::Home;
+    app.progress = None;
+    app.pause = Some(pause_job);
+    app.job = Job::Running {
+        label: format!("{run_word} ({auto_word})"),
+        started: Instant::now(),
+        rx,
+    };
+}
+
 fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     use planning_review::ReviewAction;
 
@@ -3340,6 +3393,7 @@ fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifi
             app.planning_review_editing = false;
         }
         ReviewAction::SubmitRevision => start_planning_revision(app),
+        ReviewAction::Start => start_planning_singleton(app),
         ReviewAction::InsertNewline => app.input_insert("\n"),
         ReviewAction::Insert(c) => app.input_insert(&c.to_string()),
         ReviewAction::Backspace => app.input_backspace(),

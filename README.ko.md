@@ -90,11 +90,7 @@ Yardlet은 당신의 하네스를 대체하는 게 아니라 그 위에 오케�
 ```bash
 cd your-project
 yardlet new "add admin order search with status, email, and date filters"
-yardlet planning show              # proposal과 semantic diff 검토
-yardlet planning accept <proposal> --expected-head none
-yardlet planning confirm --expected-head <draft-revision>
-yardlet queue                      # confirm된 작업 검토
-yardlet run --auto                 # 큐를 비움, 사람 게이트에서만 멈춤
+yardlet planning start             # 신선한 단일 플랜을 exact accept + confirm + auto-drain
 yardlet handoff                    # 동료가 읽을 수 있는 요약 읽기
 yardlet                            # 또는 터미널 UI에서 전부 처리
 ```
@@ -104,11 +100,15 @@ yardlet                            # 또는 터미널 UI에서 전부 처리
 위해 존재하지만, 먼저 실행할 필요는 없습니다.
 
 한 문장의 요청이 planning channel을 엽니다. 각 worker proposal은 검사 가능한 semantic
-diff를 가진 immutable draft revision입니다. `accept`, `reject`, `undo`, `answer`는 화면에
-보이는 expected head를 요구하고, 명시적 `confirm`만 그 draft 그대로를 active intent와
-bounded queue로 승격합니다. confirm 전에는 active state를 바꾸지 않으며, confirm은
-worker를 다시 부르거나 숨은 re-plan을 하지 않습니다. `yardlet goal`은 express path로
-남습니다. planning worker는 건너뛰되 생성한 draft와 confirmation provenance를 기록합니다.
+diff를 가진 immutable draft revision입니다. 일반적인 경우 `yardlet planning start`가 신선한
+제안 하나를 수락하거나 이미 수락된 표시 초안 하나를 이어받아 그 정확한 revision을 확정하고
+큐를 auto-drain합니다. 여러 제안, stale 제안, high ambiguity, 남은 질문, 미해결 planning
+action, 손상된 activation, 끝나지 않은 active work가 있으면 거절합니다. 이때
+`yardlet planning show`와 명시적 `accept`, `reject`, `answer`, `confirm` 명령을 사용합니다.
+이 상세 명령의 expected-head 계약은 그대로 유지됩니다. confirm 전에는 active state를
+바꾸지 않으며, confirm은 worker를 다시 부르거나 숨은 re-plan을 하지 않습니다. `yardlet
+goal`은 express path로 남습니다. planning worker는 건너뛰되 생성한 draft와 confirmation
+provenance를 기록합니다.
 
 confirm 뒤 각 작업은 숨은 워커를 거쳐 실행되고, 결정론적 평가기로 검사되며,
 `.agents/runs/` 아래에 체크포인트와 핸드오프를 남깁니다.
@@ -254,6 +254,11 @@ Answer 상자에서는 `PgUp` / `PgDn`으로 초안 위의 읽기 전용 문맥�
 
 Bracketed paste는 붙여넣은 줄바꿈과 한국어/CJK 본문을 그대로 보존합니다.
 
+플랜 검토 화면에서는 `s`로 같은 singleton fast-path를 실행합니다. 코어는 ambiguity,
+stale, 남은 질문, 손상된 상태, active queue 게이트를 그대로 거절하고 toast로 상세 검토
+동작을 안내합니다. `a`, `r`, `e`, `c`는 각각 명시적 수락, 거절, 수정, 확정 동작으로
+그대로 남습니다.
+
 ## 명령어
 
 | 명령어 | 용도 |
@@ -261,6 +266,7 @@ Bracketed paste는 붙여넣은 줄바꿈과 한국어/CJK 본문을 그대로 �
 | `yardlet` | 터미널 UI 열기 (최초 사용 시 자동 초기화). |
 | `yardlet init [--force]` | `.agents/` 상태를 명시적으로 스캐폴딩 (선택). |
 | `yardlet new "<request>" [--worker <id>]` | active state를 바꾸지 않고 대화형 planning을 시작하거나 재개해 replacement proposal을 기록. |
+| `yardlet planning start` | 필요하면 신선한 단일 제안을 수락하고 정확한 표시 초안을 확정한 뒤 auto-drain. 상태가 명확하지 않으면 상세 검토로 fail closed. |
 | `yardlet planning show [--json]` / `accept` / `reject` / `undo` / `answer` / `confirm` | channel과 semantic diff를 검토하고 expected draft head에 action 적용. 보이는 draft 승격은 `confirm`만 수행. |
 | `yardlet goal "<goal>" [--verify "..."]` | planning worker를 건너뛰고 exact draft와 confirmation을 기록한 뒤 하나의 목표를 검증 조건까지 실행. |
 | `yardlet new "..." --image <path>` | 로컬 이미지를 목표에 첨부 (요청에서 자동 감지도 됨). |
@@ -599,7 +605,9 @@ session, malformed result, corrupt activation은 active byte를 바꾸거나 con
 않고 오류로 반환됩니다. recovery는 request text 일치로 session을 찾지 않고 active intent나
 queue를 fallback으로 직접 쓰지 않습니다. exact proposal만 만들며 accept와 confirm은 계속
 명시적 user action입니다. consumed marker는 canonical proposal과 journal write가 성공한
-뒤에만 atomic하게 기록됩니다. 중단된 planning confirm은 같은 stable action으로 replay하고 effect event를 중복 기록하지
+뒤에만 atomic하게 기록됩니다. `planning start`는 유일한 exact proposal과 revision에서 stable
+internal action을 만들므로 중단된 accept나 confirm을 revision, activation, effect event 중복 없이
+재개합니다. 중단된 planning confirm은 같은 stable action으로 replay하고 effect event를 중복 기록하지
 않습니다. snapshot, activation, completed action receipt 중 하나라도 현재 active
 confirmation과 정확히 맞지 않으면 실행 불가로 남습니다. accepted revision을 저장하기 전에
 prepared receipt가 stable result id와 정확한 typed effect event id, payload, digest를
