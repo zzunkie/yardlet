@@ -3378,7 +3378,8 @@ queue:
         let queue = ws.load_queue().unwrap();
         assert_eq!(queue.tasks[0].state, TaskState::NeedsUser);
         assert!(queue.tasks[0].required_capabilities.is_empty());
-        std::fs::remove_file(ws.conversation_path("YARD-001")).unwrap();
+        let intent_id = ws.load_queue().unwrap().intent_id;
+        std::fs::remove_file(ws.conversation_path(&intent_id, "YARD-001")).unwrap();
         assert_eq!(
             crate::run::latest_question_for(&ws, "YARD-001").as_deref(),
             Some(
@@ -3386,7 +3387,7 @@ queue:
             )
         );
         crate::state::save_yaml(
-            &ws.conversation_path("YARD-001"),
+            &ws.conversation_path(&intent_id, "YARD-001"),
             &crate::schemas::Conversation {
                 task_id: "YARD-001".to_string(),
                 turns: vec![crate::schemas::ConversationTurn {
@@ -3491,7 +3492,9 @@ queue:
             error.contains("active_runtime_envelope_mismatch"),
             "{error}"
         );
-        assert!(!ws.conversation_path("YARD-001").exists());
+        assert!(!ws
+            .conversation_path(&ws.load_queue().unwrap().intent_id, "YARD-001")
+            .exists());
         assert!(!ws.transition_path("YARD-001").exists());
         let _ = std::fs::remove_dir_all(&ws.root);
     }

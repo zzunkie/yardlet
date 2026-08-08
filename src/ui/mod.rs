@@ -4271,7 +4271,9 @@ fn run_belongs_to_intent(ws: &Workspace, run_id: &str, intent_id: Option<&str>) 
 /// User turns inherit the attribution of the worker turn they answer. A
 /// run-less seeded decision is included only when it is the current question.
 fn answer_conversation(app: &App, task_id: &str, question: &str) -> Option<String> {
-    let conversation = app.ws.load_conversation(task_id);
+    let conversation = app
+        .ws
+        .load_conversation(current_intent_id(app).unwrap_or(""), task_id);
     let last_worker = conversation
         .turns
         .iter()
@@ -6082,6 +6084,7 @@ tasks:
         );
         state::append_conversation_turn(
             &ws,
+            "intent-old",
             "ASK",
             crate::schemas::ConversationTurn {
                 role: crate::schemas::TurnRole::Worker,
@@ -6093,6 +6096,7 @@ tasks:
         .unwrap();
         state::append_conversation_turn(
             &ws,
+            "intent-old",
             "ASK",
             crate::schemas::ConversationTurn {
                 role: crate::schemas::TurnRole::User,
@@ -6104,6 +6108,7 @@ tasks:
         .unwrap();
         state::append_conversation_turn(
             &ws,
+            "intent-current",
             "ASK",
             crate::schemas::ConversationTurn {
                 role: crate::schemas::TurnRole::Worker,
@@ -6115,6 +6120,7 @@ tasks:
         .unwrap();
         state::append_conversation_turn(
             &ws,
+            "intent-current",
             "ASK",
             crate::schemas::ConversationTurn {
                 role: crate::schemas::TurnRole::User,

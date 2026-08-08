@@ -2115,6 +2115,7 @@ fn persist_needs_user_question(
             .unwrap_or_default();
         state::append_conversation_turn(
             ws,
+            &context.intent_id,
             &context.task_id,
             ConversationTurn {
                 role: TurnRole::Worker,
@@ -2463,10 +2464,15 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         .map(str::trim)
         .filter(|a| !a.is_empty())
     {
-        if ws.load_conversation(&task.id).turns.is_empty() {
+        if ws
+            .load_conversation(&queue.intent_id, &task.id)
+            .turns
+            .is_empty()
+        {
             if let Some(q) = latest_question_for(ws, &task.id) {
                 let _ = state::append_conversation_turn(
                     ws,
+                    &queue.intent_id,
                     &task.id,
                     ConversationTurn {
                         role: TurnRole::Worker,
@@ -2479,6 +2485,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         }
         let _ = state::append_conversation_turn(
             ws,
+            &queue.intent_id,
             &task.id,
             ConversationTurn {
                 role: TurnRole::User,
@@ -2487,7 +2494,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
                 ts: Local::now().to_rfc3339(),
             },
         );
-        ws.load_conversation(&task.id).turns
+        ws.load_conversation(&queue.intent_id, &task.id).turns
     } else {
         Vec::new()
     };
@@ -4623,6 +4630,7 @@ fn migrate_stale_gate_to_decision(
         ws.save_queue_locked(lock, &latest)?;
         state::append_conversation_turn(
             ws,
+            &latest.intent_id,
             &task_id,
             ConversationTurn {
                 role: TurnRole::Worker,
@@ -8330,6 +8338,7 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
         if let Some(question) = persisted_question.as_deref() {
             let _ = state::append_conversation_turn(
                 ws,
+                &intent_id,
                 &task.id,
                 ConversationTurn {
                     role: TurnRole::Worker,
@@ -9117,7 +9126,7 @@ pub fn latest_question_for(ws: &Workspace, task_id: &str) -> Option<String> {
     // is still the worker's; once the user replies, the last turn is theirs.
     // Conversation files survive replanning, so scope attributable turns to
     // the current intent.
-    let conv = ws.load_conversation(task_id);
+    let conv = ws.load_conversation(current_intent.as_deref().unwrap_or(""), task_id);
     match conv.turns.last() {
         Some(t) if t.role == TurnRole::Worker && !t.text.trim().is_empty() => {
             if let Some(cur) = &current_intent {
@@ -15191,6 +15200,7 @@ exit 1
 
         crate::state::append_conversation_turn(
             &ws,
+            &q.intent_id,
             &id,
             ConversationTurn {
                 role: TurnRole::User,

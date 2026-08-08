@@ -2178,6 +2178,7 @@ pub(crate) fn persist_ingested_decision_questions(
         };
         crate::state::append_conversation_turn(
             ws,
+            &queue.intent_id,
             id,
             crate::schemas::ConversationTurn {
                 role: crate::schemas::TurnRole::Worker,
