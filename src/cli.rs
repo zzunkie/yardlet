@@ -385,6 +385,8 @@ enum PlanningCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Accept the sole fresh proposal (if needed), confirm it, and auto-drain.
+    Start,
     /// Accept one proposal as a new immutable visible draft revision.
     Accept {
         proposal: String,
@@ -1307,7 +1309,7 @@ fn cmd_new(cwd: &std::path::Path, args: NewArgs) -> Result<()> {
         }
     }
     println!(
-        "\nNext: `yardlet planning show`, then accept or reject the proposal. Only `yardlet planning confirm` activates it."
+        "\nNext: `yardlet planning start` accepts the sole fresh proposal, confirms it, and starts the queue. If it refuses, use `yardlet planning show` and the detailed accept/reject/confirm flow."
     );
     Ok(())
 }
@@ -1332,6 +1334,35 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
     let ws = init::ensure_initialized(cwd)?.0;
     match args.cmd {
         PlanningCmd::Show { json } => show_planning(&ws, json),
+        PlanningCmd::Start => {
+            let started = crate::planning::start_singleton(&ws).map_err(|error| {
+                anyhow::anyhow!(
+                    "planning start refused: {error}\nNext: `yardlet planning show` or open the TUI planning review for the detailed flow."
+                )
+            })?;
+            let transition = match started.stage {
+                crate::planning::PlanningStartStage::AcceptedPending => {
+                    format!(
+                        "accepted the sole proposal {} and confirmed its exact draft",
+                        started.proposal_id.as_deref().unwrap_or("<unknown>")
+                    )
+                }
+                crate::planning::PlanningStartStage::ConfirmedAcceptedDraft => {
+                    "confirmed the sole accepted visible draft".to_string()
+                }
+                crate::planning::PlanningStartStage::AlreadyConfirmed => {
+                    "reused the existing exact confirmation".to_string()
+                }
+            };
+            println!("Planning start {transition}.");
+            println!(
+                "Confirmed {} with activation {}.",
+                started.activation.draft_revision_id, started.activation.confirmation_id
+            );
+            println!("Starting the confirmed queue; execution still stops at approval and ambiguity gates.\n");
+            run::run_auto(&ws, false, None, None, false, |line| println!("{line}"))?;
+            Ok(())
+        }
         PlanningCmd::Accept {
             proposal,
             expected_head,
@@ -1440,7 +1471,7 @@ fn cmd_planning(cwd: &std::path::Path, args: PlanningArgs) -> Result<()> {
                 report.task_count
             );
             println!(
-                "\nNext: `yardlet planning show`, then accept and confirm to activate the replacement plan."
+                "\nNext: `yardlet planning start` for a sole fresh proposal, or `yardlet planning show` for the detailed accept/confirm flow."
             );
             Ok(())
         }

@@ -239,6 +239,7 @@ fn slow_startup_then_ko_review_then_multiline_revision_over_one_pty() {
         "대화",           // conversation section
         "검토 대기 제안", // pending-proposal section
         "a 수락",         // footer: accept
+        "s 시작",         // footer: singleton start
         "r 거절",         // footer: reject
         "e 수정",         // footer: revise
         "Esc/q 뒤로",     // footer: back
