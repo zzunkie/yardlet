@@ -392,8 +392,13 @@ impl Workspace {
     pub fn conversations_dir(&self) -> PathBuf {
         self.agents_dir().join("conversations")
     }
-    pub fn conversation_path(&self, task_id: &str) -> PathBuf {
-        self.conversations_dir().join(format!("{task_id}.yaml"))
+    pub fn conversation_path(&self, intent_id: &str, task_id: &str) -> PathBuf {
+        // Scoped per (intent, task): task ids are reused across intents, and a
+        // task-id-only transcript leaked past intents' turns into new packets
+        // (issue #134). Legacy top-level <task>.yaml files are never read.
+        self.conversations_dir()
+            .join(intent_id)
+            .join(format!("{task_id}.yaml"))
     }
     pub fn transitions_dir(&self) -> PathBuf {
         self.agents_dir().join("transitions")
@@ -2725,8 +2730,8 @@ impl Workspace {
 
     /// A task's conversation transcript (empty when the task never paused for
     /// the user). A malformed file reads as empty rather than failing the run.
-    pub fn load_conversation(&self, task_id: &str) -> Conversation {
-        let p = self.conversation_path(task_id);
+    pub fn load_conversation(&self, intent_id: &str, task_id: &str) -> Conversation {
+        let p = self.conversation_path(intent_id, task_id);
         if !p.is_file() {
             return Conversation {
                 task_id: task_id.to_string(),
@@ -4739,7 +4744,7 @@ impl Workspace {
 
         self.save_queue_locked(&lock, &queue)?;
         for (task_id, turn) in pending_conversations {
-            append_conversation_turn(self, &task_id, turn)?;
+            append_conversation_turn(self, &snapshot.intent_id, &task_id, turn)?;
         }
         for transition in pending_transitions {
             append_transition(self, transition)?;
@@ -5515,10 +5520,11 @@ fn leading_spaces(line: &str) -> usize {
 /// skipped, so a retried run never double-records.
 pub fn append_conversation_turn(
     ws: &Workspace,
+    intent_id: &str,
     task_id: &str,
     turn: ConversationTurn,
 ) -> Result<()> {
-    let mut conv = ws.load_conversation(task_id);
+    let mut conv = ws.load_conversation(intent_id, task_id);
     if conv.task_id.is_empty() {
         conv.task_id = task_id.to_string();
     }
@@ -5539,7 +5545,7 @@ pub fn append_conversation_turn(
         return Ok(());
     }
     conv.turns.push(turn);
-    save_yaml(&ws.conversation_path(task_id), &conv)
+    save_yaml(&ws.conversation_path(intent_id, task_id), &conv)
 }
 
 pub fn transition(
@@ -7059,22 +7065,30 @@ routing:
         let ws = Workspace::at(&dir);
 
         // First worker question seeds the transcript.
-        append_conversation_turn(&ws, "YARD-1", worker("Forward+ or GL?", "run-1")).unwrap();
+        append_conversation_turn(
+            &ws,
+            "intent-a",
+            "YARD-1",
+            worker("Forward+ or GL?", "run-1"),
+        )
+        .unwrap();
         // The same run's worker turn is deduped by run_id.
-        append_conversation_turn(&ws, "YARD-1", worker("dup of run-1", "run-1")).unwrap();
+        append_conversation_turn(&ws, "intent-a", "YARD-1", worker("dup of run-1", "run-1"))
+            .unwrap();
         // A user reply lands.
-        append_conversation_turn(&ws, "YARD-1", user("what is Forward+?")).unwrap();
+        append_conversation_turn(&ws, "intent-a", "YARD-1", user("what is Forward+?")).unwrap();
         // An identical consecutive user turn is skipped.
-        append_conversation_turn(&ws, "YARD-1", user("what is Forward+?")).unwrap();
+        append_conversation_turn(&ws, "intent-a", "YARD-1", user("what is Forward+?")).unwrap();
         // A worker turn from a different run lands.
         append_conversation_turn(
             &ws,
+            "intent-a",
             "YARD-1",
             worker("Forward+ is the advanced path", "run-2"),
         )
         .unwrap();
 
-        let conv = ws.load_conversation("YARD-1");
+        let conv = ws.load_conversation("intent-a", "YARD-1");
         assert_eq!(conv.task_id, "YARD-1");
         assert_eq!(conv.turns.len(), 3, "the two duplicate turns are dropped");
         assert_eq!(conv.turns[0].role, TurnRole::Worker);
@@ -7083,7 +7097,16 @@ routing:
         assert_eq!(conv.turns[2].run_id, "run-2");
 
         // A task that never paused reads as an empty transcript.
-        assert!(ws.load_conversation("YARD-2").turns.is_empty());
+        assert!(ws.load_conversation("intent-a", "YARD-2").turns.is_empty());
+        // A reused task id under a different intent shares nothing (issue #134).
+        assert!(ws.load_conversation("intent-b", "YARD-1").turns.is_empty());
+        append_conversation_turn(&ws, "intent-b", "YARD-1", user("fresh intent turn")).unwrap();
+        assert_eq!(ws.load_conversation("intent-b", "YARD-1").turns.len(), 1);
+        assert_eq!(
+            ws.load_conversation("intent-a", "YARD-1").turns.len(),
+            conv.turns.len(),
+            "a sibling intent's append must not grow another intent's transcript"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -7925,7 +7948,7 @@ records:
             ws.latest_transition("TOOL").unwrap().cause,
             TransitionCause::TidyDefer
         );
-        assert!(!ws.load_conversation("DECIDE").turns.is_empty());
+        assert!(!ws.load_conversation("", "DECIDE").turns.is_empty());
 
         let _ = fs::remove_dir_all(&dir);
     }

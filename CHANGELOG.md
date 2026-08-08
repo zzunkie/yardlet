@@ -33,6 +33,17 @@
 
 ### Fixed
 
+- **Task conversations are scoped per intent.** The answer/resume transcript
+  store was keyed by task id alone, so a reused id (`YARD-002` exists in almost
+  every intent) accumulated turns from every past intent and leaked them into
+  new task packets: a review packet carried fragments of unrelated intents'
+  conversations, implying acceptance criteria that exist nowhere in its
+  contract. Transcripts now live under
+  `.agents/conversations/<intent>/<task>.yaml`; a sibling or past intent's
+  turns are unreachable by construction. Legacy top-level transcript files are
+  left in place but never read. (#134)
+
+
 - **The report no longer calls a delivered run "disabled".** A `Disabled`
   Git-finish record only ever meant the push was disabled by policy, but the
   per-task report line read as if nothing was delivered. The line now reports

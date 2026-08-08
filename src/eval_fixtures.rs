@@ -390,6 +390,7 @@ fn needs_user_transcript_persists() -> Result<Vec<String>> {
     let fixture = FixtureWorkspace::new("needs-user")?;
     crate::state::append_conversation_turn(
         &fixture.ws,
+        "intent-fixture",
         "FIX-004",
         ConversationTurn {
             role: TurnRole::Worker,
@@ -400,6 +401,7 @@ fn needs_user_transcript_persists() -> Result<Vec<String>> {
     )?;
     crate::state::append_conversation_turn(
         &fixture.ws,
+        "intent-fixture",
         "FIX-004",
         ConversationTurn {
             role: TurnRole::User,
@@ -408,14 +410,17 @@ fn needs_user_transcript_persists() -> Result<Vec<String>> {
             ts: String::new(),
         },
     )?;
-    let transcript = fixture.ws.load_conversation("FIX-004");
+    let transcript = fixture.ws.load_conversation("intent-fixture", "FIX-004");
     if transcript.turns.len() != 2 || transcript.turns[1].text != "Option A" {
         bail!("conversation transcript did not round-trip")
     }
     Ok(vec![format!(
         "{} preserved turn(s) in {}",
         transcript.turns.len(),
-        fixture.ws.conversation_path("FIX-004").display()
+        fixture
+            .ws
+            .conversation_path("intent-fixture", "FIX-004")
+            .display()
     )])
 }
 
