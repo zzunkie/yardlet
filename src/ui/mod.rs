@@ -636,17 +636,23 @@ impl App {
             return;
         }
         self.ime_checked = Instant::now();
-        if matches!(self.screen, Screen::NewWork | Screen::Answer)
-            || (self.screen == Screen::PlanningReview && self.planning_review_editing)
-        {
-            // Text input: give the user their IME back.
-            if let Some(id) = self.ime_saved.take() {
-                let _ = ime::select_by_id(&id);
+        let text_input = matches!(self.screen, Screen::NewWork | Screen::Answer)
+            || (self.screen == Screen::PlanningReview && self.planning_review_editing);
+        match ime_sync_action(text_input, force) {
+            ImeSync::RestoreSaved => {
+                // Text input: give the user their IME back.
+                if let Some(id) = self.ime_saved.take() {
+                    let _ = ime::select_by_id(&id);
+                }
             }
-        } else if let Some((id, ascii)) = ime::current_id_and_ascii() {
-            if !ascii && ime::select_ascii() {
-                self.ime_saved = Some(id);
+            ImeSync::ForceAscii => {
+                if let Some((id, ascii)) = ime::current_id_and_ascii() {
+                    if !ascii && ime::select_ascii() {
+                        self.ime_saved = Some(id);
+                    }
+                }
             }
+            ImeSync::Leave => {}
         }
     }
 
@@ -985,6 +991,29 @@ fn title_for(app: &App) -> String {
 }
 
 /// Modification time of the binary this process was started from.
+/// What one input-source sync pass may do. The ASCII force runs only on a
+/// real screen transition: the periodic poll must never wrestle a deliberate
+/// 한/영 toggle back to ASCII, because tools like Karabiner-Elements switch
+/// the source out from under us and the user always wins (issue #130). The
+/// poll still restores a saved IME once a text screen is focused (covers the
+/// in-screen edit toggle on the plan review, which changes no screen).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImeSync {
+    RestoreSaved,
+    ForceAscii,
+    Leave,
+}
+
+fn ime_sync_action(text_input_screen: bool, force: bool) -> ImeSync {
+    if text_input_screen {
+        ImeSync::RestoreSaved
+    } else if force {
+        ImeSync::ForceAscii
+    } else {
+        ImeSync::Leave
+    }
+}
+
 fn binary_mtime() -> Option<std::time::SystemTime> {
     std::fs::metadata(std::env::current_exe().ok()?)
         .ok()?
@@ -1110,7 +1139,9 @@ fn main_loop(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<bo
             app.sync_ime(true);
             last_screen = Some(app.screen);
         } else {
-            // Catch a manual 한/영 toggle while on a shortcut screen.
+            // Poll only restores the IME on text screens (in-screen edit
+            // toggles change no screen); it never re-forces ASCII, so a
+            // deliberate 한/영 toggle sticks (issue #130).
             app.sync_ime(false);
         }
         // Keep the Monitor's log cache current (stat per frame; read on growth).
@@ -3172,6 +3203,26 @@ fn review_gate(app: &App) -> planning_review::ReviewGate {
     }
 }
 
+/// A successful confirm ends the review screen's job: the queue is active and
+/// the drain actions live on Home, so land the operator there and name the
+/// next step instead of leaving a dead-end screen (issue #129).
+fn finish_planning_confirm(app: &mut App, result: Result<String>) {
+    match result {
+        Ok(message) => {
+            let _ = refresh_planning_review(app);
+            app.input_clear();
+            app.planning_review_editing = false;
+            app.screen = Screen::Home;
+            app.reload();
+            app.toast = Some((
+                true,
+                format!("{message} · {}", app.lang.l().planning_confirmed_next),
+            ));
+        }
+        Err(error) => finish_planning_review_action(app, Err(error)),
+    }
+}
+
 fn finish_planning_review_action(app: &mut App, result: Result<String>) {
     match result {
         Ok(message) => match refresh_planning_review(app) {
@@ -3394,7 +3445,7 @@ fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifi
                             activation.confirmation_id
                         )
                     });
-            finish_planning_review_action(app, result);
+            finish_planning_confirm(app, result);
         }
     }
 }
@@ -6039,6 +6090,51 @@ tasks:
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ime_poll_never_forces_ascii_over_a_deliberate_toggle() {
+        // Screen transition may force ASCII on shortcut screens.
+        assert_eq!(ime_sync_action(false, true), ImeSync::ForceAscii);
+        // The periodic poll must not wrestle a manual/Karabiner 한/영 toggle.
+        assert_eq!(ime_sync_action(false, false), ImeSync::Leave);
+        // Text screens always get the saved IME back, poll or transition.
+        assert_eq!(ime_sync_action(true, false), ImeSync::RestoreSaved);
+        assert_eq!(ime_sync_action(true, true), ImeSync::RestoreSaved);
+    }
+
+    #[test]
+    fn confirm_success_lands_on_home_and_names_the_drain_actions() {
+        let ws = workspace_with_user_config("confirm-next-step");
+        let mut app = App::new(ws.clone());
+        app.screen = Screen::PlanningReview;
+        app.planning_review_editing = true;
+
+        finish_planning_confirm(&mut app, Ok("confirmed: cnf_x".to_string()));
+
+        assert_eq!(
+            app.screen,
+            Screen::Home,
+            "confirm must not dead-end on the review screen"
+        );
+        assert!(!app.planning_review_editing);
+        let (ok, toast) = app.toast.clone().expect("confirm sets a toast");
+        assert!(ok);
+        assert!(toast.contains("confirmed: cnf_x"), "{toast}");
+        assert!(
+            toast.contains(app.lang.l().planning_confirmed_next),
+            "the toast must name the next step: {toast}"
+        );
+
+        // A failed confirm keeps today's behavior: stay on the screen and
+        // surface the error.
+        app.screen = Screen::PlanningReview;
+        finish_planning_confirm(&mut app, Err(anyhow::anyhow!("stale head")));
+        assert_eq!(app.screen, Screen::PlanningReview);
+        let (ok, toast) = app.toast.clone().expect("error sets a toast");
+        assert!(!ok);
+        assert!(toast.contains("stale head"), "{toast}");
+        let _ = std::fs::remove_dir_all(ws.root);
     }
 
     #[test]

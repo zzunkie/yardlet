@@ -43,6 +43,20 @@
   turns are unreachable by construction. Legacy top-level transcript files are
   left in place but never read. (#134)
 
+- **Confirm now leads somewhere.** Confirming a plan in the TUI used to leave
+  the operator on the review screen with no way to start the queue it had just
+  activated. A successful confirm now returns to Home and the toast names the
+  drain actions (A for the full queue, r for one task); the CLI's
+  `planning confirm` prints the equivalent next command. (#129)
+
+- **auto_ime no longer fights external input-source switching.** The TUI's
+  input-source sync polled every second and re-forced an ASCII layout on
+  shortcut screens, silently reverting any 한/영 switch made meanwhile by the
+  user or by tools like Karabiner-Elements. The ASCII switch now happens only
+  on a real screen transition, a deliberate toggle afterwards sticks, and the
+  template config documents the interaction and the `auto_ime: false` escape
+  hatch. (#130)
+
 
 - **The report no longer calls a delivered run "disabled".** A `Disabled`
   Git-finish record only ever meant the push was disabled by policy, but the
