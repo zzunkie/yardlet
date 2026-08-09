@@ -2834,10 +2834,18 @@ fn redo_all(app: &mut App) {
                     n += 1;
                 }
             }
-            match app.ws.save_queue_locked(&lock, &q) {
-                Ok(()) => app.toast = Some((true, format!("{}: {n}", app.lang.l().redo_done))),
-                Err(error) => {
-                    app.toast = Some((false, format!("{} {error}", app.lang.l().run_failed)))
+            // Nothing to redo, nothing to write: with no queue file on disk
+            // (the normal post-tidy state) `load_queue` materializes an
+            // in-memory scaffold, and persisting it wedged the workspace
+            // against the sticky activation marker (issue #138).
+            if n == 0 {
+                app.toast = Some((true, format!("{}: 0", app.lang.l().redo_done)));
+            } else {
+                match app.ws.save_queue_locked(&lock, &q) {
+                    Ok(()) => app.toast = Some((true, format!("{}: {n}", app.lang.l().redo_done))),
+                    Err(error) => {
+                        app.toast = Some((false, format!("{} {error}", app.lang.l().run_failed)))
+                    }
                 }
             }
         }
@@ -4870,6 +4878,24 @@ routing:
         std::fs::write(ws.workers_path(), WORKERS_WITH_COMMENTS).unwrap();
         std::fs::write(ws.billing_path(), crate::templates::BILLING_POLICY).unwrap();
         ws
+    }
+
+    /// Issue #138: `R` (redo all) on the completion screen with no queue file on
+    /// disk — the normal post-tidy state — loaded the in-memory scaffold
+    /// (`WorkQueue::empty()`) and persisted it even with zero done tasks,
+    /// materializing a queue file that never existed. Combined with the sticky
+    /// activation marker that wedged the whole workspace. Nothing to redo must
+    /// mean nothing written.
+    #[test]
+    fn redo_all_with_nothing_to_redo_does_not_materialize_a_queue_file() {
+        let ws = workspace_with_user_config("redo-all-no-queue");
+        assert!(!ws.queue_path().is_file());
+        let mut app = App::new(ws.clone());
+        redo_all(&mut app);
+        assert!(
+            !ws.queue_path().is_file(),
+            "redo with zero done tasks must not persist the scaffold queue (issue #138)"
+        );
     }
 
     fn cached_snapshot(ws: &Workspace) -> Snapshot {
