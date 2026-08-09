@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A post-tidy scaffold queue no longer wedges the workspace.** After `tidy`
+  archived a drained intent and cleared the live files, the completion screen's
+  redo-all key persisted the in-memory scaffold queue even with zero tasks to
+  requeue, and the activation gate then read "queue present, intent missing"
+  as corruption — blocking every confirm, status, and snapshot until the file
+  was hand-deleted (issue #138). Redo now writes nothing when there is nothing
+  to redo, and the gate treats a pristine provenance-free scaffold as the
+  clean legacy state while task-bearing or provenance-bearing queues keep
+  failing closed.
+
 ### Added
 
 - **One-command start for the unambiguous planning case.** `yardlet planning

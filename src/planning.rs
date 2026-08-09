@@ -2724,11 +2724,20 @@ pub fn validate_active_activation(ws: &Workspace) -> Result<ActivationGate> {
                 })?,
             None => false,
         };
-        if queue
-            .as_ref()
-            .is_some_and(|queue| workspace_requires_activation || queue_provenance_present(queue))
-            || modern_evidence
-        {
+        // A pristine scaffold queue (no intent id, no tasks, no provenance) is
+        // what a stray writer materializes from `load_queue()` after tidy has
+        // cleared the live files. It carries zero information about any
+        // confirmed intent, so it reads as "no queue" even while the sticky
+        // workspace activation marker is set — otherwise one stray file wedges
+        // every confirm, status, and snapshot (issue #138). Any queue carrying
+        // an intent id, tasks, or provenance stays fail-closed.
+        let queue_evidence = queue.as_ref().is_some_and(|queue| {
+            let pristine = queue.intent_id.trim().is_empty()
+                && queue.tasks.is_empty()
+                && !queue_provenance_present(queue);
+            !pristine && (workspace_requires_activation || queue_provenance_present(queue))
+        });
+        if queue_evidence || modern_evidence {
             return Err(inconsistent("active intent is missing"));
         }
         return Ok(ActivationGate::Legacy);
@@ -3093,6 +3102,40 @@ queue:
         ));
         let _ = std::fs::remove_dir_all(&root);
         Workspace::at(&root)
+    }
+
+    /// Issue #138: after tidy archives an intent and clears both live files, a
+    /// stray writer can re-persist the in-memory scaffold (`WorkQueue::empty()`),
+    /// and the workspace-level activation marker is sticky once set. That pair
+    /// carries zero information about any confirmed intent, so the gate must
+    /// read it as the clean legacy state instead of wedging every confirm,
+    /// status, and snapshot behind "active intent is missing".
+    #[test]
+    fn pristine_scaffold_queue_with_sticky_activation_marker_stays_legacy() {
+        let ws = temp_workspace("pristine-scaffold-gate");
+        ws.require_confirmed_activation().unwrap();
+        ws.save_queue(&crate::schemas::WorkQueue::empty()).unwrap();
+        let gate = validate_active_activation(&ws)
+            .expect("a provenance-free scaffold queue is not corruption");
+        assert_eq!(gate, ActivationGate::Legacy);
+    }
+
+    /// The #138 tolerance is for the pristine scaffold ONLY: a queue that
+    /// carries tasks while the intent contract is missing is still real
+    /// corruption and must keep failing closed.
+    #[test]
+    fn scaffold_queue_with_tasks_still_fails_closed_without_an_intent() {
+        let ws = temp_workspace("scaffold-with-tasks-gate");
+        ws.require_confirmed_activation().unwrap();
+        let mut queue = crate::schemas::WorkQueue::empty();
+        queue.tasks = draft().queue.tasks.clone();
+        ws.save_queue(&queue).unwrap();
+        let error = validate_active_activation(&ws)
+            .expect_err("a task-bearing queue without an intent is corruption");
+        assert!(
+            error.to_string().contains("active intent is missing"),
+            "{error}"
+        );
     }
 
     fn pending_plan(
