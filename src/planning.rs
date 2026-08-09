@@ -89,6 +89,26 @@ pub enum ActivationGate {
     Confirmed,
 }
 
+/// The canonical state from which [`start_singleton`] completed. Surfaces use
+/// this only for feedback; every mutation still goes through the exact
+/// accept/confirm actions below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanningStartStage {
+    /// One fresh pending proposal was accepted and then confirmed.
+    AcceptedPending,
+    /// The sole visible draft was already accepted and was confirmed.
+    ConfirmedAcceptedDraft,
+    /// The exact activation already existed, so start was an idempotent retry.
+    AlreadyConfirmed,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlanningStartOutcome {
+    pub stage: PlanningStartStage,
+    pub proposal_id: Option<String>,
+    pub activation: ActivationReceipt,
+}
+
 fn new_id(prefix: &str) -> String {
     let counter = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!(
@@ -1943,6 +1963,29 @@ pub fn confirm(ws: &Workspace, expected_head: &str, action_id: &str) -> Result<A
     confirm_with_policy(ws, expected_head, action_id, true)
 }
 
+fn active_queue_blocks_confirmation(
+    session: &PlanningSession,
+    active_queue: &crate::schemas::WorkQueue,
+    protect_unfinished_active_queue: bool,
+) -> bool {
+    // An explicit same-intent replan session may supersede its own settled
+    // queue. Cross-intent confirmation keeps the full unfinished-work guard.
+    let same_intent_settled_replan =
+        session.intent_id == active_queue.intent_id && active_queue.drained();
+    active_queue.tasks.iter().any(|task| {
+        task.state == TaskState::Running
+            || (protect_unfinished_active_queue
+                && !same_intent_settled_replan
+                && matches!(
+                    task.state,
+                    TaskState::Queued
+                        | TaskState::NeedsUser
+                        | TaskState::Partial
+                        | TaskState::Blocked
+                ))
+    })
+}
+
 fn confirm_with_policy(
     ws: &Workspace,
     expected_head: &str,
@@ -2049,25 +2092,8 @@ fn confirm_with_policy_locked(
         return Err(reject_action(ws, &mut session, action, "stale_head")?);
     }
     let active_queue = ws.load_queue()?;
-    // An explicit same-intent replan session (begin_replan_session_exact) may
-    // supersede its own settled queue: every task is terminal and the user
-    // reopened planning for exactly this intent, so settled holds no longer
-    // block promotion. Only a replan session can be Open with the active
-    // queue's intent id; cross-intent confirms keep the full protection.
-    let same_intent_settled_replan =
-        session.intent_id == active_queue.intent_id && active_queue.drained();
-    if active_queue.tasks.iter().any(|task| {
-        task.state == TaskState::Running
-            || (protect_unfinished_active_queue
-                && !same_intent_settled_replan
-                && matches!(
-                    task.state,
-                    TaskState::Queued
-                        | TaskState::NeedsUser
-                        | TaskState::Partial
-                        | TaskState::Blocked
-                ))
-    }) && !prepared_replay
+    if active_queue_blocks_confirmation(&session, &active_queue, protect_unfinished_active_queue)
+        && !prepared_replay
     {
         return Err(reject_action(
             ws,
@@ -2212,6 +2238,282 @@ fn confirm_with_policy_locked(
     complete_action(ws, &mut session, action, &confirmation_id, &effect)?;
     validate_active_activation(ws)?;
     Ok(activation)
+}
+
+const START_ACCEPT_PREFIX: &str = "planning-start-accept-";
+const START_CONFIRM_PREFIX: &str = "planning-start-confirm-";
+
+fn singleton_start_action_id(prefix: &str, target: &str) -> Result<String> {
+    let action_id = format!("{prefix}{target}");
+    crate::state::validate_action_id(&action_id)?;
+    Ok(action_id)
+}
+
+fn pending_proposals_for_session(
+    ws: &Workspace,
+    session: &PlanningSession,
+) -> Result<Vec<PlanningProposal>> {
+    let disposed = ws
+        .load_planning_events(&session.session_id)?
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event.event_type,
+                PlanningEventType::DraftAccepted
+                    | PlanningEventType::DraftRevised
+                    | PlanningEventType::DraftRejected
+            )
+        })
+        .map(|event| event.proposal_id)
+        .collect::<BTreeSet<_>>();
+    Ok(ws
+        .load_planning_proposals(&session.session_id)?
+        .into_iter()
+        .filter(|proposal| !disposed.contains(&proposal.proposal_id))
+        .collect())
+}
+
+fn validate_singleton_start_content(content: &PlanningDraftContent) -> Result<()> {
+    if content.intent.ambiguity.eq_ignore_ascii_case("high") {
+        bail!("high_ambiguity: review and answer the plan in `yardlet planning show` or the TUI");
+    }
+    if !content.intent.open_questions.is_empty() {
+        bail!(
+            "open_questions: {} question(s) remain; answer them in the planning review",
+            content.intent.open_questions.len()
+        );
+    }
+    Ok(())
+}
+
+fn prepared_start_target(
+    ws: &Workspace,
+    session: &PlanningSession,
+    receipt: &PlanningActionReceipt,
+    action: PlanningActionKind,
+    prefix: &str,
+) -> Result<String> {
+    if receipt.action != action || !receipt.action_id.starts_with(prefix) {
+        bail!(
+            "planning_action_in_progress: session {} action {} is still prepared; resume the detailed planning action first",
+            session.session_id,
+            receipt.action_id
+        );
+    }
+    let effect_target = receipt
+        .effect_event
+        .as_ref()
+        .and_then(|event| match action {
+            PlanningActionKind::Accept => Some(event.proposal_id.clone()),
+            PlanningActionKind::Confirm => Some(event.draft_revision_id.clone()),
+            _ => None,
+        });
+    let target = match (action, effect_target.filter(|target| !target.is_empty())) {
+        (_, Some(target)) => target,
+        (PlanningActionKind::Accept, None) => {
+            let matches = ws
+                .load_planning_proposals(&session.session_id)?
+                .into_iter()
+                .filter(|proposal| {
+                    singleton_start_action_id(prefix, &proposal.proposal_id)
+                        .is_ok_and(|action_id| action_id == receipt.action_id)
+                })
+                .map(|proposal| proposal.proposal_id)
+                .collect::<Vec<_>>();
+            if matches.len() != 1 {
+                bail!("planning_start_recovery_corrupt: accept target is not unique");
+            }
+            matches.into_iter().next().unwrap()
+        }
+        (PlanningActionKind::Confirm, None) => session
+            .current_head
+            .clone()
+            .filter(|head| {
+                singleton_start_action_id(prefix, head)
+                    .is_ok_and(|action_id| action_id == receipt.action_id)
+            })
+            .ok_or_else(|| anyhow!("planning_start_recovery_corrupt: confirm head is missing"))?,
+        _ => unreachable!(),
+    };
+    if singleton_start_action_id(prefix, &target)? != receipt.action_id {
+        bail!("planning_start_recovery_corrupt: prepared action target mismatch");
+    }
+    Ok(target)
+}
+
+/// Accept and confirm only the unambiguous default planning shape.
+///
+/// The whole decision and transition stays under the planning lock. Stable,
+/// target-derived internal action ids let a second invocation resume the
+/// existing accept/confirm crash windows without exposing proposal/head ids at
+/// either the CLI or TUI surface.
+pub fn start_singleton(ws: &Workspace) -> Result<PlanningStartOutcome> {
+    let lock = ws.acquire_planning_lock()?;
+    let mut accepted_proposal_id = None;
+
+    loop {
+        let session = ws
+            .load_latest_planning_session()?
+            .ok_or_else(|| anyhow!("no_planning_session: run `yardlet new \"...\"` first"))?;
+        let actions = ws.load_planning_actions(&session.session_id)?;
+        for receipt in actions
+            .iter()
+            .filter(|receipt| receipt.status != PlanningActionStatus::Prepared)
+        {
+            validate_terminal_action_effect(ws, receipt)?;
+        }
+        let prepared = actions
+            .iter()
+            .filter(|receipt| receipt.status == PlanningActionStatus::Prepared)
+            .collect::<Vec<_>>();
+        if prepared.len() > 1 {
+            bail!(
+                "planning_action_in_progress: session {} has multiple prepared actions",
+                session.session_id
+            );
+        }
+        if let Some(receipt) = prepared.first() {
+            match receipt.action {
+                PlanningActionKind::Accept => {
+                    let proposal_id = prepared_start_target(
+                        ws,
+                        &session,
+                        receipt,
+                        PlanningActionKind::Accept,
+                        START_ACCEPT_PREFIX,
+                    )?;
+                    let proposal = ws.load_planning_proposal(&session.session_id, &proposal_id)?;
+                    validate_singleton_start_content(&proposal.content)?;
+                    accept_proposal_locked(
+                        ws,
+                        &lock,
+                        &proposal_id,
+                        proposal.expected_head.as_deref(),
+                        &receipt.action_id,
+                    )?;
+                    accepted_proposal_id = Some(proposal_id);
+                    continue;
+                }
+                PlanningActionKind::Confirm => {
+                    let head = prepared_start_target(
+                        ws,
+                        &session,
+                        receipt,
+                        PlanningActionKind::Confirm,
+                        START_CONFIRM_PREFIX,
+                    )?;
+                    let revision = ws.load_draft_revision(&session.session_id, &head)?;
+                    validate_singleton_start_content(&revision.content)?;
+                    let activation =
+                        confirm_with_policy_locked(ws, &lock, &head, &receipt.action_id, true)?;
+                    return Ok(PlanningStartOutcome {
+                        stage: PlanningStartStage::ConfirmedAcceptedDraft,
+                        proposal_id: accepted_proposal_id,
+                        activation,
+                    });
+                }
+                _ => {
+                    bail!(
+                        "planning_action_in_progress: session {} action {} is still prepared; resume the detailed planning action first",
+                        session.session_id,
+                        receipt.action_id
+                    );
+                }
+            }
+        }
+
+        match session.lifecycle {
+            PlanningLifecycle::Confirmed => {
+                validate_active_activation(ws)?;
+                let active_queue = ws.load_queue()?;
+                if active_queue
+                    .tasks
+                    .iter()
+                    .any(|task| task.state == TaskState::Running)
+                {
+                    bail!(
+                        "active_queue_running: inspect the current run before retrying `yardlet planning start`"
+                    );
+                }
+                let confirmation_id = session.confirmation_id.as_deref().ok_or_else(|| {
+                    anyhow!("unconfirmed_or_inconsistent: confirmed session has no receipt id")
+                })?;
+                let activation = ws.load_activation(confirmation_id)?.ok_or_else(|| {
+                    anyhow!("unconfirmed_or_inconsistent: confirmed activation receipt is missing")
+                })?;
+                return Ok(PlanningStartOutcome {
+                    stage: PlanningStartStage::AlreadyConfirmed,
+                    proposal_id: None,
+                    activation,
+                });
+            }
+            PlanningLifecycle::Open => {}
+            other => bail!(
+                "planning_session_not_startable: session {} is {other:?}; open the detailed planning review",
+                session.session_id
+            ),
+        }
+
+        // These checks intentionally precede accept. A fresh pending proposal
+        // must remain untouched when the current activation or active queue
+        // cannot safely be replaced.
+        validate_active_activation(ws)?;
+        let active_queue = ws.load_queue()?;
+        if active_queue_blocks_confirmation(&session, &active_queue, true) {
+            bail!("active_queue_not_drained: settle the current queue before starting this plan");
+        }
+
+        let pending = pending_proposals_for_session(ws, &session)?;
+        match pending.as_slice() {
+            [proposal] => {
+                if proposal.expected_head != session.current_head {
+                    bail!(
+                        "stale_singleton_proposal: open `yardlet planning show` and use the detailed accept/reject flow"
+                    );
+                }
+                validate_draft(&session, &proposal.content)?;
+                if digest(&proposal.content)? != proposal.content_digest {
+                    bail!("proposal_digest_mismatch");
+                }
+                validate_singleton_start_content(&proposal.content)?;
+                let action_id =
+                    singleton_start_action_id(START_ACCEPT_PREFIX, &proposal.proposal_id)?;
+                accept_proposal_locked(
+                    ws,
+                    &lock,
+                    &proposal.proposal_id,
+                    session.current_head.as_deref(),
+                    &action_id,
+                )?;
+                accepted_proposal_id = Some(proposal.proposal_id.clone());
+            }
+            [] => {
+                let head = session.current_head.as_deref().ok_or_else(|| {
+                    anyhow!(
+                        "no_startable_plan: no pending proposal or accepted draft; run `yardlet planning show`"
+                    )
+                })?;
+                let revision = ws.load_draft_revision(&session.session_id, head)?;
+                validate_revision_integrity(&session, &revision, head)?;
+                validate_singleton_start_content(&revision.content)?;
+                let action_id = singleton_start_action_id(START_CONFIRM_PREFIX, head)?;
+                let activation =
+                    confirm_with_policy_locked(ws, &lock, head, &action_id, true)?;
+                return Ok(PlanningStartOutcome {
+                    stage: accepted_proposal_id.as_ref().map_or(
+                        PlanningStartStage::ConfirmedAcceptedDraft,
+                        |_| PlanningStartStage::AcceptedPending,
+                    ),
+                    proposal_id: accepted_proposal_id,
+                    activation,
+                });
+            }
+            many => bail!(
+                "multiple_pending_proposals: {} proposals require an explicit target in `yardlet planning show`",
+                many.len()
+            ),
+        }
+    }
 }
 
 #[allow(dead_code)] // Legacy exact express helper retained for restart compatibility.
@@ -2793,6 +3095,30 @@ queue:
         Workspace::at(&root)
     }
 
+    fn pending_plan(
+        label: &str,
+        configure: impl FnOnce(&mut PlanningDraftContent),
+    ) -> (Workspace, PlanningSession, PlanningProposal) {
+        let ws = temp_workspace(label);
+        let (session, turn) = begin_user_turn_exact(&ws, "bounded test").unwrap();
+        let mut content = draft();
+        content.intent.id = session.intent_id.clone();
+        content.queue.intent_id = session.intent_id.clone();
+        content.queue.queue_id = session.queue_id.clone();
+        configure(&mut content);
+        let proposal = record_worker_proposal(
+            &ws,
+            &turn,
+            "planner",
+            &format!("attempt-{label}"),
+            "proposal",
+            "rationale",
+            content,
+        )
+        .unwrap();
+        (ws, session, proposal)
+    }
+
     fn journal_snapshot(ws: &Workspace, session_id: &str) -> Vec<(String, Vec<u8>)> {
         let mut paths = std::fs::read_dir(ws.planning_session_dir(session_id).join("events"))
             .unwrap()
@@ -2984,6 +3310,226 @@ queue:
             None,
             "a confirmed session became the queue; the queue surface owns it now"
         );
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn ac_001_single_fresh_pending_start_accepts_and_confirms_the_exact_plan() {
+        let (ws, session, proposal) = pending_plan("ac-001-start", |_| {});
+
+        let started = start_singleton(&ws).unwrap();
+
+        assert_eq!(started.stage, PlanningStartStage::AcceptedPending);
+        assert_eq!(
+            started.proposal_id.as_deref(),
+            Some(proposal.proposal_id.as_str())
+        );
+        assert_eq!(started.activation.session_id, session.session_id);
+        assert_eq!(
+            validate_active_activation(&ws).unwrap(),
+            ActivationGate::Confirmed
+        );
+        let projection = projection(&ws).unwrap();
+        assert_eq!(projection.session.lifecycle, PlanningLifecycle::Confirmed);
+        assert!(projection.pending_proposals.is_empty());
+        assert!(projection.exact_active_parity);
+        assert_eq!(
+            projection.current_draft.unwrap().content_digest,
+            started.activation.draft_content_digest
+        );
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn ac_002_accepted_draft_and_confirmed_retry_do_not_rematerialize_the_plan() {
+        let (ws, session, proposal) = pending_plan("ac-002-retry", |_| {});
+        let accepted =
+            accept_proposal(&ws, &proposal.proposal_id, None, "explicit-accept").unwrap();
+
+        let first = start_singleton(&ws).unwrap();
+        assert_eq!(first.stage, PlanningStartStage::ConfirmedAcceptedDraft);
+        assert_eq!(
+            first.activation.draft_revision_id,
+            accepted.draft_revision_id
+        );
+        let revision_count =
+            std::fs::read_dir(ws.planning_session_dir(&session.session_id).join("drafts"))
+                .unwrap()
+                .count();
+        let confirmed_events = ws
+            .load_planning_events(&session.session_id)
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.event_type == PlanningEventType::DraftConfirmed)
+            .count();
+
+        let retried = start_singleton(&ws).unwrap();
+        assert_eq!(retried.stage, PlanningStartStage::AlreadyConfirmed);
+        assert_eq!(
+            retried.activation.confirmation_id,
+            first.activation.confirmation_id
+        );
+        assert_eq!(
+            std::fs::read_dir(ws.planning_session_dir(&session.session_id).join("drafts"))
+                .unwrap()
+                .count(),
+            revision_count
+        );
+        assert_eq!(
+            ws.load_planning_events(&session.session_id)
+                .unwrap()
+                .into_iter()
+                .filter(|event| event.event_type == PlanningEventType::DraftConfirmed)
+                .count(),
+            confirmed_events
+        );
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn ac_003_multiple_and_stale_proposals_fail_closed_without_state_changes() {
+        let (ws, session, first) = pending_plan("ac-003-shapes", |_| {});
+        let request = ws
+            .load_planning_events(&session.session_id)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.event_type == PlanningEventType::UserMessage)
+            .unwrap();
+        let turn = turn_cas(&request, None).unwrap();
+        let mut second_content = first.content.clone();
+        second_content.intent.summary = "second proposal".into();
+        let second = record_worker_proposal(
+            &ws,
+            &turn,
+            "planner",
+            "attempt-ac-003-second",
+            "proposal two",
+            "rationale",
+            second_content,
+        )
+        .unwrap();
+        let before_multiple = journal_snapshot(&ws, &session.session_id);
+        let error = start_singleton(&ws).unwrap_err().to_string();
+        assert!(error.contains("multiple_pending_proposals"), "{error}");
+        assert_eq!(journal_snapshot(&ws, &session.session_id), before_multiple);
+        assert!(ws.load_intent().unwrap().is_none());
+
+        let accepted =
+            accept_proposal(&ws, &first.proposal_id, None, "ac-003-explicit-accept").unwrap();
+        let before_stale = journal_snapshot(&ws, &session.session_id);
+        let error = start_singleton(&ws).unwrap_err().to_string();
+        assert!(error.contains("stale_singleton_proposal"), "{error}");
+        assert_eq!(journal_snapshot(&ws, &session.session_id), before_stale);
+        assert_eq!(
+            ws.load_planning_session(&session.session_id)
+                .unwrap()
+                .current_head
+                .as_deref(),
+            Some(accepted.draft_revision_id.as_str())
+        );
+        assert_eq!(
+            projection(&ws).unwrap().pending_proposals[0].proposal_id,
+            second.proposal_id
+        );
+        assert!(ws.load_intent().unwrap().is_none());
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn ac_004_ambiguity_questions_unresolved_actions_and_active_work_fail_closed() {
+        for (label, configure, marker) in [
+            (
+                "ac-004-high",
+                (|content: &mut PlanningDraftContent| {
+                    content.intent.ambiguity = "high".into();
+                }) as fn(&mut PlanningDraftContent),
+                "high_ambiguity",
+            ),
+            (
+                "ac-004-question",
+                (|content: &mut PlanningDraftContent| {
+                    content.intent.open_questions = vec!["which boundary?".into()];
+                }) as fn(&mut PlanningDraftContent),
+                "open_questions",
+            ),
+        ] {
+            let (ws, session, _) = pending_plan(label, configure);
+            let before = journal_snapshot(&ws, &session.session_id);
+            let error = start_singleton(&ws).unwrap_err().to_string();
+            assert!(error.contains(marker), "{label}: {error}");
+            assert_eq!(journal_snapshot(&ws, &session.session_id), before);
+            assert!(ws.load_intent().unwrap().is_none());
+            let _ = std::fs::remove_dir_all(ws.root);
+        }
+
+        let (ws, session, proposal) = pending_plan("ac-004-unresolved", |_| {});
+        let mut loaded = ws.load_planning_session(&session.session_id).unwrap();
+        begin_action(
+            &ws,
+            &mut loaded,
+            PlanningActionKind::Accept,
+            "unrelated-prepared-action",
+            None,
+            &proposal.proposal_id,
+        )
+        .unwrap();
+        let before = journal_snapshot(&ws, &session.session_id);
+        let error = start_singleton(&ws).unwrap_err().to_string();
+        assert!(error.contains("planning_action_in_progress"), "{error}");
+        assert_eq!(journal_snapshot(&ws, &session.session_id), before);
+        assert!(ws.load_intent().unwrap().is_none());
+        let _ = std::fs::remove_dir_all(ws.root);
+
+        let ws = temp_workspace("ac-004-active-queue");
+        activate_express_draft(&ws, "active plan", draft()).unwrap();
+        let (session, turn) = begin_user_turn_exact(&ws, "unrelated fresh work").unwrap();
+        let mut content = draft();
+        content.intent.id = session.intent_id.clone();
+        content.queue.intent_id = session.intent_id.clone();
+        content.queue.queue_id = session.queue_id.clone();
+        record_worker_proposal(
+            &ws,
+            &turn,
+            "planner",
+            "attempt-ac-004-active",
+            "proposal",
+            "rationale",
+            content,
+        )
+        .unwrap();
+        let before = journal_snapshot(&ws, &session.session_id);
+        let error = start_singleton(&ws).unwrap_err().to_string();
+        assert!(error.contains("active_queue_not_drained"), "{error}");
+        assert_eq!(journal_snapshot(&ws, &session.session_id), before);
+        assert!(ws
+            .load_planning_session(&session.session_id)
+            .unwrap()
+            .current_head
+            .is_none());
+        let _ = std::fs::remove_dir_all(ws.root);
+
+        let ws = temp_workspace("ac-004-corrupt-activation");
+        let activation = activate_express_draft(&ws, "active plan", draft()).unwrap();
+        let mut corrupt = ws
+            .load_activation(&activation.confirmation_id)
+            .unwrap()
+            .unwrap();
+        corrupt.queue_digest = "fnv1a64:corrupt".into();
+        crate::state::save_yaml(&ws.activation_path(&activation.confirmation_id), &corrupt)
+            .unwrap();
+        let queue_before = std::fs::read(ws.queue_path()).unwrap();
+        let error = start_singleton(&ws).unwrap_err().to_string();
+        assert!(error.contains("unconfirmed_or_inconsistent"), "{error}");
+        assert_eq!(std::fs::read(ws.queue_path()).unwrap(), queue_before);
+        let _ = std::fs::remove_dir_all(ws.root);
+
+        let ws = temp_workspace("ac-004-running-active");
+        activate_express_draft(&ws, "active plan", draft()).unwrap();
+        set_active_task_state(&ws, TaskState::Running);
+        let queue_before = std::fs::read(ws.queue_path()).unwrap();
+        let error = start_singleton(&ws).unwrap_err().to_string();
+        assert!(error.contains("active_queue_running"), "{error}");
+        assert_eq!(std::fs::read(ws.queue_path()).unwrap(), queue_before);
         let _ = std::fs::remove_dir_all(ws.root);
     }
 

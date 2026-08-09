@@ -16,7 +16,7 @@ PLANNER="$ROOT/planner-worker.sh"
 cp "$SCRIPT_DIR/planner-worker.sh" "$PLANNER"
 chmod +x "$PLANNER"
 
-if [[ "$SCENARIO" == "confirmed_auto_runtime_envelope" ]]; then
+if [[ "$SCENARIO" == "confirmed_auto_runtime_envelope" || "$SCENARIO" == "planning_start" ]]; then
   touch "$ROOT/.fixture-confirmed-auto"
 fi
 
@@ -198,6 +198,33 @@ run_yardlet new "initial planning request" --worker fixture-planner >/dev/null
 p1="$(proposal)"
 
 case "$SCENARIO" in
+  planning_start)
+    (cd "$ROOT" && git init -q && git config user.name fixture && \
+      git config user.email fixture@example.invalid && git add .agents/yardlet.yaml && \
+      git commit -qm baseline)
+    set +e
+    (cd "$ROOT" && YARDLET_TEST_PLANNING_CRASH=accept_after_revision_write \
+      "$YARDLET_BIN" planning start >"$EVIDENCE_DIR/start-crash.out" 2>"$EVIDENCE_DIR/start-crash.err")
+    crash_status=$?
+    set -e
+    [[ "$crash_status" -eq 86 ]] || fail "planning start did not stop at the accept crash seam"
+    [[ "$(revision_count)" == "1" ]] || fail "interrupted planning start did not persist one exact revision"
+
+    run_yardlet planning start >"$EVIDENCE_DIR/start-retry.out"
+    show
+    [[ "$(json_get "$EVIDENCE_DIR/show.json" session.lifecycle)" == "confirmed" ]] || fail "planning start did not confirm"
+    [[ "$(json_get "$EVIDENCE_DIR/show.json" exact_active_parity)" == "true" ]] || fail "planning start lost exact activation parity"
+    [[ "$(json_len "$EVIDENCE_DIR/show.json" pending_proposals)" == "0" ]] || fail "planning start left the singleton pending"
+    [[ "$(revision_count)" == "1" ]] || fail "planning start retry duplicated the visible draft"
+    grep -q 'Starting the confirmed queue' "$EVIDENCE_DIR/start-retry.out" || fail "planning start did not announce auto-drain"
+    [[ "$(find "$ROOT/.agents/runs" -path '*/result.json' -type f | wc -l | tr -d ' ')" -ge 1 ]] || fail "planning start did not enter the runtime worker"
+
+    run_yardlet planning start >"$EVIDENCE_DIR/start-confirmed-retry.out"
+    [[ "$(revision_count)" == "1" ]] || fail "confirmed planning start retry duplicated the draft"
+    confirmed_events="$(find "$ROOT/.agents/planning-sessions" -path '*/events/*.yaml' -type f -exec grep -l '^type: draft.confirmed$' {} + | wc -l | tr -d ' ')"
+    [[ "$confirmed_events" == "1" ]] || fail "confirmed planning start retry duplicated the confirm effect"
+    write_summary "planning start가 accept crash를 exact receipt로 재개하고 한 번만 confirm한 뒤 opaque 인자 없이 auto-drain함"
+    ;;
   accept)
     accept_proposal "$p1" none act-accept-1 >/dev/null
     show

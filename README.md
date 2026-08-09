@@ -92,11 +92,7 @@ a worker opts a specific var back in only via `pass_env`.
 ```bash
 cd your-project
 yardlet new "add admin order search with status, email, and date filters"
-yardlet planning show              # review the proposal and semantic diff
-yardlet planning accept <proposal> --expected-head none
-yardlet planning confirm --expected-head <draft-revision>
-yardlet queue                      # review the confirmed tasks
-yardlet run --auto                 # drain the queue, stopping only at human gates
+yardlet planning start             # exact accept + confirm + auto-drain for one fresh plan
 yardlet handoff                    # read the teammate-readable summary
 yardlet                            # or do it all from the terminal UI
 ```
@@ -106,12 +102,17 @@ creates `.agents/` state on demand. `yardlet init` exists for scripting or to
 re-scaffold, but you do not need to run it first.
 
 A one-sentence request opens a planning channel. Each worker proposal is an
-immutable draft revision with an inspectable semantic diff. `accept`, `reject`,
-`undo`, and `answer` require the expected visible head, and only explicit
-`confirm` promotes that exact draft to the active intent and bounded queue. No
-active state changes before confirmation, and confirmation does not call the
-worker or hide a re-plan. `yardlet goal` remains the express path: it skips the
-planning worker but records the generated draft and confirmation provenance.
+immutable draft revision with an inspectable semantic diff. In the ordinary
+case, `yardlet planning start` accepts the only fresh proposal (or resumes the
+only accepted visible draft), confirms that exact revision, and auto-drains the
+queue. It refuses multiple or stale proposals, high ambiguity, open questions,
+an unresolved planning action, corrupt activation, or active unfinished work;
+use `yardlet planning show` and the explicit `accept`, `reject`, `answer`, and
+`confirm` commands for those detailed flows. These commands retain their
+expected-head contract. No active state changes before confirmation, and
+confirmation does not call the worker or hide a re-plan. `yardlet goal` remains
+the express path: it skips the planning worker but records the generated draft
+and confirmation provenance.
 
 After confirmation, each task runs through a hidden worker, is checked by a
 deterministic evaluator, and leaves a checkpoint and handoff under
@@ -271,6 +272,11 @@ shown above the draft.
 
 Bracketed paste preserves pasted newlines and Korean/CJK text.
 
+On Planning Review, press `s` to run the same singleton fast-path. The core
+still refuses ambiguous, stale, questioned, corrupt, or active-queue states and
+the toast points back to the detailed review actions. `a`, `r`, `e`, and `c`
+remain the explicit accept, reject, revise, and confirm controls.
+
 ## Commands
 
 | Command | Purpose |
@@ -278,6 +284,7 @@ Bracketed paste preserves pasted newlines and Korean/CJK text.
 | `yardlet` | Open the terminal UI (auto-inits on first use). |
 | `yardlet init [--force]` | Explicitly scaffold `.agents/` state (optional). |
 | `yardlet new "<request>" [--worker <id>]` | Start or resume conversational planning and record a replacement proposal without changing active state. |
+| `yardlet planning start` | Accept the sole fresh proposal if needed, confirm the exact visible draft, and auto-drain; fail closed to detailed review when the state is not unambiguous. |
 | `yardlet planning show [--json]` / `accept` / `reject` / `undo` / `answer` / `confirm` | Review the channel and semantic diff, then act against an expected draft head; only `confirm` promotes the visible draft. |
 | `yardlet goal "<goal>" [--verify "..."]` | Express lane: skip the planning worker, record an exact draft and confirmation, then run one goal to a verify condition. |
 | `yardlet new "..." --image <path>` | Attach a local image to the goal (also auto-detected from the request). |
@@ -640,7 +647,10 @@ bytes or writing the consumed marker. Recovery never finds a session by matching
 request text and never writes active intent or queue as a fallback. It creates
 only the exact proposal, and accept plus confirm remain explicit user actions.
 The consumed marker is written atomically only after canonical proposal and
-journal writes succeed. An interrupted planning confirmation replays the same stable action,
+journal writes succeed. `planning start` derives stable internal actions from
+the sole exact proposal and revision, so an interrupted accept or confirmation
+resumes without duplicating the revision, activation, or effect event. An
+interrupted planning confirmation replays the same stable action,
 deduplicates its effect events, and remains non-runnable if any snapshot,
 activation, or completed action receipt does not match the current active
 confirmation exactly. Before an accepted revision is stored, its prepared

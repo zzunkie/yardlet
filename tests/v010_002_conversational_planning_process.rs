@@ -233,4 +233,9 @@ mod unix {
     fn restart_recovery_creates_only_the_exact_session_proposal() {
         run_scenario("restart_unconsumed_planner_recovery");
     }
+
+    #[test]
+    fn ac_001_to_004_planning_start_recovers_and_auto_drains_without_opaque_arguments() {
+        run_scenario("planning_start");
+    }
 }

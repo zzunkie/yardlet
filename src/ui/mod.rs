@@ -3310,6 +3310,103 @@ fn start_planning_revision(app: &mut App) {
     };
 }
 
+/// What a singleton quick-start outcome does to the review surface.
+///
+/// The `s` key is mapped independently of proposal count so the core can
+/// explain *why* it refused (multiple/stale proposals, an unresolved question,
+/// an active queue) instead of silently doing nothing. For that explanation to
+/// be actionable it has to appear on the review screen, next to the detailed
+/// accept/confirm actions it points at, so a refusal must keep the operator
+/// there. Only an accepted start hands off to Home for the run(auto) job.
+#[derive(Debug, PartialEq, Eq)]
+enum SingletonStartStep {
+    /// Refused: stay on Planning Review and show this `(false, ...)` toast.
+    Refused { toast: String },
+    /// Accepted: go to Home; `summary` seeds the run(auto) job's final toast.
+    Started { summary: String },
+}
+
+/// Pure branch: map the (synchronous) `start_singleton` result to the screen
+/// transition. Deciding the screen here -- rather than navigating to Home before
+/// the result is known -- is what lets a refusal stay on the review screen. The
+/// `Ok` carries the activation's confirmation id; that is all the started toast
+/// needs from the outcome.
+fn singleton_start_step(lbl: &i18n::L, result: Result<String>) -> SingletonStartStep {
+    match result {
+        Ok(confirmation_id) => SingletonStartStep::Started {
+            summary: format!("{}: {confirmation_id}", lbl.planning_started),
+        },
+        Err(error) => SingletonStartStep::Refused {
+            toast: format!(
+                "{} {error} {}",
+                lbl.planning_start_failed, lbl.planning_start_fallback
+            ),
+        },
+    }
+}
+
+fn start_planning_singleton(app: &mut App) {
+    let lbl = app.lang.l();
+    // Accept + confirm is a deterministic, locked state transition -- the same
+    // category as the accept/reject/confirm actions, which all run synchronously.
+    // Running it inline (not in the background run(auto) thread) means the screen
+    // decision can see whether it was refused before navigating anywhere.
+    let result =
+        crate::planning::start_singleton(&app.ws).map(|outcome| outcome.activation.confirmation_id);
+    match singleton_start_step(lbl, result) {
+        SingletonStartStep::Refused { toast } => {
+            // Refused: keep Planning Review open so the detailed actions the
+            // toast points at stay reachable. Re-read the projection like the
+            // other refusal paths so the screen does not keep offering an action
+            // against state the refusal already moved past.
+            let _ = refresh_planning_review(app);
+            app.toast = Some((false, toast));
+        }
+        SingletonStartStep::Started { summary } => {
+            let ws = app.ws.clone();
+            let run_word = lbl.run_word;
+            let auto_word = lbl.auto_word;
+            let failed = lbl.run_failed;
+            let pause = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let pause_job = pause.clone();
+            let (tx, rx) = mpsc::channel();
+            let txp = tx.clone();
+            thread::spawn(move || {
+                let res = match run::run_auto(&ws, false, Some(pause), None, false, |line| {
+                    let _ = txp.send(JobMsg::Progress(line.to_string()));
+                }) {
+                    Ok(lines) => JobResult {
+                        ok: true,
+                        summary: format!(
+                            "{summary}{}",
+                            lines
+                                .last()
+                                .filter(|line| !line.is_empty())
+                                .map(|line| format!(" · {line}"))
+                                .unwrap_or_default()
+                        ),
+                    },
+                    Err(error) => JobResult {
+                        ok: false,
+                        summary: format!("{failed} {error}"),
+                    },
+                };
+                let _ = tx.send(JobMsg::Done(res));
+            });
+            app.input_clear();
+            app.planning_review_editing = false;
+            app.screen = Screen::Home;
+            app.progress = None;
+            app.pause = Some(pause_job);
+            app.job = Job::Running {
+                label: format!("{run_word} ({auto_word})"),
+                started: Instant::now(),
+                rx,
+            };
+        }
+    }
+}
+
 fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     use planning_review::ReviewAction;
 
@@ -3340,6 +3437,7 @@ fn handle_planning_review_key(app: &mut App, code: KeyCode, modifiers: KeyModifi
             app.planning_review_editing = false;
         }
         ReviewAction::SubmitRevision => start_planning_revision(app),
+        ReviewAction::Start => start_planning_singleton(app),
         ReviewAction::InsertNewline => app.input_insert("\n"),
         ReviewAction::Insert(c) => app.input_insert(&c.to_string()),
         ReviewAction::Backspace => app.input_backspace(),
@@ -6134,6 +6232,80 @@ tasks:
         let (ok, toast) = app.toast.clone().expect("error sets a toast");
         assert!(!ok);
         assert!(toast.contains("stale head"), "{toast}");
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// The quick-start branch is pinned per language: a refusal produces a
+    /// failed+fallback toast (and, by returning `Refused`, keeps the review
+    /// screen); an accepted start returns `Started` for the Home hand-off. This
+    /// locks the exact phrases so a refactor cannot silently drop or reword the
+    /// "why it refused / use the detailed actions here" guidance in either EN or
+    /// KO.
+    #[test]
+    fn singleton_start_step_pins_the_refuse_and_start_branches_in_both_languages() {
+        for lang in [i18n::Lang::En, i18n::Lang::Ko] {
+            let l = lang.l();
+
+            let refused = singleton_start_step(l, Err(anyhow::anyhow!("multiple proposals")));
+            let SingletonStartStep::Refused { toast } = refused else {
+                panic!("{lang:?}: a refused start must stay on the review screen");
+            };
+            assert!(
+                toast.starts_with(l.planning_start_failed),
+                "{lang:?}: refusal must lead with the failed label: {toast}"
+            );
+            assert!(
+                toast.contains("multiple proposals"),
+                "{lang:?}: refusal must carry the core's reason: {toast}"
+            );
+            assert!(
+                toast.contains(l.planning_start_fallback),
+                "{lang:?}: refusal must point at the detailed actions: {toast}"
+            );
+
+            let started = singleton_start_step(l, Ok("cnf_singleton_1".to_string()));
+            let SingletonStartStep::Started { summary } = started else {
+                panic!("{lang:?}: an accepted start must hand off to Home");
+            };
+            assert!(
+                summary.starts_with(l.planning_started),
+                "{lang:?}: started summary must lead with the confirmed label: {summary}"
+            );
+            assert!(
+                summary.contains("cnf_singleton_1"),
+                "{lang:?}: started summary must name the confirmation id: {summary}"
+            );
+        }
+    }
+
+    /// End-to-end wiring: a refused quick start must not eject the review screen.
+    /// On a workspace with no planning session `start_singleton` refuses, and the
+    /// operator must stay on Planning Review with the failed+fallback toast and no
+    /// run job started.
+    #[test]
+    fn refused_quick_start_stays_on_planning_review() {
+        let ws = workspace_with_user_config("singleton-start-refused");
+        let mut app = App::new(ws.clone());
+        app.screen = Screen::PlanningReview;
+
+        start_planning_singleton(&mut app);
+
+        assert_eq!(
+            app.screen,
+            Screen::PlanningReview,
+            "a refused start must not jump to Home"
+        );
+        assert!(
+            matches!(app.job, Job::Idle),
+            "a refused start must not launch a run(auto) job"
+        );
+        let (ok, toast) = app.toast.clone().expect("a refused start sets a toast");
+        assert!(!ok, "a refused start is an error toast: {toast}");
+        assert!(
+            toast.contains(app.lang.l().planning_start_failed)
+                && toast.contains(app.lang.l().planning_start_fallback),
+            "the toast must carry the failed+fallback guidance: {toast}"
+        );
         let _ = std::fs::remove_dir_all(ws.root);
     }
 
