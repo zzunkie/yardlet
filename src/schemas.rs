@@ -1946,6 +1946,11 @@ impl WorkQueue {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkersFile {
+    /// Deliberately has NO serde default: a `workers.yaml` that never declared
+    /// a version is rejected by the parser (`missing field schema_version`)
+    /// before `validate` runs, so defaulting it here would start silently
+    /// reading an unversioned file as version 1. `validate` therefore only has
+    /// to judge versions that are actually present.
     pub schema_version: u32,
     #[serde(default)]
     pub workers: Vec<WorkerProfile>,
@@ -1956,8 +1961,19 @@ pub struct WorkersFile {
 pub const MAX_PROVIDER_RESPONSE_REFUSAL_PATTERNS: usize = 16;
 pub const MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES: usize = 256;
 
+/// The only `workers.yaml` schema this build understands. A newer file is a
+/// hard stop rather than a best-effort read: the fields this build ignores are
+/// exactly the ones a future version would use to bound a worker's behavior.
+pub const SUPPORTED_WORKERS_SCHEMA_VERSION: u32 = 1;
+
 impl WorkersFile {
     pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != SUPPORTED_WORKERS_SCHEMA_VERSION {
+            return Err(format!(
+                "this yardlet supports workers.yaml schema_version {SUPPORTED_WORKERS_SCHEMA_VERSION}, found {}",
+                self.schema_version
+            ));
+        }
         for worker in &self.workers {
             if !matches!(worker.id.as_str(), "codex" | "claude-code") {
                 worker.invocation.validate_generic(&worker.id)?;
@@ -2206,14 +2222,18 @@ pub struct Invocation {
     pub output_contract: String,
     /// Generic adapter template for workers without a built-in adapter
     /// (codex and claude-code have first-class ones; any other id uses these).
-    /// Placeholders: `{run_dir}`, `{model}`, `{effort}`, `{image}`, and, for
-    /// argument prompt transport, exactly one `{prompt}`. The binary must be
-    /// able to write result files in the workspace.
+    /// Placeholders: `{run_dir}`, `{model}`, `{effort}`, `{image}`, and, per
+    /// prompt transport, exactly one `{prompt}` (argument) or one
+    /// `{prompt_file}` (file). The binary must be able to write result files in
+    /// the workspace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
     /// How a generic adapter receives the compiled task packet: `stdin`
-    /// (legacy/default) or `argument` (`arg` is accepted as an alias). Argument
-    /// transport expands exactly one `{prompt}` in `args` without a shell.
+    /// (legacy/default), `argument` (`arg` is accepted as an alias), or `file`.
+    /// Argument transport expands exactly one `{prompt}` in `args` without a
+    /// shell; file transport writes the packet into the run directory and
+    /// expands exactly one `{prompt_file}` with its absolute path, for CLIs
+    /// that take a prompt file instead of stdin or an argv-sized prompt.
     #[serde(
         default = "default_prompt_transport",
         skip_serializing_if = "is_default_prompt_transport"
@@ -2338,6 +2358,11 @@ impl Invocation {
         self.prompt_transport.trim() == "stdin"
     }
 
+    /// Does this worker read the packet from a file Yardlet writes for it?
+    pub fn prompt_in_file(&self) -> bool {
+        self.prompt_transport.trim() == "file"
+    }
+
     /// Validate only the generic adapter's structural template. Runtime
     /// invocability (`supports_noninteractive`, output contract, binary,
     /// offline probe, billing policy) belongs to the shared guard so status,
@@ -2372,27 +2397,30 @@ impl Invocation {
             validate_invocation_args(worker_id, label, args, true, false, false)?;
         }
 
-        let prompt_count = self
-            .args
-            .iter()
-            .map(|arg| arg.matches("{prompt}").count())
-            .sum::<usize>();
+        let prompt_count = placeholder_count(&self.args, "{prompt}");
+        let prompt_file_count = placeholder_count(&self.args, "{prompt_file}");
         match self.prompt_transport.trim() {
-            "stdin" if prompt_count == 0 => {}
+            "stdin" if prompt_count == 0 && prompt_file_count == 0 => {}
             "stdin" => {
                 return Err(format!(
-                "worker '{worker_id}' uses prompt_transport stdin, so args must not contain {{prompt}}"
+                "worker '{worker_id}' uses prompt_transport stdin, so args must not contain {{prompt}} or {{prompt_file}}"
             ))
             }
-            "argument" | "arg" if prompt_count == 1 => {}
+            "argument" | "arg" if prompt_count == 1 && prompt_file_count == 0 => {}
             "argument" | "arg" => {
                 return Err(format!(
-                "worker '{worker_id}' argument prompt transport requires exactly one {{prompt}} placeholder in args"
+                "worker '{worker_id}' argument prompt transport requires exactly one {{prompt}} placeholder in args and no {{prompt_file}}"
+            ))
+            }
+            "file" if prompt_file_count == 1 && prompt_count == 0 => {}
+            "file" => {
+                return Err(format!(
+                "worker '{worker_id}' file prompt transport requires exactly one {{prompt_file}} placeholder in args and no {{prompt}}"
             ))
             }
             other => {
                 return Err(format!(
-                "worker '{worker_id}' has unsupported prompt_transport '{other}'; expected stdin or argument"
+                "worker '{worker_id}' has unsupported prompt_transport '{other}'; expected stdin, argument, or file"
             ))
             }
         }
@@ -2432,19 +2460,22 @@ impl Invocation {
                 "worker '{worker_id}' generic session resume_args require exactly one {{session}} placeholder"
             ));
         }
-        let resume_prompt_count = session
-            .resume_args
-            .iter()
-            .map(|arg| arg.matches("{prompt}").count())
-            .sum::<usize>();
+        let resume_prompt_count = placeholder_count(&session.resume_args, "{prompt}");
+        let resume_prompt_file_count = placeholder_count(&session.resume_args, "{prompt_file}");
         match self.prompt_transport.trim() {
-            "stdin" if resume_prompt_count == 0 => Ok(()),
+            "stdin" if resume_prompt_count == 0 && resume_prompt_file_count == 0 => Ok(()),
             "stdin" => Err(format!(
-                "worker '{worker_id}' uses prompt_transport stdin, so session.resume_args must not contain {{prompt}}"
+                "worker '{worker_id}' uses prompt_transport stdin, so session.resume_args must not contain {{prompt}} or {{prompt_file}}"
             )),
-            "argument" | "arg" if resume_prompt_count == 1 => Ok(()),
+            "argument" | "arg" if resume_prompt_count == 1 && resume_prompt_file_count == 0 => {
+                Ok(())
+            }
             "argument" | "arg" => Err(format!(
-                "worker '{worker_id}' argument prompt transport requires exactly one {{prompt}} placeholder in session.resume_args"
+                "worker '{worker_id}' argument prompt transport requires exactly one {{prompt}} placeholder in session.resume_args and no {{prompt_file}}"
+            )),
+            "file" if resume_prompt_file_count == 1 && resume_prompt_count == 0 => Ok(()),
+            "file" => Err(format!(
+                "worker '{worker_id}' file prompt transport requires exactly one {{prompt_file}} placeholder in session.resume_args and no {{prompt}}"
             )),
             _ => unreachable!("prompt transport was validated above"),
         }
@@ -2505,6 +2536,13 @@ impl Invocation {
     }
 }
 
+/// How many times `placeholder` appears across an argv template.
+fn placeholder_count(args: &[String], placeholder: &str) -> usize {
+    args.iter()
+        .map(|arg| arg.matches(placeholder).count())
+        .sum()
+}
+
 fn validate_invocation_args(
     worker_id: &str,
     label: &str,
@@ -2521,6 +2559,10 @@ fn validate_invocation_args(
             }
         }
         if allow_prompt {
+            // Both packet placeholders are structurally legal wherever the
+            // packet may be delivered; which ONE is required is decided per
+            // transport in `validate_generic`.
+            remainder = remainder.replace("{prompt_file}", "");
             remainder = remainder.replace("{prompt}", "");
         }
         if allow_session {
@@ -4139,6 +4181,105 @@ delivery: auto
                 .expect_err("ambiguous generic prompt transport must fail validation");
             assert!(error.contains(expected), "{error:?} does not contain {expected:?}");
         }
+    }
+
+    #[test]
+    fn generic_file_prompt_transport_requires_exactly_one_prompt_file_placeholder() {
+        let valid: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      supports_noninteractive: true\n      output_contract: files\n      prompt_transport: file\n      args: [run, '--packet', '{prompt_file}']\n",
+        )
+        .unwrap();
+        valid.validate().unwrap();
+        assert!(!valid.workers[0].invocation.prompt_on_stdin());
+        assert!(valid.workers[0].invocation.prompt_in_file());
+
+        let valid_resume: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      prompt_transport: file\n      args: [run, '{prompt_file}']\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: [resume, '{session}', '{prompt_file}']\n",
+        )
+        .unwrap();
+        valid_resume.validate().unwrap();
+
+        for (yaml, expected) in [
+            // File transport without the placeholder has nowhere to deliver.
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      prompt_transport: file\n      args: [run]\n",
+                "exactly one {prompt_file}",
+            ),
+            // Twice would hand the worker two contradictory packet paths.
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      prompt_transport: file\n      args: [run, '{prompt_file}', '{prompt_file}']\n",
+                "exactly one {prompt_file}",
+            ),
+            // Both placeholders would deliver the same packet twice.
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      prompt_transport: file\n      args: [run, '{prompt_file}', '{prompt}']\n",
+                "exactly one {prompt_file}",
+            ),
+            // The other transports never expand {prompt_file}, so a literal
+            // placeholder would reach the worker's argv verbatim.
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      args: [run, '{prompt_file}']\n",
+                "stdin",
+            ),
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      prompt_transport: argument\n      args: [run, '{prompt}', '{prompt_file}']\n",
+                "exactly one {prompt}",
+            ),
+            (
+                "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      prompt_transport: file\n      args: [run, '{prompt_file}']\n      session:\n        capture: {stream: stdout, prefix: 'SESSION_REF='}\n        resume_args: [resume, '{session}']\n",
+                "exactly one {prompt_file}",
+            ),
+        ] {
+            let workers: WorkersFile = crate::yaml::from_str(yaml).unwrap();
+            let error = workers
+                .validate()
+                .expect_err("ambiguous file prompt transport must fail validation");
+            assert!(
+                error.contains(expected),
+                "{error:?} does not contain {expected:?}"
+            );
+        }
+
+        let unsupported: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation:\n      command: fixture\n      prompt_transport: shell\n      args: [run]\n",
+        )
+        .unwrap();
+        let error = unsupported.validate().unwrap_err();
+        assert!(error.contains("stdin, argument, or file"), "{error}");
+    }
+
+    #[test]
+    fn workers_schema_version_gate_fails_closed_on_unsupported_versions() {
+        let supported: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation: {command: fixture}\n",
+        )
+        .unwrap();
+        assert_eq!(supported.schema_version, SUPPORTED_WORKERS_SCHEMA_VERSION);
+        supported.validate().unwrap();
+
+        for version in [0_u32, 2, 7] {
+            let workers: WorkersFile = crate::yaml::from_str(&format!(
+                "schema_version: {version}\nworkers:\n  - id: fixture\n    invocation: {{command: fixture}}\n"
+            ))
+            .unwrap();
+            let error = workers
+                .validate()
+                .expect_err("an unsupported workers.yaml schema_version must fail closed");
+            assert_eq!(
+                error,
+                format!("this yardlet supports workers.yaml schema_version 1, found {version}")
+            );
+        }
+
+        // The field has no serde default, so a workers.yaml that never carried
+        // it is rejected by the parser before the gate is ever reached. The gate
+        // therefore only has to judge values that are actually present.
+        let missing = crate::yaml::from_str::<WorkersFile>("workers: []\n")
+            .expect_err("workers.yaml without schema_version does not parse");
+        assert!(
+            missing.to_string().contains("schema_version"),
+            "{missing:?}"
+        );
     }
 
     #[test]

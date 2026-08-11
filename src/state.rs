@@ -6458,7 +6458,7 @@ fn write_bytes_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn write_private_str_atomic(path: &Path, contents: &str) -> Result<()> {
+pub(crate) fn write_private_str_atomic(path: &Path, contents: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }

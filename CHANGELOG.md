@@ -16,6 +16,30 @@
 
 ### Added
 
+- **`prompt_transport: file` completes the generic packet-delivery matrix.** A
+  worker CLI that takes its prompt as a file, because it has no stdin mode or
+  because a full packet exceeds the platform's argv limit, declares
+  `prompt_transport: file` and exactly one `{prompt_file}` in `args` (and, for
+  native resume, in `session.resume_args`). Yardlet writes the complete packet
+  to `packet-prompt.txt` inside that run's own directory, mode `0600`, expands
+  `{prompt_file}` with its absolute path, and writes nothing to the worker's
+  stdin. The file is replaced in place for a retry or a resume, so a worker can
+  never read the previous attempt's packet, and the run directory's own
+  lifecycle removes it rather than a separate cleanup step that could fail.
+  Each transport now requires exactly its own placeholder (`stdin` neither,
+  `argument` one `{prompt}`, `file` one `{prompt_file}`), and a mixed template
+  is rejected before any probe or worker is spawned, because an unexpanded
+  placeholder would otherwise reach the worker's argv verbatim.
+
+- **`workers.yaml` `schema_version` is enforced instead of merely parsed.** The
+  field was read and then ignored, so a file written by a newer Yardlet was
+  silently interpreted under this build's rules, and the fields a newer schema
+  adds are exactly the ones that bound a worker's behavior. Any version other
+  than the supported `1` now fails closed with `this yardlet supports
+  workers.yaml schema_version 1, found N`. A file that never declared the field
+  is unaffected in kind: it has always been rejected by the parser itself,
+  because the field deliberately carries no serde default.
+
 - **Worker-declared native harness sources.** A worker profile can declare the
   harness it already loads by itself — `harness.native_rule_files` (e.g.
   `AGENTS.md`, `.cursorrules`) and `harness.native_skill_dirs` (e.g.
