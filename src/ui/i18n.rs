@@ -337,6 +337,17 @@ pub struct L {
     pub w_ambiguous: &'static str,
     pub w_notready: &'static str,
     pub w_disabled: &'static str,
+    /// Readiness contract states: another product answers this command name,
+    /// the CLI is older than the profile's declared minimum, and the CLI
+    /// itself reports it is not logged in.
+    pub w_wrong_product: &'static str,
+    pub w_unsupported_version: &'static str,
+    pub w_unauthenticated: &'static str,
+    /// Fix-it hints shown next to those three states. `w_hint_upgrade` is
+    /// formatted with the declared minimum version.
+    pub w_hint_wrong_product: &'static str,
+    pub w_hint_upgrade: &'static str,
+    pub w_hint_login: &'static str,
     pub worker_on: &'static str,
     pub worker_off: &'static str,
     pub worker_toggle_hint: &'static str,
@@ -635,6 +646,12 @@ pub const EN: L = L {
     w_ambiguous: "ambiguous",
     w_notready: "not ready",
     w_disabled: "off",
+    w_wrong_product: "wrong CLI",
+    w_unsupported_version: "old version",
+    w_unauthenticated: "logged out",
+    w_hint_wrong_product: "another product answers this command",
+    w_hint_upgrade: "upgrade to >=",
+    w_hint_login: "sign in with the worker CLI itself",
     worker_on: "enabled",
     worker_off: "disabled",
     worker_toggle_hint: "  Enter/Space toggle",
@@ -906,6 +923,12 @@ pub const KO: L = L {
     w_ambiguous: "모호",
     w_notready: "준비안됨",
     w_disabled: "꺼짐",
+    w_wrong_product: "다른 제품",
+    w_unsupported_version: "구버전",
+    w_unauthenticated: "미인증",
+    w_hint_wrong_product: "같은 명령 이름에 엉뚱한 CLI가 응답",
+    w_hint_upgrade: "업그레이드 필요 >=",
+    w_hint_login: "워커 CLI에서 직접 로그인",
     worker_on: "켜짐",
     worker_off: "꺼짐",
     worker_toggle_hint: "  Enter/Space 토글",
@@ -1266,6 +1289,43 @@ mod tests {
         for ((state, en), ko) in states.into_iter().zip(expected_en).zip(expected_ko) {
             assert_eq!(task_state_label(Lang::En.l(), state), en);
             assert_eq!(task_state_label(Lang::Ko.l(), state), ko);
+        }
+    }
+
+    #[test]
+    fn extended_worker_readiness_labels_stay_distinct_in_both_languages() {
+        // The workers panel renders one of these per row, and marker-based
+        // assertions elsewhere match on them, so no label may be a substring of
+        // another label or of a fix-it hint.
+        for lang in [Lang::En, Lang::Ko] {
+            let l = lang.l();
+            let labels = [
+                l.w_ready,
+                l.w_ambiguous,
+                l.w_notready,
+                l.w_disabled,
+                l.w_wrong_product,
+                l.w_unsupported_version,
+                l.w_unauthenticated,
+            ];
+            let hints = [l.w_hint_wrong_product, l.w_hint_upgrade, l.w_hint_login];
+            for field in labels.iter().chain(hints.iter()) {
+                assert!(!field.trim().is_empty(), "{lang:?} has an empty field");
+            }
+            for (index, label) in labels.iter().enumerate() {
+                for (other_index, other) in labels.iter().enumerate() {
+                    assert!(
+                        index == other_index || !other.contains(label),
+                        "{lang:?}: worker label {label:?} overlaps {other:?}"
+                    );
+                }
+                for hint in hints {
+                    assert!(
+                        !hint.contains(label),
+                        "{lang:?}: worker label {label:?} overlaps hint {hint:?}"
+                    );
+                }
+            }
         }
     }
 

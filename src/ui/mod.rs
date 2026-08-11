@@ -4950,6 +4950,7 @@ routing:
                 billing_env_present: 0,
                 billing_blocked: false,
                 model: worker.model,
+                required_version: worker.invocation.min_version,
                 detail: "injected".into(),
                 enabled: true,
             })

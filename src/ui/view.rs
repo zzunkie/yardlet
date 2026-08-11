@@ -1000,21 +1000,58 @@ fn task_waiting_kind(snap: &Snapshot, id: &str, state: TaskState, l: &L) -> Opti
     }
 }
 
+/// The workers-panel row vocabulary for one readiness verdict: glyph, color,
+/// localized word, and the fix-it hint the state is only actionable with.
+///
+/// The match arms are the `guard::Readiness` labels carried on the snapshot, so
+/// this stays pure and is unit-tested against every variant rather than
+/// discovered as a silently untranslated row.
+fn worker_row_words(
+    readiness: &str,
+    enabled: bool,
+    required_version: Option<&str>,
+    l: &L,
+) -> (&'static str, Color, &'static str, Option<String>) {
+    if !enabled {
+        return ("\u{00b7}", Color::DarkGray, l.w_disabled, None);
+    }
+    match readiness {
+        "invocable" => ("\u{2713}", Color::Green, l.w_ready, None),
+        "ambiguous" => ("?", Color::Yellow, l.w_ambiguous, None),
+        "wrong product" => (
+            "\u{2715}",
+            Color::Red,
+            l.w_wrong_product,
+            Some(l.w_hint_wrong_product.to_string()),
+        ),
+        "unsupported version" => (
+            "\u{2715}",
+            Color::Red,
+            l.w_unsupported_version,
+            Some(format!(
+                "{} {}",
+                l.w_hint_upgrade,
+                required_version.unwrap_or("?")
+            )),
+        ),
+        "unauthenticated" => (
+            "\u{2715}",
+            Color::Red,
+            l.w_unauthenticated,
+            Some(l.w_hint_login.to_string()),
+        ),
+        _ => ("\u{2715}", Color::Red, l.w_notready, None),
+    }
+}
+
 fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selected: Option<usize>) {
     let items: Vec<ListItem> = snap
         .workers
         .iter()
         .enumerate()
         .map(|(i, w)| {
-            let (glyph, color, word) = if !w.enabled {
-                ("\u{00b7}", Color::DarkGray, l.w_disabled)
-            } else {
-                match w.readiness.as_str() {
-                    "invocable" => ("\u{2713}", Color::Green, l.w_ready),
-                    "ambiguous" => ("?", Color::Yellow, l.w_ambiguous),
-                    _ => ("\u{2715}", Color::Red, l.w_notready),
-                }
-            };
+            let (glyph, color, word, hint) =
+                worker_row_words(&w.readiness, w.enabled, w.required_version.as_deref(), l);
             let is_sel = selected == Some(i);
             let marker = if is_sel { "\u{25b8}" } else { " " };
             let id_style = if w.enabled {
@@ -1055,6 +1092,12 @@ fn render_workers(frame: &mut Frame, area: Rect, snap: &Snapshot, l: &L, selecte
                     Style::default().fg(Color::DarkGray),
                 ),
             ];
+            if let Some(hint) = hint {
+                spans.push(Span::styled(
+                    format!("  {hint}"),
+                    Style::default().fg(Color::Red),
+                ));
+            }
             if is_sel {
                 // The selected worker also surfaces its model alongside the
                 // toggle hint (room is tight on every row, so show it here).
@@ -2032,6 +2075,58 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn every_readiness_verdict_reaches_the_workers_panel_with_its_own_words() {
+        use crate::guard::Readiness;
+
+        for lang in [i18n::Lang::En, i18n::Lang::Ko] {
+            let l = lang.l();
+            let mut seen: Vec<&'static str> = Vec::new();
+            for readiness in [
+                Readiness::Ready,
+                Readiness::NotReady,
+                Readiness::Ambiguous,
+                Readiness::WrongProduct,
+                Readiness::UnsupportedVersion,
+                Readiness::Unauthenticated,
+            ] {
+                let (_, _, word, hint) =
+                    worker_row_words(readiness.label(), true, Some("1.2.0"), l);
+                // A verdict that falls through to the generic "not ready" arm
+                // would silently hide what is actually wrong.
+                assert!(
+                    readiness == Readiness::NotReady || word != l.w_notready,
+                    "{lang:?}: {} has no workers-panel wording of its own",
+                    readiness.label()
+                );
+                assert!(!seen.contains(&word), "{lang:?}: {word} is used twice");
+                seen.push(word);
+
+                // The three extended states are only actionable with their fix.
+                let extended = matches!(
+                    readiness,
+                    Readiness::WrongProduct
+                        | Readiness::UnsupportedVersion
+                        | Readiness::Unauthenticated
+                );
+                assert_eq!(
+                    hint.is_some(),
+                    extended,
+                    "{lang:?}: {} hint presence is wrong",
+                    readiness.label()
+                );
+                if readiness == Readiness::UnsupportedVersion {
+                    assert!(hint.unwrap().contains("1.2.0"), "{lang:?}");
+                }
+            }
+            // A disabled worker keeps its own row wording regardless of verdict.
+            let (_, _, word, hint) =
+                worker_row_words(Readiness::Unauthenticated.label(), false, None, l);
+            assert_eq!(word, l.w_disabled);
+            assert!(hint.is_none());
+        }
     }
 
     #[test]
