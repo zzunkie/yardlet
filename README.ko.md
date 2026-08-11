@@ -273,6 +273,7 @@ stale, 남은 질문, 손상된 상태, active queue 게이트를 그대로 거�
 | `yardlet add "<title>" [--depends-on <id>]` | 재계획 없이 사용자 작성 작업을 현재 큐에 추가. |
 | `yardlet queue` | 작업 큐 나열. |
 | `yardlet tidy` | 워크스페이스 상태 자가 치유: 오래된 게이트 이관, 실행 불가 작업 defer, 소진된 인텐트 아카이브. |
+| `yardlet gc [--apply] [--salvage]` | `.agents/worktrees/`에 남은 run 워크트리 분류. `--apply`면 잃을 것이 없는 병합된 것만 제거하고, `--salvage`면 dirty한 것의 diff를 먼저 기록. |
 | `yardlet status [--json]` | 워크스페이스, 인텐트, 큐, 워커 요약. |
 | `yardlet worker status` | 워커 준비 상태 및 빌링-env 안전성. |
 | `yardlet inspect repo [--json]` | 저렴한 결정론적 로컬 증거. |

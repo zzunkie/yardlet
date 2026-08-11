@@ -42,6 +42,8 @@ pub enum Command {
     Queue,
     /// Self-heal workspace state: migrate stale gates, defer non-runnable work, wrap drained intents.
     Tidy,
+    /// Classify (and optionally end) retained run worktrees under .agents/worktrees/.
+    Gc(GcArgs),
     /// Worker readiness and zero-key billing safety.
     Worker(WorkerArgs),
     /// Gather cheap deterministic local evidence.
@@ -90,6 +92,17 @@ pub enum Command {
     Skill(SkillArgs),
     /// Review the harness learning loop: learned rules + learned skills (H4).
     Harness(HarnessArgs),
+}
+
+#[derive(Args)]
+pub struct GcArgs {
+    /// Remove the worktrees that can lose nothing. Default: classify only.
+    #[arg(long)]
+    apply: bool,
+    /// With --apply: record a dirty-merged worktree's diff and untracked files
+    /// under .agents/gc-salvage/, then remove it too.
+    #[arg(long)]
+    salvage: bool,
 }
 
 #[derive(Args)]
@@ -630,6 +643,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Status(a)) => cmd_status(&cwd, a),
         Some(Command::Queue) => cmd_queue(&cwd),
         Some(Command::Tidy) => cmd_tidy(&cwd),
+        Some(Command::Gc(a)) => cmd_gc(&cwd, a),
         Some(Command::Worker(a)) => cmd_worker(&cwd, a),
         Some(Command::Inspect(a)) => cmd_inspect(&cwd, a),
         Some(Command::Resource(a)) => cmd_resource(&cwd, a),
@@ -1662,6 +1676,155 @@ fn cmd_tidy(cwd: &std::path::Path) -> Result<()> {
         println!("Archived drained intent and cleared live queue: {intent}");
     }
     Ok(())
+}
+
+fn cmd_gc(cwd: &std::path::Path, args: GcArgs) -> Result<()> {
+    use crate::gc::{GcOptions, KeepReason, Outcome, Verdict};
+
+    let ws = init::ensure_initialized(cwd)?.0;
+    let options = GcOptions {
+        apply: args.apply,
+        salvage: args.salvage,
+    };
+    let report = crate::gc::collect(&ws, &options)?;
+
+    let target = report.target.clone();
+    println!("Retained run worktrees under .agents/worktrees/");
+    match &target {
+        Some(target) => println!("Integration target: {target}"),
+        None => println!(
+            "Integration target: (unresolved — set one with `yardlet target <branch>`; \
+             nothing can be judged without it)"
+        ),
+    }
+    if report.entries.is_empty() {
+        println!("\nNothing retained. Nothing to do.");
+        return Ok(());
+    }
+
+    let target_label = target.as_deref().unwrap_or("the integration target");
+    let width = report
+        .entries
+        .iter()
+        .map(|entry| entry.facts.name.chars().count())
+        .max()
+        .unwrap_or(0);
+    println!();
+    for entry in &report.entries {
+        let detail = match &entry.outcome {
+            Outcome::Removed => "removed".to_string(),
+            Outcome::SalvagedAndRemoved => match &entry.salvage_dir {
+                Some(dir) => format!("salvaged to {} and removed", display_in(&ws, dir)),
+                None => "salvaged and removed".to_string(),
+            },
+            Outcome::WouldRemove => "would remove".to_string(),
+            Outcome::WouldSalvageAndRemove => "would salvage and remove".to_string(),
+            Outcome::Failed(error) => format!("kept: {error}"),
+            Outcome::Kept => match &entry.verdict {
+                Verdict::Keep(reason) => format!("kept: {}", reason.text()),
+                Verdict::Unmerged => {
+                    format!("kept: HEAD is not an ancestor of {target_label}")
+                }
+                Verdict::DirtyMerged { unmatched } => format!(
+                    "kept: {} path(s) not in {target_label} ({}); --salvage records and removes",
+                    unmatched.len(),
+                    preview_paths(unmatched)
+                ),
+                Verdict::CleanMerged | Verdict::SupersededMerged => "kept".to_string(),
+            },
+        };
+        println!(
+            "{:<width$}  {:<17}  {detail}",
+            entry.facts.name,
+            entry.verdict.label(),
+            width = width
+        );
+    }
+
+    let removed = report
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.outcome,
+                Outcome::Removed | Outcome::SalvagedAndRemoved
+            )
+        })
+        .count();
+    let branches: usize = report
+        .entries
+        .iter()
+        .map(|entry| entry.branches.len())
+        .sum();
+    println!();
+    if report.applied {
+        println!(
+            "Removed {removed} worktree(s) and {branches} branch(es); kept {}.",
+            report.entries.len() - removed
+        );
+        let held = report
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.verdict,
+                    Verdict::DirtyMerged { .. } if !args.salvage
+                )
+            })
+            .count();
+        if held > 0 {
+            println!(
+                "{held} dirty-merged worktree(s) kept. Re-run with `--apply --salvage` to \
+                 record their diffs under .agents/{}/ and remove them.",
+                crate::gc::SALVAGE_DIR
+            );
+        }
+    } else {
+        let would = report
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.outcome,
+                    Outcome::WouldRemove | Outcome::WouldSalvageAndRemove
+                )
+            })
+            .count();
+        println!("Dry run: nothing was removed. `yardlet gc --apply` would end {would}.");
+    }
+    if report
+        .entries
+        .iter()
+        .any(|entry| matches!(entry.verdict, Verdict::Keep(KeepReason::NotRegistered)))
+    {
+        println!(
+            "Directories Git does not list as worktrees are never touched here; \
+             inspect and remove them yourself."
+        );
+    }
+    Ok(())
+}
+
+/// Workspace-relative when it is inside the workspace, absolute otherwise.
+fn display_in(ws: &Workspace, path: &std::path::Path) -> String {
+    path.strip_prefix(&ws.root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn preview_paths(paths: &[String]) -> String {
+    const SHOWN: usize = 3;
+    let mut text = paths
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if paths.len() > SHOWN {
+        text.push_str(&format!(", +{} more", paths.len() - SHOWN));
+    }
+    text
 }
 
 fn cmd_answer(cwd: &std::path::Path, args: AnswerArgs) -> Result<()> {

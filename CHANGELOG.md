@@ -16,6 +16,22 @@
 
 ### Added
 
+- **`yardlet gc` ends the retention that had no end.** Per-run cleanup removes a
+  worktree only on a verified, fully integrated finish; every other ending keeps
+  it as evidence, and nothing ever reclaimed those — a dogfooding audit found 39
+  stale worktrees and 4.0GB still on disk, which `tidy` never looks at because
+  it scopes to the queue and intent (issue #139). `gc` classifies every
+  directory under `.agents/worktrees/`: `clean-merged` and `superseded-merged`
+  (its dirty paths are byte-identical to the integration target's) can lose
+  nothing and are removable; `dirty-merged` is kept with its unmatched paths
+  named; `unmerged` and anything undecidable is always kept with a reason. A
+  Running task, a live worker process, a still-live intent, an unregistered
+  directory, or a HEAD that is not an ancestor of the target makes a worktree
+  untouchable. The default is a dry-run report; `--apply` removes and deletes
+  the matching `yard/<task>/<run-id>` branches after re-checking each ref's
+  ancestry; `--apply --salvage` additionally writes a dirty worktree's tracked
+  diff and untracked files to `.agents/gc-salvage/<run-id>/` before removing it.
+
 - **Readiness tells the five failure modes apart.** A worker whose binary
   answered `--version` with exit 0 used to read as ready even when the command
   name resolved to a different product, when the CLI was older than the profile

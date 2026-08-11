@@ -11,6 +11,7 @@ mod cli;
 mod compact;
 mod eval_fixtures;
 mod evaluator;
+mod gc;
 mod git_finish;
 mod guard;
 mod hooks;
