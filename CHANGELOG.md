@@ -16,6 +16,24 @@
 
 ### Added
 
+- **Readiness tells the five failure modes apart.** A worker whose binary
+  answered `--version` with exit 0 used to read as ready even when the command
+  name resolved to a different product, when the CLI was older than the profile
+  needs, or when it was never logged in. A profile can now declare three
+  optional invocation fields — `identity_probe` (args + `expected_signature`),
+  `auth_probe` (args + `ready_patterns` / `unauthenticated_patterns`), and
+  `min_version` — and readiness reports `wrong product`, `unsupported version`,
+  and `unauthenticated` as distinct, non-invocable states next to the existing
+  missing-binary and ready ones. The gates run in order (identity, version,
+  `min_version`, then auth) and stop at the first failure, every probe runs in
+  the same sanitized zero-key environment as a real invocation, and each state
+  carries its fix (`worker status`, the routing refusal, and the TUI workers
+  panel all name it, e.g. "upgrade to >= 1.2.0"). Auth stays deliberately
+  tolerant: only a positively reported logged-out CLI blocks, while unknown
+  output leaves the worker invocable with an "unverified" label, since Yardlet
+  never makes a billed call to confirm a subscription login. Profiles that omit
+  all three fields keep today's behavior exactly.
+
 - **One-command start for the unambiguous planning case.** `yardlet planning
   start` accepts the sole fresh proposal when needed, confirms the exact visible
   draft, and enters the existing auto-drain. The Planning Review screen exposes
