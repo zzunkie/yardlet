@@ -2252,6 +2252,47 @@ pub struct Invocation {
     /// profiles omit this and keep ExplicitPacket answer continuation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<GenericSessionInvocation>,
+    /// Opt-in offline product-identity probe. Without it, any binary that
+    /// answers the version probe with exit 0 passes as this worker, so a
+    /// different product installed under the same command name reads as ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_probe: Option<IdentityProbe>,
+    /// Opt-in offline auth probe. Deliberately tolerant: it can only confirm
+    /// an unauthenticated CLI, never turn an unknown login into a hard stop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_probe: Option<AuthProbe>,
+    /// Opt-in lowest supported version of the worker CLI. Compared tolerantly
+    /// (leading numeric triple on both sides); anything unparseable is unknown
+    /// and never blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_version: Option<String>,
+}
+
+/// Offline check that the binary under `command` really is the expected
+/// product. The probe must be a local, non-interactive command.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IdentityProbe {
+    /// Arguments for the identity probe (e.g. `["--version"]`).
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Case-insensitive substring expected in the probe's first output line.
+    #[serde(default)]
+    pub expected_signature: String,
+}
+
+/// Offline, tolerant auth probe. Yardlet never makes a billed call to verify a
+/// subscription login; this only reads what a local command already prints.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuthProbe {
+    /// Arguments for the auth probe (e.g. `["auth", "status"]`).
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Case-insensitive substrings that mean "logged in".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ready_patterns: Vec<String>,
+    /// Case-insensitive substrings that mean "not logged in". Checked first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unauthenticated_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -2407,6 +2448,60 @@ impl Invocation {
             )),
             _ => unreachable!("prompt transport was validated above"),
         }
+    }
+
+    /// Validate the optional readiness-probe declarations. Applies to every
+    /// worker id (built-in adapters included) because these fields are new:
+    /// nothing declares them today, and a declared-but-unusable probe must
+    /// fail closed on the static gate rather than spawn a bare command.
+    pub fn validate_probes(&self, worker_id: &str) -> Result<(), String> {
+        if let Some(identity) = &self.identity_probe {
+            if identity.args.is_empty() || identity.args.iter().any(|arg| arg.trim().is_empty()) {
+                return Err(format!(
+                    "worker '{worker_id}' identity_probe.args must contain a configured offline probe"
+                ));
+            }
+            validate_invocation_args(
+                worker_id,
+                "identity_probe.args",
+                &identity.args,
+                false,
+                false,
+                false,
+            )?;
+            if identity.expected_signature.trim().is_empty() {
+                return Err(format!(
+                    "worker '{worker_id}' identity_probe.expected_signature must not be empty"
+                ));
+            }
+        }
+        if let Some(auth) = &self.auth_probe {
+            if auth.args.is_empty() || auth.args.iter().any(|arg| arg.trim().is_empty()) {
+                return Err(format!(
+                    "worker '{worker_id}' auth_probe.args must contain a configured offline probe"
+                ));
+            }
+            validate_invocation_args(
+                worker_id,
+                "auth_probe.args",
+                &auth.args,
+                false,
+                false,
+                false,
+            )?;
+            let patterns = auth
+                .ready_patterns
+                .iter()
+                .chain(auth.unauthenticated_patterns.iter())
+                .filter(|pattern| !pattern.trim().is_empty())
+                .count();
+            if patterns == 0 {
+                return Err(format!(
+                    "worker '{worker_id}' auth_probe must declare at least one ready_patterns or unauthenticated_patterns entry"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

@@ -26,6 +26,15 @@ pub enum Readiness {
     /// resolved CLI or its runtime cannot be confirmed. Yardlet stops rather than
     /// guess (it never risks a billed call to verify auth).
     Ambiguous,
+    /// A binary answered the probe, but its declared identity signature does not
+    /// match: a different product is installed under the same command name.
+    WrongProduct,
+    /// The resolved CLI is the right product but reports a version below the
+    /// profile's declared `min_version`.
+    UnsupportedVersion,
+    /// The declared offline auth probe positively reported that the CLI is not
+    /// logged in. An unknown login is never this state (it stays Ready).
+    Unauthenticated,
 }
 
 impl Readiness {
@@ -35,8 +44,152 @@ impl Readiness {
             Readiness::NotReady => "not ready",
             Readiness::Disabled => "disabled",
             Readiness::Ambiguous => "ambiguous",
+            Readiness::WrongProduct => "wrong product",
+            Readiness::UnsupportedVersion => "unsupported version",
+            Readiness::Unauthenticated => "unauthenticated",
         }
     }
+}
+
+/// Outcome of the optional offline product-identity gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityState {
+    /// No `identity_probe` in the profile: legacy posture, nothing was spawned.
+    NotDeclared,
+    /// The probe's first line carried the declared signature.
+    Matched,
+    /// The probe ran and its first line did NOT carry the declared signature.
+    Mismatched,
+    /// The probe could not be run (non-zero exit, no output, or no spawn).
+    Unverified,
+}
+
+/// Outcome of the optional offline auth gate. Deliberately three-valued:
+/// Yardlet never makes a billed call to verify a subscription login, so only a
+/// positively reported "not logged in" blocks; anything else stays invocable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthState {
+    /// No `auth_probe` in the profile: unchanged "not verified offline" posture.
+    NotProbed,
+    /// A declared unauthenticated pattern matched the probe output.
+    Unauthenticated,
+    /// A declared ready pattern matched the probe output.
+    Authenticated,
+    /// The probe was declared but inconclusive (no pattern matched, or it could
+    /// not be run). Never blocks.
+    Unknown,
+}
+
+/// Outcome of the optional `min_version` gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionVerdict {
+    /// Both sides parsed and the found version is at or above the minimum.
+    Satisfied,
+    /// Both sides parsed and the found version is below the minimum.
+    Below,
+    /// No `min_version` declared, or either side carries no numeric triple.
+    /// Unknown is never a block.
+    Undetermined,
+}
+
+/// Does an identity probe's first output line identify the expected product?
+///
+/// Case-insensitive substring match, so a profile can declare a stable product
+/// marker (`"codex-cli"`) without pinning the whole version banner. An empty
+/// signature has nothing to check and cannot fail (the static contract gate
+/// rejects a declared-but-empty signature before any spawn).
+pub fn identity_matches(first_line: &str, expected_signature: &str) -> bool {
+    let expected = expected_signature.trim().to_lowercase();
+    if expected.is_empty() {
+        return true;
+    }
+    first_line.to_lowercase().contains(&expected)
+}
+
+/// Tolerant three-way auth verdict over an auth probe's combined output
+/// (stdout + stderr). Unauthenticated patterns win over ready patterns so a CLI
+/// that prints both a banner and a "not logged in" line is not read as ready.
+/// Exit status is deliberately NOT a verdict: many CLIs exit non-zero exactly
+/// when they are logged out, and an unrunnable probe must stay Unknown.
+pub fn auth_state_from_output(
+    output: &str,
+    ready_patterns: &[String],
+    unauthenticated_patterns: &[String],
+) -> AuthState {
+    let haystack = output.to_lowercase();
+    let matches = |patterns: &[String]| {
+        patterns
+            .iter()
+            .map(|pattern| pattern.trim().to_lowercase())
+            .filter(|pattern| !pattern.is_empty())
+            .any(|pattern| haystack.contains(&pattern))
+    };
+    if matches(unauthenticated_patterns) {
+        AuthState::Unauthenticated
+    } else if matches(ready_patterns) {
+        AuthState::Authenticated
+    } else {
+        AuthState::Unknown
+    }
+}
+
+/// Tolerant version comparison: compare the first `major.minor.patch` triple
+/// found on each side and treat anything unparseable as undetermined. Yardlet
+/// cannot know a worker CLI's private versioning scheme, so an uncomparable
+/// version is reported as unknown and never blocks a run.
+pub fn version_verdict(found: &str, min_version: &str) -> VersionVerdict {
+    match (numeric_triple(found), numeric_triple(min_version)) {
+        (Some(found), Some(min)) if found >= min => VersionVerdict::Satisfied,
+        (Some(_), Some(_)) => VersionVerdict::Below,
+        _ => VersionVerdict::Undetermined,
+    }
+}
+
+/// The first `N.N.N` triple in a string, ignoring any surrounding banner text
+/// and any pre-release suffix (`1.2.3-beta` parses as 1.2.3).
+fn numeric_triple(text: &str) -> Option<(u64, u64, u64)> {
+    let bytes: Vec<char> = text.chars().collect();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if !bytes[index].is_ascii_digit() {
+            index += 1;
+            continue;
+        }
+        // A triple must start at a component boundary, not mid-number.
+        if index > 0 && bytes[index - 1].is_ascii_digit() {
+            index += 1;
+            continue;
+        }
+        let mut cursor = index;
+        let mut parts: Vec<u64> = Vec::new();
+        while parts.len() < 3 {
+            let start = cursor;
+            while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+                cursor += 1;
+            }
+            if cursor == start {
+                break;
+            }
+            let digits: String = bytes[start..cursor].iter().collect();
+            match digits.parse::<u64>() {
+                Ok(value) => parts.push(value),
+                Err(_) => break,
+            }
+            if parts.len() == 3 {
+                break;
+            }
+            if cursor < bytes.len() && bytes[cursor] == '.' {
+                cursor += 1;
+            } else {
+                break;
+            }
+        }
+        if parts.len() == 3 {
+            return Some((parts[0], parts[1], parts[2]));
+        }
+        index = cursor.max(index + 1);
+    }
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +203,13 @@ pub struct WorkerStatus {
     /// Static generic invocation contract failure. Kept separate so staged
     /// status can report why no version subprocess was started.
     pub contract_error: Option<String>,
+    /// Outcome of the optional offline product-identity gate.
+    pub identity: IdentityState,
+    /// Outcome of the optional offline auth gate.
+    pub auth: AuthState,
+    /// The profile's declared `min_version`, carried so status, the snapshot,
+    /// and the TUI can all say "upgrade to >= X" without re-reading the config.
+    pub required_version: Option<String>,
     pub readiness: Readiness,
     pub detail: String,
 }
@@ -256,6 +416,7 @@ pub fn invocation_contract(profile: &WorkerProfile) -> Result<(), String> {
             profile.id
         ));
     }
+    profile.invocation.validate_probes(&profile.id)?;
     let output = profile.invocation.output_contract.trim();
     match profile.id.as_str() {
         "codex" | "claude-code" if matches!(output, "files" | "json_or_files") => Ok(()),
@@ -315,9 +476,44 @@ impl WorkerStatus {
             },
         };
 
+        // Only a profile that declared an identity probe gets the extra gate
+        // line; every other profile keeps the existing checklist unchanged.
+        let identity = match self.identity {
+            IdentityState::NotDeclared => None,
+            IdentityState::Matched => Some(StatusStage {
+                label: "identity",
+                mark: StageMark::Pass,
+                note: "identity probe matched the declared product signature".to_string(),
+            }),
+            IdentityState::Mismatched => Some(StatusStage {
+                label: "identity",
+                mark: StageMark::Fail,
+                note: format!(
+                    "identity probe reported a different product under command '{}'; fix `command:` in .agents/workers.yaml to point at the real CLI",
+                    self.command
+                ),
+            }),
+            IdentityState::Unverified => Some(StatusStage {
+                label: "identity",
+                mark: StageMark::Fail,
+                note: "configured identity probe failed; the resolved CLI is unverified"
+                    .to_string(),
+            }),
+        };
+
         let policy = billing.worker_invocation.ai_billing_env_policy.as_str();
         let blocked = billing_blocked(policy, self.billing_env_present.len());
-        let version = if self.contract_error.is_some() {
+        let version = if self.readiness == Readiness::UnsupportedVersion {
+            StatusStage {
+                label: "version",
+                mark: StageMark::Fail,
+                note: format!(
+                    "{} is below the profile's min_version; upgrade to >= {}",
+                    self.version.as_deref().unwrap_or("the reported version"),
+                    self.required_version.as_deref().unwrap_or("the minimum")
+                ),
+            }
+        } else if self.contract_error.is_some() {
             StatusStage {
                 label: "version",
                 mark: StageMark::Skipped,
@@ -379,13 +575,33 @@ impl WorkerStatus {
             }
         };
 
-        let auth = StatusStage {
-            label: "auth",
-            mark: StageMark::Offline,
-            note: "not verified offline; Yardlet never makes a billed call to check, it relies on the worker's own subscription login".to_string(),
+        let auth = match self.auth {
+            AuthState::NotProbed => StatusStage {
+                label: "auth",
+                mark: StageMark::Offline,
+                note: "not verified offline; Yardlet never makes a billed call to check, it relies on the worker's own subscription login".to_string(),
+            },
+            AuthState::Authenticated => StatusStage {
+                label: "auth",
+                mark: StageMark::Pass,
+                note: "the declared offline auth probe reports the CLI is logged in".to_string(),
+            },
+            AuthState::Unauthenticated => StatusStage {
+                label: "auth",
+                mark: StageMark::Fail,
+                note: "the declared offline auth probe reports the CLI is NOT logged in; log in with the worker CLI's own subscription account, then retry".to_string(),
+            },
+            AuthState::Unknown => StatusStage {
+                label: "auth",
+                mark: StageMark::Offline,
+                note: "the declared offline auth probe was inconclusive; login stays unverified and is never assumed to have failed".to_string(),
+            },
         };
 
-        vec![contract, binary, version, billing_env, auth]
+        let mut stages = vec![contract, binary];
+        stages.extend(identity);
+        stages.extend([version, billing_env, auth]);
+        stages
     }
 
     /// One-line verdict framed as invocation safety under the current policy,
@@ -406,6 +622,19 @@ impl WorkerStatus {
             }
             Readiness::Ambiguous => {
                 "not invocable: binary found but unverified (see version gate)".to_string()
+            }
+            Readiness::WrongProduct => format!(
+                "not invocable: a different product answers command '{}' (see identity gate)",
+                self.command
+            ),
+            Readiness::UnsupportedVersion => format!(
+                "not invocable: {} is below the profile's min_version; upgrade to >= {}",
+                self.version.as_deref().unwrap_or("the reported version"),
+                self.required_version.as_deref().unwrap_or("the minimum")
+            ),
+            Readiness::Unauthenticated => {
+                "not invocable: the worker CLI reports it is not logged in (see auth gate); log in with its own subscription account, then retry"
+                    .to_string()
             }
             Readiness::NotReady => format!("not invocable: {}", self.detail),
             Readiness::Disabled => {
@@ -474,11 +703,19 @@ fn fallback_paths(worker_id: &str) -> Vec<PathBuf> {
     }
 }
 
-/// Probe one worker's readiness. Does not invoke any provider API. Version
-/// probing runs the local CLI's configured arguments, which must be offline.
-/// Built-in adapters retain their core-owned `--version` probe.
+/// Probe one worker's readiness. Does not invoke any provider API. Every probe
+/// runs the local CLI's configured arguments, which must be offline, in the
+/// same sanitized zero-key environment used for a real invocation. Built-in
+/// adapters retain their core-owned `--version` probe.
 ///
-/// Resolution prefers the first candidate whose version probe succeeds: the
+/// Gate order per candidate binary: identity (when declared) -> version ->
+/// `min_version` (when declared); the auth probe (when declared) then runs once,
+/// on the selected binary. A failed gate stops the later ones, so the reported
+/// state always names the FIRST thing that is wrong. The static invocation and
+/// access contracts still run before all of them, because they decide whether
+/// Yardlet may spawn anything at all.
+///
+/// Resolution prefers the first candidate that passes those gates: the
 /// PATH-resolved binary first, then well-known fallback paths. This keeps a
 /// worker usable even when a wrapper shadows the real CLI on PATH.
 pub fn probe(
@@ -488,6 +725,12 @@ pub fn probe(
 ) -> WorkerStatus {
     let command = profile.invocation.command.clone();
     let billing_env_present = present_billing_env(&billing.blocked_worker_env_names);
+    let required_version = profile
+        .invocation
+        .min_version
+        .as_ref()
+        .map(|min| min.trim().to_string())
+        .filter(|min| !min.is_empty());
 
     if !profile.enabled {
         return WorkerStatus {
@@ -497,6 +740,9 @@ pub fn probe(
             version: None,
             billing_env_present,
             contract_error: None,
+            identity: IdentityState::NotDeclared,
+            auth: AuthState::NotProbed,
+            required_version,
             readiness: Readiness::Disabled,
             detail: "disabled in .agents/workers.yaml".to_string(),
         };
@@ -523,6 +769,9 @@ pub fn probe(
             version: None,
             billing_env_present,
             contract_error: Some(error.clone()),
+            identity: IdentityState::NotDeclared,
+            auth: AuthState::NotProbed,
+            required_version,
             readiness: Readiness::NotReady,
             detail: error,
         };
@@ -539,6 +788,9 @@ pub fn probe(
             version: None,
             billing_env_present,
             contract_error: None,
+            identity: IdentityState::NotDeclared,
+            auth: AuthState::NotProbed,
+            required_version,
             readiness: Readiness::NotReady,
             detail: "strict billing policy refuses to start any worker subprocess while AI-billing env is set"
                 .to_string(),
@@ -554,40 +806,144 @@ pub fn probe(
     } else {
         &profile.invocation.version_args
     };
-    let verified = candidates
-        .iter()
-        .find_map(|p| read_version(p, version_args, billing).map(|v| (p.clone(), v)));
-
-    let (binary_path, version, readiness, detail) = match verified {
-        Some((path, version)) => {
-            let mut detail = if billing_env_present.is_empty() {
-                "binary found; version ok; AI-billing env clean; will run with sanitized environment"
-                    .to_string()
-            } else {
-                format!(
-                    "binary found; version ok; {} AI-billing env var(s) present in parent and will \
-                     be scrubbed before the worker runs (policy: {})",
-                    billing_env_present.len(),
-                    billing.worker_invocation.ai_billing_env_policy
-                )
-            };
-            // An operator reading "sandboxed" must be able to tell an enforced
-            // boundary from a declared one (issue #123): the generic sandbox
-            // passed the declaration check above, but Yardlet does not own it.
-            if requested_access == "sandboxed"
-                && !matches!(profile.id.as_str(), "codex" | "claude-code")
-            {
-                detail.push_str(
-                    "; sandbox is profile-declared, not verified by Yardlet",
-                );
+    // Run the per-candidate gates in declaration order and keep the first
+    // candidate that clears them all. A candidate's first failing gate is
+    // remembered so the verdict can name what is actually wrong.
+    let mut selected: Option<(PathBuf, String, IdentityState)> = None;
+    let mut first_failure: Option<(PathBuf, CandidateFailure)> = None;
+    for path in &candidates {
+        match evaluate_candidate(
+            path,
+            profile,
+            billing,
+            version_args,
+            required_version.as_deref(),
+        ) {
+            Ok((version, identity)) => {
+                selected = Some((path.clone(), version, identity));
+                break;
             }
-            (Some(path), Some(version), Readiness::Ready, detail)
+            Err(failure) => {
+                if first_failure.is_none() {
+                    first_failure = Some((path.clone(), failure));
+                }
+            }
         }
-        None => match candidates.into_iter().next() {
-            // A binary exists but no candidate passed its version probe: ambiguous.
-            Some(path) => (
+    }
+
+    let (binary_path, version, identity, auth, readiness, detail) = match selected {
+        Some((path, version, identity)) => {
+            // Auth runs last, once, and only on the binary that already proved
+            // it is the right product at a supported version.
+            let auth = match &profile.invocation.auth_probe {
+                Some(auth_probe) => match run_probe(&path, &auth_probe.args, billing) {
+                    Some(output) => auth_state_from_output(
+                        &output.combined,
+                        &auth_probe.ready_patterns,
+                        &auth_probe.unauthenticated_patterns,
+                    ),
+                    None => AuthState::Unknown,
+                },
+                None => AuthState::NotProbed,
+            };
+            if auth == AuthState::Unauthenticated {
+                (
+                    Some(path.clone()),
+                    Some(version),
+                    identity,
+                    auth,
+                    Readiness::Unauthenticated,
+                    format!(
+                        "binary resolved to {} and its version is ok, but the profile's offline auth probe reports the CLI is NOT logged in. \
+                         Log in with the worker CLI's own subscription account, then retry. Yardlet did not call an AI API and did not ask for an API key.",
+                        path.display()
+                    ),
+                )
+            } else {
+                let mut detail = if billing_env_present.is_empty() {
+                    "binary found; version ok; AI-billing env clean; will run with sanitized environment"
+                        .to_string()
+                } else {
+                    format!(
+                        "binary found; version ok; {} AI-billing env var(s) present in parent and will \
+                         be scrubbed before the worker runs (policy: {})",
+                        billing_env_present.len(),
+                        billing.worker_invocation.ai_billing_env_policy
+                    )
+                };
+                if identity == IdentityState::Matched {
+                    detail.push_str("; identity probe matched the declared product signature");
+                }
+                match auth {
+                    AuthState::Authenticated => {
+                        detail.push_str("; offline auth probe reports the CLI is logged in")
+                    }
+                    AuthState::Unknown => detail
+                        .push_str("; offline auth probe was inconclusive, login stays unverified"),
+                    _ => {}
+                }
+                // An operator reading "sandboxed" must be able to tell an enforced
+                // boundary from a declared one (issue #123): the generic sandbox
+                // passed the declaration check above, but Yardlet does not own it.
+                if requested_access == "sandboxed"
+                    && !matches!(profile.id.as_str(), "codex" | "claude-code")
+                {
+                    detail.push_str("; sandbox is profile-declared, not verified by Yardlet");
+                }
+                (
+                    Some(path),
+                    Some(version),
+                    identity,
+                    auth,
+                    Readiness::Ready,
+                    detail,
+                )
+            }
+        }
+        None => match first_failure {
+            Some((path, CandidateFailure::WrongProduct { seen, expected })) => (
                 Some(path.clone()),
                 None,
+                IdentityState::Mismatched,
+                AuthState::NotProbed,
+                Readiness::WrongProduct,
+                format!(
+                    "binary resolved to {} but its identity probe reported {seen:?}, which does not carry the declared signature {expected:?}: \
+                     a different product is installed under the command name '{command}'. Set an explicit `command:` path in \
+                     .agents/workers.yaml, then retry. Yardlet did not call an AI API and did not ask for an API key.",
+                    path.display()
+                ),
+            ),
+            Some((path, CandidateFailure::UnsupportedVersion { found, minimum })) => (
+                Some(path.clone()),
+                Some(found.clone()),
+                IdentityState::from_declaration(profile, true),
+                AuthState::NotProbed,
+                Readiness::UnsupportedVersion,
+                format!(
+                    "binary resolved to {} reports version {found:?}, below the profile's declared min_version {minimum}: \
+                     upgrade to >= {minimum}, then retry. Yardlet did not call an AI API and did not ask for an API key.",
+                    path.display()
+                ),
+            ),
+            Some((path, CandidateFailure::IdentityProbeFailed)) => (
+                Some(path.clone()),
+                None,
+                IdentityState::Unverified,
+                AuthState::NotProbed,
+                Readiness::Ambiguous,
+                format!(
+                    "binary resolved to {} but the configured offline identity probe failed; the resolved CLI or its runtime \
+                     is unverified. Set an explicit `command:` path in .agents/workers.yaml or fix \
+                     the local CLI runtime, then retry. Yardlet did not call an AI API and did not ask for an API key.",
+                    path.display()
+                ),
+            ),
+            Some((path, CandidateFailure::VersionProbeFailed)) => (
+                Some(path.clone()),
+                None,
+                IdentityState::from_declaration(profile, true),
+                AuthState::NotProbed,
                 Readiness::Ambiguous,
                 format!(
                     "binary resolved to {} but the configured offline version probe failed; the resolved CLI or its runtime \
@@ -600,6 +956,8 @@ pub fn probe(
             None => (
                 None,
                 None,
+                IdentityState::NotDeclared,
+                AuthState::NotProbed,
                 Readiness::NotReady,
                 format!(
                     "worker CLI '{command}' not found on PATH or known install paths. Install it \
@@ -617,9 +975,121 @@ pub fn probe(
         version,
         billing_env_present,
         contract_error: None,
+        identity,
+        auth,
+        required_version,
         readiness,
         detail,
     }
+}
+
+impl IdentityState {
+    /// The identity outcome for a gate that was already passed (or never
+    /// declared) by the time a later gate failed.
+    fn from_declaration(profile: &WorkerProfile, passed: bool) -> IdentityState {
+        match (&profile.invocation.identity_probe, passed) {
+            (None, _) => IdentityState::NotDeclared,
+            (Some(_), true) => IdentityState::Matched,
+            (Some(_), false) => IdentityState::Unverified,
+        }
+    }
+}
+
+/// The first gate a candidate binary failed.
+enum CandidateFailure {
+    WrongProduct { seen: String, expected: String },
+    IdentityProbeFailed,
+    VersionProbeFailed,
+    UnsupportedVersion { found: String, minimum: String },
+}
+
+/// Run the per-candidate gates in order: identity (when declared), then the
+/// offline version probe, then `min_version` (when declared). Returns the
+/// verified version line and the identity outcome.
+fn evaluate_candidate(
+    path: &std::path::Path,
+    profile: &WorkerProfile,
+    billing: &BillingPolicy,
+    version_args: &[String],
+    required_version: Option<&str>,
+) -> Result<(String, IdentityState), CandidateFailure> {
+    let identity = match &profile.invocation.identity_probe {
+        None => IdentityState::NotDeclared,
+        Some(identity_probe) => match run_probe(path, &identity_probe.args, billing) {
+            Some(output) if output.success && !output.first_line.is_empty() => {
+                if identity_matches(&output.first_line, &identity_probe.expected_signature) {
+                    IdentityState::Matched
+                } else {
+                    return Err(CandidateFailure::WrongProduct {
+                        seen: output.first_line,
+                        expected: identity_probe.expected_signature.trim().to_string(),
+                    });
+                }
+            }
+            _ => return Err(CandidateFailure::IdentityProbeFailed),
+        },
+    };
+
+    let version =
+        read_version(path, version_args, billing).ok_or(CandidateFailure::VersionProbeFailed)?;
+
+    if let Some(minimum) = required_version {
+        if version_verdict(&version, minimum) == VersionVerdict::Below {
+            return Err(CandidateFailure::UnsupportedVersion {
+                found: version,
+                minimum: minimum.to_string(),
+            });
+        }
+    }
+
+    Ok((version, identity))
+}
+
+/// One offline probe attempt's output. Never contains secret values: the child
+/// runs with the same sanitized zero-key environment as a real invocation.
+struct ProbeOutput {
+    success: bool,
+    first_line: String,
+    combined: String,
+}
+
+/// Spawn one offline probe in the sanitized worker environment. Returns None
+/// when Yardlet must not or could not run it, which every caller treats as
+/// "unknown", never as a positive result.
+fn run_probe(
+    path: &std::path::Path,
+    args: &[String],
+    billing: &BillingPolicy,
+) -> Option<ProbeOutput> {
+    // Never spawn a bare command: Yardlet cannot know whether it would be an
+    // interactive session rather than an offline probe.
+    if args.is_empty() || args.iter().all(|arg| arg.trim().is_empty()) {
+        return None;
+    }
+    let env = sanitized_worker_env_for(billing, &[]).ok()?;
+    let mut command = Command::new(path);
+    command.args(args).env_clear();
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let out = command.output().ok()?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let primary = if !out.stdout.is_empty() {
+        &stdout
+    } else {
+        &stderr
+    };
+    Some(ProbeOutput {
+        success: out.status.success(),
+        first_line: primary
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        combined: format!("{stdout}\n{stderr}"),
+    })
 }
 
 fn read_version(
@@ -627,26 +1097,11 @@ fn read_version(
     version_args: &[String],
     billing: &BillingPolicy,
 ) -> Option<String> {
-    let env = sanitized_worker_env_for(billing, &[]).ok()?;
-    let mut command = Command::new(path);
-    command.args(version_args).env_clear();
-    for (key, value) in env {
-        command.env(key, value);
-    }
-    let out = command.output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = if !out.stdout.is_empty() {
-        String::from_utf8_lossy(&out.stdout)
-    } else {
-        String::from_utf8_lossy(&out.stderr)
-    };
-    let line = text.lines().next()?.trim().to_string();
-    if line.is_empty() {
+    let out = run_probe(path, version_args, billing)?;
+    if !out.success || out.first_line.is_empty() {
         None
     } else {
-        Some(line)
+        Some(out.first_line)
     }
 }
 
@@ -757,6 +1212,9 @@ mod tests {
             version: Some("codex 1.0.0".into()),
             billing_env_present,
             contract_error: None,
+            identity: IdentityState::NotDeclared,
+            auth: AuthState::NotProbed,
+            required_version: None,
             readiness: Readiness::Ready,
             detail: String::new(),
         }
@@ -984,6 +1442,357 @@ invocation:
         );
     }
 
+    // ---- readiness contract: identity / auth / version decision logic -------
+    // These three are the whole judgement surface of the extended contract, so
+    // they stay pure and unit-tested away from any subprocess.
+
+    #[test]
+    fn identity_signature_matches_case_insensitively_and_rejects_another_product() {
+        // The declared marker only has to appear in the probe's first line.
+        assert!(identity_matches("codex-cli 0.9.7 (rust)", "codex-cli"));
+        assert!(identity_matches("Codex-CLI 0.9.7", "codex-cli"));
+        assert!(identity_matches("  codex-cli 0.9.7", "  CODEX-CLI  "));
+        // A different product under the same command name must not pass.
+        assert!(!identity_matches("GNU coreutils codex 9.4", "codex-cli"));
+        assert!(!identity_matches("", "codex-cli"));
+        // Nothing declared to check cannot fail.
+        assert!(identity_matches("anything at all", "   "));
+    }
+
+    #[test]
+    fn auth_probe_output_is_a_tolerant_three_way_verdict() {
+        let ready = vec!["logged in".to_string()];
+        let unauth = vec!["not logged in".to_string(), "please run login".to_string()];
+
+        assert_eq!(
+            auth_state_from_output("You are not logged in.", &ready, &unauth),
+            AuthState::Unauthenticated
+        );
+        assert_eq!(
+            auth_state_from_output("Logged in as someone", &ready, &unauth),
+            AuthState::Authenticated
+        );
+        // Unknown output is never a hard stop.
+        assert_eq!(
+            auth_state_from_output("status: unavailable", &ready, &unauth),
+            AuthState::Unknown
+        );
+        assert_eq!(
+            auth_state_from_output("", &ready, &unauth),
+            AuthState::Unknown
+        );
+        // An unauthenticated marker wins over a ready-looking banner.
+        assert_eq!(
+            auth_state_from_output("Logged in: no, please run login", &ready, &unauth),
+            AuthState::Unauthenticated
+        );
+        // Blank patterns must not match everything.
+        assert_eq!(
+            auth_state_from_output("whatever", &[String::new()], &["  ".to_string()]),
+            AuthState::Unknown
+        );
+    }
+
+    #[test]
+    fn min_version_comparison_blocks_only_a_confidently_lower_version() {
+        assert_eq!(
+            version_verdict("fixture-worker 1.2.3", "1.2.0"),
+            VersionVerdict::Satisfied
+        );
+        assert_eq!(version_verdict("1.2.0", "1.2.0"), VersionVerdict::Satisfied);
+        assert_eq!(
+            version_verdict("mytool 0.9.9 (build 7)", "1.0.0"),
+            VersionVerdict::Below
+        );
+        // Component-wise, not lexicographic.
+        assert_eq!(
+            version_verdict("1.10.0", "1.9.0"),
+            VersionVerdict::Satisfied
+        );
+        // Pre-release suffixes are ignored, not treated as a parse failure.
+        assert_eq!(
+            version_verdict("2.0.0-beta.1", "1.9.9"),
+            VersionVerdict::Satisfied
+        );
+        // Either side unparseable: unknown, and unknown never blocks.
+        assert_eq!(
+            version_verdict("nightly build", "1.0.0"),
+            VersionVerdict::Undetermined
+        );
+        assert_eq!(
+            version_verdict("1.0.0", "latest"),
+            VersionVerdict::Undetermined
+        );
+        assert_eq!(version_verdict("1.2", "1.3"), VersionVerdict::Undetermined);
+    }
+
+    #[test]
+    fn readiness_cache_key_changes_when_a_probe_declaration_changes() {
+        let billing = BillingPolicy::default();
+        let key = |invocation: &str| {
+            let profile: WorkerProfile = crate::yaml::from_str(&format!(
+                "id: generic-fixture\ninvocation: {{ command: bash, supports_noninteractive: true, output_contract: files, {invocation} }}\n"
+            ))
+            .unwrap();
+            readiness_cache_key(&profile, &billing, "full")
+        };
+        let base = key("args: ['{run_dir}']");
+        assert_ne!(
+            base,
+            key("args: ['{run_dir}'], identity_probe: { args: ['--version'], expected_signature: fixture }")
+        );
+        assert_ne!(
+            key("args: ['{run_dir}'], identity_probe: { args: ['--version'], expected_signature: fixture }"),
+            key("args: ['{run_dir}'], identity_probe: { args: ['--version'], expected_signature: other }")
+        );
+        assert_ne!(
+            base,
+            key("args: ['{run_dir}'], auth_probe: { args: [auth], unauthenticated_patterns: ['not logged in'] }")
+        );
+        assert_ne!(base, key("args: ['{run_dir}'], min_version: '1.2.0'"));
+        assert_ne!(
+            key("args: ['{run_dir}'], min_version: '1.2.0'"),
+            key("args: ['{run_dir}'], min_version: '2.0.0'")
+        );
+    }
+
+    #[test]
+    fn declared_but_unusable_probes_fail_the_static_contract_before_any_spawn() {
+        for (invocation, expected) in [
+            (
+                "identity_probe: { args: [], expected_signature: fixture }",
+                "identity_probe.args",
+            ),
+            (
+                "identity_probe: { args: ['--version'], expected_signature: '  ' }",
+                "expected_signature",
+            ),
+            (
+                "auth_probe: { args: [], unauthenticated_patterns: ['not logged in'] }",
+                "auth_probe.args",
+            ),
+            (
+                "auth_probe: { args: [auth, status] }",
+                "at least one ready_patterns",
+            ),
+        ] {
+            // Built-in adapters are covered too: these fields are new, so no
+            // existing profile can regress and a broken declaration must never
+            // spawn a bare command.
+            for id in ["generic-fixture", "codex"] {
+                let profile: WorkerProfile = crate::yaml::from_str(&format!(
+                    "id: {id}\ninvocation: {{ command: bash, supports_noninteractive: true, output_contract: files, {invocation} }}\n"
+                ))
+                .unwrap();
+                let status = probe(&profile, &BillingPolicy::default(), "full");
+                assert_eq!(status.readiness, Readiness::NotReady, "{}", status.detail);
+                assert!(status.detail.contains(expected), "{}", status.detail);
+            }
+        }
+    }
+
+    /// A profile whose probes are answered by `echo`: `echo <arg>` prints its
+    /// arguments, so each declared probe's output is exactly what the test
+    /// declares. No worker CLI is needed to exercise the gates end to end.
+    fn echo_profile(invocation: &str) -> WorkerProfile {
+        crate::yaml::from_str(&format!(
+            "id: generic-fixture\ninvocation: {{ command: echo, supports_noninteractive: true, output_contract: files, {invocation} }}\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn identity_mismatch_is_wrong_product_not_ready() {
+        let profile = echo_profile(
+            "identity_probe: { args: ['some-other-product 3.1'], expected_signature: 'fixture-worker' }",
+        );
+        let status = probe(&profile, &BillingPolicy::default(), "full");
+        assert_eq!(
+            status.readiness,
+            Readiness::WrongProduct,
+            "{}",
+            status.detail
+        );
+        assert_eq!(status.readiness.label(), "wrong product");
+        assert_eq!(status.identity, IdentityState::Mismatched);
+        assert!(
+            status.detail.contains("some-other-product"),
+            "{}",
+            status.detail
+        );
+        assert!(
+            status.detail.contains("fixture-worker"),
+            "{}",
+            status.detail
+        );
+
+        let matching = echo_profile(
+            "identity_probe: { args: ['fixture-worker 3.1'], expected_signature: 'fixture-worker' }",
+        );
+        let status = probe(&matching, &BillingPolicy::default(), "full");
+        assert_eq!(status.readiness, Readiness::Ready, "{}", status.detail);
+        assert_eq!(status.identity, IdentityState::Matched);
+    }
+
+    #[test]
+    fn version_below_declared_minimum_is_unsupported_version_with_upgrade_guidance() {
+        let profile = echo_profile("version_args: ['fixture-worker 0.9.9'], min_version: '1.2.0'");
+        let status = probe(&profile, &BillingPolicy::default(), "full");
+        assert_eq!(
+            status.readiness,
+            Readiness::UnsupportedVersion,
+            "{}",
+            status.detail
+        );
+        assert_eq!(status.readiness.label(), "unsupported version");
+        assert_eq!(status.required_version.as_deref(), Some("1.2.0"));
+        assert!(status.detail.contains(">= 1.2.0"), "{}", status.detail);
+        assert!(
+            status
+                .invocation_verdict(&BillingPolicy::default())
+                .contains(">= 1.2.0"),
+            "{}",
+            status.invocation_verdict(&BillingPolicy::default())
+        );
+
+        // At or above the minimum stays invocable, and an unparseable version
+        // is unknown rather than a block.
+        for version in ["fixture-worker 1.2.0", "fixture-worker nightly"] {
+            let profile = echo_profile(&format!(
+                "version_args: ['{version}'], min_version: '1.2.0'"
+            ));
+            let status = probe(&profile, &BillingPolicy::default(), "full");
+            assert_eq!(status.readiness, Readiness::Ready, "{}", status.detail);
+        }
+    }
+
+    #[test]
+    fn auth_probe_blocks_only_a_confirmed_logged_out_cli() {
+        let unauthenticated = echo_profile(
+            "auth_probe: { args: ['you are not logged in'], ready_patterns: ['logged in as'], unauthenticated_patterns: ['not logged in'] }",
+        );
+        let status = probe(&unauthenticated, &BillingPolicy::default(), "full");
+        assert_eq!(
+            status.readiness,
+            Readiness::Unauthenticated,
+            "{}",
+            status.detail
+        );
+        assert_eq!(status.readiness.label(), "unauthenticated");
+        assert_eq!(status.auth, AuthState::Unauthenticated);
+
+        let authenticated = echo_profile(
+            "auth_probe: { args: ['logged in as fixture'], ready_patterns: ['logged in as'], unauthenticated_patterns: ['not logged in'] }",
+        );
+        let status = probe(&authenticated, &BillingPolicy::default(), "full");
+        assert_eq!(status.readiness, Readiness::Ready, "{}", status.detail);
+        assert_eq!(status.auth, AuthState::Authenticated);
+
+        // Inconclusive output is a label on a ready worker, never a block.
+        let unknown = echo_profile(
+            "auth_probe: { args: ['status unavailable'], ready_patterns: ['logged in as'], unauthenticated_patterns: ['not logged in'] }",
+        );
+        let status = probe(&unknown, &BillingPolicy::default(), "full");
+        assert_eq!(status.readiness, Readiness::Ready, "{}", status.detail);
+        assert_eq!(status.auth, AuthState::Unknown);
+        let auth_stage = status
+            .stages(&BillingPolicy::default())
+            .into_iter()
+            .find(|stage| stage.label == "auth")
+            .unwrap();
+        assert_eq!(auth_stage.mark, StageMark::Offline);
+    }
+
+    #[test]
+    fn the_new_gates_run_in_order_and_stop_at_the_first_failure() {
+        // Identity is checked before version: a wrong product with a too-low
+        // version reports the wrong product, never the version.
+        let profile = echo_profile(
+            "version_args: ['other 0.0.1'], min_version: '9.9.9', identity_probe: { args: ['other 0.0.1'], expected_signature: 'fixture-worker' }, auth_probe: { args: ['not logged in'], unauthenticated_patterns: ['not logged in'] }",
+        );
+        let status = probe(&profile, &BillingPolicy::default(), "full");
+        assert_eq!(
+            status.readiness,
+            Readiness::WrongProduct,
+            "{}",
+            status.detail
+        );
+        assert_eq!(
+            status.auth,
+            AuthState::NotProbed,
+            "auth ran after a failed identity gate"
+        );
+
+        // Version is checked before auth: a too-low version reports the
+        // version, and the auth probe never runs.
+        let profile = echo_profile(
+            "version_args: ['fixture-worker 0.0.1'], min_version: '9.9.9', identity_probe: { args: ['fixture-worker 0.0.1'], expected_signature: 'fixture-worker' }, auth_probe: { args: ['not logged in'], unauthenticated_patterns: ['not logged in'] }",
+        );
+        let status = probe(&profile, &BillingPolicy::default(), "full");
+        assert_eq!(
+            status.readiness,
+            Readiness::UnsupportedVersion,
+            "{}",
+            status.detail
+        );
+        assert_eq!(status.identity, IdentityState::Matched);
+        assert_eq!(
+            status.auth,
+            AuthState::NotProbed,
+            "auth ran after a failed version gate"
+        );
+    }
+
+    #[test]
+    fn undeclared_probes_keep_the_existing_five_stage_checklist_unchanged() {
+        let billing = BillingPolicy::default();
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: codex\ninvocation: { command: bash, supports_noninteractive: true, output_contract: files }\n",
+        )
+        .unwrap();
+        let status = probe(&profile, &billing, "full");
+        assert_eq!(status.readiness, Readiness::Ready, "{}", status.detail);
+        assert_eq!(status.identity, IdentityState::NotDeclared);
+        assert_eq!(status.auth, AuthState::NotProbed);
+        let labels: Vec<&str> = status
+            .stages(&billing)
+            .iter()
+            .map(|stage| stage.label)
+            .collect();
+        assert_eq!(
+            labels,
+            ["contract", "binary", "version", "billing-env", "auth"]
+        );
+    }
+
+    #[test]
+    fn declared_gates_appear_in_the_staged_checklist_between_binary_and_version() {
+        let billing = BillingPolicy::default();
+        let profile = echo_profile(
+            "version_args: ['fixture-worker 1.2.3'], min_version: '1.0.0', identity_probe: { args: ['fixture-worker 1.2.3'], expected_signature: 'fixture-worker' }, auth_probe: { args: ['logged in as fixture'], ready_patterns: ['logged in as'] }",
+        );
+        let status = probe(&profile, &billing, "full");
+        assert_eq!(status.readiness, Readiness::Ready, "{}", status.detail);
+        let stages = status.stages(&billing);
+        let labels: Vec<&str> = stages.iter().map(|stage| stage.label).collect();
+        assert_eq!(
+            labels,
+            [
+                "contract",
+                "binary",
+                "identity",
+                "version",
+                "billing-env",
+                "auth"
+            ]
+        );
+        assert_eq!(stages[2].mark, StageMark::Pass);
+        assert_eq!(
+            stages.iter().find(|s| s.label == "auth").unwrap().mark,
+            StageMark::Pass
+        );
+    }
+
     #[test]
     fn generic_scout_sandbox_contract_fails_closed_when_missing_or_unverifiable() {
         let profile = |sandbox_args: &[&str], full_access_args: &[&str]| WorkerProfile {
@@ -1012,6 +1821,9 @@ invocation:
                 effort_args: vec![],
                 pass_env: vec![],
                 session: None,
+                identity_probe: None,
+                auth_probe: None,
+                min_version: None,
             },
             limits: crate::schemas::Limits::default(),
             provider_response_refusal_patterns: vec![],

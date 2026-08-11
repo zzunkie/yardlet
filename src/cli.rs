@@ -2573,6 +2573,24 @@ fn cmd_worker(cwd: &std::path::Path, args: WorkerArgs) -> Result<()> {
                 let s = guard::probe(p, &billing, &requested_access);
                 println!("{} [{}]", s.id, s.readiness.label());
                 println!("  command: {}", s.command);
+                // The extended readiness states are only actionable with their
+                // fix, so name it right under the command line.
+                match s.readiness {
+                    guard::Readiness::WrongProduct => println!(
+                        "  fix: another product answers '{}'; set an explicit `command:` path in .agents/workers.yaml",
+                        s.command
+                    ),
+                    guard::Readiness::UnsupportedVersion => println!(
+                        "  fix: upgrade {} to >= {}",
+                        s.command,
+                        s.required_version.as_deref().unwrap_or("the declared minimum")
+                    ),
+                    guard::Readiness::Unauthenticated => println!(
+                        "  fix: sign in with '{}' itself (its own subscription account); Yardlet never asks for an API key",
+                        s.command
+                    ),
+                    _ => {}
+                }
                 // Staged checklist: each readiness gate, with auth reported as
                 // unverifiable offline (Yardlet never makes a billed call).
                 for stage in s.stages(&billing) {

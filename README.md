@@ -391,6 +391,14 @@ access explicitly (`yardlet access full`).
     supports_noninteractive: true
     output_contract: files
     version_args: ["version", "--offline"] # default: ["--version"]
+    min_version: "1.2.0"                    # optional lowest supported version
+    identity_probe:                         # optional wrong-binary check
+      args: ["--version"]
+      expected_signature: mytool
+    auth_probe:                             # optional, tolerant login check
+      args: ["auth", "status"]
+      ready_patterns: ["logged in as"]
+      unauthenticated_patterns: ["not logged in"]
     prompt_transport: argument              # default: stdin
     args: ["run", "--out", "{run_dir}", "--prompt", "{prompt}"]
     session:                                # optional native resume contract
@@ -428,11 +436,42 @@ so `{session}` and `{prompt}` retain their argv boundaries. If the session block
 is absent, the fresh child emits no non-empty ref, or answer routing selects a
 different worker, Yardlet safely uses `ExplicitPacket` instead of native resume.
 
+`identity_probe`, `min_version`, and `auth_probe` are optional and independent;
+omitting them keeps the previous behavior, where any binary that answers the
+version probe with exit 0 passes. Declaring them separates readiness failures
+that used to look identical:
+
+| Declaration | State when it fails | What status and the TUI say |
+|---|---|---|
+| (none) | `not ready` | the CLI is not on PATH or in a known install path |
+| `identity_probe` | `wrong product` | another product answers this command name; set an explicit `command:` path |
+| `min_version` | `unsupported version` | upgrade to >= the declared minimum |
+| `auth_probe` | `unauthenticated` | sign in with the worker CLI itself |
+
+The gates run in that order — identity, then the version probe, then
+`min_version`, then auth — and stop at the first failure, so the reported state
+always names the first thing that is wrong. All three states are non-invocable
+everywhere the ready state is checked: routing, planning, capability
+projection, `yardlet worker status`, and the TUI workers panel.
+
+`identity_probe.expected_signature` is matched case-insensitively as a substring
+of the probe's first output line, so declare a stable product marker rather than
+a full version banner. `min_version` is compared tolerantly: only the leading
+`major.minor.patch` triple on each side is read, and if either side has none the
+result is unknown and never blocks. `auth_probe` is deliberately three-valued —
+an unauthenticated pattern blocks, a ready pattern confirms a login, and
+anything else (including a probe that fails to run) leaves the worker invocable
+with the login still marked unverified. A declared probe with no arguments, an
+empty signature, or no patterns fails the static contract before anything is
+spawned, because Yardlet must not guess whether a bare command is a safe
+offline probe.
+
 The worker must write `result.json` and `handoff.md` in the run directory. Its
 execution env is sanitized unless the profile opts variables back in with
-`pass_env`. The version probe is also sanitized and local-only: it verifies the
-configured executable and probe arguments without network or provider calls,
-but it cannot prove login or API authentication. Authentication can therefore
+`pass_env`. Every readiness probe — version, identity, and auth — is also
+sanitized and local-only: they verify the configured executable and probe
+arguments without network or provider calls. Yardlet never makes a billed call
+to confirm a subscription login, so without an `auth_probe` authentication can
 still fail when the actual worker starts.
 
 A worker can also declare which parts of the shared harness it already loads by
