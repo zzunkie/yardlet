@@ -508,22 +508,27 @@ fn render_home(frame: &mut Frame, app: &App) {
         render_bootstrap(frame, app, area);
         return;
     }
-    let chunks = Layout::vertical([
-        Constraint::Length(5),
+    // A frozen screen gets one extra row directly under the header, and only
+    // then: a healthy Home keeps the layout it always had (issue #138).
+    let stale = app.snapshot_stale.as_deref();
+    let mut constraints = vec![Constraint::Length(5)];
+    constraints.extend(stale.map(|_| Constraint::Length(1)));
+    constraints.extend([
         Constraint::Min(4),
         Constraint::Length(5),
         Constraint::Length(3),
         Constraint::Length(4),
-    ])
-    .split(area);
+    ]);
+    let chunks = Layout::vertical(constraints).split(area);
+    let body = 1 + usize::from(stale.is_some());
 
     match &app.snapshot {
         Some(snap) => {
             render_header(frame, chunks[0], snap, l);
-            render_queue(frame, chunks[1], snap, l, app.selected);
+            render_queue(frame, chunks[body], snap, l, app.selected);
             // Selection continues past the queue into the workers panel.
             let wsel = app.selected.checked_sub(snap.tasks().len());
-            render_workers(frame, chunks[2], snap, l, wsel);
+            render_workers(frame, chunks[body + 1], snap, l, wsel);
         }
         None => {
             let p =
@@ -531,7 +536,16 @@ fn render_home(frame: &mut Frame, app: &App) {
             frame.render_widget(p, chunks[0]);
         }
     }
-    render_status(frame, chunks[3], app);
+    if let Some(error) = stale {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                stale_banner(l, error, chunks[1].width),
+                Style::default().fg(Color::Red).bold(),
+            ))),
+            chunks[1],
+        );
+    }
+    render_status(frame, chunks[body + 2], app);
     // A freshly installed binary is worth shouting about — the silent
     // status-line note got missed for days. When idle, the footer turns into
     // the restart prompt in cyan so it can't be overlooked.
@@ -543,7 +557,7 @@ fn render_home(frame: &mut Frame, app: &App) {
             )))
             .block(Block::bordered())
             .wrap(Wrap { trim: true }),
-            chunks[4],
+            chunks[body + 3],
         );
         return;
     }
@@ -590,7 +604,24 @@ fn render_home(frame: &mut Frame, app: &App) {
             plan_reviewable,
         )
     };
-    render_footer(frame, chunks[4], &footer);
+    render_footer(frame, chunks[body + 3], &footer);
+}
+
+/// The one-row Home banner for a screen frozen on its last good projection.
+///
+/// The error is width-truncated so a long failure chain cannot push the retry
+/// hint off the row: the whole point of the banner is that the operator learns
+/// the screen is dead AND how to refresh it (issue #138).
+fn stale_banner(l: &L, error: &str, width: u16) -> String {
+    let error = if error.trim().is_empty() {
+        l.unknown_word
+    } else {
+        error
+    };
+    let fixed = UnicodeWidthStr::width(l.snapshot_stale.replace("{error}", "").as_str());
+    let budget = (width as usize).saturating_sub(fixed);
+    l.snapshot_stale
+        .replace("{error}", &truncate_width(error, budget))
 }
 
 fn render_bootstrap(frame: &mut Frame, app: &App, area: Rect) {
@@ -1929,6 +1960,76 @@ mod tests {
         let output = rendered_queue(&current);
         assert!(output.contains("CURRENT INTENT REASON"));
         assert!(!output.contains("STALE INTENT REASON"));
+
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    /// Issue #138: a wedged workspace froze Home on its last good projection
+    /// with nothing on screen saying so. The frozen projection stays — a blank
+    /// Home is worse — but it now leads with one row that names the failure and
+    /// the retry key, and it must not push the queue, workers, or footer out.
+    #[test]
+    fn a_stale_snapshot_banner_leads_home_without_hiding_the_rest_of_it() {
+        let (ws, _, _) = crate::snapshot::reused_task_id_fixture("tui-stale-banner");
+        let mut app = App::new(ws.clone());
+
+        let fresh = rendered_home(&app);
+        assert!(
+            !fresh.contains("state reload failed"),
+            "a healthy Home must carry no stale banner:\n{fresh}"
+        );
+        assert!(fresh.contains("SHARED"), "{fresh}");
+
+        app.snapshot_stale = Some("unconfirmed_or_inconsistent: active intent is missing".into());
+        let stale = rendered_home(&app);
+        assert!(stale.contains("state reload failed"), "{stale}");
+        assert!(stale.contains("active intent is missing"), "{stale}");
+        assert!(stale.contains("press g to retry"), "{stale}");
+        // Header first, banner directly under it, then the rest of Home.
+        let rows: Vec<&str> = stale.lines().collect();
+        let banner = rows
+            .iter()
+            .position(|row| row.contains("state reload failed"))
+            .expect("banner row");
+        let queue = rows
+            .iter()
+            .position(|row| row.contains("SHARED"))
+            .expect("queue row");
+        assert!(
+            (1..queue).contains(&banner),
+            "banner must sit between the header and the queue, got row {banner} of:\n{stale}"
+        );
+        // Nothing the healthy frame showed is hidden by the extra row.
+        for kept in ["Workspace: ", "SHARED", "n new", "? keys"] {
+            assert!(
+                stale.contains(kept),
+                "stale Home dropped {kept:?}:\n{stale}"
+            );
+        }
+
+        app.lang = i18n::Lang::Ko;
+        let ko = rendered_home(&app);
+        assert!(ko.replace(' ', "").contains("상태로드실패"), "{ko}");
+        assert!(!ko.contains("state reload failed"), "{ko}");
+
+        // A failure with no message still gets a banner rather than an empty row.
+        app.lang = i18n::Lang::En;
+        app.snapshot_stale = Some(String::new());
+        let blank = rendered_home(&app);
+        assert!(blank.contains("state reload failed (unknown)"), "{blank}");
+
+        // A long failure chain loses its own tail, never the retry hint, and it
+        // stays inside one row in both languages.
+        for lang in [i18n::Lang::En, i18n::Lang::Ko] {
+            let l = lang.l();
+            let narrow = stale_banner(l, &"chain ".repeat(200), 100);
+            let hint = l.snapshot_stale.rsplit("{error}").next().unwrap();
+            assert!(narrow.ends_with(hint), "{narrow}");
+            assert!(
+                UnicodeWidthStr::width(narrow.as_str()) <= 100,
+                "banner overflowed its row: {narrow}"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(ws.root);
     }

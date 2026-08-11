@@ -452,6 +452,11 @@ pub struct L {
     pub startup_failed: &'static str,
     pub background_job_failed: &'static str,
     pub no_workspace_state: &'static str,
+    /// Home banner for a screen frozen on the last projection that loaded, with
+    /// `{error}` replaced by the reload failure (issue #138). Keep the leading
+    /// phrase distinct from every other string here: the PTY tests match it as a
+    /// substring of the whole rendered frame.
+    pub snapshot_stale: &'static str,
     pub footer_startup_loading: &'static str,
     pub footer_startup_failed: &'static str,
     pub newwork_title: &'static str,
@@ -725,6 +730,8 @@ pub const EN: L = L {
     startup_failed: "Startup failed:",
     background_job_failed: "Background job ended unexpectedly; state will be recovered",
     no_workspace_state: "No workspace state loaded.",
+    snapshot_stale:
+        "! state reload failed ({error}) - showing the last good state, press g to retry",
     footer_startup_loading: "startup in progress  q quit",
     footer_startup_failed: "g retry  q quit",
     newwork_title: " New Work ",
@@ -994,6 +1001,7 @@ pub const KO: L = L {
     startup_failed: "시작 실패:",
     background_job_failed: "백그라운드 작업이 예기치 않게 종료됨; 상태를 복구합니다",
     no_workspace_state: "워크스페이스 상태를 불러오지 못했습니다.",
+    snapshot_stale: "! 상태 로드 실패 ({error}) - 마지막 정상 상태를 보여주는 중, g 키로 재시도",
     footer_startup_loading: "시작 준비 중  q 종료",
     footer_startup_failed: "g 재시도  q 종료",
     newwork_title: " 새 작업 ",
