@@ -444,7 +444,11 @@ pub fn run_batch<F: FnMut(&str)>(
         .map(|i| i.images.clone())
         .unwrap_or_default();
 
-    let harness = packet::discover_harness(&ws.root, config.harness_discovery);
+    let harness = packet::discover_harness(
+        &ws.root,
+        config.harness_discovery,
+        &packet::NativeHarnessSources::for_workers(&workers_file.workers),
+    );
     ensure_worktrees_excluded(&ws.root);
 
     // ---- prepare every task up front (deterministic, no workers yet) -----

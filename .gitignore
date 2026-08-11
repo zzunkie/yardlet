@@ -33,6 +33,7 @@ Cargo.lock.orig
 /.agents/runtime-task-receipts/
 /.agents/runtime-capability-receipts/
 /.agents/activation-required.yaml
+/.agents/gc-salvage/
 /.agents/yardlet.yaml
 /.agents/yard.yaml
 /.agents/workers.yaml

@@ -273,6 +273,7 @@ stale, 남은 질문, 손상된 상태, active queue 게이트를 그대로 거�
 | `yardlet add "<title>" [--depends-on <id>]` | 재계획 없이 사용자 작성 작업을 현재 큐에 추가. |
 | `yardlet queue` | 작업 큐 나열. |
 | `yardlet tidy` | 워크스페이스 상태 자가 치유: 오래된 게이트 이관, 실행 불가 작업 defer, 소진된 인텐트 아카이브. |
+| `yardlet gc [--apply] [--salvage]` | `.agents/worktrees/`에 남은 run 워크트리 분류. `--apply`면 잃을 것이 없는 병합된 것만 제거하고, `--salvage`면 dirty한 것의 diff를 먼저 기록. |
 | `yardlet status [--json]` | 워크스페이스, 인텐트, 큐, 워커 요약. |
 | `yardlet worker status` | 워커 준비 상태 및 빌링-env 안전성. |
 | `yardlet inspect repo [--json]` | 저렴한 결정론적 로컬 증거. |
@@ -443,6 +444,29 @@ ready 상태를 확인하는 모든 곳(라우팅, 계획, capability projection
 프로브도 모두 정화된 환경에서 로컬로만 실행됩니다. 설정한 실행 파일과 프로브 인자를
 네트워크나 공급자 호출 없이 확인합니다. Yardlet은 구독 로그인을 확인하려고 과금되는
 호출을 하지 않으므로, `auth_probe` 없이는 실제 워커가 시작될 때 인증이 실패할 수 있습니다.
+
+워커는 공유 하네스 중 자신이 이미 직접 읽는 소스를 선언할 수도 있습니다. 그러면
+Yardlet이 같은 소스를 두 번 보내지 않습니다.
+
+```yaml
+- id: mytool
+  harness:
+    native_rule_files: ["AGENTS.md", ".cursorrules"]  # mytool이 스스로 읽는 규칙 파일
+    native_skill_dirs: [".mytool/skills"]             # mytool이 스스로 발견하는 스킬 디렉터리
+```
+
+`native_rule_files`는 워크스페이스 상대 경로의 규칙 파일, `native_skill_dirs`는
+워크스페이스 상대 경로의 스킬 디렉터리입니다. 선언된 경로는 그 워커의 패킷에서
+제외되고, 하네스 발견이 켜져 있고 경로가 실제로 존재하면 그 소스를 읽지 *않는*
+워커들을 위해 발견 대상에 합류합니다. 즉 CLI를 등록하면 그 CLI가 가져오는 자산도
+Yardlet이 알게 됩니다. Yardlet이 이미 스캔하는 디렉터리를 선언하면 두 번 스캔하지
+않고 그 소스에 병합되며, 심볼릭 링크 중복(`CLAUDE.md` -> `AGENTS.md`,
+`.claude/skills` -> `.agents/skills`)은 모든 리더를 포함하는 하나의 항목으로
+병합됩니다. 절대 경로와 `..` 탈출은 무시됩니다.
+
+내장 어댑터는 자체 기본값을 가집니다(codex: `AGENTS.md`, claude-code: `CLAUDE.md`와
+`.claude/skills`). 따라서 기존 프로필은 수정할 필요가 없고, 명시적 `harness:` 블록은
+그 워커의 기본값을 대체합니다.
 
 생태계의 에이전트들이 Yardlet의 공급 측입니다.
 [oh-my-pi](https://github.com/can1357/oh-my-pi)(`omp`), OpenCode, Gemini CLI,

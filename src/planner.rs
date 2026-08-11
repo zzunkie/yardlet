@@ -1398,7 +1398,11 @@ fn plan_core(
         lines.push(format!("pruned weak skills: {}", pruned.join(", ")));
     }
     let worker_guidance = build_worker_guidance(workers);
-    let harness = packet::discover_harness(&ws.root, config.harness_discovery);
+    let harness = packet::discover_harness(
+        &ws.root,
+        config.harness_discovery,
+        &packet::NativeHarnessSources::for_workers(&workers.workers),
+    );
     let current_intent = if let Some(session) = planning_session {
         match crate::planning::current_draft(ws, session)?.map(|draft| draft.content.intent) {
             Some(intent) => Some(intent),
@@ -1638,7 +1642,11 @@ pub fn run_planning_amend(ws: &Workspace, request: &str) -> Result<PlanningRepor
     let request_classification = crate::skills::classify_repo(&summary, &ctx);
     let request_overlays = crate::skills::detect_overlay_skills(&ctx, &request_classification);
     crate::skills::ensure_builtin_names(ws, &request_overlays)?;
-    let harness = packet::discover_harness(&ws.root, config.harness_discovery);
+    let harness = packet::discover_harness(
+        &ws.root,
+        config.harness_discovery,
+        &packet::NativeHarnessSources::for_workers(&workers.workers),
+    );
     let packet_text = packet::compile_planning(
         &ctx,
         existing_intent.as_ref(),
@@ -2847,7 +2855,11 @@ mod tests {
 
         let ws = Workspace::at(&root);
         let summary = planning_repo_summary(&ws);
-        let harness = packet::discover_harness(&root, false);
+        let harness = packet::discover_harness(
+            &root,
+            false,
+            &crate::packet::NativeHarnessSources::builtin(),
+        );
         let current_intent = IntentContract {
             schema_version: 1,
             id: "intent-current".into(),

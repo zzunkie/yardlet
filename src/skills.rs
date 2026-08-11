@@ -2407,7 +2407,11 @@ mod tests {
         assert!(selected.required_capabilities.is_empty());
         assert!(selected.approval.is_none());
 
-        let harness = crate::packet::discover_harness(&root, false);
+        let harness = crate::packet::discover_harness(
+            &root,
+            false,
+            &crate::packet::NativeHarnessSources::builtin(),
+        );
         let selected_packet = crate::packet::compile(&crate::packet::PacketInputs {
             worker_id: "codex",
             task: &selected,
@@ -2450,7 +2454,11 @@ mod tests {
         assert!(unrelated_packet.contains("verification-before-completion"));
 
         ensure_builtin_names(&ws, &["mcp-builder".into()]).unwrap();
-        let planning_harness = crate::packet::discover_harness(&root, false);
+        let planning_harness = crate::packet::discover_harness(
+            &root,
+            false,
+            &crate::packet::NativeHarnessSources::builtin(),
+        );
         let planning_packet = crate::packet::compile_planning(
             "MCP server 작성. preset:+web-ui preset:-web-ui",
             None,
