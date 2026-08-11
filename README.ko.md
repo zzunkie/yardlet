@@ -347,6 +347,13 @@ Enter/Space). 비활성화된 워커는 라우팅과 계획에서 건너뜁니�
 
 ### 워커 추가하기
 
+`.agents/workers.yaml`은 `schema_version: 1`을 선언하며, 이 빌드는 그 버전만
+읽습니다. 다른 버전을 선언한 파일은 부분적으로 읽는 대신
+`this yardlet supports workers.yaml schema_version 1, found N`으로 거부됩니다.
+새 스키마가 추가하는 필드가 바로 워커의 동작을 제한하는 필드이므로, 최선을 다해
+읽어보는 쪽이 위험한 선택입니다. Yardlet을 업그레이드하거나 이 빌드가 지원하는
+버전으로 되돌리세요.
+
 Codex와 Claude Code는 내장 어댑터를 가집니다. 다른 모든 구독 기반 CLI는
 `.agents/workers.yaml`만으로 추가할 수 있습니다. 호출 템플릿을 주면 Yardlet이 동일한
 결과 파일 계약으로 그것을 구동합니다. 제네릭 워커는 활성 상태이고 실행 파일과 설정된
@@ -379,7 +386,7 @@ TUI는 모두 같은 판정을 사용합니다.
       args: ["auth", "status"]
       ready_patterns: ["logged in as"]
       unauthenticated_patterns: ["not logged in"]
-    prompt_transport: argument              # 기본값: stdin
+    prompt_transport: argument              # stdin(기본값) | argument | file
     args: ["run", "--out", "{run_dir}", "--prompt", "{prompt}"]
     session:                                # 선택적 native resume 계약
       capture: {stream: stdout, prefix: "SESSION_REF="}
@@ -398,6 +405,28 @@ stdin으로 보내고, `version_args`를 생략하면 `--version`을 실행합�
 경계를 보존합니다. stdin 전달에는 `{prompt}`를 넣으면 안 됩니다. 그 밖의 호출
 플레이스홀더는 `{run_dir}`, `{model}`, `{effort}`, `{image}`입니다.
 
+프롬프트를 **파일**로 받는 CLI, 즉 stdin 모드가 없거나 전체 패킷이 플랫폼의 argv
+한도를 넘는 경우에는 `prompt_transport: file`을 설정하고 `args`에 `{prompt_file}`을
+정확히 한 번 넣으세요.
+
+```yaml
+    prompt_transport: file
+    args: ["run", "--out", "{run_dir}", "--prompt-file", "{prompt_file}"]
+    session:
+      capture: {stream: stdout, prefix: "SESSION_REF="}
+      resume_args: ["resume", "--session", "{session}", "--prompt-file", "{prompt_file}"]
+```
+
+Yardlet은 전체 패킷을 해당 run 디렉터리 안의 `packet-prompt.txt`에 `0600` 모드로
+쓰고 `{prompt_file}`을 그 절대 경로로 치환합니다. 워커의 stdin에는 아무것도 쓰지
+않습니다. 재시도나 native resume에서는 같은 자리에 새로 쓰므로 워커가 이전 attempt의
+패킷을 읽는 일이 없고, 정리는 run 디렉터리의 수명주기가 담당하므로 따로 실패할 수
+있는 cleanup 단계가 없습니다. 각 transport는 자기 플레이스홀더만 요구합니다. `stdin`은
+`{prompt}`와 `{prompt_file}` 둘 다 없어야 하고, `argument`는 `{prompt}`가 정확히 한 번,
+`file`은 `{prompt_file}`이 정확히 한 번 있어야 합니다. 섞어 쓰면 프로브나 워커를
+띄우기 전에 거부됩니다. 치환되지 않은 플레이스홀더가 그대로 워커의 argv에 도달하기
+때문입니다.
+
 제네릭 native resume은 하위 호환 opt-in입니다. `session`을 생략하면 기존
 `ExplicitPacket` 답변 continuation을 유지합니다. `session`이 있으면
 `capture.stream`은 `stdout` 또는 `stderr`여야 하고, `capture.prefix`는 비어 있지 않은
@@ -407,9 +436,10 @@ suffix가 opaque `worker_session_ref`가 됩니다. Yardlet은 전역 session �
 attempt의 참조를 추론하지 않습니다.
 
 resume template은 fresh generic invocation과 같은 `command`, access, model, effort, image,
-정화된 환경 계약을 사용합니다. `{prompt}`는 `prompt_transport`를 따릅니다. `stdin`이면
-`resume_args`에서 생략하고, `argument`이면 정확히 한 번 넣습니다. 각 template 항목은
-하나의 `Command` 인자가 되므로 `{session}`과 `{prompt}`의 argv 경계가 유지됩니다.
+정화된 환경 계약을 사용합니다. 패킷 플레이스홀더는 `prompt_transport`를 따릅니다.
+`stdin`이면 `resume_args`에서 둘 다 생략하고, `argument`이면 `{prompt}`를 정확히 한 번,
+`file`이면 `{prompt_file}`을 정확히 한 번 넣습니다. 각 template 항목은
+하나의 `Command` 인자가 되므로 `{session}`과 패킷의 argv 경계가 유지됩니다.
 session block이 없거나, fresh child가 비어 있지 않은 ref를 내지 않거나, answer routing이
 다른 worker를 선택하면 Yardlet은 native resume 대신 안전하게 `ExplicitPacket`을 사용합니다.
 

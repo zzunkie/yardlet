@@ -367,6 +367,13 @@ planning.
 
 ### Adding a worker
 
+`.agents/workers.yaml` declares `schema_version: 1`, and this build reads that
+version only. A file that declares any other version is refused with
+`this yardlet supports workers.yaml schema_version 1, found N` instead of being
+read partially: the fields a newer schema adds are exactly the ones that would
+bound a worker's behavior, so a best-effort read is the unsafe option. Upgrade
+Yardlet, or set the version back to what this build supports.
+
 Codex and Claude Code have built-in adapters. Any other subscription-backed
 CLI can be added in `.agents/workers.yaml` alone: give it an invocation
 template and Yardlet drives it through the same result-file contract. Generic
@@ -400,7 +407,7 @@ access explicitly (`yardlet access full`).
       args: ["auth", "status"]
       ready_patterns: ["logged in as"]
       unauthenticated_patterns: ["not logged in"]
-    prompt_transport: argument              # default: stdin
+    prompt_transport: argument              # stdin (default) | argument | file
     args: ["run", "--out", "{run_dir}", "--prompt", "{prompt}"]
     session:                                # optional native resume contract
       capture: {stream: stdout, prefix: "SESSION_REF="}
@@ -421,6 +428,29 @@ boundaries without constructing a shell string. Stdin delivery must not include
 `{prompt}`. The other invocation placeholders are `{run_dir}`, `{model}`,
 `{effort}`, and `{image}`.
 
+For a CLI that takes its prompt as a **file**, because it has no stdin mode or
+because a full packet is larger than the platform's argv limit, set
+`prompt_transport: file` and put `{prompt_file}` exactly once in `args`:
+
+```yaml
+    prompt_transport: file
+    args: ["run", "--out", "{run_dir}", "--prompt-file", "{prompt_file}"]
+    session:
+      capture: {stream: stdout, prefix: "SESSION_REF="}
+      resume_args: ["resume", "--session", "{session}", "--prompt-file", "{prompt_file}"]
+```
+
+Yardlet writes the complete packet to `packet-prompt.txt` inside that run's own
+directory, mode `0600`, and expands `{prompt_file}` with its absolute path.
+Nothing is written to the worker's stdin. The file is replaced in place for a
+retry or a native resume, so a worker never reads the previous attempt's packet,
+and the run directory's own lifecycle removes it, so there is no separate
+cleanup step to fail. Each transport requires exactly its own placeholder:
+`stdin` must contain neither `{prompt}` nor `{prompt_file}`, `argument` needs
+exactly one `{prompt}`, and `file` needs exactly one `{prompt_file}`. Mixing
+them is rejected before any worker or probe is spawned, because an unexpanded
+placeholder would otherwise reach the worker's argv verbatim.
+
 Generic native resume is backward-compatible and opt-in. Omit `session` to keep
 the existing `ExplicitPacket` answer continuation. When `session` is present,
 `capture.stream` must be `stdout` or `stderr`, `capture.prefix` must be a
@@ -430,10 +460,11 @@ child's selected raw stream becomes the opaque `worker_session_ref`. Yardlet
 does not inspect global session files or infer a reference from another attempt.
 
 The resume template uses the same `command`, access, model, effort, image, and
-sanitized environment contract as the fresh generic invocation. `{prompt}`
-follows `prompt_transport`: omit it from `resume_args` for `stdin`, or include it
-exactly once for `argument`. Each template item becomes one `Command` argument,
-so `{session}` and `{prompt}` retain their argv boundaries. If the session block
+sanitized environment contract as the fresh generic invocation. The packet
+placeholder follows `prompt_transport`: omit both from `resume_args` for
+`stdin`, include exactly one `{prompt}` for `argument`, or exactly one
+`{prompt_file}` for `file`. Each template item becomes one `Command` argument,
+so `{session}` and the packet retain their argv boundaries. If the session block
 is absent, the fresh child emits no non-empty ref, or answer routing selects a
 different worker, Yardlet safely uses `ExplicitPacket` instead of native resume.
 
