@@ -291,6 +291,7 @@ remain the explicit accept, reject, revise, and confirm controls.
 | `yardlet add "<title>" [--depends-on <id>]` | Append a user-authored task to the current queue without replanning. |
 | `yardlet queue` | List the work queue. |
 | `yardlet tidy` | Self-heal workspace state: migrate stale gates, defer non-runnable work, archive drained intents. |
+| `yardlet gc [--apply] [--salvage]` | Classify retained run worktrees under `.agents/worktrees/`; with `--apply`, remove the merged ones that can lose nothing (and with `--salvage`, record a dirty one's diff first). |
 | `yardlet status [--json]` | Workspace, intent, queue, and worker summary. |
 | `yardlet worker status` | Worker readiness and billing-env safety. |
 | `yardlet inspect repo [--json]` | Cheap deterministic local evidence. |

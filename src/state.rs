@@ -6337,6 +6337,13 @@ fn clear_intent_and_queue_with_wrap(
 }
 
 pub fn write_str(path: &Path, contents: &str) -> Result<()> {
+    write_bytes(path, contents.as_bytes())
+}
+
+/// The byte-exact twin of [`write_str`], for evidence that is not text (a
+/// salvaged binary file, a patch with embedded binary hunks). Copying such a
+/// file through a `String` would corrupt it.
+pub fn write_bytes(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
