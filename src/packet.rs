@@ -1935,6 +1935,7 @@ mod tests {
                 command: id.to_string(),
                 supports_noninteractive: true,
                 output_contract: "files".to_string(),
+                output_format: None,
                 args: vec!["{run_dir}".to_string()],
                 prompt_transport: "stdin".to_string(),
                 version_args: vec!["--version".to_string()],

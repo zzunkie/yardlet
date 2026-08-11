@@ -2199,6 +2199,23 @@ pub struct OutputContractIncident {
     pub terminal_attempt_id: Option<String>,
 }
 
+/// Provenance for a result Yardlet had to recover from a worker's captured
+/// stdout because the declared result FILE was absent. Recorded so a tolerant
+/// recovery can never read back as "the worker wrote result.json" (V010-006).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResultRecoveredFromStdout {
+    #[serde(default)]
+    pub schema_version: u32,
+    pub attempt_id: String,
+    pub worker_id: String,
+    /// The `invocation.output_format` declaration that authorized the recovery.
+    pub output_format: String,
+    /// Raw attempt stream the bytes came from (always `stdout` today).
+    pub stream: String,
+    pub byte_start: u64,
+    pub byte_end: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Billing {
     #[serde(default)]
@@ -2220,6 +2237,15 @@ pub struct Invocation {
     pub supports_noninteractive: bool,
     #[serde(default)]
     pub output_contract: String,
+    /// Shape of this worker's stdout: `text` (one event per line, the default
+    /// when undeclared), `json` (one JSON document per attempt), or
+    /// `stream-json` (one JSON object per line). It selects the stdout
+    /// normalizer and, for a generic worker declaring `json`/`stream-json`,
+    /// authorizes the tolerant result fallback when the result FILE is absent.
+    /// The built-in adapters own their vendor stream-json profile, so they may
+    /// only restate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<String>,
     /// Generic adapter template for workers without a built-in adapter
     /// (codex and claude-code have first-class ones; any other id uses these).
     /// Placeholders: `{run_dir}`, `{model}`, `{effort}`, `{image}`, and, per
@@ -2337,6 +2363,9 @@ pub struct GenericSessionCapture {
     pub prefix: String,
 }
 
+/// The declarable stdout shapes, in the order the guard names them.
+pub const OUTPUT_FORMATS: [&str; 3] = ["text", "json", "stream-json"];
+
 fn default_prompt_transport() -> String {
     "stdin".to_string()
 }
@@ -2361,6 +2390,31 @@ impl Invocation {
     /// Does this worker read the packet from a file Yardlet writes for it?
     pub fn prompt_in_file(&self) -> bool {
         self.prompt_transport.trim() == "file"
+    }
+
+    /// Validate the optional `output_format` declaration.
+    ///
+    /// Undeclared keeps today's behavior for every profile. A built-in adapter
+    /// carries a CORE-OWNED vendor stream-json normalizer, so a declaration
+    /// that disagrees with it is rejected rather than silently ignored: a
+    /// profile must never claim a stdout shape Yardlet will not honor.
+    pub fn validate_output_format(&self, worker_id: &str) -> Result<(), String> {
+        let Some(declared) = self.output_format.as_deref().map(str::trim) else {
+            return Ok(());
+        };
+        if !OUTPUT_FORMATS.contains(&declared) {
+            return Err(format!(
+                "worker '{worker_id}' has unsupported output_format '{declared}'; expected {}",
+                OUTPUT_FORMATS.join(", ")
+            ));
+        }
+        if matches!(worker_id, "codex" | "claude-code") && declared != "stream-json" {
+            return Err(format!(
+                "worker '{worker_id}' has a core-owned stream-json output_format; \
+                 remove the declaration or set stream-json (declared '{declared}')"
+            ));
+        }
+        Ok(())
     }
 
     /// Validate only the generic adapter's structural template. Runtime

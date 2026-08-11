@@ -417,7 +417,13 @@ pub fn invocation_contract(profile: &WorkerProfile) -> Result<(), String> {
         ));
     }
     profile.invocation.validate_probes(&profile.id)?;
+    profile.invocation.validate_output_format(&profile.id)?;
     let output = profile.invocation.output_contract.trim();
+    // `output_contract` answers "where does the RESULT come from"; the newer
+    // `output_format` answers "what shape is stdout". They must not read as
+    // rival knobs: `json_or_files` stays the built-in adapters' core-owned
+    // result contract, and a generic worker keeps the `files` contract plus the
+    // tolerant stdout fallback its `output_format` declaration authorizes.
     match profile.id.as_str() {
         "codex" | "claude-code" if matches!(output, "files" | "json_or_files") => Ok(()),
         "codex" | "claude-code" => Err(format!(
@@ -425,7 +431,8 @@ pub fn invocation_contract(profile: &WorkerProfile) -> Result<(), String> {
             profile.id, output
         )),
         _ if output != "files" => Err(format!(
-            "worker '{}' generic invocation has unsupported output_contract '{}'; expected files",
+            "worker '{}' generic invocation has unsupported output_contract '{}'; expected files \
+             (declare structured stdout with output_format, not output_contract)",
             profile.id, output
         )),
         _ => profile.invocation.validate_generic(&profile.id),
@@ -1339,6 +1346,70 @@ invocation:
         assert_eq!(projection[0].capabilities, vec!["Shell Tool"]);
     }
 
+    // V010-006: `output_format` declares the STDOUT shape while
+    // `output_contract` keeps declaring where the result comes from. An
+    // undeclared format must leave every existing verdict untouched, an
+    // unsupported value must be rejected instead of guessed at, and a built-in
+    // adapter must not be able to claim a shape its core-owned normalizer will
+    // not honor.
+    #[test]
+    fn declared_output_format_is_gated_without_moving_existing_verdicts() {
+        for (label, yaml, expected) in [
+            (
+                "generic-unsupported",
+                "id: generic-fixture\ninvocation: { command: bash, supports_noninteractive: true, output_contract: files, output_format: ndjson, sandbox_args: ['--restricted'] }\n",
+                Some("unsupported output_format 'ndjson'"),
+            ),
+            (
+                "generic-stream-json",
+                "id: generic-fixture\ninvocation: { command: bash, supports_noninteractive: true, output_contract: files, output_format: stream-json, sandbox_args: ['--restricted'] }\n",
+                None,
+            ),
+            (
+                "generic-json",
+                "id: generic-fixture\ninvocation: { command: bash, supports_noninteractive: true, output_contract: files, output_format: json, sandbox_args: ['--restricted'] }\n",
+                None,
+            ),
+            (
+                "generic-undeclared",
+                "id: generic-fixture\ninvocation: { command: bash, supports_noninteractive: true, output_contract: files, sandbox_args: ['--restricted'] }\n",
+                None,
+            ),
+            (
+                "builtin-restates-vendor-profile",
+                "id: codex\ninvocation: { command: bash, supports_noninteractive: true, output_contract: json_or_files, output_format: stream-json }\n",
+                None,
+            ),
+            (
+                "builtin-contradicts-vendor-profile",
+                "id: codex\ninvocation: { command: bash, supports_noninteractive: true, output_contract: json_or_files, output_format: text }\n",
+                Some("core-owned stream-json output_format"),
+            ),
+        ] {
+            let profile: WorkerProfile = crate::yaml::from_str(yaml).unwrap();
+            match (invocation_contract(&profile), expected) {
+                (Ok(()), None) => {}
+                (Err(error), Some(expected)) => {
+                    assert!(error.contains(expected), "{label}: {error}")
+                }
+                (result, expected) => panic!("{label}: got {result:?}, expected {expected:?}"),
+            }
+        }
+    }
+
+    // The two knobs must not read as rivals: a generic worker still cannot
+    // widen its RESULT contract, and the rejection says which knob to use.
+    #[test]
+    fn generic_result_contract_rejection_points_at_output_format() {
+        let profile: WorkerProfile = crate::yaml::from_str(
+            "id: generic-fixture\ninvocation: { command: bash, supports_noninteractive: true, output_contract: json_or_files, sandbox_args: ['--restricted'] }\n",
+        )
+        .unwrap();
+        let error = invocation_contract(&profile).unwrap_err();
+        assert!(error.contains("expected files"), "{error}");
+        assert!(error.contains("output_format"), "{error}");
+    }
+
     #[test]
     fn built_in_adapters_keep_their_existing_file_contracts_invocable() {
         for (id, output_contract) in [("codex", "files"), ("claude-code", "json_or_files")] {
@@ -1811,6 +1882,7 @@ invocation:
                 command: "bash".into(),
                 supports_noninteractive: true,
                 output_contract: "files".into(),
+                output_format: None,
                 args: vec!["{run_dir}".into()],
                 prompt_transport: "stdin".into(),
                 version_args: vec!["--version".into()],

@@ -24,6 +24,30 @@
 
 ### Added
 
+- **Worker-declared stdout format, and a tolerant result fallback for the
+  workers that declare one.** Normalization used to branch on two hardcoded
+  worker ids, so every other CLI's output was read one-line-one-message no
+  matter what it actually emitted. A profile can now declare
+  `invocation.output_format`: `text` (the previous behavior, and still the
+  default when undeclared), `json` (one document per attempt), or `stream-json`
+  (one object per line). Normalization is selected by that FORMAT rather than by
+  worker id; the built-in Codex and Claude Code adapters keep their vendor
+  profiles as core-owned, byte-for-byte unchanged, and may only restate
+  `stream-json` — any other declaration on them is rejected instead of silently
+  ignored. Degradation is the rule: an unparseable `stream-json` line becomes a
+  text message and a `json` attempt with no complete document is all text, so a
+  malformed stream can never fail a run. A generic worker declaring `json` or
+  `stream-json` also gains the tolerant result fallback: with no `result.json`
+  on disk, Yardlet recovers the last complete JSON object in its captured stdout
+  that parses as the result schema and names this run and task. That identity
+  check is load-bearing — every packet carries a result schema EXAMPLE, so
+  without it a worker that echoed its own prompt would have manufactured a
+  finished run, template follow-up tasks and all. A recovery never masquerades
+  as a written file: the run record keeps a `result_recovered_from_stdout`
+  marker with the exact attempt, stream and byte range, and the run report says
+  so. Nothing recoverable means today's typed failure and raw-log preservation,
+  unchanged.
+
 - **`prompt_transport: file` completes the generic packet-delivery matrix.** A
   worker CLI that takes its prompt as a file, because it has no stdin mode or
   because a full packet exceeds the platform's argv limit, declares
