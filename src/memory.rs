@@ -87,7 +87,11 @@ fn first_non_empty(values: &[&str]) -> String {
 
 pub fn indexed(ws: &Workspace) -> Result<Vec<MemoryEntry>> {
     let config = ws.load_config()?;
-    let h = packet::discover_harness(&ws.root, config.harness_discovery);
+    let h = packet::discover_harness(
+        &ws.root,
+        config.harness_discovery,
+        &packet::native_harness_sources(ws),
+    );
     let uncommitted = git_uncommitted_paths(&ws.root);
     Ok(h.memory
         .into_iter()
@@ -506,7 +510,11 @@ fn draft(
         &inspect::to_markdown(&summary),
     )?;
     let language = packet::resolve_language(&config.language, mode);
-    let harness = packet::discover_harness(&ws.root, config.harness_discovery);
+    let harness = packet::discover_harness(
+        &ws.root,
+        config.harness_discovery,
+        &packet::NativeHarnessSources::for_workers(&worker_profiles.workers),
+    );
     let packet_text = packet::compile_memory(
         mode,
         &summary,

@@ -2646,7 +2646,11 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         .unwrap_or_default();
 
     let role_notes = packet::load_role_notes(&ws.root, packet::role_for(&task.kind));
-    let harness = packet::discover_harness(&ws.root, config.harness_discovery);
+    let harness = packet::discover_harness(
+        &ws.root,
+        config.harness_discovery,
+        &packet::NativeHarnessSources::for_workers(&workers.workers),
+    );
     let chained_from = opts.chain.as_ref().map(|c| c.prev_task_id.clone());
     // A grant present now (consumed below at execute time) means the human has
     // approved this run's gated action: tell the worker to finish it, not re-ask.

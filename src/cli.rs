@@ -2540,9 +2540,13 @@ fn cmd_status(cwd: &std::path::Path, args: StatusArgs) -> Result<()> {
     if suggestions > 0 {
         println!("\nrouting: {suggestions} suggestion(s) \u{2014} run `yardlet routing review`");
     }
-    let memory = crate::packet::discover_harness(&ws.root, snap.config.harness_discovery)
-        .memory
-        .len();
+    let memory = crate::packet::discover_harness(
+        &ws.root,
+        snap.config.harness_discovery,
+        &crate::packet::native_harness_sources(&ws),
+    )
+    .memory
+    .len();
     if memory > 0 {
         println!("\nProject memory: {memory} doc(s) \u{2014} `yardlet memory`");
     }
@@ -2639,7 +2643,11 @@ fn cmd_packet(cwd: &std::path::Path, args: PacketArgs) -> Result<()> {
         .cloned()
         .collect();
     crate::skills::ensure_builtin_names(&ws, &builtin_task_skills)?;
-    let harness = packet::discover_harness(&ws.root, config.harness_discovery);
+    let harness = packet::discover_harness(
+        &ws.root,
+        config.harness_discovery,
+        &packet::native_harness_sources(&ws),
+    );
     let approved = task.approval_required() && crate::approvals::is_granted(&ws, &task.id);
     let text = packet::compile(&packet::PacketInputs {
         worker_id: &args.worker,

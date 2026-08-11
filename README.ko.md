@@ -410,6 +410,29 @@ session block이 없거나, fresh child가 비어 있지 않은 ref를 내지 �
 없이 확인하지만 로그인 또는 API 인증까지 증명할 수는 없습니다. 따라서 실제 워커가
 시작될 때 인증이 실패할 수 있습니다.
 
+워커는 공유 하네스 중 자신이 이미 직접 읽는 소스를 선언할 수도 있습니다. 그러면
+Yardlet이 같은 소스를 두 번 보내지 않습니다.
+
+```yaml
+- id: mytool
+  harness:
+    native_rule_files: ["AGENTS.md", ".cursorrules"]  # mytool이 스스로 읽는 규칙 파일
+    native_skill_dirs: [".mytool/skills"]             # mytool이 스스로 발견하는 스킬 디렉터리
+```
+
+`native_rule_files`는 워크스페이스 상대 경로의 규칙 파일, `native_skill_dirs`는
+워크스페이스 상대 경로의 스킬 디렉터리입니다. 선언된 경로는 그 워커의 패킷에서
+제외되고, 하네스 발견이 켜져 있고 경로가 실제로 존재하면 그 소스를 읽지 *않는*
+워커들을 위해 발견 대상에 합류합니다. 즉 CLI를 등록하면 그 CLI가 가져오는 자산도
+Yardlet이 알게 됩니다. Yardlet이 이미 스캔하는 디렉터리를 선언하면 두 번 스캔하지
+않고 그 소스에 병합되며, 심볼릭 링크 중복(`CLAUDE.md` -> `AGENTS.md`,
+`.claude/skills` -> `.agents/skills`)은 모든 리더를 포함하는 하나의 항목으로
+병합됩니다. 절대 경로와 `..` 탈출은 무시됩니다.
+
+내장 어댑터는 자체 기본값을 가집니다(codex: `AGENTS.md`, claude-code: `CLAUDE.md`와
+`.claude/skills`). 따라서 기존 프로필은 수정할 필요가 없고, 명시적 `harness:` 블록은
+그 워커의 기본값을 대체합니다.
+
 생태계의 에이전트들이 Yardlet의 공급 측입니다.
 [oh-my-pi](https://github.com/can1357/oh-my-pi)(`omp`), OpenCode, Gemini CLI,
 또는 당신이 만든 API 기반 CLI 같은 터미널 에이전트 모두가 같은 템플릿에 맞습니다.

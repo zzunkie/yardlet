@@ -435,6 +435,30 @@ configured executable and probe arguments without network or provider calls,
 but it cannot prove login or API authentication. Authentication can therefore
 still fail when the actual worker starts.
 
+A worker can also declare which parts of the shared harness it already loads by
+itself, so Yardlet never ships it the same source twice:
+
+```yaml
+- id: mytool
+  harness:
+    native_rule_files: ["AGENTS.md", ".cursorrules"]  # mytool reads these itself
+    native_skill_dirs: [".mytool/skills"]             # mytool discovers these itself
+```
+
+`native_rule_files` are workspace-relative rule files and `native_skill_dirs`
+workspace-relative skills directories. Each declared path is projected out of
+that worker's packet, and — when harness discovery is on and the path exists —
+joins discovery for the workers that do *not* read it, so registering a CLI also
+teaches Yardlet about the assets that CLI brings. A declared directory Yardlet
+already scans merges into that source instead of being scanned twice, and
+symlinked duplicates (`CLAUDE.md` -> `AGENTS.md`, `.claude/skills` ->
+`.agents/skills`) merge into one entry whose native set covers every reader.
+Absolute paths and `..` escapes are ignored.
+
+The built-in adapters carry their own defaults (codex: `AGENTS.md`; claude-code:
+`CLAUDE.md` and `.claude/skills`), so existing profiles need no edit; an explicit
+`harness:` block replaces the default for that worker.
+
 The ecosystem's agents are Yardlet's supply side: terminal agents like
 [oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`), OpenCode, Gemini
 CLI, or an API-backed CLI of your own all fit the same template. Register
