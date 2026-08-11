@@ -2110,6 +2110,33 @@ pub struct WorkerProfile {
         skip_serializing_if = "is_default_background_deferral_patterns"
     )]
     pub background_deferral_patterns: Vec<String>,
+    /// Harness sources this worker's CLI already loads by itself. Omitted keeps
+    /// the built-in default for the first-party ids (`codex`, `claude-code`) and
+    /// declares nothing for any other worker; an explicit block replaces that
+    /// default. See `packet::NativeHarnessSources`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<WorkerHarnessDeclaration>,
+}
+
+/// What a worker CLI reads from the workspace on its own.
+///
+/// The packet is Yardlet's shared injection point, so workspace rules and the
+/// skill catalog ride in it. A source the worker already loads natively would
+/// then arrive twice, so it is projected out of *that* worker's packet — and a
+/// declared source Yardlet did not otherwise know about joins discovery, so the
+/// workers that do NOT read it still get it.
+///
+/// Paths are workspace-relative (`AGENTS.md`, `.cursorrules`, `.claude/skills`).
+/// Absolute paths and `..` escapes are ignored: a declaration selects workspace
+/// files, never anything outside the repo.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerHarnessDeclaration {
+    /// Rule files this worker reads itself (e.g. `AGENTS.md`, `.cursorrules`).
+    #[serde(default)]
+    pub native_rule_files: Vec<String>,
+    /// Skills directories this worker discovers itself (e.g. `.claude/skills`).
+    #[serde(default)]
+    pub native_skill_dirs: Vec<String>,
 }
 
 /// Structural markers, not prose: these are the exact stream events a
@@ -4037,6 +4064,36 @@ delivery: auto
         workers.workers[0].provider_response_refusal_patterns =
             vec!["x".repeat(MAX_PROVIDER_RESPONSE_REFUSAL_PATTERN_BYTES + 1)];
         assert!(workers.validate().is_err());
+    }
+
+    #[test]
+    fn worker_harness_declaration_is_optional_and_never_written_when_absent() {
+        // V010-006: a workspace written before declarations existed keeps
+        // parsing, and Yardlet does not start persisting an empty block.
+        let legacy: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: fixture\n    invocation: {command: fixture}\n",
+        )
+        .unwrap();
+        assert!(legacy.workers[0].harness.is_none());
+        assert!(!crate::yaml::to_string(&legacy).unwrap().contains("harness"));
+
+        let declared: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: mytool\n    harness:\n      native_rule_files: ['AGENTS.md']\n      native_skill_dirs: ['.mytool/skills']\n    invocation: {command: mytool}\n",
+        )
+        .unwrap();
+        let harness = declared.workers[0].harness.clone().unwrap();
+        assert_eq!(harness.native_rule_files, ["AGENTS.md"]);
+        assert_eq!(harness.native_skill_dirs, [".mytool/skills"]);
+        declared.validate().unwrap();
+
+        // Either list alone is enough; the other defaults to empty.
+        let partial: WorkersFile = crate::yaml::from_str(
+            "schema_version: 1\nworkers:\n  - id: mytool\n    harness:\n      native_rule_files: ['.cursorrules']\n    invocation: {command: mytool}\n",
+        )
+        .unwrap();
+        let harness = partial.workers[0].harness.clone().unwrap();
+        assert_eq!(harness.native_rule_files, [".cursorrules"]);
+        assert!(harness.native_skill_dirs.is_empty());
     }
 
     #[test]

@@ -1828,6 +1828,7 @@ invocation:
             limits: crate::schemas::Limits::default(),
             provider_response_refusal_patterns: vec![],
             background_deferral_patterns: vec![],
+            harness: None,
         };
 
         assert!(scout_sandbox_contract(&profile(&[], &[])).is_err());

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::inspect::RepoSummary;
 use crate::schemas::{
     ConversationTurn, GitFinishCheck, IntentContract, ResearchPolicy, ResearchSource,
-    ScoutDisposition, ScoutResult, Task, TurnRole,
+    ScoutDisposition, ScoutResult, Task, TurnRole, WorkerHarnessDeclaration, WorkerProfile,
 };
 
 pub struct ScoutPacketInputs<'a> {
@@ -512,12 +512,159 @@ fn parse_memory_doc(text: &str, fallback: &str) -> (String, String, Vec<String>)
     (title, summary, look_at)
 }
 
+/// The harness sources the first-party adapters read on their own. A profile
+/// that declares no `harness:` block keeps these, so a workspace written before
+/// declarations existed projects exactly as it did before.
+pub fn builtin_harness_declaration(worker_id: &str) -> WorkerHarnessDeclaration {
+    match worker_id {
+        "codex" => WorkerHarnessDeclaration {
+            native_rule_files: vec!["AGENTS.md".to_string()],
+            native_skill_dirs: Vec::new(),
+        },
+        "claude-code" => WorkerHarnessDeclaration {
+            native_rule_files: vec!["CLAUDE.md".to_string()],
+            native_skill_dirs: vec![".claude/skills".to_string()],
+        },
+        _ => WorkerHarnessDeclaration::default(),
+    }
+}
+
+/// Worker harness declarations inverted for discovery: workspace path -> the
+/// workers that already read it. Built from the workspace's worker profiles, so
+/// a third-party CLI that reads its own AGENTS.md (or ships its own skills
+/// directory) is deduplicated by declaration instead of by hardcoded worker id.
+#[derive(Debug, Clone, Default)]
+pub struct NativeHarnessSources {
+    rule_files: Vec<(String, Vec<String>)>,
+    skill_dirs: Vec<(String, Vec<String>)>,
+}
+
+impl NativeHarnessSources {
+    /// Effective declarations for a workspace's worker profiles: each profile's
+    /// own `harness:` block, or the built-in default for a first-party id that
+    /// declares none.
+    pub fn for_workers(workers: &[WorkerProfile]) -> Self {
+        let mut out = Self::default();
+        for w in workers {
+            let decl = w
+                .harness
+                .clone()
+                .unwrap_or_else(|| builtin_harness_declaration(&w.id));
+            out.declare(&w.id, &decl);
+        }
+        out
+    }
+
+    /// The first-party defaults alone — the fallback when workers.yaml cannot
+    /// be read, so an unreadable profile file never silently double-injects.
+    pub fn builtin() -> Self {
+        let mut out = Self::default();
+        for id in ["codex", "claude-code"] {
+            out.declare(id, &builtin_harness_declaration(id));
+        }
+        out
+    }
+
+    fn declare(&mut self, worker_id: &str, decl: &WorkerHarnessDeclaration) {
+        for raw in &decl.native_rule_files {
+            add_reader(&mut self.rule_files, raw, worker_id);
+        }
+        for raw in &decl.native_skill_dirs {
+            add_reader(&mut self.skill_dirs, raw, worker_id);
+        }
+    }
+
+    /// Workers that read this rule file natively (empty when none declare it).
+    fn rule_readers(&self, path: &str) -> Vec<String> {
+        readers(&self.rule_files, path)
+    }
+
+    /// Workers that discover this skills directory natively.
+    fn skill_dir_readers(&self, path: &str) -> Vec<String> {
+        readers(&self.skill_dirs, path)
+    }
+
+    /// Declared sources Yardlet does not already scan, sorted for determinism.
+    fn extra_rule_files<'a>(&'a self, known: &[&str]) -> Vec<&'a (String, Vec<String>)> {
+        extras(&self.rule_files, known)
+    }
+
+    fn extra_skill_dirs<'a>(&'a self, known: &[&str]) -> Vec<&'a (String, Vec<String>)> {
+        extras(&self.skill_dirs, known)
+    }
+}
+
+/// Record `worker_id` as a native reader of one declared path, ignoring the
+/// declaration when the path does not name something inside the workspace.
+fn add_reader(list: &mut Vec<(String, Vec<String>)>, raw: &str, worker_id: &str) {
+    let Some(path) = normalize_declared_path(raw) else {
+        return;
+    };
+    match list.iter_mut().find(|(p, _)| *p == path) {
+        Some((_, workers)) => {
+            if !workers.iter().any(|w| w == worker_id) {
+                workers.push(worker_id.to_string());
+            }
+        }
+        None => list.push((path, vec![worker_id.to_string()])),
+    }
+}
+
+fn readers(list: &[(String, Vec<String>)], path: &str) -> Vec<String> {
+    list.iter()
+        .find(|(p, _)| p == path)
+        .map(|(_, w)| w.clone())
+        .unwrap_or_default()
+}
+
+fn extras<'a>(list: &'a [(String, Vec<String>)], known: &[&str]) -> Vec<&'a (String, Vec<String>)> {
+    let mut out: Vec<&(String, Vec<String>)> = list
+        .iter()
+        .filter(|(p, _)| !known.iter().any(|k| k == p))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// A declared harness path, cleaned for comparison. `None` for anything that
+/// does not name a file inside the workspace.
+fn normalize_declared_path(raw: &str) -> Option<String> {
+    let mut s = raw.trim().replace('\\', "/");
+    while let Some(rest) = s.strip_prefix("./") {
+        s = rest.to_string();
+    }
+    let s = s.trim_end_matches('/').to_string();
+    if s.is_empty() || std::path::Path::new(&s).is_absolute() || s.starts_with('/') {
+        return None;
+    }
+    if s.split('/').any(|c| c == ".." || c == ".") {
+        return None;
+    }
+    Some(s)
+}
+
+/// Effective declarations for a workspace, falling back to the built-in
+/// first-party defaults when workers.yaml cannot be read.
+pub fn native_harness_sources(ws: &crate::state::Workspace) -> NativeHarnessSources {
+    ws.load_workers()
+        .map(|w| NativeHarnessSources::for_workers(&w.workers))
+        .unwrap_or_else(|_| NativeHarnessSources::builtin())
+}
+
 /// Discover the workspace harness. Yardlet-native `.agents/` sources always
 /// load; with `discovery` on (the default), assets the repo already has for
 /// other agent tooling join in, in precedence order — `.agents` first, and a
 /// canonical-path dedup so symlinked copies (e.g. CLAUDE.md -> AGENTS.md)
 /// merge into one entry whose native set covers both readers.
-pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
+///
+/// `native` says which workers read which source on their own, so the same
+/// source is never injected into a worker that already has it (see
+/// `NativeHarnessSources`).
+pub fn discover_harness(
+    root: &std::path::Path,
+    discovery: bool,
+    native: &NativeHarnessSources,
+) -> Harness {
     let mut h = Harness::default();
     let mut seen_rule_paths: Vec<(std::path::PathBuf, usize)> = Vec::new();
 
@@ -525,7 +672,7 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
                      seen: &mut Vec<(std::path::PathBuf, usize)>,
                      file: &std::path::Path,
                      origin: String,
-                     native: Option<&str>| {
+                     native: &[String]| {
         let Ok(text) = std::fs::read_to_string(file) else {
             return;
         };
@@ -536,10 +683,10 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
         let canon = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
         if let Some((_, idx)) = seen.iter().find(|(c, _)| *c == canon) {
             // Same file under another name (symlink): merge the native set.
-            if let Some(n) = native {
-                let entry = &mut h.rules[*idx];
+            let entry = &mut h.rules[*idx];
+            for n in native {
                 if !entry.native_to.iter().any(|w| w == n) {
-                    entry.native_to.push(n.to_string());
+                    entry.native_to.push(n.clone());
                 }
             }
             return;
@@ -548,7 +695,7 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
         h.rules.push(HarnessRule {
             origin,
             text,
-            native_to: native.map(|n| vec![n.to_string()]).unwrap_or_default(),
+            native_to: native.to_vec(),
         });
     };
 
@@ -564,22 +711,19 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
     files.sort();
     for f in &files {
         let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("rule");
-        push_rule(
-            &mut h,
-            &mut seen_rule_paths,
-            f,
-            format!(".agents/rules/{name}"),
-            None,
-        );
+        let origin = format!(".agents/rules/{name}");
+        let readers = native.rule_readers(&origin);
+        push_rule(&mut h, &mut seen_rule_paths, f, origin, &readers);
     }
 
-    // 1b. Yardlet-native skills (always on).
-    collect_skills(
-        &mut h,
-        &root.join(crate::state::STATE_DIR).join("skills"),
-        ".agents/skills",
-        &[],
-    );
+    // 1b. Yardlet-native skills (always on). Scanned last-in-precedence order
+    // below; the source list is assembled first so a declared directory that
+    // duplicates one Yardlet already scans merges instead of scanning twice.
+    let mut skill_sources: Vec<(std::path::PathBuf, String, Vec<String>)> = vec![(
+        root.join(crate::state::STATE_DIR).join("skills"),
+        ".agents/skills".to_string(),
+        native.skill_dir_readers(".agents/skills"),
+    )];
 
     // 1c. Project memory (always on): durable workspace facts/decisions, each
     // surfaced as one index line with the body read on demand. The generated
@@ -616,28 +760,60 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
     }
 
     if discovery {
-        // 2. Root instruction files other agents already use.
-        push_rule(
-            &mut h,
-            &mut seen_rule_paths,
-            &root.join("AGENTS.md"),
-            "AGENTS.md".to_string(),
-            Some("codex"),
-        );
-        push_rule(
-            &mut h,
-            &mut seen_rule_paths,
-            &root.join("CLAUDE.md"),
-            "CLAUDE.md".to_string(),
-            Some("claude-code"),
-        );
-        // 3. Claude Code skills (same SKILL.md format).
-        collect_skills(
-            &mut h,
-            &root.join(".claude/skills"),
-            ".claude/skills",
-            &["claude-code"],
-        );
+        // 2. Root instruction files other agents already use. `codex` reads
+        // AGENTS.md and `claude-code` reads CLAUDE.md by built-in declaration,
+        // not by hardcoded id, so any worker can claim either.
+        for origin in ["AGENTS.md", "CLAUDE.md"] {
+            let readers = native.rule_readers(origin);
+            push_rule(
+                &mut h,
+                &mut seen_rule_paths,
+                &root.join(origin),
+                origin.to_string(),
+                &readers,
+            );
+        }
+        // 2b. Rule files only a worker profile knows about (e.g. `.cursorrules`):
+        // discovered for the workers that do not read them natively, skipped for
+        // the ones that do. Symlinked duplicates merge canonically in push_rule.
+        for (path, readers) in native.extra_rule_files(&["AGENTS.md", "CLAUDE.md"]) {
+            push_rule(
+                &mut h,
+                &mut seen_rule_paths,
+                &root.join(path),
+                path.clone(),
+                readers,
+            );
+        }
+        // 3. Claude Code skills (same SKILL.md format), plus any skills
+        // directory a worker profile declares. A declared directory joins the
+        // scan only when it exists, and merges into an already-listed source
+        // when it resolves to the same canonical directory.
+        skill_sources.push((
+            root.join(".claude/skills"),
+            ".claude/skills".to_string(),
+            native.skill_dir_readers(".claude/skills"),
+        ));
+        for (path, readers) in native.extra_skill_dirs(&[".agents/skills", ".claude/skills"]) {
+            let dir = root.join(path);
+            if !dir.is_dir() {
+                continue;
+            }
+            let canon = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+            match skill_sources
+                .iter_mut()
+                .find(|(d, _, _)| d.canonicalize().is_ok_and(|c| c == canon))
+            {
+                Some((_, _, existing)) => {
+                    for r in readers {
+                        if !existing.iter().any(|w| w == r) {
+                            existing.push(r.clone());
+                        }
+                    }
+                }
+                None => skill_sources.push((dir, path.clone(), readers.clone())),
+            }
+        }
         // 4. Cursor rules.
         let cursor = root.join(".cursor/rules");
         let mut cfiles: Vec<_> = std::fs::read_dir(&cursor)
@@ -650,22 +826,23 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
         cfiles.sort();
         for f in &cfiles {
             let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("rule");
-            push_rule(
-                &mut h,
-                &mut seen_rule_paths,
-                f,
-                format!(".cursor/rules/{name}"),
-                None,
-            );
+            let origin = format!(".cursor/rules/{name}");
+            let readers = native.rule_readers(&origin);
+            push_rule(&mut h, &mut seen_rule_paths, f, origin, &readers);
         }
         // 5. Copilot instructions.
+        let copilot = ".github/copilot-instructions.md";
+        let readers = native.rule_readers(copilot);
         push_rule(
             &mut h,
             &mut seen_rule_paths,
-            &root.join(".github/copilot-instructions.md"),
-            ".github/copilot-instructions.md".to_string(),
-            None,
+            &root.join(copilot),
+            copilot.to_string(),
+            &readers,
         );
+    }
+    for (dir, prefix, readers) in &skill_sources {
+        collect_skills(&mut h, dir, prefix, readers);
     }
     h.skills.sort_by(|a, b| a.name.cmp(&b.name));
     h
@@ -673,7 +850,7 @@ pub fn discover_harness(root: &std::path::Path, discovery: bool) -> Harness {
 
 /// Scan one skills directory into the harness, skipping names already taken
 /// by a higher-precedence source and files already seen via symlink.
-fn collect_skills(h: &mut Harness, dir: &std::path::Path, prefix: &str, native_to: &[&str]) {
+fn collect_skills(h: &mut Harness, dir: &std::path::Path, prefix: &str, native_to: &[String]) {
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let skill_md = entry.path().join("SKILL.md");
         let Ok(text) = std::fs::read_to_string(&skill_md) else {
@@ -1697,6 +1874,265 @@ or `follow_up_tasks`.
 mod tests {
     use super::*;
 
+    /// A workspace laid out the way the pre-declaration code discovered it:
+    /// Yardlet-native sources plus every foreign source discovery knows about.
+    fn write_legacy_harness_fixture(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join(".agents/rules")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/skills/native-skill")).unwrap();
+        std::fs::create_dir_all(root.join(".agents/memory")).unwrap();
+        std::fs::create_dir_all(root.join(".claude/skills/borrowed-skill")).unwrap();
+        std::fs::create_dir_all(root.join(".cursor/rules")).unwrap();
+        std::fs::create_dir_all(root.join(".github")).unwrap();
+        std::fs::write(root.join(".agents/rules/team.md"), "Ours first.").unwrap();
+        std::fs::write(
+            root.join(".agents/skills/native-skill/SKILL.md"),
+            "---\nname: native-skill\ndescription: Ours.\n---\nbody",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".agents/memory/decisions.md"),
+            "# Coding conventions\n\nMatch the surrounding code.",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".claude/skills/borrowed-skill/SKILL.md"),
+            "---\nname: borrowed-skill\ndescription: From claude dir.\n---\nbody",
+        )
+        .unwrap();
+        std::fs::write(root.join("AGENTS.md"), "Repo agent instructions.").unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "Claude instructions.").unwrap();
+        std::fs::write(root.join(".cursor/rules/style.mdc"), "Cursor style rule.").unwrap();
+        std::fs::write(
+            root.join(".github/copilot-instructions.md"),
+            "Copilot notes.",
+        )
+        .unwrap();
+    }
+
+    fn declaring_worker(id: &str, rule_files: &[&str], skill_dirs: &[&str]) -> WorkerProfile {
+        let mut profile = worker_profile_fixture(id);
+        profile.harness = Some(WorkerHarnessDeclaration {
+            native_rule_files: rule_files.iter().map(|s| (*s).to_string()).collect(),
+            native_skill_dirs: skill_dirs.iter().map(|s| (*s).to_string()).collect(),
+        });
+        profile
+    }
+
+    fn worker_profile_fixture(id: &str) -> WorkerProfile {
+        WorkerProfile {
+            id: id.to_string(),
+            enabled: true,
+            kind: "cli_worker".to_string(),
+            role_strengths: vec![],
+            capabilities: vec![],
+            best_for: String::new(),
+            not_for: String::new(),
+            cost_weight: String::new(),
+            model: String::new(),
+            effort: String::new(),
+            billing: Default::default(),
+            invocation: crate::schemas::Invocation {
+                command: id.to_string(),
+                supports_noninteractive: true,
+                output_contract: "files".to_string(),
+                args: vec!["{run_dir}".to_string()],
+                prompt_transport: "stdin".to_string(),
+                version_args: vec!["--version".to_string()],
+                sandbox_args: vec![],
+                full_access_args: vec![],
+                image_args: vec![],
+                model_args: vec![],
+                effort_args: vec![],
+                pass_env: vec![],
+                session: None,
+                identity_probe: None,
+                auth_probe: None,
+                min_version: None,
+            },
+            limits: Default::default(),
+            provider_response_refusal_patterns: vec![],
+            background_deferral_patterns: vec![],
+            harness: None,
+        }
+    }
+
+    /// V010-006: a third-party CLI that reads the repo's AGENTS.md itself says
+    /// so in its profile, and the packet stops shipping it that rule — the same
+    /// deduplication codex gets, without a hardcoded worker id.
+    #[test]
+    fn declared_native_rule_file_leaves_that_workers_packet() {
+        let root = std::env::temp_dir().join(format!("yard-native-rule-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "Repo agent instructions.").unwrap();
+
+        let workers = vec![
+            worker_profile_fixture("codex"),
+            worker_profile_fixture("claude-code"),
+            declaring_worker("mytool", &["AGENTS.md"], &[]),
+        ];
+        let h = discover_harness(&root, true, &NativeHarnessSources::for_workers(&workers));
+
+        let rule = h.rules.iter().find(|r| r.origin == "AGENTS.md").unwrap();
+        assert!(
+            rule.native_to.contains(&"mytool".to_string()),
+            "declared reader missing from native set: {:?}",
+            rule.native_to
+        );
+        let mut mine = String::new();
+        push_harness_sections(&mut mine, &h, "mytool", &[], &[]);
+        assert!(
+            !mine.contains("Repo agent instructions."),
+            "a self-reading worker got AGENTS.md twice: {mine}"
+        );
+        // Workers that do NOT read it still receive it.
+        let mut theirs = String::new();
+        push_harness_sections(&mut theirs, &h, "claude-code", &[], &[]);
+        assert!(theirs.contains("Repo agent instructions."), "{theirs}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A declared skills directory Yardlet never scanned before joins discovery
+    /// (when it exists), native to its declarer only.
+    #[test]
+    fn declared_native_skill_dir_joins_discovery() {
+        let root = std::env::temp_dir().join(format!("yard-native-skills-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".mytool/skills/deploy")).unwrap();
+        std::fs::write(
+            root.join(".mytool/skills/deploy/SKILL.md"),
+            "---\nname: deploy\ndescription: Ship it.\n---\nbody",
+        )
+        .unwrap();
+
+        let workers = vec![
+            worker_profile_fixture("codex"),
+            declaring_worker("mytool", &[], &[".mytool/skills", ".missing/skills"]),
+        ];
+        let h = discover_harness(&root, true, &NativeHarnessSources::for_workers(&workers));
+
+        let skill = h.skills.iter().find(|s| s.name == "deploy").unwrap();
+        assert_eq!(skill.path, ".mytool/skills/deploy/SKILL.md");
+        assert_eq!(skill.native_to, vec!["mytool".to_string()]);
+        let mut theirs = String::new();
+        push_harness_sections(&mut theirs, &h, "codex", &[], &[]);
+        assert!(
+            theirs.contains(".mytool/skills/deploy/SKILL.md"),
+            "{theirs}"
+        );
+        let mut mine = String::new();
+        push_harness_sections(&mut mine, &h, "mytool", &[], &[]);
+        assert!(!mine.contains(".mytool/skills/deploy"), "{mine}");
+
+        // Discovery off keeps foreign sources out, declared or not.
+        let h = discover_harness(&root, false, &NativeHarnessSources::for_workers(&workers));
+        assert!(h.skills.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Declaring a directory Yardlet already scans merges the reader into that
+    /// source instead of scanning it a second time.
+    #[test]
+    fn declared_dir_already_scanned_merges_instead_of_duplicating() {
+        let root = std::env::temp_dir().join(format!("yard-native-merge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".claude/skills/borrowed")).unwrap();
+        std::fs::write(
+            root.join(".claude/skills/borrowed/SKILL.md"),
+            "---\nname: borrowed\ndescription: From claude dir.\n---\nbody",
+        )
+        .unwrap();
+
+        let workers = vec![
+            worker_profile_fixture("claude-code"),
+            declaring_worker("mytool", &[], &["./.claude/skills/"]),
+        ];
+        let h = discover_harness(&root, true, &NativeHarnessSources::for_workers(&workers));
+        assert_eq!(h.skills.len(), 1, "duplicate scan: {:?}", h.skills.len());
+        let skill = &h.skills[0];
+        assert!(skill.native_to.contains(&"claude-code".to_string()));
+        assert!(skill.native_to.contains(&"mytool".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The layout Yardlet's own repo uses: `.claude/skills` is a symlink to
+    /// `.agents/skills`. Both are built-in sources, so name precedence still
+    /// keeps the `.agents` entry and its (empty) native set — the declaration
+    /// refactor must not quietly start merging them, which would change what
+    /// existing workspaces project.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_claude_skills_dir_keeps_todays_precedence_and_projection() {
+        let root = std::env::temp_dir().join(format!("yard-native-symdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".agents/skills/native-skill")).unwrap();
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(
+            root.join(".agents/skills/native-skill/SKILL.md"),
+            "---\nname: native-skill\ndescription: Ours.\n---\nbody",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(root.join(".agents/skills"), root.join(".claude/skills"))
+            .unwrap();
+
+        let h = discover_harness(&root, true, &NativeHarnessSources::builtin());
+        assert_eq!(h.skills.len(), 1);
+        assert_eq!(h.skills[0].path, ".agents/skills/native-skill/SKILL.md");
+        assert!(h.skills[0].native_to.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A declaration selects workspace files. Anything that could reach outside
+    /// the repo is dropped rather than read.
+    #[test]
+    fn declared_paths_are_normalized_and_confined_to_the_workspace() {
+        assert_eq!(
+            normalize_declared_path("  ./AGENTS.md ").as_deref(),
+            Some("AGENTS.md")
+        );
+        assert_eq!(
+            normalize_declared_path(".claude/skills/").as_deref(),
+            Some(".claude/skills")
+        );
+        for bad in ["", "   ", "/etc/passwd", "../outside.md", "a/../../b", "."] {
+            assert!(
+                normalize_declared_path(bad).is_none(),
+                "accepted out-of-workspace declaration: {bad:?}"
+            );
+        }
+    }
+
+    /// Byte-identity regression for the declaration refactor: with no profile
+    /// declaring anything, the two first-party workers must see exactly the
+    /// harness sections they saw when the native mapping was hardcoded. The
+    /// expected strings were captured from the pre-refactor `discover_harness`.
+    #[test]
+    fn builtin_native_mapping_projects_byte_identically() {
+        let root = std::env::temp_dir().join(format!("yard-native-golden-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        write_legacy_harness_fixture(&root);
+
+        const CODEX_GOLDEN: &str = "## Workspace rules (always apply)\n\n### .agents/rules/team.md\nOurs first.\n\n### CLAUDE.md\nClaude instructions.\n\n### .cursor/rules/style.mdc\nCursor style rule.\n\n### .github/copilot-instructions.md\nCopilot notes.\n\n## Skills (read on demand)\n\nReusable procedures for this workspace. Before work a skill clearly applies to, read its SKILL.md first (the folder may hold deeper reference files \u{2014} read those only as needed):\n- borrowed-skill \u{2014} From claude dir. (`.claude/skills/borrowed-skill/SKILL.md`)\n- native-skill \u{2014} Ours. (`.agents/skills/native-skill/SKILL.md`)\n\n## Project memory (read on demand)\n\nDurable facts and decisions about this workspace. Read an entry's file when it bears on the task:\n- Coding conventions \u{2014} Match the surrounding code. (`.agents/memory/decisions.md`)\n\n";
+        const CLAUDE_GOLDEN: &str = "## Workspace rules (always apply)\n\n### .agents/rules/team.md\nOurs first.\n\n### AGENTS.md\nRepo agent instructions.\n\n### .cursor/rules/style.mdc\nCursor style rule.\n\n### .github/copilot-instructions.md\nCopilot notes.\n\n## Skills (read on demand)\n\nReusable procedures for this workspace. Before work a skill clearly applies to, read its SKILL.md first (the folder may hold deeper reference files \u{2014} read those only as needed):\n- native-skill \u{2014} Ours. (`.agents/skills/native-skill/SKILL.md`)\n\n## Project memory (read on demand)\n\nDurable facts and decisions about this workspace. Read an entry's file when it bears on the task:\n- Coding conventions \u{2014} Match the surrounding code. (`.agents/memory/decisions.md`)\n\n";
+
+        // Both routes must match: profiles that declare nothing, and the
+        // built-in fallback used when workers.yaml cannot be read.
+        let from_profiles = NativeHarnessSources::for_workers(&[
+            worker_profile_fixture("codex"),
+            worker_profile_fixture("claude-code"),
+        ]);
+        for native in [&from_profiles, &NativeHarnessSources::builtin()] {
+            let h = discover_harness(&root, true, native);
+            let mut codex = String::new();
+            push_harness_sections(&mut codex, &h, "codex", &[], &[]);
+            assert_eq!(codex, CODEX_GOLDEN);
+            let mut claude = String::new();
+            push_harness_sections(&mut claude, &h, "claude-code", &[], &[]);
+            assert_eq!(claude, CLAUDE_GOLDEN);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn provider_refusal_recovery_instruction_is_neutral_and_result_first() {
         let instruction = provider_refusal_recovery_instruction();
@@ -1752,7 +2188,7 @@ mod tests {
         )
         .unwrap();
 
-        let h = discover_harness(&root, true);
+        let h = discover_harness(&root, true, &NativeHarnessSources::builtin());
         let origins: Vec<&str> = h.rules.iter().map(|r| r.origin.as_str()).collect();
         assert_eq!(
             origins,
@@ -1775,7 +2211,7 @@ mod tests {
         assert_eq!(borrowed.native_to, vec!["claude-code".to_string()]);
 
         // Discovery off: only .agents sources remain.
-        let h = discover_harness(&root, false);
+        let h = discover_harness(&root, false, &NativeHarnessSources::builtin());
         assert_eq!(h.rules.len(), 1);
         assert_eq!(h.skills.len(), 1);
         let _ = std::fs::remove_dir_all(&root);
@@ -1790,7 +2226,7 @@ mod tests {
         std::fs::write(root.join("AGENTS.md"), "Shared instructions.").unwrap();
         std::os::unix::fs::symlink(root.join("AGENTS.md"), root.join("CLAUDE.md")).unwrap();
 
-        let h = discover_harness(&root, true);
+        let h = discover_harness(&root, true, &NativeHarnessSources::builtin());
         assert_eq!(h.rules.len(), 1);
         let r = &h.rules[0];
         assert_eq!(r.origin, "AGENTS.md");
@@ -1832,7 +2268,7 @@ mod tests {
         .unwrap();
 
         // Memory is always-on, so discovery=false still finds it (sorted by file).
-        let h = discover_harness(&root, false);
+        let h = discover_harness(&root, false, &NativeHarnessSources::builtin());
         let titles: Vec<&str> = h.memory.iter().map(|m| m.title.as_str()).collect();
         assert_eq!(titles, vec!["Coding conventions", "v0.8 decisions"]);
         assert_eq!(h.memory[1].path, ".agents/memory/decisions.md");

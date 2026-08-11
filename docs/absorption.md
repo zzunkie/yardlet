@@ -65,6 +65,13 @@ discipline. Projection matrix in code, adapter-owned:
 | .claude/skills | skip (native) | catalog | catalog |
 | .cursor/rules, copilot-instructions | inject | inject | inject |
 
+The matrix is the *default*, not a hardcoded worker list: the first-party rows
+are built-in declarations, and any profile can state its own via
+`harness.native_rule_files` / `harness.native_skill_dirs` in workers.yaml — so a
+custom CLI that reads AGENTS.md itself skips it too, and a skills directory it
+declares joins discovery for the workers that do not read it (README: Adding a
+worker).
+
 Mechanics: read-only at packet compile (I3 — nothing copied into `.agents/`);
 discovered rules share the existing 4 KB inline cap (overflow → anchors);
 discovered skills join the catalog with an origin suffix (e.g.
