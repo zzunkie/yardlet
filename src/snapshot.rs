@@ -206,6 +206,10 @@ pub struct WorkerLine {
     pub billing_blocked: bool,
     /// Model this worker runs with (alias or full id); empty = the CLI default.
     pub model: String,
+    /// The profile's declared `min_version`, so the workers panel can say
+    /// "upgrade to >= X" without re-reading workers.yaml.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_version: Option<String>,
     pub detail: String,
     pub enabled: bool,
     /// Non-public cache identity for the invocation/billing inputs that produced
@@ -286,6 +290,7 @@ impl Snapshot {
                         billing_env_present: 0,
                         billing_blocked: false,
                         model: p.model.clone(),
+                        required_version: p.invocation.min_version.clone(),
                         detail: "disabled (toggle on the Home workers panel)".to_string(),
                         enabled: false,
                         readiness_cache_key,
@@ -301,6 +306,7 @@ impl Snapshot {
                     return WorkerLine {
                         enabled: true,
                         model: p.model.clone(),
+                        required_version: p.invocation.min_version.clone(),
                         billing_blocked: guard::billing_blocked(&policy, c.billing_env_present),
                         readiness_cache_key,
                         ..c.clone()
@@ -315,6 +321,7 @@ impl Snapshot {
                     billing_env_present: present,
                     billing_blocked: guard::billing_blocked(&policy, present),
                     model: p.model.clone(),
+                    required_version: s.required_version,
                     detail: s.detail,
                     enabled: true,
                     readiness_cache_key,
@@ -817,6 +824,9 @@ current_intent: ""
                 version: Some("fixture 1.0".into()),
                 billing_env_present: Vec::new(),
                 contract_error: None,
+                identity: crate::guard::IdentityState::NotDeclared,
+                auth: crate::guard::AuthState::NotProbed,
+                required_version: None,
                 readiness: crate::guard::Readiness::Ready,
                 detail: "injected readiness".into(),
             }

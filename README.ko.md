@@ -371,6 +371,14 @@ TUI는 모두 같은 판정을 사용합니다.
     supports_noninteractive: true
     output_contract: files
     version_args: ["version", "--offline"] # 기본값: ["--version"]
+    min_version: "1.2.0"                    # 선택: 최소 지원 버전
+    identity_probe:                         # 선택: 잘못된 바이너리 검사
+      args: ["--version"]
+      expected_signature: mytool
+    auth_probe:                             # 선택: 관용적 로그인 검사
+      args: ["auth", "status"]
+      ready_patterns: ["logged in as"]
+      unauthenticated_patterns: ["not logged in"]
     prompt_transport: argument              # 기본값: stdin
     args: ["run", "--out", "{run_dir}", "--prompt", "{prompt}"]
     session:                                # 선택적 native resume 계약
@@ -405,11 +413,37 @@ resume template은 fresh generic invocation과 같은 `command`, access, model, 
 session block이 없거나, fresh child가 비어 있지 않은 ref를 내지 않거나, answer routing이
 다른 worker를 선택하면 Yardlet은 native resume 대신 안전하게 `ExplicitPacket`을 사용합니다.
 
+`identity_probe`, `min_version`, `auth_probe`는 선택 사항이며 서로 독립적입니다.
+생략하면 기존 동작이 그대로 유지되어, 버전 프로브에 exit 0으로 답하는 바이너리는
+무엇이든 통과합니다. 선언하면 지금까지 똑같이 보이던 준비 실패들이 구분됩니다.
+
+| 선언 | 실패 시 상태 | 상태 화면과 TUI가 알려주는 것 |
+|---|---|---|
+| (없음) | `not ready` | CLI가 PATH나 알려진 설치 경로에 없음 |
+| `identity_probe` | `wrong product` | 같은 명령 이름에 다른 제품이 응답. `command:`에 명시 경로 지정 |
+| `min_version` | `unsupported version` | 선언한 최소 버전 이상으로 업그레이드 |
+| `auth_probe` | `unauthenticated` | 워커 CLI에서 직접 로그인 |
+
+게이트는 identity → 버전 프로브 → `min_version` → auth 순서로 실행되며 첫 실패에서
+멈춥니다. 따라서 보고되는 상태는 언제나 가장 먼저 잘못된 것을 가리킵니다. 세 상태는
+ready 상태를 확인하는 모든 곳(라우팅, 계획, capability projection,
+`yardlet worker status`, TUI 워커 패널)에서 실행 불가로 취급됩니다.
+
+`identity_probe.expected_signature`는 프로브 출력 첫 줄에 대해 대소문자를 구분하지 않는
+부분문자열로 대조하므로, 전체 버전 배너가 아니라 안정적인 제품 표식을 선언하세요.
+`min_version`은 관용적으로 비교합니다. 양쪽에서 선행 `major.minor.patch` 세 자리만 읽고,
+어느 한쪽이라도 없으면 판정 불가로 처리해 절대 차단하지 않습니다. `auth_probe`는 의도적으로
+3값입니다. unauthenticated 패턴은 차단하고, ready 패턴은 로그인을 확인하며, 그 밖의
+경우(프로브 실행 실패 포함)에는 로그인 미검증 라벨만 붙은 채 실행 가능 상태가 유지됩니다.
+인자가 없거나 서명이 비었거나 패턴이 하나도 없는 선언은 아무것도 spawn하기 전에 정적
+계약에서 실패합니다. Yardlet은 맨 명령이 안전한 오프라인 프로브인지 추측하면 안 되기
+때문입니다.
+
 워커는 실행 디렉터리에 `result.json`과 `handoff.md`를 작성해야 합니다. 실행 env는
-프로필이 `pass_env`로 변수를 다시 옵트인하지 않는 한 정화됩니다. 버전 프로브도 정화된
-환경에서 로컬로만 실행됩니다. 설정한 실행 파일과 프로브 인자를 네트워크나 공급자 호출
-없이 확인하지만 로그인 또는 API 인증까지 증명할 수는 없습니다. 따라서 실제 워커가
-시작될 때 인증이 실패할 수 있습니다.
+프로필이 `pass_env`로 변수를 다시 옵트인하지 않는 한 정화됩니다. 버전, identity, auth
+프로브도 모두 정화된 환경에서 로컬로만 실행됩니다. 설정한 실행 파일과 프로브 인자를
+네트워크나 공급자 호출 없이 확인합니다. Yardlet은 구독 로그인을 확인하려고 과금되는
+호출을 하지 않으므로, `auth_probe` 없이는 실제 워커가 시작될 때 인증이 실패할 수 있습니다.
 
 생태계의 에이전트들이 Yardlet의 공급 측입니다.
 [oh-my-pi](https://github.com/can1357/oh-my-pi)(`omp`), OpenCode, Gemini CLI,
