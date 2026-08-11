@@ -370,6 +370,7 @@ TUI는 모두 같은 판정을 사용합니다.
     command: mytool
     supports_noninteractive: true
     output_contract: files
+    output_format: stream-json             # 선택: text | json | stream-json
     version_args: ["version", "--offline"] # 기본값: ["--version"]
     min_version: "1.2.0"                    # 선택: 최소 지원 버전
     identity_probe:                         # 선택: 잘못된 바이너리 검사
@@ -397,6 +398,31 @@ stdin으로 보내고, `version_args`를 생략하면 `--version`을 실행합�
 넣으세요. Yardlet은 셸 문자열을 만들지 않고 하나의 `Command` 인자로 치환하여 인자
 경계를 보존합니다. stdin 전달에는 `{prompt}`를 넣으면 안 됩니다. 그 밖의 호출
 플레이스홀더는 `{run_dir}`, `{model}`, `{effort}`, `{image}`입니다.
+
+`output_format`은 워커 stdout의 형태를 선언하고, `output_contract`는 결과가 어디서
+오는지를 계속 선언합니다. 선택 사항이며, 생략하면 지금 동작이 그대로 유지되어
+제네릭 워커 출력의 모든 줄이 하나의 공개 메시지가 됩니다.
+
+| `output_format` | Yardlet이 stdout을 읽는 방식 | 결과 fallback |
+|---|---|---|
+| (생략) / `text` | 비어 있지 않은 줄마다 공개 메시지 하나 | 없음 — 결과 파일만이 결과 |
+| `json` | attempt당 JSON 문서 하나, 나머지 줄은 text | 있음 |
+| `stream-json` | 줄마다 JSON 오브젝트 하나, 파싱 실패 줄은 text로 강등 | 있음 |
+
+강등이 원칙이고 hard failure는 없습니다. 파싱되지 않는 `stream-json` 줄은 text
+메시지가 되고, 완전한 문서가 없는 `json` attempt는 전부 text가 됩니다. `json` 또는
+`stream-json`을 선언하면 관용적 결과 fallback도 켜집니다. 워커가 `result.json`을
+쓰지 않았다면, Yardlet은 캡처된 stdout에서 결과 스키마로 파싱되고 **이 run과 task를
+가리키는** 마지막 완전한 JSON 오브젝트를 복원합니다. 이 신원 검사가, 자기 패킷을
+그대로 echo한 워커가 패킷 안의 결과 스키마 예시를 완료된 run으로 둔갑시키는 것을
+막습니다. 복원은 결코 "파일을 썼다"로 위장되지 않습니다. run 기록에 정확한 attempt,
+stream, 바이트 범위를 담은 `result_recovered_from_stdout` 마커가 남고 run 보고서도
+그 사실을 명시합니다. 복원할 결과가 없으면 기존의 typed 실패와 raw 로그가 그대로
+유지됩니다.
+
+내장 어댑터는 자신의 stream-json 프로파일을 소유하므로, `codex`와 `claude-code`
+프로필은 `stream-json`만 다시 선언할 수 있습니다. 다른 값은 조용히 무시되지 않고
+거절됩니다.
 
 제네릭 native resume은 하위 호환 opt-in입니다. `session`을 생략하면 기존
 `ExplicitPacket` 답변 continuation을 유지합니다. `session`이 있으면

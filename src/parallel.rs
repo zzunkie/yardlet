@@ -696,6 +696,7 @@ pub fn run_batch<F: FnMut(&str)>(
                 integration_cleanup_complete: false,
                 owned_oids: Vec::new(),
                 output_contract_incident: None,
+                result_recovered_from_stdout: None,
             },
         )?;
         ok.push(p);

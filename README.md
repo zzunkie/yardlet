@@ -391,6 +391,7 @@ access explicitly (`yardlet access full`).
     command: mytool
     supports_noninteractive: true
     output_contract: files
+    output_format: stream-json             # optional: text | json | stream-json
     version_args: ["version", "--offline"] # default: ["--version"]
     min_version: "1.2.0"                    # optional lowest supported version
     identity_probe:                         # optional wrong-binary check
@@ -420,6 +421,33 @@ Yardlet substitutes it as one `Command` argument, preserving argument
 boundaries without constructing a shell string. Stdin delivery must not include
 `{prompt}`. The other invocation placeholders are `{run_dir}`, `{model}`,
 `{effort}`, and `{image}`.
+
+`output_format` declares the SHAPE of the worker's stdout, while
+`output_contract` keeps declaring where its result comes from. It is optional;
+omitting it keeps today's behavior exactly, where every line of a generic
+worker's output becomes one public message.
+
+| `output_format` | Yardlet reads stdout as | Result fallback |
+|---|---|---|
+| (omitted) / `text` | one public message per non-empty line | none — the result file is the only result |
+| `json` | one JSON document per attempt; the rest of the stream stays text | yes |
+| `stream-json` | one JSON object per line; unparseable lines degrade to text | yes |
+
+Degradation is the rule, never a hard failure: a `stream-json` line that does
+not parse becomes a text message, and a `json` attempt with no complete
+document is all text. Declaring `json` or `stream-json` also enables the
+tolerant result fallback: if the worker wrote no `result.json`, Yardlet
+recovers the last complete JSON object in its captured stdout that parses as
+the result schema **and names this run and task**. The identity check is what
+keeps a worker that echoes its own packet from turning the packet's result
+schema example into a finished run. A recovery never passes as a written file:
+the run record carries a `result_recovered_from_stdout` marker with the exact
+attempt, stream and byte range, and the run report says so out loud. If no
+result can be recovered, the run keeps its usual typed failure and its raw logs.
+
+The built-in adapters own their stream-json profiles, so a `codex` or
+`claude-code` profile may only restate `stream-json`; any other value is
+rejected rather than silently ignored.
 
 Generic native resume is backward-compatible and opt-in. Omit `session` to keep
 the existing `ExplicitPacket` answer continuation. When `session` is present,

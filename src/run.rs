@@ -20,8 +20,9 @@ use crate::packet::{self, PacketInputs};
 use crate::schemas::{
     AnswerActionRequest, AttemptState, ChannelEvent, ChannelEventType, ContinuationMode,
     ConversationTurn, EventActor, EventActorKind, OutputContractCause, OutputContractIncident,
-    Question, QuestionState, RunResult, TaskState, TransitionActor, TransitionCause, TurnRole,
-    WorkQueue, WorkerAttempt, WorkerOutputLogSpan, WorkerProfile, WorkersFile,
+    Question, QuestionState, ResultRecoveredFromStdout, RunResult, TaskState, TransitionActor,
+    TransitionCause, TurnRole, WorkQueue, WorkerAttempt, WorkerOutputLogSpan, WorkerProfile,
+    WorkersFile,
 };
 use crate::state::{self, append_str, write_str, PlanningLock, Workspace};
 use crate::ui::i18n::{self, Lang};
@@ -1251,6 +1252,11 @@ pub(crate) struct RunRecord {
     /// third attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_contract_incident: Option<OutputContractIncident>,
+    /// Set when a result was recovered from a worker's captured stdout instead
+    /// of read from the result file it was asked to write. Recorded so the run
+    /// can never present a tolerant recovery as a written-file success.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_recovered_from_stdout: Option<ResultRecoveredFromStdout>,
 }
 
 impl RunRecord {
@@ -1835,6 +1841,88 @@ fn worker_attempt_result(
     "failed"
 }
 
+/// The stdout shape this attempt's worker is normalized against.
+///
+/// Resolution must match what the live publisher used during the attempt: the
+/// end-of-attempt replay dedupes against the events that publisher already
+/// recorded, and two different normalizers over the same bytes would record
+/// two different answers for one raw span. An unreadable workers file falls
+/// back to the core-owned resolution, which is what every profile without a
+/// declaration gets anyway.
+fn declared_output_format(ws: &Workspace, worker_id: &str) -> workers::WorkerOutputFormat {
+    let declared = ws.load_workers().ok().and_then(|workers| {
+        workers
+            .workers
+            .iter()
+            .find(|profile| profile.id == worker_id)
+            .and_then(|profile| profile.invocation.output_format.clone())
+    });
+    workers::resolve_output_format(worker_id, declared.as_deref())
+}
+
+/// Recover a missing result from the attempt's captured stdout when — and only
+/// when — the profile declared structured stdout (`json`/`stream-json`).
+///
+/// Deliberate limits: the built-in adapters never reach this (their format is
+/// a core-owned vendor profile, not a declaration), an existing result file
+/// always wins, and the recovery is abandoned unless its provenance marker can
+/// be written first. A run record that cannot hold the marker must not gain a
+/// result.json that reads as worker-written.
+fn recover_declared_result_from_stdout(
+    run_dir: &std::path::Path,
+    attempt: &WorkerAttempt,
+    capture: &workers::AttemptCapture,
+    format: workers::WorkerOutputFormat,
+) -> Result<Option<ResultRecoveredFromStdout>> {
+    use workers::WorkerOutputFormat;
+
+    let declared = match format {
+        WorkerOutputFormat::Json => "json",
+        WorkerOutputFormat::StreamJson => "stream-json",
+        _ => return Ok(None),
+    };
+    let result_path = run_dir.join("result.json");
+    if result_path.exists() {
+        return Ok(None);
+    }
+    // The run receipt is read BEFORE the stream: it names the run and task the
+    // recovered result has to identify, and a receipt that cannot hold the
+    // provenance marker forfeits the recovery outright.
+    let record_path = run_dir.join("run.yaml");
+    let Ok(mut record) = state::load_yaml::<RunRecord>(&record_path) else {
+        return Ok(None);
+    };
+    let Ok(raw) = std::fs::read(&capture.stdout_log) else {
+        return Ok(None);
+    };
+    let Some(recovered) =
+        workers::recover_result_from_output(&raw, &record.run_id, &record.task_id)
+    else {
+        return Ok(None);
+    };
+    let marker = ResultRecoveredFromStdout {
+        schema_version: 1,
+        attempt_id: attempt.attempt_id.clone(),
+        worker_id: attempt.worker_id.clone(),
+        output_format: declared.to_string(),
+        stream: "stdout".to_string(),
+        byte_start: recovered.byte_start as u64,
+        byte_end: recovered.byte_end as u64,
+    };
+    record.result_recovered_from_stdout = Some(marker.clone());
+    state::save_yaml_atomic(&record_path, &record)?;
+    // The worker's exact bytes, never a re-serialization: a recovered result
+    // stays worker-authored content that Yardlet only relocated.
+    state::write_str_atomic(&result_path, &recovered.json)?;
+    Ok(Some(marker))
+}
+
+fn load_result_recovery_marker(run_dir: &std::path::Path) -> Option<ResultRecoveredFromStdout> {
+    state::load_yaml::<RunRecord>(&run_dir.join("run.yaml"))
+        .ok()
+        .and_then(|record| record.result_recovered_from_stdout)
+}
+
 pub(crate) fn finish_worker_attempt(
     ws: &Workspace,
     lock: Option<&PlanningLock>,
@@ -1844,6 +1932,13 @@ pub(crate) fn finish_worker_attempt(
     capture: &workers::AttemptCapture,
     outcome: &workers::WorkerOutcome,
 ) -> Result<()> {
+    let output_format = declared_output_format(ws, &attempt.worker_id);
+    // Before the attempt is judged: a worker that DECLARES structured stdout
+    // may have put its result there instead of in the result file. Recovering
+    // it here keeps the tolerant fallback on the one seam the serial and
+    // parallel paths already share, and the marker it writes is what stops a
+    // recovery from reading back as "the worker wrote result.json".
+    recover_declared_result_from_stdout(run_dir, attempt, capture, output_format)?;
     let mut channel = ws.load_task_channel(&context.intent_id, &context.task_id)?;
     let mut causation_id = channel
         .events
@@ -1872,9 +1967,12 @@ pub(crate) fn finish_worker_attempt(
         ] {
             let raw = std::fs::read(path)
                 .with_context(|| format!("reading attempt raw stream {}", path.display()))?;
-            for normalized in
-                workers::normalize_worker_output(&attempt.worker_id, stream, &raw, &artifact_id)
-            {
+            for normalized in workers::normalize_worker_output_with_format(
+                output_format,
+                stream,
+                &raw,
+                &artifact_id,
+            ) {
                 let existing = channel.events.iter().find(|event| {
                     event.attempt_id.as_deref() == Some(&attempt.attempt_id)
                         && event.event_type == normalized.event_type
@@ -2718,6 +2816,7 @@ pub fn run_next(ws: &Workspace, opts: &RunOptions) -> Result<RunReport> {
         integration_cleanup_complete: false,
         owned_oids: Vec::new(),
         output_contract_incident: None,
+        result_recovered_from_stdout: None,
     };
     state::save_yaml_atomic(&run_dir.join("run.yaml"), &record)?;
     if serial_worktree.is_some() {
@@ -7453,6 +7552,19 @@ pub(crate) fn finalize_run(input: FinalizeInput) -> Result<FinalizeReport> {
     let result: Option<RunResult> = std::fs::read_to_string(run_dir.join("result.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok());
+    // Say it out loud in the run report: this result was read out of the
+    // worker's stdout, not out of the file the worker was asked to write.
+    if let Some(marker) = load_result_recovery_marker(run_dir) {
+        lines.push(format!(
+            "result_recovered_from_stdout: attempt {} wrote no result.json; recovered the last \
+             result object from its {} bytes {}..{} (declared output_format {})",
+            marker.attempt_id,
+            marker.stream,
+            marker.byte_start,
+            marker.byte_end,
+            marker.output_format
+        ));
+    }
     let output_contract_incident = load_output_contract_incident(run_dir);
     let output_contract_classification_skips =
         state::load_yaml::<OutputContractClassificationSkips>(
@@ -8522,6 +8634,7 @@ fn seal_run_record(
         integration_cleanup_complete: false,
         owned_oids: Vec::new(),
         output_contract_incident: None,
+        result_recovered_from_stdout: None,
     });
     // Never preserve identity or worktree-location fields from the
     // worker-writable projection. These values are all known by the core at
@@ -15681,6 +15794,7 @@ exit 1
                 integration_cleanup_complete: false,
                 owned_oids: vec![worker_oid.clone(), integration_oid.clone()],
                 output_contract_incident: None,
+                result_recovered_from_stdout: None,
             },
         )
         .unwrap();
@@ -16642,6 +16756,7 @@ exit 1
                 integration_cleanup_complete: false,
                 owned_oids: vec![],
                 output_contract_incident: None,
+                result_recovered_from_stdout: None,
             },
         )
         .unwrap();
@@ -16796,6 +16911,7 @@ exit 1
                 integration_cleanup_complete: false,
                 owned_oids: vec![],
                 output_contract_incident: None,
+                result_recovered_from_stdout: None,
             },
         )
         .unwrap();
@@ -16931,6 +17047,7 @@ exit 1
                 integration_cleanup_complete: false,
                 owned_oids: vec![],
                 output_contract_incident: None,
+                result_recovered_from_stdout: None,
             },
         )
         .unwrap();
@@ -17079,6 +17196,7 @@ exit 1
                 integration_cleanup_complete: false,
                 owned_oids: vec![],
                 output_contract_incident: None,
+                result_recovered_from_stdout: None,
             },
         )
         .unwrap();
@@ -17296,6 +17414,7 @@ exit 1
                 integration_cleanup_complete: false,
                 owned_oids: vec![],
                 output_contract_incident: None,
+                result_recovered_from_stdout: None,
             },
         )
         .unwrap();

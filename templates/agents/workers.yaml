@@ -120,6 +120,12 @@ workers:
   #     command: mytool
   #     supports_noninteractive: true
   #     output_contract: files
+  #     # Shape of this CLI's stdout: text (default when omitted; one message
+  #     # per line), json (one document per attempt), or stream-json (one
+  #     # object per line). json/stream-json also let Yardlet tolerantly
+  #     # recover a missing result from stdout, marked as recovered in the run
+  #     # record so it never reads as a written result file.
+  #     output_format: stream-json
   #     version_args: ["version", "--offline"]
   #     prompt_transport: argument
   #     # {prompt} is exactly one argv item. Yardlet never builds a shell string.

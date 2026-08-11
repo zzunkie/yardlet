@@ -351,14 +351,260 @@ fn normalize_claude_json(
     out
 }
 
+/// The stdout shape a worker's output is normalized against.
+///
+/// The two built-in adapters keep their own vendor profiles: those normalizers
+/// are core-owned, so a profile cannot redefine them. Everything else is a
+/// user declaration (`invocation.output_format`), defaulting to line-per-event
+/// text — exactly the fallback every non-built-in worker had before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerOutputFormat {
+    /// Codex CLI's stream-json profile.
+    CodexStreamJson,
+    /// Claude Code CLI's stream-json profile.
+    ClaudeStreamJson,
+    /// One public message per non-empty line, verbatim.
+    Text,
+    /// One JSON document per attempt; the rest of the stream is text.
+    Json,
+    /// One JSON object per line; unparseable lines degrade to text.
+    StreamJson,
+}
+
+impl WorkerOutputFormat {
+    /// Whether the streaming publisher can normalize this format line by line.
+    ///
+    /// A `json` worker emits ONE document that may span many lines, so its
+    /// events can only be derived once the whole attempt stream is on disk.
+    /// Publishing per line there would record a different event for the same
+    /// bytes than the end-of-attempt replay does, and those two must agree.
+    pub fn streams_line_by_line(self) -> bool {
+        !matches!(self, Self::Json)
+    }
+}
+
+/// Parse a declared `output_format`. Unknown values are rejected by the guard,
+/// never guessed at.
+pub fn parse_output_format(declared: &str) -> Option<WorkerOutputFormat> {
+    match declared.trim() {
+        "text" => Some(WorkerOutputFormat::Text),
+        "json" => Some(WorkerOutputFormat::Json),
+        "stream-json" => Some(WorkerOutputFormat::StreamJson),
+        _ => None,
+    }
+}
+
+/// Deterministic normalizer selection: a built-in adapter's vendor profile is
+/// core-owned and wins over any declaration; a generic worker uses its own
+/// declaration and falls back to text when it has none.
+pub fn resolve_output_format(worker_id: &str, declared: Option<&str>) -> WorkerOutputFormat {
+    match worker_id {
+        "codex" => WorkerOutputFormat::CodexStreamJson,
+        "claude-code" => WorkerOutputFormat::ClaudeStreamJson,
+        _ => declared
+            .and_then(parse_output_format)
+            .unwrap_or(WorkerOutputFormat::Text),
+    }
+}
+
+/// A structured event from a generic worker's JSON. `text` keeps the payload
+/// renderable by the same consumers that read vendor messages; `json` keeps
+/// the exact parsed object so nothing structural is lost to prose.
+fn generic_json_event(
+    value: &serde_json::Value,
+    artifact_id: &str,
+    stream: RawStreamKind,
+    start: usize,
+    end: usize,
+) -> Option<NormalizedWorkerEvent> {
+    let rendered = value
+        .get("text")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string());
+    (!rendered.is_empty()).then(|| {
+        normalized_event(
+            ChannelEventType::WorkerMessage,
+            serde_json::json!({"text": rendered, "json": value}),
+            artifact_id,
+            stream,
+            start,
+            end,
+        )
+    })
+}
+
+/// Byte spans of every balanced `{...}` region, in the order they CLOSE, so
+/// reversing yields the latest-finishing candidate first and, at equal ends,
+/// the outermost before the fragment nested inside it.
+///
+/// Nested regions are kept on purpose: a worker's prose can leave a stray brace
+/// open, and dropping everything after it would silently lose a result that is
+/// sitting right there in the stream. Quoted text is only tracked inside an
+/// object, where JSON strings actually live; unbalanced quotes in prose must
+/// not swallow the rest of the stream.
+///
+/// This is a scanner, not a parser: callers still parse the spans they want.
+fn balanced_object_spans(raw: &[u8]) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut open = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, byte) in raw.iter().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if *byte == b'\\' {
+                escaped = true;
+            } else if *byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' if !open.is_empty() => in_string = true,
+            b'{' => open.push(index),
+            b'}' => {
+                if let Some(start) = open.pop() {
+                    spans.push((start, index + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+/// The last balanced region that actually parses as a JSON object.
+/// Tolerant by design: unparseable candidates are skipped, never fatal.
+pub fn last_complete_json_object(raw: &[u8]) -> Option<(usize, usize, serde_json::Value)> {
+    balanced_object_spans(raw)
+        .into_iter()
+        .rev()
+        .find_map(|(start, end)| {
+            serde_json::from_slice::<serde_json::Value>(&raw[start..end])
+                .ok()
+                .filter(serde_json::Value::is_object)
+                .map(|value| (start, end, value))
+        })
+}
+
+/// A result Yardlet recovered from captured stdout instead of the result file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredResult {
+    pub byte_start: usize,
+    pub byte_end: usize,
+    /// The worker's exact bytes, so the recovered result stays worker-authored.
+    pub json: String,
+}
+
+/// Tolerantly recover a worker result from captured stdout: the LAST balanced
+/// JSON object that parses as the result schema AND identifies this exact run.
+/// Returns None when the stream holds no such object, which keeps the typed
+/// failure path exactly as it was.
+///
+/// The identity check is not a formality. Every task packet carries a result
+/// SCHEMA EXAMPLE, so a worker that echoes its own prompt prints a
+/// result-shaped object; without this, echoing the packet would manufacture a
+/// finished run — placeholder status, template follow-up tasks and all. A
+/// result that does not name this run and task is not this run's result.
+pub fn recover_result_from_output(
+    raw: &[u8],
+    run_id: &str,
+    task_id: &str,
+) -> Option<RecoveredResult> {
+    if run_id.trim().is_empty() || task_id.trim().is_empty() {
+        return None;
+    }
+    balanced_object_spans(raw)
+        .into_iter()
+        .rev()
+        .find(|(start, end)| {
+            serde_json::from_slice::<crate::schemas::RunResult>(&raw[*start..*end])
+                .is_ok_and(|result| result.run_id == run_id && result.task_id == task_id)
+        })
+        .and_then(|(start, end)| {
+            Some(RecoveredResult {
+                byte_start: start,
+                byte_end: end,
+                json: String::from_utf8(raw[start..end].to_vec()).ok()?,
+            })
+        })
+}
+
+/// One JSON document per attempt: the last complete object becomes a structured
+/// event; every line outside it degrades to text.
+fn normalize_json_document(
+    raw: &[u8],
+    artifact_id: &str,
+    stream: RawStreamKind,
+) -> Vec<NormalizedWorkerEvent> {
+    let document = last_complete_json_object(raw);
+    let mut events = Vec::new();
+    let mut start = 0_usize;
+    while start < raw.len() {
+        let end = raw[start..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(raw.len(), |offset| start + offset + 1);
+        match &document {
+            Some((doc_start, doc_end, value)) if start < *doc_end && end > *doc_start => {
+                if start <= *doc_start {
+                    events.extend(generic_json_event(
+                        value,
+                        artifact_id,
+                        stream,
+                        *doc_start,
+                        *doc_end,
+                    ));
+                }
+            }
+            _ => {
+                let line = String::from_utf8_lossy(&raw[start..end]);
+                if let Some(event) = text_event(line.trim(), artifact_id, stream, start, end) {
+                    events.push(event);
+                }
+            }
+        }
+        start = end;
+    }
+    events
+}
+
 /// Normalize only provider-exposed public messages/tool activity. Raw bytes
 /// remain the source of truth and every emitted event points at its exact line.
+///
+/// Id-keyed entry, kept as the oracle for the two core-owned vendor profiles:
+/// production always resolves a profile's DECLARED format first, so nothing
+/// outside tests reaches a normalizer through a worker id any more.
+#[cfg(test)]
 pub fn normalize_worker_output(
     worker_id: &str,
     stream: RawStreamKind,
     raw: &[u8],
     artifact_id: &str,
 ) -> Vec<NormalizedWorkerEvent> {
+    normalize_worker_output_with_format(
+        resolve_output_format(worker_id, None),
+        stream,
+        raw,
+        artifact_id,
+    )
+}
+
+/// Format-keyed normalization. Every worker reaches its normalizer through the
+/// declared (or core-owned) stdout shape, never through an id comparison.
+pub fn normalize_worker_output_with_format(
+    format: WorkerOutputFormat,
+    stream: RawStreamKind,
+    raw: &[u8],
+    artifact_id: &str,
+) -> Vec<NormalizedWorkerEvent> {
+    if format == WorkerOutputFormat::Json {
+        return normalize_json_document(raw, artifact_id, stream);
+    }
     let mut events = Vec::new();
     let mut start = 0_usize;
     while start < raw.len() {
@@ -369,30 +615,27 @@ pub fn normalize_worker_output(
         let line = String::from_utf8_lossy(&raw[start..end]);
         let trimmed = line.trim();
         if !trimmed.is_empty() {
-            match serde_json::from_str::<serde_json::Value>(trimmed) {
-                Ok(value) if worker_id == "codex" => {
-                    events.extend(normalize_codex_json(
-                        &value,
-                        artifact_id,
-                        stream,
-                        start,
-                        end,
-                    ));
-                }
-                Ok(value) if worker_id == "claude-code" => {
-                    events.extend(normalize_claude_json(
-                        &value,
-                        artifact_id,
-                        stream,
-                        start,
-                        end,
-                    ));
-                }
-                Ok(_) | Err(_) => {
-                    if let Some(event) = text_event(trimmed, artifact_id, stream, start, end) {
-                        events.push(event);
+            let parsed = serde_json::from_str::<serde_json::Value>(trimmed).ok();
+            let structured =
+                match (format, parsed.as_ref()) {
+                    (WorkerOutputFormat::CodexStreamJson, Some(value)) => {
+                        Some(normalize_codex_json(value, artifact_id, stream, start, end))
                     }
-                }
+                    (WorkerOutputFormat::ClaudeStreamJson, Some(value)) => Some(
+                        normalize_claude_json(value, artifact_id, stream, start, end),
+                    ),
+                    (WorkerOutputFormat::StreamJson, Some(value)) => Some(
+                        generic_json_event(value, artifact_id, stream, start, end)
+                            .into_iter()
+                            .collect(),
+                    ),
+                    // Text, and any line the declared format could not parse:
+                    // degrade to a message event instead of failing the stream.
+                    _ => None,
+                };
+            match structured {
+                Some(structured) => events.extend(structured),
+                None => events.extend(text_event(trimmed, artifact_id, stream, start, end)),
             }
         }
         start = end;
@@ -401,7 +644,7 @@ pub fn normalize_worker_output(
 }
 
 fn publish_complete_public_lines(
-    worker_id: &str,
+    format: WorkerOutputFormat,
     stream: RawStreamKind,
     artifact_id: &str,
     pending: &mut Vec<u8>,
@@ -419,10 +662,13 @@ fn publish_complete_public_lines(
             break;
         };
         let line = pending.drain(..line_len).collect::<Vec<_>>();
-        for mut event in normalize_worker_output(worker_id, stream, &line, artifact_id) {
-            event.raw_ref.byte_start += *consumed;
-            event.raw_ref.byte_end += *consumed;
-            sink(event).map_err(std::io::Error::other)?;
+        if format.streams_line_by_line() {
+            for mut event in normalize_worker_output_with_format(format, stream, &line, artifact_id)
+            {
+                event.raw_ref.byte_start += *consumed;
+                event.raw_ref.byte_end += *consumed;
+                sink(event).map_err(std::io::Error::other)?;
+            }
         }
         *consumed += line_len as u64;
     }
@@ -1567,6 +1813,8 @@ fn spawn_internal(
                 let log = std::sync::Arc::clone(&log_file);
                 let captured = std::sync::Arc::clone(&captured_session);
                 let worker_id = profile.id.clone();
+                let output_format =
+                    resolve_output_format(&profile.id, profile.invocation.output_format.as_deref());
                 let event_sink = reader_event_sink.clone();
                 thread::spawn(move || -> std::io::Result<()> {
                     let mut buf = [0u8; 4096];
@@ -1595,7 +1843,7 @@ fn spawn_internal(
                                 }
                                 if let Some(sink) = &event_sink {
                                     publish_complete_public_lines(
-                                        &worker_id,
+                                        output_format,
                                         stream,
                                         &artifact_id,
                                         &mut public_pending,
@@ -1651,7 +1899,7 @@ fn spawn_internal(
                                 if let Some(sink) = &event_sink {
                                     public_pending.extend_from_slice(&buf[..n]);
                                     publish_complete_public_lines(
-                                        &worker_id,
+                                        output_format,
                                         stream,
                                         &artifact_id,
                                         &mut public_pending,
@@ -3078,6 +3326,245 @@ printf '%s\n' '{"type":"thread.started","thread_id":"aaaaaaaa-bbbb-4ccc-8ddd-eee
         }
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    // V010-006: normalization is selected by FORMAT. The two built-in adapters
+    // own theirs, so a declaration cannot move them; every other worker gets
+    // the shape it declared, and text when it declared nothing.
+    #[test]
+    fn output_format_resolution_is_core_owned_for_built_ins_and_declared_for_the_rest() {
+        for declared in [None, Some("text"), Some("json"), Some("stream-json")] {
+            assert_eq!(
+                resolve_output_format("codex", declared),
+                WorkerOutputFormat::CodexStreamJson,
+                "codex profile moved by {declared:?}"
+            );
+            assert_eq!(
+                resolve_output_format("claude-code", declared),
+                WorkerOutputFormat::ClaudeStreamJson,
+                "claude-code profile moved by {declared:?}"
+            );
+        }
+        for (declared, expected) in [
+            (None, WorkerOutputFormat::Text),
+            (Some("text"), WorkerOutputFormat::Text),
+            (Some("json"), WorkerOutputFormat::Json),
+            (Some("stream-json"), WorkerOutputFormat::StreamJson),
+            // Unsupported values are the guard's business; resolution must not
+            // invent a shape for one that slipped through.
+            (Some("ndjson"), WorkerOutputFormat::Text),
+        ] {
+            assert_eq!(
+                resolve_output_format("generic-fixture", declared),
+                expected,
+                "generic profile for {declared:?}"
+            );
+        }
+        assert_eq!(
+            parse_output_format("stream-json"),
+            Some(WorkerOutputFormat::StreamJson)
+        );
+        assert_eq!(parse_output_format("ndjson"), None);
+    }
+
+    // A `json` worker emits ONE document, so its events can only be derived
+    // once the whole stream is captured; every other format streams per line.
+    #[test]
+    fn only_the_json_document_format_defers_normalization_off_the_line_publisher() {
+        for format in [
+            WorkerOutputFormat::CodexStreamJson,
+            WorkerOutputFormat::ClaudeStreamJson,
+            WorkerOutputFormat::Text,
+            WorkerOutputFormat::StreamJson,
+        ] {
+            assert!(format.streams_line_by_line(), "{format:?}");
+        }
+        assert!(!WorkerOutputFormat::Json.streams_line_by_line());
+    }
+
+    #[test]
+    fn declared_stream_json_structures_json_lines_and_degrades_the_rest_to_text() {
+        let raw = concat!(
+            "warming up\n",
+            "{\"text\":\"public update\",\"phase\":\"build\"}\n",
+            "{not json at all\n",
+            "{\"phase\":\"done\"}\n"
+        );
+        let events = normalize_worker_output_with_format(
+            WorkerOutputFormat::StreamJson,
+            RawStreamKind::Stdout,
+            raw.as_bytes(),
+            "raw_att_1_stdout",
+        );
+
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].payload["text"], "warming up");
+        assert!(events[0].payload.get("json").is_none());
+        assert_eq!(events[1].payload["text"], "public update");
+        assert_eq!(events[1].payload["json"]["phase"], "build");
+        // A line the declared format cannot parse degrades; it never fails.
+        assert_eq!(events[2].payload["text"], "{not json at all");
+        // No `text` field to render: keep the object and say so verbatim.
+        assert_eq!(events[3].payload["json"]["phase"], "done");
+        assert_eq!(events[3].payload["text"], "{\"phase\":\"done\"}");
+        for event in &events {
+            assert_eq!(
+                event.event_type,
+                crate::schemas::ChannelEventType::WorkerMessage
+            );
+            let start = event.raw_ref.byte_start as usize;
+            let end = event.raw_ref.byte_end as usize;
+            assert!(start < end && end <= raw.len());
+        }
+    }
+
+    #[test]
+    fn declared_json_normalizes_the_last_complete_document_and_leaves_the_rest_text() {
+        let raw = concat!(
+            "starting\n",
+            "{\"text\":\"superseded\"}\n",
+            "note between documents\n",
+            "{\n  \"text\": \"final answer\",\n  \"nested\": {\"brace\": \"} not a close\"}\n}\n",
+            "trailing note\n"
+        );
+        let events = normalize_worker_output_with_format(
+            WorkerOutputFormat::Json,
+            RawStreamKind::Stdout,
+            raw.as_bytes(),
+            "raw_att_1_stdout",
+        );
+
+        let texts = events
+            .iter()
+            .map(|event| event.payload["text"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            texts,
+            vec![
+                "starting",
+                "{\"text\":\"superseded\"}",
+                "note between documents",
+                "final answer",
+                "trailing note",
+            ]
+        );
+        let document = &events[3];
+        assert_eq!(document.payload["json"]["nested"]["brace"], "} not a close");
+        // The structured event spans the WHOLE document, not just its first line.
+        let start = document.raw_ref.byte_start as usize;
+        let end = document.raw_ref.byte_end as usize;
+        assert_eq!(&raw[start..=start], "{");
+        assert!(raw[start..end].contains("final answer"));
+        assert!(raw[start..end].lines().count() > 1);
+    }
+
+    #[test]
+    fn result_recovery_takes_the_last_result_shaped_object_from_captured_stdout() {
+        let raw = concat!(
+            "{\"schema_version\":1,\"run_id\":\"r1\",\"task_id\":\"YARD-001\",\"status\":\"failed\"}\n",
+            "still working\n",
+            "{\"type\":\"progress\",\"done\":true}\n",
+            "{\"schema_version\":1,\"run_id\":\"r1\",\"task_id\":\"YARD-001\",\"status\":\"done\",\"compact_summary\":\"last\"}\n",
+        );
+        let recovered =
+            recover_result_from_output(raw.as_bytes(), "r1", "YARD-001").expect("result recovered");
+        assert!(recovered.json.contains("\"compact_summary\":\"last\""));
+        assert_eq!(
+            &raw[recovered.byte_start..recovered.byte_end],
+            recovered.json
+        );
+        let parsed: crate::schemas::RunResult = serde_json::from_str(&recovered.json).unwrap();
+        assert_eq!(parsed.status, "done");
+    }
+
+    // A stray brace in a worker's prose must not hide the result sitting after
+    // it: the scanner keeps nested candidates precisely so recovery survives an
+    // unbalanced stream.
+    #[test]
+    fn result_recovery_survives_an_unbalanced_brace_earlier_in_the_stream() {
+        let raw = concat!(
+            "writing { and never closing it\n",
+            "{\"schema_version\":1,\"run_id\":\"r1\",\"task_id\":\"YARD-001\",\"status\":\"done\"}\n",
+        );
+        let recovered =
+            recover_result_from_output(raw.as_bytes(), "r1", "YARD-001").expect("result recovered");
+        assert!(recovered.json.starts_with("{\"schema_version\":1"));
+    }
+
+    // Every task packet carries a result SCHEMA EXAMPLE, so a worker that
+    // echoes its own prompt prints a result-shaped object. Recovering that
+    // would manufacture a finished run out of a template.
+    #[test]
+    fn result_recovery_refuses_the_result_schema_example_a_worker_echoed_back() {
+        let task: crate::schemas::Task =
+            crate::yaml::from_str("id: YARD-001\ntitle: echo the packet\n").unwrap();
+        let echoed = format!(
+            "here is my packet:\n{}\n",
+            crate::packet::compile(&crate::packet::PacketInputs {
+                worker_id: "generic-fixture",
+                task: &task,
+                intent: None,
+                repo: &Default::default(),
+                run_dir_rel: ".agents/runs/run-1",
+                conversation: &[],
+                continuation: None,
+                chained_from: None,
+                language: "en",
+                images: &[],
+                role_notes: "",
+                harness: &Default::default(),
+                approved: false,
+                pre_push_checks: &[],
+            })
+        );
+        assert!(
+            echoed.contains("\"run_id\": \"<run-id>\""),
+            "the packet no longer carries the template this guards against"
+        );
+        assert_eq!(
+            recover_result_from_output(echoed.as_bytes(), "run-1", "YARD-001"),
+            None,
+            "the packet's own schema example was recovered as a result"
+        );
+    }
+
+    #[test]
+    fn result_recovery_declines_broken_non_result_and_foreign_output() {
+        for (label, raw) in [
+            // Truncated: no balanced object at all.
+            (
+                "truncated",
+                "{\"schema_version\":1,\"run_id\":\"r1\",\"task_id\":\"YARD-001\",\"status\":\"done\"",
+            ),
+            // Balanced but not the result schema.
+            ("not a result", "{\"type\":\"progress\",\"done\":true}\n"),
+            // Balanced, result-ish, but missing required fields.
+            ("partial schema", "{\"status\":\"done\"}\n"),
+            // A complete result that belongs to a DIFFERENT run or task.
+            (
+                "foreign run",
+                "{\"schema_version\":1,\"run_id\":\"r0\",\"task_id\":\"YARD-001\",\"status\":\"done\"}\n",
+            ),
+            (
+                "foreign task",
+                "{\"schema_version\":1,\"run_id\":\"r1\",\"task_id\":\"YARD-999\",\"status\":\"done\"}\n",
+            ),
+            ("empty", ""),
+        ] {
+            assert_eq!(
+                recover_result_from_output(raw.as_bytes(), "r1", "YARD-001"),
+                None,
+                "{label}: recovered a result from {raw:?}"
+            );
+        }
+        // An unidentifiable run cannot claim any result as its own.
+        let mine =
+            "{\"schema_version\":1,\"run_id\":\"r1\",\"task_id\":\"YARD-001\",\"status\":\"done\"}";
+        assert_eq!(
+            recover_result_from_output(mine.as_bytes(), "", "YARD-001"),
+            None
+        );
+        assert_eq!(recover_result_from_output(mine.as_bytes(), "r1", ""), None);
     }
 
     #[test]
