@@ -871,10 +871,49 @@ pub fn build_command(
     cmd
 }
 
+/// The file a `prompt_transport: file` worker reads its packet from.
+///
+/// Fixed by convention and written INTO the run directory Yardlet already owns,
+/// so the run's own lifecycle (retention/gc) is what removes it and no separate
+/// cleanup path can leak a packet after the run.
+pub const PROMPT_FILE_NAME: &str = "packet-prompt.txt";
+
+/// Where the file prompt transport materializes the packet for a run.
+pub fn prompt_file_path(run_dir: &Path) -> PathBuf {
+    run_dir.join(PROMPT_FILE_NAME)
+}
+
+/// Materialize the packet for a `prompt_transport: file` worker and return the
+/// absolute path to hand it. `Ok(None)` for every other transport.
+///
+/// Written 0600 and replaced in place: a retry, a hot chain, or a native resume
+/// inside the same run directory must never leave the worker reading the
+/// previous attempt's packet.
+fn materialize_prompt_file(
+    inv: &Invocation,
+    packet: &str,
+    run_dir: &Path,
+    cwd: &Path,
+) -> Result<Option<String>> {
+    if !inv.prompt_in_file() {
+        return Ok(None);
+    }
+    let path = prompt_file_path(run_dir);
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    };
+    crate::state::write_private_str_atomic(&absolute, packet)
+        .with_context(|| format!("writing worker packet file {}", absolute.display()))?;
+    Ok(Some(absolute.display().to_string()))
+}
+
 /// Build the command for a worker WITHOUT a built-in adapter, from the
 /// invocation template in its workers.yaml profile. This is what makes a
-/// third worker a pure-config addition: packet on stdin or in one argument,
-/// args from the template, placeholders expanded without a shell.
+/// third worker a pure-config addition: packet on stdin, in one argument, or in
+/// a run-directory file; args from the template, placeholders expanded without
+/// a shell.
 #[allow(clippy::too_many_arguments)]
 pub fn build_generic_command(
     inv: &Invocation,
@@ -889,11 +928,17 @@ pub fn build_generic_command(
 ) -> Result<Command> {
     inv.validate_generic("generic worker")
         .map_err(anyhow::Error::msg)?;
+    let prompt_file = materialize_prompt_file(inv, packet, run_dir, cwd)?;
+    let prompt_file = prompt_file.as_deref().unwrap_or_default();
+    // `{prompt_file}` is expanded BEFORE `{prompt}` for the same reason
+    // `{prompt}` comes last overall: once packet text is in the string, nothing
+    // may rescan it for placeholders.
     let expand = |arg: &str, image: &str| -> String {
         arg.replace("{run_dir}", &run_dir.display().to_string())
             .replace("{model}", model)
             .replace("{effort}", effort)
             .replace("{image}", image)
+            .replace("{prompt_file}", prompt_file)
             .replace("{prompt}", packet)
     };
     let mut cmd = Command::new(bin);
@@ -954,12 +999,15 @@ fn build_generic_resume_command(
         .session
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("generic worker has no native session contract"))?;
+    let prompt_file = materialize_prompt_file(inv, packet, run_dir, cwd)?;
+    let prompt_file = prompt_file.as_deref().unwrap_or_default();
     let expand = |arg: &str, image: &str| -> String {
         arg.replace("{run_dir}", &run_dir.display().to_string())
             .replace("{model}", model)
             .replace("{effort}", effort)
             .replace("{image}", image)
             .replace("{session}", session_ref)
+            .replace("{prompt_file}", prompt_file)
             .replace("{prompt}", packet)
     };
     let mut cmd = Command::new(bin);
@@ -2512,6 +2560,110 @@ image_args: ["-i", "{image}"]
             &build_generic_command(&inv, bin, "packet", run, cwd, true, "auto", "", &[]).unwrap(),
         );
         assert_eq!(full, vec!["run", "--json", "--out", "/tmp/r", "--yolo"]);
+    }
+
+    #[test]
+    fn generic_file_transport_materializes_the_packet_and_passes_its_absolute_path() {
+        let inv: Invocation = crate::yaml::from_str(
+            r#"
+command: mytool
+supports_noninteractive: true
+output_contract: files
+prompt_transport: file
+args: ["run", "--packet", "{prompt_file}", "--out", "{run_dir}"]
+sandbox_args: ["--sandbox"]
+session:
+  capture: {stream: stdout, prefix: "SESSION_REF="}
+  resume_args: ["resume", "--session", "{session}", "--packet", "{prompt_file}"]
+"#,
+        )
+        .unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "yard-file-transport-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let run = root.join("run-1");
+        std::fs::create_dir_all(&run).unwrap();
+
+        let fresh = args_of(
+            &build_generic_command(
+                &inv,
+                Path::new("mytool"),
+                "fresh packet body",
+                &run,
+                &root,
+                false,
+                "auto",
+                "",
+                &[],
+            )
+            .unwrap(),
+        );
+        let expected = prompt_file_path(&run).display().to_string();
+        assert_eq!(
+            fresh,
+            vec![
+                "run",
+                "--packet",
+                &expected,
+                "--out",
+                &run.display().to_string(),
+                "--sandbox",
+            ]
+        );
+        assert!(Path::new(&expected).is_absolute());
+        assert_eq!(
+            std::fs::read_to_string(&expected).unwrap(),
+            "fresh packet body"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&expected).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "the packet file must not be world readable"
+            );
+        }
+
+        // A resume in the same run directory replaces the packet in place, so
+        // the worker never reads a stale continuation.
+        let resumed = args_of(
+            &build_generic_resume_command(
+                &inv,
+                Path::new("mytool"),
+                "resume packet body",
+                "session-ref",
+                &run,
+                &root,
+                false,
+                "auto",
+                "",
+                &[],
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            resumed,
+            vec![
+                "resume",
+                "--session",
+                "session-ref",
+                "--packet",
+                &expected,
+                "--sandbox",
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&expected).unwrap(),
+            "resume packet body"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

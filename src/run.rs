@@ -962,6 +962,10 @@ pub(crate) fn capture_serial_input_overlays(
 const PROVIDER_REFUSAL_CLASSIFICATION_SKIPS_FILE: &str =
     "provider-refusal-classification-skips.yaml";
 
+// NOTE: the file prompt transport's `packet-prompt.txt` is deliberately NOT
+// listed. It is written into the staging run directory the worker actually
+// reads, and importing it back is what leaves the exact packet the worker was
+// handed in the canonical run's evidence.
 const MAIN_OWNED_RUN_ARTIFACT_NAMES: [&str; 19] = [
     "run.yaml",
     "task-packet.md",
