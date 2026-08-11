@@ -308,6 +308,11 @@ pub struct App {
     /// would be wasteful).
     pub ime_checked: Instant,
     pub lang: i18n::Lang,
+    /// Why the last state reload failed, when it did. `snapshot` deliberately
+    /// keeps the last projection that loaded — a blank Home is worse than a
+    /// stale one — so this is what stops the frozen screen from passing for a
+    /// live one (issue #138). `None` means the screen is current.
+    pub snapshot_stale: Option<String>,
 }
 
 #[derive(Default)]
@@ -470,6 +475,18 @@ fn lang_of(snapshot: &Option<Snapshot>) -> i18n::Lang {
         .unwrap_or(i18n::Lang::En)
 }
 
+/// The freshness marker a finished reload attempt leaves behind: `None` when
+/// the projection on screen is current, `Some(reason)` when it is frozen.
+///
+/// A failure never clears the last good snapshot — a blank Home is worse than a
+/// stale one — so this verdict is the only thing that keeps the frozen screen
+/// from passing for a live one (issue #138). The reason is flattened to a single
+/// line because the banner owns exactly one row; a failure with nothing to say
+/// still yields a marker, so silence is never mistaken for health.
+fn snapshot_freshness(load_error: Option<&str>) -> Option<String> {
+    load_error.map(|error| error.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
 impl App {
     #[cfg(test)]
     fn new(ws: Workspace) -> App {
@@ -550,6 +567,7 @@ impl App {
             ime_saved: None,
             ime_checked: Instant::now(),
             lang,
+            snapshot_stale: None,
         }
     }
 
@@ -563,6 +581,7 @@ impl App {
 
     fn begin_startup(&mut self, rx: Receiver<StartupMsg>) {
         self.snapshot = None;
+        self.snapshot_stale = None;
         self.bootstrap = BootstrapState::Loading(StartupStage::Recovery);
         self.startup_started = Instant::now();
         self.startup_rx = Some(rx);
@@ -665,20 +684,34 @@ impl App {
             Some(w) => Snapshot::load_reusing_workers(&self.ws, w),
             None => Snapshot::load(&self.ws),
         };
-        if let Ok(s) = loaded {
-            self.lang = i18n::detect(&s.config.language, s.intent_summary());
-            self.snapshot = Some(s);
-        }
+        self.apply_reload(loaded);
         self.refresh_monitor_runs();
     }
 
     /// Full reload including a fresh worker readiness probe (g / startup).
     fn reload_full(&mut self) {
-        if let Ok(s) = Snapshot::load(&self.ws) {
-            self.lang = i18n::detect(&s.config.language, s.intent_summary());
-            self.snapshot = Some(s);
-        }
+        let loaded = Snapshot::load(&self.ws);
+        self.apply_reload(loaded);
         self.refresh_monitor_runs();
+    }
+
+    /// Adopt a reload result.
+    ///
+    /// A failure keeps the last projection that loaded, because a blank Home is
+    /// worse than a stale one — but it records why, so the Home banner can say
+    /// the screen is frozen. Dropping these errors is what let a wedged
+    /// workspace serve stale-but-plausible state with no indication at all
+    /// (issue #138).
+    fn apply_reload(&mut self, loaded: Result<Snapshot>) {
+        let error = match loaded {
+            Ok(s) => {
+                self.lang = i18n::detect(&s.config.language, s.intent_summary());
+                self.snapshot = Some(s);
+                None
+            }
+            Err(error) => Some(error.to_string()),
+        };
+        self.snapshot_stale = snapshot_freshness(error.as_deref());
     }
 
     /// Rebuild the Monitor's task→run-dir map (a runs-directory scan per
@@ -5086,6 +5119,75 @@ routing:
         assert!(app.snapshot.as_ref().unwrap().workers[0]
             .detail
             .contains("supports_noninteractive"));
+        let _ = std::fs::remove_dir_all(ws.root);
+    }
+
+    #[test]
+    fn snapshot_freshness_marks_a_failed_reload_and_clears_on_the_next_success() {
+        assert_eq!(snapshot_freshness(None), None, "a good reload is fresh");
+        assert_eq!(
+            snapshot_freshness(Some(
+                "unconfirmed_or_inconsistent: active intent is missing"
+            )),
+            Some("unconfirmed_or_inconsistent: active intent is missing".to_string())
+        );
+        // The banner owns exactly one row, so a multi-line failure chain has to
+        // collapse into one line instead of pushing the queue off-screen.
+        assert_eq!(
+            snapshot_freshness(Some("  reading work-queue.yaml\n\ncaused by:\tbad yaml  ")),
+            Some("reading work-queue.yaml caused by: bad yaml".to_string())
+        );
+        // A failure with nothing to say is still a failure: the marker must be
+        // present so the screen is never silently frozen (issue #138).
+        assert_eq!(snapshot_freshness(Some(" \n ")), Some(String::new()));
+    }
+
+    /// Issue #138: both reload paths dropped `Snapshot::load` errors on the
+    /// floor, so a wedged workspace left the TUI showing stale-but-plausible
+    /// Home state with nothing saying the screen was dead. Keeping the last good
+    /// projection is right; keeping it silently is the defect.
+    const WEDGED_QUEUE: &str = r#"schema_version: 1
+queue_id: queue-wedged
+intent_id: int-wedged
+activation_required: true
+tasks: []
+"#;
+
+    #[test]
+    fn a_failed_reload_keeps_the_last_good_snapshot_and_marks_it_stale() {
+        let ws = workspace_with_user_config("stale-snapshot-marker");
+        let mut app = App::new(ws.clone());
+        assert!(app.snapshot.is_some(), "fixture workspace must load");
+        assert_eq!(app.snapshot_stale, None, "a good load is not stale");
+
+        std::fs::write(ws.queue_path(), WEDGED_QUEUE).unwrap();
+        app.reload_full();
+        assert!(
+            app.snapshot.is_some(),
+            "a load failure must keep the last good projection, not blank Home"
+        );
+        assert!(
+            app.snapshot_stale
+                .as_deref()
+                .is_some_and(|marker| marker.contains("active intent is missing")),
+            "explicit refresh must record why the reload failed: {:?}",
+            app.snapshot_stale
+        );
+
+        // The once-a-second cheap reload takes the same path.
+        app.snapshot_stale = None;
+        app.reload();
+        assert!(
+            app.snapshot_stale.is_some(),
+            "the cheap reload must mark the screen stale too"
+        );
+
+        std::fs::remove_file(ws.queue_path()).unwrap();
+        app.reload_full();
+        assert_eq!(
+            app.snapshot_stale, None,
+            "a reload that succeeds again must clear the marker"
+        );
         let _ = std::fs::remove_dir_all(ws.root);
     }
 

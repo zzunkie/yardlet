@@ -14,6 +14,14 @@
   clean legacy state while task-bearing or provenance-bearing queues keep
   failing closed.
 
+- **A failed state reload no longer freezes Home silently.** Both TUI reload
+  paths dropped `Snapshot::load` errors, so a wedged workspace kept serving the
+  last projection that loaded: the operator saw stale-but-plausible Home state
+  plus an unrelated-sounding confirm error, with nothing saying the screen was
+  dead (issue #138). The last good projection is still kept — a blank Home is
+  worse — but Home now leads with one red row naming the failure and the `g`
+  retry key, in English and Korean, and clears it the moment a reload succeeds.
+
 ### Added
 
 - **Worker-declared native harness sources.** A worker profile can declare the
