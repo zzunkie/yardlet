@@ -38,7 +38,9 @@ struct YardletTabCommandSet {
 /// (the window's last tab closes the window, as Close did), ⌘⇧W Close Window, ⌘⇧T Reopen Closed
 /// Tab, ⌃Tab and ⌃⇧Tab Show Next / Previous Tab. The Claude app's Code tab and the Codex app use
 /// ⌃Tab, ⌘W and ⌘⇧T the same way for sessions and panel tabs. `⌘⇧[` / `⌘⇧]` stay with the sidebar's
-/// previous and next task, and `⌘1`–`⌘9` with the task surfaces and pinned rows.
+/// previous and next task, and `⌘1`–`⌘9` with the task surfaces and pinned rows. With one tab, ⌃Tab
+/// and ⌃⇧Tab are the next and previous task, as in the Claude app's Code sidebar (the Codex app's
+/// ⌃Tab does nothing without a second tab).
 enum TabCommandShortcut {
     static let newTab = KeyboardShortcut("t", modifiers: .command)
     static let closeTab = KeyboardShortcut("w", modifiers: .command)
@@ -52,6 +54,7 @@ enum TabCommandShortcut {
 
 struct YardletTabCommands: Commands {
     @FocusedValue(\.yardletSplitCommands) private var split
+    @FocusedValue(\.yardletTaskCommands) private var task
 
     private var tabs: YardletTabCommandSet? { split?.tabs }
 
@@ -76,12 +79,23 @@ struct YardletTabCommands: Commands {
                 .disabled(!(tabs?.canReopenClosedTab ?? false))
         }
         CommandGroup(before: .windowArrangement) {
-            Button(L10n.string("Show Previous Tab")) { tabs?.selectPreviousTab() }
+            if tabs?.canCloseTab ?? false {
+                Button(L10n.string("Show Previous Tab")) { tabs?.selectPreviousTab() }
+                    .keyboardShortcut(TabCommandShortcut.previousTab)
+                Button(L10n.string("Show Next Tab")) { tabs?.selectNextTab() }
+                    .keyboardShortcut(TabCommandShortcut.nextTab)
+            } else {
+                Button(L10n.string("Previous task")) {
+                    if let row = task?.targets.previousRow { task?.activate(row) }
+                }
                 .keyboardShortcut(TabCommandShortcut.previousTab)
-                .disabled(!(tabs?.canCloseTab ?? false))
-            Button(L10n.string("Show Next Tab")) { tabs?.selectNextTab() }
+                .disabled(task?.targets.previousRow == nil)
+                Button(L10n.string("Next task")) {
+                    if let row = task?.targets.nextRow { task?.activate(row) }
+                }
                 .keyboardShortcut(TabCommandShortcut.nextTab)
-                .disabled(!(tabs?.canCloseTab ?? false))
+                .disabled(task?.targets.nextRow == nil)
+            }
             Divider()
         }
     }
