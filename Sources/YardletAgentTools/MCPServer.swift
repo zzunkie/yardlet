@@ -228,7 +228,9 @@ package enum MCPStdioLoop {
                         }
                     }
                     let reply = await server.handle(message)
+                    // A progress notification already being written finishes first: none may follow the reply.
                     keepAlive?.cancel()
+                    await keepAlive?.value
                     if let reply { await write(reply) }
                 }
             }
