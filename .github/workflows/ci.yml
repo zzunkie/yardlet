@@ -15,12 +15,9 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: Build and test (${{ matrix.runner }})
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-26, xcode-27]
-    runs-on: ${{ matrix.runner }}
+    name: Build and test
+    # Yardlet builds with Xcode 27.1 (Swift 6.4); Xcode 26 cannot compile it.
+    runs-on: xcode-27
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,7 +28,6 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
-          sysctl -n hw.ncpu hw.memsize
       - name: Build
         run: swift build --build-system native
       - name: Test

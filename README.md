@@ -1,5 +1,7 @@
 # Yardlet
 
+[![CI](https://github.com/zzunkie/yardlet/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zzunkie/yardlet/actions/workflows/ci.yml)
+
 A native macOS app for running coding agents. Codex, Claude Code and other agent CLIs open side by
 side in one window of projects and tasks, while each agent keeps its own agent loop, sign-in and
 session history.
@@ -107,11 +109,18 @@ belong to their owners; Yardlet is not affiliated with or endorsed by them.
 
 ## Development
 
+Building needs Xcode 27.1 or later (Swift 6.4); Xcode 26 cannot compile Yardlet.
+
 ```bash
-swift build
-swift test
-swift run NativeHarnessClient
+swift build --build-system native
+./scripts/test-fast.sh
+swift run --build-system native NativeHarnessClient
 ```
+
+The default build system also compiles SwiftTerm's Metal shaders and stops when the Metal toolchain
+is not installed; `--build-system native` builds without it. `scripts/test-fast.sh` runs every test
+except renders, QA fixtures and performance runs, as CI does for each pull request;
+`swift test --build-system native` runs them all.
 
 For a normal registered macOS application bundle during development:
 

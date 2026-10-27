@@ -62,7 +62,12 @@ final class ConversationBlankViewportLogTests: XCTestCase {
         monitor.observe(visibleItems: 1)
         monitor.note("content height 32834 to 32659")
         monitor.observe(visibleItems: 0)
-        try await Task.sleep(for: .milliseconds(120))
+        // The line comes once the threshold has passed and the main actor gets to it, which on a
+        // busy machine (CI runs four test processes on three cores) can be well after 120 ms.
+        let deadline = ContinuousClock.now + .seconds(2)
+        while lines.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         XCTAssertEqual(lines.count, 1, "\(lines)")
         let began = try XCTUnwrap(lines.first)
         for part in ["blank viewport began", "task TASK-1", "turns 40", "visible 0", "offset 32260",
