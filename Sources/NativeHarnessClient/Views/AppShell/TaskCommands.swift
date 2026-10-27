@@ -29,6 +29,10 @@ struct YardletTaskCommandSet {
     /// Opens the shown composer's model menu, the task's or the new-task screen's. Nil while a sheet
     /// or alert is up.
     var openModelMenu: (() -> Void)? = nil
+    /// View › Back and Forward through what the window showed (`SplitStore.goBack`). Nil where there is
+    /// nothing to go back or forward to.
+    var goBack: (() -> Void)? = nil
+    var goForward: (() -> Void)? = nil
 }
 
 private struct YardletTaskCommandsKey: FocusedValueKey {
@@ -79,7 +83,9 @@ enum TaskCommandTitle {
 /// Claude app's `toggle_terminal_pane`, the Codex app's `toggleBottomPanel`), and the side panel is
 /// the Codex app's `toggleSidePanel` `⌘⌥B` (the Claude app has a key per pane instead). The model menu
 /// opens with the Codex app's `composer.openModelPicker` `⌃⇧M`; the Claude app's `⌘⇧I` (model) and `⌘⇧E`
-/// (effort) are the Codex app's personality settings and file tree, so they are left out.
+/// (effort) are the Codex app's personality settings and file tree, so they are left out. Back and
+/// Forward are `⌘[` / `⌘]` in both apps (the Claude app's Go menu, the Codex app's `navigateBack` and
+/// `navigateForward`), which also give them the mouse's back and forward buttons.
 enum TaskCommandShortcut {
     static let toggleSidebar = KeyboardShortcut("s", modifiers: [.command, .shift])
     static let previousTask = KeyboardShortcut("[", modifiers: [.command, .shift])
@@ -93,12 +99,15 @@ enum TaskCommandShortcut {
     static let toggleSidePanel = KeyboardShortcut("b", modifiers: [.command, .option])
     static let toggleTerminal = KeyboardShortcut("j", modifiers: .command)
     static let openModelMenu = KeyboardShortcut("m", modifiers: [.control, .shift])
+    static let back = KeyboardShortcut("[", modifiers: .command)
+    static let forward = KeyboardShortcut("]", modifiers: .command)
 
     /// File › New task, the Codex app's `newThread` (⌘N). Its New Window has no shortcut.
     static let newTask = KeyboardShortcut("n", modifiers: .command)
 
     static let all = [toggleSidebar, previousTask, nextTask, nextTaskNeedingAttention, toggleActivityView,
-                      togglePinned, markUnread, archive, toggleSessionRail, toggleSidePanel, toggleTerminal, openModelMenu]
+                      togglePinned, markUnread, archive, toggleSessionRail, toggleSidePanel, toggleTerminal, openModelMenu,
+                      back, forward]
 }
 
 struct YardletTaskCommands: Commands {
@@ -134,6 +143,15 @@ struct YardletTaskCommands: Commands {
             }
             .keyboardShortcut(TaskCommandShortcut.toggleTerminal)
             .disabled(task?.panels == nil)
+
+            Divider()
+
+            Button(L10n.string("Back")) { task?.goBack?() }
+                .keyboardShortcut(TaskCommandShortcut.back)
+                .disabled(task?.goBack == nil)
+            Button(L10n.string("Forward")) { task?.goForward?() }
+                .keyboardShortcut(TaskCommandShortcut.forward)
+                .disabled(task?.goForward == nil)
         }
         CommandMenu(Text(L10n.string("Task"))) {
             Button(L10n.string("Previous task")) {

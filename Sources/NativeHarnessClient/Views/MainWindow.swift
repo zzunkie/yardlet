@@ -709,6 +709,27 @@ struct MainWindow: View {
         focusCurrentContent()
     }
 
+    /// View › Back, ⌘[ and the mouse's back button outside a browser page. The scheduled tasks list,
+    /// which stands in for what the window shows, closes first.
+    private var goBack: (() -> Void)? {
+        guard schedulesWindow.isShowing || model.splits.canGoBack else { return nil }
+        return {
+            shellFocusBookmark = nil
+            if schedulesWindow.isShowing { closeSchedules() } else { model.splits.goBack() }
+            focusCurrentContent()
+        }
+    }
+
+    private var goForward: (() -> Void)? {
+        guard model.splits.canGoForward else { return nil }
+        return {
+            shellFocusBookmark = nil
+            closeSchedules()
+            model.splits.goForward()
+            focusCurrentContent()
+        }
+    }
+
     /// A conversation's link to another task (`TaskLink`): that task, in a new tab on ⌘-click as a
     /// sidebar row opens. A Codex thread Yardlet does not have opens in the Codex app; an anchor
     /// to a task Yardlet does not have only beeps.
@@ -1009,6 +1030,8 @@ struct MainWindow: View {
         )
         if !hasPresentedModal {
             commands.newTask = { showNewTask() }
+            commands.goBack = goBack
+            commands.goForward = goForward
             commands.openModelMenu = {
                 let focus = model.store.selectedSessionID.map {
                     model.taskWorkspaces.state(for: $0, initialSurface: model.initialTaskSurface).keyboardFocus
@@ -2017,6 +2040,8 @@ struct MainWindow: View {
         .onGeometryChange(for: CGSize.self) { $0.size } action: { windowSize = $0 }
         .background(ParityTheme.canvas)
         .background(WindowInitialFocusReset().allowsHitTesting(false))
+        .background(MouseNavigationMonitor(goBack: hasPresentedModal ? nil : goBack,
+                                           goForward: hasPresentedModal ? nil : goForward))
         // Keep ordinary shell controls monochrome. Semantic status, links, and the primary send
         // action opt into Yardlet's accent explicitly at their point of use.
         .tint(Color.primary)

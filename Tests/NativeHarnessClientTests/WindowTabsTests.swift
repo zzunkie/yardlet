@@ -100,6 +100,62 @@ final class WindowTabsTests: XCTestCase {
         XCTAssertEqual(store.selection, .session(a))
     }
 
+    /// Back and Forward follow the order things were shown in, across tabs, as a browser's history.
+    func testBackAndForwardStepThroughWhatTheWindowShowed() {
+        let store = readyStore()
+        let a = UUID(), b = UUID(), c = UUID()
+        XCTAssertFalse(store.canGoBack)
+        store.activate(.session(a))
+        store.activate(.session(b))
+        store.openInNewTab(.session(c))
+
+        store.goBack()
+        XCTAssertEqual(store.selection, .session(b))
+        XCTAssertEqual(store.tabs, [.session(b), .session(c)], "going back moves to the tab that shows it")
+        store.goBack()
+        XCTAssertEqual(store.selection, .session(a))
+        XCTAssertEqual(store.tabs, [.session(a), .session(c)], "an item without a tab shows in the active one")
+        store.goForward()
+        XCTAssertEqual(store.selection, .session(b))
+
+        // A new visit ends the forward list; a task that is gone is passed over.
+        store.activate(.home)
+        XCTAssertFalse(store.canGoForward)
+        store.removeSession(b)
+        store.goBack()
+        XCTAssertEqual(store.selection, .session(a))
+        store.goBack()
+        XCTAssertEqual(store.selection, .home, "the first thing shown")
+        XCTAssertFalse(store.canGoBack)
+    }
+
+    /// The mouse's back and forward buttons belong to what is under the pointer: a browser page's own
+    /// history over the page, the window's Back and Forward anywhere else, never both.
+    func testTheMouseBackButtonIsThePagesOverABrowserAndTheWindowsElsewhere() throws {
+        func button(_ number: Int64) throws -> MouseNavigationButton? {
+            let event = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp,
+                                              mouseCursorPosition: .zero, mouseButton: .center))
+            event.setIntegerValueField(.mouseEventButtonNumber, value: number)
+            return MouseNavigationButton(try XCTUnwrap(NSEvent(cgEvent: event)))
+        }
+        XCTAssertEqual(try button(3), .back)
+        XCTAssertEqual(try button(4), .forward)
+        XCTAssertNil(try button(2), "the middle button stays a middle click")
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200), styleMask: .borderless,
+                              backing: .buffered, defer: true)
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        window.contentView = content
+        let page = BrowserHostView(frame: NSRect(x: 200, y: 0, width: 200, height: 200))
+        page.addSubview(NSView(frame: NSRect(x: 10, y: 10, width: 50, height: 50)))
+        content.addSubview(page)
+        content.addSubview(NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 200)))
+        XCTAssertTrue(MouseNavigationMonitorView.keepsOwnHistory(at: NSPoint(x: 300, y: 100), in: window))
+        XCTAssertTrue(MouseNavigationMonitorView.keepsOwnHistory(at: NSPoint(x: 220, y: 20), in: window),
+                      "a view inside the page is the page's")
+        XCTAssertFalse(MouseNavigationMonitorView.keepsOwnHistory(at: NSPoint(x: 100, y: 100), in: window))
+    }
+
     func testATabFollowsItsTaskIntoAndOutOfASplitView() throws {
         let store = readyStore()
         let a = UUID(), b = UUID(), c = UUID()

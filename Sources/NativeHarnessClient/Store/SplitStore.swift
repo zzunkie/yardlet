@@ -195,7 +195,16 @@ final class SplitStore {
     @ObservationIgnored private var removedSessionIDs: Set<UUID> = []
     /// Closed tabs, most recent last, for Reopen Closed Tab.
     @ObservationIgnored private var closedTabs: [WindowItem] = []
+    /// What the window showed before and after `selection`, most recent last, for Back and Forward:
+    /// the order things were shown in, not the sidebar's, as the Claude app's Go › Back and the Codex
+    /// app's `navigateBack` step through the pages they showed. Kept for this run only.
+    private var backItems: [WindowItem] = []
+    private var forwardItems: [WindowItem] = []
+    /// The selection the history last saw; a change from it is a visit.
+    @ObservationIgnored private var visitedSelection: WindowItem
     @ObservationIgnored private let now: () -> Date
+
+    static let historyLimit = 50
 
     /// How soon after the window was saved a launch reopens what it showed. The Claude app restores
     /// its page only when relaunched within five minutes (`stealth-relaunch`, `kVe=3e5`), as after an
@@ -211,7 +220,9 @@ final class SplitStore {
         // A launch long after the last save opens the home in the active tab's place; the other tabs,
         // the split views and the sidebar keep what they had.
         let isLater = snapshot.savedAt.map { now().timeIntervalSince($0) > Self.relaunchWindow } ?? false
-        self.selection = isLater ? .home : saved
+        let shown: WindowItem = isLater ? .home : saved
+        self.selection = shown
+        visitedSelection = shown
         tabs = snapshot.tabs ?? [saved]
         tabbedSelection = saved
         hasSavedSelection = snapshot.selection != nil
@@ -251,6 +262,8 @@ final class SplitStore {
     /// A window's last tab is not closed as a tab; closing it closes the window.
     var canCloseTab: Bool { tabs.count > 1 }
     var canReopenClosedTab: Bool { closedTabs.contains { resolved($0) != nil } }
+    var canGoBack: Bool { backItems.contains(where: isVisitable) }
+    var canGoForward: Bool { forwardItems.contains(where: isVisitable) }
 
     // MARK: - Launch handoff
 
@@ -266,6 +279,7 @@ final class SplitStore {
         }
         isReady = true
         reconcileTabs()
+        visitedSelection = selection
     }
 
     /// Restoration keeps a saved split authoritative. Without a saved window item the previously
@@ -429,6 +443,50 @@ final class SplitStore {
             tabbedSelection = target
             return changed()
         }
+    }
+
+    // MARK: - History
+
+    /// Back (⌘[, the mouse's back button): what the window showed before, shown as a sidebar row
+    /// shows it, in its tab or the active one. Items that are gone are passed over.
+    func goBack() {
+        guard let target = popVisitable(\.backItems) else { return }
+        forwardItems.append(selection)
+        show(visited: target)
+    }
+
+    /// Forward (⌘], the mouse's forward button): undoes a Back.
+    func goForward() {
+        guard let target = popVisitable(\.forwardItems) else { return }
+        backItems.append(selection)
+        show(visited: target)
+    }
+
+    private func popVisitable(_ list: ReferenceWritableKeyPath<SplitStore, [WindowItem]>) -> WindowItem? {
+        while let item = self[keyPath: list].popLast() {
+            if isVisitable(item), let target = resolved(item) { return target }
+        }
+        return nil
+    }
+
+    /// Shows an item from the history without recording it as a new visit.
+    private func show(visited target: WindowItem) {
+        visitedSelection = target
+        activate(target, fillsEmptyPane: false)
+    }
+
+    private func isVisitable(_ item: WindowItem) -> Bool {
+        resolved(item).map { $0 != selection } ?? false
+    }
+
+    /// A new selection is a visit: what was shown goes on the back list and the forward list ends,
+    /// as a browser's history does.
+    private func recordVisit() {
+        defer { visitedSelection = selection }
+        guard isReady, selection != visitedSelection else { return }
+        backItems.append(visitedSelection)
+        if backItems.count > Self.historyLimit { backItems.removeFirst() }
+        forwardItems.removeAll()
     }
 
     // MARK: - Pane commands
@@ -654,6 +712,7 @@ final class SplitStore {
     }
 
     private func changed() {
+        recordVisit()
         reconcileTabs()
         schedulePersist()
         publishFocusedSession()

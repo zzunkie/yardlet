@@ -177,6 +177,10 @@ section of `YardletCEFBridge.c` |
 
 - Mouse (click, drag, move, exit), wheel and trackpad (precise deltas and momentum phases carry straight through to page
   scrolling), pinch zoom.
+- The mouse's back and forward buttons (buttons 4 and 5) go back and forward in the tab's history when released over the
+  page, as the Codex app's browser page sends them, and do not reach the page: Chromium's off-screen mouse input knows
+  only left, middle and right. Over the page they are the page's, so the window's Back and Forward do not run; anywhere
+  else in the window they are the window's (`MouseNavigationMonitor`, `MouseHistoryNavigating`).
 - Keys: a full table from macOS virtual key codes to Windows key codes (`BrowserKeyCodes`, based on Chromium's
   `keyboard_code_conversion_mac.mm`): letters, digits and symbols, arrow keys, Home/End/PageUp/PageDown, Delete, F1 to
   F20, keypad, modifier keys (Shift/Control/Option/Command/ Caps Lock, left and right told apart), the Korean/English

@@ -21,7 +21,9 @@ extension BrowserAccessibilitySource {
     func accessibilityLabel(for view: BrowserHostView) -> String? { nil }
 }
 
-/// Keyboard shortcuts the panel handles itself rather than the page.
+/// Keyboard shortcuts the panel handles itself rather than the page, and the mouse's back and forward
+/// buttons, which go back and forward in the page's history as the Codex app's browser page sends
+/// them (`browser-sidebar-runtime-mouse-navigation`).
 enum BrowserPanelShortcut: Equatable {
     case find, focusAddress, reload, back, forward
     /// The task's tabs, as the Claude app's Browser pane: ⌘T, ⌘W, ⌘⇧T, ⌃Tab, ⌃⇧Tab, ⌘1…⌘9.
@@ -34,7 +36,7 @@ enum BrowserPanelShortcut: Equatable {
 /// off-screen text input client: key presses go out as raw keys, and the input method's marked and
 /// inserted text go out as composition commands.
 @MainActor
-final class BrowserHostView: NSView, @preconcurrency NSTextInputClient {
+final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHistoryNavigating {
     /// Sends a command for this view's tab. Nil until the tab exists.
     var tabID: BrowserTabID? {
         // Another tab's focused field is not this one's; the panel says the new tab's (`isPasswordFieldFocused`).
@@ -435,8 +437,19 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient {
     }
     override func rightMouseUp(with event: NSEvent) { sendMouse(.up, .right, event) }
     override func rightMouseDragged(with event: NSEvent) { sendMouse(.move, nil, event) }
-    override func otherMouseDown(with event: NSEvent) { sendMouse(.down, .middle, event) }
-    override func otherMouseUp(with event: NSEvent) { sendMouse(.up, .middle, event) }
+    /// Chromium's mouse input knows left, middle and right only; the back and forward buttons go to the
+    /// page's history on release instead of reaching the page as a middle click.
+    override func otherMouseDown(with event: NSEvent) {
+        guard MouseNavigationButton(event) == nil else { return }
+        sendMouse(.down, .middle, event)
+    }
+    override func otherMouseUp(with event: NSEvent) {
+        switch MouseNavigationButton(event) {
+        case .back?: onShortcut?(.back)
+        case .forward?: onShortcut?(.forward)
+        case nil: sendMouse(.up, .middle, event)
+        }
+    }
     override func otherMouseDragged(with event: NSEvent) { sendMouse(.move, nil, event) }
 
     /// Trackpad scrolling arrives with precise deltas through its phases and the momentum that
