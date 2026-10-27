@@ -36,6 +36,27 @@ enum RuntimeProcessEnvironment {
         return accountScoped(values.merging(overrides) { _, new in new })
     }
 
+    /// Where Yardlet looks for a program a GUI app's `PATH` does not have, as a person's shell
+    /// would find it: the package managers' own folders, Homebrew, nvm's Node versions newest
+    /// first, Docker Desktop, then `path` and the system. Harness runtimes and connector programs
+    /// are both looked for here.
+    static func searchDirectories(home: URL, path: String = ProcessInfo.processInfo.environment["PATH"] ?? "",
+                                  fileManager: FileManager = .default) -> [URL] {
+        var directories = [".local/bin", ".bun/bin", ".volta/bin", ".cargo/bin", ".deno/bin", ".npm-global/bin",
+                           "Library/pnpm"].map { home.appending(path: $0) }
+        directories += ["/opt/homebrew/bin", "/usr/local/bin"].map { URL(filePath: $0) }
+        let nvm = home.appending(path: ".nvm/versions/node", directoryHint: .isDirectory)
+        let versions = ((try? fileManager.contentsOfDirectory(atPath: nvm.path(percentEncoded: false))) ?? [])
+            .filter { $0.hasPrefix("v") }
+            .sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+        directories += versions.map { nvm.appending(path: "\($0)/bin") }
+        directories.append(URL(filePath: "/Applications/Docker.app/Contents/Resources/bin"))
+        directories += path.split(separator: ":").map { URL(filePath: String($0)) }
+        directories += ["/usr/bin", "/bin", "/usr/sbin", "/sbin"].map { URL(filePath: $0) }
+        var seen = Set<String>()
+        return directories.filter { seen.insert($0.standardizedFileURL.path(percentEncoded: false)).inserted }
+    }
+
     static func accountScoped(_ environment: [String: String]) -> [String: String] {
         guard environment["YARDLET_ACCOUNT_ENVIRONMENT"] == "isolated" else { return environment }
         var result = environment

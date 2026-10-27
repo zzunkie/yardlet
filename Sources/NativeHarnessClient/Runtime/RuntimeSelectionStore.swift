@@ -169,7 +169,8 @@ final class RuntimeSelectionStore {
 
     /// Where `harness` may be installed, in the order that breaks a tie between equal versions:
     /// installs the person manages before a desktop app's bundle (Codex), the Claude app's newest
-    /// version first (Claude Code).
+    /// version first (Claude Code). The installs the person manages are looked for where their
+    /// shell would find them, not only in Yardlet's own `PATH` (`installedPrograms(named:home:)`).
     nonisolated static func candidates(
         for harness: HarnessKind,
         home: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -177,11 +178,7 @@ final class RuntimeSelectionStore {
         if harness == .codex {
             return codexCandidates(home: home)
         } else if harness == .claudeCode {
-            return claudeDesktopCandidates(home: home) + [
-                home.appending(path: ".local/bin/claude"),
-                URL(filePath: "/opt/homebrew/bin/claude"),
-                URL(filePath: "/usr/local/bin/claude")
-            ] + pathCandidates(named: "claude")
+            return claudeDesktopCandidates(home: home) + installedPrograms(named: "claude", home: home)
         } else if harness == .museCode {
             // `muse` is a generic executable name. Auto-discover only Meta's
             // documented installer location; a custom binary can still be
@@ -190,10 +187,7 @@ final class RuntimeSelectionStore {
         } else if let descriptor = HarnessCatalog.descriptor(for: harness) {
             return descriptor.relativeExecutablePaths.map {
                 append(relativePath: $0, to: home)
-            } + [
-                URL(filePath: "/opt/homebrew/bin").appending(path: descriptor.executableName),
-                URL(filePath: "/usr/local/bin").appending(path: descriptor.executableName)
-            ] + pathCandidates(named: descriptor.executableName)
+            } + installedPrograms(named: descriptor.executableName, home: home)
         }
         return []
     }
@@ -241,11 +235,7 @@ final class RuntimeSelectionStore {
         home: URL,
         searchPath: String = ProcessInfo.processInfo.environment["PATH"] ?? ""
     ) -> [URL] {
-        [
-            home.appending(path: ".local/bin/codex"),
-            URL(filePath: "/opt/homebrew/bin/codex"),
-            URL(filePath: "/usr/local/bin/codex")
-        ] + pathCandidates(named: "codex", searchPath: searchPath)
+        installedPrograms(named: "codex", home: home, searchPath: searchPath)
             + RuntimeRelocation.chatGPTCodexLayouts(inAppAt: URL(filePath: "/Applications/ChatGPT.app"))
     }
 
@@ -261,13 +251,16 @@ final class RuntimeSelectionStore {
         return RuntimeRelocation.claudeDesktopLayouts(inVersionsRoot: versionsRoot, fileManager: fileManager)
     }
 
-    nonisolated private static func pathCandidates(
+    /// `executable` in each folder a person's own install may be in: a GUI launch's `PATH` has only
+    /// the system's folders, so the package managers' folders (nvm, Volta, bun, pnpm, …) and
+    /// Homebrew come first, then `searchPath` (`RuntimeProcessEnvironment.searchDirectories`).
+    nonisolated private static func installedPrograms(
         named executable: String,
+        home: URL,
         searchPath: String = ProcessInfo.processInfo.environment["PATH"] ?? ""
     ) -> [URL] {
-        searchPath
-            .split(separator: ":")
-            .map { URL(filePath: String($0)).appending(path: executable) }
+        RuntimeProcessEnvironment.searchDirectories(home: home, path: searchPath)
+            .map { $0.appending(path: executable) }
     }
 
     nonisolated private static func append(relativePath: String, to root: URL) -> URL {

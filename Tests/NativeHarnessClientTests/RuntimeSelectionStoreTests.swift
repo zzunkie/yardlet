@@ -197,24 +197,40 @@ final class RuntimeSelectionStoreTests: XCTestCase {
         XCTAssertNil(defaults.string(forKey: "runtime.codex.executablePath"))
     }
 
-    /// The order breaks a tie between equal versions (product document 13.100).
-    func testCodexCandidatesListUserManagedInstallsBeforeChatGPTBundle() {
-        let home = URL(filePath: "/Users/example")
+    /// The order breaks a tie between equal versions (product document 13.100). A GUI launch's
+    /// `PATH` has only the system's folders, so an install a package manager put elsewhere (npm
+    /// under nvm, Volta, pnpm) is looked for where the person's shell would find it.
+    func testCodexCandidatesListUserManagedInstallsBeforeChatGPTBundle() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appending(path: "nhc-codex-candidates-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let nvm = home.appending(path: ".nvm/versions/node", directoryHint: .isDirectory)
+        for version in ["v9.11.2", "v22.11.0"] {
+            try FileManager.default.createDirectory(at: nvm.appending(path: "\(version)/bin"), withIntermediateDirectories: true)
+        }
         let candidates = RuntimeSelectionStore.codexCandidates(
             home: home,
-            searchPath: "/custom/bin:/other/bin"
+            searchPath: "/custom/bin:/usr/bin"
         ).map { $0.path(percentEncoded: false) }
 
-        XCTAssertEqual(candidates, [
-            "/Users/example/.local/bin/codex",
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex",
-            "/custom/bin/codex",
-            "/other/bin/codex",
+        let expected = [
+            home.appending(path: ".local/bin/codex"),
+            home.appending(path: ".volta/bin/codex"),
+            home.appending(path: "Library/pnpm/codex"),
+            URL(filePath: "/opt/homebrew/bin/codex"),
+            URL(filePath: "/usr/local/bin/codex"),
+            // nvm's newest Node first.
+            nvm.appending(path: "v22.11.0/bin/codex"),
+            nvm.appending(path: "v9.11.2/bin/codex"),
+            URL(filePath: "/custom/bin/codex"),
+            URL(filePath: "/usr/bin/codex"),
             // ChatGPT moved its bundled runtime in September 2026; the older layout stays last.
-            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
-            "/Applications/ChatGPT.app/Contents/Resources/codex"
-        ])
+            URL(filePath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"),
+            URL(filePath: "/Applications/ChatGPT.app/Contents/Resources/codex")
+        ].map { $0.path(percentEncoded: false) }
+        XCTAssertEqual(candidates.filter(expected.contains), expected)
+        XCTAssertEqual(Array(candidates.suffix(2)), Array(expected.suffix(2)))
+        XCTAssertEqual(candidates.filter { $0 == "/usr/bin/codex" }.count, 1, "a folder in PATH and in the list is looked in once")
     }
 
     func testClaudeDesktopCandidatesPreferNewestExecutableVersion() throws {

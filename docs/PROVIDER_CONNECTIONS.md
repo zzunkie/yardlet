@@ -100,7 +100,10 @@ Existing tasks are not moved to another account folder, and native conversations
 
 Each harness has one runtime that reads its accounts and starts its new tasks (2026-10-27). Unless the person chose
 one, it is the newest version among the installs on this Mac; a runtime the person chose is kept, and Settings ›
-CLI Updates offers a newer install found elsewhere. The same account can see different models depending on the
+CLI Updates offers a newer install found elsewhere. Installs are looked for in the desktop apps' bundles and where the
+person's shell would find them, not only in Yardlet's own `PATH`, which has only the system's folders when Yardlet
+opens from the Dock: `~/.local/bin`, the package managers' folders (bun, Volta, Cargo, Deno, `~/.npm-global/bin`,
+pnpm, each Node version of nvm), Homebrew, `/usr/local/bin`, `PATH` and the system. The same account can see different models depending on the
 runtime's version: the App Server's `model/list` answered one user's older Codex without the GPT-6.1 models. Creating a
 task records its runtime on the task only; it does not become the harness's choice. Choosing a runtime with Choose…
 under Runtime and connection details checks the accounts again with `restart`.

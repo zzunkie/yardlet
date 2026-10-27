@@ -146,26 +146,8 @@ enum ConnectorPrograms {
         return plain ? argument : "'" + argument.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    /// Where Yardlet looks for a program a GUI app's `PATH` does not have: the package managers'
-    /// own folders, Homebrew, nvm's newest Node, Docker Desktop, then the system.
-    static func searchDirectories(home: URL, path: String = ProcessInfo.processInfo.environment["PATH"] ?? "",
-                                  fileManager: FileManager = .default) -> [URL] {
-        var directories = [".local/bin", ".bun/bin", ".volta/bin", ".cargo/bin", ".deno/bin"].map { home.appending(path: $0) }
-        directories += ["/opt/homebrew/bin", "/usr/local/bin"].map { URL(filePath: $0) }
-        let nvm = home.appending(path: ".nvm/versions/node", directoryHint: .isDirectory)
-        let versions = ((try? fileManager.contentsOfDirectory(atPath: nvm.path(percentEncoded: false))) ?? [])
-            .filter { $0.hasPrefix("v") }
-            .sorted { $0.compare($1, options: .numeric) == .orderedDescending }
-        directories += versions.map { nvm.appending(path: "\($0)/bin") }
-        directories.append(URL(filePath: "/Applications/Docker.app/Contents/Resources/bin"))
-        directories += path.split(separator: ":").map { URL(filePath: String($0)) }
-        directories += ["/usr/bin", "/bin", "/usr/sbin", "/sbin"].map { URL(filePath: $0) }
-        var seen = Set<String>()
-        return directories.filter { seen.insert($0.standardizedFileURL.path(percentEncoded: false)).inserted }
-    }
-
     /// The program's executable on this Mac: a path as given, or a name found in the search
-    /// directories; nil when there is none.
+    /// directories (`RuntimeProcessEnvironment.searchDirectories`); nil when there is none.
     static func locate(_ program: String, home: URL, fileManager: FileManager = .default) -> URL? {
         if program.hasPrefix("/") {
             return fileManager.isExecutableFile(atPath: program) ? URL(filePath: program) : nil
@@ -175,7 +157,7 @@ enum ConnectorPrograms {
             return fileManager.isExecutableFile(atPath: path) ? URL(filePath: path) : nil
         }
         guard !program.contains("/"), !program.isEmpty else { return nil }
-        return searchDirectories(home: home, fileManager: fileManager).lazy
+        return RuntimeProcessEnvironment.searchDirectories(home: home, fileManager: fileManager).lazy
             .map { $0.appending(path: program) }
             .first { fileManager.isExecutableFile(atPath: $0.path(percentEncoded: false)) }
     }
