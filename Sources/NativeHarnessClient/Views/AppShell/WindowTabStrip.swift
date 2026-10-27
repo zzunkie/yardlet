@@ -74,7 +74,8 @@ struct WindowTabStrip<SelectedTitle: View>: View {
             .onDrop(of: [.yardletTaskReference], delegate: TaskDropOnStrip(
                 strip: { stripFrame }, tabs: { orderedFrames }, index: $systemDropIndex,
                 onDrop: { id, index in onOpenTask(id, tabs.indices.contains(index) ? tabs[index].id : nil) }))
-            ParityIconButton(systemName: "plus", help: L10n.string("New Tab"), action: onNewTab)
+            ParityIconButton(systemName: "plus", help: L10n.string("New Tab"), shortcut: TabCommandShortcut.newTab,
+                             action: onNewTab)
         }
         // The first frames count too: a title bar drawn anew for another item registers its bar at once.
         .onChange(of: stripFrame, initial: true) { register() }
@@ -244,7 +245,8 @@ private struct WindowTabButton<SelectedTitle: View>: View {
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()
-                .help(L10n.string("Close tab"))
+                // ⌘W closes the shown tab only.
+                .help(ShortcutHelp.text(L10n.string("Close tab"), isSelected ? TabCommandShortcut.closeTab : nil))
                 .accessibilityLabel(L10n.format("Close tab %@", tab.title))
                 .padding(.trailing, 5)
             }

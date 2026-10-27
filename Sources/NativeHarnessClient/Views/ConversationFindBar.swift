@@ -78,9 +78,11 @@ struct ConversationFindBar: View {
 
             if !find.normalizedQuery.isEmpty {
                 HStack(spacing: 6) {
-                    iconButton("chevron.up", label: L10n.string("Previous result"), action: find.previous)
+                    iconButton("chevron.up", label: L10n.string("Previous result"),
+                               shortcut: ConversationFindShortcut.previous, action: find.previous)
                         .disabled(!find.hasMatches)
-                    iconButton("chevron.down", label: L10n.string("Next result"), action: find.next)
+                    iconButton("chevron.down", label: L10n.string("Next result"),
+                               shortcut: ConversationFindShortcut.next, action: find.next)
                         .disabled(!find.hasMatches)
                     Spacer(minLength: 8)
                     Text(statusText)
@@ -139,7 +141,8 @@ struct ConversationFindBar: View {
         if !find.close() { keyboardFocus?.move(to: .chat) }
     }
 
-    private func iconButton(_ systemName: String, label: String, action: @escaping () -> Void) -> some View {
+    private func iconButton(_ systemName: String, label: String, shortcut: KeyboardShortcut? = nil,
+                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 11, weight: .semibold))
@@ -150,7 +153,7 @@ struct ConversationFindBar: View {
         .foregroundStyle(.secondary)
         .parityPointer()
         .accessibilityLabel(label)
-        .help(label)
+        .help(ShortcutHelp.text(label, shortcut))
     }
 }
 

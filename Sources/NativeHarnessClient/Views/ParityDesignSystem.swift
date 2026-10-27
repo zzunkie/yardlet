@@ -248,6 +248,8 @@ struct ParityIconButton: View {
     let systemName: String
     let help: String
     var isProminent = false
+    /// The menu bar's key for the same action, which the tooltip shows after `help` (`ShortcutHelp`).
+    var shortcut: KeyboardShortcut? = nil
     let action: () -> Void
 
     @State private var isHovering = false
@@ -275,7 +277,7 @@ struct ParityIconButton: View {
         .buttonStyle(.borderless)
         .parityPointer()
         .accessibilityLabel(help)
-        .help(help)
+        .help(ShortcutHelp.text(help, shortcut))
         .onHover { isHovering = $0 }
         .animation(ParityMotion.easeOut(reduceMotion: reduceMotion, duration: 0.1), value: isHovering)
     }

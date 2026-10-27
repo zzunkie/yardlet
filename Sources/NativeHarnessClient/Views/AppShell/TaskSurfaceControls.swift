@@ -114,7 +114,7 @@ struct TaskSurfaceControls: View {
         .accessibilityAddTraits(isActive(surface) ? .isSelected : [])
         .accessibilityValue(isActive(surface) ? L10n.string("Selected") : "")
         .accessibilityHint(L10n.string("Show or hide this task panel"))
-        .help(controlTitle(surface))
+        .help(ShortcutHelp.text(controlTitle(surface), menuShortcut(surface)))
         .onMoveCommand { direction in
             if direction == .left { move(from: surface, by: -1) }
             if direction == .right { move(from: surface, by: 1) }
@@ -161,6 +161,16 @@ struct TaskSurfaceControls: View {
     private func act(_ surface: TaskSurface) {
         onActivate()
         toggle(surface)
+    }
+
+    /// The View menu's key for what the button does: the rail, the side panel or the terminal.
+    private func menuShortcut(_ surface: TaskSurface) -> KeyboardShortcut? {
+        switch surface {
+        case .diff: TaskCommandShortcut.toggleSessionRail
+        case .browser: TaskCommandShortcut.toggleSidePanel
+        case .terminal: TaskCommandShortcut.toggleTerminal
+        case .chat: nil
+        }
     }
 
     private func controlTitle(_ surface: TaskSurface) -> String {

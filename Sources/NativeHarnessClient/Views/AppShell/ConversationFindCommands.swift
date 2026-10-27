@@ -16,6 +16,12 @@ extension FocusedValues {
 /// The Codex app's find shortcuts: `⌘F` opens the find bar (from the composer too), `⌘G` and `⇧⌘G`
 /// move between its results while it is open. They sit in the Edit menu, where a Mac app keeps Find.
 /// A focused browser page keeps its own `⌘F`, which it handles before the menu.
+enum ConversationFindShortcut {
+    static let find = KeyboardShortcut("f", modifiers: .command)
+    static let next = KeyboardShortcut("g", modifiers: .command)
+    static let previous = KeyboardShortcut("g", modifiers: [.command, .shift])
+}
+
 struct YardletConversationFindCommands: Commands {
     @FocusedValue(\.yardletConversationFind) private var find
 
@@ -23,13 +29,13 @@ struct YardletConversationFindCommands: Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
             Button(L10n.string("Find")) { open() }
-                .keyboardShortcut("f", modifiers: .command)
+                .keyboardShortcut(ConversationFindShortcut.find)
                 .disabled(find == nil)
             Button(L10n.string("Next result")) { find?.next() }
-                .keyboardShortcut("g", modifiers: .command)
+                .keyboardShortcut(ConversationFindShortcut.next)
                 .disabled(find == nil)
             Button(L10n.string("Previous result")) { find?.previous() }
-                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .keyboardShortcut(ConversationFindShortcut.previous)
                 .disabled(find == nil)
         }
     }

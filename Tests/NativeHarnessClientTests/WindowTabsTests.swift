@@ -247,5 +247,10 @@ final class WindowTabsTests: XCTestCase {
         // A keyboard's ⇧Tab is the back-tab character.
         XCTAssertEqual(TabCommandShortcut.previousTab.key.character, "\u{19}")
         XCTAssertEqual(TabCommandShortcut.nextTab.key, .tab)
+        // Tooltips show the menu's own key, written as the menu writes it.
+        XCTAssertEqual(ShortcutHelp.text("Hide sidebar", TaskCommandShortcut.toggleSidebar), "Hide sidebar (⇧⌘S)")
+        XCTAssertEqual(TaskCommandShortcut.toggleSidePanel.displayText, "⌥⌘B")
+        XCTAssertEqual(TabCommandShortcut.previousTab.displayText, "⌃⇧⇥")
+        XCTAssertEqual(ShortcutHelp.text("Close tab", nil), "Close tab")
     }
 }

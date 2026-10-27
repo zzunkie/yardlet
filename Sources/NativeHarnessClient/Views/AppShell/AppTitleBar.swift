@@ -21,6 +21,7 @@ struct TitleBarSidebarPart: View {
             ParityIconButton(
                 systemName: "sidebar.left",
                 help: isSidebarVisible ? L10n.string("Hide sidebar") : L10n.string("Show sidebar"),
+                shortcut: TaskCommandShortcut.toggleSidebar,
                 action: onToggleSidebar
             )
             WindowDragRegion().frame(minWidth: 4, maxWidth: .infinity)
@@ -31,6 +32,7 @@ struct TitleBarSidebarPart: View {
             ParityIconButton(
                 systemName: "square.and.pencil",
                 help: L10n.string("New task"),
+                shortcut: TaskCommandShortcut.newTask,
                 action: onNewTask
             )
         }
@@ -267,7 +269,7 @@ struct ActivityViewButton: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
-        .help(toggle.help)
+        .help(ShortcutHelp.text(toggle.help, TaskCommandShortcut.toggleActivityView))
         .accessibilityLabel(toggle.accessibilityLabel)
         .accessibilityHint(L10n.string("See chats that are unread, active, or awaiting a response"))
         .accessibilityAddTraits(toggle.isOn ? .isSelected : [])
