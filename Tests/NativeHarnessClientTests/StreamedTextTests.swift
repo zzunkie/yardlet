@@ -3,10 +3,11 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// A fragment that changes only the words of the message a running turn writes goes to that message
-/// alone (`ConversationTurn.streamedTextChange(from:)`, `ConversationStreamedText`): the message reads
-/// its latest words, what the person opened in the turn stays open, and anything else that changes
-/// with it, or the message finishing, draws the turn whole again.
+/// A fragment that changes only the words of the message a running turn writes, a transcript's or a
+/// Codex thread's, goes to that message alone (`ConversationTurn.streamedTextChange(from:)`,
+/// `ConversationStreamedText`): the message reads its latest words, what the person opened in the
+/// turn stays open, and anything else that changes with it, or the message finishing, draws the turn
+/// whole again.
 @MainActor
 final class StreamedTextTests: XCTestCase {
     private let user = TranscriptEntry(content: .user(text: "Fix the failing tests"))
@@ -38,7 +39,7 @@ final class StreamedTextTests: XCTestCase {
 
         let grown = try turn([user, build, test, writing("Checking the build")])
         XCTAssertEqual(grown.streamedTextChange(from: before)?.itemID, itemID)
-        XCTAssertEqual(grown.streamedTextChange(from: before)?.text, "Checking the build")
+        XCTAssertEqual(grown.streamedTextChange(from: before)?.message.text, "Checking the build")
 
         // Words to none or none to words decide whether the provider began to answer, and so the fold.
         let blank = try turn([user, build, test, writing("  \n")])
@@ -58,6 +59,34 @@ final class StreamedTextTests: XCTestCase {
         XCTAssertNil(try turn([user, build, failed, writing("Checking the build")]).streamedTextChange(from: before))
         // The same turn is no change at all.
         XCTAssertNil(before.streamedTextChange(from: before))
+
+        // A Codex message the same way, with what its details copy.
+        let codexBefore = try codexTurn("Checking")
+        let change = try XCTUnwrap(try codexTurn("Checking the build").streamedTextChange(from: codexBefore))
+        XCTAssertEqual(change.message.text, "Checking the build")
+        XCTAssertEqual(change.message.copyDetails?.contains("Checking the build"), true, "Its details copy its latest words")
+        // Working notes becoming the answer, and the message finishing, draw the turn whole.
+        XCTAssertNil(try codexTurn("Checking the build", phase: .commentary).streamedTextChange(from: codexBefore))
+        XCTAssertNil(try codexTurn("Checking the build", lifecycle: .completed).streamedTextChange(from: codexBefore))
+    }
+
+    /// A running Codex turn of three commands and the message it writes after them.
+    private func codexTurn(_ text: String, phase: CodexMessagePhase = .finalAnswer,
+                           lifecycle: CodexItemLifecycle = .inProgress) throws -> ConversationTurn {
+        var state = LongConversationFixture.codex(threadID: "thread-words", turns: [
+            LongConversationFixture.runningCodexTurn(0, request: "Fix the failing tests", calls: 3, paragraphs: 1)
+        ])
+        let index = state.thread!.turns[0].items.count - 1
+        guard case var .agentMessage(message) = state.thread!.turns[0].items[index].content else {
+            throw XCTSkip("The fixture's last item is not a message")
+        }
+        message.text = text
+        message.phase = phase
+        state.thread!.turns[0].items[index].content = .agentMessage(message)
+        state.thread!.turns[0].items[index].lifecycle = lifecycle
+        return try XCTUnwrap(CodexConversationProjection.presentation(
+            state, workspaceURL: LongConversationFixture.workspace, historySelection: nil
+        ).turns.last)
     }
 
     // MARK: - Drawn

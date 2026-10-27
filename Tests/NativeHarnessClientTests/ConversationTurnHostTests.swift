@@ -5,9 +5,9 @@ import XCTest
 @testable import NativeHarnessClient
 
 /// Each turn draws in a hosting view of its own (`ConversationTurnHost`): a streamed fragment of words
-/// goes to the running turn's message alone and leaves every turn's graph as it was
-/// (`ConversationStreamedText`), a conversation shown again finds its turns kept with its task, and a
-/// change in how the conversation looks reaches every turn.
+/// goes to the running turn's message alone, a transcript's or a Codex thread's, and leaves every
+/// turn's graph as it was (`ConversationStreamedText`), a conversation shown again finds its turns
+/// kept with its task, and a change in how the conversation looks reaches every turn.
 @MainActor
 final class ConversationTurnHostTests: XCTestCase {
     @Observable
@@ -67,6 +67,63 @@ final class ConversationTurnHostTests: XCTestCase {
         XCTAssertEqual(ViewBodyCensus[.conversationTurnHosting], 0)
         let texts = TranscriptProseRenderingTests.proseTextViews(in: host.hosting)
         XCTAssertTrue(texts.contains { $0.string == text }, "The running message reads its latest words")
+    }
+
+    @Observable
+    final class CodexFeed {
+        var state: CodexTaskState
+        init(_ state: CodexTaskState) { self.state = state }
+    }
+
+    private struct CodexHost: View {
+        let feed: CodexFeed
+        let renderState: ConversationRenderState
+        var body: some View {
+            TaskConversationView(harness: .codex, workspaceURL: LongConversationFixture.workspace, entries: [],
+                                 sessionStatus: .running, codexTaskState: feed.state, renderState: renderState)
+                .frame(width: 900, height: 700)
+        }
+    }
+
+    /// A Codex answer written after many calls: its fragments go to the message alone, as a
+    /// transcript's do, and a call the turn adds after it draws the turn whole.
+    func testACodexFragmentGoesToTheRunningMessageAndANewCallDrawsTheTurn() {
+        let running = LongConversationFixture.runningCodexTurn(1, request: "Write up what changed", calls: 40, paragraphs: 1)
+        var state = LongConversationFixture.codex(threadID: "thread-host", turns: [LongConversationFixture.codexTurn(0), running])
+        let turn = 1, answer = state.thread!.turns[turn].items.count - 1
+        // The answer is being written, as the App Server's first delta leaves it.
+        state.thread!.turns[turn].items[answer].lifecycle = .inProgress
+        let feed = CodexFeed(state)
+        let host = WindowlessRender.Host(CodexHost(feed: feed, renderState: ConversationRenderState()),
+                                         size: NSSize(width: 900, height: 700), appearance: .light)
+        host.settle(passes: 20)
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        addTeardownBlock { @MainActor in
+            ViewBodyCensus.isEnabled = false
+            ViewBodyCensus.reset()
+            host.close()
+        }
+        var text = "Working"
+        for fragment in 0..<20 {
+            text += " word\(fragment)"
+            guard case var .agentMessage(message) = feed.state.thread!.turns[turn].items[answer].content else {
+                return XCTFail("The answer is not a message")
+            }
+            message.text = text
+            feed.state.thread!.turns[turn].items[answer].content = .agentMessage(message)
+            host.settle(passes: 1, interval: 0.005)
+        }
+        XCTAssertEqual(ViewBodyCensus[.conversationTurn], 0, "A fragment of words drew a Codex turn whole")
+        let texts = TranscriptProseRenderingTests.proseTextViews(in: host.hosting)
+        XCTAssertTrue(texts.contains { $0.string == text }, "The running message reads its latest words")
+
+        feed.state.thread!.turns[turn].items.append(CodexTaskDecoder().item(from: .object([
+            "id": .string("command-after"), "type": .string("commandExecution"), "command": .string("swift build"),
+            "cwd": .string(LongConversationFixture.workspace.path), "status": .string("inProgress")
+        ]), fallbackID: "command-after", lifecycle: .inProgress))
+        host.settle(passes: 6)
+        XCTAssertEqual(ViewBodyCensus[.conversationTurn], 1, "A new call drew no turn, or more than its own")
     }
 
     func testAConversationShownAgainFindsItsTurnsKept() {

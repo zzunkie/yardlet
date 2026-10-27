@@ -95,7 +95,7 @@ final class ConversationTurnHosting {
         if let shown, look == shownLook, shown.offers == host.offers, shown.renderState === host.renderState,
            let change = host.turn.streamedTextChange(from: shown.turn) {
             self.shown = host
-            streamedText.set(change.text, for: change.itemID)
+            streamedText.set(change.message, for: change.itemID)
             heights = [:]
             return
         }
@@ -142,16 +142,22 @@ final class ConversationTurnHosting {
 @MainActor
 @Observable
 final class ConversationStreamedText {
-    private var texts: [String: String] = [:]
+    /// A message's words so far, and what "Copy item details" copies of it with them.
+    struct Message: Equatable {
+        var text: String
+        var copyDetails: String?
+    }
 
-    func text(for itemID: String) -> String? { texts[itemID] }
+    private var messages: [String: Message] = [:]
 
-    func set(_ text: String, for itemID: String) {
-        if texts[itemID] != text { texts[itemID] = text }
+    func message(for itemID: String) -> Message? { messages[itemID] }
+
+    func set(_ message: Message, for itemID: String) {
+        if messages[itemID] != message { messages[itemID] = message }
     }
 
     func clear() {
-        if !texts.isEmpty { texts = [:] }
+        if !messages.isEmpty { messages = [:] }
     }
 }
 
@@ -169,11 +175,13 @@ extension EnvironmentValues {
 
 extension ConversationTurn {
     /// The message whose text is all that changed from `previous`, and its text now: the turn's last
-    /// answer or last item of work, streaming before and after, from a transcript entry, with words
-    /// before and after (so whether it answers, and so the fold, stays as it was). Put back to its
-    /// earlier text, the message and the whole turn must equal `previous`; anything else that changed
-    /// with it, in the message or elsewhere in the turn, draws the turn whole.
-    func streamedTextChange(from previous: ConversationTurn) -> (itemID: String, text: String)? {
+    /// answer or last item of work, streaming before and after, from a transcript entry or a Codex
+    /// agent message, with words before and after (so whether it answers, and so the fold, stays as it
+    /// was). Put back to its earlier text, the message and the whole turn must equal `previous`;
+    /// anything else that changed with it, in the message or elsewhere in the turn, draws the turn
+    /// whole.
+    func streamedTextChange(from previous: ConversationTurn)
+        -> (itemID: String, message: ConversationStreamedText.Message)? {
         guard id == previous.id, work.count == previous.work.count, answers.count == previous.answers.count
         else { return nil }
         var restored = self
@@ -191,32 +199,51 @@ extension ConversationTurn {
         guard new.id == old.id, let text = Self.streamingText(of: new), let earlierText = Self.streamingText(of: old),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !earlierText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              Self.item(new, withStreamingText: earlierText) == old, restored == previous
+              Self.item(new, withTextOf: old) == old, restored == previous
         else { return nil }
-        return (new.id, text)
+        return (new.id, ConversationStreamedText.Message(text: text, copyDetails: new.copyDetails))
     }
 
-    /// The text of a message being written that a transcript entry holds.
+    /// The text of a message being written: a transcript entry's, or a Codex agent message's as the
+    /// conversation shows it.
     private static func streamingText(of item: ConversationItem) -> String? {
-        guard case let .transcript(entry) = item.source, case let .assistant(entryText, true) = entry.content
-        else { return nil }
+        let text: String
         switch item.kind {
-        case let .answer(text, true), let .commentary(text, true):
-            return text == entryText ? text : nil
-        default:
-            return nil
+        case let .answer(words, true), let .commentary(words, true): text = words
+        default: return nil
         }
+        switch item.source {
+        case let .transcript(entry):
+            guard case let .assistant(entryText, true) = entry.content, entryText == text else { return nil }
+        case let .codex(codexItem, _):
+            guard case .agentMessage = codexItem.content else { return nil }
+        }
+        return text
     }
 
-    private static func item(_ item: ConversationItem, withStreamingText text: String) -> ConversationItem {
-        guard case var .transcript(entry) = item.source else { return item }
+    /// `item` with the text `earlier`, the same message before, had: the text shown, its record's,
+    /// and for Codex what its details copy, which are made from the record.
+    private static func item(_ item: ConversationItem, withTextOf earlier: ConversationItem) -> ConversationItem {
+        guard let text = streamingText(of: earlier) else { return item }
         var item = item
-        entry.content = .assistant(text: text, isStreaming: true)
-        item.source = .transcript(entry)
         switch item.kind {
         case .answer: item.kind = .answer(text: text, isStreaming: true)
         case .commentary: item.kind = .commentary(text: text, isStreaming: true)
         default: break
+        }
+        switch (item.source, earlier.source) {
+        case (.transcript(var entry), .transcript):
+            entry.content = .assistant(text: text, isStreaming: true)
+            item.source = .transcript(entry)
+        case (.codex(var codexItem, let turnID), .codex(let earlierItem, _)):
+            guard case var .agentMessage(message) = codexItem.content,
+                  case let .agentMessage(earlierMessage) = earlierItem.content else { break }
+            message.text = earlierMessage.text
+            codexItem.content = .agentMessage(message)
+            item.source = .codex(codexItem, turnID: turnID)
+            item.copyDetails = earlier.copyDetails
+        default:
+            break
         }
         return item
     }

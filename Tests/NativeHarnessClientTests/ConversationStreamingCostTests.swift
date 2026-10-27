@@ -96,6 +96,83 @@ final class ConversationStreamingCostTests: XCTestCase {
     }
 
     @Observable
+    final class CodexFeed {
+        var state: CodexTaskState
+        init(_ state: CodexTaskState) { self.state = state }
+    }
+
+    private struct CodexHost: View {
+        let feed: CodexFeed
+        var body: some View {
+            TaskConversationView(harness: .codex, workspaceURL: LongConversationFixture.workspace, entries: [],
+                                 sessionStatus: .running, codexTaskState: feed.state)
+                .frame(width: 900, height: 700)
+        }
+    }
+
+    /// A Codex answer streaming at the end of a turn of 3 and of 72 calls, under four finished turns
+    /// (129 items in all with 72): what a fragment costs the main thread, and how many turns it drew
+    /// whole.
+    func testBenchmarkACodexFragmentInATurnOfManyCalls() throws {
+        guard ProcessInfo.processInfo.environment["NHC_PERF_BENCH"] == "1" else {
+            throw XCTSkip("Set NHC_PERF_BENCH=1 to run the streaming cost benchmark")
+        }
+        var costs: [(calls: Int, cost: Cost)] = []
+        for round in 0..<3 {
+            for calls in [3, 72] {
+                let cost = measureCodex(calls: calls)
+                if round > 0 { costs.append((calls, cost)) }
+            }
+        }
+        for (calls, cost) in costs {
+            print(String(format: "[codex-streaming-cost] %d calls: %.2f ms a fragment (layout %.2f ms), %d layers, %d turns drawn",
+                         calls, cost.perFragment * 1000, cost.layoutPerFragment * 1000, cost.layers, cost.turnsDrawn))
+        }
+    }
+
+    private func measureCodex(calls: Int) -> Cost {
+        let finished = (0..<4).map { LongConversationFixture.codexTurn($0) }
+        let running = LongConversationFixture.runningCodexTurn(4, request: "Write up what changed", calls: calls, paragraphs: 1)
+        var state = LongConversationFixture.codex(threadID: "thread-cost", turns: finished + [running])
+        let turn = state.thread!.turns.count - 1, item = state.thread!.turns[turn].items.count - 1
+        // The answer is being written, as the App Server's first delta leaves it.
+        state.thread!.turns[turn].items[item].lifecycle = .inProgress
+        let feed = CodexFeed(state)
+        let host = WindowlessRender.Host(CodexHost(feed: feed), size: NSSize(width: 900, height: 700), appearance: .light)
+        defer { host.close() }
+        host.settle(passes: 20)
+
+        var text = "## Summary\n\nWorking"
+        func publish(_ fragment: Int) {
+            text += fragment.isMultiple(of: 25) ? "\n\n- point \(fragment) " : " word\(fragment)"
+            guard case var .agentMessage(message) = feed.state.thread!.turns[turn].items[item].content else { return }
+            message.text = text
+            feed.state.thread!.turns[turn].items[item].content = .agentMessage(message)
+        }
+        for fragment in 0..<20 {
+            publish(fragment)
+            host.hosting.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date())
+        }
+        let fragments = 80
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        defer { ViewBodyCensus.isEnabled = false }
+        var layout = 0.0
+        let start = Self.mainThreadCPU()
+        for fragment in 20..<(20 + fragments) {
+            publish(fragment)
+            let layoutStart = Self.mainThreadCPU()
+            host.hosting.layoutSubtreeIfNeeded()
+            layout += Self.mainThreadCPU() - layoutStart
+            RunLoop.main.run(until: Date())
+        }
+        let perFragment = (Self.mainThreadCPU() - start) / Double(fragments)
+        return Cost(finishedTurns: 4, perFragment: perFragment, layoutPerFragment: layout / Double(fragments),
+                    layers: Self.layerCount(host.hosting.layer), turnsDrawn: ViewBodyCensus[.conversationTurn])
+    }
+
+    @Observable
     final class Shown {
         var isShown = true
     }

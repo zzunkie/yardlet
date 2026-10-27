@@ -366,10 +366,14 @@ struct ConversationAgentMessage: View {
     private var dialect: TranscriptMarkdownDialect { TranscriptMarkdownDialect(messagesOf: harness) }
 
     /// The words so far: a message being written takes the fragments its turn streamed since the
-    /// turn was last drawn whole (`ConversationStreamedText`).
-    private var shownText: String {
-        isStreaming ? streamedText?.text(for: itemID) ?? text : text
+    /// turn was last drawn whole (`ConversationStreamedText`), and its details copy them.
+    private var streamed: ConversationStreamedText.Message? {
+        isStreaming ? streamedText?.message(for: itemID) : nil
     }
+
+    private var shownText: String { streamed?.text ?? text }
+
+    private var shownCopyDetails: String? { streamed.map(\.copyDetails) ?? copyDetails }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -384,7 +388,7 @@ struct ConversationAgentMessage: View {
                 TranscriptMarkdownText(text: shownText, characterLimit: ConversationLayout.messageCharacterLimit,
                                        dialect: dialect)
                     .environment(\.conversationFindSlot, find?.slot(for: .unit(itemID)))
-                    .environment(\.transcriptCopyDetails, copyDetails)
+                    .environment(\.transcriptCopyDetails, shownCopyDetails)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -402,7 +406,7 @@ struct ConversationAgentMessage: View {
         .modifier(RevealsActionsOnHover())
         .padding(.vertical, 2)
         .contextMenu {
-            if let copyDetails {
+            if let copyDetails = shownCopyDetails {
                 Button(L10n.string("Copy item details")) { TranscriptClipboard.copy(copyDetails) }
             }
         }
