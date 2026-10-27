@@ -44,6 +44,12 @@ struct SidebarResizeDivider: View {
                                 onCommit()
                             }
                     )
+                    // A double click returns the sidebar to its standard width, as the Codex and
+                    // Claude apps' sidebar lines return theirs to their default.
+                    .simultaneousGesture(TapGesture(count: 2).onEnded {
+                        onResize(SidebarWidth.standard)
+                        onCommit()
+                    })
             }
             .onDisappear {
                 if isHovering { NSCursor.pop() }

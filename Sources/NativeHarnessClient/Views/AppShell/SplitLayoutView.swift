@@ -122,8 +122,9 @@ private struct SplitBranchView: View {
                         dragStart = nil
                     }
             )
-            // A double click gives the two panes beside the line equal room, as a split view's divider
-            // does in Xcode and VS Code; the side panel's line returns to its default width the same way.
+            // A double click gives the two panes beside the line equal room, as the Claude app's line
+            // between tiles and the Codex app's between two content panes do; the side panel's, the
+            // terminal's and the sidebar's lines return to their default size the same way.
             .simultaneousGesture(TapGesture(count: 2).onEnded {
                 guard fractions.indices.contains(index + 1) else { return }
                 let even = (fractions[index] + fractions[index + 1]) / 2

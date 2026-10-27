@@ -330,6 +330,19 @@ final class WindowStructureQATests: XCTestCase {
                 let restored = Self.size.height - (handle(L10n.string("Resize terminal"), in: host)?.frame.maxY ?? 0)
                 XCTAssertEqual(restored, 280, accuracy: 1)
                 notes.append("Terminal handle double-clicked → \(Int(restored)) (default)")
+
+                // The sidebar's line: a drag widens the sidebar, a double click returns it to its standard width.
+                // The line's middle is the sidebar's width; its frame is the wider area that takes the drag.
+                let sidebarLine = try XCTUnwrap(handle(L10n.string("Resize sidebar"), in: host))
+                drag(sidebarLine, by: CGSize(width: 80, height: 0), in: host)
+                let widened = handle(L10n.string("Resize sidebar"), in: host)?.frame.midX ?? 0
+                XCTAssertEqual(widened, SidebarWidth.standard + 80, accuracy: 1)
+                if let line = handle(L10n.string("Resize sidebar"), in: host) { doubleClick(line, in: host) }
+                let standard = handle(L10n.string("Resize sidebar"), in: host)?.frame.midX ?? 0
+                XCTAssertEqual(standard, SidebarWidth.standard, accuracy: 1, "a double click returns the sidebar to its standard width")
+                XCTAssertEqual(UserDefaults.yardlet.object(forKey: SidebarWidth.defaultsKey) as? Double, Double(SidebarWidth.standard))
+                notes.append("Sidebar line dragged 80 right → width \(Int(widened)), double-clicked → \(Int(standard)) (standard)")
+                UserDefaults.yardlet.removeObject(forKey: SidebarWidth.defaultsKey)
                 describe("One task, side panel and terminal open", titleBarControls(in: host), width: Self.size.width, notes: notes)
             }
             model.taskWorkspaces.state(for: fixture.running.id).setPanels(.init())
@@ -380,6 +393,10 @@ final class WindowStructureQATests: XCTestCase {
                 let moved = (leftShare() - before) * Double(Self.size.width - 241 - SplitLayoutMetrics.handleThickness)
                 XCTAssertEqual(moved, 100, accuracy: 2, "the pane boundary moves as far as the pointer")
                 report.append("- Check: handle between panes dragged 100 right → boundary moved \(Int(moved.rounded())) (half before)")
+                // A double click gives the two panes beside the line equal room.
+                if let moved = handle(L10n.string("Resize panes"), in: host) { doubleClick(moved, in: host) }
+                XCTAssertEqual(leftShare(), 0.5, accuracy: 0.001, "a double click on the pane boundary evens the two panes")
+                report.append("- Check: handle between panes double-clicked → left share \(String(format: "%.3f", leftShare())) (even)")
                 report.append("")
                 splits.resize(at: [], fractions: [before, 1 - before])
             }
