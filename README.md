@@ -20,6 +20,9 @@ proxy their accounts: it starts the CLI you already use, with the account you al
 - **Sessions stay where the agent keeps them.** Codex runs against your normal `CODEX_HOME` and
   Claude Code against its own store, so a session started in Yardlet resumes in the original app or
   CLI, and the other way round. Yardlet keeps only its own index, drafts and reading state.
+- **Stop whenever you like.** Yardlet writes nothing into the agents' own configuration; it hands
+  them its tools when it starts them. Quit it or remove it, and each agent, its sign-in and its
+  sessions are as they were, ready in the original app or CLI (see [Uninstall](#uninstall)).
 - **Several accounts.** Register more than one account per provider and start a task on the one
   with quota left; Yardlet shows each account's session and weekly limits.
 - **Review the work.** Diffs of the last turn, file restore and fork, a pull request tab with checks
@@ -70,6 +73,18 @@ An update installs only if it is signed with the release key built into Yardlet 
 Developer ID. Sparkle keeps its settings in Yardlet's own preferences (keys starting with `SU`) and
 downloads under `~/Library/Caches/com.zzunkie.yardlet/org.sparkle-project.Sparkle/`. It installs no
 login item, launch agent or system helper: its installer runs only while an update is put in place.
+
+### Uninstall
+
+Quit Yardlet and move it to the Trash, or run `brew uninstall --cask zzunkie/tap/yardlet`. Your
+agents, their sign-ins and their sessions do not change. To remove Yardlet's own data as well:
+
+- `~/.yardlet` (task list, drafts, reading state) and `~/Library/Application Support/Yardlet`
+  (browser profiles, staged updates). `brew uninstall --zap --cask zzunkie/tap/yardlet` removes
+  these together with Yardlet's caches and preferences.
+- In Keychain Access, the items whose name starts with `Yardlet` (connector sign-ins, the phone
+  remote, the password vault), and `Chromium Safe Storage` if you do not use Chromium itself.
+- Yardlet's entries in **System Settings > Privacy & Security**.
 
 ## Privacy
 
