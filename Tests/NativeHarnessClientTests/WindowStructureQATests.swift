@@ -802,13 +802,13 @@ final class WindowStructureQATests: XCTestCase {
     /// 2026-10-24 (a user reported that a message sent in an old task, with the sidebar scrolled down, moved the
     /// task to the top and out of sight): while the sidebar is scrolled away from its top, the shown task keeps its place and its
     /// project's when it becomes active; with the list at its top it goes where its activity puts it (`SidebarOrderHold`).
-    /// The task is picked by pressing its row, the list is scrolled by its scroll view, into
+    /// Crossing the top with no order changed draws no window again (#183: the hold was the window's state, and each
+    /// crossing drew the window and its conversation). The task is picked by pressing its row, the list is scrolled by
+    /// its scroll view, into
     /// `.build/window-structure-qa/sidebar-hold-*.png`.
     func testTheShownTaskKeepsItsPlaceWhileTheSidebarIsScrolled() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-hold-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-        let suite = testDefaultsSuite("WindowStructureQA.hold")
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let cli = URL(filePath: "/usr/bin/true")
         let now = Date()
         var sessions: [SessionRecord] = []
@@ -822,22 +822,7 @@ final class WindowStructureQATests: XCTestCase {
                     title: "Task \(project)-\(task)", updatedAt: now.addingTimeInterval(-Double(project * 10 + task) * 60)))
             }
         }
-        let model = AppModel(
-            store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
-            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
-            codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults, keyPrefix: "queue."),
-            preferences: defaults,
-            codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
-            codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
-            codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults,
-                                                                                         keyPrefix: "history."),
-            transcriptRepository: FileTranscriptRepository(directoryURL: root.appending(path: "transcripts")),
-            sessionTitleResolver: { _ in nil },
-            sessionTitleRetryCount: 0,
-            restoresIndexOnLaunch: false
-        )
-        addTeardownBlock { await model.shutdown() }
-        for (index, folder) in folders.enumerated() { _ = model.projects.ensureProject(forRoot: folder, name: "Project \(index)") }
+        let model = try sidebarModel(sessions, folders: folders, root: root, suite: "WindowStructureQA.hold")
         let target = try XCTUnwrap(sessions.first { $0.title == "Task 7-1" })
         let directory = try WindowlessRender.directory(Self.folder)
 
@@ -881,6 +866,80 @@ final class WindowStructureQATests: XCTestCase {
         let other = try XCTUnwrap(elements(in: host).first { $0.label.hasPrefix("Task 0-0") })
         XCTAssertLessThan(top.frame.minY, other.frame.minY, "At the top the task did not take its place by activity")
         try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "sidebar-hold-top-light.png"))
+
+        // Crossing the top again and again, as a scroll near it does, starts and ends the hold each time and
+        // changes no order: the window is not drawn again.
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+        for offset in [30, 0, 30, 0] {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            host.settle(passes: 3, interval: 0.02)
+        }
+        XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "Crossing the list's top drew the window again")
+    }
+
+    /// The sidebar crossing its top, as a scroll near it does: 828 tasks in 10 projects, the list moved
+    /// between 0 and 30 pt 120 times. Prints the main thread's time a step and the window's body
+    /// evaluations. Run with `NHC_PERF_BENCH=1`.
+    func testBenchmarkTheSidebarCrossingItsTop() throws {
+        guard ProcessInfo.processInfo.environment["NHC_PERF_BENCH"] == "1" else {
+            throw XCTSkip("Set NHC_PERF_BENCH=1 to run the sidebar benchmark")
+        }
+        let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-top-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let folders = (0..<10).map { root.appending(path: "project-\($0)") }
+        for folder in folders { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
+        let now = Date()
+        let sessions = (0..<828).map { index in
+            SessionRecord(harness: .claudeCode, workspaceURL: folders[index % 10], runtimeExecutableURL: URL(filePath: "/usr/bin/true"),
+                          title: "Task \(index)", updatedAt: now.addingTimeInterval(-Double(index) * 60))
+        }
+        let model = try sidebarModel(sessions, folders: folders, root: root, suite: "WindowStructureQA.top")
+        model.splits.activate(.session(sessions[0].id))
+        let host = WindowlessRender.Host(window(model, .light, size: Self.size), size: Self.size, appearance: .light)
+        defer { host.close() }
+        orderIn(host)
+        let scroll = try XCTUnwrap(sidebarScrollView(in: host.hosting, x: 120))
+        func cpu() -> Double { Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)) / 1_000_000 }
+        var steps: [Double] = []
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+        for step in 0..<120 {
+            let start = cpu()
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: step.isMultiple(of: 2) ? 30 : 0))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            host.hosting.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.016))
+            steps.append(cpu() - start)
+        }
+        let sorted = steps.sorted()
+        print(String(format: "[sidebar-top] 828 tasks, 120 steps: %.0f ms in all, median %.2f ms, p95 %.2f ms; window bodies %d",
+                     steps.reduce(0, +), sorted[60], sorted[113], ViewBodyCensus[.mainWindow]))
+    }
+
+    /// A window's model over `sessions` in a project for each of `folders`, which reads nothing from a provider.
+    private func sidebarModel(_ sessions: [SessionRecord], folders: [URL], root: URL, suite: String) throws -> AppModel {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite(suite)))
+        let model = AppModel(
+            store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
+            codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults, keyPrefix: "queue."),
+            preferences: defaults,
+            codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
+            codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
+            codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults,
+                                                                                         keyPrefix: "history."),
+            transcriptRepository: FileTranscriptRepository(directoryURL: root.appending(path: "transcripts")),
+            sessionTitleResolver: { _ in nil },
+            sessionTitleRetryCount: 0,
+            restoresIndexOnLaunch: false
+        )
+        addTeardownBlock { await model.shutdown() }
+        for (index, folder) in folders.enumerated() { _ = model.projects.ensureProject(forRoot: folder, name: "Project \(index)") }
+        return model
     }
 
     /// The scroll view whose list holds the point at `x`, the sidebar's.

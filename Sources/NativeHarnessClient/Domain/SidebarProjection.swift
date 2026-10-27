@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// One sidebar row: a task, or a split view holding several tasks. Both kinds sit in the same
 /// lists and take the same row actions. A task row carries the tasks started from it, nested under
@@ -463,19 +464,37 @@ extension WindowItem {
 /// began, everywhere the sidebar orders by time (rows, families, projects, chats). The hold moves to
 /// whatever the person shows next and ends with the list at its top, where the row's new place is in
 /// view. Other tasks order by activity as before.
-struct SidebarOrderHold: Equatable {
-    private var listedAt: [UUID: Date] = [:]
+///
+/// The list crosses its top over and over as the person scrolls near it, starting and ending the hold
+/// each time. That changes how the tasks are listed only when a held task has been active since the
+/// hold began, and only then are those who list them told (`revision`): crossing the top alone draws
+/// neither the window nor its conversation again.
+@MainActor @Observable
+final class SidebarOrderHold {
+    /// Changes whenever the hold changes how the tasks are listed, so the listing is read again.
+    private(set) var revision = 0
+    @ObservationIgnored private var listedAt: [UUID: Date] = [:]
 
     init() {}
 
-    /// Holds `sessions` at the times they have now.
-    init(holding sessions: [SessionRecord]) {
-        listedAt = Dictionary(sessions.map { ($0.id, $0.updatedAt) }, uniquingKeysWith: { first, _ in first })
+    /// Holds `held` at the times they have now, in place of what was held; none lets the hold go.
+    /// `sessions` are the tasks as they are listed now.
+    func hold(_ held: [SessionRecord], listing sessions: [SessionRecord]) {
+        let listedAt = Dictionary(held.map { ($0.id, $0.updatedAt) }, uniquingKeysWith: { first, _ in first })
+        guard listedAt != self.listedAt else { return }
+        let before = Self.listing(sessions, at: self.listedAt)
+        self.listedAt = listedAt
+        if Self.listing(sessions, at: listedAt) != before { revision += 1 }
     }
 
     /// `sessions` as the sidebar orders them: a held task that has been active since the hold began
     /// at the time it had then. The array is returned as it is when no held task moved.
     func listing(_ sessions: [SessionRecord]) -> [SessionRecord] {
+        _ = revision
+        return Self.listing(sessions, at: listedAt)
+    }
+
+    private static func listing(_ sessions: [SessionRecord], at listedAt: [UUID: Date]) -> [SessionRecord] {
         guard !listedAt.isEmpty, sessions.contains(where: { session in
             listedAt[session.id].map { session.updatedAt > $0 } ?? false
         }) else { return sessions }

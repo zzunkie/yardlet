@@ -24,7 +24,8 @@ struct MainWindow: View {
     @State private var sidebarWidth = SidebarWidthState()
     /// The task rows' hover card, drawn over the sidebar and the content beside it.
     @State private var sidebarHoverCard = SidebarHoverCardState()
-    /// The shown task's place in the sidebar while the list is scrolled away from its top.
+    /// The shown task's place in the sidebar while the list is scrolled away from its top. The window
+    /// is drawn again only when the hold changes the order, not each time the list crosses its top.
     @State private var sidebarOrderHold = SidebarOrderHold()
     @State private var isSidebarListAtTop = true
     @State private var searchText = ""
@@ -148,7 +149,7 @@ struct MainWindow: View {
     /// Holds the shown task's place from now, or lets it go with the list at its top.
     private func holdSidebarOrder() {
         guard !isSidebarListAtTop else {
-            sidebarOrderHold = SidebarOrderHold()
+            sidebarOrderHold.hold([], listing: model.store.sessions)
             return
         }
         let shown: [UUID]
@@ -158,7 +159,7 @@ struct MainWindow: View {
         case .home: shown = []
         }
         let ids = Set(shown)
-        sidebarOrderHold = SidebarOrderHold(holding: model.store.sessions.filter { ids.contains($0.id) })
+        sidebarOrderHold.hold(model.store.sessions.filter { ids.contains($0.id) }, listing: model.store.sessions)
     }
 
     private var visibleChats: [SessionRecord] {
