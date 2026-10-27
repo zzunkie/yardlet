@@ -46,7 +46,7 @@ proxy their accounts: it starts the CLI you already use, with the account you al
 
 - macOS 15 or later on Apple silicon.
 - At least one agent CLI installed and signed in, for example `codex` or `claude`. Yardlet uses the
-  CLI's own sign-in and never imports credentials from other apps.
+  CLI's own sign-in and never copies it from other apps.
 
 ## Install
 
