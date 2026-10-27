@@ -5,12 +5,27 @@ struct CommandPaletteItem: Identifiable {
     let title: String
     let subtitle: String
     let systemName: String
+    /// A task the palette opens, which shows its project (`subtitle`) beside its title.
+    var isTask = false
     let action: () -> Void
 }
 
 /// Pure keyboard-selection behavior for the command palette. Keeping the wraparound rule
 /// outside the view makes the native keyboard path deterministic and directly testable.
 enum CommandPaletteSelection {
+    /// What ⌘K lists, as the Codex app's command menu searches chats and commands: with no query the
+    /// commands and then the most recent tasks; with one, the tasks whose title or project has it
+    /// first (the side panel launcher's counts), then the commands that match.
+    static func shown(commands: [CommandPaletteItem], tasks: [CommandPaletteItem],
+                      query: String) -> [CommandPaletteItem] {
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+        guard !normalized.isEmpty else { return commands + tasks.prefix(SidePanelLauncher.recentCount) }
+        let matches = { (item: CommandPaletteItem) in
+            item.title.localizedLowercase.contains(normalized) || item.subtitle.localizedLowercase.contains(normalized)
+        }
+        return Array(tasks.filter(matches).prefix(SidePanelLauncher.matchLimit)) + commands.filter(matches)
+    }
+
     static func movedIndex(currentIndex: Int?, count: Int, offset: Int) -> Int? {
         guard count > 0, offset != 0 else { return count > 0 ? currentIndex ?? 0 : nil }
         let startingIndex = currentIndex ?? (offset > 0 ? -1 : count)
@@ -28,19 +43,15 @@ private extension Int {
 struct CommandPaletteView: View {
     @Environment(\.dismiss) private var dismiss
     let items: [CommandPaletteItem]
+    /// The tasks the palette finds, most recent first.
+    var tasks: [CommandPaletteItem] = []
     let onSelect: (CommandPaletteItem) -> Void
     @State private var query = ""
     @State private var selectedIndex: Int?
     @FocusState private var isSearchFocused: Bool
 
     private var filteredItems: [CommandPaletteItem] {
-        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            .localizedLowercase
-        guard !normalized.isEmpty else { return items }
-        return items.filter {
-            $0.title.localizedLowercase.contains(normalized)
-                || $0.subtitle.localizedLowercase.contains(normalized)
-        }
+        CommandPaletteSelection.shown(commands: items, tasks: tasks, query: query)
     }
 
     var body: some View {
@@ -48,11 +59,11 @@ struct CommandPaletteView: View {
             HStack(spacing: 8) {
                 Image(systemName: "command")
                     .foregroundStyle(.secondary)
-                TextField(L10n.string("Search commands"), text: $query)
+                TextField(L10n.string("Search tasks and commands"), text: $query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 15))
                     .focused($isSearchFocused)
-                    .accessibilityLabel(L10n.string("Search commands"))
+                    .accessibilityLabel(L10n.string("Search tasks and commands"))
                     .onSubmit { runSelected() }
                     .onKeyPress(.downArrow) {
                         moveSelection(by: 1)
@@ -72,7 +83,7 @@ struct CommandPaletteView: View {
 
             if filteredItems.isEmpty {
                 ContentUnavailableView(
-                    L10n.string("No matching commands"),
+                    L10n.string("No matching tasks or commands"),
                     systemImage: "command"
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -81,6 +92,16 @@ struct CommandPaletteView: View {
                     ScrollView {
                         LazyVStack(spacing: 2) {
                             ForEach(Array(filteredItems.enumerated()), id: \.element.id) { index, item in
+                                if item.isTask, index == 0 || !filteredItems[index - 1].isTask {
+                                    Text(L10n.string("Tasks"))
+                                        .font(.caption.weight(.medium))
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 12)
+                                        .padding(.top, index == 0 ? 2 : 10)
+                                        .padding(.bottom, 2)
+                                        .accessibilityAddTraits(.isHeader)
+                                }
                                 Button {
                                     selectedIndex = index
                                     onSelect(item)
@@ -95,6 +116,13 @@ struct CommandPaletteView: View {
                                             .lineLimit(1)
                                             .help(item.title)
                                         Spacer(minLength: 0)
+                                        if item.isTask {
+                                            Text(item.subtitle)
+                                                .font(.callout)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                        }
                                     }
                                     .padding(.horizontal, 12)
                                     .frame(height: 36)
@@ -110,7 +138,7 @@ struct CommandPaletteView: View {
                                     in: RoundedRectangle(cornerRadius: 7)
                                 )
                                 .accessibilityElement(children: .combine)
-                                .accessibilityLabel(item.title)
+                                .accessibilityLabel(item.isTask ? "\(item.title), \(item.subtitle)" : item.title)
                                 .accessibilityAddTraits(index == selectedIndex ? .isSelected : [])
                             }
                         }

@@ -2083,7 +2083,7 @@ struct MainWindow: View {
             }
         }
         .sheet(isPresented: $isPresentingCommandPalette, onDismiss: finishCommandPalette) {
-            CommandPaletteView(items: commandPaletteItems, onSelect: { pendingCommand = $0 })
+            CommandPaletteView(items: commandPaletteItems, tasks: commandPaletteTasks, onSelect: { pendingCommand = $0 })
         }
         .sheet(isPresented: $isPresentingImport, onDismiss: finishShellModal) {
             ImportConversationSheet(model: model,
@@ -2405,6 +2405,24 @@ struct MainWindow: View {
             )
         }
         return items
+    }
+
+    /// The tasks ⌘K finds: those the sidebar lists, most recent first, without the one on screen, each
+    /// opening as its sidebar row does.
+    private var commandPaletteTasks: [CommandPaletteItem] {
+        model.sidebarSessions
+            .filter { $0.id != model.store.selectedSessionID }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .map { session in
+                CommandPaletteItem(
+                    id: "task-\(session.id)",
+                    title: session.title,
+                    subtitle: model.project(for: session)?.name ?? projects.displayName(for: session.workspaceURL),
+                    systemName: "text.bubble",
+                    isTask: true,
+                    action: { activateTask(session.id) }
+                )
+            }
     }
 
     private var commandPaletteItems: [CommandPaletteItem] {

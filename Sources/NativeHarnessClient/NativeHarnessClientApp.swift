@@ -62,7 +62,7 @@ private struct YardletSettingsCommands: Commands {
             .disabled(isPresentingSettings == nil)
         }
         CommandGroup(after: .newItem) {
-            Button(L10n.string("Search commands")) {
+            Button(L10n.string("Search tasks and commands")) {
                 isPresentingCommandPalette = true
             }
             .keyboardShortcut("k", modifiers: .command)

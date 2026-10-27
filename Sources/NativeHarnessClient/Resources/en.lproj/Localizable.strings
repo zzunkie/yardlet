@@ -187,10 +187,11 @@
 "Command palette" = "Command palette";
 "Codex runtime" = "Codex runtime";
 "Search commands" = "Search commands";
+"Search tasks and commands" = "Search tasks and commands";
 "Use the arrow keys to select a command, then press Return." = "Use the arrow keys to select a command, then press Return.";
 "Use the arrow keys to select a history result, then press Return." = "Use the arrow keys to select a history result, then press Return.";
 "Use the arrow keys to select a task, then press Return to enter it." = "Use the arrow keys to select a task, then press Return to enter it.";
-"No matching commands" = "No matching commands";
+"No matching tasks or commands" = "No matching tasks or commands";
 "Try a different command name." = "Try a different command name.";
 "Choose a project and harness to start a task." = "Choose a project and harness to start a task.";
 "Change the task navigation layout." = "Change the task navigation layout.";

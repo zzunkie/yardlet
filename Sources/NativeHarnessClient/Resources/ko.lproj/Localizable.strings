@@ -187,10 +187,11 @@
 "Command palette" = "명령 팔레트";
 "Codex runtime" = "Codex 런타임";
 "Search commands" = "명령 검색";
+"Search tasks and commands" = "작업과 명령 검색";
 "Use the arrow keys to select a command, then press Return." = "화살표 키로 명령을 선택한 다음 Return을 누르세요.";
 "Use the arrow keys to select a history result, then press Return." = "화살표 키로 기록을 선택한 다음 Return을 누르세요.";
 "Use the arrow keys to select a task, then press Return to enter it." = "화살표 키로 작업을 선택한 뒤 Return 키를 눌러 작업 내용으로 이동하세요.";
-"No matching commands" = "일치하는 명령 없음";
+"No matching tasks or commands" = "일치하는 작업이나 명령 없음";
 "Try a different command name." = "다른 명령 이름을 입력하세요.";
 "Choose a project and harness to start a task." = "프로젝트와 하네스를 선택해 작업을 시작합니다.";
 "Change the task navigation layout." = "작업 탐색 레이아웃을 바꿉니다.";
