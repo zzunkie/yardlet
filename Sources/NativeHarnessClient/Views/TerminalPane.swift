@@ -438,8 +438,7 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
     }
 
     var bufferText: String {
-        guard let data = terminalView?.getTerminal().getBufferAsData() else { return "" }
-        return String(decoding: data, as: UTF8.self)
+        terminalView?.getTerminal().unwrappedText ?? ""
     }
 
     var statusText: String {

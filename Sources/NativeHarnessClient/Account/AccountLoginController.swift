@@ -203,10 +203,7 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
 
     private func refreshTerminalOutput() {
         guard let terminalView else { return }
-        let terminalText = String(
-            decoding: terminalView.getTerminal().getBufferAsData(),
-            as: UTF8.self
-        )
+        let terminalText = terminalView.getTerminal().unwrappedText
         output = terminalOutputPrefix + terminalText
         if let trigger = pendingInitialInputTrigger,
            terminalText.contains(trigger),

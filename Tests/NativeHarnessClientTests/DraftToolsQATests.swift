@@ -173,8 +173,7 @@ final class DraftToolsQATests: XCTestCase {
     }
 
     private func terminalText<Content: View>(in host: WindowlessRender.Host<Content>) -> String {
-        guard let data = terminalView(in: host.hosting)?.getTerminal().getBufferAsData() else { return "" }
-        return String(decoding: data, as: UTF8.self)
+        terminalView(in: host.hosting)?.getTerminal().unwrappedText ?? ""
     }
 
     private func waitFor<Content: View>(_ text: String, in host: WindowlessRender.Host<Content>) -> Bool {

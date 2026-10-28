@@ -402,10 +402,9 @@ private extension NSView {
         return nil
     }
 
-    /// What the terminal under this view shows, scrollback included.
+    /// What the terminal under this view shows, scrollback included, wrapped rows joined.
     var terminalText: String {
-        guard let data = terminalView?.getTerminal().getBufferAsData() else { return "" }
-        return String(decoding: data, as: UTF8.self)
+        terminalView?.getTerminal().unwrappedText ?? ""
     }
 
     /// Presses every accessibility element under the view with this label, as an assistive app
