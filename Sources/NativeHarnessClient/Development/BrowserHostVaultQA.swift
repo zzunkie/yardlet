@@ -107,6 +107,8 @@ final class BrowserHostVaultQA {
             check("an agent gets no new password for an account already saved", refused.isError && untouched
                     && vault.items.filter { $0.username == "agent@example.test" }.count == 1, refused.text)
         }
+        // The site's items stay as the later stages expect them (a passkey goes into the site's only item).
+        if let saved { try? vault.delete(saved.id) }
     }
 
     private func exerciseLogin() async {
