@@ -64,6 +64,16 @@ enum ConversationDrawing {
             + NSRegularExpression.escapedPattern(for: String(sample[range.upperBound...])) + "$"
     }
 
+    /// Ends on a live line's elapsed time: "12s", "1m 5s" or "2h 3m".
+    static func endsWithElapsedTime(_ text: String) -> Bool {
+        elapsedTimePatterns.contains { text.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    private static let elapsedTimePatterns: [String] = [
+        L10n.format("%llds", Int64(0)), L10n.format("%lldm %llds", Int64(0), Int64(0)),
+        L10n.format("%lldh %lldm", Int64(0), Int64(0))
+    ].map { NSRegularExpression.escapedPattern(for: $0).replacingOccurrences(of: "0", with: #"\d+"#) + "$" }
+
     /// A running turn counts its seconds from when it was first drawn; two renders can fall in
     /// different seconds.
     static func steady(_ element: WindowlessRender.AccessibilityElement) -> WindowlessRender.AccessibilityElement {

@@ -156,7 +156,7 @@ struct ConversationTurnView: View, Equatable {
         let key = ConversationDisclosureChoices.runKey(live.items)
         return ConversationLiveWorkLine(
             live: live, startsOpen: ConversationWorkDisclosure.liveLineStartsOpen(live.items, choice: choices.choice(key)),
-            startedAt: turn.timing.startedAt, showsElapsedTime: !showsWorkTime
+            startedAt: turn.timing.startedAt
         ) { isOpen in
             choices.record(key, isOpen: isOpen)
             // One call opens on what it holds: the line under the live line reads this choice.
@@ -194,26 +194,7 @@ struct ConversationTurnView: View, Equatable {
                 // While the turn runs, its last run with a call still running is the live line's
                 // below, not listed here as well.
                 ForEach(ConversationLiveWork.listedRuns(turn)) { run in
-                    switch run {
-                    case let .single(item):
-                        itemView(item)
-                    case let .group(items):
-                        // A run of calls folds into one summary line, while the turn runs as well; it
-                        // opens when one of its calls failed, when the person opened it under the live
-                        // line, and when the person opened a finished turn's folded work to see it.
-                        let key = ConversationDisclosureChoices.runKey(items)
-                        ConversationWorkRun(
-                            lines: items.map(workLine), harness: context.harness,
-                            startsOpen: ConversationWorkDisclosure.groupStartsOpen(
-                                items, turnIsRunning: !turn.status.isTerminal, workWasOpened: foldsWork,
-                                choice: choices.choice(key)
-                            ),
-                            onToggle: { choices.record(key, isOpen: $0) }
-                        )
-                        .equatable()
-                    case let .suggestions(items):
-                        TaskSuggestionCard(items: items)
-                    }
+                    runView(run)
                 }
             } else {
                 // What the fold keeps in view, as the Codex app keeps it out of its folded work; a
@@ -221,11 +202,7 @@ struct ConversationTurnView: View, Equatable {
                 ForEach(ConversationWorkGrouping.runsKeptWhenFolded(
                     turn, live: ConversationLiveWork.make(turn, harness: context.harness, workspaceURL: context.workspaceURL)
                 )) { run in
-                    switch run {
-                    case let .single(item): itemView(item)
-                    case let .group(items): ForEach(items) { itemView($0) }
-                    case let .suggestions(items): TaskSuggestionCard(items: items)
-                    }
+                    runView(run)
                 }
             }
 
@@ -285,6 +262,31 @@ struct ConversationTurnView: View, Equatable {
 
     // MARK: - Items
 
+    /// A run of the turn's work, drawn alike in the listed work and in what a folded turn keeps in
+    /// view. A run of calls folds into one summary line, while the turn runs as well; it opens when one
+    /// of its calls failed, when the person opened it under the live line, and when the person opened
+    /// the turn's folded work to see it.
+    @ViewBuilder
+    private func runView(_ run: ConversationWorkGrouping.Run) -> some View {
+        switch run {
+        case let .single(item):
+            itemView(item)
+        case let .group(items):
+            let key = ConversationDisclosureChoices.runKey(items)
+            ConversationWorkRun(
+                lines: items.map(workLine), harness: context.harness,
+                startsOpen: ConversationWorkDisclosure.groupStartsOpen(
+                    items, turnIsRunning: !turn.status.isTerminal, workWasOpened: foldsWork && showsWorkDetails,
+                    choice: choices.choice(key)
+                ),
+                onToggle: { choices.record(key, isOpen: $0) }
+            )
+            .equatable()
+        case let .suggestions(items):
+            TaskSuggestionCard(items: items)
+        }
+    }
+
     /// An item of the turn: an answered request by the one request card, a compaction by its marker
     /// and an earlier error or limit by its turn card for every harness (B7), everything else by its
     /// item card.
@@ -326,9 +328,9 @@ struct ConversationTurnView: View, Equatable {
     // MARK: - Header
 
     /// The work summary and its fold. A finished turn reads how long it worked when its times give
-    /// one — the provider's own, or its entries' (D4) — and a turn whose times are only its entries'
-    /// reads no time while it runs. A settled turn without a time still folds its work under "Work
-    /// details". What the turn offers to do with its messages is on the messages
+    /// one — the provider's own, or its entries' (D4). A running turn reads its time on the live line
+    /// instead, so its header is drawn only to fold its work, under "Work details", as is a settled
+    /// turn's without a time. What the turn offers to do with its messages is on the messages
     /// (`ConversationTurnAction`).
     private var header: some View {
         let canExpand = foldsWork && turn.hasWorkDetails
@@ -363,10 +365,12 @@ struct ConversationTurnView: View, Equatable {
         return showsWorkTime || (foldsWork && turn.hasWorkDetails)
     }
 
-    /// The turn reads its work time: always for a provider's own times, and for times read from the
-    /// entries once the turn has finished and they span a second or more (D4).
+    /// The header reads the turn's work time once the turn no longer runs: always for a provider's own
+    /// times, and for times read from the entries when they span a second or more (D4). While the turn
+    /// runs, every harness reads its time on the live line, beside what it does now, so the header
+    /// adds no row of its own before the work folds.
     private var showsWorkTime: Bool {
-        !turn.timing.isApproximate || (turn.status.isTerminal && turn.timing.durationMilliseconds != nil)
+        turn.status != .running && (!turn.timing.isApproximate || turn.timing.durationMilliseconds != nil)
     }
 
     @ViewBuilder

@@ -1,17 +1,17 @@
 import SwiftUI
 
 /// The one live line under a running turn (`ConversationLiveWork`): what the provider is doing now,
-/// then the turn's step count and, where the turn header does not read it, how long the turn has
-/// run. Each state reads apart at a glance: thinking has its own mark, a running call the spinner
-/// every running line has, both shimmering while the provider works as the Codex app's activity
-/// header and the Claude app's working line do; waiting on the person is orange with a raised hand
-/// and still. While a call runs or the thinking streams, a click opens what the line stands for, as
-/// a summary line would; it starts folded (`ConversationWorkDisclosure.liveLineStartsOpen`).
+/// then the turn's step count and how long the turn has run, for every harness: the turn header reads
+/// no time while the turn runs. Each state reads apart at a glance: thinking has its own mark, a
+/// running call the spinner every running line has, both shimmering while the provider works as the
+/// Codex app's activity header and the Claude app's working line do; waiting on the person is orange
+/// with a raised hand and still. While a call runs or the thinking streams, a click opens what the
+/// line stands for, as a summary line would; it starts folded
+/// (`ConversationWorkDisclosure.liveLineStartsOpen`).
 struct ConversationLiveWorkLine<Cell: View>: View {
     let live: ConversationLiveWork
-    /// When the turn began, for its elapsed time; nil where the turn header already counts it.
+    /// When the turn began, for its elapsed time; nil counts from when the line was first drawn.
     let startedAt: Date?
-    let showsElapsedTime: Bool
     /// The person opened or folded the line.
     let onToggle: (Bool) -> Void
     let cell: (ConversationItem) -> Cell
@@ -20,11 +20,10 @@ struct ConversationLiveWorkLine<Cell: View>: View {
     @State private var firstObservedAt = Date()
     @State private var isOpen: Bool
 
-    init(live: ConversationLiveWork, startsOpen: Bool, startedAt: Date?, showsElapsedTime: Bool,
+    init(live: ConversationLiveWork, startsOpen: Bool, startedAt: Date?,
          onToggle: @escaping (Bool) -> Void, @ViewBuilder cell: @escaping (ConversationItem) -> Cell) {
         self.live = live
         self.startedAt = startedAt
-        self.showsElapsedTime = showsElapsedTime
         self.onToggle = onToggle
         self.cell = cell
         _isOpen = State(initialValue: startsOpen)
@@ -76,8 +75,7 @@ struct ConversationLiveWorkLine<Cell: View>: View {
 
     private func label(isOpen: Bool) -> some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let elapsed = showsElapsedTime
-                ? BackgroundTasksProjection.elapsedText(since: startedAt ?? firstObservedAt, now: context.date) : nil
+            let elapsed = BackgroundTasksProjection.elapsedText(since: startedAt ?? firstObservedAt, now: context.date)
             let detail = ConversationLiveWork.detail(steps: live.steps, elapsed: elapsed)
             HStack(alignment: .center, spacing: 6) {
                 mark

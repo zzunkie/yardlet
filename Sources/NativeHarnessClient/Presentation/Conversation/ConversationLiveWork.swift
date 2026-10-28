@@ -5,7 +5,8 @@ import Foundation
 /// should not open), as the Codex app's activity header shows only its current item
 /// ("Running swift test", "Thinking") and the Claude app's working line its state and time
 /// ("Working… · 12s"). It tells thinking, running a call and waiting on the person apart; it counts
-/// the turn's calls and, where the turn header does not, how long the turn has run.
+/// the turn's calls and how long the turn has run, which the turn header does not read while the
+/// turn runs.
 ///
 /// The calls of the turn's last run, while one of them runs, are this line's: they are not also
 /// listed above it, and they open under it on a click. Every other run stays folded on its summary
@@ -151,7 +152,7 @@ struct ConversationLiveWork: Equatable {
     }
 
     /// "Running swift test · 5 steps · 1m 5s": the line's words after the activity, the step count
-    /// and, where the turn header does not read one, the elapsed time.
+    /// and the elapsed time.
     static func detail(steps: Int, elapsed: String?) -> String {
         var parts: [String] = []
         if steps > 0 { parts.append(steps == 1 ? L10n.string("1 step") : L10n.format("%lld steps", steps)) }

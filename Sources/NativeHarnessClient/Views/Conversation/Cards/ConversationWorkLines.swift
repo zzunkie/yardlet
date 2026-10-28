@@ -339,7 +339,8 @@ enum ConversationWorkGrouping {
     }
 
     /// What a folded turn keeps of its work (`ConversationTurn.workKeptWhenFolded`) but the calls the
-    /// live line stands for, its suggested tasks still one card.
+    /// live line stands for, in the runs the listed work has: consecutive calls still one summary line,
+    /// suggested tasks one card.
     static func runsKeptWhenFolded(_ turn: ConversationTurn, live: ConversationLiveWork?) -> [Run] {
         let liveIDs = Set(live?.items.map(\.id) ?? [])
         return runs(turn.workKeptWhenFolded.filter { !liveIDs.contains($0.id) })

@@ -260,8 +260,11 @@ final class ConversationTurnOrderTests: XCTestCase {
     // MARK: - One rule for every harness
 
     /// The same turn in Codex and in Claude Code — notes, a call, an answer, a message read into the
-    /// running turn, more notes and a call, and the closing answer — is laid out and folded alike,
-    /// while it runs and once it ended, folded and opened. Drawn in both appearances, both harnesses.
+    /// running turn, two calls in a row, more notes and a call, and the closing answer — is laid out and
+    /// folded alike, while it runs and once it ended, folded and opened. Folded while it runs, the two
+    /// calls after the answer stay one summary line, as they are in the opened work, and the turn reads
+    /// its time once, on the live line beside what it does now: the header only folds the work. Drawn in
+    /// both appearances, both harnesses.
     func testCodexAndClaudeCodeLayOutAndFoldTheSameTurnAlike() throws {
         let directory = try WindowlessRender.directory("turn-order-qa")
         for finished in [false, true] {
@@ -282,7 +285,24 @@ final class ConversationTurnOrderTests: XCTestCase {
                 ? ["message: Issue the certificate, then make the API key.", "answer: The certificate is issued.",
                    "answer: Both are in Downloads."]
                 : ["message: Issue the certificate, then make the API key.", "answer: The certificate is issued.",
-                   "message: Also make the API key.", "commentary (streaming): Making the key.", "line: \(L10n.string("Working"))"])
+                   "message: Also make the API key.", "call: swift run keygen", "call: ls Downloads",
+                   "commentary (streaming): Making the key.", "line: \(L10n.string("Working"))"])
+            // The two calls the folded running turn keeps in view are one run in both.
+            let keptCalls = { (turn: ConversationTurn, harness: HarnessKind) -> [ConversationItem] in
+                let live = ConversationLiveWork.make(turn, harness: harness, workspaceURL: nil)
+                return ConversationWorkGrouping.runsKeptWhenFolded(turn, live: live).flatMap { run -> [ConversationItem] in
+                    if case let .group(items) = run { return items }
+                    return []
+                }
+            }
+            let summaries = [
+                "codex": ConversationWorkSummary.header(for: keptCalls(codex, .codex), harness: .codex).text,
+                "claude-code": ConversationWorkSummary.header(for: keptCalls(claude, .claudeCode), harness: .claudeCode).text
+            ]
+            XCTAssertEqual(keptCalls(codex, .codex).map { ConversationDrawOrder.text(of: $0) },
+                           finished ? [] : ["swift run keygen", "ls Downloads"], stage)
+            XCTAssertEqual(keptCalls(claude, .claudeCode).map { ConversationDrawOrder.text(of: $0) },
+                           keptCalls(codex, .codex).map { ConversationDrawOrder.text(of: $0) }, stage)
 
             for (harness, timeline) in [
                 ("codex", ConversationTimeline(source: .codex(
@@ -302,6 +322,22 @@ final class ConversationTurnOrderTests: XCTestCase {
                     XCTAssertFalse(texts.contains("Checking the certificate page."), "\(harness) \(stage) folds:\n\(texts)")
                     XCTAssertTrue(texts.contains("The certificate is issued."), "\(harness) \(stage):\n\(texts)")
                     XCTAssertEqual(texts.contains("Also make the API key."), !finished, "\(harness) \(stage):\n\(texts)")
+                    if !finished {
+                        // One summary line for the two calls, folded, not a line for each.
+                        let summary = try XCTUnwrap(summaries[harness])
+                        XCTAssertTrue(texts.contains(summary), "\(harness) \(stage) summary \(summary):\n\(texts)")
+                        XCTAssertFalse(texts.contains("swift run keygen"), "\(harness) \(stage) folds the run:\n\(texts)")
+                        // The time is the live line's, and the header reads none while the turn runs.
+                        XCTAssertTrue(folded.elements.contains { element in
+                            [element.label, element.value].contains {
+                                $0.hasPrefix(L10n.string("Working")) && ConversationDrawing.endsWithElapsedTime($0)
+                            }
+                        }, "\(harness) \(stage) live line reads the time:\n\(texts)")
+                    }
+                    let readsWorkTime = folded.elements.contains {
+                        ConversationDrawing.isWorkTime($0.label) || ConversationDrawing.isWorkTime($0.value)
+                    }
+                    XCTAssertEqual(readsWorkTime, finished, "\(harness) \(stage) header reads a work time once it ended:\n\(texts)")
 
                     // Opened by the person: everything in the order it happened.
                     let host = WindowlessRender.Host(
@@ -318,7 +354,8 @@ final class ConversationTurnOrderTests: XCTestCase {
                         path: "\(harness)-\(stage)-opened-\(appearance.suffix).png"))
                     let opened = host.accessibilityElements().map(\.description)
                     let order = ["Issue the certificate", "Checking the certificate page.", "The certificate is issued.",
-                                 "Also make the API key.", "Making the key."] + (finished ? ["Both are in Downloads."] : [])
+                                 "Also make the API key.", "ls Downloads", "Making the key."]
+                        + (finished ? ["Both are in Downloads."] : [])
                     let positions = try order.map { text in
                         try XCTUnwrap(opened.firstIndex { $0.contains(text) }, "\(harness) \(stage) opened: \(text)\n\(opened)")
                     }
@@ -470,6 +507,8 @@ final class ConversationTurnOrderTests: XCTestCase {
             command("c1", "swift build"),
             Self.message("a1", "The certificate is issued.", phase: "final_answer"),
             Self.user("u2", "Also make the API key."),
+            command("k1", "swift run keygen"),
+            command("k2", "ls Downloads"),
             Self.message("m2", "Making the key.", phase: "commentary")
         ]
         if finished {
@@ -497,6 +536,8 @@ final class ConversationTurnOrderTests: XCTestCase {
             at(20, bash("toolu_1", "swift build")),
             at(60, .assistant(text: "The certificate is issued.", isStreaming: false)),
             at(70, .user(text: "Also make the API key."), joins: true),
+            at(72, bash("toolu_k1", "swift run keygen")),
+            at(75, bash("toolu_k2", "ls Downloads")),
             at(80, .assistant(text: "Making the key.", isStreaming: !finished))
         ]
         if finished {
