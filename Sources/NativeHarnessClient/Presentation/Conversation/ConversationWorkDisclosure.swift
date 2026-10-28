@@ -41,7 +41,8 @@ enum ConversationWorkDisclosure {
 
 /// The person's own open and fold choices in one turn. A line or run that moves between the live line
 /// and the turn's listed work is drawn anew there, so it reads what the person chose here: a line by
-/// its item's id, a run by its first item's (`runKey`), which stays the same as calls join the run.
+/// its item's id, a run by its first call's (`runKey`), which stays the same as calls and the thinking
+/// among them join the run.
 @MainActor
 final class ConversationDisclosureChoices {
     private var choices: [String: Bool] = [:]
@@ -55,8 +56,9 @@ final class ConversationDisclosureChoices {
         choices[key] = isOpen
     }
 
-    /// The key of a run of calls, single or grouped.
+    /// The key of a run of calls, single or grouped: its first call's, or its first item's when it
+    /// holds none (thinking that streams on its own).
     static func runKey(_ items: [ConversationItem]) -> String? {
-        items.first.map { "run:" + $0.id }
+        (items.first { ConversationWorkSummary.category(of: $0) != nil } ?? items.first).map { "run:" + $0.id }
     }
 }

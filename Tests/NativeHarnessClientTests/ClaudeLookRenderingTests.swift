@@ -29,25 +29,28 @@ final class ClaudeLookRenderingTests: XCTestCase {
         }
     }
 
-    /// A run of calls reads as Claude Code reads it, its parts in the order they first came, and the
-    /// thinking before it stays a line of its own.
+    /// A run of calls reads as Claude Code reads it, its parts in the order they first came. The
+    /// thinking before the calls is in the run where it came, and the summary counts no call for it.
     func testARunOfCallsReadsAsOneSummary() {
-        let runs = ConversationWorkGrouping.runs(ClaudeLookFixture.runningTurnWork)
-        XCTAssertEqual(runs.count, 2)
-        guard case let .group(calls) = runs.last else { return XCTFail("\(runs)") }
-        XCTAssertEqual(calls.count, 3)
+        let work = ClaudeLookFixture.runningTurnWork
+        let runs = ConversationWorkGrouping.runs(work)
+        XCTAssertEqual(runs.count, 1)
+        guard case let .group(run) = runs.last else { return XCTFail("\(runs)") }
+        XCTAssertEqual(run.map(\.id), work.map(\.id))
+        XCTAssertEqual(run.filter { ConversationWorkSummary.category(of: $0) != nil }.count, 3)
         // In the test's language; English continues the sentence in lower case.
         let phrases = ["Read a file", "Edited a file", "Ran a command"].map { L10n.string($0) }
         let expected = phrases.enumerated().map { index, phrase in
             index > 0 && phrase.first?.isASCII == true ? phrase.prefix(1).lowercased() + phrase.dropFirst() : phrase
         }.joined(separator: ", ")
-        XCTAssertEqual(ConversationWorkSummary.title(for: calls, harness: .claudeCode), expected)
-        XCTAssertEqual(ConversationWorkSummary.phase(of: calls), .running)
+        XCTAssertEqual(ConversationWorkSummary.title(for: run, harness: .claudeCode), expected)
+        XCTAssertEqual(ConversationWorkSummary.phase(of: run), .running)
     }
 
-    /// The running turn reads its thinking line and one live line for its run of calls (2026-10-16,
-    /// `ConversationLiveWork`): folded, the line reads the running command and the turn's steps;
-    /// opened, it lists each call's line in order. The finished turn folds its work under its work time.
+    /// The running turn reads one live line for its run of calls and the thinking before them
+    /// (2026-10-16, `ConversationLiveWork`): folded, the line reads the running command and the turn's
+    /// steps; opened, it lists the thinking and each call's line in order. The finished turn folds its
+    /// work under its work time.
     func testTheRunningTurnListsItsCallsAsLines() throws {
         let host = WindowlessRender.Host(
             TaskConversationView(harness: .claudeCode, workspaceURL: ClaudeLookFixture.workspace,
@@ -66,7 +69,7 @@ final class ClaudeLookRenderingTests: XCTestCase {
         XCTAssertTrue(folded.contains { $0.label.hasPrefix(running + ", ") && $0.value == L10n.string("Collapsed") },
                       "\(folded)")
         XCTAssertFalse(folded.contains { $0.label == L10n.string("Command") }, "the running command is the live line's")
-        XCTAssertTrue(folded.contains { $0.label == L10n.string("Thought process") }, "\(folded)")
+        XCTAssertFalse(folded.contains { $0.label == L10n.string("Thought process") }, "the run's: \(folded)")
 
         XCTAssertTrue(host.hosting.openLiveWorkLine(step: running))
         host.settle(passes: 6)
@@ -75,7 +78,9 @@ final class ClaudeLookRenderingTests: XCTestCase {
         let live = try XCTUnwrap(labels.firstIndex { $0.hasPrefix(running + ", ") }, "\(elements)")
         let command = try XCTUnwrap(labels.lastIndex(of: L10n.string("Command")), "\(elements)")
         let edit = try XCTUnwrap(labels.lastIndex(of: L10n.string("File change")), "\(elements)")
-        XCTAssertLessThan(live, edit)
+        let thought = try XCTUnwrap(labels.lastIndex(of: L10n.string("Thought process")), "\(elements)")
+        XCTAssertLessThan(live, thought)
+        XCTAssertLessThan(thought, edit)
         XCTAssertLessThan(edit, command)
         XCTAssertTrue(elements.contains { $0.label == L10n.string("Edited") + " Parser.swift" }, "\(elements)")
         XCTAssertTrue(elements.contains { $0.label == L10n.string("claude.read.done") + " Parser.swift" },

@@ -260,11 +260,12 @@ final class ConversationTurnOrderTests: XCTestCase {
     // MARK: - One rule for every harness
 
     /// The same turn in Codex and in Claude Code — notes, a call, an answer, a message read into the
-    /// running turn, two calls in a row, more notes and a call, and the closing answer — is laid out and
-    /// folded alike, while it runs and once it ended, folded and opened. Folded while it runs, the two
-    /// calls after the answer stay one summary line, as they are in the opened work, and the turn reads
-    /// its time once, on the live line beside what it does now: the header only folds the work. Drawn in
-    /// both appearances, both harnesses.
+    /// running turn, two calls with thinking between them, more notes and a call, and the closing answer
+    /// — is laid out and folded alike, while it runs and once it ended, folded and opened. Folded while
+    /// it runs, the two calls after the answer stay one summary line, as they are in the opened work,
+    /// with the thinking (a Codex reasoning summary, Claude Code's thinking) inside it where it came and
+    /// counted as no call; and the turn reads its time once, on the live line beside what it does now:
+    /// the header only folds the work. Drawn in both appearances, both harnesses.
     func testCodexAndClaudeCodeLayOutAndFoldTheSameTurnAlike() throws {
         let directory = try WindowlessRender.directory("turn-order-qa")
         for finished in [false, true] {
@@ -285,9 +286,9 @@ final class ConversationTurnOrderTests: XCTestCase {
                 ? ["message: Issue the certificate, then make the API key.", "answer: The certificate is issued.",
                    "answer: Both are in Downloads."]
                 : ["message: Issue the certificate, then make the API key.", "answer: The certificate is issued.",
-                   "message: Also make the API key.", "call: swift run keygen", "call: ls Downloads",
-                   "commentary (streaming): Making the key.", "line: \(L10n.string("Working"))"])
-            // The two calls the folded running turn keeps in view are one run in both.
+                   "message: Also make the API key.", "call: swift run keygen", "reasoning: \(Self.thought)",
+                   "call: ls Downloads", "commentary (streaming): Making the key.", "line: \(L10n.string("Working"))"])
+            // The two calls the folded running turn keeps in view are one run in both, the thinking in it.
             let keptCalls = { (turn: ConversationTurn, harness: HarnessKind) -> [ConversationItem] in
                 let live = ConversationLiveWork.make(turn, harness: harness, workspaceURL: nil)
                 return ConversationWorkGrouping.runsKeptWhenFolded(turn, live: live).flatMap { run -> [ConversationItem] in
@@ -300,7 +301,7 @@ final class ConversationTurnOrderTests: XCTestCase {
                 "claude-code": ConversationWorkSummary.header(for: keptCalls(claude, .claudeCode), harness: .claudeCode).text
             ]
             XCTAssertEqual(keptCalls(codex, .codex).map { ConversationDrawOrder.text(of: $0) },
-                           finished ? [] : ["swift run keygen", "ls Downloads"], stage)
+                           finished ? [] : ["swift run keygen", Self.thought, "ls Downloads"], stage)
             XCTAssertEqual(keptCalls(claude, .claudeCode).map { ConversationDrawOrder.text(of: $0) },
                            keptCalls(codex, .codex).map { ConversationDrawOrder.text(of: $0) }, stage)
 
@@ -327,12 +328,15 @@ final class ConversationTurnOrderTests: XCTestCase {
                         let summary = try XCTUnwrap(summaries[harness])
                         XCTAssertTrue(texts.contains(summary), "\(harness) \(stage) summary \(summary):\n\(texts)")
                         XCTAssertFalse(texts.contains("swift run keygen"), "\(harness) \(stage) folds the run:\n\(texts)")
-                        // The time is the live line's, and the header reads none while the turn runs.
+                        XCTAssertFalse(texts.contains(Self.thought), "\(harness) \(stage) folds the thinking:\n\(texts)")
+                        // The time is the live line's, and the header reads none while the turn runs; the
+                        // thinking is no step.
                         XCTAssertTrue(folded.elements.contains { element in
                             [element.label, element.value].contains {
-                                $0.hasPrefix(L10n.string("Working")) && ConversationDrawing.endsWithElapsedTime($0)
+                                $0.hasPrefix(L10n.string("Working")) && $0.contains(L10n.format("%lld steps", Int64(3)))
+                                    && ConversationDrawing.endsWithElapsedTime($0)
                             }
-                        }, "\(harness) \(stage) live line reads the time:\n\(texts)")
+                        }, "\(harness) \(stage) live line reads the steps and the time:\n\(texts)")
                     }
                     let readsWorkTime = folded.elements.contains {
                         ConversationDrawing.isWorkTime($0.label) || ConversationDrawing.isWorkTime($0.value)
@@ -354,7 +358,8 @@ final class ConversationTurnOrderTests: XCTestCase {
                         path: "\(harness)-\(stage)-opened-\(appearance.suffix).png"))
                     let opened = host.accessibilityElements().map(\.description)
                     let order = ["Issue the certificate", "Checking the certificate page.", "The certificate is issued.",
-                                 "Also make the API key.", "ls Downloads", "Making the key."]
+                                 "Also make the API key.", L10n.string("Thought process"), "ls Downloads",
+                                 "Making the key."]
                         + (finished ? ["Both are in Downloads."] : [])
                     let positions = try order.map { text in
                         try XCTUnwrap(opened.firstIndex { $0.contains(text) }, "\(harness) \(stage) opened: \(text)\n\(opened)")
@@ -489,6 +494,9 @@ final class ConversationTurnOrderTests: XCTestCase {
     // The scene both harnesses can tell: Claude Code sends no message while its work goes on, so the
     // question is Codex's alone and left out here.
 
+    /// The thinking between the two calls: a Codex reasoning summary, Claude Code's thinking.
+    private static let thought = "The key goes next to the certificate."
+
     private func sharedCodexThread(finished: Bool) -> CodexThreadState {
         var thread = decoder.thread(from: .object(["id": .string("thread-shared")]))!
         thread.turns = [sharedCodexTurn(finished: finished)]
@@ -508,6 +516,8 @@ final class ConversationTurnOrderTests: XCTestCase {
             Self.message("a1", "The certificate is issued.", phase: "final_answer"),
             Self.user("u2", "Also make the API key."),
             command("k1", "swift run keygen"),
+            .object(["id": .string("r1"), "type": .string("reasoning"), "summary": .array([.string(Self.thought)]),
+                     "content": .array([])]),
             command("k2", "ls Downloads"),
             Self.message("m2", "Making the key.", phase: "commentary")
         ]
@@ -537,6 +547,7 @@ final class ConversationTurnOrderTests: XCTestCase {
             at(60, .assistant(text: "The certificate is issued.", isStreaming: false)),
             at(70, .user(text: "Also make the API key."), joins: true),
             at(72, bash("toolu_k1", "swift run keygen")),
+            at(73, .reasoning(text: Self.thought, isStreaming: false)),
             at(75, bash("toolu_k2", "ls Downloads")),
             at(80, .assistant(text: "Making the key.", isStreaming: !finished))
         ]

@@ -4,7 +4,8 @@ import SwiftUI
 // its design system; 2026-10-15 user decision), the same for every
 // harness. Each call and the provider's own thinking is one line — what was done, muted, and what it
 // was done to — with a caret after the words when it opens into what it holds. A run of two or more
-// calls reads as one summary line that opens into a card with a one-point ring and a cell per call.
+// calls reads as one summary line that opens into a card with a one-point ring and a cell per call,
+// the thinking among them in its place.
 // The colors are Yardlet's own; the words are each provider's (`ConversationLineWording`): a Codex
 // command reads as the Codex app words it ("Read Parser.swift", "Ran swift test"), a Claude Code
 // call as Claude Code does ("Searched TODO", "Ran tests").
@@ -199,9 +200,9 @@ struct ConversationStatusLine<Trailing: View, Actions: View, Detail: View>: View
 }
 
 /// A run of calls as Claude Code folds it: one summary line that opens into a card with a one-point
-/// ring (`shadow-card-ring`, 10 pt corners) and a cell per call (`px-md`), divided by rules. Where it
-/// starts is `ConversationWorkDisclosure.groupStartsOpen`; it opens when one of its calls fails, and
-/// folded while one runs, it marks that it runs.
+/// ring (`shadow-card-ring`, 10 pt corners) and a cell per call and per thought among them (`px-md`),
+/// divided by rules. Where it starts is `ConversationWorkDisclosure.groupStartsOpen`; it opens when
+/// one of its calls fails, and folded while one runs, it marks that it runs.
 struct ConversationWorkGroup<Cell: View>: View {
     let items: [ConversationItem]
     let harness: HarnessKind
@@ -301,26 +302,40 @@ enum ConversationWorkGrouping {
         }
     }
 
-    /// A call, and reasoning without a summary to read (Claude Code's thinking, Codex's raw content).
-    static func drawsAsLine(_ item: ConversationItem) -> Bool {
-        switch item.kind {
-        case .command, .fileChange, .tool: true
-        case let .reasoning(summary, _, _): summary == nil
-        default: false
-        }
+    /// What a run of work holds: a call, or the provider's thinking among its calls. Thinking does not
+    /// part the calls around it, as the Codex app leaves its reasoning out of what splits its activity
+    /// group (26.1021) and the Claude app keeps a call's thinking with the call. What counts as a call,
+    /// and what a run's summary counts, stays `ConversationWorkSummary.category`'s.
+    static func joinsRun(_ item: ConversationItem) -> Bool {
+        if case .reasoning = item.kind { return true }
+        return ConversationWorkSummary.category(of: item) != nil
     }
 
-    /// Consecutive calls, two or more, become one group, and consecutive suggested tasks one card;
-    /// everything else stays as it is.
+    /// Thinking with something to read: it streams, or it has a summary or words of its own. Codex
+    /// sends reasoning with neither, which draws nothing.
+    static func showsThought(_ item: ConversationItem) -> Bool {
+        guard case let .reasoning(summary, detail, isStreaming) = item.kind else { return false }
+        return isStreaming || summary?.isEmpty == false || detail?.isEmpty == false
+    }
+
+    /// Consecutive calls, two or more, become one group that keeps the thinking among and around
+    /// them where it came, and consecutive suggested tasks one card; everything else stays as it is,
+    /// the thinking beside a single call too.
     static func runs(_ items: [ConversationItem]) -> [Run] {
         var runs: [Run] = []
         var pending: [ConversationItem] = []
         func flush() {
-            if pending.count > 1 { runs.append(.group(pending)) } else if let one = pending.first { runs.append(.single(one)) }
+            let calls = pending.filter { ConversationWorkSummary.category(of: $0) != nil }
+            if calls.count > 1 {
+                // Thinking with nothing to read takes no cell of the group.
+                runs.append(.group(pending.filter { ConversationWorkSummary.category(of: $0) != nil || showsThought($0) }))
+            } else {
+                runs += pending.map(Run.single)
+            }
             pending = []
         }
         for item in items {
-            if ConversationWorkSummary.category(of: item) != nil {
+            if joinsRun(item) {
                 pending.append(item)
             } else if case .taskSuggestion = item.kind {
                 flush()
@@ -347,7 +362,7 @@ enum ConversationWorkGrouping {
     }
 }
 
-/// The status line of each kind of call, and of reasoning without a summary.
+/// The status line of each kind of call, and of the provider's thinking.
 struct ConversationWorkLine: View, Equatable {
     let item: ConversationItem
     /// Whose words the line reads in (`ConversationLineWording`).
@@ -413,23 +428,30 @@ struct ConversationWorkLine: View, Equatable {
             fileChangeLine(change)
         case let .tool(tool):
             toolLine(tool)
-        case let .reasoning(_, detail, isStreaming) where isStreaming || detail?.isEmpty == false:
+        case let .reasoning(summary, detail, isStreaming) where ConversationWorkGrouping.showsThought(item):
+            // A summary (Codex) reads first, then the provider's own words, as the Codex app folds its
+            // reasoning on "Thinking" and "Thought" and the Claude app its thinking.
+            let texts = [summary, detail].compactMap { $0 }.filter { !$0.isEmpty }
             ConversationStatusLine(
                 words: [ConversationLineWords(verb: isStreaming ? L10n.string("Thinking") : L10n.string("Thought process"))],
-                phase: isStreaming ? .running : .completed, hasDetail: detail?.isEmpty == false,
+                phase: isStreaming ? .running : .completed, hasDetail: !texts.isEmpty,
                 startsOpen: startsOpen,
                 accessibilityLabel: L10n.string("Thought process"), opensForReview: true,
                 isHistoryMatch: item.isHistoryMatch, onToggle: record
             ) {
                 EmptyView()
             } actions: {
-                EmptyView()
+                ConversationCopyDetailsButton(details: item.copyDetails)
             } detail: {
-                Text(detail ?? "")
-                    .font(.system(size: 12 * interfaceScale))
-                    .foregroundStyle(.secondary)
-                    .lineSpacing(ParityTheme.proseLineSpacing * interfaceScale)
-                    .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(texts.enumerated()), id: \.offset) { _, text in
+                        Text(text)
+                            .font(.system(size: 12 * interfaceScale))
+                            .foregroundStyle(.secondary)
+                            .lineSpacing(ParityTheme.proseLineSpacing * interfaceScale)
+                            .textSelection(.enabled)
+                    }
+                }
             }
         default:
             EmptyView()

@@ -132,57 +132,6 @@ extension ConversationTool.Kind {
     }
 }
 
-/// The Codex timeline's row for an item of work: its symbol, its title with a spinner while it
-/// runs, its content, "Run in terminal" for a command the task's terminal can run, and "Copy item
-/// details".
-struct ConversationCodexActivityRow<Content: View>: View {
-    let title: String
-    let symbolName: String
-    let phase: ConversationItemPhase
-    let isApproved: Bool
-    let copyDetails: String?
-    let isHistoryMatch: Bool
-    var terminalCommand: (() -> Void)? = nil
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        // On the title's line: the symbol and the buttons on its words' middle, not the row's top.
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: symbolName)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(phase == .running ? ParityTheme.accent : .secondary)
-                .frame(width: 18, height: 18)
-                .centeredOnCapHeight(ofTextSize: 11)
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 7) {
-                    Text(title)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    if phase == .running {
-                        ProgressView().controlSize(.mini)
-                    }
-                    if isApproved {
-                        ConversationAllowedMark()
-                    }
-                }
-                content
-            }
-            Spacer(minLength: 0)
-            if let terminalCommand {
-                ConversationRunInTerminalButton(action: terminalCommand)
-                    .centeredOnCapHeight(ofTextSize: 11)
-            }
-            ConversationCopyDetailsButton(details: copyDetails)
-                .centeredOnCapHeight(ofTextSize: 11)
-        }
-        .padding(.vertical, 2)
-        .background(isHistoryMatch ? ParityTheme.accent.opacity(0.055) : .clear, in: RoundedRectangle(cornerRadius: 8))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(title)
-        .accessibilityValue(ConversationActivityAccessibility.value(phase: phase, isHistoryMatch: isHistoryMatch))
-    }
-}
-
 /// The shared transcript's card for a call: a status tile, the title and the kind, the status,
 /// and the details folded below. A failed call opens itself.
 private struct ConversationActivityDisclosure<Details: View, Controls: View>: View {

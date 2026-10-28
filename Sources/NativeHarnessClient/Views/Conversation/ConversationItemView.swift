@@ -11,9 +11,9 @@ struct ConversationItemContext {
 }
 
 /// One item of a turn, drawn from its normalized `kind` with one card per kind, whatever the harness:
-/// a sent message, a provider's message and its reasoning summary (plan M12f, D12), a call or the
-/// provider's own thinking as a status line (`ConversationWorkLine`, 2026-10-15), a subagent (M12b),
-/// a Claude bash command. Only what one provider alone sends —
+/// a sent message, a provider's message (plan M12f, D12), a call or the provider's own thinking, its
+/// summary too, as a status line (`ConversationWorkLine`, 2026-10-15), a subagent (M12b), a Claude
+/// bash command. Only what one provider alone sends —
 /// a Codex proposed plan and a Codex notice — is still drawn by the card its record has (`source`).
 struct ConversationItemView: View {
     let item: ConversationItem
@@ -39,9 +39,6 @@ struct ConversationItemView: View {
             agentMessage(text: text, isCommentary: false, isStreaming: isStreaming)
         case let .commentary(text, isStreaming):
             agentMessage(text: text, isCommentary: true, isStreaming: isStreaming)
-        case let .reasoning(summary?, detail, _):
-            ConversationReasoningCard(summary: summary, detail: detail, phase: item.phase,
-                                      copyDetails: item.copyDetails, isHistoryMatch: item.isHistoryMatch)
         case .reasoning, .command, .fileChange, .tool:
             ConversationWorkLine(item: item, harness: context.harness, workspaceURL: context.workspaceURL,
                                  runInTerminal: context.actions.runInTerminal,

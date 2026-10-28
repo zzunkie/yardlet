@@ -1161,8 +1161,6 @@
 "Tool input" = "Tool input";
 "Tool output" = "Tool output";
 "Thought process" = "Thought process";
-"Show the thought process" = "Show the thought process";
-"Hide the thought process" = "Hide the thought process";
 
 /* Projects: name, root folders, primary folder */
 "Primary folder" = "Primary folder";

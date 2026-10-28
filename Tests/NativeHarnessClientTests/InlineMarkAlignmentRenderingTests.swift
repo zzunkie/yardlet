@@ -55,15 +55,6 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
         XCTAssertLessThanOrEqual(abs(offset), Self.tolerance, "\(offset) pt")
     }
 
-    func testAReasoningSummarysSymbolSitsOnItsTitlesMiddle() throws {
-        let offset = try Self.offset(named: "reasoning-row-symbol", markIsFirst: true) {
-            ConversationReasoningCard(summary: "", detail: nil)
-        }
-        // The title is the app's own word, which in Korean has Hangul ink reaching a little under
-        // the baseline, so its ink's middle sits below the capitals' middle the symbol is set on.
-        XCTAssertLessThanOrEqual(abs(offset), 1, "\(offset) pt")
-    }
-
     // MARK: - Measuring
 
     /// The mark's vertical middle less the words' (positive: the mark sits low), in points, from the

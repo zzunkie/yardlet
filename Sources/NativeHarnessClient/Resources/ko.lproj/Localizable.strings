@@ -1161,8 +1161,6 @@
 "Tool input" = "도구 입력";
 "Tool output" = "도구 출력";
 "Thought process" = "사고 과정";
-"Show the thought process" = "사고 과정 보기";
-"Hide the thought process" = "사고 과정 숨기기";
 
 /* Projects: name, root folders, primary folder */
 "Primary folder" = "주 폴더";

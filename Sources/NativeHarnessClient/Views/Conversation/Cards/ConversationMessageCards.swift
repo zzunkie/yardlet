@@ -445,33 +445,6 @@ struct ConversationAgentMessage: View {
     }
 }
 
-/// A reasoning summary the provider wrote to be read (Codex), in the reasoning row, its raw
-/// reasoning folded under "Thought process". Reasoning without a summary (Codex's raw content,
-/// Claude Code's thinking) is a status line (`ConversationWorkLine`).
-struct ConversationReasoningCard: View {
-    let summary: String
-    let detail: String?
-    var phase: ConversationItemPhase = .completed
-    var copyDetails: String? = nil
-    var isHistoryMatch = false
-
-    var body: some View {
-        ConversationCodexActivityRow(
-            title: L10n.string("Reasoning"), symbolName: "brain", phase: phase, isApproved: false,
-            copyDetails: copyDetails, isHistoryMatch: isHistoryMatch
-        ) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(summary)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                if let detail {
-                    ReasoningCard(text: detail, isStreaming: false)
-                }
-            }
-        }
-    }
-}
-
 /// The frame every message sits in: a little room above and below, the history match's tint, and
 /// one element for assistive apps named for who wrote it, valued by its phase.
 private struct ConversationMessageFrame: ViewModifier {
