@@ -102,7 +102,7 @@ final class CodexTurnRecoveryTests: XCTestCase {
             draft.attachments = [.localImage(root.appending(path: "not-sent.png"), detail: .original)]
             let before = draft.snapshot
             let entries = model.transcriptBySessionID[session.id]
-            await model.retryCodexTurn(failed, in: session)
+            await model.retryTurn(failed.id, in: session)
             XCTAssertEqual(draft.snapshot, before)
             XCTAssertEqual(model.transcriptBySessionID[session.id], entries)
             let current = try XCTUnwrap(model.store.sessions.first)

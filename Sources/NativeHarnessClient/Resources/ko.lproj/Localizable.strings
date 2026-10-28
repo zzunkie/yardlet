@@ -464,6 +464,7 @@
 "Enter a localhost URL above. The WebKit process starts only after you open an address." = "위에 localhost URL을 입력하세요. 주소를 연 뒤에만 WebKit 프로세스가 시작됩니다.";
 "Preview unavailable" = "미리보기를 사용할 수 없음";
 "Try again" = "다시 시도";
+"Retry message" = "다시 시도해 주세요";
 "Enter a valid preview address." = "올바른 미리보기 주소를 입력하세요.";
 "Only HTTP and HTTPS addresses are supported." = "HTTP와 HTTPS 주소만 지원합니다.";
 "Addresses containing credentials are not allowed." = "자격 증명이 포함된 주소는 허용하지 않습니다.";

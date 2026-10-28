@@ -285,8 +285,8 @@ struct TaskDetail: View {
     }
 
     /// The conversation's actions with what this view owns: restoring a request into the
-    /// composer, the subtask controls, running a command in the task's terminal, and when Codex
-    /// may retry a turn or implement its plan.
+    /// composer, the subtask controls, running a command in the task's terminal, and when the task
+    /// may retry a turn or Codex implement its plan.
     private var chatActions: ConversationActions {
         var actions = conversationActions
         actions.restoreDraft = { restoreDraft($0) }
@@ -295,7 +295,7 @@ struct TaskDetail: View {
         actions.runInTerminal = conversationOnly ? nil : { runInTerminal($0) }
         let allowsRetry = (session.status == .ready || session.status == .failed)
             && composerDraft.editState == nil && codexQueue.isEmpty
-        if !allowsRetry { actions.retryCodexTurn = nil }
+        if !allowsRetry { actions.retryTurn = nil }
         if !canStartCodexTurn {
             actions.implementCodexPlan = nil
             actions.answerQuestion = nil

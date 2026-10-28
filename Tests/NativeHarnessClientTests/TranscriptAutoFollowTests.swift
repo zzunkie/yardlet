@@ -196,7 +196,7 @@ final class TranscriptAutoFollowTests: XCTestCase {
         var body: some View {
             TaskConversationView(
                 harness: .codex, workspaceURL: URL(filePath: "/tmp/qa"), entries: [], codexTaskState: feed.state,
-                actions: ConversationActions(retryCodexTurn: { _ in })
+                actions: ConversationActions(retryTurn: { _ in })
             )
             .frame(width: TranscriptAutoFollowTests.size.width, height: TranscriptAutoFollowTests.size.height)
         }

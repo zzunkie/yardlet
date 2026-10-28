@@ -1348,7 +1348,7 @@ actor LegacyHarnessProtocolBridge {
                     payload: .object(["cut": .string(cut.rawValue)])
                 )), source: event)
 
-            case let .error(message, recoverable):
+            case let .error(message, recoverable, transient):
                 let turnID = activeTurnIDs.removeValue(forKey: localSessionID)
                 try emit(
                     .turnFailed(
@@ -1357,7 +1357,8 @@ actor LegacyHarnessProtocolBridge {
                             code: "yardlet.compat.legacy_error",
                             message: message,
                             diagnostic: nil,
-                            recoverable: recoverable
+                            recoverable: recoverable,
+                            transient: transient
                         )
                     ),
                     source: event

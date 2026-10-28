@@ -23,7 +23,7 @@ final class CodexRuntime0163ShapeTests: XCTestCase {
         let payloads = try await finished(collected)
 
         let errors = payloads.compactMap { payload -> String? in
-            if case let .error(message, _) = payload { return message }
+            if case let .error(message, _, _) = payload { return message }
             return nil
         }
         XCTAssertTrue(errors.isEmpty, "\(errors)")

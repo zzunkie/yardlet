@@ -49,7 +49,7 @@ final class SentUserMessageTests: XCTestCase {
         ]), fallbackID: "turn-1")!]
         let timeline = TaskConversationView(
             harness: .codex, workspaceURL: URL(filePath: "/Users/me/yardlet"), entries: [],
-            codexTaskState: CodexTaskState(thread: thread), actions: ConversationActions(retryCodexTurn: { _ in })
+            codexTaskState: CodexTaskState(thread: thread), actions: ConversationActions(retryTurn: { _ in })
         )
         try render(timeline.environment(\.revealsSentMessageActions, true), height: 420, name: "codex-request")
         try render(timeline, height: 420, name: "codex-request-at-rest")

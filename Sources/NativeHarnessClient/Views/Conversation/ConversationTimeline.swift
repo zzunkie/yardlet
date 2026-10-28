@@ -364,13 +364,14 @@ struct ConversationTimeline: View {
     private func handlers(for turn: ConversationTurn) -> ConversationTurnHandlers {
         var handlers = ConversationTurnHandlers(loadMoreItems: { actions.loadMoreCodexItems(turn.id) })
         let turnID = turn.id
+        // Every harness retries by the turn's ID, the way its own app does (`AppModel.retryTurn`).
+        if turn.actions.canRetry, let retry = actions.retryTurn {
+            handlers.retry = { retry(turnID) }
+        }
         switch source {
         case let .codex(state, _, _):
             // Codex's own turn actions act on the provider's turn.
             let codexTurn = { state.thread?.turns.first { $0.id == turnID } }
-            if turn.actions.canRetry, let retry = actions.retryCodexTurn {
-                handlers.retry = { if let turn = codexTurn() { retry(turn) } }
-            }
             let rewind = actions.rewind
             let restoreDraft = actions.restoreDraft
             handlers.edit = { draft in

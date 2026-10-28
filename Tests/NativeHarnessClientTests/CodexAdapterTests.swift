@@ -361,7 +361,7 @@ final class CodexAdapterTests: XCTestCase {
         for await event in events { payloads.append(event.payload) }
 
         let errors = payloads.compactMap { payload -> String? in
-            if case let .error(message, _) = payload { return message }; return nil
+            if case let .error(message, _, _) = payload { return message }; return nil
         }
         XCTAssertEqual(errors, [CodexTurnErrorPresentation(usageLimit)?.text])
         XCTAssertTrue(errors.first?.hasPrefix(L10n.string("You've hit your usage limit.")) == true)

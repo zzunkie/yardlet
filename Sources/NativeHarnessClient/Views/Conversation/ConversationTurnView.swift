@@ -106,12 +106,15 @@ enum ConversationTurnAction: Hashable, Sendable {
 }
 
 /// One turn, in the same order for every harness (plan A5.1): what was sent, the provider's notices,
-/// the turn header (its work time, the fold of its work and its menu), the outcome, the work (plan
-/// first, then everything in the order it happened, answered requests and messages sent into the
-/// running turn included), the answers, the plan question, the status line, more items, and the
-/// requests still waiting, pinned under the turn (D1). A folded turn keeps in view what the rule every
-/// harness shares keeps (`ConversationTurn.workKeptWhenFolded`): the answers it went on past, the
-/// messages no finished answer followed, and while it runs, what came after its latest answer.
+/// the turn header (its work time, the fold of its work and its menu), the work (plan first, then
+/// everything in the order it happened, answered requests and messages sent into the running turn
+/// included), the answers, the plan question, the status line, more items, the outcome, and the
+/// requests still waiting, pinned under the turn (D1). The outcome is what the turn ended on, so it
+/// comes after everything the turn wrote, as the Codex app adds its turn error after the turn's items
+/// and the Claude app draws a failed turn's card where the turn ended. A folded turn keeps in view
+/// what the rule every harness shares keeps (`ConversationTurn.workKeptWhenFolded`): the answers it
+/// went on past, the messages no finished answer followed, and while it runs, what came after its
+/// latest answer.
 struct ConversationTurnView: View, Equatable {
     let turn: ConversationTurn
     let context: ConversationItemContext
@@ -182,10 +185,6 @@ struct ConversationTurnView: View, Equatable {
                 header
             }
 
-            if let outcome = turn.outcome {
-                outcomeCard(outcome)
-            }
-
             if workDetailsAreVisible {
                 if let plan = turn.plan {
                     planCard(plan)
@@ -239,6 +238,10 @@ struct ConversationTurnView: View, Equatable {
                 .font(.caption)
                 .foregroundStyle(ParityTheme.accent)
                 .accessibilityHint(L10n.string("Load the next page of items for this turn."))
+            }
+
+            if let outcome = turn.outcome {
+                outcomeCard(outcome)
             }
 
             ForEach(turn.requests) { request in
@@ -406,13 +409,15 @@ struct ConversationTurnView: View, Equatable {
     private func outcomeCard(_ outcome: ConversationTurnOutcome, isTurnOutcome: Bool = true) -> some View {
         switch outcome {
         case let .error(error):
-            // A transcript error offers the harness's settings, as its row did; a Codex turn error
-            // offers retry instead.
+            // The turn's own error offers retry when its provider says it can pass
+            // (`ConversationTurnActions.canRetry`). A transcript error it cannot retry offers the
+            // harness's settings, as its row did.
+            let retry = isTurnOutcome ? handlers.retry : nil
             TranscriptErrorCard(
                 harness: context.harness, title: error.title, message: error.message,
                 recoverable: error.isRecoverable,
-                onRetry: isTurnOutcome ? handlers.retry : nil, onEditRequest: isTurnOutcome ? editFailedRequest : nil,
-                onShowHarnessSettings: error.entryID == nil ? nil : context.actions.showHarnessSettings
+                onRetry: retry, onEditRequest: isTurnOutcome ? editFailedRequest : nil,
+                onShowHarnessSettings: error.entryID == nil || retry != nil ? nil : context.actions.showHarnessSettings
             )
         case let .usageLimit(limit, entryID):
             // Only the transcript's last entry offers to continue, under another account or once

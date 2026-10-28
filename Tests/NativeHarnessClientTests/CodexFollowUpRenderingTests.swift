@@ -61,7 +61,7 @@ final class CodexFollowUpRenderingTests: XCTestCase {
         for appearance in [ColorScheme.light, .dark] {
             let timeline = TaskConversationView(
                 harness: .codex, workspaceURL: URL(filePath: "/tmp/qa"), entries: [],
-                codexTaskState: CodexTaskState(thread: thread), actions: ConversationActions(retryCodexTurn: { _ in })
+                codexTaskState: CodexTaskState(thread: thread), actions: ConversationActions(retryTurn: { _ in })
             )
             .frame(width: 760, height: 520)
             .background(ParityTheme.canvas)

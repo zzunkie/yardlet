@@ -18,7 +18,7 @@ final class ConversationIntendedDifferenceTests: XCTestCase {
     /// in the work where it happened, so a finished turn folds it.
     func testCodexRequestsUseTheOneCardAndOnlyWaitingOnesStayUnderTheTurn() throws {
         let state = codexRequestsFixture()
-        let actions = ConversationActions(retryCodexTurn: { _ in }, forkCodexTurn: { _ in }, implementCodexPlan: { _ in })
+        let actions = ConversationActions(retryTurn: { _ in }, forkCodexTurn: { _ in }, implementCodexPlan: { _ in })
         let size = NSSize(width: 760, height: 1_400)
         let directory = try WindowlessRender.directory("conversation-m12-qa")
         for appearance in WindowlessRender.Appearance.allCases {
@@ -134,7 +134,7 @@ final class ConversationIntendedDifferenceTests: XCTestCase {
         ])
         var state = thread([limited, compacting])
         state.thread?.turns[1].items[1].lifecycle = .completed
-        let actions = ConversationActions(retryCodexTurn: { _ in }, forkCodexTurn: { _ in }, implementCodexPlan: { _ in },
+        let actions = ConversationActions(retryTurn: { _ in }, forkCodexTurn: { _ in }, implementCodexPlan: { _ in },
                                           restoreDraft: { _ in })
         let size = NSSize(width: 760, height: 900)
         let directory = try WindowlessRender.directory("conversation-m12-qa")
@@ -240,8 +240,8 @@ final class ConversationIntendedDifferenceTests: XCTestCase {
     }
 
     /// The transcript draws a turn in the same order as Codex (plan A5.1): a failed turn's error card
-    /// under its header, above the work.
-    func testATranscriptTurnPutsItsOutcomeAboveItsWork() throws {
+    /// after its work, where the turn ended (it was under the header, above the work, until 2026-10-28).
+    func testATranscriptTurnPutsItsOutcomeAfterItsWork() throws {
         let entries = ClaudeConversationFixture.failed()
         let size = NSSize(width: 760, height: 1_300)
         let actions = ClaudeConversationFixture.actions()
@@ -255,7 +255,7 @@ final class ConversationIntendedDifferenceTests: XCTestCase {
         // The read is its status line, or inside the summary line of the calls around it (2026-10-15).
         let readCard: (String) -> Bool = { $0.contains("“Read") || $0.contains(L10n.string("Read a file")) }
         let error: (String) -> Bool = { $0.contains("Internal server error") }
-        XCTAssertGreaterThan(try position(new, readCard), try position(new, error))
+        XCTAssertLessThan(try position(new, readCard), try position(new, error))
     }
 
     /// The decided differences in one place for review: a Codex thread, a Claude Code task waiting on
@@ -273,7 +273,7 @@ final class ConversationIntendedDifferenceTests: XCTestCase {
             ("codex", AnyView(ConversationTimeline(
                 source: .codex(ConversationFixtures.codexTimeline(), workspaceURL: ConversationFixtures.workspace,
                                historySelection: nil),
-                actions: ConversationActions(retryCodexTurn: { _ in }, forkCodexTurn: { _ in }, implementCodexPlan: { _ in })
+                actions: ConversationActions(retryTurn: { _ in }, forkCodexTurn: { _ in }, implementCodexPlan: { _ in })
             )), 1_600),
             ("claude-code", AnyView(TaskConversationView(
                 harness: .claudeCode, workspaceURL: ClaudeConversationFixture.workspace,

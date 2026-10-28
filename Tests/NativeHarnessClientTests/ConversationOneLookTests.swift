@@ -99,6 +99,73 @@ final class ConversationOneLookTests: XCTestCase {
         }
     }
 
+    /// A turn's error is what the turn ended on, so its card reads after everything the turn wrote, for
+    /// every harness, while the turn still streams as well (a Codex error was drawn under the turn's
+    /// header, above the work it streamed). The card offers Retry only for an error its provider says
+    /// can pass, on a turn that has ended: Codex's busy server, not its sign-in failure; Claude Code's
+    /// API error the adapter read as transient, not any other.
+    func testATurnsErrorComesAfterWhatTheTurnWroteAndOffersRetryOnlyWhenItCanPass() throws {
+        let directory = try WindowlessRender.directory("conversation-m12f-qa")
+        let size = NSSize(width: 760, height: 520)
+        let wrote = "Running the tests first."
+        let actions = ConversationActions(retryTurn: { _ in })
+        func failedThread(_ errorInfo: String, status: String = "failed") -> CodexTaskState {
+            var state = thread(turn: [
+                "id": .string("turn-1"), "status": .string(status),
+                "items": .array([
+                    .object(["id": .string("u1"), "type": .string("userMessage"),
+                             "content": .array([.object(["type": .string("text"), "text": .string(sentText)])])]),
+                    .object(["id": .string("m1"), "type": .string("agentMessage"), "text": .string(wrote),
+                             "phase": .string("commentary")])
+                ]),
+                "error": .object(["message": .string("The request could not be completed."),
+                                  "codexErrorInfo": .string(errorInfo)])
+            ])
+            state.thread?.status = status == "failed" ? .idle : .active(flags: [])
+            return state
+        }
+        func failedEntries(transient: Bool?) -> [TranscriptEntry] {
+            [TranscriptEntry(createdAt: start, content: .user(text: sentText)),
+             TranscriptEntry(createdAt: start.addingTimeInterval(1), content: .assistant(text: wrote, isStreaming: false)),
+             TranscriptEntry(createdAt: start.addingTimeInterval(2), content: .error(
+                message: "API Error: 529 Overloaded", recoverable: true, transient: transient))]
+        }
+        let cases: [(name: String, view: AnyView, title: String, retries: Bool)] = [
+            ("codex-busy", AnyView(ConversationTimeline(
+                source: .codex(failedThread("serverOverloaded"), workspaceURL: Self.workspace, historySelection: nil),
+                actions: actions)), L10n.string("Server is busy."), true),
+            // The final `error` notification reaches the turn before `turn/completed` does.
+            ("codex-streaming", AnyView(ConversationTimeline(
+                source: .codex(failedThread("serverOverloaded", status: "inProgress"), workspaceURL: Self.workspace,
+                               historySelection: nil),
+                actions: actions)), L10n.string("Server is busy."), false),
+            ("codex-signed-out", AnyView(ConversationTimeline(
+                source: .codex(failedThread("unauthorized"), workspaceURL: Self.workspace, historySelection: nil),
+                actions: actions)), L10n.format("%@ could not complete the request", HarnessKind.codex.displayName), false),
+            ("claude-code-busy", AnyView(transcript(.claudeCode, failedEntries(transient: true), status: .failed,
+                                                    actions: actions)),
+             L10n.format("%@ could not complete the request", HarnessKind.claudeCode.displayName), true),
+            ("claude-code-failed", AnyView(transcript(.claudeCode, failedEntries(transient: nil), status: .failed,
+                                                      actions: actions)),
+             L10n.format("%@ could not complete the request", HarnessKind.claudeCode.displayName), false)
+        ]
+        for (name, view, title, retries) in cases {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let drawing = try ConversationDrawing.draw(view, size: size, appearance: appearance)
+                try WindowlessRender.writePNG(drawing.capture.bitmap,
+                                              to: directory.appending(path: "error-\(name)-\(appearance.suffix).png"))
+                let texts = drawing.elements.map(\.description).joined(separator: "\n")
+                let written = drawing.elements.firstIndex { $0.label.contains(wrote) || $0.value.contains(wrote) }
+                let card = drawing.elements.firstIndex { $0.label == title || $0.value == title }
+                let retry = drawing.elements.firstIndex { $0.role == "AXButton" && $0.label == L10n.string("Retry") }
+                guard let written, let card else { return XCTFail("\(name): the turn's words and its error card\n\(texts)") }
+                XCTAssertLessThan(written, card, "\(name):\n\(texts)")
+                XCTAssertEqual(retry != nil, retries, "\(name):\n\(texts)")
+                if let retry { XCTAssertGreaterThan(retry, card, "\(name):\n\(texts)") }
+            }
+        }
+    }
+
     /// The sent bubble follows the interface size setting for every harness, Codex included (it was
     /// a fixed 13 pt in the Codex timeline).
     func testTheSentMessageFollowsTheInterfaceSize() throws {
@@ -168,7 +235,7 @@ final class ConversationOneLookTests: XCTestCase {
             ("codex", AnyView(ConversationTimeline(
                 source: .codex(ConversationFixtures.codexTimeline(), workspaceURL: ConversationFixtures.workspace,
                                historySelection: nil),
-                actions: ConversationActions(retryCodexTurn: { _ in }, forkCodexTurn: { _ in }, implementCodexPlan: { _ in })
+                actions: ConversationActions(retryTurn: { _ in }, forkCodexTurn: { _ in }, implementCodexPlan: { _ in })
             )), 4_400),
             ("claude-code", AnyView(TaskConversationView(
                 harness: .claudeCode, workspaceURL: ClaudeConversationFixture.workspace,

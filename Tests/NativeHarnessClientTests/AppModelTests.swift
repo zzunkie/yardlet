@@ -2667,7 +2667,7 @@ final class AppModelTests: XCTestCase {
             raw: .object([:])
         )
 
-        await model.retryCodexTurn(turn, in: created)
+        await model.retryTurn(turn.id, in: created)
 
         let submissions = await adapter.codexSubmissions
         XCTAssertTrue(submissions.isEmpty)
@@ -2716,7 +2716,7 @@ final class AppModelTests: XCTestCase {
             raw: .object([:])
         )
 
-        await model.retryCodexTurn(turn, in: session)
+        await model.retryTurn(turn.id, in: session)
 
         XCTAssertNil(model.codexCapabilitiesBySessionID[session.id])
         XCTAssertNil(model.errorBySessionID[session.id])

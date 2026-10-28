@@ -142,7 +142,7 @@ enum TaskNavigationProjection {
         case let .permission(request, state):
             [request.title, request.detail ?? "", request.command ?? "", state.rawValue]
                 .joined(separator: " ")
-        case let .error(message, recoverable):
+        case let .error(message, recoverable, _):
             "\(message) \(recoverable ? "recoverable" : "terminal")"
         case let .usageLimit(limit):
             limit.message ?? ""

@@ -3,8 +3,8 @@ import YardletRemote
 
 /// A task's conversation as the phone draws it (docs/REMOTE_PROTOCOL.md §6), read from the one
 /// conversation model the Mac's `ConversationTimeline` draws for every harness. Nothing is
-/// interpreted again: each turn keeps the Mac's order (what was sent, notices, the header, the
-/// outcome, the plan and work, the answers, the requests still waiting), each call reads the line the
+/// interpreted again: each turn keeps the Mac's order (what was sent, notices, the header, the plan
+/// and work, the answers, the outcome, the requests still waiting), each call reads the line the
 /// Mac shows (`ConversationLineWording`), and each request offers only the answers the Mac's card
 /// offers that the phone may give (`RemoteApprovalPolicy`). Outputs, file contents and diffs are left
 /// out, and fetched one line at a time by `itemDetail` (§15.8); text is capped.
@@ -30,9 +30,6 @@ enum RemoteConversationProjection {
             add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL, inWork: false))
         }
         let headerIndex = items.count
-        if let outcome = turn.outcome {
-            add(self.outcome(outcome, id: "outcome:\(turn.id)", turnID: turn.id, inWork: false))
-        }
         if let plan = turn.plan { add(self.plan(plan, turnID: turn.id)) }
         let kept = Set(turn.workKeptWhenFolded.map(\.id))
         for item in turn.work {
@@ -41,6 +38,9 @@ enum RemoteConversationProjection {
         }
         for item in turn.answers {
             add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL, inWork: false))
+        }
+        if let outcome = turn.outcome {
+            add(self.outcome(outcome, id: "outcome:\(turn.id)", turnID: turn.id, inWork: false))
         }
         for request in turn.requests { add(self.request(request, turnID: turn.id, inWork: false)) }
         items.insert(header(turn, workCount: items.filter { $0.inWork == true }.count), at: headerIndex)

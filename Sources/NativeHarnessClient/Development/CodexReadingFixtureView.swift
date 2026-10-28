@@ -40,7 +40,7 @@ struct CodexReadingFixtureView: View {
                 harness: .codex, workspaceURL: URL(filePath: "/tmp/codex-reading-fixture"), entries: [],
                 codexTaskState: state, codexHistorySelection: selection,
                 actions: ConversationActions(
-                    loadMoreCodexTurns: prepend, retryCodexTurn: { _ in }, restoreDraft: { _ in }
+                    loadMoreCodexTurns: prepend, retryTurn: { _ in }, restoreDraft: { _ in }
                 )
             )
             Divider()

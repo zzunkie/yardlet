@@ -372,6 +372,28 @@ final class RestartResumeTests: XCTestCase {
         for (frame, cut) in cuts {
             XCTAssertEqual(ClaudeProtocol.turnCut(ofResult: frame), cut, "\(frame)")
         }
+        // Which ended turns a retry may get past, as the Claude app 4.29 offers Try again on them: an API
+        // error with no HTTP status, a 429 or a 5xx. Not a sign-in, a bad request, the turn limit, a stop,
+        // or a failure that was no API error.
+        let maxTurns = JSONValue.object(["type": .string("result"), "subtype": .string("error_max_turns"),
+                                         "is_error": .bool(true), "terminal_reason": .string("max_turns")])
+        let retryable: [(JSONValue, Bool)] = [
+            (result("API Error: Connection dropped (ECONNRESET)"), true),
+            (result("API Error: Unable to connect to API: SSL certificate has expired", status: .null), true),
+            (result("API Error: Connection dropped (ECONNRESET)", reason: nil), true),
+            (result("API Error: 500 Internal server error", status: .number(500)), true),
+            (result("API Error: Repeated 529 Overloaded errors", status: .number(529)), true),
+            (result("API Error: 429 Too many requests"), true),
+            (result("Failed to authenticate. API Error: 401"), false),
+            (result("API Error: 403 Request not allowed", status: .number(403)), false),
+            (result("Prompt is too long", status: .number(400)), false),
+            (result("Something broke", reason: nil), false),
+            (result("", reason: "aborted_streaming"), false),
+            (maxTurns, false),
+        ]
+        for (frame, transient) in retryable {
+            XCTAssertEqual(ClaudeProtocol.endsTurnOnTransientError(frame), transient, "\(frame)")
+        }
         // And Codex 0.163's: a request or stream that never reached the server, with no HTTP status.
         func codexError(_ info: JSONValue) -> JSONValue { .object(["message": .string("x"), "codexErrorInfo": info]) }
         XCTAssertTrue(CodexTurnErrorPresentation.isConnectionCut(codexError(.object([

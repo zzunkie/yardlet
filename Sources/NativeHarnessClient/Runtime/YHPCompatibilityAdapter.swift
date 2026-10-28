@@ -516,7 +516,7 @@ actor YHPCompatibilityAdapter: VersionedHarnessAdapter {
 
         case .turnFailed:
             guard let failure = payload.failure else { return nil }
-            return .error(message: failure.message, recoverable: failure.recoverable)
+            return .error(message: failure.message, recoverable: failure.recoverable, transient: failure.transient)
 
         case .extension:
             if payload.extensionEvent?.namespace == "yardlet.compat",

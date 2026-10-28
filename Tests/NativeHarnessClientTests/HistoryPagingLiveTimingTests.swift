@@ -229,7 +229,7 @@ final class HistoryPagingLiveTimingTests: XCTestCase {
     private static func textBytes(of entry: TranscriptEntry) -> Int {
         switch entry.content {
         case let .user(text, _), let .assistant(text, _), let .reasoning(text, _), let .plan(text),
-             let .error(text, _):
+             let .error(text, _, _):
             return text.utf8.count
         case let .activity(activity, _):
             let diff = activity.diff.map { diff in

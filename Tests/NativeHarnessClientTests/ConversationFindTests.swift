@@ -55,7 +55,7 @@ final class ConversationFindTests: XCTestCase {
         ])
         let codex = TaskConversationView(
             harness: .codex, workspaceURL: URL(filePath: "/Users/me/yardlet"), entries: [], codexTaskState: codexState,
-            actions: ConversationActions(retryCodexTurn: { _ in })
+            actions: ConversationActions(retryTurn: { _ in })
         )
         try await render(codex, height: 760, name: "codex-commentary-match",
                          source: codexFindSource(codexState), query: "title bar", moves: 1) { find in

@@ -464,6 +464,7 @@
 "Enter a localhost URL above. The WebKit process starts only after you open an address." = "Enter a localhost URL above. The WebKit process starts only after you open an address.";
 "Preview unavailable" = "Preview unavailable";
 "Try again" = "Try again";
+"Retry message" = "Try again";
 "Enter a valid preview address." = "Enter a valid preview address.";
 "Only HTTP and HTTPS addresses are supported." = "Only HTTP and HTTPS addresses are supported.";
 "Addresses containing credentials are not allowed." = "Addresses containing credentials are not allowed.";

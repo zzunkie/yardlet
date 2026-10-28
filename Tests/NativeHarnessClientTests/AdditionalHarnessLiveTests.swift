@@ -258,7 +258,7 @@ final class AdditionalHarnessLiveTests: XCTestCase {
                 for await event in stream {
                     payloads.append(event.payload)
                     if event.payload == .turnCompleted { return payloads }
-                    if case let .error(message, _) = event.payload,
+                    if case let .error(message, _, _) = event.payload,
                        !allowProviderError {
                         throw HarnessAdapterError.invalidProviderEvent(message)
                     }
@@ -294,7 +294,7 @@ final class AdditionalHarnessLiveTests: XCTestCase {
     ) throws {
         if assistantText(in: payloads).contains(expectedText) { return }
         let errors = payloads.compactMap { payload -> String? in
-            guard case let .error(message, _) = payload else { return nil }
+            guard case let .error(message, _, _) = payload else { return nil }
             return message
         }
         guard errors.contains(where: { !$0.isEmpty }) else {

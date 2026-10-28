@@ -559,6 +559,28 @@ enum ClaudeProtocol {
         return connectionWordings.contains { text.contains($0) } ? .connection : nil
     }
 
+    /// Whether a main `result` ends a turn on an error that the same request can get past later, read as
+    /// the Claude app 4.29 reads it before offering Try again (`Wt`): an API error with no HTTP status
+    /// (the request never had an answer), a rate limit (429) or a server error (5xx, 529 overloaded
+    /// among them). A sign-in, permission or bad request (any other 4xx) and the turn limit
+    /// (`error_max_turns`) are not; nor is a failure that was no API error. The status is the result's
+    /// `api_error_status`, or else the one its words name ("API Error: 401", as the app reads them). A
+    /// CLI from before `terminal_reason` names an API error without a status only by the connection
+    /// words `turnCut` reads.
+    static func endsTurnOnTransientError(_ value: JSONValue) -> Bool {
+        guard value["type"]?.stringValue == "result",
+              value["parent_tool_use_id"]?.stringValue?.isEmpty != false,
+              value["is_error"]?.boolValue == true,
+              value["subtype"]?.stringValue != "error_max_turns" else { return false }
+        let words = value["result"]?.stringValue ?? ""
+        if let status = value["api_error_status"]?.doubleValue
+            ?? words.firstMatch(of: /API Error:? \(?(\d{3})\b/).flatMap({ Double($0.1) }) {
+            return status == 429 || status >= 500
+        }
+        guard let reason = value["terminal_reason"]?.stringValue else { return turnCut(ofResult: value) != nil }
+        return reason == "api_error"
+    }
+
     /// The CLI's words for a request that could not reach the API or lost it (2.1.299 `xfe` and its
     /// fallback "Connection to the API was lost (CODE)"), and the error codes the Claude app's own
     /// list names.
@@ -986,7 +1008,8 @@ struct ClaudeEventProjector: Sendable {
                 payloads.append(
                     .error(
                         message: value["result"]?.stringValue ?? "Claude reported an error",
-                        recoverable: true
+                        recoverable: true,
+                        transient: ClaudeProtocol.endsTurnOnTransientError(value) ? true : nil
                     )
                 )
             }

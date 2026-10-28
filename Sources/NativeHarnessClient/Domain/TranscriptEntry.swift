@@ -55,7 +55,9 @@ enum TranscriptEntryContent: Codable, Equatable, Sendable {
     case activity(HarnessActivity, state: TranscriptActivityState)
     case permission(PermissionRequest, state: TranscriptPermissionState)
     case plan(String)
-    case error(message: String, recoverable: Bool)
+    /// `transient` as the provider's error event carried it (`HarnessEventPayload.error`); nil keeps
+    /// the saved shape of older entries.
+    case error(message: String, recoverable: Bool, transient: Bool? = nil)
     /// A marker where the provider summarized earlier conversation.
     case compaction(HarnessContextCompaction)
     /// A turn a plan limit stopped, in place of a generic error.

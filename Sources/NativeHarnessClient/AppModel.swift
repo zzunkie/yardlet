@@ -2121,15 +2121,26 @@ final class AppModel {
         }
     }
 
+    /// Retries the latest turn an error that can pass ended (`ConversationTurnActions.canRetry`), the
+    /// way the task's own app does: Codex continues its thread with an empty turn, Claude Code is sent
+    /// the Claude app's retry message.
+    func retryTurn(_ turnID: String, in session: SessionRecord) async {
+        if session.harness == .codex {
+            await retryCodexTurn(turnID, in: session)
+        } else {
+            await retryTranscriptTurn(in: session)
+        }
+    }
+
     /// Capacity recovery sends no user input and preserves both the retained native history
     /// and the current composer. It is never queued or steered into a different active turn.
-    func retryCodexTurn(_ turn: CodexTurnState, in session: SessionRecord) async {
-        guard canRetryCodexTurn(turn.id, in: session),
+    private func retryCodexTurn(_ turnID: String, in session: SessionRecord) async {
+        guard canRetryCodexTurn(turnID, in: session),
               sessionMutations.insert(session.id).inserted else { return }
         defer { sessionMutations.remove(session.id) }
         do {
             let (adapter, _, handle) = try await codexProvider(for: session)
-            guard canRetryCodexTurn(turn.id, in: session, allowingMutation: true) else { return }
+            guard canRetryCodexTurn(turnID, in: session, allowingMutation: true) else { return }
             guard let recovery = adapter as? any CodexTurnRecovering else {
                 throw HarnessAdapterError.capabilityUnavailable(L10n.string("Retry is unavailable for this Codex runtime."))
             }
@@ -2138,7 +2149,7 @@ final class AppModel {
             }
             await markSubmissionStarted(for: session.id)
             guard matchingSession(session) != nil else { return }
-            try await recovery.retryFailedTurn(turn.id, in: handle)
+            try await recovery.retryFailedTurn(turnID, in: handle)
         } catch {
             guard matchingSession(session) != nil else { return }
             if store.sessions.first(where: { $0.id == session.id })?.status == .running,
@@ -2147,6 +2158,20 @@ final class AppModel {
             }
             updateCodexActionError(error, for: session.id)
         }
+    }
+
+    /// The Claude app's retry of a turn an error ended (`retryLastTurn`): its retry message, sent as the
+    /// person's, which leaves the composer as it is. It goes only to the task as the card left it: idle,
+    /// the transient error still its last entry, no message being edited, none queued.
+    private func retryTranscriptTurn(in source: SessionRecord) async {
+        flushTranscriptDeltas(for: source.id)
+        guard let session = matchingSession(source),
+              session.status == .ready || session.status == .failed,
+              case .error(_, _, true?)? = transcriptBuilders[session.id]?.entries.last?.content,
+              composerDrafts.tasks.draft(for: session.id).editState == nil,
+              followUps.queue(for: session.id).isEmpty,
+              !switchingAccounts.contains(session.id), !sessionMutations.contains(session.id) else { return }
+        await send(HarnessUserInput(text: RestartContinuation.claudeRetry), to: session)
     }
 
     private func canRetryCodexTurn(_ turnID: String, in source: SessionRecord, allowingMutation: Bool = false) -> Bool {
@@ -6422,7 +6447,7 @@ final class AppModel {
                 fallback: providerUsageBySessionID[event.localSessionID]
             )
             keepLiveContextUsage(usage, for: event.localSessionID)
-        case let .error(message, _):
+        case let .error(message, _, _):
             errorBySessionID[event.localSessionID] = message
             let shouldMarkUnread = !isSessionVisible(event.localSessionID)
             try? await store.updateSession(

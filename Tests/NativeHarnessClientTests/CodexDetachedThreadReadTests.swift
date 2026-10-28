@@ -115,7 +115,7 @@ final class CodexDetachedThreadReadTests: XCTestCase {
                 sessionStatus: .completed, latestTurnIsComplete: true, codexTaskState: feed.state,
                 providerSessionID: CodexDetachedThreadReadTests.threadID,
                 transcriptReading: workspace.transcript, codexReading: workspace.codex,
-                actions: ConversationActions(retryCodexTurn: { _ in }))
+                actions: ConversationActions(retryTurn: { _ in }))
                 .frame(width: 620, height: 520)
         }
     }

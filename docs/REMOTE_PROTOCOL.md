@@ -328,9 +328,9 @@ See §3.4.
 
 The phone's projection of the Mac's one conversation model (`ConversationPresentation`, which the
 Mac's `ConversationTimeline` draws for every harness), in the Mac's order. Each turn is: what was
-sent (`user`), notices, the turn header (`turn`), the turn's error (`error`), its plan and work
-(`plan`, `activity`, answered `approval`, commentary `assistant`; marked `inWork`), its answers
-(`assistant` with role `answer`), and the requests still waiting (pending `approval`).
+sent (`user`), notices, the turn header (`turn`), its plan and work (`plan`, `activity`, answered
+`approval`, commentary `assistant`; marked `inWork`), its answers (`assistant` with role `answer`),
+the error or limit the turn ended on (`error`), and the requests still waiting (pending `approval`).
 
 Every item has:
 

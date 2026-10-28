@@ -36,8 +36,9 @@ struct ConversationActions {
     var readEarlierHistory: (() -> Void)? = nil
     /// Loads the next page of one turn's items.
     var loadMoreCodexItems: (String) -> Void = { _ in }
-    /// Retries a failed turn; nil while the task is busy, editing, or holding queued messages.
-    var retryCodexTurn: ((CodexTurnState) -> Void)? = nil
+    /// Retries a turn by its ID (`AppModel.retryTurn`); nil while the task is busy, editing, or holding
+    /// queued messages.
+    var retryTurn: ((String) -> Void)? = nil
     var forkCodexTurn: ((String) -> Void)? = nil
     /// Forks the task through a point of its conversation (`AppModel.branch`); nil where the task
     /// cannot branch. A transcript turn's menu forks the whole conversation from its latest turn

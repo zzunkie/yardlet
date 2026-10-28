@@ -162,13 +162,13 @@ struct TranscriptBuilder: Sendable {
             // The turn went on past a compaction whose end the provider did not announce.
             finishRunningCompaction(as: .completed)
 
-        case let .error(message, recoverable):
+        case let .error(message, recoverable, transient):
             finishStreamingBlocks()
             forgetStreamedEntries()
             completeRunningActivities()
             finishRunningCompaction(as: .failed)
             entries.append(
-                TranscriptEntry(content: .error(message: message, recoverable: recoverable))
+                TranscriptEntry(content: .error(message: message, recoverable: recoverable, transient: transient))
             )
 
         case let .usageLimitReached(limit):

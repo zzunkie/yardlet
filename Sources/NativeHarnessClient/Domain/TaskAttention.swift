@@ -53,7 +53,7 @@ struct TaskAttentionDetail: Equatable, Sendable {
                 if detail.pendingRequest != .approval { detail.pendingRequest = kind }
             case let .usageLimit(limit):
                 if detail.usageLimit == nil { detail.usageLimit = limit }
-            case let .error(message, _):
+            case let .error(message, _, _):
                 if detail.errorMessage == nil { detail.errorMessage = message }
             // Claude Code names the call `mcp__yardlet__spawn_task`, an ACP agent titles it `yardlet_spawn_task`.
             case let .activity(activity, _) where activity.kind.hasSuffix(TaskSuggestionToolCatalog.spawnTask)

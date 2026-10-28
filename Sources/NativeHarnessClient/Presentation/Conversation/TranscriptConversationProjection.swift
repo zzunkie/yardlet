@@ -278,7 +278,7 @@ enum TranscriptConversationProjection {
                 var parsed = ConversationPlan.parse(text, stepIDPrefix: entry.id.uuidString)
                 parsed.source = .transcript(entry)
                 plan = parsed
-            case let .error(message, recoverable):
+            case let .error(message, recoverable, _):
                 let error = ConversationTurnOutcome.error(ConversationTurnError(
                     title: nil, message: message, isRecoverable: recoverable, entryID: entry.id
                 ))
@@ -360,6 +360,8 @@ enum TranscriptConversationProjection {
     /// - "Edit request" puts back the failed request `TranscriptRecoveryProjection.editableRequest`
     ///   names. A later request rules it out, so it too is only the last turn's, and the rule
     ///   reads nothing past the turn. It reads as the turn's editable request (`failedRequestDraft`).
+    /// - "Retry" is the last turn's, while idle, when the turn ended on an error its provider called
+    ///   transient (`HarnessEventPayload.error`) and nothing came after it.
     /// Whether the host can carry these out is the actions' business, not the projection's.
     private static func actions(_ input: TurnInput, outcome: ConversationTurnOutcome?, isBusy: Bool) -> ConversationTurnActions {
         var actions = ConversationTurnActions()
@@ -383,6 +385,7 @@ enum TranscriptConversationProjection {
             // task is idle (D10).
             if input.isLast, !isBusy { actions.canFork = true }
         }
+        if input.isLast, !isBusy, case .error(_, _, true?)? = input.entries.last?.content { actions.canRetry = true }
         if input.isLast, let status = input.status, case let .error(error)? = outcome, let entryID = error.entryID,
            let text = TranscriptRecoveryProjection.editableRequest(for: entryID, entries: input.entries, status: status),
            !isHeartbeat(text) {

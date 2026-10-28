@@ -294,7 +294,7 @@ extension AppModel {
             if run.isEvaluationJudge { Task { await stopAgentRun(run) } }
         case .turnCompleted:
             if run.harness != .codex { finishAgentRun(run, state: .completed) }
-        case let .error(message, recoverable):
+        case let .error(message, recoverable, _):
             run.lastError = message
             if !recoverable, run.harness != .codex { finishAgentRun(run, state: .failed(message)) }
         default:

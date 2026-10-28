@@ -1370,8 +1370,8 @@ struct MainWindow: View {
             loadMoreCodexItems: { turnID in
                 Task { await model.loadMoreCodexItems(for: session, turnID: turnID) }
             },
-            retryCodexTurn: { turn in
-                Task { await model.retryCodexTurn(turn, in: session) }
+            retryTurn: { turnID in
+                Task { await model.retryTurn(turnID, in: session) }
             },
             forkCodexTurn: { turnID in
                 Task { await model.branch(session, at: .turn(turnID)) }

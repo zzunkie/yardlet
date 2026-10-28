@@ -702,7 +702,7 @@ private final class LiveRig {
             case let .activity(activity, state): "activity(\(state.rawValue)): \(activity.kind) \(activity.title.prefix(60))"
             case let .permission(request, state): "permission(\(state.rawValue)): \(request.title.prefix(60))"
             case let .plan(text): "plan: \(text.prefix(60))"
-            case let .error(message, recoverable): "error(\(recoverable)): \(message.prefix(120))"
+            case let .error(message, recoverable, _): "error(\(recoverable)): \(message.prefix(120))"
             case .compaction: "compaction"
             case .usageLimit: "usageLimit"
             }

@@ -213,6 +213,14 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         XCTAssertEqual(turn.work.map(\.phase), [.failed, .completed])
         XCTAssertEqual(turn.status, .failed)
 
+        // Retry is offered only for an error its provider called transient, ending the latest turn while
+        // the task is idle.
+        XCTAssertFalse(turn.actions.canRetry)
+        let busy = entry(3, .error(message: "API Error: 529 Overloaded", recoverable: true, transient: true))
+        XCTAssertTrue(project([request, partial, busy], status: .failed).turns[0].actions.canRetry)
+        XCTAssertFalse(project([request, partial, busy], status: .running).turns[0].actions.canRetry)
+        XCTAssertFalse(project([request, busy, entry(4, .user(text: "Again"))]).turns[0].actions.canRetry)
+
         let limit = HarnessRateLimit(status: .rejected, window: .weekly)
         let stopped = entry(4, .usageLimit(limit))
         let limited = project([request, partial, stopped]).turns[0]

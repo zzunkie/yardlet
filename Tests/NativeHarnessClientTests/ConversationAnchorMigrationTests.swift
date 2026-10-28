@@ -45,7 +45,7 @@ final class ConversationAnchorMigrationTests: XCTestCase {
                 switch entry.content {
                 case let .user(value, _), let .assistant(value, _): value == text
                 case let .plan(value): value == text
-                case let .error(message, _): message == text
+                case let .error(message, _, _): message == text
                 default: false
                 }
             }?.id

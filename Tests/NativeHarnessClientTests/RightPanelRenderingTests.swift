@@ -100,7 +100,7 @@ private struct PanelHost: View {
             focusedSurface: $focused, entries: [], errorMessage: nil, codexTaskState: nil,
             codexHistorySelection: nil, codexQueue: [], codexCapabilities: .empty, providerCapabilities: nil,
             providerUsage: nil, isProviderAttached: false, onShowCodexCapabilities: {},
-            conversationActions: ConversationActions(retryCodexTurn: { _ in }, showHarnessSettings: {}),
+            conversationActions: ConversationActions(retryTurn: { _ in }, showHarnessSettings: {}),
             composerActions: ComposerActions(
                 submitCodex: { _, _ in }, removeQueued: { _ in }, retryQueued: { _ in }, moveQueued: { _, _ in },
                 sendQueuedNow: { _ in }, editQueued: { _ in nil }, resumeQueue: {}

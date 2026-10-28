@@ -156,7 +156,8 @@ struct ConversationTurnActions: Equatable, Sendable {
     /// Fork from this turn. Codex allows it once the turn has finished; Claude Code only on its
     /// latest turn while idle, as a fork of the whole saved conversation (D10).
     var canFork: Bool = false
-    /// Retry a turn the server was too busy for (Codex).
+    /// Retry the latest turn, which an error its provider says can pass ended: a busy server, a rate
+    /// limit or a lost connection (`CodexTurnRecoveryProjection.canRetry`, `HarnessEventPayload.error`).
     var canRetry: Bool = false
     /// The proposed plan the turn asks to implement.
     var planToImplement: String? = nil

@@ -565,7 +565,7 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
         }
         let payloads = await recorder.payloads
         XCTAssertTrue(payloads.contains { payload in
-            guard case let .error(message, recoverable) = payload else { return false }
+            guard case let .error(message, recoverable, _) = payload else { return false }
             return recoverable && message.contains("fixture headless failure")
         })
 
@@ -595,7 +595,7 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
         }
         let payloads = await recorder.payloads
         XCTAssertTrue(payloads.contains { payload in
-            guard case let .error(message, recoverable) = payload else { return false }
+            guard case let .error(message, recoverable, _) = payload else { return false }
             return recoverable
                 && message == L10n.string("Harness process exited without a terminal result")
         })
@@ -710,7 +710,7 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
             return activity.kind == "list_dir"
         })
         XCTAssertTrue(payloads.contains { payload in
-            guard case let .error(message, recoverable) = payload else { return false }
+            guard case let .error(message, recoverable, _) = payload else { return false }
             return recoverable
                 && message == L10n.string("Harness process exited without a terminal result")
         })

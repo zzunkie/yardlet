@@ -189,7 +189,7 @@ final class ComposerImageChipTests: XCTestCase {
         ]), fallbackID: "turn-1"))]
         let codex = TaskConversationView(harness: .codex, workspaceURL: URL(filePath: "/Users/me/yardlet"), entries: [],
                                          codexTaskState: CodexTaskState(thread: thread),
-                                         actions: ConversationActions(retryCodexTurn: { _ in }))
+                                         actions: ConversationActions(retryTurn: { _ in }))
         try WindowlessRender.hostedInBothAppearances("sent-codex", in: directory, size: NSSize(width: 760, height: 300)) {
             codex.environment(\.colorScheme, $0.colorScheme)
                 .frame(width: 760, height: 300, alignment: .top)

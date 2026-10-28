@@ -129,7 +129,7 @@ final class CodexTimelineRenderingTests: XCTestCase {
         var answers: [String] = []
         let view = TaskConversationView(
             harness: .codex, workspaceURL: URL(filePath: "/Users/me/yardlet"), entries: [], codexTaskState: state,
-            actions: ConversationActions(retryCodexTurn: { _ in }, answerQuestion: { answers.append($0) }))
+            actions: ConversationActions(retryTurn: { _ in }, answerQuestion: { answers.append($0) }))
         try render(view, height: 420, name: "async-question")
 
         // The card starts on the first option and sends the Codex app's reply for the one it holds.
@@ -156,7 +156,7 @@ final class CodexTimelineRenderingTests: XCTestCase {
         XCTAssertNil(next.turns.last?.actions.editDraft, "A reply's JSON goes back in no composer")
         try render(TaskConversationView(
             harness: .codex, workspaceURL: URL(filePath: "/Users/me/yardlet"), entries: [], codexTaskState: answered,
-            actions: ConversationActions(retryCodexTurn: { _ in }, answerQuestion: { answers.append($0) })),
+            actions: ConversationActions(retryTurn: { _ in }, answerQuestion: { answers.append($0) })),
             height: 520, name: "async-question-answered")
 
         // A reply Yardlet sent before it wrote the Codex app's reads back too; any other message is no
@@ -180,7 +180,7 @@ final class CodexTimelineRenderingTests: XCTestCase {
     private func timeline(_ state: CodexTaskState, onImplementPlan: ((String) -> Void)? = nil) -> some View {
         TaskConversationView(
             harness: .codex, workspaceURL: URL(filePath: "/Users/me/yardlet"), entries: [], codexTaskState: state,
-            actions: ConversationActions(retryCodexTurn: { _ in }, implementCodexPlan: onImplementPlan)
+            actions: ConversationActions(retryTurn: { _ in }, implementCodexPlan: onImplementPlan)
         )
     }
 

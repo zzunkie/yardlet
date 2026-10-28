@@ -322,7 +322,10 @@ enum HarnessEventPayload: Codable, Equatable, Sendable {
     case usageUpdated(HarnessProtocolUsage)
     case turnCompleted
     case sessionStatusChanged(SessionStatus)
-    case error(message: String, recoverable: Bool)
+    /// `transient` is true when the provider's own error says the same request can succeed later (a
+    /// busy server, a rate limit, a lost connection), so the turn's card offers to retry it; nil when
+    /// the error says no such thing, which keeps the saved shape of older entries.
+    case error(message: String, recoverable: Bool, transient: Bool? = nil)
     /// The provider changed one of its session settings on its own, so the capability state the
     /// adapter reports is worth reading again. It carries no state; the adapter remains the one
     /// place that state is read from.

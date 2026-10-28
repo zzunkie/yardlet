@@ -137,6 +137,32 @@ import XCTest
           "rateLimitType":"five_hour","utilization":0.2},"uuid":"w2","session_id":"s"}
         """#))
         try await waitUntil { model.rateLimitWarningBySessionID[task.id] == nil }
+
+        // A turn a sign-in failure ended has nothing to retry. One its retries could not get past has:
+        // Retry sends the Claude app's retry message as the person's and leaves the draft alone.
+        model.composerDrafts.tasks.draft(for: task.id).text = "Keep my draft"
+        await transport.emit(try json(#"""
+        {"type":"result","subtype":"success","is_error":true,"api_error_status":401,"terminal_reason":"api_error",
+          "result":"Failed to authenticate. API Error: 401","session_id":"s"}
+        """#))
+        try await waitUntil { model.store.sessions.first?.status == .failed }
+        let beforeRetry = await transport.sentValues.count
+        await model.retryTurn("latest", in: task)
+        let refused = await transport.sentValues.count
+        XCTAssertEqual(refused, beforeRetry)
+
+        await transport.emit(try json(#"""
+        {"type":"result","subtype":"success","is_error":true,"api_error_status":529,"terminal_reason":"api_error",
+          "result":"API Error: Repeated 529 Overloaded errors","session_id":"s"}
+        """#))
+        try await waitUntil {
+            model.transcriptBySessionID[task.id]?.last?.content == .error(
+                message: "API Error: Repeated 529 Overloaded errors", recoverable: true, transient: true)
+        }
+        await model.retryTurn("latest", in: task)
+        let retried = await transport.sentValues.dropFirst(beforeRetry).compactMap { $0["message"]?["content"]?.stringValue }
+        XCTAssertEqual(retried, [RestartContinuation.claudeRetry])
+        XCTAssertEqual(model.composerDrafts.tasks.draft(for: task.id).text, "Keep my draft")
     }
 
     func testATaskResumesInTheModeItLastChose() async throws {

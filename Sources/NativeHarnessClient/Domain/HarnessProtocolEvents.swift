@@ -78,6 +78,8 @@ struct HarnessProtocolFailure: Codable, Equatable, Sendable {
     let message: String
     let diagnostic: String?
     let recoverable: Bool
+    /// The provider's error says the same request can succeed later (`HarnessEventPayload.error`).
+    var transient: Bool? = nil
 }
 
 struct HarnessProtocolExtensionEvent: Codable, Equatable, Sendable {

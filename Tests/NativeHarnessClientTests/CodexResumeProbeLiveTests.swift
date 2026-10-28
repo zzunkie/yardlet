@@ -212,7 +212,7 @@ final class CodexTurnProbeLiveTests: XCTestCase {
         await log.write(to: environment["NHC_CODEX_TURN_PROBE_RECORD"].map { URL(filePath: $0) })
 
         let errors = payloads.compactMap { payload -> String? in
-            if case let .error(message, _) = payload { return message }
+            if case let .error(message, _, _) = payload { return message }
             return nil
         }
         XCTAssertTrue(errors.isEmpty, "\(errors)")
