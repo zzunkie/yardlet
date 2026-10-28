@@ -52,7 +52,8 @@ OAuth steps (the MCP authorization spec):
 1. Send `initialize` without a token and get a 401. Read `resource_metadata` and `scope` from
    `WWW-Authenticate: Bearer`. A connector with its own client signs in first, without waiting for a 401. Some servers
    answer `initialize` and `tools/list` for anyone and refuse only `tools/call`, so otherwise the connector would show
-   "Connected" and then fail on a call.
+   "Connected" and then fail on a call. A connector without its own client connects to such a server without a
+   sign-in; its first refused call marks it "Needs sign-in", and Reconnect then signs in.
 2. Protected resource metadata (RFC 9728): the address the header points to, else
    `/.well-known/oauth-protected-resource<path>`, then the root. For a server without the metadata (Atlassian), the
    server's origin is taken as the authorization server (the fallback in the 2025-03-26 spec).

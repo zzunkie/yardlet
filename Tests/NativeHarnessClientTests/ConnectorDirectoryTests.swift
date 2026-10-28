@@ -268,7 +268,8 @@ final class ConnectorDirectoryTests: XCTestCase {
     }
 
     /// "Reconnect" starts an OAuth sign-in over, and one cancelled on the server's page leaves the
-    /// earlier sign-in as it was; a pasted token is kept, since only the user can replace it.
+    /// earlier sign-in as it was; a pasted token is kept, since only the user can replace it. A
+    /// server that lists its tools to anyone and refuses only calls signs in on "Reconnect" too.
     func testReconnectSignsInAgainAndKeepsAPastedToken() async throws {
         let server = FakeConnectorServer()
         server.validTokens.insert("pasted")
@@ -302,6 +303,24 @@ final class ConnectorDirectoryTests: XCTestCase {
         await center.waitForPendingDeletions()
         XCTAssertEqual(try credentials.load(token.id), .token("pasted"))
         XCTAssertEqual(center.record(token.id)?.status, .connected)
+
+        let listing = FakeConnectorServer(listsToolsToAnyone: true)
+        let listingAgent = FakeUserAgent()
+        let open = makeCenter(server: listing, agent: listingAgent)
+        let record = try await open.add(name: "Listed", serverURL: FakeConnectorServer.mcpURL)
+        open.connect(record.id)
+        await open.waitForConnection(record.id)
+        XCTAssertEqual(open.record(record.id)?.authorization, ConnectorRecord.Authorization.none)
+        let refused = await open.callConnectorTool(named: "listed_whoami", arguments: .object([:]), for: ConnectorToolContext())
+        XCTAssertEqual(refused?.isError, true)
+        XCTAssertEqual(open.record(record.id)?.status, .signInRequired)
+        open.reconnect(record.id)
+        await open.waitForConnection(record.id)
+        XCTAssertEqual(listingAgent.opened.count, 1, "The browser opens to sign in")
+        XCTAssertEqual(open.record(record.id)?.authorization, .oauth)
+        XCTAssertEqual(open.record(record.id)?.status, .connected)
+        let call = await open.callConnectorTool(named: "listed_whoami", arguments: .object([:]), for: ConnectorToolContext())
+        XCTAssertEqual(call?.isError, false)
     }
 
     /// A Slack app with PKCE turned on is a public client: no secret in the token request.

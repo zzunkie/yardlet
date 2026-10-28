@@ -630,10 +630,12 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// Signs in again even while the stored OAuth sign-in works. That sign-in stays until the new
     /// one is saved, so a sign-in the person cancels, or one that fails, leaves the connection and
     /// its tools as they were. A pasted token is kept, since only the user can replace it. A
-    /// Google or Microsoft service signs its account in again, for all the account's services.
+    /// Google or Microsoft service signs its account in again, for all the account's services. A
+    /// server that listed its tools without a sign-in and then refused a call signs in now too.
     func reconnect(_ id: UUID) {
         guard let record = record(id) else { return }
-        guard record.authorization == .oauth else { return connect(id) }
+        let refusedACall = record.authorization != .token && record.status == .signInRequired
+        guard record.authorization == .oauth || refusedACall else { return connect(id) }
         cancelConnect(id)
         connect(id, signingInAgain: true)
     }
