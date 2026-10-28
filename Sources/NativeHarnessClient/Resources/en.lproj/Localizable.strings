@@ -1921,6 +1921,8 @@
 "More" = "More";
 "Open %@" = "Open %@";
 "Quit %@" = "Quit %@";
+"Language" = "Language";
+"Applies the next time you open Yardlet" = "Applies the next time you open Yardlet";
 "Show in menu bar" = "Show in menu bar";
 "Keep Yardlet in the macOS menu bar when the main window is closed" = "Keep Yardlet in the macOS menu bar when the main window is closed";
 "Show Yardlet in the menu bar" = "Show Yardlet in the menu bar";

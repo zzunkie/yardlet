@@ -38,3 +38,46 @@ enum L10n {
         )
     }
 }
+
+/// Yardlet's language, kept where macOS keeps each app's own: `AppleLanguages` in the app's
+/// defaults, the value System Settings › General › Language & Region › Applications writes, so the
+/// two never disagree. System removes the key and leaves nothing behind. AppKit and the bundle read
+/// it as Yardlet opens, so a choice applies from the next launch; switching while running would mix
+/// languages in menus, system strings and views already drawn.
+enum AppLanguagePreference: String, CaseIterable, Identifiable {
+    case system
+    case english = "en"
+    case korean = "ko"
+
+    static let key = "AppleLanguages"
+
+    var id: Self { self }
+
+    /// Each language in its own words; only System follows the language Yardlet shows.
+    var title: String {
+        switch self {
+        case .system: L10n.string("System")
+        case .english: "English"
+        case .korean: "한국어"
+        }
+    }
+
+    /// The language this app's own defaults ask for, or System when they ask for none. The list
+    /// every app inherits from macOS is not a choice made for Yardlet.
+    static func stored(in defaults: UserDefaults = .standard,
+                       domain: String = Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName) -> Self {
+        guard let languages = defaults.persistentDomain(forName: domain)?[key] as? [String], !languages.isEmpty
+        else { return .system }
+        let codes = allCases.filter { $0 != .system }.map(\.rawValue)
+        return Bundle.preferredLocalizations(from: codes, forPreferences: languages).first
+            .flatMap(Self.init(rawValue:)) ?? .system
+    }
+
+    static func store(_ preference: Self, in defaults: UserDefaults = .standard) {
+        if preference == .system {
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set([preference.rawValue], forKey: key)
+        }
+    }
+}

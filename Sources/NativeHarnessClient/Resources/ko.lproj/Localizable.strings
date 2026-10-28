@@ -1921,6 +1921,8 @@
 "More" = "더 보기";
 "Open %@" = "%@ 열기";
 "Quit %@" = "%@ 종료";
+"Language" = "언어";
+"Applies the next time you open Yardlet" = "다음에 Yardlet을 열 때부터 적용됩니다.";
 "Show in menu bar" = "메뉴 막대에 표시";
 "Keep Yardlet in the macOS menu bar when the main window is closed" = "메인 창을 닫아도 Yardlet을 macOS 메뉴 막대에 유지합니다.";
 "Show Yardlet in the menu bar" = "메뉴 막대에 Yardlet 표시";

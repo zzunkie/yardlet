@@ -174,6 +174,8 @@ struct SettingsCenterView: View {
     /// Asked of a Claude Code task's CLI when it starts or resumes; the composer reads it live.
     @AppStorage(NextMessageSuggestionPreference.key) private var suggestsNextMessage = true
     @AppStorage(PullRequestAutoFixPrompt.preferenceKey) private var autoFixPrompt = PullRequestAutoFixPrompt.ask.rawValue
+    /// Not `@AppStorage`: System must remove the app's own `AppleLanguages`, not store a value.
+    @State private var language = AppLanguagePreference.stored()
     /// Sparkle in a public build: General's automatic update check. Nil in a development build.
     @Environment(\.yardletSparkle) private var sparkle
 
@@ -384,7 +386,32 @@ struct SettingsCenterView: View {
         switch section {
         case .general:
             VStack(spacing: 0) {
-                // The Codex app's General row (`settings.general.macMenuBar`), first as there.
+                // The Codex app's General rows (`settings.ide.language`, `settings.general.macMenuBar`),
+                // first and in its order.
+                HStack(spacing: 12) {
+                    settingsControlIcon("character.bubble")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L10n.string("Language")).font(.callout.weight(.medium))
+                        Text(L10n.string("Applies the next time you open Yardlet"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Picker(L10n.string("Language"), selection: Binding(
+                        get: { language },
+                        set: { language = $0; AppLanguagePreference.store($0) })) {
+                        ForEach(AppLanguagePreference.allCases) { preference in
+                            Text(preference.title).tag(preference)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                    .controlSize(.small)
+                }
+                .padding(.vertical, 14)
+                Divider().padding(.leading, Self.dividerLeading)
                 HStack(spacing: 12) {
                     settingsControlIcon("menubar.rectangle")
                     VStack(alignment: .leading, spacing: 3) {

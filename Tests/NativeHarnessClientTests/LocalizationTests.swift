@@ -318,6 +318,28 @@ final class LocalizationTests: XCTestCase {
         XCTAssertTrue(korean.allSatisfy { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
     }
 
+    /// The app's own `AppleLanguages`, as System Settings writes it per app: a language puts that one
+    /// code there, and System removes the key instead of storing a value.
+    func testAppLanguageIsTheAppsOwnAppleLanguagesAndSystemRemovesIt() throws {
+        let suite = testDefaultsSuite("AppLanguage")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        func stored() -> Any? { defaults.persistentDomain(forName: suite)?[AppLanguagePreference.key] }
+
+        XCTAssertEqual(AppLanguagePreference.stored(in: defaults, domain: suite), .system)
+        AppLanguagePreference.store(.english, in: defaults)
+        XCTAssertEqual(stored() as? [String], ["en"])
+        XCTAssertEqual(AppLanguagePreference.stored(in: defaults, domain: suite), .english)
+        AppLanguagePreference.store(.korean, in: defaults)
+        XCTAssertEqual(stored() as? [String], ["ko"])
+        AppLanguagePreference.store(.system, in: defaults)
+        XCTAssertNil(stored())
+        XCTAssertEqual(AppLanguagePreference.stored(in: defaults, domain: suite), .system)
+
+        // A region-qualified choice made in System Settings reads as its language.
+        defaults.set(["ko-KR"], forKey: AppLanguagePreference.key)
+        XCTAssertEqual(AppLanguagePreference.stored(in: defaults, domain: suite), .korean)
+    }
+
     private func catalog(languageCode: String) throws -> [String: String] {
         let path = try XCTUnwrap(
             Bundle.module.path(
