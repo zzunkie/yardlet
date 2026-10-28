@@ -69,17 +69,8 @@ actor PiRPCProcessTransport: PiRPCTransport {
 
         let chunks = AsyncStream<Data>.makeStream()
         chunkContinuation = chunks.continuation
-        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                chunks.continuation.finish()
-            } else {
-                chunks.continuation.yield(data)
-            }
-        }
-        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
+        stdoutPipe.fileHandleForReading.readChunks(into: chunks.continuation)
+        stderrPipe.fileHandleForReading.readChunks { [weak self] data in
             Task { await self?.appendStderr(data) }
         }
         process.terminationHandler = { [weak self] process in

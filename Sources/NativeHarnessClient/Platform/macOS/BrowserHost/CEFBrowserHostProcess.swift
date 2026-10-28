@@ -124,12 +124,7 @@ final class CEFBrowserHostProcess: BrowserHostConnection {
         let surfaces = surfaces
         let router = frameRouter
         let mainThreadEvents = BrowserMainThreadEvents { [weak self] events in self?.receive(events) }
-        events.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                handle.readabilityHandler = nil
-                return
-            }
+        events.fileHandleForReading.readChunks { [weak self] data in
             do {
                 let events = try eventDecoder.decode(data)
                 for event in events {

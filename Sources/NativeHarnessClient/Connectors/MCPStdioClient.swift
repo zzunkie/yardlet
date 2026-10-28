@@ -262,27 +262,20 @@ final class ProcessMCPStdioChannel: MCPStdioChannel, @unchecked Sendable {
         let ends = Ends { continuation.finish() }
         // Split at newline bytes only: a JSON string may hold U+2028, which line readers also end
         // a line at, and the encoder escapes every real newline.
-        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard let self, !data.isEmpty else {
-                handle.readabilityHandler = nil
-                ends.reached()
-                return
-            }
+        output.fileHandleForReading.readChunks { [weak self] data in
+            guard let self else { return }
             partial.append(data)
             while let newline = partial.firstIndex(of: 0x0A) {
                 continuation.yield(String(decoding: partial[partial.startIndex..<newline], as: UTF8.self))
                 partial.removeSubrange(partial.startIndex...newline)
             }
+        } atEnd: {
+            ends.reached()
         }
-        errorPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else {
-                handle.readabilityHandler = nil
-                ends.reached()
-                return
-            }
+        errorPipe.fileHandleForReading.readChunks { [weak self] data in
             self?.keepError(data)
+        } atEnd: {
+            ends.reached()
         }
         try process.run()
     }

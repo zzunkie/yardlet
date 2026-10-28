@@ -178,22 +178,8 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
 
         let chunks = AsyncStream<Data>.makeStream()
         let stderrChunks = AsyncStream<Data>.makeStream()
-        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                chunks.continuation.finish()
-            } else {
-                chunks.continuation.yield(data)
-            }
-        }
-        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                stderrChunks.continuation.finish()
-            } else {
-                stderrChunks.continuation.yield(data)
-            }
-        }
+        stdoutPipe.fileHandleForReading.readChunks(into: chunks.continuation)
+        stderrPipe.fileHandleForReading.readChunks(into: stderrChunks.continuation)
         process.terminationHandler = { [weak self] process in
             Task { await self?.processDidTerminate(process, for: session.localSessionID) }
         }
@@ -624,15 +610,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
             exitStatus.continuation.finish()
         }
         try process.run()
-        pipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                handle.readabilityHandler = nil
-                chunks.continuation.finish()
-            } else {
-                chunks.continuation.yield(data)
-            }
-        }
+        pipe.fileHandleForReading.readChunks(into: chunks.continuation)
 
         let timeout = cursorChatTimeout
         let creation = await withTaskGroup(of: CursorChatCreation?.self) { group in
