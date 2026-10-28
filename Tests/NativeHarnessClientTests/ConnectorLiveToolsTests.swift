@@ -27,7 +27,7 @@ final class ConnectorLiveToolsTests: XCTestCase {
         let first = await client.list()
         XCTAssertEqual(first, ["tool_1"])
         // The app's hold runs out a few times with nothing to tell; the server asks again each time.
-        try await Task.sleep(for: .milliseconds(450))
+        try await waitUntil { await app.askedAbout.count >= 2 }
         let asked = await app.askedAbout
         XCTAssertGreaterThanOrEqual(asked.count, 2, "\(asked)")
         XCTAssertTrue(asked.allSatisfy { $0 == FakeApp.fingerprint(1) }, "It asks about the list its client has")
@@ -46,7 +46,7 @@ final class ConnectorLiveToolsTests: XCTestCase {
         let relisted = await client.list()
         XCTAssertEqual(relisted, ["tool_1", "tool_2", "tool_3"])
         await app.change()
-        let toldAgain = await eventually(timeout: .seconds(5)) { await client.listChangedCount == 2 }
+        let toldAgain = await eventually { await client.listChangedCount == 2 }
         XCTAssertTrue(toldAgain, "After listing again, the next change is told too")
         let lastAsked = await app.askedAbout.last
         XCTAssertEqual(lastAsked, FakeApp.fingerprint(3))
@@ -316,7 +316,7 @@ final class ConnectorLiveToolsTests: XCTestCase {
         .object(["name": .string(name), "description": .string(description), "inputSchema": .object(["type": .string("object")])])
     }
 
-    private func eventually(timeout: Duration = .seconds(3), _ condition: () async -> Bool) async -> Bool {
+    private func eventually(timeout: Duration = testWaitLimit, _ condition: () async -> Bool) async -> Bool {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if await condition() { return true }

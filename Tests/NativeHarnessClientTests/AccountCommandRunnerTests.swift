@@ -45,18 +45,21 @@ final class AccountCommandRunnerTests: XCTestCase {
             let fixture = try makeExecutable(script)
             defer { try? FileManager.default.removeItem(at: fixture.root) }
 
+            // The script has to start and write its process IDs before the timeout stops it, which on
+            // a busy machine can take more than half a second.
+            let timeout: Duration = .seconds(2)
             let started = ContinuousClock.now
             do {
                 let result = try await AccountCommandRunner.run(
                     executableURL: fixture.executable,
                     arguments: [],
-                    timeout: .milliseconds(500)
+                    timeout: timeout
                 )
                 XCTFail("Expected a stalled account command to time out, got exit \(result.exitCode)")
             } catch let error as AccountCommandError {
                 XCTAssertEqual(error, .timedOut)
             }
-            XCTAssertLessThan(ContinuousClock.now - started, .seconds(5))
+            XCTAssertLessThan(ContinuousClock.now - started, timeout + .milliseconds(4_500))
 
             let rootPID = try readPID(fixture.executable.appendingPathExtension("pid"))
             let childPID = try readPID(fixture.executable.appendingPathExtension("child"))
