@@ -160,6 +160,8 @@ private extension VaultItem {
         case .login: hasPassword
         case .oneTimeCode: hasOneTimeCode
         case .passkey: hasPasskey
+        // Made for a new account, not filled from an item.
+        case .newPassword: false
         }
     }
 }
