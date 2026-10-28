@@ -379,7 +379,7 @@ Agent tools do not expose raw CDP, so the private key from `WebAuthn.getCredenti
 |---|---|
 | Tool arguments (text the model writes) | The model does not know the value. The arguments are only the item name and a reference |
 | Tool results | No value or length is written (section 5.1) |
-| Reading the field value with `browser_evaluate`, or `fetch` to the outside | Refused on the document the value was filled into, whether or not the field still holds it, and in the task's tabs linked to that tab by `window.opener` (one opened the other, directly or through other tabs) while it shows the document. It lifts when the tab goes to another document (a main frame navigation or a reload); an SPA that keeps its document after signing in needs a reload first, which the refusal says. The same holds whoever filled: the agent's tool, or the person's key button and code bar, which are recorded with the tab before the values go in. A page where the person typed into a password field in the panel, and a page the vault saw showing a two-factor setup (its QR code or `otpauth://` link), count as filled too. When the agent ran its own scripts (`browser_evaluate`) on the document before the fill, or in a tab linked to it while it was shown, the fill asks the person first whatever the item's policy, and fills nothing without them; the refusal tells the agent to reload and fill without scripts. The ordinary flow, a fill without scripts first, does not ask (user decision on 2026-10-28; on 2026-10-24 such fills were let through) |
+| Reading the field value with `browser_evaluate`, or `fetch` to the outside | Refused on the document the value was filled into, whether or not the field still holds it, and in the task's tabs linked to that tab by `window.opener` (one opened the other, directly or through other tabs) while it shows the document. It lifts when the tab goes to another document (a main frame navigation or a reload); an SPA that keeps its document after signing in needs a reload first, which the refusal says. The same holds whoever filled: the agent's tool, or the person's key button, code bar and strong password bar (section 15), which are recorded with the tab before the values go in. A page where the person typed into a password field in the panel, and a page the vault saw showing a two-factor setup (its QR code or `otpauth://` link), count as filled too. When the agent ran its own scripts (`browser_evaluate`) on the document before the fill, or in a tab linked to it while it was shown, the fill asks the person first whatever the item's policy, and fills nothing without them; the refusal tells the agent to reload and fill without scripts. The ordinary flow, a fill without scripts first, does not ask (user decision on 2026-10-28; on 2026-10-24 such fills were let through) |
 | `browser_snapshot` (accessibility tree) | Blink replaces a password field's accessibility value with • of the same length (`IsPasswordFieldAndShouldHideValue`, verified with CEF 154 in step 1 of section 12). Yardlet replaces that value with `<redacted>` too, so the length does not show (the same marker as Codex `browser-service.mjs`, section 10). This rule always applies, vault or not. On a filled document, the fields that took a value and the innermost elements whose text shows one (a code drawn in boxes of the page's own) read as `<redacted>` by node, with nothing of what is in them, so a code split over one-digit boxes does not show; when Yardlet cannot tell which those are, the snapshot is refused. Values are scrubbed from each name and value before a long one is cut. As a backstop, "scrubbing matching strings" below covers everything else |
 | `browser_screenshot` | Refused on a filled document, for as long as `browser_evaluate` is: a page can draw a value again in ways no cover of the filled fields reaches (a field of its own, a canvas, a code in boxes). While the vault is on, a screenshot that shows a two-factor setup QR code is not handed over; its key is scrubbed from results and the page counts as filled. The element picker's picture, which the person attaches, hides typed values and is left out when they cannot be hidden |
 | `browser_console_messages` | Messages that a filled document logged are left out, and the result says how many |
@@ -905,16 +905,18 @@ space), `ascii-printable`, `unicode` and custom ones in brackets, where `-` come
 `browser_fill_credential` takes `kind: new_password` with `ref` on a sign-up form's password field. Yardlet reads the
 field's `passwordrules`, `minlength` and `maxlength` and the username the form holds, makes the password, saves it as a
 new item (named after the site, or `item`) before the page takes it, and fills it and its confirmation. The result says
-only which fields were filled and the item's name and username. The value goes onto the scrubbing list, the document
-counts as filled (section 5.3: `browser_evaluate` refused, screenshots covered), and the usage log has the fill.
+only which fields were filled and the item's name and username. It goes the way of a saved password's fill (sections
+5.2 and 5.3): only into a form that sends it to the site over https; onto the scrubbing list, the tab's record and the
+address guard before it goes in; submitted only when the form is safe; and the usage log has the fill.
 
 - **Only new accounts:** when an item of the form's username or of the name in `item` is already saved for the site,
   the call is refused and says to hand the tab to the person. Yardlet cannot tell whether a site took a change, and the
   person's update after it is the step that makes a new password the item's; an agent changing a saved password could
   lock the person out of an account they use.
 - **Confirmation step:** a new item has no step yet, and new items default to "Always" (section 6.1), so the fill does
-  not ask. The harness's tool approval sits above it as for every fill. The tool is offered as before: with the vault on
-  and holding an item.
+  not ask, except on a page where the agent ran its own scripts, where the person confirms first as for every fill
+  (section 5.3). The harness's tool approval sits above it as for every fill. The tool is offered as before: with the
+  vault on and holding an item.
 - **Why account creation is in scope now (section 3):** Codex `browserAuth` leaves it out, but it is a path where the
   model would otherwise type a password it chose, which then sits in the conversation history. Yardlet making it keeps
   the value out of the model's hands, which is the vault's purpose. It is part of the vault, so turning the vault off
@@ -922,10 +924,12 @@ counts as filled (section 5.3: `browser_evaluate` refused, screenshots covered),
 
 ### 15.4 Rules kept
 
-- A made password is a vault value from the first moment: it goes onto the scrubbing list before the page takes it,
-  and the bar never holds or shows it. An agent's fill also makes the document a filled one (screenshots covered,
-  `browser_evaluate` refused); the person's goes the way of the key button's fill (section 8.3). The watch tells Yardlet that a form with a made password was submitted without
-  sending the value (`made`), since Yardlet has it already. No clipboard, no log, no tool result.
+- A made password is a vault value from the first moment, whoever asked for it: it goes onto the scrubbing list, the
+  tab's record of filled documents and the address guard before the page takes it, so the agent's snapshots, scripts
+  and screenshots on that document are refused as for any filled one (section 5.3), and the bar never holds or shows
+  it. The watch tells Yardlet that a form with a made password was submitted without sending the value (`made`), since
+  Yardlet has it already. No clipboard, no log, no tool result. Copying a previous password out of the item sheet
+  marks the copy as concealed and clears it, as the sheet's other secrets.
 - The site comes from the browser's main frame origin, as for every fill; only https sites and local development
   origins get an item.
 - Nothing new in Settings and no shortcuts. Added: one bar, one menu item, and the previous passwords row in the item
