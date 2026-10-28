@@ -169,7 +169,41 @@ extension ConnectorPreset {
         "openai-docs": "https://developers.openai.com/favicon.png",
         "microsoft-learn": "https://learn.microsoft.com/apple-touch-icon.png",
         "aws-knowledge": "https://aws.amazon.com/apple-touch-icon.png",
-        "cloudflare-docs": "https://developers.cloudflare.com/favicon.png"
+        "cloudflare-docs": "https://developers.cloudflare.com/favicon.png",
+        // Checked 2026-10-29 the same way. BrowserStack, BugSnag, Fathom, Mapbox, Port, and Zephyr link
+        // icons only on another company's host, Grafana's is 16 px, CircleCI's own is a dark mark that
+        // vanishes on a dark background, and Contentful and PandaDoc refused the request, so they keep
+        // their symbol.
+        "basecamp": "https://basecamp.com/assets/images/general/apple-touch-icon.png",
+        "teamwork": "https://www.teamwork.com/favicon.ico",
+        "lucid": "https://lucid.co/favicon.ico",
+        "deepl": "https://www.deepl.com/apple-icon",
+        "mobbin": "https://mobbin.com/mobbin-marketing-pages/images/apple-touch-icon.png",
+        "apollo-io": "https://www.apollo.io/apple-icon.png",
+        "attio": "https://attio.com/favicon.ico",
+        "customer-io": "https://customer.io/apple-touch-icon.png",
+        "klaviyo": "https://www.klaviyo.com/icons/icon-192x192.png",
+        "mailerlite": "https://www.mailerlite.com/site/themes/new/img/favicons/apple-touch-icon.png",
+        "ahrefs": "https://ahrefs.com/apple-touch-icon.png",
+        "semrush": "https://www.semrush.com/favicon.ico",
+        "similarweb": "https://www.similarweb.com/favicon.ico",
+        "amplitude": "https://amplitude.com/nextjs-public/favicon/apple-touch-icon.png",
+        "mixpanel": "https://mixpanel.com/favicon.ico",
+        "swagger": "https://swagger.io/swagger_fav.png",
+        "honeycomb": "https://www.honeycomb.io/favicon.ico",
+        "axiom": "https://axiom.co/apple-touch-icon.png",
+        "statsig": "https://www.statsig.com/images/favicons/favicon180.png",
+        "aiven": "https://aiven.io/favicons/apple-touch-icon.png",
+        "upstash": "https://upstash.com/icons/apple-touch-icon.png",
+        "algolia": "https://www.algolia.com/favicon.ico",
+        "sanity": "https://www.sanity.io/apple-touch-icon.png",
+        "workos": "https://workos.com/apple-touch-icon.png",
+        "apify": "https://apify.com/apple-icon.png",
+        "ramp": "https://ramp.com/apple-touch-icon.png",
+        "brex": "https://www.brex.com/apple-touch-icon.png",
+        "paddle": "https://www.paddle.com/favicon.ico",
+        "beancount-io": "https://beancount.io/img/favicon.png",
+        "hostinger": "https://www.hostinger.com/favicon.ico"
     ]
 
     /// The service's icon on its own site, when the directory has one.

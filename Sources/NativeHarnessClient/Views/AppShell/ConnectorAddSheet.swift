@@ -123,7 +123,7 @@ struct ConnectorSetupGuide: Equatable {
         case "github": return L10n.string("Personal access token")
         case "browserbase": return L10n.string("API key")
         case "slack": return L10n.string("A Slack app made from Yardlet's manifest")
-        case "mercury": return L10n.string("Read-only")
+        case "mercury", "ramp", "brex", "apollo-io": return L10n.string("Read-only")
         case "twilio-docs": return L10n.string("Public API docs · no account data")
         case "gmail", "google-calendar", "google-drive", "google-analytics", "google-ads":
             return L10n.string("Your own Google OAuth app · personal and Workspace accounts")

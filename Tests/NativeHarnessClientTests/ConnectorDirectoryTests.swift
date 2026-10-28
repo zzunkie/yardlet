@@ -55,7 +55,7 @@ final class ConnectorDirectoryTests: XCTestCase {
     // MARK: - Directory
 
     /// Each entry is the service's own public endpoint with the sign-in its live metadata showed
-    /// on 2026-10-16, 2026-10-21 and 2026-10-27 (docs/CONNECTORS.md, "Directory").
+    /// on 2026-10-16, 2026-10-21, 2026-10-27 and 2026-10-29 (docs/CONNECTORS.md, "Directory").
     func testTheDirectoryHasEachServicesOfficialEndpointAndSignIn() throws {
         func preset(_ id: String) throws -> ConnectorPreset { try XCTUnwrap(ConnectorPreset.preset(id: id), id) }
         XCTAssertEqual(ConnectorPreset.all.map(\.id), [
@@ -63,9 +63,14 @@ final class ConnectorDirectoryTests: XCTestCase {
             "outlook-mail", "outlook-calendar", "onedrive", "microsoft-teams", "apple-calendar", "apple-reminders",
             "apple-contacts", "github", "browserbase", "atlassian", "sentry", "asana", "clickup", "monday", "todoist", "airtable",
             "miro", "dropbox", "intercom", "zapier", "pipedream", "composio", "make", "granola", "fireflies", "gamma",
-            "zoom-meetings", "zoom-team-chat", "zoom-docs", "xcode", "app-store-connect", "gitlab",
-            "supabase", "neon", "prisma", "netlify", "cloudflare", "posthog", "semgrep",
-            "postman", "jam", "stripe", "paypal", "square", "mercury", "webflow", "wix", "figma-desktop", "tavily", "exa", "huggingface",
+            "basecamp", "teamwork", "lucid", "pandadoc", "fathom", "deepl", "mobbin",
+            "zoom-meetings", "zoom-team-chat", "zoom-docs",
+            "apollo-io", "attio", "customer-io", "klaviyo", "mailerlite", "ahrefs", "semrush", "similarweb", "amplitude", "mixpanel",
+            "xcode", "app-store-connect", "gitlab", "supabase", "neon", "prisma", "netlify", "cloudflare", "posthog", "semgrep",
+            "postman", "jam", "circleci", "browserstack", "bugsnag", "swagger", "zephyr", "grafana", "honeycomb", "axiom", "statsig",
+            "port", "aiven", "upstash", "algolia", "contentful", "sanity", "workos", "apify", "mapbox",
+            "stripe", "paypal", "square", "mercury", "webflow", "wix", "ramp", "brex", "paddle", "beancount-io", "hostinger",
+            "figma-desktop", "tavily", "exa", "huggingface",
             "context7", "deepwiki", "openai-docs", "microsoft-learn", "aws-knowledge", "cloudflare-docs", "twilio-docs"
         ])
         XCTAssertEqual(Set(ConnectorPreset.all.map(\.id)).count, ConnectorPreset.all.count)
@@ -77,7 +82,11 @@ final class ConnectorDirectoryTests: XCTestCase {
         for id in ["asana", "clickup", "monday", "todoist", "airtable", "miro", "dropbox", "intercom", "zapier", "pipedream",
                    "composio", "make", "granola",
                    "fireflies", "gamma", "gitlab", "supabase", "neon", "prisma", "netlify", "cloudflare", "posthog", "semgrep",
-                   "postman", "jam", "stripe", "paypal", "square", "mercury", "webflow", "wix", "tavily"] {
+                   "postman", "jam", "stripe", "paypal", "square", "mercury", "webflow", "wix", "tavily",
+                   "basecamp", "teamwork", "lucid", "pandadoc", "fathom", "deepl", "mobbin", "apollo-io", "attio", "customer-io",
+                   "klaviyo", "mailerlite", "ahrefs", "semrush", "similarweb", "amplitude", "mixpanel", "circleci", "browserstack",
+                   "bugsnag", "swagger", "zephyr", "grafana", "honeycomb", "axiom", "statsig", "port", "aiven", "upstash", "algolia",
+                   "contentful", "sanity", "workos", "apify", "mapbox", "ramp", "brex", "paddle", "beancount-io", "hostinger"] {
             XCTAssertEqual(try preset(id).signIn, .oauth, "\(id) registers its client dynamically")
         }
         for id in ["exa", "huggingface", "context7", "deepwiki", "openai-docs", "microsoft-learn", "aws-knowledge", "cloudflare-docs",
@@ -123,7 +132,17 @@ final class ConnectorDirectoryTests: XCTestCase {
         // the sign-in asks for none of them (docs.mercury.com/docs/connecting-mercury-mcp).
         XCTAssertEqual(try preset("mercury").serverURL.absoluteString, "https://mcp.mercury.com/mcp")
         XCTAssertEqual(try preset("mercury").scope, "read offline_access")
-        XCTAssertEqual(ConnectorSetupGuide.summary(try preset("mercury")), L10n.string("Read-only"))
+        // Ramp, Brex, and Apollo.io list payment, card, bank account, sending, and purchase scopes too
+        // (2026-10-29); each asks for a few read scopes from its list and nothing that writes.
+        XCTAssertEqual(try preset("ramp").scope, "transactions:read business:read cards:read")
+        XCTAssertEqual(try preset("brex").scope, "openid offline_access users.readonly expenses.card.readonly accounts.cash.readonly")
+        XCTAssertEqual(try preset("apollo-io").scope, "read_user_profile app_scopes people_match organizations_enrich contacts_search")
+        for id in ["mercury", "ramp", "brex", "apollo-io"] {
+            XCTAssertEqual(ConnectorSetupGuide.summary(try preset(id)), L10n.string("Read-only"), id)
+        }
+        // The rest ask for what their server lists (docs/CONNECTORS.md, "Connection types", step 5).
+        XCTAssertEqual(ConnectorPreset.all.filter { $0.signIn == .oauth && $0.scope != nil }.map(\.id).sorted(),
+                       ["apollo-io", "brex", "mercury", "ramp"])
         XCTAssertEqual(try preset("github").signIn, .token)
         XCTAssertTrue(try preset("github").acceptsRegisteredClient)
         XCTAssertEqual(try preset("browserbase").tokenQueryParameter, "browserbaseApiKey")

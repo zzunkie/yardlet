@@ -214,6 +214,24 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
                         signIn: .oauth, symbol: "mic"),
         ConnectorPreset(id: "gamma", name: "Gamma", serverURL: URL(string: "https://mcp.gamma.app/mcp")!,
                         signIn: .oauth, symbol: "rectangle.stack"),
+        // Services checked on 2026-10-29 the same way, here and at the end of the groups below: 401
+        // without a token, protected resource and authorization server metadata, a registration
+        // endpoint, and PKCE `S256` (docs/CONNECTORS.md, "Directory"). Each asks for the scopes its
+        // server lists, except Ramp, Apollo.io, and Brex, whose lists reach payments, purchases, or sending.
+        ConnectorPreset(id: "basecamp", name: "Basecamp", serverURL: URL(string: "https://mcp.basecamp.com/mcp")!,
+                        signIn: .oauth, symbol: "mountain.2"),
+        ConnectorPreset(id: "teamwork", name: "Teamwork", serverURL: URL(string: "https://mcp.ai.teamwork.com")!,
+                        signIn: .oauth, symbol: "list.bullet.clipboard"),
+        ConnectorPreset(id: "lucid", name: "Lucid", serverURL: URL(string: "https://mcp.lucid.app/mcp")!,
+                        signIn: .oauth, symbol: "flowchart"),
+        ConnectorPreset(id: "pandadoc", name: "PandaDoc", serverURL: URL(string: "https://mcp.pandadoc.com/v1/mcp")!,
+                        signIn: .oauth, symbol: "signature"),
+        ConnectorPreset(id: "fathom", name: "Fathom", serverURL: URL(string: "https://api.fathom.ai/mcp")!,
+                        signIn: .oauth, symbol: "waveform"),
+        ConnectorPreset(id: "deepl", name: "DeepL", serverURL: URL(string: "https://mcp.deepl.com/v1/mcp")!,
+                        signIn: .oauth, symbol: "translate"),
+        ConnectorPreset(id: "mobbin", name: "Mobbin", serverURL: URL(string: "https://api.mobbin.com/mcp")!,
+                        signIn: .oauth, symbol: "iphone"),
         // Zoom's own servers, one per product (developers.zoom.us/docs/mcp/servers, 2026-10-27): no
         // dynamic registration, so a Zoom app of the person's own (General app, PKCE, its secret in
         // Basic). Each asks only for the read scopes of its server's metadata (`scopes_supported`).
@@ -236,6 +254,34 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
                             + "docs:read:general_access canvas:read:data_table canvas:read:comment canvas:write:file_search",
                         symbol: "doc.richtext", setupURL: URL(string: "https://marketplace.zoom.us/develop/create")!,
                         note: "Needs a Zoom app of your own. Yardlet asks only to read and search docs."),
+        // Sales, marketing, and product analytics
+        // Apollo.io lists sending, sequence, and purchase scopes too; Yardlet asks only for the
+        // profile, contact search, and person and company lookups.
+        ConnectorPreset(id: "apollo-io", name: "Apollo.io", serverURL: URL(string: "https://mcp.apollo.io/mcp")!,
+                        signIn: .oauth, scope: "read_user_profile app_scopes people_match organizations_enrich contacts_search",
+                        symbol: "person.crop.rectangle.stack"),
+        ConnectorPreset(id: "attio", name: "Attio", serverURL: URL(string: "https://mcp.attio.com/mcp")!,
+                        signIn: .oauth, symbol: "person.2.crop.square.stack"),
+        // Customer.io's sign-in page lets the person grant each scope; sending (`write:live`) also
+        // needs an account admin's switch (docs.customer.io/ai/mcp/get-started).
+        ConnectorPreset(id: "customer-io", name: "Customer.io", serverURL: URL(string: "https://mcp.customer.io/mcp")!,
+                        signIn: .oauth, symbol: "envelope.open"),
+        ConnectorPreset(id: "klaviyo", name: "Klaviyo", serverURL: URL(string: "https://mcp.klaviyo.com/mcp")!,
+                        signIn: .oauth, symbol: "mail.stack"),
+        ConnectorPreset(id: "mailerlite", name: "MailerLite", serverURL: URL(string: "https://mcp.mailerlite.com/mcp")!,
+                        signIn: .oauth, symbol: "newspaper"),
+        ConnectorPreset(id: "ahrefs", name: "Ahrefs", serverURL: URL(string: "https://api.ahrefs.com/mcp/mcp")!,
+                        signIn: .oauth, symbol: "link"),
+        ConnectorPreset(id: "semrush", name: "Semrush", serverURL: URL(string: "https://mcp.semrush.com/v2/mcp")!,
+                        signIn: .oauth, symbol: "chart.bar.doc.horizontal"),
+        ConnectorPreset(id: "similarweb", name: "Similarweb", serverURL: URL(string: "https://mcp.similarweb.com")!,
+                        signIn: .oauth, symbol: "chart.xyaxis.line"),
+        // Amplitude, Mixpanel, and Port have a server per region; these are the default ones, and
+        // another region's is added by its address.
+        ConnectorPreset(id: "amplitude", name: "Amplitude", serverURL: URL(string: "https://mcp.amplitude.com/mcp")!,
+                        signIn: .oauth, symbol: "waveform.path.ecg"),
+        ConnectorPreset(id: "mixpanel", name: "Mixpanel", serverURL: URL(string: "https://mcp.mixpanel.com/mcp")!,
+                        signIn: .oauth, symbol: "chart.pie"),
         // Building and running software
         // Xcode's own MCP server (Xcode 26.3 and later), which `mcpbridge` reaches; offered only on
         // a Mac with Xcode (`XcodeBridge.locate`).
@@ -268,6 +314,42 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
                         signIn: .oauth, symbol: "paperplane"),
         ConnectorPreset(id: "jam", name: "Jam", serverURL: URL(string: "https://mcp.jam.dev/mcp")!,
                         signIn: .oauth, symbol: "record.circle"),
+        ConnectorPreset(id: "circleci", name: "CircleCI", serverURL: URL(string: "https://mcp.circleci.com/v1/mcp")!,
+                        signIn: .oauth, symbol: "circle.circle"),
+        ConnectorPreset(id: "browserstack", name: "BrowserStack", serverURL: URL(string: "https://mcp.browserstack.com/mcp")!,
+                        signIn: .oauth, symbol: "macbook.and.iphone"),
+        ConnectorPreset(id: "bugsnag", name: "BugSnag", serverURL: URL(string: "https://bugsnag.mcp.smartbear.com/mcp")!,
+                        signIn: .oauth, symbol: "exclamationmark.triangle"),
+        ConnectorPreset(id: "swagger", name: "Swagger", serverURL: URL(string: "https://swagger.mcp.smartbear.com/mcp")!,
+                        signIn: .oauth, symbol: "curlybraces"),
+        ConnectorPreset(id: "zephyr", name: "Zephyr", serverURL: URL(string: "https://zephyr.mcp.smartbear.com/mcp")!,
+                        signIn: .oauth, symbol: "checkmark.seal"),
+        ConnectorPreset(id: "grafana", name: "Grafana", serverURL: URL(string: "https://mcp.grafana.com/mcp")!,
+                        signIn: .oauth, symbol: "gauge.medium"),
+        ConnectorPreset(id: "honeycomb", name: "Honeycomb", serverURL: URL(string: "https://mcp.honeycomb.io/mcp")!,
+                        signIn: .oauth, symbol: "hexagon"),
+        ConnectorPreset(id: "axiom", name: "Axiom", serverURL: URL(string: "https://mcp.axiom.co/mcp")!,
+                        signIn: .oauth, symbol: "list.bullet.rectangle"),
+        ConnectorPreset(id: "statsig", name: "Statsig", serverURL: URL(string: "https://api.statsig.com/v1/mcp")!,
+                        signIn: .oauth, symbol: "flag"),
+        ConnectorPreset(id: "port", name: "Port", serverURL: URL(string: "https://mcp.port.io/v1")!,
+                        signIn: .oauth, symbol: "square.stack.3d.down.right"),
+        ConnectorPreset(id: "aiven", name: "Aiven", serverURL: URL(string: "https://mcp.aiven.live/mcp")!,
+                        signIn: .oauth, symbol: "cylinder.fill"),
+        ConnectorPreset(id: "upstash", name: "Upstash", serverURL: URL(string: "https://mcp.upstash.com/mcp")!,
+                        signIn: .oauth, symbol: "bolt.horizontal"),
+        ConnectorPreset(id: "algolia", name: "Algolia", serverURL: URL(string: "https://mcp.algolia.com/mcp")!,
+                        signIn: .oauth, symbol: "text.magnifyingglass"),
+        ConnectorPreset(id: "contentful", name: "Contentful", serverURL: URL(string: "https://mcp.contentful.com/mcp")!,
+                        signIn: .oauth, symbol: "square.text.square"),
+        ConnectorPreset(id: "sanity", name: "Sanity", serverURL: URL(string: "https://mcp.sanity.io")!,
+                        signIn: .oauth, symbol: "doc.plaintext"),
+        ConnectorPreset(id: "workos", name: "WorkOS", serverURL: URL(string: "https://mcp.workos.com/mcp")!,
+                        signIn: .oauth, symbol: "person.badge.key"),
+        ConnectorPreset(id: "apify", name: "Apify", serverURL: URL(string: "https://mcp.apify.com/")!,
+                        signIn: .oauth, symbol: "ant"),
+        ConnectorPreset(id: "mapbox", name: "Mapbox", serverURL: URL(string: "https://mcp.mapbox.com/mcp")!,
+                        signIn: .oauth, symbol: "map"),
         // Payments and sites
         ConnectorPreset(id: "stripe", name: "Stripe", serverURL: URL(string: "https://mcp.stripe.com")!,
                         signIn: .oauth, symbol: "dollarsign.circle"),
@@ -285,6 +367,21 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
                         signIn: .oauth, symbol: "macwindow"),
         ConnectorPreset(id: "wix", name: "Wix", serverURL: URL(string: "https://mcp.wix.com/mcp")!,
                         signIn: .oauth, symbol: "safari"),
+        // Ramp and Brex list card, bill, transfer, and bank account scopes too; like Mercury, Yardlet
+        // asks only to read: Ramp's transactions, business, and cards, and Brex's users, card
+        // expenses, and cash accounts (docs/CONNECTORS.md, "Directory").
+        ConnectorPreset(id: "ramp", name: "Ramp", serverURL: URL(string: "https://mcp.ramp.com/mcp")!,
+                        signIn: .oauth, scope: "transactions:read business:read cards:read", symbol: "dollarsign.square"),
+        ConnectorPreset(id: "brex", name: "Brex", serverURL: URL(string: "https://api.brex.com/mcp")!,
+                        signIn: .oauth,
+                        scope: "openid offline_access users.readonly expenses.card.readonly accounts.cash.readonly",
+                        symbol: "creditcard.fill"),
+        ConnectorPreset(id: "paddle", name: "Paddle", serverURL: URL(string: "https://mcp.paddle.com/mcp")!,
+                        signIn: .oauth, symbol: "cart"),
+        ConnectorPreset(id: "beancount-io", name: "Beancount.io", serverURL: URL(string: "https://beancount.io/api-gateway/mcp")!,
+                        signIn: .oauth, symbol: "book.closed"),
+        ConnectorPreset(id: "hostinger", name: "Hostinger", serverURL: URL(string: "https://mcp.hostinger.com")!,
+                        signIn: .oauth, symbol: "network"),
         // Figma's remote server (mcp.figma.com) admits only clients in Figma's catalog, so the
         // desktop app's own server is the one Yardlet can use.
         ConnectorPreset(id: "figma-desktop", name: "Figma", serverURL: URL(string: "http://127.0.0.1:3845/mcp")!,

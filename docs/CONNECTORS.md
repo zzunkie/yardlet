@@ -122,7 +122,7 @@ registration, the connection error shows the reason the service gave.
 
 | Sign-in | Services |
 |---|---|
-| Dynamic registration OAuth | Linear, Notion, Atlassian, Sentry, Asana, ClickUp, monday.com, Todoist, Airtable, Miro, Dropbox, Intercom, Zapier, Pipedream, Composio, Make, Granola, Fireflies, Gamma, GitLab, Supabase, Neon, Prisma Postgres, Netlify, Cloudflare, PostHog, Semgrep, Postman, Jam, Stripe, PayPal, Square, Mercury (read-only), Webflow, Wix, Tavily |
+| Dynamic registration OAuth | Linear, Notion, Atlassian, Sentry, Asana, ClickUp, monday.com, Todoist, Airtable, Miro, Dropbox, Intercom, Zapier, Pipedream, Composio, Make, Granola, Fireflies, Gamma, Basecamp, Teamwork, Lucid, PandaDoc, Fathom, DeepL, Mobbin, Apollo.io (read-only), Attio, Customer.io, Klaviyo, MailerLite, Ahrefs, Semrush, Similarweb, Amplitude, Mixpanel, GitLab, Supabase, Neon, Prisma Postgres, Netlify, Cloudflare, PostHog, Semgrep, Postman, Jam, CircleCI, BrowserStack, BugSnag, Swagger, Zephyr, Grafana, Honeycomb, Axiom, Statsig, Port, Aiven, Upstash, Algolia, Contentful, Sanity, WorkOS, Apify, Mapbox, Stripe, PayPal, Square, Mercury (read-only), Webflow, Wix, Ramp (read-only), Brex (read-only), Paddle, Beancount.io, Hostinger, Tavily |
 | No authentication | Exa, Hugging Face, Context7, DeepWiki, OpenAI Docs, Microsoft Learn, AWS Knowledge, Cloudflare Docs, Twilio Docs, the Figma desktop app server (`http://127.0.0.1:3845/mcp`, turned on in Dev Mode). Exa, Hugging Face and Context7 allow more after a sign-in, but Yardlet does not ask for one |
 | Your own OAuth app | Slack (the "Slack" section), Zoom Meetings, Zoom Team Chat, Zoom Docs |
 | Google account | Gmail, Google Calendar, Google Drive, Google Analytics, Google Ads (the "Google" section) |
@@ -133,9 +133,10 @@ registration, the connection error shows the reason the service gave.
 
 - Order: widely used services (Linear, Notion, Slack, the five Google services, the four Microsoft services, the three
   Mac services, GitHub,
-  Browserbase, Atlassian, Sentry) → work and planning → development and operations (Xcode and App Store Connect first) →
-  payments and sites → Figma desktop → search and docs. An entry's symbol (SF Symbol) is used before the service icon
-  arrives and when it cannot be fetched (the "Icons" section).
+  Browserbase, Atlassian, Sentry) → work and planning → sales, marketing and product analytics → development and
+  operations (Xcode and App Store Connect first) → payments and sites → Figma desktop → search and docs. Within a group,
+  services added later come after the earlier ones. An entry's symbol (SF Symbol) is used before the service icon
+  arrives and when it cannot be fetched (the "Icons" section). The directory search narrows the list by name.
 - Xcode appears in the list only when this Mac has `mcpbridge`, and App Store Connect only when the build can sign
   tokens (`ConnectorCenter.isAvailable`).
 - Asana uses `/mcp`, which supports dynamic registration. The new address (`/v2/mcp`) needs an app registration.
@@ -164,6 +165,30 @@ registration, the connection error shows the reason the service gave.
   messages, channels, contacts and files; and Docs files, exports and comments (`canvas:write:file_search` searches and
   writes nothing). The Zoom page in Add connector takes the client once, adds the products picked, and signs each in
   in turn. A product the account's plan lacks still connects, and its tools answer with Zoom's reason.
+- Forty services were added on 2026-10-29 after the same unauthenticated checks: each server answered `initialize`
+  without a token with 401 (Teamwork answers it and refuses a GET with 401), and its protected resource metadata,
+  authorization server metadata, registration endpoint and PKCE `S256` were all public. No registration POST, sign-in
+  or tool call was made, so whether each service accepts Yardlet's registration and loopback redirect is learned on the
+  first connection. They are Basecamp, Teamwork, Lucid, PandaDoc, Fathom, DeepL and Mobbin (work and planning);
+  Apollo.io, Attio, Customer.io, Klaviyo, MailerLite, Ahrefs, Semrush, Similarweb, Amplitude and Mixpanel (sales,
+  marketing and product analytics); CircleCI, BrowserStack, BugSnag, Swagger, Zephyr, Grafana, Honeycomb, Axiom,
+  Statsig, Port, Aiven, Upstash, Algolia, Contentful, Sanity, WorkOS, Apify and Mapbox (development and operations); and
+  Ramp, Brex, Paddle, Beancount.io and Hostinger (payments and sites).
+  - Scopes: each asks for what its server lists (step 5 of the OAuth steps), except three whose lists reach payments,
+    cards, bank accounts, purchases or sending. For those, Yardlet's product scope is reading, and the directory entry
+    fixes a few read scopes picked from the server's own `scopes_supported`: Ramp `transactions:read business:read
+    cards:read`; Brex `openid offline_access users.readonly expenses.card.readonly accounts.cash.readonly`; Apollo.io
+    `read_user_profile app_scopes people_match organizations_enrich contacts_search`. These sets are a choice made from
+    public metadata, not one confirmed by a sign-in: tools that need another scope do not appear or answer with the
+    service's reason. "Read-only" shows under these lines in the Add connector sheet, as for Mercury.
+  - Some servers list write scopes that the person grants or refuses on the service's own sign-in page: Customer.io
+    sends messages only with `write:live`, which an account admin must also allow (docs.customer.io/ai/mcp/get-started),
+    and PandaDoc asks what the assistant may access. Brex's MCP needs an account admin to turn on its early access first.
+  - PandaDoc's authorization server takes only `client_secret_post` and `client_secret_basic`, which dynamic
+    registration already handles, as for Make.
+  - Amplitude (`mcp.eu.amplitude.com`), Mixpanel (EU and India) and Port (`mcp.us.port.io`) run a server per region. The
+    directory has their default server; an account in another region adds that region's address under "Another MCP
+    server". Yardlet has no region control.
 - Twilio Docs (`https://mcp.twilio.com/docs`, twilio.com/docs/ai/mcp) searches and reads Twilio's public API
   documentation without a sign-in (`twilio__search`, `twilio__retrieve`). It has no account's messages or calls, which
   need Twilio's API keys and are not in the directory.
