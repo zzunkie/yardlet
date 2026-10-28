@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Ask a question
+    url: https://github.com/zzunkie/yardlet/discussions
+    about: Questions about using or building Yardlet.
   - name: How Yardlet handles your data
     url: https://yardlet.app/privacy.html
     about: What the app accesses, where it is stored and where it goes.

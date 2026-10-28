@@ -108,6 +108,14 @@ check asks `yardlet.app` for the appcast with Yardlet's and Sparkle's versions i
 sends no system profile; updates download from GitHub Releases. See the
 [privacy policy](https://yardlet.app/privacy.html).
 
+## Roadmap and feedback
+
+What's being worked on and what comes next is on the [roadmap](https://github.com/users/zzunkie/projects/1),
+and each release gathers its work in a [milestone](https://github.com/zzunkie/yardlet/milestones).
+Report bugs and ideas in [issues](https://github.com/zzunkie/yardlet/issues/new/choose), ask questions in
+[Discussions](https://github.com/zzunkie/yardlet/discussions), and see [CONTRIBUTING.md](CONTRIBUTING.md)
+to send a pull request.
+
 ## License
 
 [MIT](LICENSE). Bundled third-party software and marks are listed in

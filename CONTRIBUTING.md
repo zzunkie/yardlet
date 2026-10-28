@@ -9,12 +9,15 @@ requests are both welcome.
   (Yardlet > About Yardlet), your macOS version, the agent and its CLI version, and the steps that lead to the problem.
 - **Ideas:** open a [feature request](../../issues/new?template=feature_request.yml) and describe the problem first,
   then what you would like Yardlet to do.
+- **Questions:** ask in [Discussions](../../discussions).
 - **Security problems:** do not open an issue. Follow [SECURITY.md](SECURITY.md).
 
 Before you attach a log or a screenshot, remove tokens, email addresses, private repository names and anything else
 you would not post in public.
 
 ## Pull requests
+
+The [roadmap](https://github.com/users/zzunkie/projects/1) shows what's in progress and what's next.
 
 Pull requests are welcome. Development happens in this repository: branches start from `main`, and
 changes land on `main` through pull requests.
