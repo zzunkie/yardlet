@@ -9,6 +9,25 @@ struct BrowserVaultSaveOffer: Equatable {
     var password: String
     /// The item it would update (same site and username, another password); nil saves a new one.
     var updates: VaultItem?
+    /// The item a password the vault made was presaved in beside `updates` (design §15), which updating
+    /// makes needless.
+    var presaved: UUID?
+}
+
+/// A password the vault made in a tab and the item it was presaved in (design §15): submitting the form
+/// completes the item; emptying the field before that drops it, as Chrome drops its presave.
+struct BrowserVaultMadePassword: Equatable {
+    var tab: BrowserTabID
+    var item: UUID
+    var submitted = false
+}
+
+/// An empty new-password field took the focus (design §15): the bar offers a strong password for it, as
+/// Chrome's and Safari's suggestion at the field does.
+struct BrowserVaultPasswordOffer: Equatable {
+    var origin: String
+    /// The document the field is in; moving to another one ends the offer.
+    var page: String
 }
 
 /// A new item the person starts from the page ("Add to Password Manager…").
@@ -88,6 +107,10 @@ extension BrowserHostPaneController {
         vaultOffer = nil
         vaultCodeOffer = nil
         vaultSetupOffer = nil
+        vaultPasswordOffer = nil
+        focusedPasswordPage = nil
+        offeredPasswordPages = []
+        madePassword = nil
         dismissedSetups = []
         passkeyTask?.cancel()
         view?.extraContextMenuItems = nil
@@ -97,6 +120,8 @@ extension BrowserHostPaneController {
     func vaultPageMoved(to address: String) {
         if let offer = vaultCodeOffer, offer.page != address { vaultCodeOffer = nil }
         if let offer = vaultSetupOffer, offer.page != address { vaultSetupOffer = nil }
+        if let offer = vaultPasswordOffer, offer.page != address { vaultPasswordOffer = nil }
+        if focusedPasswordPage != address { focusedPasswordPage = nil }
     }
 
     /// What the watch in the page saw (`VaultPageScripts.offerBinding`).
@@ -111,6 +136,9 @@ extension BrowserHostPaneController {
         case "qr": scanForCodes(on: tab, page: fields["page"] ?? "", asked: false)
         case "setup": setupsFound(OneTimeCodeSetup.setups(in: fields["text"] ?? ""), on: tab, page: fields["page"] ?? "",
                                   asked: false)
+        case "passwordFocus": passwordFieldFocused(on: tab, page: fields["page"] ?? "", isNew: fields["isNew"] == "1")
+        case "passwordBlur": focusedPasswordPage = nil
+        case "madeCleared": madePasswordCleared(on: tab)
         default: personSignedIn(fields, on: tab)
         }
     }
@@ -118,9 +146,11 @@ extension BrowserHostPaneController {
     // MARK: Save offers
 
     private func personSignedIn(_ fields: [String: String], on tab: BrowserTab) {
-        guard let password = fields["password"], !password.isEmpty else { return }
-        // A form sent in the address carries what the person typed there too: no tool result does.
-        MacAgentToolService.shared.broker.noteVaultValues([password])
+        let made = fields["made"] == "1"
+        guard made || !(fields["password"] ?? "").isEmpty else { return }
+        // A form sent in the address carries what the person typed there too: no tool result does. A made
+        // password is on that list since it was filled.
+        if let password = fields["password"] { MacAgentToolService.shared.broker.noteVaultValues([password]) }
         let username = fields["username"] ?? ""
         Task { @MainActor [weak self] in
             // The origin comes from the browser, not from the page's script.
@@ -128,6 +158,8 @@ extension BrowserHostPaneController {
                   let site = VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) else { return }
             MacBrowserHost.shared.loginFollow.signInSubmitted(on: tab)
             guard self.vault.isAllowedBuild, self.vault.isEnabled else { return }
+            if made { return self.madePasswordSubmitted(username: username, origin: frame.origin, site: site, on: tab) }
+            guard let password = fields["password"] else { return }
             let never = UserDefaults.yardlet.stringArray(forKey: Self.neverSaveKey) ?? []
             guard !never.contains(site) else { return }
             let here = self.vault.items(for: frame.origin)
@@ -152,7 +184,12 @@ extension BrowserHostPaneController {
             if let item = offer.updates {
                 var secret = vault.secret(of: item.id) ?? VaultSecret()
                 secret.password = offer.password
+                // The replaced password stays in the item's previous ones (`VaultCenter.save`).
                 try vault.save(item, secret: secret)
+                if let presaved = offer.presaved {
+                    try vault.delete(presaved)
+                    if madePassword?.item == presaved { madePassword = nil }
+                }
             } else {
                 let item = VaultItem(name: VaultSite.host(of: offer.origin), sites: [offer.site], username: offer.username)
                 try vault.save(item, secret: VaultSecret(password: offer.password))
@@ -168,6 +205,87 @@ extension BrowserHostPaneController {
         var never = UserDefaults.yardlet.stringArray(forKey: Self.neverSaveKey) ?? []
         if !never.contains(offer.site) { never.append(offer.site) }
         UserDefaults.yardlet.set(never, forKey: Self.neverSaveKey)
+    }
+
+    // MARK: Strong passwords (design §15)
+
+    private func passwordFieldFocused(on tab: BrowserTab, page: String, isNew: Bool) {
+        focusedPasswordPage = page
+        guard isNew, vault.isAllowedBuild, vault.isEnabled, vaultPasswordOffer == nil, !offeredPasswordPages.contains(page) else { return }
+        Task { @MainActor [weak self] in
+            guard let self, let frame = try? await VaultPageScripts.mainFrame(tab.devTools, timeout: .seconds(10)),
+                  VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) != nil, self.tab === tab,
+                  !self.offeredPasswordPages.contains(page) else { return }
+            self.offeredPasswordPages.insert(page)
+            self.vaultPasswordOffer = BrowserVaultPasswordOffer(origin: frame.origin, page: page)
+        }
+    }
+
+    /// The person chose a strong password from the bar or the page's menu: Yardlet makes one within what the
+    /// field asks, keeps it in the vault first (Chrome's presave: a new item for the site, or the item this
+    /// tab presaved before; never over a saved password), then fills the field and its confirmation.
+    func useStrongPassword() {
+        vaultPasswordOffer = nil
+        guard let tab, vault.isAllowedBuild, vault.isEnabled else { return }
+        Task { @MainActor [weak self] in
+            // The site is the one of the document the field is in, as the browser reports it.
+            guard let self else { return }
+            guard let field = await VaultPageScripts.newPasswordField(tab.devTools) else {
+                return self.showVaultNotice(L10n.string("This page has no password field to fill."))
+            }
+            let context = field.context
+            guard let password = self.vault.makePassword(rules: context["rules"]?.stringValue,
+                                                         minLength: Int(context["minLength"]?.integerValue ?? 0),
+                                                         maxLength: Int(context["maxLength"]?.integerValue ?? 0)) else {
+                return self.showVaultNotice(L10n.string("Yardlet could not make a password."))
+            }
+            let earlier = self.madePassword.flatMap { $0.tab == tab.id && !$0.submitted ? $0.item : nil }
+            let item: VaultItem
+            do {
+                item = try self.vault.presaveMadePassword(password, origin: field.frame.origin,
+                                                          username: context["username"]?.stringValue ?? "", into: earlier)
+            } catch {
+                return self.showVaultNotice((error as? VaultRefusal)?.message ?? error.localizedDescription)
+            }
+            // Before the value goes in, as for the key button's fill.
+            MacAgentToolService.shared.broker.noteVaultValues([password])
+            if password.count >= VaultScrubList.shortest {
+                tab.send(.guardFilledValues(tab: tab.id, values: VaultScrubList.spellings(of: password)))
+            }
+            MacBrowserHost.shared.loginFollow.personFilling(on: tab)
+            guard await VaultPageScripts.fillNewPassword(tab.devTools, frame: field.frame, fills: tab.vaultFills,
+                                                         into: field.objectID, password: password) else {
+                if earlier != item.id { try? self.vault.delete(item.id) }
+                return self.showVaultNotice(L10n.string("This page has no password field to fill."))
+            }
+            self.madePassword = BrowserVaultMadePassword(tab: tab.id, item: item.id)
+            self.showVaultNotice(L10n.format("Saved the new password in “%@”.", item.name))
+        }
+    }
+
+    /// The person submitted a form holding the password the vault made (Chrome saves it then): the presaved
+    /// item takes the username the form held; beside a saved item of that username, the bar asks to update it.
+    private func madePasswordSubmitted(username: String, origin: String, site: String, on tab: BrowserTab) {
+        guard let made = madePassword, made.tab == tab.id,
+              var item = vault.items(for: origin).first(where: { $0.id == made.item }),
+              let password = vault.secret(of: item.id)?.password else { return }
+        madePassword?.submitted = true
+        let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !username.isEmpty, let saved = vault.items(for: origin).first(where: { $0.id != item.id && $0.username == username }) {
+            guard vault.secret(of: saved.id)?.password != password else { return }
+            vaultOffer = BrowserVaultSaveOffer(origin: origin, site: site, username: username, password: password,
+                                               updates: saved, presaved: item.id)
+            return
+        }
+        guard !username.isEmpty, item.username != username, let secret = vault.secret(of: item.id) else { return }
+        item.username = username
+        try? vault.save(item, secret: secret)
+    }
+
+    private func madePasswordCleared(on tab: BrowserTab) {
+        guard let made = madePassword, made.tab == tab.id, !made.submitted else { return }
+        madePassword = nil
+        try? vault.delete(made.item)
     }
 
     // MARK: The key button
@@ -331,6 +449,10 @@ extension BrowserHostPaneController {
         guard vault.isAllowedBuild, vault.isEnabled, let address = tab?.currentURL else { return [] }
         var items: [(title: String, action: () -> Void)] = []
         if VaultSite.suggestion(for: address, suffixes: vault.suffixes) != nil {
+            // Chrome's "Generate password" on a password field.
+            if focusedPasswordPage != nil {
+                items.append((L10n.string("Use Strong Password"), { [weak self] in self?.useStrongPassword() }))
+            }
             items.append((L10n.string("Add to Password Manager…"), { [weak self] in self?.startVaultDraft() }))
             if !isMakingPasskey {
                 items.append((L10n.string("Make a Yardlet Passkey"), { [weak self] in self?.makeVaultPasskey() }))

@@ -149,6 +149,8 @@ enum VaultFillKind: String, Sendable {
     case login
     case oneTimeCode = "one_time_code"
     case passkey
+    /// A new password Yardlet makes for a sign-up form, saved as a new item (design §15).
+    case newPassword = "new_password"
 }
 
 private extension VaultItem {
@@ -206,6 +208,8 @@ final class VaultCenter: ObservableObject {
         var isAllowedBuild: Bool
         /// Asks the person at this Mac (Touch ID, or the login password) and says whether they confirmed.
         var confirm: @MainActor (_ reason: String) async -> Bool = { _ in false }
+        /// Secure random bytes for new passwords (`SecRandomCopyBytes` on macOS).
+        var randomBytes: VaultPasswordGenerator.RandomBytes = VaultPasswordGenerator.systemRandomBytes
         var now: () -> Date = Date.init
         var defaults: UserDefaults = .yardlet
     }
@@ -367,8 +371,93 @@ final class VaultCenter: ObservableObject {
         case .passkey:
             guard let passkey = secret?.passkey else { return refuse(request, item: item, "“\(item.name)” has no passkey.") }
             grant.passkey = passkey
+        case .newPassword:
+            return refuse(request, item: item, "A new password is made for a sign-up form, not filled from “\(item.name)”.")
         }
         return .success(grant)
+    }
+
+    // MARK: New passwords (design §15)
+
+    /// How many replaced passwords an item keeps.
+    static let previousPasswordsKept = 5
+
+    /// A strong password for a new-password field, within the site's `passwordrules` and the field's
+    /// `minlength` and `maxlength` (0 or less for none); nil when the system's random source fails.
+    func makePassword(rules: String?, minLength: Int, maxLength: Int) -> String? {
+        VaultPasswordGenerator.generate(rules: rules.flatMap(PasswordRules.init), fieldMinLength: minLength,
+                                        fieldMaxLength: maxLength, random: environment.randomBytes)
+    }
+
+    /// Decides an agent's new password for a sign-up form whose username field holds `username`. It goes into
+    /// a new item; a saved item of that username or of the name asked for is the person's to change, since
+    /// Yardlet cannot tell whether the site took a change, and the person's update after it is what makes
+    /// a new password the item's.
+    /// A page where the agent ran its own scripts asks the person first, as a saved password's fill does.
+    func authorizeNewPassword(_ request: VaultFillRequest, username: String) async -> Result<VaultUse.Confirmation, VaultRefusal> {
+        let host = VaultSite.host(of: request.origin)
+        guard environment.isAllowedBuild, isEnabled else {
+            return refuse(request, item: nil, "Yardlet's password manager is off in its settings.").map { _ in .always }
+        }
+        guard VaultSite.suggestion(for: request.origin, suffixes: suffixes) != nil else {
+            return refuse(request, item: nil, "Yardlet saves new passwords only for https sites, so it made none for \(host).")
+                .map { _ in .always }
+        }
+        let here = items(for: request.origin)
+        let name = request.itemName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let saved = here.first { item in
+            !name.isEmpty && (item.name.compare(name, options: .caseInsensitive) == .orderedSame
+                || item.username.compare(name, options: .caseInsensitive) == .orderedSame)
+                || !username.isEmpty && item.username.compare(username, options: .caseInsensitive) == .orderedSame
+        }
+        if let saved {
+            return refuse(request, item: saved, "\(Self.label(saved)) is already saved for \(host). Yardlet makes a new "
+                + "password only for a new account; changing a saved one is for the person at this Mac, so hand them the tab.")
+                .map { _ in .always }
+        }
+        guard request.afterAgentScript else { return .success(.always) }
+        let title = describeTask(request.sessionID)?.title ?? L10n.string("A task")
+        notify(L10n.string("Waiting for you to sign in"),
+               L10n.format("“%@” is waiting to make a password for %@.", title, host), request.sessionID)
+        guard await environment.confirm(L10n.format("make a password for %@ for “%@”, on a page where it ran its own scripts",
+                                                   host, title)) else {
+            return refuse(request, item: nil, "You ran your own scripts on this page (browser_evaluate here or in a tab "
+                + "linked to it), so Yardlet asked the person before making a password, and they did not confirm. Reload "
+                + "the page (browser_navigate to its address) and fill it without running scripts on it first.")
+                .map { _ in .always }
+        }
+        return .success(.touchID)
+    }
+
+    /// Logs an agent's fill refused outside `authorize`, such as a new password for a form that sends elsewhere.
+    func recordRefusal(_ request: VaultFillRequest, _ message: String) {
+        _ = refuse(request, item: nil, message)
+    }
+
+    /// Keeps a password Yardlet made the moment it goes into a page (Chrome's presave): in `presaved`, an
+    /// item this page took a made password into before, else in a new item for the site named `name` (its
+    /// host by default). Beside a saved item of the same username, the new item goes without the username,
+    /// as Chrome's does, so the saved password stays the one filled until the person updates it.
+    @discardableResult
+    func presaveMadePassword(_ password: String, origin: String, username: String, name: String? = nil,
+                             into presaved: UUID? = nil) throws -> VaultItem {
+        guard let site = VaultSite.suggestion(for: origin, suffixes: suffixes) else {
+            throw VaultRefusal(message: "Yardlet saves new passwords only for https sites.")
+        }
+        let here = items(for: origin)
+        let taken = !username.isEmpty && here.contains { $0.id != presaved && $0.username == username }
+        if let presaved, var item = here.first(where: { $0.id == presaved }) {
+            if item.username.isEmpty, !taken { item.username = username }
+            var secret = (try trustedSecret(of: item)) ?? VaultSecret()
+            secret.password = password
+            try save(item, secret: secret)
+            return item
+        }
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let item = VaultItem(name: trimmed.isEmpty ? VaultSite.host(of: origin) : trimmed, sites: [site],
+                             username: taken ? "" : username)
+        try save(item, secret: VaultSecret(password: password))
+        return item
     }
 
     /// Logs a fill the page took (or failed to take after the grant), and counts the item as used.
@@ -519,6 +608,13 @@ final class VaultCenter: ObservableObject {
         var secret = secret
         secret.savedSites = item.sites
         secret.savedPolicy = item.policy
+        if let stored = try? environment.secrets.load(item.id), let old = stored.password, !old.isEmpty,
+           let new = secret.password, !new.isEmpty, new != old {
+            // A password it replaces stays in the item's previous ones (design §15).
+            let earlier = (secret.previousPasswords ?? stored.previousPasswords ?? []).filter { $0.password != old && $0.password != new }
+            secret.previousPasswords = Array(([VaultPreviousPassword(password: old, replacedAt: environment.now())] + earlier)
+                .prefix(Self.previousPasswordsKept))
+        }
         item.hasPassword = !(secret.password ?? "").isEmpty
         item.hasOneTimeCode = secret.oneTimeCode != nil
         item.hasPasskey = secret.passkey != nil

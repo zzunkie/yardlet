@@ -16,7 +16,9 @@ send the password where it does not belong, VAULT_GET below), /vault/react (fiel
 controlled inputs), /vault/otp (a one-time code field and six one-digit boxes, checked against RFC 6238's
 test key in the page), /vault/otp/setup (a site's two-factor setup: a QR code of an otpauth:// address and a
 field for the first code, checked against the QR code's test key), /vault/otp/export (a picture of Google
-Authenticator's export QR code with two TOTP accounts and one counter-based one, all test keys), /isolation (a blank page whose cookies and localStorage the QA reads and sets), /vault/reveal (a password field with a show button), /vault/step (a first step with the email only) and /vault/webauthn (a blank
+Authenticator's export QR code with two TOTP accounts and one counter-based one, all test keys), /isolation (a blank page whose cookies and localStorage the QA reads and sets), /vault/reveal (a password field with a show button), /vault/step (a first step with the email only), /vault/signup (a
+sign-up form whose new password and confirmation fields carry passwordrules), /vault/change (a password change form for
+person@example.test: current, new and confirmation fields, none marked, the current one told apart by its label) and /vault/webauthn (a blank
 page for WebAuthn on localhost), /passkey (a sign-in form with passkey autofill and the passkey requests sites
 make, started by window.passkey(kind)), for what ordinary sites ask of a browser /compat (window.compat(kind)
 starts each request and window.qa.compat says how it ended; links to other apps' addresses, mailto:, tel: and one
@@ -452,6 +454,31 @@ VAULT_STEP = '''<!doctype html><meta charset="utf-8"><title>Vault first step</ti
 <form id="form"><label>Email <input id="user" autocomplete="username"></label><button>Next</button></form>
 <script>window.qa = {submitted: null};
 document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = user.value; });</script>'''
+
+# window.qa.ok() says whether the new password meets the field's passwordrules, without giving it.
+VAULT_SIGNUP = '''<!doctype html><meta charset="utf-8"><title>Vault sign-up</title>
+<form id="form" method="post"><label>Email <input id="user" autocomplete="username"></label>
+<label>Password <input id="pass" type="password" autocomplete="new-password"
+  passwordrules="minlength: 12; maxlength: 18; required: lower; required: upper; required: digit; required: [-!]"></label>
+<label>Confirm password <input id="again" type="password" autocomplete="new-password"></label><button id="go">Create account</button></form>
+<script>
+window.qa = {submitted: null, ok: () => /^[a-zA-Z0-9!-]{12,18}$/.test(pass.value) && /[a-z]/.test(pass.value)
+  && /[A-Z]/.test(pass.value) && /[0-9]/.test(pass.value) && /[-!]/.test(pass.value) && pass.value === again.value};
+document.getElementById('form').addEventListener('submit', e => { e.preventDefault();
+  window.qa.submitted = {user: user.value, ok: window.qa.ok()}; });
+</script>'''
+
+VAULT_CHANGE = '''<!doctype html><meta charset="utf-8"><title>Vault password change</title>
+<form id="form" method="post"><input id="user" autocomplete="username" value="person@example.test" hidden>
+<label>Current password <input id="current" type="password"></label>
+<label>New password <input id="fresh" type="password"></label>
+<label>Confirm new password <input id="again" type="password"></label><button id="go">Change password</button></form>
+<script>
+window.qa = {submitted: null};
+document.getElementById('form').addEventListener('submit', e => { e.preventDefault();
+  window.qa.submitted = {current: current.value, match: fresh.value !== '' && fresh.value === again.value,
+    changed: fresh.value !== current.value}; });
+</script>'''
 
 ISOLATION = '''<!doctype html><meta charset="utf-8"><title>Isolation</title><h1>Isolation</h1>'''
 
@@ -1010,6 +1037,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = VAULT_REVEAL.encode()
         elif self.path.startswith('/vault/step'):
             payload = VAULT_STEP.encode()
+        elif self.path.startswith('/vault/signup'):
+            payload = VAULT_SIGNUP.encode()
+        elif self.path.startswith('/vault/change'):
+            payload = VAULT_CHANGE.encode()
         elif self.path.startswith('/vault/webauthn'):
             payload = VAULT_WEBAUTHN.encode()
         elif self.path.startswith('/passkey'):

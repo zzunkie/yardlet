@@ -89,6 +89,13 @@ final class BrowserHostPaneController {
     /// Two-factor codes (§14): a code field to fill the current code into; a setup QR code to save.
     var vaultCodeOffer: BrowserVaultCodeOffer?
     var vaultSetupOffer: BrowserVaultSetupOffer?
+    /// Strong passwords (§15): an empty new-password field to suggest one for; the page whose password field
+    /// has the focus (the page menu offers one there); the pages the bar showed on, where it does not show
+    /// again; the item a password made in a tab was presaved in, which submitting the form completes.
+    var vaultPasswordOffer: BrowserVaultPasswordOffer?
+    @ObservationIgnored var focusedPasswordPage: String?
+    @ObservationIgnored var offeredPasswordPages: Set<String> = []
+    @ObservationIgnored var madePassword: BrowserVaultMadePassword?
     @ObservationIgnored var isScanningForCodes = false
     /// Setup codes the person said no to, not offered again while the tab is shown.
     @ObservationIgnored var dismissedSetups: Set<Data> = []
@@ -1194,6 +1201,7 @@ struct BrowserHostPane: View {
                     if let offer = controller.vaultOffer { vaultOfferBar(offer) }
                     if let offer = controller.vaultSetupOffer { vaultSetupBar(offer) }
                     if let offer = controller.vaultCodeOffer { vaultCodeBar(offer) }
+                    if let offer = controller.vaultPasswordOffer { vaultPasswordBar(offer) }
                     if let notice = controller.notice {
                         Label(notice, systemImage: "hand.raised")
                             .font(.callout).foregroundStyle(.secondary)
@@ -1606,6 +1614,19 @@ struct BrowserHostPane: View {
                 .controlSize(.small)
                 .fixedSize()
             }
+        }
+    }
+
+    /// The strong password suggestion at a new-password field that Chrome and Safari show, as a bar over the
+    /// page. The password is made when the person takes it, so the bar never holds one.
+    private func vaultPasswordBar(_ offer: BrowserVaultPasswordOffer) -> some View {
+        vaultBar(systemName: "key") {
+            Text(L10n.format("Use a strong password for %@? The password manager saves it.", VaultSite.host(of: offer.origin)))
+        } actions: {
+            Button(L10n.string("Not Now")) { controller.vaultPasswordOffer = nil }
+                .controlSize(.small)
+            Button(L10n.string("Use Strong Password")) { controller.useStrongPassword() }
+                .controlSize(.small)
         }
     }
 

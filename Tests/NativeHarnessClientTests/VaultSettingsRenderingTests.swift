@@ -8,7 +8,7 @@ import XCTest
 ///
 /// - `settings-vault-*`: the switch and three items (sites, kinds, agent use, last use).
 /// - `settings-vault-unsigned-*`: an ad-hoc build with an empty vault: the switch off and disabled.
-/// - `vault-item-*`: a saved item's sheet with its recent uses and passkey line.
+/// - `vault-item-*`: a saved item's sheet with its previous passwords, recent uses and passkey line.
 /// - `vault-item-new-*`: a new item from a page, with its site and username filled in.
 @MainActor
 final class VaultSettingsRenderingTests: XCTestCase {
@@ -38,7 +38,11 @@ final class VaultSettingsRenderingTests: XCTestCase {
         let secrets = InMemoryVaultSecretStore([
             Self.github.id: VaultSecret(password: "not-a-real-password",
                                         oneTimeCode: OneTimeCodeSecret(key: Data("12345678901234567890".utf8)),
-                                        passkey: Self.passkey),
+                                        passkey: Self.passkey,
+                                        previousPasswords: [
+                                            VaultPreviousPassword(password: "an-older-password", replacedAt: Date().addingTimeInterval(-3600)),
+                                            VaultPreviousPassword(password: "the-oldest-password", replacedAt: Date().addingTimeInterval(-86400))
+                                        ]),
             Self.vercel.id: VaultSecret(passkey: Self.passkey),
             Self.bank.id: VaultSecret(password: "not-a-real-password")
         ])
@@ -105,10 +109,12 @@ final class VaultSettingsRenderingTests: XCTestCase {
         host.settle()
         let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
         for text in [L10n.string("Recent use"), L10n.string("Filled"), L10n.string("Refused"), "Fix the release CI",
-                     L10n.string("Show a saved password"), L10n.string("Copy Code")] {
+                     L10n.string("Show a saved password"), L10n.string("Copy Code"), L10n.string("Previous passwords"),
+                     L10n.format("%lld kept", Int64(2))] {
             XCTAssertTrue(spoken.contains { $0.contains(text) }, "No \(text): \(spoken)")
         }
-        XCTAssertFalse(spoken.contains { $0.contains("not-a-real-password") }, "The password showed unasked: \(spoken)")
+        XCTAssertFalse(spoken.contains { $0.contains("not-a-real-password") || $0.contains("an-older-password") },
+                       "A password showed unasked: \(spoken)")
 
         let draft = VaultItemSheet(vault: vault, item: nil, draftSites: ["example.test"], draftUsername: "ada@example.test",
                                    onDone: {})

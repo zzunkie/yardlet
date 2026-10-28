@@ -17,12 +17,12 @@ enum MacVault {
             let confirms = ProcessInfo.processInfo.environment["YARDLET_VAULT_QA_CONFIRM"] == "1"
             return VaultCenter(environment: VaultCenter.Environment(
                 secrets: InMemoryVaultSecretStore(), repository: InMemoryVaultRepository(), hmac: hmac,
-                isAllowedBuild: true, confirm: { _ in confirms }))
+                isAllowedBuild: true, confirm: { _ in confirms }, randomBytes: randomBytes))
         }
 #endif
         let center = VaultCenter(environment: VaultCenter.Environment(
             secrets: KeychainVaultSecretStore.live(), repository: FileVaultRepository.live(), hmac: hmac,
-            isAllowedBuild: isTeamSigned, confirm: confirm))
+            isAllowedBuild: isTeamSigned, confirm: confirm, randomBytes: randomBytes))
         observeLocks(of: center)
         return center
     }
@@ -34,6 +34,12 @@ enum MacVault {
         case .sha256: return Data(HMAC<SHA256>.authenticationCode(for: message, using: symmetric))
         case .sha512: return Data(HMAC<SHA512>.authenticationCode(for: message, using: symmetric))
         }
+    }
+
+    /// Bytes from the system's secure random source, for new passwords; nil when it fails.
+    nonisolated static func randomBytes(_ count: Int) -> [UInt8]? {
+        var bytes = [UInt8](repeating: 0, count: count)
+        return SecRandomCopyBytes(kSecRandomDefault, count, &bytes) == errSecSuccess ? bytes : nil
     }
 
     /// Whether the running app is signed by a team (Developer ID or Apple Development): its keychain

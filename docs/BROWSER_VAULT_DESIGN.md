@@ -5,7 +5,8 @@ is the name used during design. The `Vault…` types in code, the storage locati
 names stay as they are.
 
 Status: implemented. Decisions are in section 11, implementation steps and results in section 12. What changed during
-implementation is collected in section 13.
+implementation is collected in section 13. The built-in authenticator is section 14, and strong password suggestions
+section 15.
 
 Related documents: agent tools in [AGENT_BROWSER_TOOLS](AGENT_BROWSER_TOOLS.md), the browser host and passkeys in
 [BROWSER_HOST](BROWSER_HOST.md) section 3, "Passkeys (WebAuthn)" and section 7, and the precedent for keeping secrets in
@@ -151,7 +152,7 @@ is better not to do it because of technical limits or product principles.
 | Scoped access that gives each task only what it needs, a record each time a credential is used | [Home] (not in the help pages) | Possible as is | The usage log of section 6.3 and per-item site binding |
 | TOTP: finding the QR on a setup page and offering to save it, the agent enrolling the authenticator and filling codes without seeing the secret | [Changes C] 2026-07-21 and 10-21 | Possible as is | Filling codes takes the same path as section 5. Since 2026-10-25 the panel reads a page's setup QR from the screen and offers to save it (section 14). There is no path yet for the agent to enroll a setup QR without the person |
 | Saving passkeys, showing them automatically, conditional sign-in, syncing between devices, handing over to the browser's own passkey flow | [Changes C] 2026-07-21, 07-25 and 10-16 | Partly possible | Passkeys that Yardlet holds should be usable through a CDP virtual authenticator (checked in step 1 of section 12). No syncing between devices. Touch ID profile passkeys already work but need the person. Apple does not open up iCloud Keychain passkeys |
-| Autofill for the person: sign-in suggestions, save prompts, password generation | [Autofill] | Partly possible | Because CEF renders off screen, Chrome's autocomplete list and save bubble do not appear in the panel. Yardlet draws them natively: a save prompt when the person signs in, a key button in the address bar on sites with items (section 8.3), and a code bar when a verification code field shows (section 14). There is no suggestion list attached under fields and no password generation |
+| Autofill for the person: sign-in suggestions, save prompts, password generation | [Autofill] | Partly possible | Because CEF renders off screen, Chrome's autocomplete list and save bubble do not appear in the panel. Yardlet draws them natively: a save prompt when the person signs in, a key button in the address bar on sites with items (section 8.3), a code bar when a verification code field shows (section 14), and a strong password bar at a new password field (section 15). There is no suggestion list attached under fields |
 | Import: CSV, directly from other managers, Apple Passwords, the 1Password extension | [Autofill] [Troubleshooting] [Changes C] 2026-10-11 [Changes B] 06-20 | Partly possible | CSV is possible. Apple does not open up Apple Passwords or iCloud Keychain, and Yardlet has no extension path either |
 | End-to-end encrypted sync through an Aside account, Secure Enclave, post-quantum cryptography | [Home] [Autofill] | Hard | Yardlet has no accounts or servers. The local keychain (encrypted with the login password, backed up by Time Machine) takes its place. A keychain that syncs through iCloud needs an entitlement and a provisioning profile on the app itself, so it is outside this scope |
 | The agent cannot use the vault in incognito windows | [Vault] | Not applicable | Yardlet has no incognito windows |
@@ -252,8 +253,10 @@ done.
   section 2.2).
 - Existing Touch ID profile passkeys are left alone. A Yardlet passkey is a separate passkey newly registered on the
   site.
-- Account creation (generating new passwords, sign-up fields) and payment details (cards) are out of scope. Codex
-  `browserAuth` excludes both too (section 10).
+- Payment details (cards) are out of scope; Codex `browserAuth` excludes them (section 10). Account creation is in
+  scope only for its password: since 2026-10-28 Yardlet makes a strong password for a new account and saves it
+  (section 15). Codex `browserAuth` leaves account creation out; the reason Yardlet does not is in section 15.3. Other
+  sign-up fields are the agent's ordinary typing.
 
 ## 4. What to store and where
 
@@ -287,8 +290,8 @@ to add UI now.
 ### 4.3 Keychain layout
 
 - Secrets: a generic password item in the login keychain, service `<bundle ID>.vault`, account set to the item UUID,
-  value in JSON (username, password, TOTP parameters, and for passkeys the credential ID, RP ID, user handle, PKCS#8
-  private key and signature count). The label is "Yardlet vault item" without the site name (so sites do not show in the
+  value in JSON (username, password, the last five passwords it replaced with when each was replaced, TOTP parameters,
+  and for passkeys the credential ID, RP ID, user handle, PKCS#8 private key and signature count). The label is "Yardlet vault item" without the site name (so sites do not show in the
   Keychain Access list).
 - Access: items Yardlet creates trust the designated requirement of the app that created them. The installed app is
   Developer ID signed and its requirement includes a team certificate condition (verified with `codesign -d -r-` on
@@ -313,7 +316,7 @@ One tool is added: `browser_fill_credential`. Its description says only what it 
 |---|---|
 | `ref` | The input field reference from the last snapshot. For a sign-in, Yardlet finds the username field and the password field of the form that field belongs to |
 | `item` | Item name or username (optional; usernames since 2026-10-27). If empty, the item matching this tab's origin is used when there is exactly one; if there are several, an error with a list of "name (username)". Only the site's items that have what `kind` asks for (a password, a code, a passkey) are weighed, unless none has it, since a site's password and its two-factor code are often two items (section 14.3). Items with the same name, which import names after the site, are also picked by username |
-| `kind` | `login` (default, username and password), `one_time_code` (TOTP), `passkey` (briefly prepares the virtual authenticator on this tab) |
+| `kind` | `login` (default, username and password), `one_time_code` (TOTP), `passkey` (briefly prepares the virtual authenticator on this tab), `new_password` (a password Yardlet makes for a sign-up form, saved as a new item, section 15) |
 | `submit` | Whether to submit the form after filling (optional): a safe form is submitted unless it is false (section 5.2) |
 | `tabId` | Same as in the other page tools |
 
@@ -500,8 +503,9 @@ Vault
 
 ### 8.2 Item sheet
 
-Name, sites, username, password, two-factor setup key (`otpauth://` or the key), current code (seconds left and copy,
-section 14), agent use (three steps), recent use and delete. An item with only a two-factor key is saved without a site
+Name, sites, username, password, previous passwords (when a password was replaced; shown after Touch ID, section 15),
+two-factor setup key (`otpauth://` or the key), current code (seconds left and copy, section 14), agent use (three
+steps), recent use and delete. An item with only a two-factor key is saved without a site
 or password (an authenticator app's entry, section 14). The password is a hidden field, and "Show" works only after
 Touch ID (the same convention as the Chrome and Safari password screens). A passkey, if there is one, shows only as
 "Passkey · made 2026-10-24", and it is not created here (section 8.3).
@@ -526,6 +530,9 @@ Touch ID (the same convention as the Chrome and Safari password screens). A pass
 - **Two-step verification (2026-10-25, section 14):** when a verification code field shows, the code bar "Fill the
   two-factor code from “GitHub”? [Not Now] [Fill Code]"; when a setup QR shows, the setup bar "Save the two-factor code
   for github.com in “GitHub”? [Not Now] [Save]"; and right-click "Add Two-Factor Code from QR Code".
+- **Strong passwords (2026-10-28, section 15):** when an empty new password field takes the focus, the bar "Use a strong
+  password for github.com? The password manager saves it. [Not Now] [Use Strong Password]"; on any password field,
+  right-click "Use Strong Password".
 
 ### 8.4 When it is used
 
@@ -599,6 +606,7 @@ safe everywhere pleases nobody), D3's default changed, and this task decided the
 | D5 | Notifications | Only when the person has something to do: waiting for Touch ID, an item named explicitly refused because it belongs to another site (section 6.3) |
 | D6 | UI and saving flow | The "Vault" section in settings (on by default), a save prompt when the person signs in, the key button in the address bar, two right-click items, CSV import (section 8) |
 | D7 | Child tasks and other harnesses | The same rules (section 7) |
+| D8 | Strong passwords (2026-10-28) | Chrome's generator and presave, `passwordrules`, previous passwords kept in the item; agents only for new accounts (section 15) |
 
 ## 12. Implementation steps
 
@@ -834,3 +842,93 @@ cannot get a code while the person is away.
   code bar with `qa-vendor.test`, and filling it passes the page's check and saves that site in the item. The panel PNG
   `vault-panel-unlinked-code-bar` was checked by eye.
 
+
+## 15. Strong password suggestions (2026-10-28)
+
+The request was the strong password suggestion Chrome and Safari make: when a password is made or changed, the vault
+makes a strong random one, offers it, fills it, and keeps it.
+
+### 15.1 Other browsers and managers compared
+
+Read from public sources on 2026-10-28 (a subagent read Chromium's and Bitwarden's source on their `main` branches and
+the vendors' help pages; these may differ from released builds).
+
+| | Chrome | Safari | 1Password | Bitwarden |
+|---|---|---|---|---|
+| When it offers one | Automatically only on a field it knows is a new password: crowdsourced server or model predictions, or `autocomplete="new-password"`, not its basic two- or three-field heuristics ([form_data_parser.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/form_parsing/form_data_parser.cc)); right-click "Generate password" on other password fields ([help](https://support.google.com/chrome/answer/95606?hl=en)) | Sign-up and change forms by its own heuristics, helped by `autocomplete="new-password"` ([Apple](https://support.apple.com/en-ca/guide/security/secc84c811c4/web)) | Sign-up and new password fields ([help](https://support.1password.com/generate-website-password/)) | Sign-up and change fields in the inline menu ([overlay.background.ts](https://github.com/bitwarden/clients/blob/main/apps/browser/src/autofill/background/overlay.background.ts)) |
+| The password | 15 characters from `abcdefghijkmnpqrstuvwxyz`, `ABCDEFGHJKLMNPQRSTUVWXYZ` and `23456789` (no `l o I O 0 1`), at least one of each; symbols `-_.:!` only when a site's requirements ask ([password_generator.cc](https://chromium.googlesource.com/chromium/src/+/main/components/password_manager/core/browser/generation/password_generator.cc)) | 20 characters in three groups of six joined by hyphens: lower case with one upper case letter and one digit | Its "smart" generator; current defaults unconfirmed | 14 characters, upper and lower case and digits, no symbols, look-alikes allowed ([defaults](https://github.com/bitwarden/clients/blob/main/libs/tools/generator/core/src/data/default-password-generation-options.ts)) |
+| Randomness | Rejection before `% range` (`base::RandGenerator`), BoringSSL `RAND_bytes` ([rand_util.cc](https://github.com/chromium/chromium/blob/main/base/rand_util.cc)) | — | — | — |
+| A site's rules | Crowdsourced requirements and the field's `maxlength`; no `passwordrules` in the path read | `passwordrules` ([Apple](https://developer.apple.com/documentation/security/customizing-password-autofill-rules)) | `passwordrules` and Apple's site rules ([blog](https://1password.com/blog/a-smarter-password-generator)) | In its SDK; in the extension unconfirmed |
+| Confirmation field | Filled ([password_generation_agent.cc](https://github.com/chromium/chromium/blob/main/components/autofill/content/renderer/password_generation_agent.cc)) | Filled (older screenshots only) | Filled | Filled |
+| When it is saved | On acceptance (presave); "Clear the username value if there are already saved credentials with the same username in order to prevent overwriting." Committed without a prompt when the submission succeeds; an update may still prompt. Emptying the field deletes the presave ([password_generation_manager.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_generation_manager.cc), [password_manager.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_manager.cc)) | With the sign-up; the exact moment is unconfirmed | Into the generator history at once; the login when the person saves ([help](https://support.1password.com/recover-unsaved-password/)) | Into the generator history at once (up to 200); the login after the person confirms |
+| Old passwords | Not kept | — | Item history | The last 5 per item ([help](https://bitwarden.com/help/password-and-generator-history/)) |
+
+`passwordrules` is Apple's proposal to the HTML standard: `required:`, `allowed:`, `max-consecutive:`, `minlength:` and
+`maxlength:` rules separated by `;`, with the classes `upper`, `lower`, `digit`, `special` (ASCII punctuation and the
+space), `ascii-printable`, `unicode` and custom ones in brackets, where `-` comes first and a `]` last, as in `[-abc]]`
+([PasswordRulesParser.js](https://github.com/apple/password-manager-resources/blob/main/tools/PasswordRulesParser/PasswordRulesParser.js)).
+
+### 15.2 Decisions
+
+- **When the bar shows:** when an empty new password field takes the focus, the panel shows a bar over the page, "Use a
+  strong password for github.com? The password manager saves it. [Not Now] [Use Strong Password]" (the same shape as the
+  save and code bars; section 8.3 says why there is no list under the field). A new password field is one marked
+  `autocomplete="new-password"`; else, past a current password (marked `current-password` or named so in its name, id,
+  placeholder or label), the form's other one or two; else both of a form's two password fields or the last two of three;
+  else a lone field named new. Chrome offers automatically only with its server's predictions or the attribute, and
+  Yardlet has no server, so its basic heuristics stand in, with the current password told apart by name. A lone password
+  field is a sign-in's, so it gets no bar. The bar shows once per page.
+- **The other path:** on any password field, right-click "Use Strong Password" (Chrome's "Generate password"). The
+  person's click is the choice, so it fills at once.
+- **The password:** Chrome's generator (15 characters, its three classes without look-alikes, at least one of each,
+  shuffled), plus one of Chrome's symbols `-_.:!`, since many sites insist on a symbol and Yardlet has no list of each
+  site's requirements as Chrome has. A site's `passwordrules` replace those classes (Safari and 1Password read them), and
+  the field's `minlength` and `maxlength` bound the length. Each character comes from `SecRandomCopyBytes`, drawn 32 bits
+  at a time and drawn again when past the last whole multiple of the range (no modulo bias), and the shuffle uses the
+  same draws. As Chrome does, `--` and `__` are drawn again. If the random source fails, no password is made.
+- **Saving (Chrome's presave):** the password is saved the moment it is filled, so a page that fails or submits on its
+  own loses nothing. With no item for that username on the site, it is a new item (named after the site, with the
+  username the form holds); submitting the form gives the item the username typed by then, without asking. Beside an
+  item of the same username (a change form), the new item has no username, as Chrome's has, so the saved password stays
+  the one filled; after the change is submitted, the save bar asks "Update the saved password for github.com?", and
+  updating gives the saved item the new password and deletes the item beside it. If the person empties the field before
+  submitting, the item made for it is deleted (Chrome's `PasswordNoLongerGenerated`). Choosing again on the same page
+  replaces the password in the same item.
+- **Previous passwords:** whenever an item's password is replaced (the update bar, the item sheet, a made password), the
+  old one stays in the item, the last five with when each was replaced (Bitwarden keeps five). The item sheet shows them
+  after Touch ID. So a change the site refused, then updated by mistake, loses nothing.
+- **No generator history:** 1Password and Bitwarden keep every generated password in a history. The presave already
+  keeps each filled one in an item the person sees, so a second list was not added.
+
+### 15.3 Agents
+
+`browser_fill_credential` takes `kind: new_password` with `ref` on a sign-up form's password field. Yardlet reads the
+field's `passwordrules`, `minlength` and `maxlength` and the username the form holds, makes the password, saves it as a
+new item (named after the site, or `item`) before the page takes it, and fills it and its confirmation. The result says
+only which fields were filled and the item's name and username. The value goes onto the scrubbing list, the document
+counts as filled (section 5.3: `browser_evaluate` refused, screenshots covered), and the usage log has the fill.
+
+- **Only new accounts:** when an item of the form's username or of the name in `item` is already saved for the site,
+  the call is refused and says to hand the tab to the person. Yardlet cannot tell whether a site took a change, and the
+  person's update after it is the step that makes a new password the item's; an agent changing a saved password could
+  lock the person out of an account they use.
+- **Confirmation step:** a new item has no step yet, and new items default to "Always" (section 6.1), so the fill does
+  not ask. The harness's tool approval sits above it as for every fill. The tool is offered as before: with the vault on
+  and holding an item.
+- **Why account creation is in scope now (section 3):** Codex `browserAuth` leaves it out, but it is a path where the
+  model would otherwise type a password it chose, which then sits in the conversation history. Yardlet making it keeps
+  the value out of the model's hands, which is the vault's purpose. It is part of the vault, so turning the vault off
+  removes it with the rest, and nothing else is written anywhere.
+
+### 15.4 Rules kept
+
+- A made password is a vault value from the first moment: it goes onto the scrubbing list before the page takes it,
+  and the bar never holds or shows it. An agent's fill also makes the document a filled one (screenshots covered,
+  `browser_evaluate` refused); the person's goes the way of the key button's fill (section 8.3). The watch tells Yardlet that a form with a made password was submitted without
+  sending the value (`made`), since Yardlet has it already. No clipboard, no log, no tool result.
+- The site comes from the browser's main frame origin, as for every fill; only https sites and local development
+  origins get an item.
+- Nothing new in Settings and no shortcuts. Added: one bar, one menu item, and the previous passwords row in the item
+  sheet. Turning the vault off removes the bar, the menu item and the tool's kind.
+
+### 15.5 Verification

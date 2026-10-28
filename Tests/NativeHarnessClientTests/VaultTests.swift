@@ -6,8 +6,8 @@ import XCTest
 
 /// The vault's contracts that would break without a visible sign (docs/BROWSER_VAULT_DESIGN.md):
 /// which pages an item's sites cover, the RFC 6238 codes, the refusal of an item asked for on
-/// another site, the codes an authenticator app's export brings over, and how such a code with no
-/// site comes to fill on its site.
+/// another site, the codes an authenticator app's export brings over, how such a code with no site
+/// comes to fill on its site, and the passwords it makes.
 @MainActor
 final class VaultTests: XCTestCase {
     func testSitesCoverTheirSubdomainsOverHTTPSAndNothingThatOnlyLooksAlike() {
@@ -203,6 +203,68 @@ final class VaultTests: XCTestCase {
                                                                origin: "https://github.com"))
         guard case let .success(chosen) = byUsername else { return XCTFail("the username did not name its item") }
         XCTAssertEqual(chosen.password, "battery staple")
+    }
+
+    /// Passwords the vault makes (design §15): Chrome's classes plus a symbol, without look-alikes, within a
+    /// site's `passwordrules` and a field's `maxlength`; a draw past the last whole multiple of the range is
+    /// drawn again (no modulo bias), and no password comes from a failed random source. A made password is
+    /// kept beside, never over, a saved one of the same username, an agent makes one only for a new account,
+    /// and a replaced password stays in the item.
+    func testMadePasswordsMeetTheRulesAndNeverReplaceASavedPassword() async throws {
+        let random = VaultPasswordGenerator.systemRandomBytes
+        for _ in 0..<200 {
+            let password = try XCTUnwrap(VaultPasswordGenerator.generate(rules: nil, random: random))
+            XCTAssertEqual(password.count, 15)
+            for set in [VaultPasswordGenerator.lower, VaultPasswordGenerator.upper, VaultPasswordGenerator.digits,
+                        VaultPasswordGenerator.symbols] {
+                XCTAssertTrue(password.contains(where: set.contains), password)
+            }
+            XCTAssertFalse(password.contains(where: VaultPasswordGenerator.lookAlikes.contains), password)
+            XCTAssertFalse(password.contains("--") || password.contains("__"), password)
+        }
+        let rules = try XCTUnwrap(PasswordRules("minlength: 20; required: digit; required: [!@]; allowed: lower; max-consecutive: 2"))
+        for _ in 0..<200 {
+            let password = try XCTUnwrap(VaultPasswordGenerator.generate(rules: rules, random: random))
+            XCTAssertEqual(password.count, 20)
+            XCTAssertTrue(password.contains(where: \.isNumber) && password.contains(where: { "!@".contains($0) }), password)
+            XCTAssertTrue(password.allSatisfy { $0.isLowercase || $0.isNumber || "!@".contains($0) }, password)
+        }
+        XCTAssertEqual(VaultPasswordGenerator.generate(rules: nil, fieldMaxLength: 8, random: random)?.count, 8)
+        XCTAssertNil(PasswordRules("not a rule"))
+        XCTAssertNil(VaultPasswordGenerator.generate(rules: nil, random: { _ in nil }))
+
+        // 0xffffffff is past 3 × 1431655765, so the next draw (5) decides.
+        let bytes: [UInt8] = [0xff, 0xff, 0xff, 0xff, 0, 0, 0, 5] + Array(repeating: 0, count: 248)
+        var draw = UnbiasedDraw(random: { count in Array(bytes.prefix(count)) })
+        XCTAssertEqual(draw.index(below: 3), 2)
+
+        let saved = VaultItem(name: "GitHub", sites: ["github.com"], username: "ada")
+        let center = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([saved.id: VaultSecret(password: "correct horse")]),
+            repository: InMemoryVaultRepository(items: [saved]), hmac: MacVault.hmac, isAllowedBuild: true,
+            defaults: .vaultTests()))
+        let beside = try center.presaveMadePassword("made-1", origin: "https://github.com", username: "ada")
+        XCTAssertEqual(beside.username, "")
+        XCTAssertEqual(center.secret(of: saved.id)?.password, "correct horse")
+        let again = try center.presaveMadePassword("made-2", origin: "https://github.com", username: "ada", into: beside.id)
+        XCTAssertEqual(again.id, beside.id)
+        XCTAssertEqual(center.items.count, 2)
+        XCTAssertEqual(center.secret(of: beside.id)?.previousPasswords?.map(\.password), ["made-1"])
+
+        var updated = try XCTUnwrap(center.secret(of: saved.id))
+        updated.password = "made-2"
+        try center.save(saved, secret: updated)
+        XCTAssertEqual(center.secret(of: saved.id)?.previousPasswords?.map(\.password), ["correct horse"])
+
+        let request = { (name: String?) in
+            VaultFillRequest(sessionID: UUID(), itemName: name, kind: .newPassword, origin: "https://github.com")
+        }
+        let sameUser = await center.authorizeNewPassword(request(nil), username: "ada")
+        let sameName = await center.authorizeNewPassword(request("GitHub"), username: "")
+        let newAccount = await center.authorizeNewPassword(request(nil), username: "grace")
+        guard case .failure = sameUser, case .failure = sameName, case .success(.always) = newAccount else {
+            return XCTFail("an agent's new password went over a saved one, or not into a new account")
+        }
     }
 }
 

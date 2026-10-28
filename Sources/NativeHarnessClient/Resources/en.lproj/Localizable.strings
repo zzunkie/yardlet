@@ -2724,6 +2724,17 @@
 "No two-factor QR code is in the picture." = "No two-factor QR code is in the picture.";
 "Copy Code" = "Copy Code";
 "Code %@, %lld seconds left" = "Code %@, %lld seconds left";
+"Use a strong password for %@? The password manager saves it." = "Use a strong password for %@? The password manager saves it.";
+"Use Strong Password" = "Use Strong Password";
+"This page has no password field to fill." = "This page has no password field to fill.";
+"Yardlet could not make a password." = "Yardlet could not make a password.";
+"Saved the new password in “%@”." = "Saved the new password in “%@”.";
+"Previous passwords" = "Previous passwords";
+"%lld kept" = "%lld kept";
+"Replaced %@" = "Replaced %@";
+"show the previous passwords" = "show the previous passwords";
+"“%@” is waiting to make a password for %@." = "“%@” is waiting to make a password for %@.";
+"make a password for %@ for “%@”, on a page where it ran its own scripts" = "make a password for %@ for “%@”, on a page where it ran its own scripts";
 
 /* Browser profile per task */
 "Keep cookies" = "Keep cookies";

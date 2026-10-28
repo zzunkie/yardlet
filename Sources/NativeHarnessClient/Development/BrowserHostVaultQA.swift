@@ -60,6 +60,7 @@ final class BrowserHostVaultQA {
         await exerciseCodes()
         await exerciseReveal()
         await exerciseRefusals(strict: strict)
+        await exerciseNewPasswords()
         await exerciseVirtualAuthenticator()
         await exercisePasskeys()
         await exercisePanel()
@@ -68,6 +69,45 @@ final class BrowserHostVaultQA {
     }
 
     // MARK: Fills
+
+    /// An agent's new password for a sign-up (design §15): Yardlet makes one within the field's passwordrules,
+    /// fills it and its confirmation, saves it as a new item with the form's username, and gives no value back;
+    /// a page script cannot read it, and a username already saved for the site is refused.
+    private func exerciseNewPasswords() async {
+        await navigate("vault/signup")
+        let snapshot = await call(AgentToolCatalog.snapshot)
+        guard let email = Self.ref(in: snapshot.text, role: "textbox", name: "Email"),
+              let field = Self.ref(in: snapshot.text, role: "textbox", name: "Password") else {
+            return check("the sign-up page's snapshot names its fields", false, snapshot.text)
+        }
+        _ = await call(AgentToolCatalog.type, ["ref": .string(email), "text": .string("agent@example.test")])
+        let made = await call(VaultToolCatalog.fillCredential, ["ref": .string(field), "kind": .string("new_password"),
+                                                                "submit": .bool(true)])
+        let value = await pageValue("document.getElementById('pass').value")?.stringValue ?? ""
+        let submitted = await pageValue("window.qa.submitted")
+        let saved = vault.items.first { $0.username == "agent@example.test" }
+        check("an agent's new password meets the field's rules, fills its confirmation and is saved with the form's username, "
+                + "and the result has no value",
+              !made.isError && !value.isEmpty && !made.text.contains(value) && submitted?["ok"]?.boolValue == true
+                && submitted?["user"]?.stringValue == "agent@example.test"
+                && saved.flatMap { vault.secret(of: $0.id)?.password } == value,
+              made.text)
+        let after = await call(AgentToolCatalog.snapshot)
+        let read = await call(AgentToolCatalog.evaluate, ["function": .string("() => document.getElementById('pass').value")])
+        check("the new password stays out of snapshots and page scripts",
+              !value.isEmpty && !after.text.contains(value) && read.isError && !read.text.contains(value), read.text)
+
+        await navigate("vault/signup")
+        let again = await call(AgentToolCatalog.snapshot)
+        if let email = Self.ref(in: again.text, role: "textbox", name: "Email"),
+           let field = Self.ref(in: again.text, role: "textbox", name: "Password") {
+            _ = await call(AgentToolCatalog.type, ["ref": .string(email), "text": .string("agent@example.test")])
+            let refused = await call(VaultToolCatalog.fillCredential, ["ref": .string(field), "kind": .string("new_password")])
+            let untouched = await pageValue("document.getElementById('pass').value") == .string("")
+            check("an agent gets no new password for an account already saved", refused.isError && untouched
+                    && vault.items.filter { $0.username == "agent@example.test" }.count == 1, refused.text)
+        }
+    }
 
     private func exerciseLogin() async {
         await navigate("vault/login")
@@ -499,7 +539,8 @@ final class BrowserHostVaultQA {
                   evaluated.isError && evaluated.text.contains("password or code"), evaluated.text)
         }
 
-        let menuItems = controller.view?.extraContextMenuItems?() ?? []
+        // The strong password item shows only while a password field has the focus.
+        let menuItems = (controller.view?.extraContextMenuItems?() ?? []).filter { $0.title != L10n.string("Use Strong Password") }
         // The vault's three, then the browser's own import of another browser's sign-ins.
         check("panel: the page's menu has the vault's three items", menuItems.count == 4
                 && menuItems[2].title == L10n.string("Add Two-Factor Code from QR Code")
@@ -527,6 +568,7 @@ final class BrowserHostVaultQA {
 
         await exercisePanelAddress(controller, item: saved)
         await exercisePanelCodes(controller)
+        await exercisePanelPasswords(controller)
     }
 
     /// The person's key-button fill holds the page's addresses too: a GET form's submission is refused before it is
@@ -697,6 +739,93 @@ final class BrowserHostVaultQA {
         check("panel: filling it keeps the site for that item and the page takes the code",
               filled && taken && kept == ["qa-vendor.test"],
               "filled \(filled), checked \(taken), sites \(kept ?? [])")
+    }
+
+    /// The person's strong passwords in the panel (design §15): an empty new-password field offers one; taking
+    /// it fills the field and its confirmation within the site's passwordrules and saves an item at once, which
+    /// submitting completes with the form's username. On a change form the made password is kept beside the
+    /// saved item, which updating after the change replaces while keeping its old password; and the page's
+    /// menu offers one while a password field has the focus.
+    private func exercisePanelPasswords(_ controller: BrowserHostPaneController) async {
+        func open(_ path: String) async -> BrowserTab? {
+            controller.addressInput = base + path
+            controller.submitAddress()
+            guard await waitUntilAsync(.seconds(20), {
+                controller.tab?.currentURL?.hasSuffix(path) == true && controller.tab?.isLoading == false
+            }), let tab = controller.tab else {
+                check("panel: \(path) loads", false, controller.tab?.currentURL ?? "no tab")
+                return nil
+            }
+            try? await Task.sleep(for: .seconds(1))
+            return tab
+        }
+        func page(_ tab: BrowserTab, _ expression: String) async -> JSONValue? {
+            let result = try? await tab.devTools.send("Runtime.evaluate", ["expression": .string(expression), "returnByValue": .bool(true)],
+                                                      timeout: .seconds(10))
+            return result?["result"]?["value"]
+        }
+        func type(_ tab: BrowserTab, _ field: String, _ text: String) async {
+            _ = await page(tab, "document.getElementById('\(field)').focus()")
+            _ = try? await tab.devTools.send("Input.insertText", ["text": .string(text)], timeout: .seconds(10))
+        }
+        let origin = VaultSite.origin(of: base) ?? base
+
+        guard let signup = await open("vault/signup") else { return }
+        await type(signup, "user", "newperson@example.test")
+        _ = await page(signup, "document.getElementById('pass').focus()")
+        let offered = await waitUntilAsync(.seconds(5)) { controller.vaultPasswordOffer != nil }
+        capture(controller, named: "vault-panel-password-bar.png")
+        check("panel: an empty new-password field offers a strong password", offered, "\(String(describing: controller.vaultPasswordOffer))")
+        controller.useStrongPassword()
+        let filled = await waitUntilAsync(.seconds(5)) { await page(signup, "window.qa.ok()") == .bool(true) }
+        let value = await page(signup, "pass.value")?.stringValue ?? ""
+        let presaved = vault.items.first { $0.username == "newperson@example.test" }
+        try? await Task.sleep(for: .milliseconds(300))
+        capture(controller, named: "vault-panel-password-saved.png")
+        check("panel: Use Strong Password fills the field and its confirmation within the site's rules and saves an item at once",
+              filled && !value.isEmpty && presaved.flatMap { vault.secret(of: $0.id)?.password } == value
+                && controller.vaultPasswordOffer == nil,
+              "filled \(filled), saved \(presaved?.name ?? "none")")
+        _ = await page(signup, "document.getElementById('go').click()")
+        let created = await waitUntilAsync(.seconds(3)) { await page(signup, "window.qa.submitted?.ok") == .bool(true) }
+        try? await Task.sleep(for: .milliseconds(500))
+        check("panel: submitting the made password asks nothing and keeps the item",
+              created && controller.vaultOffer == nil && vault.items.filter { $0.username == "newperson@example.test" }.count == 1,
+              "submitted \(created), offer \(controller.vaultOffer != nil)")
+
+        guard let change = await open("vault/change"),
+              let person = vault.items.first(where: { $0.username == "person@example.test" }),
+              let old = vault.secret(of: person.id)?.password else {
+            return check("panel: the change form loads for the person's saved item", false, "no item")
+        }
+        await type(change, "current", old)
+        _ = await page(change, "document.getElementById('fresh').focus()")
+        let changeOffered = await waitUntilAsync(.seconds(5)) { controller.vaultPasswordOffer != nil }
+        controller.useStrongPassword()
+        let changeFilled = await waitUntilAsync(.seconds(5)) {
+            await page(change, "fresh.value !== '' && fresh.value === again.value && current.value !== fresh.value") == .bool(true)
+        }
+        let fresh = await page(change, "fresh.value")?.stringValue ?? ""
+        let beside = vault.items.first { $0.username.isEmpty && $0.sites == [origin] && $0.hasPassword }
+        check("panel: on a change form the made password goes into the new and confirmation fields and beside the saved item",
+              changeOffered && changeFilled && vault.secret(of: person.id)?.password == old
+                && beside.flatMap { vault.secret(of: $0.id)?.password } == fresh,
+              "offered \(changeOffered), filled \(changeFilled), beside \(beside?.name ?? "none")")
+        _ = await page(change, "document.getElementById('go').click()")
+        let asked = await waitUntilAsync(.seconds(5)) { controller.vaultOffer?.updates?.id == person.id }
+        capture(controller, named: "vault-panel-password-update.png")
+        controller.acceptVaultOffer()
+        let updated = vault.secret(of: person.id)
+        check("panel: updating after the change gives the item the new password, keeps the old one and drops the item beside it",
+              asked && updated?.password == fresh && updated?.previousPasswords?.first?.password == old
+                && !vault.items.contains { $0.id == beside?.id },
+              "asked \(asked), previous \(updated?.previousPasswords?.count ?? 0)")
+
+        _ = await page(change, "document.getElementById('current').focus()")
+        let focused = await waitUntilAsync(.seconds(3)) { controller.focusedPasswordPage != nil }
+        let menu = controller.view?.extraContextMenuItems?() ?? []
+        check("panel: the page's menu offers a strong password while a password field has the focus",
+              focused && menu.first?.title == L10n.string("Use Strong Password"), menu.map(\.title).joined(separator: ", "))
     }
 
     private func capture(_ controller: BrowserHostPaneController, named name: String) {

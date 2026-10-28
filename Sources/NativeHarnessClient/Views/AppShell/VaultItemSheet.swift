@@ -7,7 +7,8 @@ import SwiftUI
 /// with the page's site filled in. Secrets the person leaves blank stay as saved; the saved password
 /// shows only after Touch ID or the login password, as Chrome's and Safari's password pages do. An
 /// item may hold a two-factor code alone, without a site or password, as an authenticator app's
-/// entry (§14); its current code shows here to copy.
+/// entry (§14); its current code shows here to copy. The passwords a saved one replaced are kept and
+/// show the same way (§15), so a change a site did not take loses nothing.
 struct VaultItemSheet: View {
     let vault: VaultCenter
     private let original: VaultItem?
@@ -26,6 +27,9 @@ struct VaultItemSheet: View {
     @State private var failure: String?
     /// The saved item's code secret, for its current code.
     @State private var savedCode: OneTimeCodeSecret?
+    /// How many passwords the saved one replaced, and those passwords once the person confirmed.
+    @State private var previousCount = 0
+    @State private var previousPasswords: [VaultPreviousPassword]?
 
     /// - Parameters:
     ///   - item: the saved item to edit, or nil for a new one.
@@ -64,13 +68,16 @@ struct VaultItemSheet: View {
         .frame(width: 520)
         .background(ParityTheme.canvas)
         .task {
-            if let original, original.hasOneTimeCode { savedCode = vault.secret(of: original.id)?.oneTimeCode }
+            guard let original, original.hasOneTimeCode || original.hasPassword, let secret = vault.secret(of: original.id) else { return }
+            savedCode = secret.oneTimeCode
+            previousCount = secret.previousPasswords?.count ?? 0
         }
-        // A password or setup key the person copies out of its field goes on the clipboard as the vault's own copies do.
+        // A password, a previous one or a setup key the person copies out of the sheet goes on the clipboard as the
+        // vault's own copies do.
         .onReceive(NotificationCenter.default.publisher(for: NSMenu.didSendActionNotification)) { note in
             let action = (note.userInfo?["MenuItem"] as? NSMenuItem)?.action
             guard action == #selector(NSText.copy(_:)) || action == #selector(NSText.cut(_:)) else { return }
-            VaultClipboard.conceal(ifPartOf: [password, setupKey])
+            VaultClipboard.conceal(ifPartOf: [password, setupKey] + (previousPasswords ?? []).map(\.password))
         }
         .alert(L10n.format("Delete “%@”?", original?.name ?? ""), isPresented: $confirmsDeleting) {
             Button(L10n.string("Delete"), role: .destructive, action: delete)
@@ -127,6 +134,12 @@ struct VaultItemSheet: View {
                     }
                 }
             }
+            if previousCount > 0 {
+                GridRow {
+                    label(L10n.string("Previous passwords"))
+                    previousPasswordsView
+                }
+            }
             GridRow {
                 label(L10n.string("Two-factor setup key"))
                 TextField(L10n.string("Two-factor setup key"), text: $setupKey,
@@ -161,6 +174,35 @@ struct VaultItemSheet: View {
         }
         .textFieldStyle(.roundedBorder)
         .labelsHidden()
+    }
+
+    @ViewBuilder
+    private var previousPasswordsView: some View {
+        if let previousPasswords {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(previousPasswords.enumerated()), id: \.offset) { _, previous in
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(verbatim: previous.password)
+                            .font(.callout.monospaced())
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 8)
+                        Text(L10n.format("Replaced %@", previous.replacedAt.formatted(date: .abbreviated, time: .shortened)))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Button(L10n.string("Hide")) { self.previousPasswords = nil }
+            }
+        } else {
+            HStack(spacing: 6) {
+                Text(L10n.format("%lld kept", Int64(previousCount)))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button(L10n.string("Show a saved password"), action: showPreviousPasswords)
+            }
+        }
     }
 
     private func label(_ text: String) -> some View {
@@ -279,6 +321,14 @@ struct VaultItemSheet: View {
             guard await vault.confirmPerson(L10n.string("show the saved password")) else { return }
             if password.isEmpty, let saved = vault.secret(of: id)?.password { password = saved }
             showsPassword = true
+        }
+    }
+
+    private func showPreviousPasswords() {
+        guard let id = original?.id else { return }
+        Task { @MainActor in
+            guard await vault.confirmPerson(L10n.string("show the previous passwords")) else { return }
+            previousPasswords = vault.secret(of: id)?.previousPasswords ?? []
         }
     }
 

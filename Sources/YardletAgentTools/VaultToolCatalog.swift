@@ -14,8 +14,10 @@ package enum VaultToolCatalog {
         name: fillCredential,
         title: "Fill saved sign-in",
         description: "Fill a sign-in saved in the person's Yardlet password manager into a form on the page: the username and "
-            + "password, or the current one-time code, or the passkey for the page's next passkey request. Yardlet puts "
-            + "the values into the page itself and does not return them. It fills only on the sites the item is saved for.",
+            + "password, or the current one-time code, or the passkey for the page's next passkey request. For a new "
+            + "account, Yardlet makes a strong password, fills it into the new password field and its confirmation, and "
+            + "saves it as a new item. Yardlet puts the values into the page itself and does not return them. It fills "
+            + "only on the sites the item is saved for.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
@@ -26,14 +28,16 @@ package enum VaultToolCatalog {
                 ]),
                 "item": .object([
                     "type": .string("string"),
-                    "description": .string("The saved item's name or username. Omit when one item is saved for this site.")
+                    "description": .string("The saved item's name or username. Omit when one item is saved for this site. "
+                        + "For new_password, the new item's name (the site by default).")
                 ]),
                 "kind": .object([
                     "type": .string("string"),
-                    "enum": .array([.string("login"), .string("one_time_code"), .string("passkey")]),
+                    "enum": .array([.string("login"), .string("one_time_code"), .string("passkey"), .string("new_password")]),
                     "description": .string("login (the default): username and password. one_time_code: the "
                         + "authenticator code. passkey: the item's passkey answers the page's next passkey request "
-                        + "within 60 seconds.")
+                        + "within 60 seconds. new_password: a new password for a sign-up form, with ref its new password "
+                        + "field, saved with the username the form holds.")
                 ]),
                 "submit": .object([
                     "type": .string("boolean"),

@@ -53,12 +53,23 @@ struct VaultSecret: Codable, Equatable, Sendable {
     /// and as these say.
     var savedSites: [String]?
     var savedPolicy: VaultItem.Policy?
+    /// The passwords this one replaced, newest first (design §15): a change the site did not take loses
+    /// nothing. Nil in items saved before they were kept.
+    var previousPasswords: [VaultPreviousPassword]?
 
-    init(password: String? = nil, oneTimeCode: OneTimeCodeSecret? = nil, passkey: VaultPasskey? = nil) {
+    init(password: String? = nil, oneTimeCode: OneTimeCodeSecret? = nil, passkey: VaultPasskey? = nil,
+         previousPasswords: [VaultPreviousPassword]? = nil) {
         self.password = password
         self.oneTimeCode = oneTimeCode
         self.passkey = passkey
+        self.previousPasswords = previousPasswords
     }
+}
+
+/// A password an item held before, and when another replaced it.
+struct VaultPreviousPassword: Codable, Equatable, Sendable {
+    var password: String
+    var replacedAt: Date
 }
 
 /// A passkey Yardlet holds itself (design §5.2): the credential a CDP virtual authenticator

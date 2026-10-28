@@ -177,9 +177,13 @@ enum VaultFillNotice {
 /// two-factor code field or setup QR code, to offer filling or saving the code.
 @MainActor
 enum VaultPageScripts {
-    /// The binding the watch calls with a JSON object whose `kind` says what it saw:
-    /// - `signIn`, with `username` and `password`: the person submitted a sign-in.
+    /// The binding the watch calls with a JSON object of strings whose `kind` says what it saw:
+    /// - `signIn`, with `username` and `password`: the person submitted a sign-in. With `made` set instead of
+    ///   `password`, the form held a password the vault made, which Yardlet already has.
     /// - `typedSecret`: someone typed into a password field (trusted input), told once a document.
+    /// - `passwordFocus`, with `page`, and `isNew` set for a new-password field still empty; `passwordBlur`:
+    ///   a password field took or lost the focus.
+    /// - `madeCleared`: the person emptied a field that held a password the vault made (Chrome then drops it).
     /// - `codeField`, with `page`: a one-time code field showed.
     /// - `qr`, with `page`: a graphic the size and shape of a QR code showed; Yardlet reads the screen.
     /// - `setup`, with `page` and `text`: a link to set up a code (`otpauth://`).
@@ -200,9 +204,40 @@ enum VaultPageScripts {
             || (e.maxLength > 0 && e.maxLength <= 8 && (e.inputMode === 'numeric' || e.type === 'tel' || e.type === 'number')));
         """
 
+    /// `autocompleteOf(e)`, `isCurrentPassword(e)` and `newPasswordFields(e)`: the fields a new password goes
+    /// into when `e` is one of them (design §15). The form's fields marked `new-password`; else, past the
+    /// current password (marked so, or named so in its name, id, placeholder or label), the form's other one
+    /// or two (a change's new password and its confirmation); else both of a form's two (a sign-up's password
+    /// and confirmation) or the last two of three; else a lone field named new. A sign-in's field has none.
+    /// `madePasswords()` holds the fields that took a password the vault made, until the person types in one.
+    static let newPasswordTests = """
+        const autocompleteOf = e => (e.getAttribute('autocomplete') || '').toLowerCase().split(/\\s+/);
+        const fieldWords = e => [e.name, e.id, e.placeholder, e.getAttribute('aria-label')]
+          .concat(Array.from(e.labels || []).map(l => l.textContent)).join(' ');
+        const isCurrentPassword = e => autocompleteOf(e).includes('current-password')
+          || (!autocompleteOf(e).includes('new-password') && /current|old|existing|기존|현재/i.test(fieldWords(e)));
+        const passwordFieldsWith = e => Array.from((e.form || e.closest('form') || document).querySelectorAll('input[type=password]'))
+          .filter(f => f === e || (!f.disabled && !f.readOnly && f.getBoundingClientRect().width > 0));
+        const newPasswordFields = e => {
+          if (!(e instanceof HTMLInputElement) || e.type !== 'password') return [];
+          const fields = passwordFieldsWith(e);
+          const marked = fields.filter(f => autocompleteOf(f).includes('new-password'));
+          if (marked.length) return marked.includes(e) ? marked : [];
+          const rest = fields.filter(f => !isCurrentPassword(f));
+          if (!rest.includes(e)) return [];
+          if (rest.length < fields.length) return rest.length <= 2 ? rest : [];
+          if (fields.length === 2) return fields;
+          if (fields.length === 3) return fields.indexOf(e) > 0 ? fields.slice(1) : [];
+          return fields.length === 1 && /new|신규|새/i.test(fieldWords(e)) ? [e] : [];
+        };
+        const madePasswords = () => window.__yardletMade || (window.__yardletMade = new WeakSet());
+        """
+
     /// Runs in the vault's isolated world of every document of a panel's tab. It listens for the person
-    /// submitting a form whose password field they typed into (not one the vault filled) and tells
-    /// Yardlet through the binding, once per submission. It also looks, at most twice a second while the
+    /// submitting a form whose password field they typed into, or that holds a password the vault made
+    /// (not one the vault filled from an item), and tells Yardlet through the binding, once per submission.
+    /// It tells when a password field takes or loses the focus, and whether it is an empty new-password
+    /// field, for the strong password suggestion. It also looks, at most twice a second while the
     /// page changes, for a one-time code field (told once while it shows) and for a QR code's square on
     /// screen (each element once, ten QR looks a document) and tells Yardlet; no value leaves the page
     /// that way.
@@ -211,6 +246,7 @@ enum VaultPageScripts {
           if (window.__yardletVaultWatch) return;
           window.__yardletVaultWatch = true;
           const send = message => { if (typeof window.__yardletVaultOffer === 'function') window.__yardletVaultOffer(JSON.stringify(message)); };
+          \(newPasswordTests)
           const typed = new WeakSet();
           const textTypes = ['text', 'email', 'tel', ''];
           let toldTyped = false;
@@ -218,24 +254,39 @@ enum VaultPageScripts {
             if (!e.isTrusted || !(e.target instanceof HTMLInputElement) || e.target.type !== 'password') return;
             typed.add(e.target);
             if (!toldTyped) { toldTyped = true; send({ kind: 'typedSecret' }); }
+            if (madePasswords().delete(e.target) && !e.target.value) send({ kind: 'madeCleared' });
           }, true);
           let last = '';
           const offer = scope => {
             const fields = Array.from((scope || document).querySelectorAll('input'));
-            const pass = fields.find(e => e.type === 'password' && e.value && typed.has(e) && !(window.__yardletVault || []).includes(e));
+            const made = fields.find(e => e.type === 'password' && e.value && madePasswords().has(e));
+            const own = fields.filter(e => e.type === 'password' && e.value && typed.has(e) && !(window.__yardletVault || []).includes(e));
+            // A change form's new password, not the current one typed above it.
+            const pass = made || own.find(e => newPasswordFields(e).length) || own[0];
             if (!pass) return;
             const user = fields.find(e => textTypes.includes(e.type) && (e.autocomplete || '').split(/\\s+/).includes('username') && e.value)
               || fields.slice(0, fields.indexOf(pass)).reverse().find(e => textTypes.includes(e.type) && e.value);
-            const payload = JSON.stringify({ username: user ? user.value : '', password: pass.value });
+            const message = made ? { kind: 'signIn', username: user ? user.value : '', made: '1' }
+              : { kind: 'signIn', username: user ? user.value : '', password: pass.value };
+            const payload = JSON.stringify(message);
             if (payload === last) return;
             last = payload;
-            send({ kind: 'signIn', username: user ? user.value : '', password: pass.value });
+            send(message);
           };
           addEventListener('submit', e => offer(e.target), true);
           addEventListener('click', e => { const b = e.target instanceof Element && e.target.closest('button, input[type=submit]');
             if (b) offer(b.form || b.closest('form')); }, true);
           addEventListener('keydown', e => { if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.type === 'password')
             offer(e.target.form || e.target.closest('form')); }, true);
+          addEventListener('focusin', e => {
+            if (!(e.target instanceof HTMLInputElement) || e.target.type !== 'password') return;
+            const fresh = newPasswordFields(e.target);
+            send({ kind: 'passwordFocus', page: location.href,
+                   isNew: fresh.length && fresh.every(f => !f.value && !madePasswords().has(f)) ? '1' : '' });
+          }, true);
+          addEventListener('focusout', e => {
+            if (e.target instanceof HTMLInputElement && e.target.type === 'password') send({ kind: 'passwordBlur', page: location.href });
+          }, true);
 
           \(codeFieldTests)
           const onScreen = r => r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
@@ -319,6 +370,78 @@ enum VaultPageScripts {
           return user ? user.value : '';
         })()
         """
+
+    /// The field the person's strong password goes to: the focused password field, else the page's first
+    /// new-password field.
+    static let newPasswordTarget = """
+        (() => {
+          \(newPasswordTests)
+          const focused = document.activeElement;
+          if (focused instanceof HTMLInputElement && focused.type === 'password') return focused;
+          return Array.from(document.querySelectorAll('input[type=password]'))
+            .find(e => newPasswordFields(e).length && e.getBoundingClientRect().width > 0) || null;
+        })()
+        """
+
+    /// With a password field as `this`: what a password made for it must meet (the site's `passwordrules`,
+    /// the field's `minlength` and `maxlength`) and the username in its form, which the saved item takes.
+    static let newPasswordContext = """
+        function() {
+          \(newPasswordTests)
+          const target = this;
+          if (!(target instanceof HTMLInputElement) || target.type !== 'password') return { isPassword: false };
+          const textTypes = ['text', 'email', 'tel', ''];
+          const inputs = Array.from((target.form || target.closest('form') || document).querySelectorAll('input'));
+          const first = newPasswordFields(target)[0] || target;
+          const user = inputs.find(e => textTypes.includes(e.type) && autocompleteOf(e).includes('username') && e.value)
+            || inputs.slice(0, inputs.indexOf(first)).reverse().find(e => textTypes.includes(e.type) && e.value);
+          return { isPassword: true, rules: target.getAttribute('passwordrules') || '', minLength: target.minLength,
+                   maxLength: target.maxLength, username: user ? user.value.trim() : '' };
+        }
+        """
+
+    /// The person's field for a strong password, in the vault's world of the main frame: the field's object, bound
+    /// to the document it is in, that document as the browser reports it, what the password must meet and the form's
+    /// username; nil when the page has no password field.
+    static func newPasswordField(_ cdp: any BrowserAgentCDP, timeout: Duration = .seconds(10)) async
+        -> (objectID: String, frame: (id: String, loaderID: String, origin: String), context: JSONValue)? {
+        guard let frame = try? await mainFrame(cdp, timeout: timeout),
+              let world = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout),
+              let target = try? await cdp.send("Runtime.evaluate", [
+                  "expression": .string(newPasswordTarget), "contextId": .integer(world)
+              ], timeout: timeout),
+              let objectID = target["result"]?["objectId"]?.stringValue,
+              let context = try? await cdp.send("Runtime.callFunctionOn", [
+                  "functionDeclaration": .string(newPasswordContext), "objectId": .string(objectID), "returnByValue": .bool(true)
+              ], timeout: timeout),
+              context["result"]?["value"]?["isPassword"]?.boolValue == true else { return nil }
+        return (objectID, frame, context["result"]?["value"] ?? .null)
+    }
+
+    /// Puts a password the vault made into the field and its confirmation, as `fillForPerson` puts a saved one: only
+    /// into the document of `frame`, recorded on the tab before it goes in; false when the page took nothing.
+    static func fillNewPassword(_ cdp: any BrowserAgentCDP, frame: (id: String, loaderID: String, origin: String),
+                                fills: BrowserVaultFills, into objectID: String, password: String,
+                                timeout: Duration = .seconds(10)) async -> Bool {
+        guard (try? await mainFrame(cdp, timeout: timeout))?.loaderID == frame.loaderID else { return false }
+        let record = BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: cdp.eventLog.count)
+        fills.record(record)
+        let filled = try? await cdp.send("Runtime.callFunctionOn", [
+            "functionDeclaration": .string(BrowserAgentTools.fillFunction), "objectId": .string(objectID),
+            "arguments": .array([.string(VaultFillKind.newPassword.rawValue), .null, .string(password), .null,
+                                 .string(frame.origin)].map { .object(["value": $0]) }),
+            "returnByValue": .bool(true)
+        ], timeout: timeout)
+        guard filled?["result"]?["value"]?["kinds"] != nil else {
+            fills.withdraw(record)
+            return false
+        }
+        if let now = try? await mainFrame(cdp, timeout: timeout), now.loaderID != frame.loaderID {
+            // The page went on to another document of its own as the fill went in; it may hold the value too.
+            fills.record(BrowserAgentVaultFill(loaderID: now.loaderID, eventMark: record.eventMark))
+        }
+        return true
+    }
 
     /// The tab's main frame: its ID, the document it shows and its origin, as the browser reports them.
     static func mainFrame(_ cdp: any BrowserAgentCDP, timeout: Duration) async throws
@@ -506,6 +629,10 @@ extension BrowserAgentTools {
         guard onPage.boolValue == true else {
             throw BrowserAgentToolError("\(ref) is inside a frame in the page; Yardlet fills only the page's own fields.")
         }
+        if kind == .newPassword {
+            return try await fillNewPassword(vault, itemName: itemName, ref: ref, objectID: objectID, frame: frame,
+                                             submit: arguments["submit"]?.boolValue, on: page, sessionID: sessionID)
+        }
 
         var request = VaultFillRequest(sessionID: sessionID, itemName: itemName, kind: kind, origin: frame.origin)
         request.afterAgentScript = page.vaultFills.scriptedDocuments.contains(frame.loaderID)
@@ -598,6 +725,105 @@ extension BrowserAgentTools {
         }
         return .text("Filled \(what) of “\(grant.item.name)” into the form on \(host)"
             + (submitted ? " and submitted it." : ".") + " The values are not shown to you.")
+    }
+
+    /// `browser_fill_credential` with `kind: new_password` (design §15), on the path a saved password's fill takes:
+    /// Yardlet makes the password within what the field asks, saves it as a new item for the site before the page
+    /// takes it (so a page that fails or submits on its own loses nothing), and fills the field and its confirmation
+    /// only when the form sends them to that site.
+    private func fillNewPassword(_ vault: VaultCenter, itemName: String?, ref: String, objectID: String,
+                                 frame: (id: String, loaderID: String, origin: String), submit asked: Bool?,
+                                 on page: BrowserAgentPage, sessionID: UUID) async throws -> AgentToolResult {
+        let context = try await callInVaultWorld(page, objectID, VaultPageScripts.newPasswordContext)
+        guard context["isPassword"]?.boolValue == true else {
+            throw BrowserAgentToolError("\(ref) is not a password field. Give the ref of the new password field.")
+        }
+        let username = context["username"]?.stringValue ?? ""
+        var request = VaultFillRequest(sessionID: sessionID, itemName: itemName, kind: .newPassword, origin: frame.origin)
+        request.afterAgentScript = page.vaultFills.scriptedDocuments.contains(frame.loaderID)
+        let confirmation: VaultUse.Confirmation
+        switch await vault.authorizeNewPassword(request, username: username) {
+        case .success(let confirmed): confirmation = confirmed
+        case .failure(let refusal): throw BrowserAgentToolError(refusal.message)
+        }
+        // The page may have moved on while the person was asked.
+        guard (try? await mainFrame(of: page))?.loaderID == frame.loaderID,
+              let site = VaultSite.suggestion(for: frame.origin, suffixes: vault.suffixes) else {
+            throw BrowserAgentToolError("The page navigated before Yardlet could fill it; nothing was filled or saved.")
+        }
+        // The password goes only into a form that sends it to the new item's site over https.
+        let submission = try await callInVaultWorld(page, objectID, Self.submissionFunction)
+        let targets = (submission["targets"]?.arrayValue ?? []).compactMap { target -> FormTarget? in
+            guard let action = target["action"]?.stringValue, let method = target["method"]?.stringValue else { return nil }
+            return FormTarget(action: action, method: method)
+        }
+        let destination = VaultItem(name: "", sites: [site], username: "")
+        if let elsewhere = targets.first(where: { !Self.isItemDestination($0.action, of: destination) }) {
+            let message = "Yardlet made no password: the form sends its fields to "
+                + "\(VaultSite.origin(of: elsewhere.action) ?? "another address"), which is not \(site) over https."
+            vault.recordRefusal(request, message)
+            throw BrowserAgentToolError(message)
+        }
+        guard let password = vault.makePassword(rules: context["rules"]?.stringValue,
+                                                minLength: Int(context["minLength"]?.integerValue ?? 0),
+                                                maxLength: Int(context["maxLength"]?.integerValue ?? 0)) else {
+            throw BrowserAgentToolError("The system's random source failed, so Yardlet made no password.")
+        }
+        let item: VaultItem
+        do {
+            item = try vault.presaveMadePassword(password, origin: frame.origin, username: username, name: itemName)
+        } catch {
+            throw BrowserAgentToolError("Yardlet could not save a new password, so it filled none.")
+        }
+        let grant = VaultFillGrant(item: item, password: password, confirmedBy: confirmation)
+        // Before the value goes in, as for a saved password (`fillCredential`).
+        vaultScrub.add(password)
+        let record = BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: page.cdp.eventLog.count)
+        page.vaultFills.record(record)
+        if password.count >= VaultScrubList.shortest {
+            page.guardFilledValues(VaultScrubList.spellings(of: password))
+        }
+        let filled = try await callInVaultWorld(page, objectID, Self.fillFunction, arguments: [
+            .string(VaultFillKind.newPassword.rawValue), .null, .string(password), .null, .string(frame.origin)
+        ])
+        let kinds = filled["kinds"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        if let failure = filled["error"]?.stringValue {
+            page.vaultFills.withdraw(record)
+            try? vault.delete(item.id)
+            let message = Self.fillFailure(failure, ref: ref)
+            vault.record(grant, for: request, filled: [], failure: message)
+            throw BrowserAgentToolError(message)
+        }
+        vault.record(grant, for: request, filled: kinds)
+        NotificationCenter.default.post(name: .vaultFilled, object: nil, userInfo: [VaultFillNotice.tabKey: page.tabID])
+
+        // Submitted as a saved password's form is: a safe form unless the agent says not to, another never.
+        var submitted = false
+        var unsent = submission["form"]?.boolValue == true
+            ? Self.submissionRisk(targets, pageOrigin: frame.origin, password: true) : nil
+        if asked != false, unsent == nil {
+            switch try await callInVaultWorld(page, objectID, Self.submitFunction).stringValue {
+            case "submitted":
+                submitted = true
+            case "address":
+                unsent = Self.addressRisk
+            default:
+                if asked == true, let enter = BrowserAgentKeyPress.parse("Enter") {
+                    try await dispatch(enter, on: page)
+                    submitted = true
+                }
+            }
+        }
+        let fields = kinds.contains("new_password_and_confirmation") ? "the new password and its confirmation"
+            : "the new password field"
+        let saved = "saved it as “\(item.name)”" + (item.username.isEmpty ? "" : " for \(item.username)")
+        let host = VaultSite.host(of: frame.origin)
+        if let unsent, asked != false {
+            return .text("Made a new password, filled \(fields) on \(host) and \(saved), but did not submit the form: "
+                + "\(unsent) Click the page's button to create the account. The value is not shown to you.")
+        }
+        return .text("Made a new password, filled \(fields) on \(host) and \(saved)"
+            + (submitted ? ", then submitted the form." : ".") + " The value is not shown to you; sign in later with this item.")
     }
 
     /// Whether the vault filled a password or a code into the document the page shows now (design §5.3):
@@ -705,16 +931,17 @@ extension BrowserAgentTools {
         case "not a code field": "\(ref) is not a one-time code field."
         case "not enough code boxes": "The code boxes after \(ref) are fewer than the code's digits."
         case "moved": "The page went to another site before Yardlet could fill it; nothing was filled."
+        case "not a password field": "\(ref) is not a password field."
         default: "The fill did not run on this page."
         }
     }
 
     /// Runs in the vault's isolated world with the field as `this`. A password goes only into a
     /// password field, a username into a text field of the same form, a code into a code field
-    /// (design §5.2 step 3), and nothing goes into a document of another origin than the one the values were
-    /// given for (the page may have moved on since). The fields that took a secret (a password, a code; not the
-    /// username) and the secrets themselves are kept in this world, which the page's scripts cannot reach, for
-    /// `secretElements`.
+    /// (design §5.2 step 3), and a password the vault made into a password field and its confirmation (§15);
+    /// nothing goes into a document of another origin than the one the values were given for (the page may have
+    /// moved on since). The fields that took a secret (a password, a code; not the username) and the secrets
+    /// themselves are kept in this world, which the page's scripts cannot reach, for `secretElements`.
     static let fillFunction = """
         function(kind, username, password, code, origin) {
           const target = this;
@@ -760,6 +987,13 @@ extension BrowserAgentTools {
             }
             values.push(code);
             kinds.push('one_time_code');
+          } else if (kind === 'new_password') {
+            \(VaultPageScripts.newPasswordTests)
+            if (!isInput(target) || target.type !== 'password' || typeof password !== 'string') return { error: 'not a password field' };
+            const fields = newPasswordFields(target);
+            for (const e of fields.length ? fields : [target]) { put(e, password); secret.push(e); madePasswords().add(e); }
+            values.push(password);
+            kinds.push(fields.length > 1 ? 'new_password_and_confirmation' : 'new_password');
           }
           window.__yardletVault = (window.__yardletVault || []).concat(secret);
           window.__yardletVaultSecrets = (window.__yardletVaultSecrets || []).concat(values);

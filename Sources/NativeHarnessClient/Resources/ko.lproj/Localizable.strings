@@ -2724,6 +2724,17 @@
 "No two-factor QR code is in the picture." = "그림에서 2단계 인증 QR 코드를 찾지 못했습니다.";
 "Copy Code" = "코드 복사";
 "Code %@, %lld seconds left" = "코드 %1$@, %2$lld초 남음";
+"Use a strong password for %@? The password manager saves it." = "%@에 강력한 비밀번호를 쓸까요? 비밀번호 관리자에 저장됩니다.";
+"Use Strong Password" = "강력한 비밀번호 사용";
+"This page has no password field to fill." = "이 페이지에는 채울 비밀번호 칸이 없습니다.";
+"Yardlet could not make a password." = "Yardlet이 비밀번호를 만들지 못했습니다.";
+"Saved the new password in “%@”." = "새 비밀번호를 “%@”에 저장했습니다.";
+"Previous passwords" = "이전 비밀번호";
+"%lld kept" = "%lld개 보관 중";
+"Replaced %@" = "%@까지 사용";
+"show the previous passwords" = "이전 비밀번호 보기";
+"“%@” is waiting to make a password for %@." = "“%1$@”이(가) %2$@ 비밀번호를 만들려고 기다립니다.";
+"make a password for %@ for “%@”, on a page where it ran its own scripts" = "%1$@ 비밀번호 만들기(“%2$@” 작업이 자기 스크립트를 실행한 페이지)";
 
 /* Browser profile per task */
 "Keep cookies" = "쿠키 보관";
