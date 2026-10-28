@@ -936,3 +936,21 @@ address guard before it goes in; submitted only when the form is safe; and the u
   sheet. Turning the vault off removes the bar, the menu item and the tool's kind.
 
 ### 15.5 Verification
+
+- Unit and render: `VaultTests.testMadePasswordsMeetTheRulesAndNeverReplaceASavedPassword` (200 passwords by default and
+  200 under a `passwordrules` value meet their classes, lengths and look-alike rule; a draw of `0xffffffff` for a range
+  of three is drawn again; a failed random source makes none; a made password goes beside a saved item of the same
+  username, which keeps its password until it is updated, and the replaced one stays in the item; an agent makes one
+  only for a new account), and `VaultSettingsRenderingTests` (the item sheet's previous passwords row in light and
+  dark).
+- Real CEF 154 QA bundle (`com.zzunkie.yardlet.vaultqa`, running in the background, a temporary home, the vault in
+  memory, test values only): `run-check.sh … --ui-fixture-browser-check-only=vault`, 60 checks passed. The QA server's
+  `/vault/signup` (new password and confirmation fields with `passwordrules`) and `/vault/change` (current, new and
+  confirmation fields with no `autocomplete`, the current one told apart by its label). The agent's `new_password`
+  filled both fields within the rules, saved the item with the typed username, gave no value, and left the page to the
+  filled-document refusals; a second sign-up with that username was refused. In the panel, the bar showed at the empty
+  new password field, its fill met the rules and saved an item at once, and submitting asked nothing; on the change
+  form the made password went into the new and confirmation fields beside the saved item, and updating replaced the
+  saved password, kept the old one and removed the item beside it; the page menu offered a strong password while a
+  password field had the focus. The panel PNGs (`vault-panel-password-bar`, `-password-saved`, `-password-update`) were
+  checked by eye.
