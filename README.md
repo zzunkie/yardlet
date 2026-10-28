@@ -9,6 +9,9 @@ session history.
 Yardlet is written in Swift and SwiftUI; it is not a web view. It does not replace the agents or
 proxy their accounts: it starts the CLI you already use, with the account you already signed in to.
 
+Most of us will end up with an agent workbench of our own. Yardlet began as one, built for working with
+several agents and accounts every day, and it is shared for anyone who doesn't have one yet.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-dark.png">
   <img alt="A Codex task in Yardlet: the conversation, with the changes, pull request checks, progress and settings beside it" src="docs/images/main-light.png">
