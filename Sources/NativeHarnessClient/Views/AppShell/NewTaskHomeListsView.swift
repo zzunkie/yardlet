@@ -79,7 +79,7 @@ struct NewTaskHomeLists: View {
         NewTaskHomeListsProjection.idleProjects(
             groups: activity.groups, details: activity.details, shellBusy: activity.shellBusy,
             work: { leftWork[$0] }, pullRequest: pullRequest, stoppedSchedules: activity.stoppedSchedules,
-            isSuggestionOpen: activity.isSuggestionOpen, now: activity.now)
+            isSuggestionOpen: activity.isSuggestionOpen, latestTurn: activity.latestTurn, now: activity.now)
     }
 
     private func summaries(leaving idle: [NewTaskIdleProject]) -> [NewTaskProjectSummary] {
@@ -87,7 +87,7 @@ struct NewTaskHomeLists: View {
             groups: activity.groups, chats: activity.chats, details: activity.details,
             shellBusy: activity.shellBusy, pullRequest: pullRequest, schedules: activity.schedules,
             isSuggestionOpen: activity.isSuggestionOpen, agents: activity.agents, answerLine: activity.answerLine,
-            leaving: Set(idle.map(\.id)), now: activity.now))
+            latestTurn: activity.latestTurn, leaving: Set(idle.map(\.id)), now: activity.now))
     }
 
     /// The folder's rows that start something: the same-folder warning, failing checks, a branch to

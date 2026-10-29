@@ -47,6 +47,8 @@ struct NewTaskHomeActivity {
     var onSetAside: (UUID, Date) -> Void = { _, _ in }
     /// A task's latest finished message's first line (`AppModel.answerLineBySessionID`).
     var answerLine: (UUID) -> String? = { _ in nil }
+    /// When a task's latest turn started and what it suggested (`AppModel.latestTurnBySessionID`).
+    var latestTurn: (UUID) -> TaskLatestTurn? = { _ in nil }
 }
 
 /// The new-task screen, which is Yardlet's home: the projects with what their tasks need, then the

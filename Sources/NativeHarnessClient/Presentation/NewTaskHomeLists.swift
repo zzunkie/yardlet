@@ -339,7 +339,7 @@ enum NewTaskHomeListsProjection {
     /// than listed, as the sidebar nests it.
     static func runningRows(
         sessions: [SessionRecord], details: [UUID: TaskAttentionDetail] = [:], shellBusy: Set<UUID> = [],
-        agents: (UUID) -> Int = { _ in 0 }
+        agents: (UUID) -> Int = { _ in 0 }, latestTurn: (UUID) -> TaskLatestTurn? = { _ in nil }
     ) -> [NewTaskRunningRow] {
         let running = TaskAttentionProjection.activityList(in: sessions, details: details, shellBusy: shellBusy)
             .filter { TaskAttentionProjection.place(of: $0, details: details, shellBusy: shellBusy).state == .active }
@@ -360,7 +360,7 @@ enum NewTaskHomeListsProjection {
         for task in running { if let ancestor = listedAncestor(of: task.id) { nested[ancestor, default: 0] += 1 } }
         return running.filter { listedAncestor(of: $0.id) == nil }.map { task in
             NewTaskRunningRow(session: task, subtasks: nested[task.id, default: 0] + agents(task.id),
-                              since: details[task.id]?.turnStartedAt ?? task.updatedAt)
+                              since: latestTurn(task.id)?.startedAt ?? task.updatedAt)
         }
     }
 
@@ -403,6 +403,7 @@ enum NewTaskHomeListsProjection {
         work: (UUID) -> GitLeftWork? = { _ in nil }, pullRequest: (UUID) -> TaskPullRequest? = { _ in nil },
         stoppedSchedules: [ScheduledTask] = [],
         isSuggestionOpen: (TaskAttentionSuggestion, UUID) -> Bool = { _, _ in true },
+        latestTurn: (UUID) -> TaskLatestTurn? = { _ in nil },
         now: Date = Date()
     ) -> [NewTaskIdleProject] {
         let tasks = Dictionary(groups.compactMap { group in group.project.map { ($0.id, group.sessions) } },
@@ -415,7 +416,7 @@ enum NewTaskHomeListsProjection {
             idle.pullRequests = pullRequestRows(sessions: sessions, pullRequest: pullRequest)
             idle.stoppedSchedules = stoppedSchedules.filter { belongs($0, to: candidate.project) }.count
             idle.suggestions = sessions.reduce(0) { count, task in
-                count + (details[task.id]?.suggestions ?? []).filter { isSuggestionOpen($0, task.id) }.count
+                count + (latestTurn(task.id)?.suggestions ?? []).filter { isSuggestionOpen($0, task.id) }.count
             }
             return idle.hasWorkLeft ? idle : nil
         }
@@ -440,13 +441,15 @@ enum NewTaskHomeListsProjection {
         schedules: [(schedule: ScheduledTask, nextRun: Date)] = [],
         isSuggestionOpen: (TaskAttentionSuggestion, UUID) -> Bool = { _, _ in true },
         agents: (UUID) -> Int = { _ in 0 }, answerLine: (UUID) -> String? = { _ in nil },
+        latestTurn: (UUID) -> TaskLatestTurn? = { _ in nil },
         leaving: Set<UUID> = [], now: Date = Date(), calendar: Calendar = .current
     ) -> [NewTaskProjectSummary] {
         let everyTask = groups.flatMap(\.sessions) + chats
         let attention = Dictionary(attentionRows(sessions: everyTask, details: details, shellBusy: shellBusy,
                                                  answerLine: answerLine)
             .map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let running = Dictionary(runningRows(sessions: everyTask, details: details, shellBusy: shellBusy, agents: agents)
+        let running = Dictionary(runningRows(sessions: everyTask, details: details, shellBusy: shellBusy, agents: agents,
+                                             latestTurn: latestTurn)
             .map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let taskIDs = Set(everyTask.map(\.id))
 
@@ -482,7 +485,7 @@ enum NewTaskHomeListsProjection {
                 }
             }
             result.pullRequests = pullRequestRows(sessions: tasks, pullRequest: pullRequest)
-            result.upcoming = upcomingRows(schedules: runs, sessions: tasks, details: details,
+            result.upcoming = upcomingRows(schedules: runs, sessions: tasks, latestTurn: latestTurn,
                                            isOpen: isSuggestionOpen, now: now)
             result.latest = tasks.map(\.updatedAt).max() ?? .distantPast
             guard result.state != .idle || !result.pullRequests.isEmpty || !result.upcoming.isEmpty
@@ -538,8 +541,8 @@ enum NewTaskHomeListsProjection {
     /// suggested that were neither started nor dismissed, most recent first.
     static func upcomingRows(
         schedules: [(schedule: ScheduledTask, nextRun: Date)], sessions: [SessionRecord],
-        details: [UUID: TaskAttentionDetail] = [:], isOpen: (TaskAttentionSuggestion, UUID) -> Bool = { _, _ in true },
-        now: Date = Date()
+        latestTurn: (UUID) -> TaskLatestTurn? = { _ in nil },
+        isOpen: (TaskAttentionSuggestion, UUID) -> Bool = { _, _ in true }, now: Date = Date()
     ) -> [NewTaskUpcomingRow] {
         let runs = schedules
             .filter { $0.schedule.isEnabled && $0.nextRun.timeIntervalSince(now) <= upcomingWindow }
@@ -548,7 +551,7 @@ enum NewTaskHomeListsProjection {
         let suggested = sessions
             .sorted { $0.updatedAt != $1.updatedAt ? $0.updatedAt > $1.updatedAt : $0.id.uuidString < $1.id.uuidString }
             .flatMap { task in
-                (details[task.id]?.suggestions ?? []).reversed().filter { isOpen($0, task.id) }
+                (latestTurn(task.id)?.suggestions ?? []).reversed().filter { isOpen($0, task.id) }
                     .map { NewTaskUpcomingRow.suggestion($0, in: task) }
             }
         return runs + suggested

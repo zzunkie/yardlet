@@ -20,11 +20,6 @@ struct TaskAttentionDetail: Equatable, Sendable {
     var usageLimit: HarnessRateLimit?
     /// The latest turn's error, in the provider's words.
     var errorMessage: String?
-    /// When the latest turn started: its request's time, or Codex's own.
-    var turnStartedAt: Date?
-    /// The tasks the latest turn suggested (`spawn_task`), oldest first. Whether each was started or
-    /// dismissed is the suggestion store's.
-    var suggestions: [TaskAttentionSuggestion] = []
     /// What the task waits on while no turn runs, answered by the person's next message: a question
     /// a restart cut off (`RestartResumePolicy.Plan.questions`).
     var idleRequest: TaskPendingRequest?
@@ -45,7 +40,6 @@ struct TaskAttentionDetail: Equatable, Sendable {
             switch entry.content {
             case .user:
                 if entry.joinsRunningTurn == true { continue }
-                detail.turnStartedAt = entry.createdAt
                 return detail
             case let .permission(request, state) where state == .pending:
                 let kind: TaskPendingRequest
@@ -55,12 +49,6 @@ struct TaskAttentionDetail: Equatable, Sendable {
                 if detail.usageLimit == nil { detail.usageLimit = limit }
             case let .error(message, _, _):
                 if detail.errorMessage == nil { detail.errorMessage = message }
-            // Claude Code names the call `mcp__yardlet__spawn_task`, an ACP agent titles it `yardlet_spawn_task`.
-            case let .activity(activity, _) where activity.kind.hasSuffix(TaskSuggestionToolCatalog.spawnTask)
-                || activity.title.hasSuffix(TaskSuggestionToolCatalog.spawnTask):
-                if let suggestion = ConversationTaskSuggestionProjection.suggestion(from: activity) {
-                    detail.suggestions.insert(TaskAttentionSuggestion(suggestion), at: 0)
-                }
             default:
                 break
             }
@@ -89,26 +77,14 @@ struct TaskAttentionDetail: Equatable, Sendable {
             case nil: break
             }
         }
-        if let last = state.thread?.turns.last {
-            detail.turnStartedAt = last.startedAt
-            for item in last.items.reversed() where item.lifecycle != .inProgress {
-                switch item.content {
-                case let .mcpToolCall(tool):
-                    if let suggestion = ConversationTaskSuggestionProjection.suggestion(from: tool) {
-                        detail.suggestions.insert(TaskAttentionSuggestion(suggestion), at: 0)
-                    }
-                default:
-                    break
-                }
-            }
-        }
         return detail
     }
 
     /// The first line of the latest turn's last finished message, as the home shows a result under
     /// its task. A message still streaming is not read. Kept apart from the detail
     /// (`AppModel.answerLineBySessionID`, one task at a time) because it changes as each message of a
-    /// running turn ends, which must not redraw the sidebar.
+    /// running turn ends, which must not redraw the sidebar; so is what else the home alone shows of
+    /// the turn (`TaskLatestTurn`).
     static func answerLine(_ entries: [TranscriptEntry]) -> String? {
         for entry in entries.reversed() {
             switch entry.content {
@@ -150,12 +126,65 @@ struct TaskAttentionDetail: Equatable, Sendable {
             pendingRequest: pendingRequest ?? other.pendingRequest,
             usageLimit: usageLimit ?? other.usageLimit,
             errorMessage: errorMessage ?? other.errorMessage,
-            turnStartedAt: turnStartedAt ?? other.turnStartedAt,
-            suggestions: suggestions.isEmpty ? other.suggestions : suggestions,
             idleRequest: idleRequest ?? other.idleRequest,
             isReconnecting: isReconnecting || other.isReconnecting,
             browserWait: browserWait ?? other.browserWait
         )
+    }
+}
+
+/// What the home shows of a task's latest turn besides its answer: when the turn started, and the
+/// tasks it suggested. `AppModel` keeps it per task (`latestTurnBySessionID`), one task at a time,
+/// apart from `TaskAttentionDetail`, which the whole window reads: it changes with every turn a task
+/// starts and with the first read of a saved conversation, which must not update the window.
+struct TaskLatestTurn: Equatable, Sendable {
+    /// When the latest turn started: its request's time, or Codex's own.
+    var startedAt: Date?
+    /// The tasks the latest turn suggested (`spawn_task`), oldest first. Whether each was started or
+    /// dismissed is the suggestion store's.
+    var suggestions: [TaskAttentionSuggestion] = []
+
+    /// The latest turn of a transcript: everything after the last request the person sent. A
+    /// message read into the running turn belongs to it.
+    static func reading(_ entries: [TranscriptEntry]) -> TaskLatestTurn {
+        var turn = TaskLatestTurn()
+        for entry in entries.reversed() {
+            switch entry.content {
+            case .user:
+                if entry.joinsRunningTurn == true { continue }
+                turn.startedAt = entry.createdAt
+                return turn
+            // Claude Code names the call `mcp__yardlet__spawn_task`, an ACP agent titles it `yardlet_spawn_task`.
+            case let .activity(activity, _) where activity.kind.hasSuffix(TaskSuggestionToolCatalog.spawnTask)
+                || activity.title.hasSuffix(TaskSuggestionToolCatalog.spawnTask):
+                if let suggestion = ConversationTaskSuggestionProjection.suggestion(from: activity) {
+                    turn.suggestions.insert(TaskAttentionSuggestion(suggestion), at: 0)
+                }
+            default:
+                break
+            }
+        }
+        return turn
+    }
+
+    /// A Codex timeline's latest turn.
+    static func reading(_ state: CodexTaskState) -> TaskLatestTurn {
+        var turn = TaskLatestTurn()
+        guard let last = state.thread?.turns.last else { return turn }
+        turn.startedAt = last.startedAt
+        for item in last.items.reversed() where item.lifecycle != .inProgress {
+            if case let .mcpToolCall(tool) = item.content,
+               let suggestion = ConversationTaskSuggestionProjection.suggestion(from: tool) {
+                turn.suggestions.insert(TaskAttentionSuggestion(suggestion), at: 0)
+            }
+        }
+        return turn
+    }
+
+    /// A Codex task has both; its own timeline speaks first.
+    func merged(over other: TaskLatestTurn) -> TaskLatestTurn {
+        TaskLatestTurn(startedAt: startedAt ?? other.startedAt,
+                       suggestions: suggestions.isEmpty ? other.suggestions : suggestions)
     }
 }
 

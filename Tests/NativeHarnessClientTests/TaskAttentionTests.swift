@@ -84,8 +84,8 @@ final class TaskAttentionTests: XCTestCase {
             TranscriptEntry(content: .user(text: UsageLimitContinuation.afterAccountSwitch)),
         ]).usageLimit, "Continuing after the limit starts a new turn")
 
-        // What the home reads: when the turn started and the tasks it suggested, and apart from the
-        // detail, the last finished message's first line without Markdown's marks (a message still
+        // What the home reads apart from the detail: when the turn started and the tasks it suggested,
+        // and the last finished message's first line without Markdown's marks (a message still
         // streaming is not read).
         let start = Date(timeIntervalSince1970: 100)
         let entries = [
@@ -99,8 +99,9 @@ final class TaskAttentionTests: XCTestCase {
                 output: TaskSuggestionToolCatalog.notedResult(taskID: "task_1a2b3c4d")), state: .completed)),
             TranscriptEntry(content: .assistant(text: "Still typing", isStreaming: true)),
         ]
-        let read = TaskAttentionDetail.reading(entries)
-        XCTAssertEqual(read.turnStartedAt, start)
+        let read = TaskLatestTurn.reading(entries)
+        XCTAssertEqual(read.startedAt, start)
+        XCTAssertEqual(TaskAttentionDetail.reading(entries), .none, "Nothing the window reads changed")
         XCTAssertEqual(TaskAttentionDetail.answerLine(entries), "Done: see the PR")
         XCTAssertNil(TaskAttentionDetail.answerLine(Array(entries.prefix(3))), "An earlier turn's answer is not this turn's")
         XCTAssertEqual(read.suggestions, [TaskAttentionSuggestion(id: "task_1a2b3c4d", title: "Fix the badge")])

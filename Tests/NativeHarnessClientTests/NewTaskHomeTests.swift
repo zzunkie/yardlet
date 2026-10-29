@@ -298,9 +298,8 @@ final class NewTaskHomeTests: XCTestCase {
         let question = task("Question", at: at(3), status: .running, in: Self.otherFolder)
         let lastWeek = task("Last week", at: at(24 * 6), in: quietFolder)
         let old = task("Old", at: at(24 * 8), in: staleFolder)
-        let details = [question.id: TaskAttentionDetail(pendingRequest: .input),
-                       parent.id: TaskAttentionDetail(turnStartedAt: Date(timeIntervalSince1970: at(1.5))),
-]
+        let details = [question.id: TaskAttentionDetail(pendingRequest: .input)]
+        let turns = [parent.id: TaskLatestTurn(startedAt: Date(timeIntervalSince1970: at(1.5)))]
         let audit = ScheduledTask(name: "Audit", prompt: "", trigger: .daily(ScheduleTime(hour: 9, minute: 0)),
                                   destination: ScheduleDestination(harness: .codex, projectID: yardlet.id))
         let groups = [
@@ -311,7 +310,7 @@ final class NewTaskHomeTests: XCTestCase {
         ]
         let summaries = NewTaskHomeListsProjection.projectSummaries(
             groups: groups, details: details, schedules: [(audit, now.addingTimeInterval(3600))],
-            answerLine: { $0 == unread.id ? "Done." : nil }, now: now,
+            answerLine: { $0 == unread.id ? "Done." : nil }, latestTurn: { turns[$0] }, now: now,
             calendar: Calendar(identifier: .gregorian))
 
         XCTAssertEqual(summaries.map(\.name), ["other", "yardlet", "quiet"],

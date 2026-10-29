@@ -60,6 +60,11 @@ final class AppModel {
     /// what reads that task's line.
     var answerLineBySessionID: TaskStateReader<String> { answerLines.reader }
     private let answerLines = TaskStateTable<String>()
+    /// When each task's latest turn started and the tasks it suggested (`TaskLatestTurn`), which the
+    /// home shows. One task at a time, so a turn starting or a saved conversation read for the first
+    /// time redraws only what reads that task's turn, not the window.
+    var latestTurnBySessionID: TaskStateReader<TaskLatestTurn> { latestTurns.reader }
+    private let latestTurns = TaskStateTable<TaskLatestTurn>()
     /// How much of each Claude task's saved transcript its reads take, and whether the file holds
     /// earlier turns than they reached, which the conversation offers as it scrolls up.
     var claudeTranscriptTailBySessionID: TaskStateReader<ClaudeTranscriptTail> { claudeTranscriptTails.reader }
@@ -1879,12 +1884,17 @@ final class AppModel {
         }
     }
 
-    /// Rereads one task's `TaskAttentionDetail` after its transcript or Codex timeline was set.
-    /// `sessionToolWaits` is `sessionToolWaitsForPerson(in:)` when the caller just read it.
+    /// Rereads one task's `TaskAttentionDetail`, answer line and latest turn after its transcript or
+    /// Codex timeline was set. `sessionToolWaits` is `sessionToolWaitsForPerson(in:)` when the caller
+    /// just read it.
     func refreshAttentionDetail(for id: UUID, sessionToolWaits: Bool? = nil) {
         let answerLine = codexPresentations[id].flatMap(TaskAttentionDetail.answerLine)
             ?? transcripts[id].flatMap(TaskAttentionDetail.answerLine)
         if answerLines[id] != answerLine { answerLines[id] = answerLine }
+        let transcriptTurn = transcripts[id].map(TaskLatestTurn.reading)
+        let latestTurn = codexPresentations[id].map { TaskLatestTurn.reading($0).merged(over: transcriptTurn ?? .init()) }
+            ?? transcriptTurn
+        if latestTurns[id] != latestTurn { latestTurns[id] = latestTurn }
         let transcript = transcripts[id].map(TaskAttentionDetail.reading) ?? .none
         var detail = codexPresentations[id].map { TaskAttentionDetail.reading($0).merged(over: transcript) } ?? transcript
         // A session tool's own approval, or one its subagent waits on, is an approval the task waits on.
@@ -2969,6 +2979,7 @@ final class AppModel {
             transcriptPublicationTasks.removeValue(forKey: session.id)?.cancel()
             transcripts.removeValue(forKey: session.id)
             answerLines.removeValue(forKey: session.id)
+            latestTurns.removeValue(forKey: session.id)
             claudeTranscriptTails.removeValue(forKey: session.id)
             antigravityHistoryShown.removeValue(forKey: session.id)
             errorBySessionID.removeValue(forKey: session.id)

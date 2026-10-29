@@ -1605,7 +1605,8 @@ struct MainWindow: View {
                 onMarkRead: { ids in Task { await model.store.markRead(ids: ids) } },
                 onOpenSchedule: showSchedule,
                 onSetAside: { projects.setAside($0, through: $1) },
-                answerLine: { model.answerLineBySessionID[$0] }),
+                answerLine: { model.answerLineBySessionID[$0] },
+                latestTurn: { model.latestTurnBySessionID[$0] }),
             reply: NewTaskHomeReplyServices(
                 content: { session, hooks in AnyView(homeReplyContent(session, hooks: hooks)) },
                 isShownElsewhere: { model.splits.activeSplit?.pane(hosting: $0) != nil },

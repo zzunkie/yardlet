@@ -57,6 +57,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let now = Date()
         func at(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
         var details: [UUID: TaskAttentionDetail] = [:]
+        var turns: [UUID: TaskLatestTurn] = [:]
         var answers: [UUID: String] = [:]
 
         // yardlet: one waiting, one unread, one running with two subtasks, two finished with pull requests.
@@ -65,7 +66,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         notes.completionState = .completed
         answers[notes.id] = "Sorted the 12 changes in 0.9 into features, fixes and internals."
         let sidebar = task("Refactor sidebar rows", minutesAgo: 0.5, status: .running, in: repository)
-        details[sidebar.id] = TaskAttentionDetail(turnStartedAt: at(14), suggestions: [
+        turns[sidebar.id] = TaskLatestTurn(startedAt: at(14), suggestions: [
             TaskAttentionSuggestion(id: "task_1a2b3c4d", title: "Fix the README badge")])
         var child = task("Tidy selection state tests", minutesAgo: 1, status: .running, in: repository)
         child.parentTaskID = sidebar.id
@@ -84,7 +85,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let blog = task("Blog list first-load speed", minutesAgo: 25, unread: true, in: shop, harness: .codex)
         answers[blog.id] = "The list's first screen now loads in 0.6 s, down from 1.8 s. Added lazy images and a query cache; 14 tests pass."
         let webhook = task("Retry payment webhooks", minutesAgo: 1, status: .running, in: shop, harness: .codex)
-        details[webhook.id] = TaskAttentionDetail(turnStartedAt: at(3))
+        turns[webhook.id] = TaskLatestTurn(startedAt: at(3))
         let checkout = task("Checkout page accessibility", minutesAgo: 200, in: shop)
 
         // design-kit: a plan limit and an unread result.
@@ -195,7 +196,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
             notices: [.usage(account: "jordan", window: L10n.string("Weekly"), remaining: "8%"),
                       .lowDisk(availableBytes: 8_200_000_000)],
             now: now,
-            answerLine: { answers[$0] })
+            answerLine: { answers[$0] }, latestTurn: { turns[$0] })
         return (activity, monitor, [yardlet, exampleProject, designProject, rentalProject, ledgerProject, fieldProject,
                                     oldProject], names, conversations)
     }
