@@ -21,8 +21,13 @@ if [[ ! -x "$sampler" ]]; then
     mkdir -p "${sampler:h}"
     swiftc -O -o "$sampler" "$TOOLS/sampler.swift" || exit 1
 fi
+media_fixtures="${out:h}/bin/media-fixtures"
+if [[ ! -x "$media_fixtures" ]]; then
+    swiftc -O -o "$media_fixtures" "$TOOLS/media-fixtures.swift" || exit 1
+fi
 rm -rf "$out"
 mkdir -p "$out/samples" "$out/server"
+"$media_fixtures" "$out/server/media" || exit 1
 touch "$out/.started"
 identifier=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$app/Contents/Info.plist")
 clones="$(dirname "$(getconf DARWIN_USER_TEMP_DIR)")/X/$identifier.browser-host.code_sign_clone"
