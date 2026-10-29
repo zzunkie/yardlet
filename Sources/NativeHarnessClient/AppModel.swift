@@ -6605,7 +6605,9 @@ final class AppModel {
         guard let session = store.sessions.first(where: { $0.id == sessionID }),
               session.harness == .claudeCode else { return }
         if limit.status == .warning, !limit.isUsingOverage {
-            rateLimitWarningBySessionID[sessionID] = limit
+            // Every API call reports it; an unchanged warning is not written, which would redraw the
+            // task shown, whichever task reported.
+            if rateLimitWarningBySessionID[sessionID] != limit { rateLimitWarningBySessionID[sessionID] = limit }
         } else if rateLimitWarningBySessionID[sessionID] != nil {
             rateLimitWarningBySessionID.removeValue(forKey: sessionID)
         }
