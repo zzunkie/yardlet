@@ -94,6 +94,13 @@ struct ConversationTimeline: View {
         let turns = presentation.turns
         let _ = rendering.keep(turnIDs: turns.map(\.id))
         let context = itemContext(presentation)
+        // The transcript's last entry is in the last turn. An earlier turn is not told it, so what it
+        // is offered stays the same as entries are added, and it is not drawn again for each of them.
+        let earlierTurnContext = {
+            var earlier = context
+            earlier.lastEntryID = nil
+            return earlier
+        }()
         let anchors = ConversationAnchorResolver(presentation: presentation, threadID: threadID)
         let wholeAnchors = ConversationAnchorResolver(presentation: whole, threadID: threadID)
         let latestRequestID = latestRequest.id(latestTurnID: turns.last?.id) { anchors.isRenamed($0, as: $1) }
@@ -122,8 +129,8 @@ struct ConversationTimeline: View {
                         emptyState
                     }
                     ForEach(turns) { turn in
-                        ConversationTurnHost(turn: turn, context: context, handlers: handlers(for: turn),
-                                             renderState: rendering)
+                        ConversationTurnHost(turn: turn, context: turn.id == turns.last?.id ? context : earlierTurnContext,
+                                             handlers: handlers(for: turn), renderState: rendering)
                             .equatable()
                             .transcriptReadingAnchor(turn.id, tracker: readingTracker)
                     }
