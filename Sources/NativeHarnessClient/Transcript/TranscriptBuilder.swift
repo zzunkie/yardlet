@@ -349,12 +349,13 @@ struct TranscriptBuilder: Sendable {
         streamedReasoningIDs.removeAll()
     }
 
-    /// A card for this activity is already in the conversation.
+    /// A card for this activity is already in the conversation. Looked for from the newest entry:
+    /// a call reports its progress while it is among the latest, and every report asks.
     private func showsActivity(_ id: String) -> Bool {
-        entries.contains { entry in
+        entries.lastIndex { entry in
             guard case let .activity(existing, _) = entry.content else { return false }
             return existing.id == id
-        }
+        } != nil
     }
 
     private mutating func finishStreamingBlocks() {
