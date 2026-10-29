@@ -389,7 +389,7 @@ Agent tools do not expose raw CDP, so the private key from `WebAuthn.getCredenti
 | What Yardlet keeps of pages | A tab does not remember an address or title that carries a filled value: the task's saved tabs, a closed tab to reopen and the tabs reopened after the browser host ended keep the page before it, and the address field's history does not count it as a visit |
 | Harness conversation history | If the above holds, values have no path into the history. Provider history is not edited |
 | Yardlet and host logs | CDP messages are not logged (even now the DEBUG host writes only a dialog's ID and whether it was accepted). Fill commands carry a "sensitive" mark so future logs leave them out too, and the usage log has no values. The DEBUG raw accessibility dump (`accessibilityRecordPath`, QA only) runs only in QA homes where the vault is off |
-| Clipboard | Agents get no tool that copies a value. A code the person copies in Settings → Passwords, and a shown password or setup key the person copies out of the item sheet, are marked `org.nspasteboard.ConcealedType` and cleared after 90 seconds unless something else was copied since (1Password's default); Universal Clipboard still carries them to the person's devices. The agent's paste key does not paste a clipboard marked concealed. Any process of the person's can still read the clipboard during those 90 seconds |
+| Clipboard | Agents get no tool that copies a value. A code the person copies in Settings → Passwords or chooses from the key button's list on a page with no code field (section 16), and a shown password or setup key the person copies out of the item sheet, are marked `org.nspasteboard.ConcealedType` and cleared after 90 seconds unless something else was copied since (1Password's default); Universal Clipboard still carries them to the person's devices. The agent's paste key does not paste a clipboard marked concealed. Any process of the person's can still read the clipboard during those 90 seconds |
 | Chromium autofill and session restore | Password fields are left out of Blink's form state saving, and the host turns off Chrome's address and card autofill (which also stops form history) and Chrome's password saving (`credentials_enable_service`, `credentials_enable_autosignin`) in every profile |
 | `items.json` | The item list is a plain file any process of the person's can write. Each secret in the keychain keeps the item's sites and agent policy as Yardlet saved them; a fill (the agent's or the key button's) of an item whose `items.json` entry differs is refused and the person is told to open the item and save it again. A secret saved before this took the item's values at its first use |
 | `browser_press_key` editing commands | Paste (`Meta+V`) is refused while the clipboard is marked concealed |
@@ -500,6 +500,9 @@ Vault
 - Rows: name, site, kind, step, last use. Clicking a row opens the item sheet.
 - Above the items, "Two-factor codes" (section 14.3) and, while any is left, "Two-factor codes with no site": each with
   a suggested site to check, "Link" and "Link All" (section 14.3).
+- Under the switch, a search field narrows all three lists to the items whose name, username or sites hold each word
+  of the search, apart from case and accents, as the search of Chrome's password manager and the Passwords app does
+  (section 16).
 - CSV import takes the `name,url,username,password` shape that Chrome, 1Password and Bitwarden export (the same columns
   as Aside's help page). Imported items also default to "Always". After the import, Yardlet asks whether to move the
   source file to the Trash.
@@ -521,9 +524,11 @@ Touch ID (the same convention as the Chrome and Safari password screens). A pass
   asks "Update?" instead. Values the agent filled do not trigger it. Detection is done by a listener in Yardlet's own
   isolated world, only on pages with a password field, and the value goes only to the Yardlet process (the same behavior
   as Chrome's save bubble; CEF has no such UI, so Yardlet draws it).
-- **Key button in the address bar:** shows at the right of the address bar only on sites that have items in the vault
-  (the same convention as Chrome's key in the address bar). Clicking it lists that site's items, and choosing one fills
-  the current form for the person. A fill for the person happens right away whatever the step (the person clicked).
+- **Key button in the address bar:** shows at the right of the address bar on a site's page while the vault holds any
+  item (Chrome's key in the address bar shows only on sites with saved passwords; Yardlet's also leads to the rest).
+  Clicking it opens a list of that site's items over a search of every item (section 16), and choosing one fills the
+  current form for the person. A fill for the person happens right away whatever the step (the person clicked); only a
+  password chosen for a site it is not saved for waits for Touch ID (section 16).
 - **Page right-click menu** (the existing CEF menu → `NSMenu`): "Add to Vault…" (an item sheet with the current site
   filled in) and "Make a Vault Passkey" (for 2 minutes, the next passkey registration on this tab goes into the Yardlet
   vault, section 5.2; the person clicked the menu, so Touch ID is not asked).
@@ -531,8 +536,14 @@ Touch ID (the same convention as the Chrome and Safari password screens). A pass
   drawn over off-screen rendering, following the field's position, so it is left out this time. The key button does the
   same job.
 - **Two-step verification (2026-10-25, section 14):** when a verification code field shows, the code bar "Fill the
-  two-factor code from “GitHub”? [Not Now] [Fill Code]"; when a setup QR shows, the setup bar "Save the two-factor code
-  for github.com in “GitHub”? [Not Now] [Save]"; and right-click "Add Two-Factor Code from QR Code".
+  two-factor code from “GitHub”? [Not Now] [Fill Code ▾]", whose menu ends in "Choose Another Code…" (the key button's
+  list of codes, section 16); when a setup QR shows, the setup bar "Save the two-factor code for github.com in
+  “GitHub”? [Not Now] [Save]"; and right-click "Add Two-Factor Code from QR Code".
+- **An item chosen for another site (2026-10-30, section 16):** after an item the person chose from the key button's
+  list fills a site it is not saved for, the bar "Also save example.com in “GitHub”? [Not Now] [Save]".
+- A bar the watcher's report raises is for the document that reported: it shows only while the tab's main frame still
+  shows that address, so a report a document sends as the tab leaves it raises nothing over the next page (2026-10-30;
+  before, the code bar of a code page could stay over the sign-in page opened after it).
 - **Strong passwords (2026-10-28, section 15):** when an empty new password field takes the focus, the bar "Use a strong
   password for github.com? The password manager saves it. [Not Now] [Use Strong Password]"; on any password field,
   right-click "Use Strong Password".
@@ -610,6 +621,7 @@ safe everywhere pleases nobody), D3's default changed, and this task decided the
 | D6 | UI and saving flow | The "Vault" section in settings (on by default), a save prompt when the person signs in, the key button in the address bar, two right-click items, CSV import (section 8) |
 | D7 | Child tasks and other harnesses | The same rules (section 7) |
 | D8 | Strong passwords (2026-10-28) | Chrome's generator and presave, `passwordrules`, previous passwords kept in the item; agents only for new accounts (section 15) |
+| D9 | Finding an item (2026-10-30) | A search in Settings → Passwords and in the key button's list, which shows on every site's page; another site's password after Touch ID, then an offer to save the site; a sign-in with no code takes its account's code; agents unchanged (section 16) |
 
 ## 12. Implementation steps
 
@@ -717,8 +729,9 @@ apps, and backup and restore work only between devices of the same kind
 - **At sign-in:** when the panel's watcher script (in Yardlet's isolated world) sees a verification code field, it
   reports it, and if that site's item has a code, a code bar appears over the page (the same shape as the save bar).
   Clicking it fills the current code into the field. With several items, the person picks one from a menu. The key
-  button fills the code when focus is in a code field, or when the page has only a code field and no sign-in fields. The
-  person clicked, so it fills whatever the step (section 6.1), as the key button does.
+  button fills the code when focus is in a code field, or when the page has only a code field and no sign-in fields; a
+  sign-in with no code of its own gives the code of the page's one other item of its account, as an agent's fill does
+  (below; section 16). The person clicked, so it fills whatever the step (section 6.1), as the key button does.
 - **Deciding what is a code field (2026-10-30):** one rule (`VaultPageScripts.codeFieldTests`) serves the agent's fill
   check, the person's key button and code bar, and the watcher. It follows Chrome's password manager (`kOneTimePwdRe`
   on a field's name and id) and Bitwarden (`TotpFieldNames`, and the weaker `AmbiguousTotpFieldNames`, on a field's
@@ -811,7 +824,8 @@ apps, and backup and restore work only between devices of the same kind
   fact that a code field or a QR is there, and the document address). The QR's secret is read only inside the Yardlet
   process.
 - Fill only when the site matches: filling from the bars and the key button picks the item by the main frame origin the
-  browser reports (`valuesForPerson`).
+  browser reports (`valuesForPerson`). Since 2026-10-30 the person may choose any item from the key button's list for
+  the page; a password goes to a site it is not saved for only after Touch ID (section 16).
 - Secrets stay in the keychain. No new settings or shortcuts. What was added: two bars, one menu item, and a list and
   one button in the vault screen; turning off the vault switch removes the bars and the menu item.
 - Watching cost: while the page changes, it looks at input fields and images at most once every 0.5 seconds. Images
@@ -1030,3 +1044,94 @@ address guard before it goes in; submitted only when the form is safe; and the u
   saved password, kept the old one and removed the item beside it; the page menu offered a strong password while a
   password field had the focus. The panel PNGs (`vault-panel-password-bar`, `-password-saved`, `-password-update`) were
   checked by eye.
+
+## 16. Finding and picking an item (2026-10-30)
+
+The request was that filling a password or a two-factor code should not send the person to Settings → Passwords
+whenever the vault does not fill on its own, and that the password list could be searched. The usage log of four days
+(52 uses, 30 refused; read without values) showed why fills did not happen: several items on one site and no item named
+(8), nothing saved for the site (7), no passkey (3), the agent had run scripts on the page (3), a sign-in item without
+a code whose account's code was another item (2), a code with no site (2), and a code field not recognized (1). Agents
+keep their rules; the person gets a way to any item from the page.
+
+### 16.1 Other browsers and managers compared
+
+Read from public sources on 2026-10-30 (a Codex subagent read the vendors' help pages and Chromium's and Bitwarden's
+source on their `main` branches; these may differ from released builds). Safari's "Other Passwords…" could not be
+confirmed from Apple's own pages.
+
+| | Chrome | 1Password | Bitwarden |
+|---|---|---|---|
+| The list of every item from a page | Right-click "Select password" opens a list of all saved passwords at the field with a "Search passwords" field ([context menu](https://github.com/chromium/chromium/blob/main/chrome/browser/ui/autofill/autofill_context_menu_manager.cc), [search](https://github.com/chromium/chromium/blob/main/chrome/browser/ui/autofill/autofill_popup_controller_impl.cc)) | The toolbar pop-up: "To search in 1Password, open the pop-up and start typing." ([help](https://support.1password.com/getting-started-browser/#search-1password)) | The toolbar pop-up's vault: "If All Items is selected, searches will check all vault items for results." ([help](https://bitwarden.com/help/searching-vault/)) |
+| Asking who is there | Device authentication before the fill when its setting is on (off by default), the same as for a site's own password ([flow](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_manual_fallback_flow.cc)) | Unlocking the extension | Unlocking the vault; a re-prompt per item when set |
+| Another site's password | A confirmation before it fills: "You will use your example.com password on example.de. Only use your password if you trust example.de." [Use Password]; no offer to add the site ([strings](https://github.com/chromium/chromium/blob/main/chrome/app/generated_resources.grd)) | A phishing warning on pasting into a site not saved; "Add website and autofill" on verified low-risk sites ([help](https://support.1password.com/browser-autofill-security/), [release notes](https://releases.1password.com/b5x/stable/)) | "Site doesn't match … Verify you're on a trusted site before autofilling." with "Autofill and save this site" and "Autofill only"; saving adds the page's address once the fill went in ([strings](https://github.com/bitwarden/clients/blob/main/apps/browser/src/_locales/en/messages.json), [help](https://bitwarden.com/help/auto-fill-browser/)) |
+| Codes from the list | Not in that list | Copied from the pop-up's item, filled by autofill ([help](https://support.1password.com/one-time-passwords/)) | Filled from the inline menu, copied from the pop-up; the clipboard clears after five minutes by default ([help](https://bitwarden.com/help/auto-fill-browser/)) |
+
+### 16.2 Decisions
+
+- **Settings → Passwords:** a search field under the switch narrows the codes, the codes with no site and the items
+  (section 8.1). A word matches a name, a username or a site, apart from case and accents; every word must match
+  (`VaultItem.matches`).
+- **The key button:** it shows on every site's page while the vault holds an item, not only where the site has one, so
+  that a site with nothing saved still leads to the list (7 of the refusals above). It opens a list under the address
+  field, as 1Password's and Bitwarden's toolbar buttons open theirs: the search field takes the keyboard, the site's own
+  items come first (each with what it holds), and a search adds every other item it finds, by name (each with its
+  sites, or "No site"). Arrow keys move through the rows, Return chooses one. The list is drawn by Yardlet, not the
+  page, and is never in a tool: an agent still names an item and gets a refusal it can act on (section 5.1).
+- **What a choice fills:** a code with no password fills the page's code field with its current code, and is copied
+  when the page has none (marked concealed and cleared after 90 seconds, as Settings → Passwords copies one; section
+  5.3). Any other item fills as before: the sign-in into the form, or the code when the focus is in a code field. A
+  sign-in with no code of its own gives the code of the page's one other item of its account (the same username apart
+  from case), the rule an agent's fill already followed (section 14.3); with no such item, or two, it gives none.
+- **Another site's item:** a password goes to a site it is not saved for only after Touch ID, whose prompt names the
+  item and the page's site ("fill “GitHub” on example.com, which is not one of its sites"), as Chrome confirms first and
+  Bitwarden warns first. Showing a password in the item sheet already asks for Touch ID, and filling it into another
+  site hands it to that site. A code asks for nothing, as copying it from Settings does not. Once the item filled, the
+  bar offers the site ("Also save example.com in “GitHub”?", or "Save example.com as the site of “Fabrikam”?" for a code
+  with no site), as Bitwarden's "Autofill and save this site"; saving keeps the page's registrable domain in the item
+  beside its others (`VaultCenter.link`), and from then on the site's own list, code bar and agents' fills take it. The
+  bar stays while the page is on that site, since a filled code often sends the page on at once.
+- **The code bar:** one code fills at once as before, and its arrow has "Choose Another Code…"; with several codes the
+  menu lists them and ends in the same item. It opens the key button's list keeping to items with a code.
+- **Several items on one site:** the person chooses from the list as before. An agent's fill is unchanged: it names
+  one item by its name or username (section 5.1).
+
+### 16.3 Rules kept
+
+- The values take the path of every person's fill (sections 5.3 and 14.4): onto the scrubbing list, the tab's record of
+  filled documents and, for a password, the address guard before they go in. A copied code goes onto the scrubbing list
+  as well.
+- An agent's fill keeps to an item's saved sites. A site saved from the bar is a site the person chose to fill on, so it
+  is then the item's like any other; the item's agent use decides whether agents fill it there unasked (section 6.1).
+- The site comes from the browser's main frame origin, as for every fill; the bar offers only an https site's
+  registrable domain or a local development origin.
+- No new settings or shortcuts. Added: a search field, the list under the key button, one bar and one menu item.
+  Turning the vault off hides the key button, its list and the bars.
+
+### 16.4 Security trade-offs
+
+Showing the key button's list on any page lets a look-alike page get a password only when the person chooses it there
+and confirms with Touch ID, whose prompt names the page's site; Yardlet cannot tell a site the person signs in to on
+another domain from a phishing one. A code goes to such a page without Touch ID, as it can be copied there today; a
+relayed code works for the attacker only within its 30 seconds, and the agents' fills stay bound to saved sites.
+
+### 16.5 Verification
+
+- Unit and render: `VaultTests.testThePersonFindsAnyItemAndAPasswordGoesToAnotherSiteOnlyAfterTouchID` (a search by
+  each word of a name, username or site, apart from case and accents; the list's site items and the rest only for a
+  search, and codes alone; a sign-in with no code taking its account's code, and none beside two such codes; another
+  site's password refused without Touch ID and given after it, its prompt naming both sites; a code given without it;
+  an item drawn before a site was saved in it filling as saved now; nothing while the vault is off), and
+  `VaultSettingsRenderingTests.testSearchesAndTheKeyButtonsListDraw` (light and dark: `settings-vault-search`,
+  `vault-picker`, `vault-picker-search`, `vault-picker-codes`, `vault-picker-empty`).
+- Real CEF 154 QA bundle (`com.zzunkie.yardlet.vaultqa`, running in the background, a temporary home, the vault in
+  memory, Touch ID answered no, test values only): `run-check.sh … --ui-fixture-browser-check-only=vault`, 77 checks
+  passed, no process left and no crash report. The list itself is not opened there, since a popover would come onto
+  the person's screen; the run takes what a choice from it does. A sign-in with no code filled its account's code into
+  the code page, and the page's check took it; an agent's code fill named after that sign-in took the code item. On
+  `https://accounts.qa-other.test/` (the QA server's pages through CDP request interception) the key button showed
+  with nothing saved; a code saved for another site filled the code field, the page took it and the bar offered the
+  site, which saving kept beside the item's own; another site's password was not filled without Touch ID; on the
+  sign-in page, which has no code field, a code was copied to the run's own pasteboard, marked concealed, and the panel
+  said so; and the code bar of the code page left did not stay over the sign-in page (it did before the fix in section
+  8.3). The panel PNGs (`vault-panel-link-bar`, `-code-copied`, `-code-bar`) were checked by eye.

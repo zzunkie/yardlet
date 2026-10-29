@@ -606,6 +606,7 @@ final class BrowserHostVaultQA {
         await exercisePanelAddress(controller, item: saved)
         await exercisePanelCodes(controller)
         await exercisePanelPasswords(controller)
+        await exercisePanelPicks(controller)
     }
 
     /// The person's key-button fill holds the page's addresses too: a GET form's submission is refused before it is
@@ -949,6 +950,122 @@ final class BrowserHostVaultQA {
         let menu = controller.view?.extraContextMenuItems?() ?? []
         check("panel: the page's menu offers a strong password while a password field has the focus",
               focused && menu.first?.title == L10n.string("Use Strong Password"), menu.map(\.title).joined(separator: ", "))
+    }
+
+    /// What the person picks from the key button's list (design §16), without opening the list itself (a popover
+    /// would come onto the person's screen; the list is drawn by `VaultSettingsRenderingTests`): the key button shows
+    /// on a site with nothing saved; a sign-in with no code fills its account's code, for the person and for an
+    /// agent; a code saved for another site fills there and the bar offers that site, which saving keeps; another
+    /// site's password waits for Touch ID, which this run answers no, and nothing goes in; and a code with no field
+    /// on the page is copied, concealed, to the run's own pasteboard. Pages of other sites are the QA server's,
+    /// served at https `.test` addresses (`serve`).
+    private func exercisePanelPicks(_ controller: BrowserHostPaneController) async {
+        guard let first = controller.tab else { return check("panel: a tab for the key button's list", false, "no tab") }
+        let origin = VaultSite.origin(of: base) ?? base
+        let other = "https://accounts.qa-other.test/"
+        let key = OneTimeCodeSecret(key: Data("12345678901234567890".utf8))
+        let account = VaultItem(name: "QA account", sites: [origin], username: "account@example.test")
+        let accountCode = VaultItem(name: "QA account code", sites: [origin], username: "account@example.test")
+        let elsewhere = VaultItem(name: "QA Elsewhere sign-in", sites: ["qa-elsewhere.test"], username: "elsewhere@example.test")
+        let elsewhereCode = VaultItem(name: "QA Elsewhere", sites: ["qa-elsewhere.test"], username: "elsewhere@example.test")
+        try? vault.save(account, secret: VaultSecret(password: "qa-account-not-real"))
+        try? vault.save(elsewhere, secret: VaultSecret(password: "qa-elsewhere-not-real"))
+        for item in [accountCode, elsewhereCode] { try? vault.save(item, secret: VaultSecret(oneTimeCode: key)) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("com.zzunkie.yardlet.vaultqa.codes"))
+        controller.vaultPasteboard = pasteboard
+        defer { pasteboard.releaseGlobally() }
+        let stopServing = await serve([other], on: first)
+        defer { stopServing() }
+        func open(_ address: String) async -> BrowserTab? {
+            controller.addressInput = address
+            controller.submitAddress()
+            guard await waitUntilAsync(.seconds(20), {
+                controller.tab?.currentURL == address && controller.tab?.isLoading == false
+            }), let tab = controller.tab else {
+                check("panel: \(address) loads", false, controller.tab?.currentURL ?? "no tab")
+                return nil
+            }
+            return tab
+        }
+        func page(_ tab: BrowserTab, _ expression: String) async -> JSONValue? {
+            let result = try? await tab.devTools.send("Runtime.evaluate", ["expression": .string(expression), "returnByValue": .bool(true)],
+                                                      timeout: .seconds(10))
+            return result?["result"]?["value"]
+        }
+        let current = { [Date(), Date().addingTimeInterval(-30)].map { self.vault.code(for: key, at: $0) } }
+
+        guard let codes = await open(base + "vault/otp") else { return }
+        controller.vaultCodeOffer = nil
+        _ = await page(codes, "document.getElementById('code').focus()")
+        controller.fillForPerson(account)
+        let accountFilled = await waitUntilAsync(.seconds(5)) {
+            await page(codes, "document.getElementById('code').value.length")?.integerValue == 6
+        }
+        _ = await page(codes, "document.querySelector('#one button').click()")
+        let accountTaken = await waitUntilAsync(.seconds(3)) { await page(codes, "window.qa.one") == .bool(true) }
+        check("panel: a sign-in with no code fills its account's code into the code field",
+              accountFilled && accountTaken && controller.vaultLinkOffer == nil,
+              "filled \(accountFilled), checked \(accountTaken)")
+
+        await navigate("vault/otp")
+        let field = Self.refs(in: await call(AgentToolCatalog.snapshot).text, role: "textbox").first ?? "@e1"
+        let agentFill = await call(VaultToolCatalog.fillCredential, ["ref": .string(field), "kind": .string("one_time_code"),
+                                                                    "item": .string("QA account")])
+        let agentValue = await pageValue("document.getElementById('code').value")?.stringValue ?? ""
+        check("an agent's code fill named after a sign-in with no code takes its account's code",
+              !agentFill.isError && current().contains(agentValue) && agentFill.text.contains("QA account code"), agentFill.text)
+
+        guard let otherCodes = await open(other + "vault/otp") else { return }
+        check("panel: the key button shows on a site with nothing saved, and the list finds the other site's items by search",
+              controller.showsVaultKey(for: otherCodes.currentURL) && controller.vaultItemsForPage(otherCodes.currentURL).isEmpty
+                && vault.pickerItems(for: "https://accounts.qa-other.test", matching: "elsewhere").elsewhere.map(\.id)
+                    == [elsewhereCode.id, elsewhere.id],
+              "shown \(controller.showsVaultKey(for: otherCodes.currentURL))")
+        controller.vaultCodeOffer = nil
+        _ = await page(otherCodes, "document.getElementById('code').focus()")
+        controller.fillForPerson(elsewhereCode)
+        let otherFilled = await waitUntilAsync(.seconds(5)) {
+            await page(otherCodes, "document.getElementById('code').value.length")?.integerValue == 6
+        }
+        _ = await page(otherCodes, "document.querySelector('#one button').click()")
+        let otherTaken = await waitUntilAsync(.seconds(3)) { await page(otherCodes, "window.qa.one") == .bool(true) }
+        let offered = await waitUntilAsync(.seconds(3)) { controller.vaultLinkOffer != nil }
+        try? await Task.sleep(for: .milliseconds(300))
+        capture(controller, named: "vault-panel-link-bar.png")
+        check("panel: a code saved for another site fills there and the bar offers to save that site in it",
+              otherFilled && otherTaken && offered && controller.vaultLinkOffer?.item.id == elsewhereCode.id
+                && controller.vaultLinkOffer?.site == "qa-other.test",
+              "filled \(otherFilled), checked \(otherTaken), offer \(controller.vaultLinkOffer.map { "\($0.item.name) → \($0.site)" } ?? "none")")
+        controller.acceptVaultLinkOffer()
+        var barTrail = ["after saving: \(controller.vaultCodeOffer?.page ?? "none")"]
+        let kept = vault.items.first { $0.id == elsewhereCode.id }?.sites ?? []
+        check("panel: saving keeps the site in that item beside its own", kept == ["qa-elsewhere.test", "qa-other.test"], "\(kept)")
+
+        guard let otherLogin = await open(other + "vault/login") else { return }
+        barTrail.append("after the move: \(controller.vaultCodeOffer?.page ?? "none")")
+        try? await Task.sleep(for: .seconds(1))
+        barTrail.append("a second later: \(controller.vaultCodeOffer?.page ?? "none")")
+        // The code page, left with its code field shown, may tell of it as the tab moves on.
+        check("panel: the code bar of a page left does not stay over the next one", controller.vaultCodeOffer == nil,
+              barTrail.joined(separator: ", "))
+        _ = await page(otherLogin, "document.getElementById('pass').focus()")
+        controller.fillForPerson(elsewhere)
+        try? await Task.sleep(for: .seconds(2))
+        let untouched = await page(otherLogin, "document.getElementById('pass').value") == .string("")
+        check("panel: another site's password is not filled when the person does not confirm with Touch ID",
+              untouched && controller.vaultLinkOffer == nil, "untouched \(untouched)")
+
+        controller.fillForPerson(elsewhereCode)
+        let copied = await waitUntilAsync(.seconds(5)) { pasteboard.string(forType: .string) != nil }
+        try? await Task.sleep(for: .milliseconds(300))
+        capture(controller, named: "vault-panel-code-copied.png")
+        let fields = await page(otherLogin, "['user', 'pass', 'note'].map(id => id + ' ' + document.getElementById(id).value.length)"
+            + ".concat('focus ' + (document.activeElement && document.activeElement.id)).join(', ')")?.stringValue ?? "unread"
+        check("panel: a code with no field on the page is copied, marked concealed",
+              copied && current().contains(pasteboard.string(forType: .string) ?? "")
+                && pasteboard.types?.contains(VaultClipboard.concealedType) == true
+                && controller.notice?.contains("QA Elsewhere") == true,
+              "copied \(copied), notice \(controller.notice ?? "none"), fields \(fields)")
     }
 
     private func capture(_ controller: BrowserHostPaneController, named name: String) {

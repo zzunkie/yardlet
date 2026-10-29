@@ -125,7 +125,6 @@ final class VaultTests: XCTestCase {
         XCTAssertEqual(center.unlinkedCodeItems(for: "https://vercel.com").map(\.id), [vercel.id])
         XCTAssertEqual(center.unlinkedCodeItems(for: "https://signin.aws.amazon.com").map(\.id), [aws.id])
         XCTAssertEqual(center.unlinkedCodeItems(for: "https://vercel-login.com"), [])
-        XCTAssertNil(center.valuesForPerson(vercel, origin: "https://vercel.com"))
         let asked: [(String?, String)] = [(nil, "https://vercel.com"), ("Vercel", "https://vercel.com"), (nil, "https://github.com")]
         for (name, origin) in asked {
             let refused = await center.authorize(VaultFillRequest(sessionID: task, itemName: name, kind: .oneTimeCode,
@@ -139,7 +138,8 @@ final class VaultTests: XCTestCase {
         let linked = try XCTUnwrap(center.items.first { $0.id == vercel.id })
         XCTAssertEqual(linked.sites, ["vercel.com"])
         XCTAssertEqual(center.unlinkedCodeItems(for: "https://vercel.com"), [])
-        XCTAssertEqual(center.valuesForPerson(linked, origin: "https://vercel.com")?.code?.count, 6)
+        let linkedValues = await center.valuesForPerson(linked, origin: "https://vercel.com")
+        XCTAssertEqual(linkedValues?.code?.count, 6)
         let agent = await center.authorize(VaultFillRequest(sessionID: task, itemName: nil, kind: .oneTimeCode,
                                                             origin: "https://vercel.com"))
         guard case .success = agent else { return XCTFail("the linked code did not fill on its site") }
@@ -226,6 +226,75 @@ final class VaultTests: XCTestCase {
                                      account: "grace")
         XCTAssertEqual(center.importOneTimeCodes([setup]), 1)
         XCTAssertEqual(center.items.first { $0.name == "Instagram (grace)" }?.sites, ["instagram.com"])
+    }
+
+    /// The person's own fills (design §16): a search finds items by each word of a name, username or site; the key
+    /// button's list puts the page's items first and the rest only for a search; a sign-in with no code gives the
+    /// code of its account's one code item on the page; a password chosen for a site it is not saved for goes only
+    /// after Touch ID, while a code needs none, as copying it from Settings does.
+    func testThePersonFindsAnyItemAndAPasswordGoesToAnotherSiteOnlyAfterTouchID() async throws {
+        let key = OneTimeCodeSecret(key: Data("12345678901234567890".utf8))
+        let northwind = VaultItem(name: "app.northwind.test", sites: ["northwind.test"], username: "ada@example.test")
+        let northwindCode = VaultItem(name: "Northwind", sites: ["northwind.test"], username: "Ada@example.test")
+        let stripe = VaultItem(name: "dashboard.stripe.com", sites: ["stripe.com"], username: "ada@example.test")
+        let fabrikam = VaultItem(name: "Fabrikam", sites: [], username: "ada")
+        var answer = false
+        var reasons: [String] = []
+        let center = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore(), repository: InMemoryVaultRepository(), hmac: MacVault.hmac,
+            isAllowedBuild: true, confirm: { reason in reasons.append(reason); return answer }, defaults: .vaultTests()))
+        for item in [northwind, stripe] { try center.save(item, secret: VaultSecret(password: "correct horse")) }
+        for item in [northwindCode, fabrikam] { try center.save(item, secret: VaultSecret(oneTimeCode: key)) }
+
+        XCTAssertTrue(northwind.matches("NORTH"))
+        XCTAssertTrue(stripe.matches("ada stripe"))
+        XCTAssertFalse(stripe.matches("ada northwind"))
+        XCTAssertTrue(VaultItem(name: "Café", sites: [], username: "").matches("cafe"))
+        let page = "https://app.northwind.test"
+        let plain = center.pickerItems(for: page, matching: "")
+        XCTAssertEqual(plain.here.map(\.id), [northwind.id, northwindCode.id])
+        XCTAssertEqual(plain.elsewhere, [])
+        let searched = center.pickerItems(for: page, matching: "ada")
+        XCTAssertEqual(searched.elsewhere.map(\.id), [stripe.id, fabrikam.id])
+        XCTAssertEqual(center.pickerItems(for: page, matching: "a", codes: true).elsewhere.map(\.id), [fabrikam.id])
+
+        let now = center.code(for: key)
+        let own = await center.valuesForPerson(northwind, origin: page)
+        XCTAssertEqual(own?.password, "correct horse")
+        XCTAssertEqual(own?.code, now, "a sign-in did not take its account's code")
+        XCTAssertEqual(reasons, [])
+        let code = await center.valuesForPerson(fabrikam, origin: page, codeOnly: true)
+        XCTAssertEqual(code?.code, now)
+        XCTAssertNil(code?.password)
+        XCTAssertEqual(reasons, [], "a code asked for Touch ID")
+
+        let declined = await center.valuesForPerson(stripe, origin: page)
+        XCTAssertNil(declined)
+        XCTAssertEqual(reasons.count, 1)
+        XCTAssertTrue(reasons[0].contains("app.northwind.test") && reasons[0].contains("dashboard.stripe.com"), reasons[0])
+        answer = true
+        let confirmed = await center.valuesForPerson(stripe, origin: page)
+        XCTAssertEqual(confirmed?.password, "correct horse")
+        XCTAssertEqual(confirmed?.confirmedBy, .touchID)
+
+        // A list drawn before the person saved a site in the item holds it as it was; the fill takes it as saved now.
+        var notices = 0
+        center.notify = { _, _, _ in notices += 1 }
+        center.link(fabrikam.id, to: "fabrikam.test")
+        let linked = await center.valuesForPerson(fabrikam, origin: "https://www.fabrikam.test", codeOnly: true)
+        XCTAssertEqual(linked?.code, now)
+        XCTAssertEqual(linked?.item.sites, ["fabrikam.test"])
+        XCTAssertEqual(notices, 0, "a saved site read as a change made outside Yardlet")
+
+        // A second code of the account leaves which one to the person.
+        try center.save(VaultItem(name: "Northwind (2)", sites: ["northwind.test"], username: "ada@example.test"),
+                        secret: VaultSecret(oneTimeCode: key))
+        let two = await center.valuesForPerson(northwind, origin: page)
+        XCTAssertNil(two?.code)
+        center.isEnabled = false
+        let off = await center.valuesForPerson(northwind, origin: page)
+        XCTAssertNil(off)
+        XCTAssertEqual(center.pickerItems(for: page, matching: "ada").elsewhere, [])
     }
 
     func testAnItemAskedForOnAnotherSiteIsRefusedAndThePersonIsTold() async throws {

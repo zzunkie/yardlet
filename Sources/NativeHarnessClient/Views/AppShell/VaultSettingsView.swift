@@ -2,10 +2,10 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Settings → Passwords (docs/BROWSER_VAULT_DESIGN.md §8.1, §9, §14): the switch that gives tasks
-/// `browser_fill_credential`, the current two-factor codes as an authenticator app lists them, the codes
-/// with no site to link to theirs, the saved items with their sites, kinds, agent use and last use, adding
-/// one, importing a browser's CSV export or an authenticator app's export QR code, and emptying the vault.
+/// Settings → Passwords (docs/BROWSER_VAULT_DESIGN.md §8.1, §9, §14, §16): the switch that gives tasks
+/// `browser_fill_credential`, a search over the lists, the current two-factor codes as an authenticator app lists
+/// them, the codes with no site to link to theirs, the saved items with their sites, kinds, agent use and last use,
+/// adding one, importing a browser's CSV export or an authenticator app's export QR code, and emptying the vault.
 /// Rows follow Settings → General and Connectors.
 struct VaultSettingsView: View {
     @ObservedObject var vault: VaultCenter
@@ -20,6 +20,13 @@ struct VaultSettingsView: View {
     /// The site in each code-with-no-site row: the vault's suggestion, or what the person typed.
     @State private var linkSites: [UUID: String] = [:]
     @State private var linkFailure: String?
+    /// The search over the lists (design §16): by name, username or site, as Chrome's and the Passwords app's.
+    @State private var query: String
+
+    init(vault: VaultCenter, query: String = "") {
+        self.vault = vault
+        _query = State(initialValue: query)
+    }
 
     private struct Editing: Identifiable {
         let id = UUID()
@@ -33,12 +40,15 @@ struct VaultSettingsView: View {
     }
 
     private var codeItems: [VaultItem] { vault.items.filter(\.hasOneTimeCode) }
+    private var isSearching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var shownItems: [VaultItem] { vault.items.filter { $0.matches(query) } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             switchCard
-            if !codeItems.isEmpty { codeList }
-            if !vault.unlinkedCodes.isEmpty { unlinkedList }
+            if !vault.items.isEmpty { searchField }
+            if codeItems.contains(where: { $0.matches(query) }) { codeList }
+            if vault.unlinkedCodes.contains(where: { $0.matches(query) }) { unlinkedList }
             VStack(alignment: .trailing, spacing: 8) {
                 itemList
                 HStack(spacing: 8) {
@@ -123,13 +133,34 @@ struct VaultSettingsView: View {
         .parityCard()
     }
 
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField(L10n.string("Search passwords"), text: $query)
+                .textFieldStyle(.plain)
+                .accessibilityLabel(L10n.string("Search passwords"))
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L10n.string("Clear search"))
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .parityCard(cornerRadius: 8)
+    }
+
     /// Every item's current code, as an authenticator app lists them; the row's button copies one.
     private var codeList: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.string("Two-factor codes"))
                 .font(.callout.weight(.semibold))
             VStack(spacing: 0) {
-                ForEach(Array(codeItems.enumerated()), id: \.element.id) { index, item in
+                ForEach(Array(codeItems.filter { $0.matches(query) }.enumerated()), id: \.element.id) { index, item in
                     if index > 0 { Divider().padding(.leading, SettingsCenterView.dividerLeading) }
                     HStack(spacing: 12) {
                         VaultSettingsIcon(systemName: "number")
@@ -170,7 +201,8 @@ struct VaultSettingsView: View {
     /// The codes with no site (design §14.3), each with the site to link it to: suggested from the vault's items
     /// and log, checked or changed by the person, and saved only when they link it here or all at once.
     private var unlinkedList: some View {
-        let codes = vault.unlinkedCodes
+        let all = vault.unlinkedCodes
+        let codes = all.filter { $0.matches(query) }
         let ready = codes.filter { siteToLink($0) != nil }
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -226,8 +258,8 @@ struct VaultSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .task(id: codes.map(\.id)) {
-            let suggested = vault.suggestedSites(for: codes.filter { linkSites[$0.id] == nil })
+        .task(id: all.map(\.id)) {
+            let suggested = vault.suggestedSites(for: all.filter { linkSites[$0.id] == nil })
             for (id, site) in suggested { linkSites[id] = site }
         }
     }
@@ -250,10 +282,17 @@ struct VaultSettingsView: View {
     }
 
     private var itemList: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(vault.items.enumerated()), id: \.element.id) { index, item in
+        let shown = shownItems
+        return VStack(spacing: 0) {
+            ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
                 if index > 0 { Divider().padding(.leading, SettingsCenterView.dividerLeading) }
                 VaultItemRow(item: item) { editing = Editing(item: item) }
+            }
+            if isSearching, shown.isEmpty {
+                Text(L10n.string("No matching passwords"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
             }
         }
         .padding(.horizontal, 12)

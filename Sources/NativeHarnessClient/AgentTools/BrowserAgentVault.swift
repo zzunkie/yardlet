@@ -532,6 +532,13 @@ enum VaultPageScripts {
         return (frame?["id"]?.stringValue ?? "", frame?["loaderId"]?.stringValue ?? "", origin)
     }
 
+    /// Whether the tab's main frame still shows `page`, the document a watch report named: a report the document sent
+    /// as the tab left it arrives after the move, and its bar would stay over the next page.
+    static func shows(_ page: String, _ cdp: any BrowserAgentCDP, timeout: Duration = .seconds(10)) async -> Bool {
+        let tree = try? await cdp.send("Page.getFrameTree", [:], timeout: timeout)
+        return BrowserURLPolicy.sameAddress(tree?["frameTree"]?["frame"]?["url"]?.stringValue, page)
+    }
+
     /// A context in the vault's isolated world of the tab's main frame.
     static func vaultWorld(_ cdp: any BrowserAgentCDP, frame: String, timeout: Duration) async throws -> Int64 {
         let world = try await cdp.send("Page.createIsolatedWorld", [

@@ -48,6 +48,13 @@ struct BrowserVaultCodeOffer: Equatable {
     var newSite: String? = nil
 }
 
+/// An item the person chose from the key button's list and filled on a site it is not saved for (design §16): the
+/// bar offers to save that site in it, so it is offered there from then on.
+struct BrowserVaultLinkOffer: Equatable {
+    var item: VaultItem
+    var site: String
+}
+
 /// A two-factor setup QR code or link the page showed (design §14), offered for the vault.
 struct BrowserVaultSetupOffer: Equatable {
     var origin: String
@@ -108,6 +115,8 @@ extension BrowserHostPaneController {
         vaultCodeOffer = nil
         vaultSetupOffer = nil
         vaultPasswordOffer = nil
+        vaultLinkOffer = nil
+        isVaultPickerShown = false
         focusedPasswordPage = nil
         offeredPasswordPages = []
         madePassword = nil
@@ -121,6 +130,8 @@ extension BrowserHostPaneController {
         if let offer = vaultCodeOffer, offer.page != address { vaultCodeOffer = nil }
         if let offer = vaultSetupOffer, offer.page != address { vaultSetupOffer = nil }
         if let offer = vaultPasswordOffer, offer.page != address { vaultPasswordOffer = nil }
+        // A filled code often sends the page on at once; the offer stays while the page is on that site.
+        if let offer = vaultLinkOffer, !VaultSite.matches(offer.site, origin: address) { vaultLinkOffer = nil }
         if focusedPasswordPage != address { focusedPasswordPage = nil }
     }
 
@@ -215,7 +226,7 @@ extension BrowserHostPaneController {
         Task { @MainActor [weak self] in
             guard let self, let frame = try? await VaultPageScripts.mainFrame(tab.devTools, timeout: .seconds(10)),
                   VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) != nil, self.tab === tab,
-                  !self.offeredPasswordPages.contains(page) else { return }
+                  !self.offeredPasswordPages.contains(page), await VaultPageScripts.shows(page, tab.devTools) else { return }
             self.offeredPasswordPages.insert(page)
             self.vaultPasswordOffer = BrowserVaultPasswordOffer(origin: frame.origin, page: page)
         }
@@ -290,16 +301,48 @@ extension BrowserHostPaneController {
 
     // MARK: The key button
 
-    /// The items for the page the panel shows (the key button appears only when there are some).
+    /// The items saved for the page the panel shows.
     func vaultItemsForPage(_ address: String?) -> [VaultItem] {
         guard let address, let origin = VaultSite.origin(of: address) else { return [] }
         return vault.items(for: origin)
     }
 
-    /// The person chose an item from the key button: it fills now, whatever the item's agent policy. In a
-    /// one-time code field it fills the item's current code.
+    /// Whether the address field shows the key button: on a site's page while the vault holds any item, so that a
+    /// sign-in or code saved for another site, or for none, is found from the page too (design §16).
+    func showsVaultKey(for address: String?) -> Bool {
+        vault.isAllowedBuild && vault.isEnabled && !vault.items.isEmpty && !showsStartPage
+            && address.flatMap(VaultSite.origin(of:)) != nil
+    }
+
+    /// Opens the key button's list with an empty search; `codes` keeps it to two-factor codes (the code bar's
+    /// "Choose Another Code…").
+    func openVaultPicker(codes: Bool = false) {
+        vaultPickerCodes = codes
+        vaultPickerQuery = ""
+        isVaultPickerShown = true
+    }
+
+    /// The person chose an item from the key button's list: it fills now, whatever the item's agent policy. A code
+    /// with no password, and any item chosen from the code bar's list, fills the current code into the page's code
+    /// field, or is copied when the page has none; any other item fills the sign-in, or the code from a code field.
     func fillForPerson(_ item: VaultItem) {
-        fill(item, codeOnly: false)
+        // What the item holds as saved now decides what fills.
+        let item = vault.items.first { $0.id == item.id } ?? item
+        let codes = vaultPickerCodes
+        vaultPickerCodes = false
+        isVaultPickerShown = false
+        vaultPickerQuery = ""
+        if codes { vaultCodeOffer = nil }
+        fill(item, codeOnly: codes || !item.hasPassword && item.hasOneTimeCode)
+    }
+
+    /// Saves the page's site in the item the person filled there from the list (design §16).
+    func acceptVaultLinkOffer() {
+        guard let offer = vaultLinkOffer else { return }
+        vaultLinkOffer = nil
+        if vault.link(offer.item.id, to: offer.site) == nil {
+            showVaultNotice(L10n.string("Yardlet could not read this sign-in from the keychain."))
+        }
     }
 
     /// The person chose the code bar's item: its current code goes into the page's code field. An item the
@@ -317,7 +360,8 @@ extension BrowserHostPaneController {
             var item = item
             // Saved only while the page is still on that site.
             if let site, VaultSite.matches(site, origin: frame.origin) { item = self.vault.link(item.id, to: site) ?? item }
-            guard let grant = self.vault.valuesForPerson(item, origin: frame.origin) else { return }
+            // An item for another site asks for Touch ID here before its password goes in.
+            guard let grant = await self.vault.valuesForPerson(item, origin: frame.origin, codeOnly: codeOnly) else { return }
             MacAgentToolService.shared.broker.noteVaultValues([grant.password, grant.code])
             if let password = grant.password, password.count >= VaultScrubList.shortest {
                 tab.send(.guardFilledValues(tab: tab.id, values: VaultScrubList.spellings(of: password)))
@@ -326,9 +370,20 @@ extension BrowserHostPaneController {
             let filled = await VaultPageScripts.fillForPerson(tab.devTools, frame: frame, fills: tab.vaultFills,
                                                               username: grant.username, password: grant.password,
                                                               code: grant.code, codeOnly: codeOnly)
-            if !filled {
-                self.showVaultNotice(codeOnly ? L10n.string("This page has no code field to fill.")
-                                              : L10n.string("This page has no sign-in field to fill."))
+            guard filled else {
+                if codeOnly, let code = grant.code {
+                    // As Settings → Passwords copies a code: marked concealed and cleared after 90 seconds.
+                    VaultClipboard.copy(code, to: self.vaultPasteboard)
+                    return self.showVaultNotice(L10n.format(
+                        "This page has no code field, so the code from “%@” is copied. It is cleared from the clipboard in 90 seconds.",
+                        item.name))
+                }
+                return self.showVaultNotice(codeOnly ? L10n.string("This page has no code field to fill.")
+                                                     : L10n.string("This page has no sign-in field to fill."))
+            }
+            if !grant.item.sites.contains(where: { VaultSite.matches($0, origin: frame.origin) }),
+               let site = VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes), self.tab === tab {
+                self.vaultLinkOffer = BrowserVaultLinkOffer(item: grant.item, site: site)
             }
         }
     }
@@ -343,7 +398,8 @@ extension BrowserHostPaneController {
             // Codes brought over from an authenticator app have no site until the person picks one here.
             let items = own.isEmpty ? self.vault.unlinkedCodeItems(for: frame.origin) : own
             // On a setup page the field is for the new code, which saving the setup fills.
-            guard !items.isEmpty, self.tab === tab, self.vaultSetupOffer == nil else { return }
+            guard !items.isEmpty, self.tab === tab, self.vaultSetupOffer == nil,
+                  await VaultPageScripts.shows(page, tab.devTools) else { return }
             self.vaultCodeOffer = BrowserVaultCodeOffer(
                 origin: frame.origin, page: page, items: items,
                 newSite: own.isEmpty ? VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) : nil)
@@ -383,7 +439,7 @@ extension BrowserHostPaneController {
         Task { @MainActor [weak self] in
             // The origin comes from the browser, not from the page's script.
             guard let self, let frame = try? await VaultPageScripts.mainFrame(tab.devTools, timeout: .seconds(10)),
-                  self.tab === tab else { return }
+                  self.tab === tab, await VaultPageScripts.shows(page, tab.devTools) else { return }
             let site = new.count == 1 ? VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) : nil
             self.vaultCodeOffer = nil
             self.vaultSetupOffer = BrowserVaultSetupOffer(

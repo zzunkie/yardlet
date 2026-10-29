@@ -11,6 +11,9 @@ import XCTest
 /// - `vault-item-*`: a saved item's sheet with its previous passwords, recent uses and passkey line.
 /// - `vault-item-new-*`: a new item from a page, with its site and username filled in.
 /// - `settings-vault-unlinked-*`: codes with no site, with the sites suggested for them and one left to type.
+/// - `settings-vault-search-*`: the lists narrowed by a search.
+/// - `vault-picker-*`, `vault-picker-search-*`, `vault-picker-codes-*`, `vault-picker-empty-*`: the browser panel's
+///   key button list on a site's page, searched, searched for a code from the code bar, and on a site with nothing.
 @MainActor
 final class VaultSettingsRenderingTests: XCTestCase {
     private static let github = VaultItem(
@@ -110,6 +113,59 @@ final class VaultSettingsRenderingTests: XCTestCase {
             XCTAssertTrue(spoken.contains { $0.contains(text) }, "No \(text): \(spoken)")
         }
         XCTAssertEqual(vault.suggestedSites(for: codes), [codes[0].id: "github.com", codes[1].id: "amazon.com"])
+    }
+
+    /// Finding an item (design §16): Settings → Passwords narrows its codes and items to a search, and the key
+    /// button's list shows the page's own items, a search over the rest, and the codes alone from the code bar.
+    func testSearchesAndTheKeyButtonsListDraw() throws {
+        let directory = try WindowlessRender.directory("vault-qa")
+        let fabrikam = VaultItem(name: "Fabrikam", sites: [], username: "ada", hasOneTimeCode: true)
+        let northwind = VaultItem(name: "Northwind", sites: ["northwind.test"], username: "ada@example.test", hasOneTimeCode: true)
+        let key = OneTimeCodeSecret(key: Data("12345678901234567890".utf8))
+        let vault = vault(items: [Self.github, Self.vercel, Self.bank, fabrikam, northwind])
+        for item in [fabrikam, northwind] { try vault.save(item, secret: VaultSecret(oneTimeCode: key)) }
+
+        let settingsSize = NSSize(width: 640, height: 560)
+        let settings = VaultSettingsView(vault: vault, query: "ada git").padding(20)
+            .frame(width: settingsSize.width, height: settingsSize.height, alignment: .top)
+        let searched = try WindowlessRender.hostedInBothAppearances("settings-vault-search", in: directory, size: settingsSize) {
+            appearance in settings.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        }
+        for capture in searched { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
+        let settingsHost = WindowlessRender.Host(settings, size: settingsSize)
+        settingsHost.settle()
+        let shown = settingsHost.accessibilityElements().map { "\($0.label) \($0.value)" }
+        settingsHost.close()
+        XCTAssertTrue(shown.contains { $0.contains("GitHub (work)") }, "\(shown)")
+        XCTAssertFalse(shown.contains { $0.contains("Example Bank") || $0.contains("Fabrikam") }, "The search let through: \(shown)")
+
+        let pickerSize = NSSize(width: 340, height: 400)
+        let pickers: [(name: String, origin: String, query: String, codes: Bool, expected: [String])] = [
+            ("vault-picker", "https://github.com", "", false, [L10n.format("Saved for %@", "github.com"), "GitHub (work)"]),
+            ("vault-picker-search", "https://www.fabrikam.test", "ada", false,
+             [L10n.string("Other passwords"), "Example Bank", "Northwind", "Fabrikam"]),
+            ("vault-picker-codes", "https://www.fabrikam.test", "ada", true, ["GitHub (work)", "Northwind", "Fabrikam"]),
+            ("vault-picker-empty", "https://www.fabrikam.test", "", false,
+             [L10n.string("Nothing is saved for this site. Search for a sign-in or code saved elsewhere.")])
+        ]
+        for picker in pickers {
+            let content = VaultPickerView(vault: vault, origin: picker.origin, codes: picker.codes, query: .constant(picker.query),
+                                          onPick: { _ in })
+                .frame(width: pickerSize.width, height: pickerSize.height, alignment: .top)
+            let captures = try WindowlessRender.hostedInBothAppearances(picker.name, in: directory, size: pickerSize) {
+                appearance in content.environment(\.colorScheme, appearance.colorScheme).background(.background)
+            }
+            for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
+            let host = WindowlessRender.Host(content, size: pickerSize)
+            host.settle()
+            let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+            host.close()
+            for text in picker.expected { XCTAssertTrue(spoken.contains { $0.contains(text) }, "\(picker.name): no \(text) in \(spoken)") }
+            if picker.codes {
+                XCTAssertFalse(spoken.contains { $0.contains("Example Bank") || $0.contains("Vercel") }, "A password in the codes: \(spoken)")
+            }
+            XCTAssertFalse(spoken.contains { $0.contains("not-a-real-password") }, "A secret reached the list: \(spoken)")
+        }
     }
 
     func testAnUnsignedBuildShowsTheVaultOff() throws {
