@@ -6,7 +6,8 @@ import SwiftUI
 enum BrowserTabTitle {
     static func make(pageTitle: String, address: String?) -> String {
         let trimmed = pageTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { return trimmed }
+        // Chromium names a blank tab by its address, as it names any page without a title.
+        if !trimmed.isEmpty, trimmed != "about:blank" { return trimmed }
         if let address, address != "about:blank", !address.isEmpty {
             return URL(string: address)?.host() ?? address
         }

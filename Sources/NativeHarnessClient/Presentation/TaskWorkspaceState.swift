@@ -244,7 +244,7 @@ final class TaskWorkspaceState {
         sideChatSessionID = snapshot.sideChatSessionID
         railFolds = snapshot.railFolds ?? SessionRailFolds()
         files = WorkspaceFilesState(preferences: snapshot.files ?? .init())
-        browserTabs = TaskBrowserTabs(pages: snapshot.browser?.pages ?? [])
+        browserTabs = TaskBrowserTabs(pages: snapshot.browser?.pages ?? [], visited: snapshot.browser?.visited ?? [])
         // A Claude subtask is not restored; a saved panel list opens the tab it leads to.
         if let shown = panels.trailingSurfaceID, !TaskSurfaceNavigationProjection.isTab(shown),
            ![TaskSurfaceNavigationProjection.sidePanelToggleID, TaskSurfaceNavigationProjection.launcherID].contains(shown) {

@@ -118,8 +118,15 @@ struct TaskDetail: View {
                     } else if panelState.trailingSurfaceID == TaskSurfaceNavigationProjection.launcherID {
                         SidePanelLauncher(
                             workspaceURL: session.workspaceURL, choices: sidePanelChoices,
+                            pages: { [workspaceState] in
+                                TaskSidePanelTabs.visitedPageTabs(workspaceState.browserTabs,
+                                                                  icons: workspaceState.browserClient?.addressHistory,
+                                                                  limit: SidePanelLauncher.pageCount)
+                            },
                             tasks: { [sidePanelTasks] in sidePanelTasks?.choiceTabs() ?? [] },
                             onOpen: openSidePanel,
+                            onOpenPage: openLauncherPage,
+                            onRemovePage: { workspaceState.browserTabs.removeVisited($0) },
                             onClose: { closeSidePanelTab(TaskSurfaceNavigationProjection.launcherID) })
                     } else if let id = panelState.trailingSurfaceID,
                               let taskID = TaskSurfaceNavigationProjection.taskID(inTab: id) {
@@ -712,6 +719,12 @@ struct TaskDetail: View {
     /// Browser always opens one, with its address field ready.
     private func openNewBrowserTab() {
         guard workspaceState.openBrowserTab() != nil else { return NSSound.beep() }
+        workspaceState.keyboardFocus.move(to: .browser)
+    }
+
+    /// A page of the task the launcher offers, in a new browser tab, as its Browser opens one.
+    private func openLauncherPage(_ address: String) {
+        guard let url = URL(string: address), workspaceState.openBrowserPage(url) else { return NSSound.beep() }
         workspaceState.keyboardFocus.move(to: .browser)
     }
 

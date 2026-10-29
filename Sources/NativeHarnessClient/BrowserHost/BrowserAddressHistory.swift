@@ -48,6 +48,10 @@ final class BrowserAddressHistory {
     private static let writer = DispatchQueue(label: "Yardlet.browser.addressHistory", qos: .utility)
     private(set) var pages: [String: Page] = [:]
     private(set) var searches: [String: Search] = [:]
+    /// Each page's and each site's icon, never saved (`noteIcon`); the pages' at most `maxIcons`.
+    private var pageIcons: [String: Data] = [:]
+    private var siteIcons: [String: Data] = [:]
+    static let maxIcons = 1000
     private var saveTask: Task<Void, Never>?
     /// Changed since the last save.
     private var isChanged = false
@@ -66,7 +70,7 @@ final class BrowserAddressHistory {
     /// address (as Chrome's history index keeps them); a search results page of the default engine counts as
     /// its search.
     func noteVisit(_ address: String, typed: Bool) {
-        guard let url = Self.kept(address) else { return }
+        guard let url = Self.keptAddress(address) else { return }
         let date = now()
         if let terms = BrowserURLPolicy.searchTerms(in: url) {
             let key = terms.lowercased()
@@ -87,14 +91,15 @@ final class BrowserAddressHistory {
     }
 
     func noteTitle(_ title: String, of address: String) {
-        guard let url = Self.kept(address), var page = pages[url], page.title != title else { return }
+        guard let url = Self.keptAddress(address), var page = pages[url], page.title != title else { return }
         page.title = title
         pages[url] = page
         scheduleSave()
     }
 
-    /// The address as the history keeps it: a web page or file, without a user name or password.
-    private static func kept(_ address: String) -> String? {
+    /// The address as the history keeps it: a web page or file, without a user name or password. A task's visited
+    /// pages keep the same (`TaskBrowserTabs.visited`).
+    nonisolated static func keptAddress(_ address: String) -> String? {
         guard var components = URLComponents(string: address),
               let scheme = components.scheme?.lowercased(), ["http", "https", "file"].contains(scheme) else { return nil }
         components.user = nil
@@ -102,10 +107,65 @@ final class BrowserAddressHistory {
         return components.string
     }
 
+    /// A page's icon as a tab last showed it, for the launcher's pages and the start page's sites; empty for a page that
+    /// has none. Kept in memory only, as a tab's icon is, so a page shows a globe, and a site its first letter, until a
+    /// tab shows it again after Yardlet restarts.
+    func noteIcon(_ png: Data, of address: String) {
+        guard let page = Self.keptAddress(address) else { return }
+        if pageIcons.count >= Self.maxIcons, pageIcons[page] == nil { pageIcons.removeAll() }
+        pageIcons[page] = png
+        if !png.isEmpty, let site = Self.site(of: address) { siteIcons[site] = png }
+    }
+
+    /// The page's own icon, else, for a page no tab showed since Yardlet started, the last icon of its site.
+    func icon(of address: String) -> Data? {
+        if let page = Self.keptAddress(address), let png = pageIcons[page] { return png.isEmpty ? nil : png }
+        return Self.site(of: address).flatMap { siteIcons[$0] }
+    }
+
+    /// The sites visited most, for a new tab's start page, as Chrome's Most visited tiles and the Codex app's
+    /// Suggested sites: one page per site (a host and port, `www.` aside), the site's most visited page (the latest
+    /// of those visited as much), the sites ordered by how often and how recently their pages were visited
+    /// (`BrowserAddressRanking.frequency`).
+    func topSites(limit: Int) -> [Page] {
+        let date = now()
+        var sites: [String: (page: Page, best: Double, score: Double)] = [:]
+        for page in pages.values {
+            guard let site = Self.site(of: page.url) else { continue }
+            let frequency = BrowserAddressRanking.frequency(of: page, now: date)
+            guard frequency > 0 else { continue }
+            if let known = sites[site] {
+                let better = frequency != known.best ? frequency > known.best : page.lastVisit > known.page.lastVisit
+                sites[site] = better ? (page, frequency, known.score + frequency) : (known.page, known.best, known.score + frequency)
+            } else {
+                sites[site] = (page, frequency, frequency)
+            }
+        }
+        return sites.values.sorted { $0.score != $1.score ? $0.score > $1.score : $0.page.url < $1.page.url }
+            .prefix(limit).map(\.page)
+    }
+
+    /// A web page's site: its host and port, without `www.`; nil for a file.
+    nonisolated static func site(of address: String) -> String? {
+        guard let components = URLComponents(string: address),
+              let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              var host = components.host?.lowercased(), !host.isEmpty else { return nil }
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        return components.port.map { "\(host):\($0)" } ?? host
+    }
+
     /// Shift-Delete on a suggestion: the page and its visits, or the search, as Chrome's `DeleteMatch` does.
     func remove(page address: String) {
         guard pages.removeValue(forKey: address) != nil else { return }
         scheduleSave()
+    }
+
+    /// "Remove from History" on a start page's site: every page of the site, so the site leaves the start page.
+    func remove(site address: String) {
+        guard let site = Self.site(of: address) else { return }
+        let count = pages.count
+        pages = pages.filter { Self.site(of: $0.key) != site }
+        if pages.count != count { scheduleSave() }
     }
 
     func remove(search terms: String) {

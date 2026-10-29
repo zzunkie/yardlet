@@ -67,6 +67,12 @@ enum BrowserHostQAFixture {
             Task { @MainActor in await BrowserHostAddressSuggestQA(output: output, base: base).run() }
             return
         }
+        // `--ui-fixture-browser-check-only=start-page` runs a new tab's start page and the launcher's pages alone
+        // (BrowserHostStartPageQA).
+        if argument("ui-fixture-browser-check-only") == "start-page" {
+            Task { @MainActor in await BrowserHostStartPageQA(output: output, base: base, session: session).run() }
+            return
+        }
         // `--ui-fixture-browser-check-only=memory-saver` runs the memory saver's discards alone (BrowserHostMemorySaverQA).
         if argument("ui-fixture-browser-check-only") == "memory-saver" {
             Task { @MainActor in await BrowserHostMemorySaverQA(output: output, base: base).run() }

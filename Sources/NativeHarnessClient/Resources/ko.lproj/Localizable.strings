@@ -3172,3 +3172,10 @@
 "The unreadable draft will be kept as a backup. The text currently in this editor will become the new draft." = "읽을 수 없는 기존 초안은 백업으로 보관합니다. 현재 입력창의 내용을 새 초안으로 저장합니다.";
 
 "The saved draft could not be read. Keep it as a backup to start a new draft." = "저장된 초안을 읽을 수 없습니다. 원본을 백업으로 보관하고 새 초안을 시작할 수 있습니다.";
+
+"Pages in this task" = "이 작업에서 연 페이지";
+"Frequently visited" = "자주 방문한 사이트";
+"Remove from list" = "목록에서 제거";
+"Remove from history" = "방문 기록에서 제거";
+"Suggest pages on new tabs" = "새 탭에 페이지 추천";
+"Shows the pages this task opened and the sites you visit most on a new tab and in the side panel. Turned off, tasks keep no list of the pages they opened." = "새 탭과 오른쪽 패널에 이 작업에서 연 페이지와 자주 방문한 사이트를 보여 줍니다. 끄면 작업이 연 페이지를 따로 남기지 않습니다.";

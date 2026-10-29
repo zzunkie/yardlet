@@ -160,6 +160,8 @@ struct SettingsCenterView: View {
     @AppStorage(BrowserTaskProfiles.storageKey) private var cookieStorage = BrowserTaskProfiles.Storage.perTask.rawValue
     /// Read as the person types in a browser panel's address field.
     @AppStorage(SearchSuggestionPreference.key) private var suggestsSearches = true
+    /// Read as a task's browser tabs move to pages, and as the launcher and a new tab's start page show.
+    @AppStorage(BrowserPageSuggestionPreference.key) private var suggestsPages = true
     /// What Return does while a Codex turn runs; read at each send.
     @AppStorage(CodexFollowUpMode.preferenceKey) private var codexFollowUpMode = CodexFollowUpMode.steer.rawValue
     /// Yardlet's menu bar item (`MenuBarStatusItem`), on unless turned off as in the Codex app.
@@ -486,6 +488,23 @@ struct SettingsCenterView: View {
                     }
                     Spacer(minLength: 8)
                     Toggle(L10n.string("Autocomplete searches and URLs"), isOn: $suggestsSearches)
+                        .labelsHidden()
+                        .toggleStyle(.paritySwitch)
+                        .controlSize(.small)
+                }
+                .padding(.vertical, 14)
+                Divider().padding(.leading, Self.dividerLeading)
+                HStack(spacing: 12) {
+                    settingsControlIcon("clock.arrow.circlepath")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L10n.string("Suggest pages on new tabs")).font(.callout.weight(.medium))
+                        Text(L10n.string("Shows the pages this task opened and the sites you visit most on a new tab and in the side panel. Turned off, tasks keep no list of the pages they opened."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle(L10n.string("Suggest pages on new tabs"), isOn: $suggestsPages)
                         .labelsHidden()
                         .toggleStyle(.paritySwitch)
                         .controlSize(.small)

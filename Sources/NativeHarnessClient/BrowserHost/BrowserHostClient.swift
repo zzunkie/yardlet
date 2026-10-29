@@ -1142,7 +1142,7 @@ final class BrowserHostClient {
 
     /// Each page a tab commits is a visit in the address field's history, typed when the person opened it from
     /// the address field: not the address it counted last (a reload, a move within the page, a restored or woken
-    /// tab) unless the person typed it again, nor a failed address's error page. Titles follow their pages.
+    /// tab) unless the person typed it again, nor a failed address's error page. Titles and icons follow their pages.
     private func noteHistory(_ event: BrowserHostEvent, of tab: BrowserTab) {
         guard let addressHistory else { return }
         // A page whose address or title carries a value the vault filled is no visit to keep.
@@ -1173,6 +1173,9 @@ final class BrowserHostClient {
         case .title(_, let title):
             // Chromium names a page without a title by its address.
             if let url = tab.currentURL, title != url { addressHistory.noteTitle(title, of: url) }
+        case .favicon(_, _, let png):
+            // Kept by site, in memory, for the start page and the launcher.
+            if let url = tab.currentURL { addressHistory.noteIcon(png, of: url) }
         default:
             break
         }

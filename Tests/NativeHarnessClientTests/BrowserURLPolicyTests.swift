@@ -130,6 +130,26 @@ final class BrowserAddressSuggestionTests: XCTestCase {
         XCTAssertTrue(path[0].isVerbatim)
     }
 
+    /// A new tab's start page offers one page per site, the site's most visited, the sites visited most first
+    /// (docs/BROWSER_HOST.md, section 3, "Start page").
+    func testTheStartPageOffersEachSiteVisitedMostByItsMostVisitedPage() {
+        let history = history()
+        history.noteVisit("https://www.github.com/settings", typed: false)
+        history.noteVisit("http://localhost:3000/", typed: false)
+        history.noteVisit("file:///tmp/report.html", typed: false)
+        XCTAssertEqual(history.topSites(limit: 8).map(\.url),
+                       ["https://github.com/", "http://localhost:3000/", "https://gist.github.com/x"],
+                       "www. is the same site, a port is a site of its own, a file is no site")
+        XCTAssertEqual(history.topSites(limit: 1).map(\.url), ["https://github.com/"])
+        history.noteIcon(Data([1]), of: "https://github.com/octocat")
+        history.noteIcon(Data(), of: "https://github.com/plain")
+        XCTAssertEqual(history.icon(of: "https://www.github.com/"), Data([1]), "a page no tab showed has its site's icon")
+        XCTAssertNil(history.icon(of: "https://github.com/plain"), "a page without an icon has none")
+        history.remove(site: "https://github.com/")
+        XCTAssertFalse(history.pages.keys.contains { $0.contains("github.com/") && !$0.contains("gist") },
+                       "removing a site removes each of its pages")
+    }
+
     func testHistoryScoresAsChromium() {
         XCTAssertEqual([0, 4, 5, 14, 31, 90, 91, 365, 400].map { BrowserAddressRanking.recencyScore(daysAgo: $0) },
                        [1, 1, 0.97, 0.7, 0.5, 0.3, 0.19, 0.1, 0.1])

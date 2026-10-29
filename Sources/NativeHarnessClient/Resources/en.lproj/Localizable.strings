@@ -3172,3 +3172,10 @@
 "The unreadable draft will be kept as a backup. The text currently in this editor will become the new draft." = "The unreadable draft will be kept as a backup. The text currently in this editor will become the new draft.";
 
 "The saved draft could not be read. Keep it as a backup to start a new draft." = "The saved draft could not be read. Keep it as a backup to start a new draft.";
+
+"Pages in this task" = "Pages in this task";
+"Frequently visited" = "Frequently visited";
+"Remove from list" = "Remove from list";
+"Remove from history" = "Remove from history";
+"Suggest pages on new tabs" = "Suggest pages on new tabs";
+"Shows the pages this task opened and the sites you visit most on a new tab and in the side panel. Turned off, tasks keep no list of the pages they opened." = "Shows the pages this task opened and the sites you visit most on a new tab and in the side panel. Turned off, tasks keep no list of the pages they opened.";

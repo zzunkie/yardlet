@@ -280,6 +280,59 @@ final class BrowserPanelTabsTests: XCTestCase {
         XCTAssertNil(state.openBrowserTab(), "a tenth does not open")
     }
 
+    /// The launcher and a new tab's start page offer the pages a task's tabs showed (docs/BROWSER_HOST.md, section 3,
+    /// "Start page"): closed tabs first, then pages the tabs moved on from, none a tab shows; never an address that
+    /// carries a value the vault filled; saved with the task; and with "Suggest pages on new tabs" off, nothing.
+    func testATasksTabsOfferThePagesTheyShowedAgain() throws {
+        let client = makeClient()
+        client.carriesFilledValue = { $0.contains("hunter22") }
+        let repository = InMemoryTaskWorkspaceRepository()
+        let task = UUID()
+        let store = TaskWorkspaceStore(repository: repository, browserClient: { client })
+        let state = store.state(for: task)
+        let first = try XCTUnwrap(state.openBrowserTab())
+        let firstTab = try XCTUnwrap(try state.openBrowserEngineTab(first, viewport: .offscreenDefault))
+        for page in ["https://docs.test/start", "https://docs.test/guide", "https://bank.test/login?password=hunter22"] {
+            connection.eventHandler?(.address(tab: firstTab.id, url: page))
+        }
+        connection.eventHandler?(.title(tab: firstTab.id, title: "Guide"))
+        let second = try XCTUnwrap(state.openBrowserTab())
+        let secondTab = try XCTUnwrap(try state.openBrowserEngineTab(second, viewport: .offscreenDefault))
+        connection.eventHandler?(.address(tab: secondTab.id, url: "https://me:pw@issues.test/42"))
+        connection.eventHandler?(.title(tab: secondTab.id, title: "Issue 42"))
+        state.closeSidePanelTabs([id(second)])
+        let offered = state.browserTabs.suggestedPages(limit: 6)
+        XCTAssertEqual(offered.map(\.address), ["https://issues.test/42", "https://docs.test/start"],
+                       "the closed tab first, then the page the open tab moved on from; not the page it shows")
+        XCTAssertEqual(offered.map(\.title), ["Issue 42", ""])
+        XCTAssertNotNil(offered[0].closed)
+        XCTAssertFalse(state.browserTabs.visited.contains { $0.address.contains("hunter22") || $0.address.contains("pw@") })
+
+        // Opened again, a closed page is a page a tab shows; another task has its own.
+        let third = try XCTUnwrap(state.openBrowserTab(address: "https://issues.test/42"))
+        let thirdTab = try XCTUnwrap(try state.openBrowserEngineTab(third, viewport: .offscreenDefault))
+        connection.eventHandler?(.address(tab: thirdTab.id, url: "https://issues.test/42"))
+        XCTAssertEqual(state.browserTabs.suggestedPages(limit: 6).map(\.address), ["https://docs.test/start"])
+        XCTAssertNil(state.browserTabs.visited.first { $0.address == "https://issues.test/42" }?.closed)
+        XCTAssertTrue(store.state(for: UUID()).browserTabs.suggestedPages(limit: 6).isEmpty)
+
+        // Saved with the task, and read back with it.
+        store.persistNow()
+        let saved = try XCTUnwrap(repository.snapshots[task]?.browser?.visited)
+        XCTAssertEqual(saved.map(\.address), state.browserTabs.visited.map(\.address))
+        XCTAssertEqual(TaskWorkspaceState(snapshot: try XCTUnwrap(repository.snapshots[task])).browserTabs.visited, saved)
+
+        // Turned off: nothing is kept or offered, and the task's next save drops what it kept.
+        UserDefaults.yardlet.set(false, forKey: BrowserPageSuggestionPreference.key)
+        defer { UserDefaults.yardlet.removeObject(forKey: BrowserPageSuggestionPreference.key) }
+        connection.eventHandler?(.address(tab: firstTab.id, url: "https://docs.test/later"))
+        XCTAssertFalse(state.browserTabs.visited.contains { $0.address == "https://docs.test/later" })
+        XCTAssertTrue(state.browserTabs.suggestedPages(limit: 6).isEmpty)
+        store.persistNow()
+        XCTAssertNil(repository.snapshots[task]?.browser?.visited)
+        XCTAssertNotNil(repository.snapshots[task]?.browser?.pages, "the tabs themselves stay")
+    }
+
     func testTabsLostWithTheHostStayAsTabsAndComeBackTogether() throws {
         let client = makeClient()
         let task = UUID()
@@ -446,7 +499,7 @@ final class BrowserPanelTabsTests: XCTestCase {
                     favicon: Self.icon(.systemPurple), isLoading: false)
         tabs.update(keys[1], address: "http://localhost:3000/", title: "", favicon: nil, isLoading: false)
         tabs.update(keys[2], address: "https://example.com/", title: "Example Domain", favicon: nil, isLoading: true)
-        tabs.update(keys[3], address: nil, title: "", favicon: nil, isLoading: false)
+        tabs.update(keys[3], address: nil, title: "about:blank", favicon: nil, isLoading: false)
         let ids = keys.map(id)
         let titles = keys.map { TaskSidePanelTabs.browserTab($0, in: tabs).title }
         XCTAssertEqual(titles, ["example/yardlet", "localhost", "Example Domain", L10n.string("New tab")])

@@ -29,6 +29,8 @@ final class BrowserHostPaneController {
     @ObservationIgnored private var selectionBeforeEdit: NSRange?
     private(set) var title = ""
     private(set) var isLoading = false
+    /// The tab shows no page and the person has not asked for one: its start page lies over it (`showsStartPage`).
+    private(set) var isBlankPage = true
     private(set) var canGoBack = false
     private(set) var canGoForward = false
     /// What the error card and "Unavailable" say: the shown tab's page failed to load (it shows the
@@ -154,9 +156,19 @@ final class BrowserHostPaneController {
         self.workspace = workspace
         self.client = client
         placeAddress(workspace.browserTabs.tab(key)?.address ?? "")
+        isBlankPage = Self.isBlank(workspace.browserTabs.tab(key)?.address)
     }
 
     var hasTab: Bool { tab != nil }
+
+    /// A new tab's start page (`BrowserStartPage`), drawn over the tab's blank page until the person or the agent
+    /// opens a page in it, or the page fails.
+    var showsStartPage: Bool { isBlankPage && errorMessage == nil && crash == nil && !isUnresponsive }
+
+    static func isBlank(_ address: String?) -> Bool {
+        guard let address, !address.isEmpty else { return true }
+        return address == "about:blank"
+    }
 
     /// The page's icon, as its side-panel tab shows it.
     var favicon: Data? { workspace.browserTabs.tab(key)?.favicon }
@@ -219,6 +231,7 @@ final class BrowserHostPaneController {
         isEditingAddress = false
         autocomplete.close()
         placeAddress(workspace.browserTabs.tab(key)?.address ?? "")
+        isBlankPage = Self.isBlank(workspace.browserTabs.tab(key)?.address)
         open()
     }
 
@@ -365,6 +378,7 @@ final class BrowserHostPaneController {
         client.setPanelKeyboard(view.hasKeyboardFocus && view.window?.isKeyWindow == true, on: tab)
         // A tab opened again shows the page it opens before the page reports its address.
         showAddress(tab.currentURL ?? workspace.browserTabs.tab(key)?.address ?? "")
+        isBlankPage = Self.isBlank(tab.currentURL ?? workspace.browserTabs.tab(key)?.address)
         // What the page waits on shows now, also what it asked while another tab or task was shown (a "Leave site?"
         // the person's close brought this tab forward for, among them).
         showJavaScriptDialog(tab.javaScriptDialog)
@@ -487,6 +501,7 @@ final class BrowserHostPaneController {
         do {
             let url = try chosen?.destination ?? BrowserURLPolicy.addressFieldURL(addressInput)
             errorMessage = nil
+            isBlankPage = false
             if let tab, tab.openFailure != nil {
                 reopen(tab, at: url)
             } else if let tab {
@@ -581,6 +596,26 @@ final class BrowserHostPaneController {
     func openSuggestion(at index: Int) {
         autocomplete.select(index)
         submitAddress()
+    }
+
+    /// A page or site chosen on the start page opens in this tab, as a Chrome tile opens in its tab, and the page takes
+    /// the keyboard as after an address the person entered.
+    func openStartPage(_ address: String) {
+        autocomplete.close()
+        isEditingAddress = false
+        clearError()
+        isBlankPage = false
+        placeAddress(address)
+        if let tab, tab.openFailure != nil {
+            reopen(tab, at: address)
+        } else if let tab {
+            tab.notePersonInput()
+            tab.send(.navigate(tab: tab.id, url: address))
+        } else {
+            workspace.browserTabs.setAddress(address, for: key)
+            open()
+        }
+        if let view { view.window?.makeFirstResponder(view) }
     }
 
     /// The field shows the selected row: what was typed and the first row's completion selected after the caret,
@@ -778,6 +813,7 @@ final class BrowserHostPaneController {
             view?.isPasswordFieldFocused = isFocused
         case .address(_, let url):
             showAddress(url)
+            isBlankPage = Self.isBlank(url)
             vaultPageMoved(to: url)
             if let pending = pendingError, BrowserURLPolicy.sameAddress(url, pending.address) {
                 pendingError = nil
@@ -792,6 +828,8 @@ final class BrowserHostPaneController {
             self.isLoading = isLoading
             self.canGoBack = canGoBack
             self.canGoForward = canGoForward
+            // An address that opened no page (a download, a refused scheme) leaves the start page over the blank tab.
+            if !isLoading, let url = tab?.currentURL { isBlankPage = Self.isBlank(url) }
             if isLoading {
                 // A failure is only another move's once a page commits (below): the error page's own
                 // follow-up load (`loading` → -3 → done) keeps it. What waited of an earlier move goes.
@@ -1121,6 +1159,9 @@ struct BrowserHostPane: View {
     @FocusState private var isFindFocused: Bool
     /// The key button and the save offer follow the vault's items.
     @ObservedObject private var vault = MacAgentToolService.shared.vault
+    @AppStorage(BrowserPageSuggestionPreference.key) private var suggestsPages = true
+    /// Changes when the start page removed a site from the history, which it reads again.
+    @State private var startPageRevision = 0
 
     init(session: UUID, key: UUID, workspace: TaskWorkspaceState, client: BrowserHostClient, workspaceURL: URL,
          onNewTab: @escaping () -> Void, onCloseTab: @escaping (UUID) -> Void, onShowTab: @escaping (UUID) -> Void,
@@ -1178,7 +1219,9 @@ struct BrowserHostPane: View {
             // in Chrome and the Codex app.
             ZStack(alignment: .top) {
                 BrowserHostViewRepresentable(controller: controller)
-                if !controller.hasTab, controller.errorMessage == nil {
+                if controller.showsStartPage {
+                    startPage
+                } else if !controller.hasTab, controller.errorMessage == nil {
                     emptyState
                 }
                 if controller.isUnresponsive {
@@ -1719,16 +1762,26 @@ struct BrowserHostPane: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "globe")
-                .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(.secondary)
-            Text(L10n.string("Enter an address to open a page"))
-                .font(.callout.weight(.semibold))
-        }
-        .padding(30)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ParityTheme.canvas)
+        BrowserStartPage.empty
+    }
+
+    /// The start page over a blank tab: this task's pages and the sites visited most, or the empty state without them.
+    @ViewBuilder
+    private var startPage: some View {
+        let _ = startPageRevision
+        let history = controller.client.addressHistory
+        let pages = TaskSidePanelTabs.visitedPageTabs(controller.workspace.browserTabs, icons: history,
+                                                      limit: BrowserStartPage.pageCount)
+        let sites = suggestsPages ? (history?.topSites(limit: BrowserStartPage.siteCount) ?? []).map { page in
+            BrowserStartPage.Site(address: page.url, title: BrowserTabTitle.make(pageTitle: page.title, address: page.url),
+                                  icon: history?.icon(of: page.url))
+        } : []
+        BrowserStartPage(pages: pages, sites: sites, onOpen: { controller.openStartPage($0) },
+                         onRemovePage: { controller.workspace.browserTabs.removeVisited($0) },
+                         onRemoveSite: { address in
+                             history?.remove(site: address)
+                             startPageRevision += 1
+                         })
     }
 
     private func errorState(title: String, message: String, action: String) -> some View {

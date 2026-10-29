@@ -48,6 +48,18 @@ enum TaskSidePanelTabs {
                               isAgentUsing: tab?.isAgentUsing ?? false, isDiscarded: tab?.isDiscarded ?? false)
     }
 
+    /// The pages the task's browser tabs showed that the launcher and a new tab's start page offer again
+    /// (`TaskBrowserTabs.suggestedPages`), each by its address, with its title, its site and the site's icon when a
+    /// tab showed it since Yardlet started.
+    @MainActor
+    static func visitedPageTabs(_ tabs: TaskBrowserTabs, icons: BrowserAddressHistory?, limit: Int) -> [WorkSurfaceTab] {
+        tabs.suggestedPages(limit: limit).map { page in
+            WorkSurfaceTab(id: page.address, title: BrowserTabTitle.make(pageTitle: page.title, address: page.address),
+                           systemName: "globe", detail: BrowserAddressHistory.site(of: page.address) ?? page.address,
+                           favicon: icons?.icon(of: page.address))
+        }
+    }
+
     @MainActor
     static func tab(_ id: String, selectedFilePath: String?, browserTabs: TaskBrowserTabs? = nil) -> WorkSurfaceTab? {
         if let key = TaskSurfaceNavigationProjection.browserKey(inTab: id) {

@@ -95,6 +95,8 @@ struct BrowserPreviewPreferences: Codable, Equatable {
     var selectedTab: Int?
     /// Each of the side panel's browser tabs, in the panel's order (2026-10-23).
     var pages: [BrowserTabPage]?
+    /// The pages the task's tabs showed, which the launcher and a new tab's start page offer again (2026-10-29).
+    var visited: [BrowserVisitedPage]?
 }
 
 @MainActor

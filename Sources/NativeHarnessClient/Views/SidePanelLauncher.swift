@@ -1,16 +1,22 @@
 import SwiftUI
 
 /// The side panel's launcher, as the Codex app's panel launcher (`RightPanelTabsEmptyState`): what the
-/// panel can open for this task, each with its key, and under them the tasks whose conversations the
-/// panel can show as tabs, recent first, with a search (where the Codex app lists the chat's recent
-/// work). A panel with no tab shows it; the + menu's "All Tasks…" shows it over the tabs, and its
-/// close returns to the tab it covered.
+/// panel can open for this task, each with its key; under them the pages this task's browser tabs showed, closed
+/// tabs first (where the Codex app's New tab lists the chat's recent work, docs/BROWSER_HOST.md, section 3, "Start
+/// page"); and the tasks whose conversations the panel can show as tabs, recent first, with a search. A panel with no
+/// tab shows it; the + menu's "All Tasks…" shows it over the tabs, and its close returns to the tab it covered.
 struct SidePanelLauncher: View {
     let workspaceURL: URL
     let choices: [WorkSurfaceTab]
+    /// The task's pages to offer again, each by its address (`TaskSidePanelTabs.visitedPageTabs`); read in the
+    /// launcher's body.
+    var pages: () -> [WorkSurfaceTab] = { [] }
     /// Every task whose conversation can open here, most recent first; read in the launcher's body.
     let tasks: () -> [WorkSurfaceTab]
     let onOpen: (String) -> Void
+    /// A page opens in a new browser tab.
+    var onOpenPage: (String) -> Void = { _ in }
+    var onRemovePage: (String) -> Void = { _ in }
     let onClose: () -> Void
     @State private var query = ""
     @FocusState private var isSearchFocused: Bool
@@ -18,6 +24,7 @@ struct SidePanelLauncher: View {
     /// The Codex app's recent list shows six rows before it scrolls.
     static let recentCount = 6
     static let matchLimit = 30
+    static let pageCount = 5
 
     /// The tasks the list shows: the most recent, or those whose title or project has the search.
     static func shown(_ tasks: [WorkSurfaceTab], query: String) -> [WorkSurfaceTab] {
@@ -31,6 +38,7 @@ struct SidePanelLauncher: View {
 
     var body: some View {
         let tasks = tasks()
+        let pages = pages()
         return VStack(spacing: 0) {
             WorkSurfaceHeader(title: L10n.string("New tab"), systemName: "plus", workspaceURL: workspaceURL,
                               onClose: onClose) { EmptyView() }
@@ -41,6 +49,9 @@ struct SidePanelLauncher: View {
                             ForEach(choices) { choice in
                                 LauncherRow(tab: choice) { onOpen(choice.id) }
                             }
+                        }
+                        if !pages.isEmpty {
+                            LauncherPageSection(pages: pages, onOpen: onOpenPage, onRemove: onRemovePage)
                         }
                         if !tasks.isEmpty { taskSection(tasks) }
                     }
@@ -95,16 +106,42 @@ struct SidePanelLauncher: View {
     }
 }
 
-/// One launcher choice: its symbol or harness mark, its title, and on the right its key or project.
-private struct LauncherRow: View {
+/// "Pages in this task" in the launcher and on a new tab's start page: a page by its title, its site on the right and
+/// its address in its help. Its menu takes it out of the list.
+struct LauncherPageSection: View {
+    let pages: [WorkSurfaceTab]
+    let onOpen: (String) -> Void
+    let onRemove: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L10n.string("Pages in this task"))
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 10)
+            VStack(spacing: 1) {
+                ForEach(pages) { page in
+                    LauncherRow(tab: page, help: page.id) { onOpen(page.id) }
+                        .contextMenu {
+                            Button(L10n.string("Remove from list")) { onRemove(page.id) }
+                        }
+                }
+            }
+        }
+    }
+}
+
+/// One launcher choice: its symbol, harness mark or page icon, its title, and on the right its key, project or site.
+struct LauncherRow: View {
     let tab: WorkSurfaceTab
+    var help: String? = nil
     let action: () -> Void
     @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                WorkSurfaceTabIcon(systemName: tab.systemName, harness: tab.harness)
+                WorkSurfaceTabIcon(systemName: tab.systemName, harness: tab.harness, favicon: tab.favicon)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .frame(width: 18)
@@ -133,7 +170,7 @@ private struct LauncherRow: View {
         .disabled(!tab.isAvailable)
         .parityPointer()
         .onHover { isHovering = $0 }
-        .help(tab.detail.map { "\(tab.title) · \($0)" } ?? tab.title)
+        .help(help ?? tab.detail.map { "\(tab.title) · \($0)" } ?? tab.title)
         .accessibilityLabel(tab.title)
         .accessibilityValue(tab.detail ?? "")
     }

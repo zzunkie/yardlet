@@ -50,8 +50,15 @@ struct NewTaskWorkspace<Home: View>: View {
         if shown == Navigation.launcherID {
             SidePanelLauncher(
                 workspaceURL: folder, choices: TaskSidePanelTabs.draftChoices,
+                pages: { [workspaceState] in
+                    TaskSidePanelTabs.visitedPageTabs(workspaceState.browserTabs,
+                                                      icons: workspaceState.browserClient?.addressHistory,
+                                                      limit: SidePanelLauncher.pageCount)
+                },
                 tasks: { [sidePanelTasks] in sidePanelTasks?.choiceTabs() ?? [] },
-                onOpen: open, onClose: { closeTab(Navigation.launcherID) })
+                onOpen: open, onOpenPage: openPage,
+                onRemovePage: { workspaceState.browserTabs.removeVisited($0) },
+                onClose: { closeTab(Navigation.launcherID) })
         } else if let shown, let taskID = Navigation.taskID(inTab: shown) {
             // A tab whose task was archived or deleted closes.
             if let sidePanelTasks, let record = sidePanelTasks.record(taskID) {
@@ -89,6 +96,12 @@ struct NewTaskWorkspace<Home: View>: View {
     /// The launcher's and the + menu's Browser, and ⌘T on a page: a new browser tab.
     private func openNewBrowserTab() {
         guard workspaceState.openBrowserTab() != nil else { return NSSound.beep() }
+        workspaceState.keyboardFocus.move(to: .browser)
+    }
+
+    /// A page the launcher offers, in a new browser tab.
+    private func openPage(_ address: String) {
+        guard let url = URL(string: address), workspaceState.openBrowserPage(url) else { return NSSound.beep() }
         workspaceState.keyboardFocus.move(to: .browser)
     }
 
