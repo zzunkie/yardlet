@@ -43,8 +43,16 @@ final class TranscriptReadingTracker {
     @ObservationIgnored private var geometryTask: Task<Void, Never>?
     @ObservationIgnored private var anchorAttempts = 0
     @ObservationIgnored private var needsCapture = false
+    /// When the reader's own scrolling last moved the view.
+    @ObservationIgnored private var readerMovedAt: Date?
 
     var isRestoring: Bool { pending != nil }
+
+    /// The reader's own scrolling moved the view in the last tenth of a second. A place kept now would
+    /// be read from geometry their next movement may already have left behind.
+    var isReaderScrolling: Bool {
+        readerMovedAt.map { Date().timeIntervalSince($0) < 0.1 } ?? false
+    }
 
     /// - Parameters:
     ///   - bookmark: the place to start from; `record`'s bookmark when nil.
@@ -122,6 +130,7 @@ final class TranscriptReadingTracker {
         self.followsLatest = followsLatest
         wasHidden = false
         if userDriven {
+            readerMovedAt = Date()
             cancelRestoration()
             needsCapture = true
             deferred = nil

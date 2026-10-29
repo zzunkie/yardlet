@@ -7,8 +7,9 @@ import XCTest
 /// Scrolling up to the top of a conversation with earlier turns brings them in, as an upward
 /// infinite scroll does: the local window's next step, a Codex thread's earlier page, or more of a
 /// Claude transcript read from its end. Only the reader's own scrolling asks, once per load, and
-/// what the reader sees stays where it is as the earlier turns arrive above it. The rail's "Load
-/// more history" stays and keeps the place the same way.
+/// what the reader sees stays where it is as the earlier turns arrive above it, a few each display
+/// cycle the reader holds still (`ConversationTurnReveal`). The rail's "Load more history" stays and
+/// keeps the place the same way.
 @MainActor
 final class ConversationTopLoadingTests: XCTestCase {
     // MARK: - When to load
@@ -130,7 +131,7 @@ final class ConversationTopLoadingTests: XCTestCase {
         scrollToNearTheTop(scroll, in: mounted.hosting)
         XCTAssertEqual(drawnTurnCount(mounted.hosting), 10)
         userScroll(scroll, up: Int32(scroll.contentView.bounds.minY + 200), in: mounted.hosting)
-        pump(mounted.hosting, passes: 8)
+        pumpUntil(mounted.hosting) { drawnTurnCount(mounted.hosting) == 20 }
         XCTAssertEqual(drawnTurnCount(mounted.hosting), 20, "one load for one arrival at the top")
         let after = try XCTUnwrap(topRequest(in: mounted))
         XCTAssertTrue((80...81).contains(after.number), "the turn read stays in view, not the new top: \(after)")
@@ -160,7 +161,7 @@ final class ConversationTopLoadingTests: XCTestCase {
             scroll.scrollWheel(with: wheel)
             pump(mounted.hosting, passes: 2)
         }
-        pump(mounted.hosting, passes: 8)
+        pumpUntil(mounted.hosting) { drawnTurnCount(mounted.hosting) == 20 }
         XCTAssertEqual(drawnTurnCount(mounted.hosting), 20)
         XCTAssertGreaterThan(scroll.contentView.bounds.minY, 1_500, "the earlier turns arrived above the reader")
     }
@@ -196,7 +197,8 @@ final class ConversationTopLoadingTests: XCTestCase {
         XCTAssertEqual(before.number, 13)
 
         feed.state = Self.codexThread(turns: 3...24, cursor: "before-2")
-        pump(mounted.hosting, passes: 10)
+        pumpUntil(mounted.hosting) { drawnTurnCount(mounted.hosting) == 22 }
+        XCTAssertEqual(drawnTurnCount(mounted.hosting), 22, "the page is drawn whole")
         let after = try XCTUnwrap(topRequest(in: mounted))
         XCTAssertEqual(after.number, 13, "the turn read stays where it was")
         XCTAssertEqual(after.y, before.y, accuracy: 2)
@@ -229,7 +231,7 @@ final class ConversationTopLoadingTests: XCTestCase {
         XCTAssertEqual(asked.count, 1)
         feed.entries = Self.transcript(turns: 60)
         feed.actions = ConversationActions()
-        pump(mounted.hosting, passes: 10)
+        pumpUntil(mounted.hosting) { drawnTurnCount(mounted.hosting) == 20 }
         let after = try XCTUnwrap(topRequest(in: mounted))
         XCTAssertEqual(after.number, before.number, "the turn read stays where it was")
         XCTAssertEqual(after.y, before.y, accuracy: 2)
@@ -363,6 +365,13 @@ final class ConversationTopLoadingTests: XCTestCase {
             hosting.layoutSubtreeIfNeeded()
             RunLoop.main.run(until: Date().addingTimeInterval(0.03))
         }
+    }
+
+    /// Pumps until `isDone`, as turns that arrived are drawn in their own time, for `testWaitLimitSeconds`
+    /// at most.
+    private func pumpUntil(_ hosting: NSView, _ isDone: () -> Bool) {
+        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
+        while !isDone(), Date() < deadline { pump(hosting, passes: 1) }
     }
 
     /// A trackpad scroll with its phases, which is how SwiftUI tells a reader's scroll from layout.

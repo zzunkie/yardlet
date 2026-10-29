@@ -52,3 +52,68 @@ struct ConversationTurnWindow: Equatable, Sendable {
             && !apply(to: presentation).turns.contains { $0.id == turnID }
     }
 }
+
+/// Earlier turns the reader brings in arrive above the first turn drawn all at once: the window's
+/// next step, a Codex thread's earlier page, more of a Claude file. Each turn is built and measured
+/// as it is first drawn, and ten turns of a working conversation built in one display cycle held the
+/// main thread for well over a tenth of a second. So once the reader asks for earlier turns, the turns
+/// that arrive before the earliest one drawn are drawn over `cycles` display cycles, the nearest first,
+/// at least one each cycle, while the reader holds the view still: a place kept while their scrolling
+/// moves the view would be read from before it moved. Asking for earlier turns again draws the rest at
+/// once. The reader's place is kept as each few arrive above it (`TranscriptScrollFollowing`), as it
+/// was kept for all of them at once, and the turns drawn in the end are the same.
+struct ConversationTurnReveal: Equatable, Sendable {
+    /// The display cycles the turns that arrive are drawn over.
+    static let cycles = 10
+
+    /// What a display cycle draws of the turns that arrived.
+    struct Progress: Equatable, Sendable {
+        /// Arrived turns not drawn yet.
+        var hidden = 0
+        /// The earliest turn drawn.
+        var earliestDrawn: String?
+    }
+
+    /// The earliest turn drawn as of the last display cycle; nil until the reader asks for earlier
+    /// turns, and once they go back to the latest output or to a place.
+    private(set) var boundary: String?
+    /// Display cycles since the turns drawing now began to arrive.
+    private var cycle = 0
+
+    /// The reader asked for the turns before `turnID`, the earliest loaded turn the window draws: any
+    /// still waiting after it are drawn now.
+    mutating func begin(before turnID: String?) {
+        self = ConversationTurnReveal(boundary: turnID)
+    }
+
+    /// The next display cycle draws on from what this one drew; with nothing left, turns that arrive
+    /// later have their own cycles.
+    mutating func advance(_ progress: Progress) {
+        boundary = progress.earliestDrawn
+        cycle = progress.hidden > 0 ? cycle + 1 : 0
+    }
+
+    /// Every turn is drawn at once: the reader went back to the latest output or to a place.
+    mutating func end() {
+        if boundary != nil { self = ConversationTurnReveal() }
+    }
+
+    /// `presentation` with what this display cycle draws of the turns that arrived, the rest counted
+    /// as earlier turns loaded here.
+    func apply(to presentation: ConversationPresentation) -> (presentation: ConversationPresentation, progress: Progress) {
+        guard let boundary, let arrived = presentation.turns.firstIndex(where: { $0.id == boundary }), arrived > 0
+        else { return (presentation, Progress(earliestDrawn: boundary)) }
+        let cyclesLeft = max(1, Self.cycles - cycle)
+        let hidden = arrived - (arrived + cyclesLeft - 1) / cyclesLeft
+        let earliest = presentation.turns[hidden].id
+        guard hidden > 0 else { return (presentation, Progress(earliestDrawn: earliest)) }
+        var drawn = presentation
+        drawn.turns = Array(presentation.turns[hidden...])
+        if case let .local(hiddenCount) = presentation.earlier {
+            drawn.earlier = .local(hiddenCount: hiddenCount + hidden)
+        } else {
+            drawn.earlier = .local(hiddenCount: hidden)
+        }
+        return (drawn, Progress(hidden: hidden, earliestDrawn: earliest))
+    }
+}

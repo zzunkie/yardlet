@@ -4,14 +4,14 @@ import XCTest
 @testable import NativeHarnessClient
 
 /// D11: a conversation draws its latest 10 turns, whatever its harness. The rail's "Load more
-/// history" brings in 10 more at a time; a Codex thread's earlier pages are asked for only once every
-/// loaded turn is drawn. A saved place or an opened history result in a turn the window leaves out
+/// history" brings in 10 more at a time, drawn over the next few display cycles; a Codex thread's
+/// earlier pages are asked for only once every loaded turn is drawn. A saved place or an opened history result in a turn the window leaves out
 /// widens the window to it (find: `ConversationFindUnifiedTests`).
 @MainActor
 final class ConversationTurnWindowRenderingTests: XCTestCase {
     private let decoder = CodexTaskDecoder()
 
-    func testATranscriptDrawsItsLatestTenTurnsAndTheRailBringsInTenMore() throws {
+    func testATranscriptDrawsItsLatestTenTurnsAndTheRailBringsInTenMore() async throws {
         let entries = (1...90).flatMap { index in
             [TranscriptEntry(content: .user(text: "Request \(index)")),
              TranscriptEntry(content: .assistant(text: "Answer \(index)", isStreaming: false))]
@@ -25,21 +25,22 @@ final class ConversationTurnWindowRenderingTests: XCTestCase {
         XCTAssertTrue(listed(host).contains(L10n.string("Load more history")))
 
         XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Load more history")))
-        host.settle(passes: 10)
-        XCTAssertEqual(drawnTurnCount(host), 20)
+        await host.settle { drawnTurnCount(host) == 20 }
 
+        // Pressed again before the turns it brought in are all drawn, too.
         for _ in 0..<7 {
             XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Load more history")))
-            host.settle(passes: 6)
+            host.settle(passes: 2)
         }
-        XCTAssertEqual(drawnTurnCount(host), 90)
+        await host.settle { drawnTurnCount(host) == 90 }
         XCTAssertFalse(listed(host).contains(L10n.string("Load more history")), "every turn is drawn")
     }
 
     /// A Codex thread holds 20 loaded turns and more behind the provider's cursor: the window draws 10
     /// of the loaded turns, the rail first brings in the other 10, and only then asks the provider for
-    /// its earlier page, which is drawn whole once it arrives.
-    func testACodexThreadWindowsItsLoadedTurnsBeforeAskingForEarlierPages() throws {
+    /// its earlier page, which is drawn whole over the next few display cycles, not in the one it
+    /// arrives in.
+    func testACodexThreadWindowsItsLoadedTurnsBeforeAskingForEarlierPages() async throws {
         var state = codexThread(turns: 81...100)
         state.thread?.turnsNextCursor = "earlier"
         let requests = Counter()
@@ -51,8 +52,7 @@ final class ConversationTurnWindowRenderingTests: XCTestCase {
         XCTAssertEqual(drawnTurnCount(host), 10)
 
         XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Load more history")))
-        host.settle(passes: 10)
-        XCTAssertEqual(drawnTurnCount(host), 20)
+        await host.settle { drawnTurnCount(host) == 20 }
         XCTAssertEqual(requests.count, 0, "the loaded turns come first")
         XCTAssertTrue(listed(host).contains(L10n.string("Load more history")), "the provider holds more")
 
@@ -63,8 +63,9 @@ final class ConversationTurnWindowRenderingTests: XCTestCase {
         var paged = codexThread(turns: 100)
         paged.thread?.turnsNextCursor = nil
         feed.state = paged
-        host.settle(passes: 10)
-        XCTAssertEqual(drawnTurnCount(host), 100, "the page asked for is drawn whole")
+        host.settle(passes: 1)
+        XCTAssertLessThan(drawnTurnCount(host) ?? 0, 100, "a page's turns are not all built in one display cycle")
+        await host.settle { drawnTurnCount(host) == 100 }
         XCTAssertFalse(listed(host).contains(L10n.string("Load more history")), "every turn is drawn")
     }
 

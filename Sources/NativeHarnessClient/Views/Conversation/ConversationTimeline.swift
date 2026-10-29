@@ -26,10 +26,11 @@ enum ConversationSource {
 /// to the top brings earlier ones in, 10 at a time, once per load, as an upward infinite scroll does
 /// (`TranscriptTopLoading`), and then asks a Codex thread for its earlier pages, or reads more of a
 /// Claude transcript a read took from its end (`ConversationEarlierTurns.providerFile`); the rail's
-/// "Load more history" asks the same way. As earlier turns arrive above them, the turns being read
-/// stay where they are in the viewport (`TranscriptReadingTracker.placeToKeep`). Going back to the
-/// latest output — a sent message, a new turn, a request to answer, "Latest response" — draws the
-/// latest 10 again. Find, saved places and an opened history result read the whole loaded
+/// "Load more history" asks the same way. The turns that arrive are drawn over the next few display
+/// cycles the reader holds still, the nearest first (`ConversationTurnReveal`), and as each arrives
+/// above them, the turns being read stay where they are in the viewport (`TranscriptReadingTracker.placeToKeep`). Going
+/// back to the latest output — a sent message, a new turn, a request to answer, "Latest response" —
+/// draws the latest 10 again. Find, saved places and an opened history result read the whole loaded
 /// conversation and widen the window to the turn they reach.
 ///
 /// The source can change under the same view (plan M7): a Codex task draws its shared transcript
@@ -70,6 +71,8 @@ struct ConversationTimeline: View {
     /// The reader asked the provider for its earlier turns, so every loaded turn is drawn: the page
     /// they asked for, whatever its length, and everything after it.
     @State private var drawsEveryLoadedTurn = false
+    /// The earlier turns the reader brought in, drawn over the next few display cycles.
+    @State private var reveal = ConversationTurnReveal()
     @State private var latestRequest = ConversationLatestRequest()
     @State private var readingTracker = TranscriptReadingTracker()
     @State private var handledInitialSearch = false
@@ -93,7 +96,9 @@ struct ConversationTimeline: View {
         // is what is drawn.
         let whole = project()
         let window = turnWindow
-        let presentation = withProviderRetry(window?.apply(to: whole) ?? whole)
+        let windowed = window?.apply(to: whole) ?? whole
+        let revealed = reveal.apply(to: windowed)
+        let presentation = withProviderRetry(revealed.presentation)
         let turns = presentation.turns
         let _ = rendering.keep(turnIDs: turns.map(\.id))
         let context = itemContext(presentation)
@@ -120,7 +125,10 @@ struct ConversationTimeline: View {
                     },
                     hasMoreTurns: presentation.earlier != .none,
                     moreTurns: "\(presentation.earlier)",
-                    onLoadMore: { loadEarlierTurns(presentation.earlier, loadedTurnCount: whole.turns.count) }
+                    onLoadMore: {
+                        loadEarlierTurns(windowed.earlier, loadedTurnCount: whole.turns.count,
+                                         before: windowed.turns.first?.id, revealing: revealed.progress, asksForMore: true)
+                    }
                 )
                 .equatable()
                 .accessibilitySortPriority(ParityAccessibility.surfacePicker - 1)
@@ -147,7 +155,8 @@ struct ConversationTimeline: View {
                     readingAnchors: readingAnchors(wholeAnchors, whole: whole, window: window),
                     pinsGrowthToBottom: true,
                     loadEarlier: presentation.earlier == .none ? nil : {
-                        loadEarlierTurns(presentation.earlier, loadedTurnCount: whole.turns.count)
+                        loadEarlierTurns(windowed.earlier, loadedTurnCount: whole.turns.count,
+                                         before: windowed.turns.first?.id, revealing: revealed.progress, asksForMore: false)
                     },
                     earlierKey: presentation.earlier == .none ? nil
                         : "\(presentation.earlier)|\(turns.first?.id ?? "")",
@@ -168,6 +177,7 @@ struct ConversationTimeline: View {
                 // A match in a turn the window leaves out widens the window to it first (plan A5.2),
                 // then goes there once the turn is drawn.
                 .onChange(of: find?.scrollRequest) { _, request in
+                    if request != nil { reveal.end() }
                     guard let request, let window, window.hides(request.scrollID, in: whole) else { return }
                     earliestReadTurnID = request.scrollID
                     Task { @MainActor in
@@ -191,6 +201,7 @@ struct ConversationTimeline: View {
                     guard !restoresReading else { return }
                     guard historySelection != nil, let targetTurnID = Self.firstHistoryMatch(in: whole)
                     else { return }
+                    reveal.end()
                     // A match in a turn the window leaves out widens the window to it first.
                     if let window, window.hides(targetTurnID, in: whole) { earliestReadTurnID = targetTurnID }
                     await Task.yield()
@@ -208,6 +219,7 @@ struct ConversationTimeline: View {
                     guard placement == .task, let place else { return }
                     defer { place.done() }
                     guard let targetTurnID = Self.turn(holding: place.request.callID, in: whole) else { return }
+                    reveal.end()
                     readingTracker.cancelRestoration()
                     scrollState.isFollowing = false
                     focusedTurnID = targetTurnID
@@ -225,6 +237,7 @@ struct ConversationTimeline: View {
         .background {
             if placement.paintsCanvas { ParityTheme.canvas }
         }
+        .task(id: revealed.progress) { await revealArrivedTurns(revealed.progress) }
         .sheet(isPresented: $showsFileRewind) {
             if let rewindActions = actions.rewind { ClaudeFileRewindSheet(actions: rewindActions) }
         }
@@ -309,12 +322,21 @@ struct ConversationTimeline: View {
         if addedTurnCount != 0 { addedTurnCount = 0 }
         if earliestReadTurnID != nil { earliestReadTurnID = nil }
         if drawsEveryLoadedTurn { drawsEveryLoadedTurn = false }
+        reveal.end()
     }
 
-    /// Brings in the turns before the first one drawn: the window's next step, the provider's
-    /// earlier page, or more of the provider's file, whose turns the window's next step then draws.
-    /// The rail's "Load more history" and scrolling up to the top both ask for them.
-    private func loadEarlierTurns(_ earlier: ConversationEarlierTurns, loadedTurnCount: Int) {
+    /// Brings in the turns before the window's (`firstTurnID` is its earliest): its next step, the
+    /// provider's earlier page, or more of the provider's file, whose turns the window's next step then
+    /// draws. The rail's "Load more history" and scrolling up to the top both ask for them, and the
+    /// turns that arrive are drawn a few each display cycle (`ConversationTurnReveal`). Turns still
+    /// waiting to be drawn come first: reaching the top draws them at once, and the rail draws them and
+    /// asks for more.
+    private func loadEarlierTurns(_ earlier: ConversationEarlierTurns, loadedTurnCount: Int, before firstTurnID: String?,
+                                  revealing: ConversationTurnReveal.Progress, asksForMore: Bool) {
+        if revealing.hidden > 0 {
+            reveal.begin(before: firstTurnID)
+            guard asksForMore else { return }
+        }
         switch earlier {
         case .local: addedTurnCount += ConversationTurnWindow.step
         case .provider:
@@ -323,8 +345,22 @@ struct ConversationTimeline: View {
         case .providerFile:
             addedTurnCount = max(addedTurnCount, loadedTurnCount + ConversationTurnWindow.step - turnWindowCount)
             actions.readEarlierHistory?()
-        case .none: break
+        case .none: return
         }
+        reveal.begin(before: firstTurnID)
+    }
+
+    /// Draws the next of the turns that arrived once what this display cycle drew is laid out and
+    /// shown, and the reader holds the view still.
+    private func revealArrivedTurns(_ progress: ConversationTurnReveal.Progress) async {
+        guard progress.earliestDrawn != reveal.boundary else { return }
+        if progress.hidden > 0 {
+            repeat {
+                try? await Task.sleep(for: .seconds(1.0 / 60))
+                guard !Task.isCancelled else { return }
+            } while readingTracker.isReaderScrolling
+        }
+        reveal.advance(progress)
     }
 
     private var historySelection: CodexHistorySearchSelection? {
