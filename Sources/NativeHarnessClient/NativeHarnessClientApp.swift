@@ -196,6 +196,7 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
     private var isShuttingDown = false
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        MainThreadHangLog.start()
         // Tabs are the window's own task tabs (`SplitStore.tabs`); macOS's window tabs would add a
         // second kind (View › Show Tab Bar, Window › Merge All Windows) whose tabs all show the
         // same task, since every Yardlet window shows the one selection.
