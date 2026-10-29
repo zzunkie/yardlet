@@ -894,12 +894,20 @@ struct CodexTaskReducer: Sendable {
         state.thread?.itemsBackwardsCursor = itemsBackwardsCursor
     }
 
+    /// Each turn takes its entries at once. A task's saved cards are merged as a page into every
+    /// state it streams, a few hundred cards into turns of as many items.
     func mergeItemPage(_ page: CodexItemPage, into state: inout CodexTaskState) {
+        var turnIDs: [String] = []
+        var itemsByTurnID: [String: [CodexItemState]] = [:]
         for entry in page.entries {
-            upsert(item: entry.item, turnID: entry.turnID, in: &state)
+            if itemsByTurnID[entry.turnID] == nil { turnIDs.append(entry.turnID) }
+            itemsByTurnID[entry.turnID, default: []].append(entry.item)
         }
-        for turnID in Set(page.entries.map(\.turnID)) {
-            mutateTurn(turnID, in: &state) { $0.itemsNextCursor = page.nextCursor }
+        for turnID in turnIDs {
+            mutateTurn(turnID, in: &state) { turn in
+                upsert(items: itemsByTurnID[turnID] ?? [], in: &turn)
+                turn.itemsNextCursor = page.nextCursor
+            }
         }
     }
 
@@ -934,9 +942,7 @@ struct CodexTaskReducer: Sendable {
         }
         guard var current = state.thread?.turns[index] else { return }
         let wouldRegressTerminalState = current.status.isTerminal && !turn.status.isTerminal
-        for item in turn.items {
-            upsert(item: item, in: &current)
-        }
+        upsert(items: turn.items, in: &current)
         if !wouldRegressTerminalState {
             current.status = turn.status
         }
@@ -958,7 +964,24 @@ struct CodexTaskReducer: Sendable {
     }
 
     private func upsert(item: CodexItemState, in turn: inout CodexTurnState) {
-        guard let index = turn.items.firstIndex(where: { $0.id == item.id }) else {
+        upsert(item: item, at: turn.items.firstIndex(where: { $0.id == item.id }), in: &turn)
+    }
+
+    /// Each of `items` in order, as `upsert(item:in:)` puts it, with the turn's items indexed by ID
+    /// once instead of searched for each.
+    private func upsert(items: [CodexItemState], in turn: inout CodexTurnState) {
+        var indexByID: [String: Int] = [:]
+        for index in turn.items.indices.reversed() { indexByID[turn.items[index].id] = index }
+        for item in items {
+            let index = indexByID[item.id]
+            if index == nil { indexByID[item.id] = turn.items.count }
+            upsert(item: item, at: index, in: &turn)
+        }
+    }
+
+    /// `index` is the turn's first item with `item`'s ID, if it has one.
+    private func upsert(item: CodexItemState, at index: Int?, in turn: inout CodexTurnState) {
+        guard let index else {
             turn.items.append(item)
             return
         }
@@ -1009,9 +1032,10 @@ struct CodexTaskReducer: Sendable {
                 raw: .object(["id": .string(id)])
             ))
         }
-        guard let index = found, var turn = state.thread?.turns[index] else { return }
-        mutation(&turn)
-        state.thread?.turns[index] = turn
+        guard let index = found else { return }
+        // The turn changes where it lies. A copy taken out shares its items with the turn left
+        // behind, so the copy's first change to them copied every item of the turn, on every call.
+        mutation(&state.thread!.turns[index])
     }
 
     private func appendAgentDelta(
