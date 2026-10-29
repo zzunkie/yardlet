@@ -6,61 +6,30 @@ struct PersonalAgentsSidebar: View {
     let accounts: [AccountChoice]
     @Binding var accountID: String
     let accountMenu: SidebarAccountMenuContext
-    /// Back to the task list, where Home, Scheduled tasks and Personal agents are, as Scheduled tasks goes back.
-    let onBack: () -> Void
+    /// The sidebar's top, the same as over the tasks: Home, Scheduled tasks and the Tasks word that
+    /// switches the list back.
+    let onHome: () -> Void
+    var onShowSchedules: (() -> Void)?
+    let onShowTasks: () -> Void
     let onAccounts: () -> Void
     let onRefresh: () -> Void
     @Environment(\.yardletInterfaceScale) private var scale
 
     var body: some View {
         VStack(spacing: 0) {
-            Button(action: onBack) {
-                SidebarActionRow(systemName: "chevron.left", title: L10n.string("Personal agents"),
-                                 symbolWeight: .semibold, titleWeight: .medium, height: 32)
-            }
-            .buttonStyle(.borderless)
-            .parityPointer()
-            .padding(.horizontal, SidebarMetrics.rowInset)
-            .help(L10n.string("Back to tasks"))
-            .accessibilityLabel(L10n.string("Back to tasks"))
-            .accessibilitySortPriority(ParityAccessibility.sidebarPrimary)
-
-            HStack(spacing: 6) {
-                Menu {
-                    ForEach(accounts) { account in
-                        Button(account.title) { accountID = account.id }
-                    }
-                    Divider()
-                    Button(L10n.string("Accounts…"), action: onAccounts)
-                } label: {
-                    HStack(spacing: 5) {
-                        Text(accounts.first { $0.id == accountID }?.title ?? "ChatGPT")
-                            .lineLimit(1)
-                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
-                    }
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .accessibilityLabel(L10n.string("ChatGPT account"))
-                Spacer(minLength: 0)
-                if center.isLoading { ProgressView().controlSize(.mini) }
-                else {
-                    Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.plain)
-                        .help(L10n.string("Refresh"))
-                        .accessibilityLabel(L10n.string("Refresh personal agents"))
-                }
-            }
-            .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 6)
+            SidebarPlacesHeader(onHome: onHome, onShowSchedules: onShowSchedules, section: .personalAgents,
+                                onSelectSection: { if $0 == .tasks { onShowTasks() } })
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: SidebarMetrics.rowSpacing) {
+                    accountHeading
+                        .padding(.horizontal, 13 - SidebarMetrics.rowInset)
+                        .padding(.bottom, 2)
                     ForEach(center.agents) { agent in
                         Button { Task { await center.select(agent.id) } } label: {
                             HStack(spacing: 8) {
-                                PersonalAgentAvatarView(name: agent.name, data: center.avatar(for: agent), size: 22)
+                                PersonalAgentAvatarView(name: agent.name, data: center.avatar(for: agent),
+                                                        sheet: center.spriteSheet(for: agent), size: 22)
                                 Text(agent.name).font(.system(size: 13 * scale)).lineLimit(1)
                                 Spacer(minLength: 4)
                                 if agent.isPaused {
@@ -85,40 +54,115 @@ struct PersonalAgentsSidebar: View {
                     }
                 }
                 .padding(.horizontal, SidebarMetrics.rowInset)
+                // The heading starts where Projects does over the tasks, below their search field.
+                .padding(.top, 16)
+                .padding(.bottom, 12)
             }
             Rectangle().fill(ParityTheme.separator).frame(height: 1)
             SidebarAccountButton(context: accountMenu).padding(.horizontal, 4).padding(.vertical, 5)
         }
         .background(ParityTheme.sidebar)
-        .onExitCommand(perform: onBack)
+    }
+
+    /// The account the dots are read from, as a section heading like Projects: a menu of the accounts
+    /// when there are several, its name alone otherwise, and the refresh button where Projects has Add.
+    private var accountHeading: some View {
+        HStack(spacing: 8) {
+            let title = accounts.first { $0.id == accountID }?.title ?? "ChatGPT"
+            if accounts.count > 1 {
+                Menu {
+                    ForEach(accounts) { account in
+                        Button(account.title) { accountID = account.id }
+                    }
+                    Divider()
+                    Button(L10n.string("Accounts…"), action: onAccounts)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(title).lineLimit(1)
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel(L10n.string("ChatGPT account"))
+                .accessibilityValue(title)
+            } else {
+                Text(title).lineLimit(1)
+            }
+            Spacer()
+            Group {
+                if center.isLoading {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Button(action: onRefresh) {
+                        Image(systemName: "arrow.clockwise").font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderless)
+                    .parityPointer()
+                    .help(L10n.string("Refresh"))
+                    .accessibilityLabel(L10n.string("Refresh personal agents"))
+                }
+            }
+            .frame(width: 22, height: 22)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
     }
 }
 
-/// A dot's profile picture, the provider's static snapshot, or its initial while there is none. The
-/// bytes are bounded by the transport; a picture larger than any avatar is not drawn.
+/// A dot's profile picture: its pet, where a sheet is given, playing or, beside a message and with
+/// Reduce Motion, still on its first frame; else the provider's static snapshot, or its initial while
+/// there is none. The bytes are bounded by the transport; a picture larger than any avatar is not drawn.
 struct PersonalAgentAvatarView: View {
     let name: String
     let data: Data?
+    var sheet: PersonalAgentSpriteSheet? = nil
+    /// Whether the pet plays here; a message's picture holds its first frame.
+    var plays = true
     let size: CGFloat
     @State private var image: NSImage?
+    @State private var frames: PersonalAgentSpriteFrames?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let maximumPixels = 2_048
 
     var body: some View {
-        ZStack {
-            if let image {
-                Image(nsImage: image).resizable().interpolation(.high).scaledToFill()
+#if DEBUG
+        let _ = ViewBodyCensus.note(.personalAgentAvatar)
+#endif
+        Group {
+            // The pet stands in its square uncut, with nothing behind it, as the provider's app shows it.
+            if let frames, plays, !reduceMotion {
+                PersonalAgentSpriteAvatar(frames: frames, size: size)
+            } else if let frames {
+                Image(decorative: frames.still, scale: 1).resizable().interpolation(.medium)
             } else {
-                Circle().fill(ParityTheme.selectedFill)
-                Text(name.first.map { String($0).uppercased() } ?? "·")
-                    .font(.system(size: size * 0.46, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                ZStack {
+                    if let image {
+                        Image(nsImage: image).resizable().interpolation(.high).scaledToFill()
+                    } else {
+                        Circle().fill(ParityTheme.selectedFill)
+                        Text(name.first.map { String($0).uppercased() } ?? "·")
+                            .font(.system(size: size * 0.46, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .clipShape(Circle())
             }
         }
         .frame(width: size, height: size)
-        .clipShape(Circle())
         .accessibilityHidden(true)
         .task(id: data) { image = data.flatMap(Self.decode) }
+        .task(id: sheet.map(ObjectIdentifier.init)) {
+            // A sheet that comes in place of another shows nothing of the old one while it decodes, and
+            // a decoding that ends after the sheet was replaced (its task cancelled) shows nothing.
+            frames = nil
+            guard let sheet else { return }
+            let decoded = await PersonalAgentSpriteFrames.decoded(sheet)
+            guard !Task.isCancelled else { return }
+            frames = decoded
+        }
     }
 
     static func decode(_ data: Data) -> NSImage? {
@@ -156,6 +200,7 @@ struct PersonalAgentsContent: View {
                 HStack(spacing: 0) {
                     PersonalAgentConversationView(agent: agent, conversation: conversation,
                         avatar: center.avatar(for: agent),
+                        sheet: center.spriteSheet(for: agent),
                         reconnecting: center.isReconnecting,
                         connectionFailure: center.failure,
                         showsDetails: showsDetailsBeside || showsDetailsRaised,
@@ -226,7 +271,8 @@ struct PersonalAgentsContent: View {
 
     private func details(agent: PersonalAgent, conversation: PersonalAgentConversation,
                          close: (() -> Void)? = nil) -> some View {
-        PersonalAgentDetailsPanel(agent: agent, avatar: center.avatar(for: agent), accountTitle: accountTitle,
+        PersonalAgentDetailsPanel(agent: agent, avatar: center.avatar(for: agent), sheet: center.spriteSheet(for: agent),
+                                  accountTitle: accountTitle,
             details: center.details, attachments: PersonalAgentDetailsPanel.attachments(in: conversation.visibleMessages),
             isLoadingAttachment: loadingAttachment, open: open,
             retry: { center.refreshDetails() },
@@ -253,10 +299,36 @@ struct PersonalAgentsContent: View {
     }
 }
 
+/// Opens a dot's own surfaces when the person asks: the dot's page on the provider's website, and the
+/// Dots home in the provider's app where it is installed (`DotsApp`). Renders put in one that opens nothing.
+@MainActor
+struct PersonalAgentOriginalOpener {
+    var appLocation: @MainActor () -> URL?
+    /// Whether the address was handed on.
+    var openWeb: @MainActor (URL) -> Bool
+    var openApp: @MainActor (URL, @escaping @MainActor (Bool) -> Void) -> Void
+
+    static let live = PersonalAgentOriginalOpener(appLocation: DotsApp.location, openWeb: DotsApp.openWeb,
+                                                  openApp: DotsApp.openHome)
+}
+
+private struct PersonalAgentOriginalOpenerKey: EnvironmentKey {
+    static let defaultValue: PersonalAgentOriginalOpener? = nil
+}
+
+extension EnvironmentValues {
+    var personalAgentOriginalOpener: PersonalAgentOriginalOpener? {
+        get { self[PersonalAgentOriginalOpenerKey.self] }
+        set { self[PersonalAgentOriginalOpenerKey.self] = newValue }
+    }
+}
+
 struct PersonalAgentConversationView: View {
     let agent: PersonalAgent
     @Bindable var conversation: PersonalAgentConversation
     var avatar: Data?
+    /// The pet the header's picture plays; each message's picture holds its first frame.
+    var sheet: PersonalAgentSpriteSheet?
     var reconnecting = false
     var connectionFailure: PersonalAgentFailure?
     var showsDetails = false
@@ -268,17 +340,24 @@ struct PersonalAgentConversationView: View {
     let loadOlder: () -> Void
     var toggleDetails: () -> Void = {}
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.personalAgentOriginalOpener) private var opener
+    /// The provider's app, where it is installed, looked up once the conversation shows.
+    @State private var dotsApp: URL?
+    @State private var openFailed = false
 
     static let headerHeight: CGFloat = 46
+
+    private var original: PersonalAgentOriginalOpener { opener ?? .live }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 9) {
-                PersonalAgentAvatarView(name: agent.name, data: avatar, size: 24)
+                PersonalAgentAvatarView(name: agent.name, data: avatar, sheet: sheet, size: 24)
                 Text(agent.name).font(.system(size: 14 * scale, weight: .semibold)).lineLimit(1)
                 if reconnecting { Text(L10n.string("Reconnecting")).font(.caption).foregroundStyle(.secondary) }
                 else if agent.isPaused { Text(L10n.string("Paused")).font(.caption).foregroundStyle(.secondary) }
                 Spacer(minLength: 8)
+                originalMenu
                 Button(action: refresh) { Image(systemName: "arrow.clockwise").frame(width: 26, height: 26) }
                     .buttonStyle(.borderless).parityPointer().disabled(conversation.isLoading)
                     .help(L10n.string("Refresh")).accessibilityLabel(L10n.string("Refresh conversation"))
@@ -324,10 +403,11 @@ struct PersonalAgentConversationView: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollPosition(id: $conversation.anchor)
-            if isLoadingAttachment || attachmentFailure != nil {
+            if isLoadingAttachment || attachmentFailure != nil || openFailed {
                 HStack(spacing: 6) {
                     if isLoadingAttachment { ProgressView().controlSize(.small) }
                     if let attachmentFailure { Text(attachmentFailure.message) }
+                    else if openFailed { Text(L10n.string("Dots could not be opened.")) }
                 }
                 .font(.caption).foregroundStyle(.secondary).padding(.bottom, 4)
             }
@@ -337,6 +417,50 @@ struct PersonalAgentConversationView: View {
                 .frame(maxWidth: .infinity)
         }
         .background(ParityTheme.canvas)
+        .task { dotsApp = original.appLocation() }
+    }
+
+    /// The dot where the provider shows it: its page on the web, which opens this dot, and, with the
+    /// provider's app installed, the app's Dots home, which names no dot. Each opens with the sign-in
+    /// its browser or app already has.
+    private var originalMenu: some View {
+        Menu {
+            if let page = DotsLinks.web(for: agent) {
+                Button(L10n.string("Open This Dot on the Web")) { openWeb(page) }
+            }
+            if let dotsApp {
+                Button(L10n.string("Open Dots Home in ChatGPT")) {
+                    openFailed = false
+                    original.openApp(dotsApp) { openFailed = !$0 }
+                }
+            }
+        } label: {
+            // The words name the menu to accessibility; only the symbol shows.
+            Label(L10n.string("Open in Dots"), systemImage: "arrow.up.right.square")
+                .labelStyle(.iconOnly)
+                .frame(width: 26, height: 26)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .parityPointer()
+        .help(L10n.string("Open in Dots"))
+    }
+
+    private func openWeb(_ page: URL) {
+        openFailed = !original.openWeb(page)
+    }
+
+    /// Under something Yardlet does not show yet, a way to it on the dot's page.
+    @ViewBuilder
+    private func unsupportedLink(_ message: PersonalAgentMessage) -> some View {
+        if !message.isDeleted, message.isUnsupported || message.attachments.contains(where: { !$0.opensHere }),
+           let page = DotsLinks.web(for: agent) {
+            Button(L10n.string("Open This Dot on the Web")) { openWeb(page) }
+                .buttonStyle(.link)
+                .font(.system(size: 12 * scale))
+                .parityPointer()
+        }
     }
 
     /// The top of the loaded history: earlier pages load when it comes into view, once each time, and
@@ -389,6 +513,7 @@ struct PersonalAgentConversationView: View {
                     .frame(maxWidth: ConversationLayout.sentBubbleMaximumWidth, alignment: .trailing)
                 }
                 attachments(of: message)
+                unsupportedLink(message)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .help(message.createdAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "")
@@ -399,7 +524,8 @@ struct PersonalAgentConversationView: View {
                 if startsRun {
                     HStack(spacing: 7) {
                         PersonalAgentAvatarView(name: author(message.author),
-                                                data: message.author == .agent ? avatar : nil, size: 20)
+                                                data: message.author == .agent ? avatar : nil,
+                                                sheet: message.author == .agent ? sheet : nil, plays: false, size: 20)
                         Text(author(message.author)).font(.system(size: 12.5 * scale, weight: .semibold))
                         if let time = message.createdAt {
                             Text(time.formatted(date: Calendar.current.isDateInToday(time) ? .omitted : .abbreviated,
@@ -416,6 +542,7 @@ struct PersonalAgentConversationView: View {
                         .textSelection(.enabled)
                 }
                 attachments(of: message)
+                unsupportedLink(message)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
@@ -427,7 +554,7 @@ struct PersonalAgentConversationView: View {
         if !message.isDeleted, !message.attachments.isEmpty {
             VStack(alignment: message.author == .person ? .trailing : .leading, spacing: 4) {
                 ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, attachment in
-                    if attachment.type == "file", attachment.fileID != nil {
+                    if attachment.opensHere {
                         Button { open(attachment) } label: {
                             Label(attachment.name, systemImage: "paperclip").lineLimit(1).truncationMode(.middle)
                         }
@@ -460,6 +587,7 @@ struct PersonalAgentDetailsPanel: View {
 
     let agent: PersonalAgent
     let avatar: Data?
+    var sheet: PersonalAgentSpriteSheet?
     let accountTitle: String?
     let details: PersonalAgentDetails?
     let attachments: [PersonalAgentAttachment]
@@ -507,7 +635,7 @@ struct PersonalAgentDetailsPanel: View {
 
     private var profile: some View {
         HStack(spacing: 12) {
-            PersonalAgentAvatarView(name: agent.name, data: avatar, size: 48)
+            PersonalAgentAvatarView(name: agent.name, data: avatar, sheet: sheet, size: 48)
             VStack(alignment: .leading, spacing: 3) {
                 Text(agent.name).font(.system(size: 14 * scale, weight: .semibold)).lineLimit(1)
                 if let accountTitle {

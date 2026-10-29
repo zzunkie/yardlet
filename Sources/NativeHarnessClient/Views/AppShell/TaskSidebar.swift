@@ -187,6 +187,15 @@ enum SidebarMetrics {
     }
 }
 
+/// Where the task list was read, kept by the window while another list takes its place (personal
+/// agents, scheduled tasks, archived tasks) so it comes back as it was left: scrolled to the same
+/// place, and not moved to the shown task or opening its project again unless another task is shown.
+/// Not observed: the list reads it when it appears and writes it as it scrolls.
+@MainActor final class SidebarListPlace {
+    var offset: CGFloat?
+    var selection: WindowItem?
+}
+
 /// Actions a split view's sidebar row offers, and the drops that create or grow one.
 struct SidebarSplitActions {
     var togglePinned: (SplitGroup) -> Void = { _ in }
@@ -238,7 +247,10 @@ struct TaskSidebar: View {
     /// Told when the list comes to its top or leaves it, where the shown task's place is held
     /// (`SidebarOrderHold`).
     var onListAtTopChange: (Bool) -> Void = { _ in }
+    /// Where the list was left, if the window keeps it.
+    var place: SidebarListPlace? = nil
     @FocusState private var isTaskListFocused: Bool
+    @State private var position = ScrollPosition()
     /// The row last picked in the list, which is in view: the list does not scroll to it.
     @State private var pickedInList: WindowItem?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -260,42 +272,14 @@ struct TaskSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // The new task's page is the home: its projects, the tasks that wait and the composer.
-            // ⌘N and the title bar's button keep the name New task.
-            Button(action: onNewTask) {
-                SidebarActionRow(systemName: "house", title: L10n.string("Home"), symbolWeight: .bold,
-                                 titleWeight: .medium, height: 32, isFilled: true)
-            }
-            .buttonStyle(.borderless)
-            .parityPointer()
-            .padding(.horizontal, SidebarMetrics.rowInset)
-            .accessibilitySortPriority(ParityAccessibility.sidebarPrimary)
-
-            if let onShowSchedules {
-                Button(action: onShowSchedules) {
-                    SidebarActionRow(systemName: "clock", title: L10n.string("Scheduled tasks"))
-                }
-                .buttonStyle(.borderless)
-                .parityPointer()
-                .padding(.horizontal, SidebarMetrics.rowInset)
-                .padding(.top, 2)
-                .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 0.5)
-            }
-
-            if let onShowPersonalAgents {
-                Button(action: onShowPersonalAgents) {
-                    SidebarActionRow(systemName: "person.crop.circle", title: L10n.string("Personal agents"))
-                }
-                .buttonStyle(.borderless)
-                .parityPointer()
-                .padding(.horizontal, SidebarMetrics.rowInset)
-                .padding(.top, 2)
-                .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 0.75)
-            }
+            SidebarPlacesHeader(onHome: onNewTask, onShowSchedules: onShowSchedules, section: .tasks,
+                                onSelectSection: onShowPersonalAgents.map { show -> (ShellSection) -> Void in
+                                    { section in if section == .personalAgents { show() } }
+                                })
 
             SidebarSearchField(placeholder: L10n.string("Search tasks"), text: $searchText)
                 .padding(.horizontal, SidebarMetrics.rowInset)
-            .padding(.top, 8)
+            .padding(.top, onShowPersonalAgents == nil ? 8 : 4)
             .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 1)
 
             ScrollViewReader { proxy in
@@ -353,9 +337,13 @@ struct TaskSidebar: View {
                     .padding(.top, 16)
                     .padding(.bottom, 12)
                 }
+                .scrollPosition($position)
                 // A row's hover card closes as the list scrolls under it.
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
-                    if old != new { hoverCard?.sidebarScrolled() }
+                    // A list made again first reports where it starts, which is not where it was left.
+                    guard old != new else { return }
+                    hoverCard?.sidebarScrolled()
+                    place?.offset = new
                 }
                 .onScrollGeometryChange(for: Bool.self) {
                     $0.contentOffset.y + $0.contentInsets.top <= 1
@@ -381,15 +369,24 @@ struct TaskSidebar: View {
                 // The list follows a task shown from elsewhere (the keyboard, a notification, a tab). A row
                 // picked in the list is in view already, and scrolling to it moved the list under the
                 // pointer: the lazy list scrolls to its estimate of the row's place first.
-                .onChange(of: selection, initial: true) { _, item in
+                .onChange(of: selection, initial: true) { old, item in
                     let picked = pickedInList
                     pickedInList = nil
+                    // Coming back to the task shown when the list was left: the list is where it was.
+                    // Made again for another task, the old place is no longer the list's.
+                    if old == item, place?.selection == item, let offset = place?.offset {
+                        position.scrollTo(y: offset)
+                        return
+                    }
+                    if old == item { place?.offset = nil }
                     if item != .home, item != picked { proxy.scrollTo(item) }
                 }
                 // Going to a task in a collapsed project opens the project, as the Codex app does
                 // when its sidebar sees a new current chat (also when the sidebar appears); a
                 // project collapsed around the shown task stays so until another task is shown.
-                .onChange(of: selection, initial: true) { _, item in
+                .onChange(of: selection, initial: true) { old, item in
+                    defer { place?.selection = item }
+                    guard old != item || place?.selection != item else { return }
                     guard let disclosure, item != .home,
                           let section = SidebarProjection.section(holding: item, in: layout),
                           disclosure.isCollapsed(section.disclosureKey) else { return }
@@ -1178,7 +1175,7 @@ struct SidebarRowLeading<Mark: View>: View {
     static func guideX(level: Int) -> CGFloat { indent(nestingDepth: level - 1) + SidebarMetrics.gutterWidth / 2 }
 }
 
-/// A row that acts above or below a list of tasks (New task, Scheduled tasks, Personal agents, Back, Import): its
+/// A row that acts above or below a list of tasks (Home, Scheduled tasks, Back, Import): its
 /// symbol in the rows' gutter and its words where task titles start, in the rows' size, inset from
 /// the sidebar's edges as the rows are, so every row's symbol and words share one column
 /// (2026-10-22 alignment audit). New task keeps its fill.
@@ -1205,6 +1202,79 @@ struct SidebarActionRow: View {
         .frame(height: height * interfaceScale)
         .contentShape(Rectangle())
         .background(isFilled ? ParityTheme.hoverFill : .clear, in: SidebarMetrics.rowShape())
+    }
+}
+
+/// The top of the sidebar, the same over either list: Home, Scheduled tasks and, when personal agents
+/// are on, two words that switch the list below between the tasks and the personal agents. Only the
+/// list changes; Home, Scheduled tasks and the account button stay where they are.
+struct SidebarPlacesHeader: View {
+    let onHome: () -> Void
+    var onShowSchedules: (() -> Void)?
+    /// The list shown below.
+    var section: ShellSection = .tasks
+    /// Switches the list; nil leaves the words out.
+    var onSelectSection: ((ShellSection) -> Void)?
+
+    var body: some View {
+        // The new task's page is the home: its projects, the tasks that wait and the composer.
+        // ⌘N and the title bar's button keep the name New task.
+        Button(action: onHome) {
+            SidebarActionRow(systemName: "house", title: L10n.string("Home"), symbolWeight: .bold,
+                             titleWeight: .medium, height: 32, isFilled: true)
+        }
+        .buttonStyle(.borderless)
+        .parityPointer()
+        .padding(.horizontal, SidebarMetrics.rowInset)
+        .accessibilitySortPriority(ParityAccessibility.sidebarPrimary)
+
+        if let onShowSchedules {
+            Button(action: onShowSchedules) {
+                SidebarActionRow(systemName: "clock", title: L10n.string("Scheduled tasks"))
+            }
+            .buttonStyle(.borderless)
+            .parityPointer()
+            .padding(.horizontal, SidebarMetrics.rowInset)
+            .padding(.top, 2)
+            .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 0.5)
+        }
+
+        if let onSelectSection {
+            SidebarSectionTabs(selection: section, onSelect: onSelectSection)
+                .padding(.horizontal, SidebarMetrics.projectHeaderLeading)
+                .padding(.top, 8)
+                .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 0.75)
+        }
+    }
+}
+
+/// "Tasks | Personal agents": plain words, the shown list's in the primary color over a short rule.
+struct SidebarSectionTabs: View {
+    let selection: ShellSection
+    let onSelect: (ShellSection) -> Void
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    var body: some View {
+        HStack(spacing: 14 * interfaceScale) {
+            ForEach(ShellSection.allCases) { section in
+                let isSelected = section == selection
+                Button { if !isSelected { onSelect(section) } } label: {
+                    Text(L10n.string(section == .tasks ? "Tasks" : "Personal agents"))
+                        .font(.system(size: 12 * interfaceScale, weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                        .lineLimit(1)
+                        .padding(.vertical, 5 * interfaceScale)
+                        .overlay(alignment: .bottom) {
+                            if isSelected { Capsule().fill(.primary).frame(height: 1.5) }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .parityPointer()
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+            Spacer(minLength: 0)
+        }
     }
 }
 

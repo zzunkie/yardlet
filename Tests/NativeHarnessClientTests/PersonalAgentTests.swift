@@ -10,9 +10,12 @@ final class PersonalAgentTests: XCTestCase {
     func testRoomMembershipSeparatesDotRepliesFromPeopleAndPaginationKeepsIdentity() throws {
         let agent = fixtureAgent()
         let room = try value(#"{"id":"room","aeon_id":"dot","members":[{"account_user_id":"person","name":"Person","role":"user"},{"account_user_id":"dot-member","name":"Atlas","role":"user","aeon_id":"dot"}]}"#)
-        let page = try value(#"{"items":[{"id":"m1","role":"user","account_user_id":"person","created_at":"2026-10-01T09:00:00Z","content":{"text":"Prepare a draft.","attachments":[]}},{"id":"m2","role":"user","account_user_id":"dot-member","created_at":"2026-10-01T09:01:00Z","content":{"text":"The draft is ready.","attachments":[{"file":{"id":"report","file_name":"report.txt"}}]}}],"prev_cursor":null}"#)
+        let page = try value(#"{"items":[{"id":"m1","role":"user","account_user_id":"person","created_at":"2026-10-01T09:00:00Z","content":{"text":"Prepare a draft.","attachments":[]}},{"id":"m2","role":"user","account_user_id":"dot-member","created_at":"2026-10-01T09:01:00Z","content":{"text":"The draft is ready.","attachments":[{"file":{"id":"report","file_name":"report.txt"}}]}},{"id":"m3","role":"user","account_user_id":"dot-member","created_at":"2026-10-01T09:02:00Z","content":{"text":"","attachments":[]}}],"prev_cursor":null}"#)
         let result = try DotsProjection.messages(page, room: room, agent: agent)
-        XCTAssertEqual(result.messages.map(\.author), [.person, .agent])
+        XCTAssertEqual(result.messages.map(\.author), [.person, .agent, .agent])
+        // What Yardlet cannot show yet is marked so, not told by its words.
+        XCTAssertEqual(result.messages.map(\.isUnsupported), [false, false, true])
+        XCTAssertEqual(result.messages[1].attachments.map(\.opensHere), [true])
         XCTAssertEqual(result.before, "m1")
         XCTAssertEqual(result.messages[1].attachments, [.init(fileID: "report", name: "report.txt", type: "file")])
         let changedAccount = fixtureAgent(account: "different-account")
@@ -22,16 +25,31 @@ final class PersonalAgentTests: XCTestCase {
 
         let edited = PersonalAgentMessage(id: "m2", author: .agent, text: "", createdAt: nil, isDeleted: true, attachments: [])
         let merged = DotsProjection.merge(result.messages, with: [edited], older: false)
-        XCTAssertEqual(merged.count, 2)
+        XCTAssertEqual(merged.count, 3)
         XCTAssertTrue(merged[1].isDeleted)
         XCTAssertEqual(merged[0].id, "m1")
 
         // A profile's picture is its HTTPS snapshot, versioned by content; asset pointers are not URLs.
-        let profiles = try value(#"{"items":[{"id":"dot","aeon_kind":"orbit","messaging_room_id":"room","display_name":"Atlas","avatar_url":"https://files.oaiusercontent.com/avatar?sig=example","avatar_manifest":{"snapshot":{"asset_pointer":"sediment://file_a","content_sha256":"abc"}}},{"id":"dot-2","aeon_kind":"orbit","messaging_room_id":"room-2","avatar_url":"sediment://file_b"}]}"#)
+        let profiles = try value(#"{"items":[{"id":"dot","aeon_kind":"orbit","messaging_room_id":"room","display_name":"Atlas","avatar_url":"https://files.oaiusercontent.com/avatar?sig=example","avatar_manifest":{"pet_id":"pet","snapshot":{"asset_pointer":"sediment://file_a","content_sha256":"abc"}}},{"id":"dot-2","aeon_kind":"orbit","messaging_room_id":"room-2","avatar_url":"sediment://file_b"}]}"#)
         let agents = try DotsProjection.agents(catalog: profiles, primary: .object([:]), accountID: "account", userID: "person")
         XCTAssertEqual(agents[0].avatar?.version, "abc")
         XCTAssertNil(agents[1].avatar)
         XCTAssertFalse(String(describing: agents[0]).contains("sig="), "A signed picture URL never reaches a description")
+        // The dot's own page names its profile identity as one escaped path component, nothing else;
+        // the app's Dots home is the one address the app takes.
+        XCTAssertEqual(DotsLinks.web(for: agents[0])?.absoluteString, "https://chatgpt.com/dots/dot")
+        let composite = PersonalAgent(id: .init(accountID: "account", userID: "person", agentID: "example-account~example dot/2", roomID: "room"),
+                                      name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        XCTAssertEqual(DotsLinks.web(for: composite)?.absoluteString, "https://chatgpt.com/dots/example-account~example%20dot%2F2")
+        XCTAssertEqual(DotsLinks.appHome.absoluteString, "codex://dots")
+        // The animated form is the pet the manifest names, read from the account's pets; the snapshot's
+        // hash says nothing about the sheet, whose version is its artwork revision and last change.
+        XCTAssertEqual(agents.map(\.petID), ["pet", nil])
+        let petPage = try DotsProjection.pets(value(#"{"pets":[{"id":"pet","artwork_revision":"3","updated_at":"2026-10-29T06:00:00Z","spritesheet_url":"https://files.oaiusercontent.com/sheet?sig=example"},{"id":"pet-2","spritesheet_url":null},{"id":"pet-3","spritesheet_url":"http://files.oaiusercontent.com/sheet"}],"cursor":"next"}"#))
+        XCTAssertEqual(petPage.pets.map(\.id), ["pet"])
+        XCTAssertEqual(petPage.pets[0].version, "3|2026-10-29T06:00:00Z")
+        XCTAssertEqual(petPage.cursor, "next")
+        XCTAssertFalse(String(describing: petPage.pets[0]).contains("sig="), "A signed sheet URL never reaches a description")
 
         // Activity keeps the provider's order and its unknowns; it is not the thread list.
         let activity = try DotsProjection.activity(value(#"{"data":[{"thread_id":"a","title":"Weekly report","status":"completed","outcome":"succeeded","updated_at":1793200300},{"thread_id":"b","title":"Call notes","status":"completed","outcome":"interrupted","updated_at":1793200900},{"thread_id":"c","status":"in_progress","updated_at":1793200000},{"thread_id":"d","status":null,"updated_at":1793200600}],"next_cursor":"next"}"#))
@@ -130,6 +148,70 @@ final class PersonalAgentTests: XCTestCase {
         await delayed.release()
         await pending.value
         XCTAssertEqual(center.selectedID, replacement.id)
+        await center.disconnect()
+    }
+
+    /// Whatever keeps a dot's pet from playing leaves its still picture, and nothing of an earlier pet,
+    /// version or account plays on; the next connection reads the pet and its sheet again.
+    func testAPetThatCannotPlayLeavesTheSnapshotUntilTheNextConnection() async throws {
+        let center = PersonalAgentCenter()
+        var dot = fixtureAgent()
+        dot.petID = "pet"
+        let plain = PersonalAgent(id: .init(accountID: "account", userID: "person", agentID: "dot-2", roomID: "room-2"),
+                                  name: "Juniper", rootThreadID: nil, isPaused: false, isPrimary: false)
+        let reader = FixturePersonalAgentReader(agents: [dot, plain])
+        func pet(_ version: String) -> PersonalAgentPet {
+            .init(id: "pet", location: "https://files.oaiusercontent.com/sheet", version: version)
+        }
+        func reconnect(_ pets: [PersonalAgentPet], failure: PersonalAgentFailure? = nil,
+                       petFailure: PersonalAgentFailure? = nil) async {
+            await reader.usePets(pets, sheetFailure: failure, petFailure: petFailure)
+            await center.connect(sourceKey: "account") { reader }
+        }
+        let shown = { center.spriteSheet(for: dot)?.version }
+
+        // A sheet the storage refuses: the snapshot stays; a dot without a pet is not looked up.
+        await reconnect([pet("v1")], failure: .attachmentUnavailable)
+        try await waitUntil { await reader.sheetReads == 1 }
+        XCTAssertNil(shown())
+        XCTAssertNil(center.spriteSheet(for: plain))
+        let lookups = await reader.petReads
+        XCTAssertEqual(lookups, 1)
+        // The next connection reads the pet and its sheet again.
+        await reconnect([pet("v1")])
+        try await waitUntil { shown() == "v1" }
+        let first = try XCTUnwrap(center.spriteSheet(for: dot))
+        await reconnect([pet("v1")])
+        try await waitUntil { await reader.petReads == 3 }
+        XCTAssertTrue(center.spriteSheet(for: dot) === first, "The same version is not read again")
+        // A new version that cannot be read, or a pet gone, does not leave the old one playing.
+        await reconnect([pet("v2")], failure: .attachmentUnavailable)
+        try await waitUntil { shown() == nil }
+        await reconnect([pet("v2")])
+        try await waitUntil { shown() == "v2" }
+        await reconnect([])
+        try await waitUntil { shown() == nil }
+        // A passing failure to read the pets keeps the pet playing.
+        await reconnect([pet("v1")])
+        try await waitUntil { shown() == "v1" }
+        var reads = await reader.petReads
+        await reconnect([], petFailure: .network)
+        try await waitUntil { await reader.petReads == reads + 1 }
+        XCTAssertEqual(shown(), "v1")
+        // A pet read that finds another login clears the whole reading, as the details do.
+        reads = await reader.petReads
+        await reconnect([], petFailure: .accountChanged)
+        try await waitUntil { await reader.petReads == reads + 1 }
+        try await waitUntil { center.failure == .accountChanged }
+        XCTAssertTrue(center.agents.isEmpty)
+        XCTAssertNil(center.selectedID)
+        XCTAssertNil(center.conversation)
+        XCTAssertNil(shown())
+        // Another account keeps nothing of this one's.
+        await reconnect([pet("v1")])
+        try await waitUntil { shown() == "v1" }
+        await center.connect(sourceKey: "another-account") { FixturePersonalAgentReader(agents: [dot]) }
+        XCTAssertNil(shown())
         await center.disconnect()
     }
 
@@ -379,6 +461,27 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
         throw PersonalAgentFailure.attachmentUnavailable
     }
     func avatar(for agent: PersonalAgent) async throws -> Data { throw PersonalAgentFailure.attachmentUnavailable }
+    private var pets: [String: PersonalAgentPet] = [:]
+    private var sheetFailure: PersonalAgentFailure?
+    private var petFailure: PersonalAgentFailure?
+    private(set) var petReads = 0
+    private(set) var sheetReads = 0
+    func usePets(_ value: [PersonalAgentPet], sheetFailure: PersonalAgentFailure? = nil,
+                 petFailure: PersonalAgentFailure? = nil) {
+        pets = Dictionary(uniqueKeysWithValues: value.map { ($0.id, $0) })
+        self.sheetFailure = sheetFailure
+        self.petFailure = petFailure
+    }
+    func pet(_ id: String, for agent: PersonalAgent) async throws -> PersonalAgentPet? {
+        petReads += 1
+        if let petFailure { throw petFailure }
+        return pets[id]
+    }
+    func spriteSheet(_ pet: PersonalAgentPet, for agent: PersonalAgent) async throws -> Data {
+        sheetReads += 1
+        if let sheetFailure { throw sheetFailure }
+        return Data(pet.version.utf8)
+    }
     private var activityPages: [String: PersonalAgentActivityPage] = [:]
     private var heldActivityCursor: String?
     private var pendingActivity: CheckedContinuation<Void, Never>?

@@ -83,6 +83,13 @@ final class PersonalAgentLiveTests: XCTestCase {
                 let decoded = await MainActor.run { PersonalAgentAvatarView.decode(picture) != nil }
                 XCTAssertTrue(decoded, "The profile picture is a bounded image")
             }
+            // The pet the profile names, found among the account's pets, has a sheet of a known size.
+            if let petID = agent.petID {
+                let found = try await reader.pet(petID, for: agent)
+                let pet = try XCTUnwrap(found, "The profile's pet is among the account's pets")
+                let sheet = try await reader.spriteSheet(pet, for: agent)
+                XCTAssertNotNil(PersonalAgentSpriteFrames(data: sheet), "The pet's sheet is one the window plays")
+            }
             let activity = try await reader.activity(for: agent, cursor: nil)
             XCTAssertEqual(Set(activity.items.map(\.id)).count, activity.items.count)
             let schedules = try await reader.schedules(for: agent)

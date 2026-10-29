@@ -3108,6 +3108,10 @@
 /* Personal agents */
 "This message cannot be displayed yet." = "이 메시지는 아직 표시할 수 없습니다.";
 "Personal agents" = "개인 에이전트";
+"Open in Dots" = "Dots에서 열기";
+"Open This Dot on the Web" = "웹에서 이 Dot 열기";
+"Open Dots Home in ChatGPT" = "ChatGPT 앱에서 Dots 홈 열기";
+"Dots could not be opened." = "Dots를 열지 못했습니다.";
 "ChatGPT account" = "ChatGPT 계정";
 "Refresh personal agents" = "개인 에이전트 새로고침";
 "Accounts…" = "계정…";

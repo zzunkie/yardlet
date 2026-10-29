@@ -1,7 +1,7 @@
 #if DEBUG
 /// How often the window's widest views worked out their bodies: the window itself, each sidebar
-/// row, and each composer. Plain counters the redraw tests read while a task streams; off unless a
-/// test turns them on, and absent from release builds.
+/// row, each composer, and a dot's picture. Plain counters the redraw tests read while a task
+/// streams or a pet plays; off unless a test turns them on, and absent from release builds.
 @MainActor
 enum ViewBodyCensus {
     enum Body: Hashable, Sendable {
@@ -12,6 +12,8 @@ enum ViewBodyCensus {
         case conversationTurn
         /// A conversation turn's hosting view made, not found kept with its task.
         case conversationTurnHosting
+        /// A dot's picture, which plays its pet on a layer without being worked out again.
+        case personalAgentAvatar
     }
 
     static var isEnabled = false

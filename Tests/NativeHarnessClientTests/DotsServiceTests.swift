@@ -72,10 +72,34 @@ final class DotsServiceTests: XCTestCase {
         pictured.avatar = .init(location: "https://example.com/avatar", version: "v1")
         do { _ = try await service.avatar(for: pictured); XCTFail("Only provider hosts serve pictures") }
         catch { XCTAssertEqual(error as? PersonalAgentFailure, .attachmentUnavailable) }
+        // The pet a profile names is looked for page by page; its sheet is read as the picture is.
+        let found = try await service.pet("pet", for: agent)
+        let pet = try XCTUnwrap(found)
+        XCTAssertEqual(fixture.requests.filter { $0.url?.path == "/backend-api/pets" }.count, 2)
+        let sheetData = try await service.spriteSheet(pet, for: agent)
+        XCTAssertEqual(sheetData, Data("PNG".utf8))
+        let sheet = try XCTUnwrap(fixture.requests.first { $0.url?.path == "/sheet" })
+        XCTAssertNil(sheet.value(forHTTPHeaderField: "Authorization"), "A signed sheet is read without the account token")
+        let missing = try await service.pet("another", for: agent)
+        XCTAssertNil(missing)
+        // One of the provider's own pets, whose sheet is on its public CDN, is read the same way.
+        let builtIn = PersonalAgentPet(id: "built-in", location: "https://cdn.openai.com/pets/example/sheet.png", version: "1")
+        let builtInData = try await service.spriteSheet(builtIn, for: agent)
+        XCTAssertEqual(builtInData, Data("PNG".utf8))
+        let cdn = try XCTUnwrap(fixture.requests.first { $0.url?.host == "cdn.openai.com" })
+        XCTAssertNil(cdn.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(cdn.value(forHTTPHeaderField: "ChatGPT-Account-Id"))
+        // Storage that refuses or no longer has the sheet leaves the still picture.
+        for status in [403, 404] {
+            let refused = PersonalAgentPet(id: "pet", location: "https://files.oaiusercontent.com/sheet-\(status)", version: "2")
+            do { _ = try await service.spriteSheet(refused, for: agent); XCTFail("A \(status) sheet is not read") }
+            catch { XCTAssertEqual(error as? PersonalAgentFailure, .attachmentUnavailable) }
+        }
         XCTAssertTrue(try DotsAttachmentLocation("/estuary/content?id=file").authenticated)
         for raw in ["http://files.oaiusercontent.com/file", "https://chatgpt.com.evil.test/backend-api/files/a",
                     "https://chatgpt.com/backend-api/tbo", "https://127.0.0.1/file", "file:///etc/passwd",
-                    "https://user:password@files.oaiusercontent.com/file"] {
+                    "https://user:password@files.oaiusercontent.com/file", "https://cdn.openai.com.evil.test/sheet.png",
+                    "https://images.cdn.openai.com/sheet.png", "http://cdn.openai.com/sheet.png"] {
             XCTAssertThrowsError(try DotsAttachmentLocation(raw))
         }
         await service.stop()
@@ -118,7 +142,14 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
             }
             recorded.append(request)
             if request.url?.host == "files.oaiusercontent.com" {
-                return (200, Data((request.url?.path == "/avatar" ? "PNG" : "Preview text").utf8))
+                if let status = ["/sheet-403": 403, "/sheet-404": 404][request.url?.path ?? ""] { return (status, Data()) }
+                return (200, Data((["/avatar", "/sheet"].contains(request.url?.path) ? "PNG" : "Preview text").utf8))
+            }
+            if request.url?.host == "cdn.openai.com" { return (200, Data("PNG".utf8)) }
+            if request.url?.path == "/backend-api/pets" {
+                return (200, Data((request.url?.query?.contains("cursor=next") == true
+                    ? #"{"pets":[{"id":"pet","artwork_revision":"2","updated_at":"2026-10-29T06:00:00Z","spritesheet_url":"https://files.oaiusercontent.com/sheet"}]}"#
+                    : #"{"pets":[{"id":"other","spritesheet_url":"https://files.oaiusercontent.com/other"}],"cursor":"next"}"#).utf8))
             }
             if request.url?.path.hasSuffix("/files/file") == true {
                 return (200, Data(#"{"name":"report.txt","download_url":"https://files.oaiusercontent.com/file"}"#.utf8))
@@ -143,7 +174,8 @@ private final class DotsHTTPProtocol: URLProtocol, @unchecked Sendable {
         guard let fixture = Self.current else { client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return }
         let (status, data) = fixture.respond(request)
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil,
-                                       headerFields: ["Content-Type": request.url?.path == "/avatar" ? "image/png" : "application/json",
+                                       headerFields: ["Content-Type": ["/avatar", "/sheet"].contains(request.url?.path) || request.url?.host == "cdn.openai.com"
+                                                          ? "image/png" : "application/json",
                                                       "Content-Length": String(data.count)])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)

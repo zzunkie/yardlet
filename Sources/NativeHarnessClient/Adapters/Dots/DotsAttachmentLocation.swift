@@ -16,7 +16,8 @@ struct DotsAttachmentLocation {
         if host == "chatgpt.com", value.path.hasPrefix("/backend-api/estuary/") || value.path.hasPrefix("/backend-api/files/") {
             authenticated = true
         } else if host == "files.oaiusercontent.com" || host.hasSuffix(".oaiusercontent.com")
-                    || host.hasSuffix(".blob.core.windows.net") {
+                    || host.hasSuffix(".blob.core.windows.net") || host == "cdn.openai.com" {
+            // The provider's own pets' sheets are public files on its CDN; that exact host, no other.
             authenticated = false
         } else { throw PersonalAgentFailure.attachmentUnavailable }
         url = value

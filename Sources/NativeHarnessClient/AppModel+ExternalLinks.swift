@@ -23,12 +23,16 @@ extension AppModel {
         for (urls, elsewhere) in pending { openExternalLinks(urls, elsewhere: elsewhere) }
     }
 
+    /// A page opened in a panel brings the window's tasks back into view, from personal agents or
+    /// scheduled tasks, as opening a task from a notification does; a link sent elsewhere leaves it.
     private func openExternalLink(_ url: URL, elsewhere: @MainActor (URL) -> Void) {
         if let task = splits.focusedSessionID, store.sessions.contains(where: { $0.id == task }),
            taskWorkspaces.state(for: task).openBrowserPage(url) {
+            taskSurfaceRevealRequest += 1
             return
         }
         guard taskWorkspaces.draft.openBrowserPage(url) else { return elsewhere(url) }
         if splits.selection != .home { splits.newTab() }
+        taskSurfaceRevealRequest += 1
     }
 }

@@ -62,6 +62,9 @@ final class PersonalAgentCenter {
     private var avatarData: [AvatarKey: Data] = [:]
     @ObservationIgnored private var unavailableAvatars: Set<AvatarKey> = []
     @ObservationIgnored private var avatarTask: Task<Void, Never>?
+    /// Sprite sheets read in this window, by pet; each carries its version. Memory only.
+    private var spriteSheets: [String: PersonalAgentSpriteSheet] = [:]
+    @ObservationIgnored private var unavailableSprites: Set<String> = []
 
     private struct AvatarKey: Hashable {
         let identity: PersonalAgentIdentity
@@ -75,6 +78,11 @@ final class PersonalAgentCenter {
     /// The picture read for `agent`'s current profile, if any; the view decodes and bounds it.
     func avatar(for agent: PersonalAgent) -> Data? {
         agent.avatar.flatMap { avatarData[AvatarKey(identity: agent.id, version: $0.version)] }
+    }
+
+    /// The sheet read for the pet `agent`'s profile names, if any; the view decodes and bounds it.
+    func spriteSheet(for agent: PersonalAgent) -> PersonalAgentSpriteSheet? {
+        agent.petID.flatMap { spriteSheets[$0] }
     }
 
     init(drafts: PersonalAgentDrafts = PersonalAgentDrafts()) { self.drafts = drafts }
@@ -108,6 +116,7 @@ final class PersonalAgentCenter {
             }
             // A new connection rereads the profiles, whose signed picture locations may be new.
             unavailableAvatars = []
+            unavailableSprites = []
             loadAvatars(values, from: reader, generation: current)
             await showSelected()
         } catch {
@@ -295,6 +304,46 @@ final class PersonalAgentCenter {
                     self.unavailableAvatars.insert(key)
                 }
             }
+            // The animated forms after every still picture: a dot without one keeps its picture.
+            await self?.loadSpriteSheets(values, from: reader, generation: current)
+        }
+    }
+
+    private static func endsTheLogin(_ error: Error) -> Bool {
+        let failure = error as? PersonalAgentFailure
+        return failure == .accountChanged || failure == .signInRequired
+    }
+
+    private func loadSpriteSheets(_ values: [PersonalAgent], from reader: any PersonalAgentClient, generation current: Int) async {
+        var looked = Set<String>()
+        for agent in values {
+            // Dots that share a pet share its sheet.
+            guard let id = agent.petID, looked.insert(id).inserted else { continue }
+            let pet: PersonalAgentPet?
+            do { pet = try await reader.pet(id, for: agent) } catch {
+                guard generation == current, !Task.isCancelled else { return }
+                // Another login clears the whole reading, as the details do; a passing failure keeps
+                // what is shown, as reconnecting does.
+                if Self.endsTheLogin(error) { return accept(error) }
+                continue
+            }
+            guard generation == current, !Task.isCancelled else { return }
+            // A pet gone, or one without a sheet to read, leaves the still picture.
+            guard let pet else { spriteSheets[id] = nil; continue }
+            let key = id + "|" + pet.version
+            guard spriteSheets[id]?.version != pet.version else { continue }
+            // A new version that cannot be read does not leave the old one playing.
+            spriteSheets[id] = nil
+            guard !unavailableSprites.contains(key) else { continue }
+            do {
+                let data = try await reader.spriteSheet(pet, for: agent)
+                guard generation == current, !Task.isCancelled else { return }
+                spriteSheets[id] = PersonalAgentSpriteSheet(data: data, version: pet.version)
+            } catch {
+                guard generation == current else { return }
+                if Self.endsTheLogin(error) { return accept(error) }
+                unavailableSprites.insert(key)
+            }
         }
     }
 
@@ -376,6 +425,8 @@ final class PersonalAgentCenter {
         detailsByAgent = [:]
         avatarData = [:]
         unavailableAvatars = []
+        spriteSheets = [:]
+        unavailableSprites = []
         hasLoaded = false
         failure = nil
     }
@@ -389,6 +440,8 @@ final class PersonalAgentCenter {
             detailsByAgent = [:]
             avatarData = [:]
             unavailableAvatars = []
+            spriteSheets = [:]
+            unavailableSprites = []
         }
         failure = value
     }

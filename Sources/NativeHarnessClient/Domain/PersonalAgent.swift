@@ -1,7 +1,7 @@
 import Foundation
 
-/// What a window's sidebar and content show: the coding tasks, or the personal agents opened from the
-/// task list's row below Scheduled tasks.
+/// What a window's sidebar and content show: the coding tasks, or the personal agents, switched by the
+/// words below Scheduled tasks.
 enum ShellSection: String, CaseIterable, Identifiable {
     case tasks, personalAgents
     var id: Self { self }
@@ -23,6 +23,63 @@ struct PersonalAgent: Identifiable, Equatable, Sendable {
     let isPaused: Bool
     let isPrimary: Bool
     var avatar: PersonalAgentAvatar? = nil
+    /// The pet whose sprite sheet is the dot's animated form, as its profile's avatar manifest names it.
+    var petID: String? = nil
+}
+
+/// A pet as the account's pet list names it. The sheet location is a signed provider URL: only the
+/// transport reads it, and it never appears in a description, a log or a saved file.
+struct PersonalAgentPet: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+    let id: String
+    let location: String
+    /// What tells one sheet from the next: the pet's artwork revision and when it last changed.
+    let version: String
+
+    var description: String { "PersonalAgentPet(\(version))" }
+    var debugDescription: String { description }
+}
+
+/// A dot's sprite sheet as read, one per pet version in a window, shared by every view that shows the
+/// dot. Its identity is what the screen's decoding of it is kept by, and released with.
+final class PersonalAgentSpriteSheet: Sendable {
+    let data: Data
+    let version: String
+
+    init(data: Data, version: String) {
+        self.data = data
+        self.version = version
+    }
+}
+
+/// How a pet's sheet is laid out: eight 192 x 208 cells across, a row per motion, nine rows in the
+/// first version of the sheet and eleven in the second. A dot shows two of them.
+enum PersonalAgentSpriteLayout {
+    static let columns = 8
+    static let cellWidth = 192
+    static let cellHeight = 208
+    static let sheetWidth = columns * cellWidth
+    static let sheetHeights: Set<Int> = [9 * cellHeight, 11 * cellHeight]
+    /// The most the pet is enlarged to fill its frame.
+    static let maximumScale = 1.5
+
+    enum Motion: CaseIterable, Sendable {
+        case idle, working
+
+        var row: Int {
+            switch self {
+            case .idle: 0
+            case .working: 7
+            }
+        }
+
+        /// Each frame's time on screen, in seconds, left to right from the row's first cell.
+        var durations: [Double] {
+            switch self {
+            case .idle: [1.68, 0.66, 0.66, 0.84, 0.84, 1.92]
+            case .working: [0.12, 0.12, 0.12, 0.12, 0.12, 0.22]
+            }
+        }
+    }
 }
 
 /// A dot's static picture as its profile names it. The location is a signed provider URL: only the
@@ -80,12 +137,38 @@ struct PersonalAgentMessage: Identifiable, Equatable, Sendable {
     let isDeleted: Bool
     let attachments: [PersonalAgentAttachment]
     var requestID: String? = nil
+    /// The provider sent something here that Yardlet does not show yet; the dot's own page does.
+    var isUnsupported = false
 }
 
 struct PersonalAgentAttachment: Equatable, Sendable {
     let fileID: String?
     let name: String
     let type: String
+
+    /// A file Yardlet can read and preview; any other attachment is named only.
+    var opensHere: Bool { type == "file" && fileID != nil }
+}
+
+/// Where a dot's own surfaces are, outside Yardlet: the dot's page on the provider's website, and the
+/// Dots home of the provider's app, which names no dot. Neither transfers a credential or switches the
+/// sign-in where it opens: each opens with whatever sign-in its browser or app already has.
+enum DotsLinks {
+    static let appBundleIdentifier = "com.openai.codex"
+    /// The app takes exactly this address, with nothing after it.
+    static let appHome = URL(string: "codex://dots")!
+
+    /// The dot's page, its profile identity as one escaped path component.
+    static func web(for agent: PersonalAgent) -> URL? {
+        let id = agent.id.agentID
+        guard !id.isEmpty, let component = id.addingPercentEncoding(withAllowedCharacters: componentCharacters)
+        else { return nil }
+        return URL(string: "https://chatgpt.com/dots/" + component)
+    }
+
+    /// What a URI component keeps unescaped (`encodeURIComponent`).
+    private static let componentCharacters = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
 }
 
 struct PersonalAgentSubmission: Codable, Equatable, Sendable {
@@ -146,6 +229,10 @@ protocol PersonalAgentClient: Actor {
     func download(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> PersonalAgentDownload
     /// The bytes of the dot's profile picture, bounded; never read with an account credential on storage hosts.
     func avatar(for agent: PersonalAgent) async throws -> Data
+    /// The pet `id` among the account's, which a dot's profile names; nil when the account has none such.
+    func pet(_ id: String, for agent: PersonalAgent) async throws -> PersonalAgentPet?
+    /// The bytes of a pet's sprite sheet, bounded and read as the picture is.
+    func spriteSheet(_ pet: PersonalAgentPet, for agent: PersonalAgent) async throws -> Data
     func activity(for agent: PersonalAgent, cursor: String?) async throws -> PersonalAgentActivityPage
     func schedules(for agent: PersonalAgent) async throws -> [PersonalAgentSchedule]
     func computers(for agent: PersonalAgent) async throws -> [PersonalAgentComputer]
@@ -164,7 +251,31 @@ enum DotsProjection {
             return PersonalAgent(id: .init(accountID: accountID, userID: userID, agentID: id, roomID: room),
                 name: item["display_name"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 } ?? "Dots",
                 rootThreadID: item["active_root_thread_id"]?.stringValue,
-                isPaused: item["is_paused"] == .bool(true), isPrimary: id == selected, avatar: avatar(item))
+                isPaused: item["is_paused"] == .bool(true), isPrimary: id == selected, avatar: avatar(item),
+                petID: item["avatar_manifest"]?["pet_id"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 })
+        }
+    }
+
+    /// A page of the account's pets that have a sheet to read: an HTTPS location, versioned by its
+    /// artwork revision and last change.
+    static func pets(_ page: JSONValue) throws -> (pets: [PersonalAgentPet], cursor: String?) {
+        guard case let .array(items)? = page["pets"] else { throw PersonalAgentFailure.invalidResponse }
+        let pets = items.compactMap { item -> PersonalAgentPet? in
+            guard let id = item["id"]?.stringValue, !id.isEmpty,
+                  let raw = item["spritesheet_url"]?.stringValue, URL(string: raw)?.scheme == "https" else { return nil }
+            let revision = item["artwork_revision"].map(versionPart) ?? ""
+            let updated = item["updated_at"].map(versionPart) ?? ""
+            return .init(id: id, location: raw, version: revision + "|" + updated)
+        }
+        return (pets, page["cursor"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 })
+    }
+
+    private static func versionPart(_ value: JSONValue) -> String {
+        switch value {
+        case let .string(text): text
+        case let .integer(number): String(number)
+        case let .number(number): String(number)
+        default: ""
         }
     }
 
@@ -281,12 +392,11 @@ enum DotsProjection {
                           type: value["type"]?.stringValue ?? (fileID == nil ? "unknown" : "file"))
                 }
             } else { attachments = [] }
-            if !deleted, text.isEmpty, attachments.isEmpty {
-                text = L10n.string("This message cannot be displayed yet.")
-            }
+            let unsupported = !deleted && text.isEmpty && attachments.isEmpty
+            if unsupported { text = L10n.string("This message cannot be displayed yet.") }
             return PersonalAgentMessage(id: id, author: author, text: deleted ? "" : text,
                 createdAt: date(item["created_at"]?.stringValue), isDeleted: deleted, attachments: deleted ? [] : attachments,
-                requestID: item["request_id"]?.stringValue)
+                requestID: item["request_id"]?.stringValue, isUnsupported: unsupported)
         }
         guard Set(messages.map(\.id)).count == messages.count else { throw PersonalAgentFailure.invalidResponse }
         // The provider's room client also uses the oldest item when prev_cursor

@@ -1,23 +1,37 @@
 # Personal agents
 
-**Personal agents**, below **Scheduled tasks** in the sidebar, replaces the task
-list with your existing cloud agents, as Scheduled tasks does; the row at its top
-returns to the tasks, where Home, Scheduled tasks and Personal agents are. Opening
-it retains each conversation's reading position and leaves the selected coding
-task, draft and panels unchanged.
+Below **Scheduled tasks** in the sidebar, the words **Tasks** and **Personal
+agents** switch the list under them between your projects and tasks and your
+existing cloud agents. Home, Scheduled tasks and the account button stay where they
+are; task search is shown only with the tasks. Switching retains each
+conversation's reading position, and the task list comes back scrolled and folded
+as it was left, with the selected coding task, draft and panels unchanged.
 
-The first provider is ChatGPT dots. Choose an existing Codex account in the account
-menu above the agent list. Its runtime-owned ChatGPT login is used for Dots;
+The first provider is ChatGPT dots. The account the dots are read from heads the
+agent list, as Projects heads the tasks; with several Codex accounts it is a menu
+of them. Its runtime-owned ChatGPT login is used for Dots;
 Yardlet does not create a dot or a coding session to represent it. An agent's
 account, user, profile, messaging room and root coding thread are separate identities.
 
 ## Reading
 
-The native conversation shows text and attachments, with the dot's picture: the
-static snapshot its profile names, not its animated form. The picture is read
-without the account credential from the provider's signed storage, bounded in size,
-kept in memory only and dropped when the account changes; until it arrives, or if
-it cannot be read, the dot's initial stands in.
+The native conversation shows text and attachments, with the dot's picture. In the
+agent list, the conversation's header and the dot's details, the picture is the
+dot's pet moving as it does in the provider's app: the pet its profile names, read
+from the account's pets, plays its idle motion. Beside each message and with Reduce
+Motion on, the same pet holds the motion's first frame. Until the pet's sheet is
+read, or without one, the picture is the still snapshot the profile names. Only a
+sheet of the provider's known sizes is shown, and only its two rows the dot uses
+are kept. The pet plays only while its window is on screen and uncovered, not
+scrolled out of its list, and Yardlet is the active app; otherwise its layer
+animation stops on a still frame. A pet that is gone, a sheet
+that cannot be read and a sheet of another size leave the still snapshot; the next
+connection reads the pet and its sheet again.
+
+Pictures and sheets are read without the account credential from the provider's
+signed storage, bounded in size, kept in memory only and dropped when the account
+changes; until a picture arrives, or if it cannot be read, the dot's initial stands
+in.
 
 The conversation opens on the latest page of the room. Reaching its top reads the
 next earlier page once, keeping the message you were reading in place; a failure
@@ -27,6 +41,20 @@ receipt. File attachments open in a native preview, with an explicit save action
 Other attachment types are named but cannot be opened here yet. Uploading
 attachments, reacting, answering approvals, pausing an agent and changing its
 settings are not implemented.
+
+## Opening the dot where the provider shows it
+
+**Open in Dots**, in the conversation's header, offers **Open This Dot on the Web**,
+the dot's own page on the provider's website, and, where the provider's app is
+installed, **Open Dots Home in ChatGPT**. The app takes only its Dots home, not a
+particular dot, so the two are named for where they go. A message or attachment
+Yardlet does not show yet has a link under it to the dot's page. Nothing is opened
+until the person chooses it. The page opens as any web link in a conversation
+does, in the Mac's default browser; the app is found by its identifier, wherever
+it is installed. Either uses the sign-in its browser or app already has: no
+credential is transferred and no destination account is switched. The app's current
+account may be another than the one chosen in Yardlet. Opening confirms only that the address was
+handed on; a failure says so under the conversation.
 
 ## Dot details
 
@@ -49,7 +77,7 @@ schedule or changes the dot.
 While the personal-agent section is open, a native WebSocket subscription
 invalidates the displayed conversation when its room changes. Reconnection reads
 the displayed range again, including edits, deletions and any missing pages.
-Going back to the tasks or closing the window stops the window's connection;
+Switching back to the tasks or closing the window stops the window's connection;
 existing cloud work continues independently.
 
 The reading cache is in memory only. It is scoped to the chosen runtime/account
@@ -83,7 +111,8 @@ beside the draft file. Those backups remain until the person removes them.
 
 Background changes to the coding-task index do not switch this section. Explicit
 task navigation from a notification, the menu bar, the resource window or an
-import sheet reveals Tasks; so does importing one conversation from the import
+import sheet reveals Tasks, as does a link another app opens with Yardlet when it
+shows in a task's browser panel; so does importing one conversation from the import
 sheet, while a batch import from other apps leaves the window where it is. Back and
 forward move through the task history only while Tasks is shown.
 

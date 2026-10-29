@@ -115,6 +115,32 @@ actor DotsService: PersonalAgentClient {
         return data
     }
 
+    func pet(_ id: String, for agent: PersonalAgent) async throws -> PersonalAgentPet? {
+        try await verify(agent)
+        var cursor: String?, seen = Set<String>(), count = 0
+        repeat {
+            var query = [URLQueryItem(name: "limit", value: "20")]
+            if let cursor { query.append(.init(name: "cursor", value: cursor)) }
+            let page = try DotsProjection.pets(try await read("/pets", query: query))
+            if let pet = page.pets.first(where: { $0.id == id }) {
+                try await verify(agent)
+                return pet
+            }
+            cursor = page.cursor
+            count += page.pets.count
+            if let cursor, !seen.insert(cursor).inserted { throw PersonalAgentFailure.invalidResponse }
+            guard count <= 1_000, seen.count <= 100 else { throw PersonalAgentFailure.invalidResponse }
+        } while cursor != nil
+        return nil
+    }
+
+    func spriteSheet(_ pet: PersonalAgentPet, for agent: PersonalAgent) async throws -> Data {
+        try await verify(agent)
+        let data = try await fetch(DotsAttachmentLocation(pet.location), limit: 20 * 1024 * 1024, imageOnly: true)
+        try await verify(agent)
+        return data
+    }
+
     func activity(for agent: PersonalAgent, cursor: String?) async throws -> PersonalAgentActivityPage {
         try await verify(agent)
         var query = [URLQueryItem(name: "limit", value: "5")]

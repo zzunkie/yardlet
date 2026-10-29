@@ -3108,6 +3108,10 @@
 /* Personal agents */
 "This message cannot be displayed yet." = "This message cannot be displayed yet.";
 "Personal agents" = "Personal agents";
+"Open in Dots" = "Open in Dots";
+"Open This Dot on the Web" = "Open This Dot on the Web";
+"Open Dots Home in ChatGPT" = "Open Dots Home in ChatGPT";
+"Dots could not be opened." = "Dots could not be opened.";
 "ChatGPT account" = "ChatGPT account";
 "Refresh personal agents" = "Refresh personal agents";
 "Accounts…" = "Accounts…";

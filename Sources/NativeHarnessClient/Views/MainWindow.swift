@@ -20,6 +20,8 @@ struct MainWindow: View {
     @Bindable var model: AppModel
     @State private var isSidebarVisible = true
     @State private var sidebarSection: ShellSection = .tasks
+    /// Where the task list was left while another list takes its place.
+    @State private var sidebarListPlace = SidebarListPlace()
     /// This window's place in `AppModel.taskWindowIDs`: windows share one model, each says for itself
     /// whether it shows Tasks.
     @State private var windowID = UUID()
@@ -368,8 +370,8 @@ struct MainWindow: View {
 
     // MARK: - Personal agents
 
-    /// The sidebar's "Personal agents": the agents in the task list's place, the chosen one's conversation
-    /// beside it. The tasks keep what they showed for the way back.
+    /// The sidebar's "Tasks | Personal agents" words: the agents in the task list's place, under the same
+    /// Home and Scheduled tasks, the chosen one's conversation beside it. The tasks keep what they showed.
     private func showPersonalAgents() {
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
             isSidebarVisible = true
@@ -1678,7 +1680,8 @@ struct MainWindow: View {
                             sidebarTitleBar
                             PersonalAgentsSidebar(center: personalAgents, accounts: personalAccounts,
                                 accountID: $personalAccountID, accountMenu: accountMenu,
-                                onBack: closePersonalAgents,
+                                onHome: showNewTask, onShowSchedules: showSchedules,
+                                onShowTasks: closePersonalAgents,
                                 onAccounts: { presentSettings(.harnesses) },
                                 onRefresh: reconnectPersonalAgents)
                         }
@@ -1765,7 +1768,8 @@ struct MainWindow: View {
                         onListAtTopChange: { atTop in
                             isSidebarListAtTop = atTop
                             holdSidebarOrder()
-                        }
+                        },
+                        place: sidebarListPlace
                     )
                     .environment(\.shellBusyTaskIDs, model.shellBusySessionIDs)
                     .environment(\.openWindowItemInNewTab, WindowItemNewTabAction(open: openInNewTab))
