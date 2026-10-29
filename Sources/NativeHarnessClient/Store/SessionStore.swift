@@ -5,8 +5,17 @@ import Observation
 @Observable
 final class SessionStore {
     private(set) var sessions: [SessionRecord]
-    /// Archived tasks once `loadArchivedSessions()` has read them; nil before that.
-    private(set) var archivedSessions: [ArchivedSessionRecord]?
+    /// Archived tasks once `loadArchivedSessions()` or `restore()` has read them; nil before that.
+    private(set) var archivedSessions: [ArchivedSessionRecord]? {
+        didSet {
+            archivedParentIDs = Dictionary(
+                (archivedSessions ?? []).compactMap { record in record.session.parentTaskID.map { (record.id, $0) } },
+                uniquingKeysWith: { first, _ in first })
+        }
+    }
+    /// The task each archived task was started from, which the sidebar follows to nest a task whose
+    /// parent is archived under the nearest task it lists (`SidebarProjection.nest`).
+    private(set) var archivedParentIDs: [UUID: UUID] = [:]
     /// The shown task, or the focused split pane's task. `SplitStore` owns the arrangement and
     /// keeps this mirror in step, so existing single-selection callers and tests stay unchanged.
     var selectedSessionID: SessionRecord.ID? {
@@ -42,6 +51,9 @@ final class SessionStore {
 
     func restore() async throws {
         sessions = try await repository.loadSessions()
+        // The archived list's links place nested tasks from the first sidebar on; without them, a task
+        // whose parent is archived waits at top level until the list is read.
+        if let archived = try? await repository.loadArchivedSessions() { archivedSessions = archived }
         for index in sessions.indices where
             sessions[index].status == .running || sessions[index].status == .waitingForApproval {
             sessions[index].status = .ready

@@ -491,17 +491,16 @@ struct TaskSidebar: View {
     }
 
     /// A row and the tasks nested under it (`SidebarRow.children`), as the Claude app lists a
-    /// family: each nested task one level in, joined by a guide, and, while the family is
-    /// collapsed, a line counting the nested tasks it hides that opens it again.
+    /// family: each nested task a level in from the task it was started from
+    /// (`SidebarRow.familyPlace`), joined by a guide, and, while the family is collapsed, a line
+    /// counting the nested tasks it hides that opens it again.
     @ViewBuilder
     private func familyEntry(_ row: SidebarRow, under group: WorkspaceGroup?, inChats: Bool = false) -> some View {
-        let showsSummary = !row.hiddenChildren.isEmpty
         rowEntry(row, under: group, title: inChats ? SidebarProjection.chatRowTitle(for: row) : nil)
-        ForEach(Array(row.children.enumerated()), id: \.element.id) { index, child in
-            rowEntry(child, under: group, title: inChats ? SidebarProjection.chatRowTitle(for: child) : nil,
-                     familyGuide: index == row.children.count - 1 && !showsSummary ? .last : .middle)
+        ForEach(row.children) { child in
+            rowEntry(child, under: group, title: inChats ? SidebarProjection.chatRowTitle(for: child) : nil)
         }
-        if showsSummary, case let .session(parent) = row.content {
+        if !row.hiddenChildren.isEmpty, case let .session(parent) = row.content {
             SidebarFamilySummaryLine(
                 hidden: row.hiddenChildren, showsMore: !row.children.isEmpty,
                 onExpand: { toggleFamily(of: parent.id) }
@@ -528,8 +527,7 @@ struct TaskSidebar: View {
     /// A task or split row; under a project when `group` is set, in Pinned or Chats otherwise.
     /// `title` replaces the row's own title where a section names it differently (Chats).
     @ViewBuilder
-    private func rowEntry(_ row: SidebarRow, under group: WorkspaceGroup?, title: String? = nil,
-                          familyGuide: SidebarFamilyGuide.Position? = nil) -> some View {
+    private func rowEntry(_ row: SidebarRow, under group: WorkspaceGroup?, title: String? = nil) -> some View {
         Group {
             switch row.content {
             case let .session(session):
@@ -537,7 +535,7 @@ struct TaskSidebar: View {
                     session: session,
                     title: title ?? group.map { SidebarProjection.rowTitle(for: session, under: $0) } ?? session.title,
                     projectName: group.map { $0.project?.name } ?? projectName(of: session),
-                    familyGuide: row.isNestedChild ? (familyGuide ?? .last) : nil,
+                    familyPlace: row.familyPlace,
                     familyToggle: familyToggle(for: row),
                     isSelected: selection == row.id,
                     onSelect: { pick(row.id) },
@@ -855,7 +853,7 @@ private struct SidebarNestedLine<Content: View>: View {
                 .lineLimit(1)
             Spacer(minLength: 0)
         }
-        .padding(.leading, SidebarMetrics.rowInset + SidebarRowLeading<EmptyView>.titleLeading(isFamilyChild: false))
+        .padding(.leading, SidebarMetrics.rowInset + SidebarRowLeading<EmptyView>.titleLeading())
         .frame(height: SidebarMetrics.secondaryLineHeight * interfaceScale)
     }
 }
@@ -875,7 +873,7 @@ private struct SidebarShowMoreButton: View {
                     .foregroundStyle(isHovering ? .secondary : .tertiary)
                 Spacer(minLength: 0)
             }
-            .padding(.leading, SidebarRowLeading<EmptyView>.titleLeading(isFamilyChild: false))
+            .padding(.leading, SidebarRowLeading<EmptyView>.titleLeading())
             .frame(height: SidebarMetrics.secondaryLineHeight * interfaceScale)
             .contentShape(Rectangle())
         }
@@ -1047,7 +1045,7 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
     /// lookup the window hands down, so a window update that changes no name draws no row again.
     var projectName: String? = nil
     /// Where the row sits in the family it is nested in, when it is a task started from another.
-    var familyGuide: SidebarFamilyGuide.Position? = nil
+    var familyPlace: SidebarFamilyPlace? = nil
     /// Hiding or showing the tasks nested under this one, when it has any.
     var familyToggle: SidebarFamilyToggle? = nil
     let isSelected: Bool
@@ -1077,7 +1075,7 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.session == rhs.session && lhs.title == rhs.title && lhs.subtitle == rhs.subtitle
-            && lhs.projectName == rhs.projectName && lhs.familyGuide == rhs.familyGuide && lhs.familyToggle?.isCollapsed == rhs.familyToggle?.isCollapsed
+            && lhs.projectName == rhs.projectName && lhs.familyPlace == rhs.familyPlace && lhs.familyToggle?.isCollapsed == rhs.familyToggle?.isCollapsed
             && lhs.isSelected == rhs.isSelected && lhs.projectMove == rhs.projectMove
             && (lhs.onDetach == nil) == (rhs.onDetach == nil)
     }
@@ -1088,7 +1086,7 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
             title: title,
             subtitle: subtitle,
             projectName: projectName,
-            familyGuide: familyGuide,
+            familyPlace: familyPlace,
             isSelected: isSelected || isDropTargeted,
             onSelect: onSelect,
             onTogglePinned: { onTogglePinned(session) },
@@ -1120,7 +1118,7 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
                 Button(familyToggle.title, action: familyToggle.action)
             }
             // The Claude app's row menu item for a session another started (`XP5vxiZixk`).
-            if familyGuide != nil, let onDetach {
+            if familyPlace != nil, let onDetach {
                 Button(L10n.string("Detach to top level")) { onDetach(session) }
             }
             if let pullRequestMark {
@@ -1153,8 +1151,8 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
 /// Chats, under a project, the activity view): the mark centred in the 32pt gutter, the title after
 /// it. A task started from another sits one family indent further in.
 struct SidebarRowLeading<Mark: View>: View {
-    /// A task started from another sits one family indent further in.
-    var isFamilyChild = false
+    /// A task started from another sits a family indent further in for each level it is nested.
+    var nestingDepth = 0
     @ViewBuilder let mark: Mark
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
@@ -1162,21 +1160,22 @@ struct SidebarRowLeading<Mark: View>: View {
         mark.frame(width: SidebarMetrics.nestedIconSize * interfaceScale,
                    height: SidebarMetrics.nestedIconSize * interfaceScale)
             .frame(width: SidebarMetrics.gutterWidth)
-            .padding(.leading, Self.indent(isFamilyChild: isFamilyChild))
+            .padding(.leading, Self.indent(nestingDepth: nestingDepth))
     }
 
-    /// How far a row's gutter sits in from the row's start: nothing, or one family indent.
-    static func indent(isFamilyChild: Bool) -> CGFloat {
-        isFamilyChild ? SidebarMetrics.familyIndent : 0
+    /// How far a row's gutter sits in from the row's start: a family indent per level nested.
+    static func indent(nestingDepth: Int) -> CGFloat {
+        CGFloat(nestingDepth) * SidebarMetrics.familyIndent
     }
 
     /// Where a row's title starts, from the row's start.
-    static func titleLeading(isFamilyChild: Bool) -> CGFloat {
-        indent(isFamilyChild: isFamilyChild) + SidebarMetrics.gutterWidth
+    static func titleLeading(nestingDepth: Int = 0) -> CGFloat {
+        indent(nestingDepth: nestingDepth) + SidebarMetrics.gutterWidth
     }
 
-    /// Where the family guide's line runs down: under the middle of the parent's mark.
-    static var guideX: CGFloat { SidebarMetrics.gutterWidth / 2 }
+    /// Where the family guide's line for a level runs down: under the middle of the mark of the row
+    /// a level out (level 1 under the family's top task).
+    static func guideX(level: Int) -> CGFloat { indent(nestingDepth: level - 1) + SidebarMetrics.gutterWidth / 2 }
 }
 
 /// A row that acts above or below a list of tasks (New task, Scheduled tasks, Personal agents, Back, Import): its
@@ -1241,17 +1240,12 @@ struct SidebarSearchField: View {
     }
 }
 
-/// The line joining a nested task to the family above it (Claude `.df-family:after`): down from
-/// the row above, then across toward the task's mark with a rounded corner. A task with more of
-/// its family below carries the line on down.
+/// The lines joining a nested task to its family (Claude `.df-family:after`): at the task's level,
+/// down from the row above, then across toward the task's mark with a rounded corner, carried on
+/// down when more of that level follows; at each level further out whose line runs on to a later
+/// row, straight through (`SidebarFamilyPlace.continuingLevels`).
 struct SidebarFamilyGuide: Shape {
-    enum Position: Hashable, Sendable {
-        case middle
-        case last
-    }
-
-    let x: CGFloat
-    let position: Position
+    let place: SidebarFamilyPlace
 
     /// A stronger line than a separator, as the Claude app draws it (`--cds-border-strong`).
     static let color = Color.primary.opacity(0.22)
@@ -1261,11 +1255,17 @@ struct SidebarFamilyGuide: Shape {
         let radius = SidebarMetrics.familyGuideRadius
         let midY = rect.midY
         let top = rect.minY - SidebarMetrics.rowSpacing
+        for level in place.continuingLevels where level < place.depth {
+            let x = SidebarRowLeading<EmptyView>.guideX(level: level)
+            path.move(to: CGPoint(x: x, y: top))
+            path.addLine(to: CGPoint(x: x, y: rect.maxY))
+        }
+        let x = SidebarRowLeading<EmptyView>.guideX(level: place.depth)
         path.move(to: CGPoint(x: x, y: top))
         path.addLine(to: CGPoint(x: x, y: midY - radius))
         path.addQuadCurve(to: CGPoint(x: x + radius, y: midY), control: CGPoint(x: x, y: midY))
         path.addLine(to: CGPoint(x: x + SidebarMetrics.familyGuideLength, y: midY))
-        if position == .middle {
+        if place.continuingLevels.contains(place.depth) {
             path.move(to: CGPoint(x: x, y: midY - radius))
             path.addLine(to: CGPoint(x: x, y: rect.maxY))
         }
@@ -1377,7 +1377,7 @@ struct SidebarFamilySummaryLine: View {
             .frame(height: SidebarMetrics.secondaryLineHeight * interfaceScale)
             .contentShape(Rectangle())
             .background(alignment: .leading) {
-                SidebarFamilyGuide(x: SidebarRowLeading<EmptyView>.guideX, position: .last)
+                SidebarFamilyGuide(place: SidebarFamilyPlace(depth: 1))
                     .stroke(SidebarFamilyGuide.color, style: StrokeStyle(lineWidth: 1, lineCap: .round))
             }
             .background(isHovering ? ParityTheme.hoverFill : .clear, in: SidebarMetrics.rowShape())
@@ -1533,7 +1533,7 @@ private struct TaskRow: View {
     /// The project the task belongs to, for its hover card; nil for a chat.
     var projectName: String? = nil
     /// Where the row sits in its family, when it is nested under the task it was started from.
-    var familyGuide: SidebarFamilyGuide.Position? = nil
+    var familyPlace: SidebarFamilyPlace? = nil
     let isSelected: Bool
     let onSelect: () -> Void
     let onTogglePinned: () -> Void
@@ -1591,7 +1591,7 @@ private struct TaskRow: View {
         if session.hasUnreadUpdate, status != .unread { parts.append(SidebarTaskStatus.unread.accessibilityName) }
         if let subtitle { parts.append(subtitle) }
         if isScheduledRun { parts.append(L10n.string("Scheduled task")) }
-        if familyGuide != nil { parts.append(L10n.string("Nested session")) }
+        if familyPlace != nil { parts.append(L10n.string("Nested session")) }
         if let worktreeDetail { parts.append(L10n.format("Worktree %@", worktreeDetail)) }
         if let pullRequestMark { parts.append(pullRequestMark.accessibilityName) }
         if let cpuPercent { parts.append(L10n.format("CPU %lld%%", cpuPercent)) }
@@ -1608,7 +1608,7 @@ private struct TaskRow: View {
                 onSelect()
             } label: {
                 HStack(spacing: 0) {
-                    SidebarRowLeading(isFamilyChild: familyGuide != nil) {
+                    SidebarRowLeading(nestingDepth: familyPlace?.depth ?? 0) {
                         HarnessIdentityIcon(harness: session.harness,
                                             size: SidebarMetrics.nestedIconSize * interfaceScale)
                     }
@@ -1640,8 +1640,8 @@ private struct TaskRow: View {
                 .frame(height: rowHeight)
                 .contentShape(Rectangle())
                 .background(alignment: .leading) {
-                    if let familyGuide {
-                        SidebarFamilyGuide(x: SidebarRowLeading<EmptyView>.guideX, position: familyGuide)
+                    if let familyPlace {
+                        SidebarFamilyGuide(place: familyPlace)
                             .stroke(SidebarFamilyGuide.color, style: StrokeStyle(lineWidth: 1, lineCap: .round))
                     }
                 }

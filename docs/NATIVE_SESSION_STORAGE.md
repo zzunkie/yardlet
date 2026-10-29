@@ -561,7 +561,9 @@ Sidebar nesting records the task a task was started from in that task's index ro
 - **When it is written:** when a task is created (fork, subagent, opening the original, import), or when
   `SessionStore.linkParents` fills in empty links only. An existing link is not overwritten, and a link to the task
   itself or one that makes a cycle is dropped. A link is not activity, so the task keeps its place. Archive and
-  unarchive leave the link as it is.
+  unarchive leave the link as it is. Restoring the index also reads the archived rows' links
+  (`SessionStore.archivedParentIDs`), so the sidebar nests a task whose parent is archived under the nearest ancestor
+  it lists; nothing is written for it.
 - **What is read from the Claude app:** from `ClaudeDesktopSessionCatalog`, the same as for the import list (the Claude
   app's `local_*.json`, read only, with the same size and count limits), it additionally reads only `sessionId` (the
   app's `local_` ID), `spawnedFrom.sessionId`, `forkedFromSessionId` and `lineageDetached`. It links only when the

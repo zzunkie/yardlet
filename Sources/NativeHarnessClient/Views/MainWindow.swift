@@ -904,7 +904,8 @@ struct MainWindow: View {
             isFiltering: !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             disclosure: sidebarDisclosure.disclosure,
             selection: model.splits.selection,
-            waiting: waitingSessionIDs
+            waiting: waitingSessionIDs,
+            archivedParents: model.store.archivedParentIDs
         )
     }
 
@@ -922,7 +923,8 @@ struct MainWindow: View {
             allGroups: allVisibleGroups,
             chats: allChats,
             splits: model.splits.splits,
-            isFiltering: false
+            isFiltering: false,
+            archivedParents: model.store.archivedParentIDs
         ).pinned.flatMap(\.rowsWithChildren)
     }
 

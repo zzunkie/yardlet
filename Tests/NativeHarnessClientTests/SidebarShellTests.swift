@@ -218,14 +218,14 @@ final class SidebarShellTests: XCTestCase {
         // child row, the plain row.
         XCTAssertEqual(bands.count, 7, "\(bands)")
         let childBand = try XCTUnwrap(bands.max { $0.minX < $1.minX })
-        XCTAssertEqual(childBand.minX, SidebarMetrics.rowInset + SidebarRowLeading<EmptyView>.guideX, accuracy: 1.5,
+        XCTAssertEqual(childBand.minX, SidebarMetrics.rowInset + SidebarRowLeading<EmptyView>.guideX(level: 1), accuracy: 1.5,
                        "The nested task's guide runs under its parent's mark: \(bands)")
         for band in bands where band != childBand {
             XCTAssertLessThanOrEqual(band.minX, SidebarMetrics.projectHeaderLeading + 1.5,
                                      "Nothing but the nested task is indented: \(bands)")
         }
-        XCTAssertEqual(SidebarRowLeading<EmptyView>.titleLeading(isFamilyChild: false), SidebarMetrics.gutterWidth)
-        XCTAssertEqual(SidebarRowLeading<EmptyView>.titleLeading(isFamilyChild: true),
+        XCTAssertEqual(SidebarRowLeading<EmptyView>.titleLeading(), SidebarMetrics.gutterWidth)
+        XCTAssertEqual(SidebarRowLeading<EmptyView>.titleLeading(nestingDepth: 1),
                        SidebarMetrics.gutterWidth + SidebarMetrics.familyIndent)
     }
 

@@ -34,14 +34,16 @@ final class SidebarDotsRenderingTests: XCTestCase {
 
     private func sidebar(projects: ProjectStore, sessions: [SessionRecord], chats: [SessionRecord] = [],
                          details: [UUID: TaskAttentionDetail], splits: [SplitGroup] = [], collapsed: Set<String> = [],
-                         selected: SessionRecord?, waiting: Set<UUID> = []) -> some View {
+                         selected: SessionRecord?, waiting: Set<UUID> = [],
+                         archivedParents: [UUID: UUID] = [:]) -> some View {
         let groups = projects.visibleGroups(sessions: sessions)
         let selection = selected.map { WindowItem.session($0.id) } ?? .home
         let disclosure = SidebarDisclosureStore(defaults: UserDefaults(suiteName: testDefaultsSuite("SidebarDots"))!)
         for key in collapsed { disclosure.collapse(key) }
         let layout = SidebarProjection.layout(
             visibleGroups: groups, allGroups: groups, chats: chats, splits: splits, isFiltering: false,
-            disclosure: SidebarDisclosure(collapsedKeys: collapsed), selection: selection, waiting: waiting)
+            disclosure: SidebarDisclosure(collapsedKeys: collapsed), selection: selection, waiting: waiting,
+            archivedParents: archivedParents)
         return TaskSidebar(layout: layout, allGroups: groups, isRestoring: false, selection: selection,
             searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
             projects: projects, onEditProject: { _ in },
@@ -159,6 +161,11 @@ final class SidebarDotsRenderingTests: XCTestCase {
         let childB = task("Rebuild the index", .claudeCode, in: yardlet, status: .running, parent: parent)
         let grandchild = task("Check the index sizes", .claudeCode, in: yardlet, status: .completed,
                               completion: .completed, unread: true, parent: childB)
+        // Past `deepestNesting`, beside the task it was started from; and under an archived task, a
+        // level in from the task that one was started from.
+        let greatGrandchild = task("Compare the index sizes", .codex, in: yardlet, parent: grandchild)
+        let archivedStep = task("Archived step", .claudeCode, in: yardlet, parent: childA)
+        let afterArchivedStep = task("Verify the backfill", .codex, in: yardlet, status: .running, parent: archivedStep)
         let collapsedParent = task("Review the parser", .codex, in: yardlet, status: .completed, completion: .completed)
         let keptChild = task("Answer the API question", .codex, in: yardlet, status: .running, parent: collapsedParent)
         let hiddenFailed = task("Fuzz the lexer", .codex, in: yardlet, status: .failed, completion: .failed,
@@ -174,8 +181,9 @@ final class SidebarDotsRenderingTests: XCTestCase {
         let chatRoot = ChatWorkspaces.yardletRoot(home: projects.chatWorkspaceHome).appending(path: "2026-10-15/new-chat")
         let chat = task("Ask about the release", .claudeCode, in: chatRoot)
         let chatChild = task("Look up the changelog", .claudeCode, in: chatRoot, status: .running, parent: chat)
-        let sessions = [pinnedParent, pinnedChild, parent, childA, childB, grandchild, collapsedParent, keptChild,
-                        hiddenFailed, hiddenWorking, hiddenDone, quietParent] + quietChildren + [orphan]
+        let sessions = [pinnedParent, pinnedChild, parent, childA, childB, grandchild, greatGrandchild,
+                        afterArchivedStep, collapsedParent, keptChild, hiddenFailed, hiddenWorking, hiddenDone,
+                        quietParent] + quietChildren + [orphan]
         let details: [UUID: TaskAttentionDetail] = [
             childA.id: TaskAttentionDetail(pendingRequest: .approval),
             keptChild.id: TaskAttentionDetail(pendingRequest: .input),
@@ -184,23 +192,27 @@ final class SidebarDotsRenderingTests: XCTestCase {
                                       SidebarProjection.familyKey(for: quietParent.id)]
         let waiting: Set<UUID> = [childA.id, keptChild.id]
 
+        let archivedParents = [archivedStep.id: childA.id]
+
         let groups = projects.visibleGroups(sessions: sessions)
         let layout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups, chats: [chat, chatChild],
             splits: [], isFiltering: false, disclosure: SidebarDisclosure(collapsedKeys: collapsed),
-            selection: .session(parent.id), waiting: waiting)
+            selection: .session(parent.id), waiting: waiting, archivedParents: archivedParents)
         XCTAssertEqual(layout.pinned.first?.children.map(\.title), ["Draft the notes"])
         let rows = layout.sections.flatMap(\.rows)
-        XCTAssertEqual(rows.first { $0.title == "Coordinate the migration" }?.children.map(\.title),
-                       ["Approve the schema", "Rebuild the index", "Check the index sizes"])
+        let migration = try XCTUnwrap(rows.first { $0.title == "Coordinate the migration" })
+        XCTAssertEqual(migration.children.map(\.title), ["Approve the schema", "Verify the backfill", "Rebuild the index",
+                                                          "Check the index sizes", "Compare the index sizes"])
+        XCTAssertEqual(migration.children.map { $0.familyPlace?.depth }, [1, 2, 1, 2, 2])
         XCTAssertEqual(rows.first { $0.title == "Review the parser" }?.children.map(\.title), ["Answer the API question"])
         XCTAssertEqual(rows.first { $0.title == "Review the parser" }?.hiddenChildren.count, 3)
         XCTAssertEqual(rows.first { $0.title == "Plan the sprint" }?.hiddenChildren.count, 3)
         XCTAssertTrue(rows.contains { $0.title == "Child of an archived task" && !$0.isNestedChild })
         XCTAssertEqual(layout.chats?.rows.first?.children.map(\.title), ["Look up the changelog"])
 
-        let elements = try render("families", height: 720, sidebar(
+        let elements = try render("families", height: 780, sidebar(
             projects: projects, sessions: sessions, chats: [chat, chatChild], details: details, collapsed: collapsed,
-            selected: parent, waiting: waiting))
+            selected: parent, waiting: waiting, archivedParents: archivedParents))
         let spoken = elements.map { "\($0.label) = \($0.value)" }
         XCTAssertTrue(spoken.contains { $0.contains("Rebuild the index") && $0.contains(L10n.string("Nested session")) },
                       spoken.description)

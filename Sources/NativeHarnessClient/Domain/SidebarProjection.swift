@@ -11,12 +11,16 @@ struct SidebarRow: Identifiable, Hashable, Sendable {
     }
 
     let content: Content
-    /// The tasks started from this one that the list shows nested under it, one level in, in order.
+    /// The tasks nested under this one, from it or from the tasks it started, in the order the list
+    /// shows them; each row's `familyPlace` says how far in it sits.
     var children: [SidebarRow] = []
     /// The nested tasks a collapsed family hides; a line under the family counts them.
     var hiddenChildren: [SessionRecord] = []
+    /// Where the row sits in the family it is nested in; nil for a row at top level.
+    var familyPlace: SidebarFamilyPlace?
+
     /// Whether the row sits nested under the task it was started from.
-    var isNestedChild = false
+    var isNestedChild: Bool { familyPlace != nil }
 
     var id: WindowItem {
         switch content {
@@ -82,6 +86,18 @@ struct SidebarRow: Identifiable, Hashable, Sendable {
         guard case let .session(sessionID) = item else { return false }
         return hiddenChildren.contains { $0.id == sessionID }
     }
+}
+
+/// Where a nested row sits in its family, which its guide draws: how many levels in, and which
+/// levels' lines run on past it to a later row of the family.
+struct SidebarFamilyPlace: Hashable, Sendable {
+    /// 1 for a task started from the family's top task, one more for each task listed between,
+    /// at most `SidebarProjection.deepestNesting`.
+    var depth: Int
+    /// The levels, from 1 to `depth`, whose line goes on below the row: to a later row at that level
+    /// with no shallower row between, or, at level 1, to the line counting what a collapsed family
+    /// hides.
+    var continuingLevels: Set<Int> = []
 }
 
 /// One project in the sidebar with the task rows nested under it.
@@ -184,6 +200,8 @@ enum SidebarProjection {
     ///   - chats: the chats after search filtering, or every chat when not searching.
     ///   - allChats: every chat; `chats` when left out.
     ///   - waiting: tasks waiting on the person, which a collapsed family keeps showing.
+    ///   - archivedParents: the task each archived task was started from
+    ///     (`SessionStore.archivedParentIDs`), which `nest` follows past an archived parent.
     static func layout(
         visibleGroups: [WorkspaceGroup],
         allGroups: [WorkspaceGroup],
@@ -193,12 +211,14 @@ enum SidebarProjection {
         isFiltering: Bool,
         disclosure: SidebarDisclosure = SidebarDisclosure(),
         selection: WindowItem? = nil,
-        waiting: Set<UUID> = []
+        waiting: Set<UUID> = [],
+        archivedParents: [UUID: UUID] = [:]
     ) -> Layout {
         var keptInFamilies = waiting
         if case let .session(id)? = selection { keptInFamilies.insert(id) }
         func nested(_ rows: [SidebarRow]) -> [SidebarRow] {
-            nest(rows, collapsedKeys: isFiltering ? [] : disclosure.collapsedKeys, keepingShown: keptInFamilies)
+            nest(rows, collapsedKeys: isFiltering ? [] : disclosure.collapsedKeys, keepingShown: keptInFamilies,
+                 archivedParents: archivedParents)
         }
         let allChats = allChats ?? visibleChats
         let sessionsByID = Dictionary(
@@ -283,29 +303,42 @@ enum SidebarProjection {
     /// at its top.
     static func familyKey(for sessionID: UUID) -> String { "family:\(sessionID.uuidString)" }
 
+    /// How many levels in a nested task can sit. A task started further down sits at this level,
+    /// beside the task it was started from, so a title keeps room at the sidebar's narrowest.
+    static let deepestNesting = 2
+
     /// One list's rows with each task nested under the task it was started from
-    /// (`SessionRecord.parentTaskID`), as the Claude app nests sessions: every descendant one level
-    /// under the family's top task, depth first along who started whom, the most recently active
-    /// first; the family sits where its most recently active member would. A task nests only under
-    /// a task row of the same list, so a task whose parent is archived, gone, pinned apart, in a
-    /// split view or in another project stays at top level, and so does a split view. A collapsed
-    /// family (`familyKey`) hides its nested tasks except those in `keepingShown` (waiting on the
-    /// person, or shown in the window), and the family row counts the rest.
+    /// (`SessionRecord.parentTaskID`), as the Claude app nests sessions under their top task, and
+    /// each a level further in than the task it was started from, up to `deepestNesting`: depth
+    /// first along who started whom, the most recently active first; the family sits where its most
+    /// recently active member would. A task nests only under a task row of the same list. When its
+    /// parent is archived, it nests under the nearest task it was started through that the list
+    /// shows (`archivedParents`); a task whose parent is gone, pinned apart, in a split view or in
+    /// another project stays at top level, and so does a split view. A collapsed family
+    /// (`familyKey`) hides its nested tasks except those in `keepingShown` (waiting on the person,
+    /// or shown in the window), each then a level in from the nearest task shown above it, and the
+    /// family row counts the rest.
     static func nest(_ rows: [SidebarRow], collapsedKeys: Set<String> = [],
-                     keepingShown: Set<UUID> = []) -> [SidebarRow] {
+                     keepingShown: Set<UUID> = [], archivedParents: [UUID: UUID] = [:]) -> [SidebarRow] {
         var sessionsByID: [UUID: SessionRecord] = [:]
         for row in rows {
             if case let .session(session) = row.content { sessionsByID[session.id] = session }
         }
-        func listedParent(of id: UUID) -> UUID? {
-            guard let parent = sessionsByID[id]?.parentTaskID, parent != id, sessionsByID[parent] != nil else { return nil }
-            return parent
+        // The nearest task each task was started through that this list shows, past archived ones.
+        var listedParents: [UUID: UUID] = [:]
+        for id in sessionsByID.keys {
+            var seen: Set<UUID> = [id]
+            var parent = sessionsByID[id]?.parentTaskID
+            while let candidate = parent, seen.insert(candidate).inserted {
+                if sessionsByID[candidate] != nil { listedParents[id] = candidate; break }
+                parent = archivedParents[candidate]
+            }
         }
-        guard sessionsByID.keys.contains(where: { listedParent(of: $0) != nil }) else { return rows }
+        guard !listedParents.isEmpty else { return rows }
         func top(of id: UUID) -> UUID {
             var current = id
             var seen: Set<UUID> = [id]
-            while let parent = listedParent(of: current), seen.insert(parent).inserted { current = parent }
+            while let parent = listedParents[current], seen.insert(parent).inserted { current = parent }
             return current
         }
         // A task is at top level when it has no parent here, or when following its parents never
@@ -316,7 +349,7 @@ enum SidebarProjection {
         }
         var childrenByParent: [UUID: [SessionRecord]] = [:]
         for (id, session) in sessionsByID where !isTopLevel(id) {
-            if let parent = listedParent(of: id) { childrenByParent[parent, default: []].append(session) }
+            if let parent = listedParents[id] { childrenByParent[parent, default: []].append(session) }
         }
         func newestFirst(_ lhs: SessionRecord, _ rhs: SessionRecord) -> Bool {
             if lhs.updatedAt == rhs.updatedAt { return lhs.id.uuidString < rhs.id.uuidString }
@@ -338,11 +371,38 @@ enum SidebarProjection {
             guard !family.isEmpty else { return row }
             var parent = row
             let collapsed = collapsedKeys.contains(familyKey(for: session.id))
-            parent.children = family.filter { !collapsed || keepingShown.contains($0.id) }
-                .map { SidebarRow(content: .session($0), isNestedChild: true) }
+            let shown = family.filter { !collapsed || keepingShown.contains($0.id) }
             parent.hiddenChildren = collapsed ? family.filter { !keepingShown.contains($0.id) } : []
+            parent.children = zip(shown, places(of: shown, under: session.id, parents: listedParents,
+                                                endsInSummary: !parent.hiddenChildren.isEmpty))
+                .map { SidebarRow(content: .session($0), familyPlace: $1) }
             return parent
         }
+    }
+
+    /// Each shown nested task's place, in the order shown: a level in from the nearest task it was
+    /// started through that is shown above it (the family's top task at level 0), and the levels whose
+    /// line runs on past it. `endsInSummary` adds the line counting hidden tasks at level 1 below.
+    private static func places(of shown: [SessionRecord], under top: UUID, parents: [UUID: UUID],
+                               endsInSummary: Bool) -> [SidebarFamilyPlace] {
+        var depthByID: [UUID: Int] = [top: 0]
+        let depths = shown.map { task -> Int in
+            var ancestor = parents[task.id]
+            while let id = ancestor, depthByID[id] == nil { ancestor = parents[id] }
+            let depth = min((ancestor.flatMap { depthByID[$0] } ?? 0) + 1, deepestNesting)
+            depthByID[task.id] = depth
+            return depth
+        }
+        // From the bottom up: a level's line runs on past a row while a later row sits at that level
+        // with nothing shallower between.
+        var open: Set<Int> = endsInSummary ? [1] : []
+        var places = depths.map { SidebarFamilyPlace(depth: $0) }
+        for index in depths.indices.reversed() {
+            let depth = depths[index]
+            places[index].continuingLevels = open.filter { $0 <= depth }
+            open = open.filter { $0 < depth }.union([depth])
+        }
+        return places
     }
 
     /// The key a project's collapsed state is remembered under: the project, or the folder of a

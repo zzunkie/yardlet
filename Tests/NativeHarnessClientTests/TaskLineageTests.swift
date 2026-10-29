@@ -3,7 +3,8 @@ import XCTest
 @testable import NativeHarnessClient
 
 /// Tasks started from another task (`SessionRecord.parentTaskID`): one link for every harness, kept
-/// in the index, and the sidebar nesting each family under its first task as the Claude app does.
+/// in the index, and the sidebar nesting each family under its first task, each task a level in from
+/// the task it was started from.
 @MainActor
 final class TaskLineageTests: XCTestCase {
     private let folder = URL(filePath: "/tmp/lineage-qa/project", directoryHint: .isDirectory)
@@ -23,26 +24,52 @@ final class TaskLineageTests: XCTestCase {
         sessions.map { SidebarRow(content: .session($0)) }
     }
 
+    /// Each title indented two spaces per level it is nested.
     private func titles(_ rows: [SidebarRow]) -> [String] {
-        rows.flatMap(\.rowsWithChildren).map { ($0.isNestedChild ? "  " : "") + $0.title }
+        rows.flatMap(\.rowsWithChildren).map { String(repeating: "  ", count: $0.familyPlace?.depth ?? 0) + $0.title }
     }
 
     // MARK: - Nesting
 
-    /// Every descendant sits one level under the family's first task, depth first along who started
-    /// whom, newest first; the family sits where its newest member would.
-    func testAFamilyNestsOneLevelUnderItsFirstTaskDepthFirst() {
+    /// Every descendant sits under the family's first task, depth first along who started whom,
+    /// newest first, each a level in from the task it was started from down to `deepestNesting`,
+    /// where deeper tasks stay; the family sits where its newest member would. The guide's lines run
+    /// on past a row at each level a later row continues.
+    func testAFamilyNestsEachTaskALevelInFromTheTaskItWasStartedFrom() {
         let root = task("Plan the release", minutesAgo: 50)
         let older = task("Write the notes", parent: root, minutesAgo: 40)
         let newer = task("Tag the build", parent: root, minutesAgo: 5)
         let grandchild = task("Check the tag", parent: newer, minutesAgo: 30)
+        let greatGrandchild = task("Read the signature", parent: grandchild, minutesAgo: 35)
         let alone = task("Tidy the README", minutesAgo: 10)
-        let nested = SidebarProjection.nest(rows([root, older, newer, grandchild, alone]))
-        XCTAssertEqual(titles(nested), ["Plan the release", "  Tag the build", "  Check the tag", "  Write the notes",
-                                        "Tidy the README"])
+        let nested = SidebarProjection.nest(rows([root, older, newer, grandchild, greatGrandchild, alone]))
+        XCTAssertEqual(SidebarProjection.deepestNesting, 2)
+        XCTAssertEqual(titles(nested), ["Plan the release", "  Tag the build", "    Check the tag",
+                                        "    Read the signature", "  Write the notes", "Tidy the README"])
+        XCTAssertEqual(nested[0].children.map(\.familyPlace?.continuingLevels), [[1], [1, 2], [1], []])
         XCTAssertEqual(nested.first?.sortDate, newer.updatedAt, "The family sorts by its newest member")
-        XCTAssertEqual(nested.first?.familySessions.map(\.id), [root.id, newer.id, grandchild.id, older.id])
+        XCTAssertEqual(nested.first?.familySessions.map(\.id), [root.id, newer.id, grandchild.id, greatGrandchild.id,
+                                                                older.id])
         XCTAssertTrue(nested[0].children.allSatisfy(\.isNestedChild))
+
+        // An archived task between nests its child under the nearest task listed, a level in from it.
+        let archived = task("Archived step", parent: newer, minutesAgo: 60)
+        let afterArchived = task("Verify the mirror", parent: archived, minutesAgo: 45)
+        let archivedRoot = task("Archived root", minutesAgo: 70)
+        let underArchivedRoot = task("Left on its own", parent: archivedRoot, minutesAgo: 55)
+        let throughArchive = SidebarProjection.nest(
+            rows([root, newer, older, afterArchived, underArchivedRoot]),
+            archivedParents: [archived.id: newer.id])
+        XCTAssertEqual(titles(throughArchive), ["Plan the release", "  Tag the build", "    Verify the mirror",
+                                                "  Write the notes", "Left on its own"])
+
+        // A collapsed family keeps a waiting grandchild a level in from the nearest task shown above it.
+        let collapsed = SidebarProjection.nest(rows([root, older, newer, grandchild]),
+                                               collapsedKeys: [SidebarProjection.familyKey(for: root.id)],
+                                               keepingShown: [grandchild.id])
+        XCTAssertEqual(titles(collapsed), ["Plan the release", "  Check the tag"])
+        XCTAssertEqual(collapsed[0].children.first?.familyPlace?.continuingLevels, [1],
+                       "The line runs on to the count of hidden tasks")
 
         // The layout puts the family where its newest member is: above an older top-level task.
         let groups = [WorkspaceGroup(workspaceURL: folder, sessions: [root, older, newer, grandchild, alone])]
@@ -201,8 +228,10 @@ final class TaskLineageTests: XCTestCase {
         try await store.restore()
         XCTAssertEqual(store.sessions.first { $0.id == child.id }?.parentTaskID, old.id)
 
-        // Archiving and restoring keep the link.
+        // Archiving and restoring keep the link, and a store read again knows an archived task's parent.
         try await repository.archive(id: child.id)
+        try await store.restore()
+        XCTAssertEqual(store.archivedParentIDs, [child.id: old.id])
         let restored = try await repository.unarchive(id: child.id)
         XCTAssertEqual(restored?.parentTaskID, old.id)
 
