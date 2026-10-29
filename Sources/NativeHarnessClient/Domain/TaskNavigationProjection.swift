@@ -85,7 +85,8 @@ enum TaskNavigationProjection {
         query: String,
         transcripts: [SessionRecord.ID: [TranscriptEntry]] = [:],
         codexPresentation: [SessionRecord.ID: CodexTaskState] = [:],
-        projectNames: [URL: String] = [:]
+        projectNames: [URL: String] = [:],
+        memo: ConversationSearchMemo? = nil
     ) -> [WorkspaceGroup] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return groups }
@@ -95,7 +96,7 @@ enum TaskNavigationProjection {
                 return group
             }
             let matches = filteredSessions(group.sessions, query: trimmed, transcripts: transcripts,
-                                           codexPresentation: codexPresentation)
+                                           codexPresentation: codexPresentation, memo: memo)
             guard !matches.isEmpty else { return nil }
             return WorkspaceGroup(workspaceURL: group.workspaceURL, sessions: matches)
         }
@@ -107,19 +108,23 @@ enum TaskNavigationProjection {
         _ sessions: [SessionRecord],
         query: String,
         transcripts: [SessionRecord.ID: [TranscriptEntry]] = [:],
-        codexPresentation: [SessionRecord.ID: CodexTaskState] = [:]
+        codexPresentation: [SessionRecord.ID: CodexTaskState] = [:],
+        memo: ConversationSearchMemo? = nil
     ) -> [SessionRecord] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return sessions }
         return sessions.filter { session in
-            session.title.localizedCaseInsensitiveContains(trimmed)
-                || session.harness.displayName.localizedCaseInsensitiveContains(trimmed)
-                || transcripts[session.id]?.contains(where: { entry in
+            if session.title.localizedCaseInsensitiveContains(trimmed)
+                || session.harness.displayName.localizedCaseInsensitiveContains(trimmed) { return true }
+            let transcript = transcripts[session.id], codex = codexPresentation[session.id]
+            func search() -> Bool {
+                transcript?.contains(where: { entry in
                     transcriptSearchText(for: entry).localizedCaseInsensitiveContains(trimmed)
                 }) == true
-                || codexPresentation[session.id].map {
-                    CodexHistorySearchProjection.contains(in: $0, query: trimmed)
-                } == true
+                    || codex.map { CodexHistorySearchProjection.contains(in: $0, query: trimmed) } == true
+            }
+            return memo?.matches(session.id, query: trimmed, transcript: transcript, codex: codex, search: search)
+                ?? search()
         }
     }
 
@@ -149,6 +154,47 @@ enum TaskNavigationProjection {
         case .compaction:
             ""
         }
+    }
+}
+
+/// Whether each task's conversation holds a search, kept while the words and the conversation stay
+/// the same. A search reads every task's conversation, so the window draws again whenever any task
+/// streams; with this, only a task whose conversation changed is searched again. A conversation
+/// counts as the same when it is the very one searched: an unchanged array or Codex state shares its
+/// storage with the one kept here, which equality sees at once.
+final class ConversationSearchMemo {
+    private struct Result {
+        let transcript: [TranscriptEntry]?
+        let codex: CodexTaskState?
+        let matches: Bool
+    }
+
+    private var query = ""
+    private var results: [SessionRecord.ID: Result] = [:]
+
+    init() {}
+
+    func matches(
+        _ id: SessionRecord.ID,
+        query: String,
+        transcript: [TranscriptEntry]?,
+        codex: CodexTaskState?,
+        search: () -> Bool
+    ) -> Bool {
+        if query != self.query {
+            self.query = query
+            results.removeAll()
+        }
+        if let kept = results[id], kept.transcript == transcript, kept.codex == codex { return kept.matches }
+        let matches = search()
+        results[id] = Result(transcript: transcript, codex: codex, matches: matches)
+        return matches
+    }
+
+    /// Lets the conversations go once there is no search.
+    func clear() {
+        query = ""
+        results.removeAll()
     }
 }
 

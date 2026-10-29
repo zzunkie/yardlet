@@ -37,6 +37,8 @@ struct MainWindow: View {
     @State private var sidebarOrderHold = SidebarOrderHold()
     @State private var isSidebarListAtTop = true
     @State private var searchText = ""
+    /// The sidebar search's matches, kept per task while its conversation is unchanged.
+    @State private var searchMemo = ConversationSearchMemo()
     /// The sidebar shows archived tasks in place of the task list until Back.
     @State private var isShowingArchivedTasks = false
     @State private var archivedSearchText = ""
@@ -141,7 +143,8 @@ struct MainWindow: View {
             query: searchText,
             transcripts: model.transcriptBySessionID.dictionary,
             codexPresentation: model.codexPresentationBySessionID.dictionary,
-            projectNames: projects.projectNames(for: groups)
+            projectNames: projects.projectNames(for: groups),
+            memo: searchMemo
         )
     }
 
@@ -184,7 +187,8 @@ struct MainWindow: View {
             allChats,
             query: searchText,
             transcripts: model.transcriptBySessionID.dictionary,
-            codexPresentation: model.codexPresentationBySessionID.dictionary
+            codexPresentation: model.codexPresentationBySessionID.dictionary,
+            memo: searchMemo
         )
     }
 
@@ -201,7 +205,8 @@ struct MainWindow: View {
         return TaskNavigationProjection.filteredSessions(
             listed, query: searchText,
             transcripts: model.transcriptBySessionID.dictionary,
-            codexPresentation: model.codexPresentationBySessionID.dictionary
+            codexPresentation: model.codexPresentationBySessionID.dictionary,
+            memo: searchMemo
         )
     }
 
@@ -2284,6 +2289,9 @@ struct MainWindow: View {
         // Only a window showing Tasks shows the selected task; coming back to them reads it.
         .onAppear(perform: reportTaskSurface)
         .onChange(of: sidebarSection) { _, _ in reportTaskSurface() }
+        .onChange(of: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { _, isEmpty in
+            if isEmpty { searchMemo.clear() }
+        }
         .onDisappear { model.setShowsTasks(false, inWindow: windowID) }
         .onChange(of: model.store.workspaceGroups.map(\.workspaceURL), initial: true) { _, _ in
             projects.ensureProjects(forTasks: model.store.sessions)
