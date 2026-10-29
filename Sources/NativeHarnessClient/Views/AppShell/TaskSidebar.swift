@@ -982,8 +982,8 @@ struct SidebarTaskStatusView: View {
     }
 }
 
-/// The Claude app's status dot. A working dot fades to 30% and back every 1.2 s, and holds still
-/// with Reduce Motion.
+/// The Claude app's status dot. A working dot fades to 30% and back every 1.2 s (`BlinkingDot`), and
+/// holds still with Reduce Motion.
 private struct SidebarStatusDot: View {
     let color: Color
     var blinks = false
@@ -991,16 +991,13 @@ private struct SidebarStatusDot: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let dot = Circle()
-            .fill(color)
-            .frame(width: SidebarTaskStatusView.dotSize * interfaceScale,
-                   height: SidebarTaskStatusView.dotSize * interfaceScale)
+        let diameter = SidebarTaskStatusView.dotSize * interfaceScale
         if blinks, !reduceMotion {
-            dot.phaseAnimator([1.0, 0.3]) { content, opacity in
-                content.opacity(opacity)
-            } animation: { _ in .easeInOut(duration: 0.6) }
+            BlinkingDot(color: color, diameter: diameter)
         } else {
-            dot
+            Circle()
+                .fill(color)
+                .frame(width: diameter, height: diameter)
         }
     }
 }

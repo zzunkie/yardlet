@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The one live line under a running turn (`ConversationLiveWork`): what the provider is doing now,
@@ -141,25 +142,99 @@ struct ShimmeringText: View {
     let isShimmering: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var sweep: CGFloat = -1
 
     var body: some View {
         Text(text)
             .overlay {
                 if isShimmering, !reduceMotion {
-                    GeometryReader { proxy in
-                        LinearGradient(colors: [.clear, .primary.opacity(0.85), .clear],
-                                       startPoint: .leading, endPoint: .trailing)
-                            .frame(width: proxy.size.width * 0.45)
-                            .offset(x: sweep * proxy.size.width)
-                    }
-                    .mask(Text(text))
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-                    .onAppear {
-                        withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) { sweep = 1.2 }
-                    }
+                    ShimmerBand(color: .primary.opacity(0.85))
+                        .mask(Text(text))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
             }
     }
+}
+
+/// The band `ShimmeringText` sweeps, which Core Animation moves. Moved by SwiftUI, every frame of
+/// the sweep updated the running turn's view graph and laid out and drew the turn again, for as
+/// long as the provider worked.
+private struct ShimmerBand: NSViewRepresentable {
+    let color: Color
+
+    func makeNSView(context: Context) -> ShimmerBandView {
+        ShimmerBandView()
+    }
+
+    func updateNSView(_ view: ShimmerBandView, context: Context) {
+        view.color = color.resolve(in: context.environment).cgColor
+    }
+}
+
+/// A gradient 45% of the text's width, fading out to both sides, that moves from one text width
+/// before the words to 1.2 widths after their start every 2 s at a steady pace.
+private final class ShimmerBandView: NSView {
+    private static let sweepKey = "Yardlet.sweep"
+    private let band = CAGradientLayer()
+    /// When the sweep began and the width it crosses: a new width keeps the band where it was.
+    private var sweepStart: CFTimeInterval?
+    private var sweptWidth: CGFloat?
+
+    var color: CGColor? {
+        didSet { if color != oldValue { needsLayout = true } }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        band.startPoint = CGPoint(x: 0, y: 0.5)
+        band.endPoint = CGPoint(x: 1, y: 0.5)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func makeBackingLayer() -> CALayer {
+        let layer = CALayer()
+        layer.addSublayer(band)
+        return layer
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        // The ends fade to the band's own color, not to clear black, as SwiftUI's gradient does.
+        band.colors = color.map { [$0.copy(alpha: 0) ?? $0, $0, $0.copy(alpha: 0) ?? $0] }
+        band.frame = CGRect(x: 0, y: 0, width: bounds.width * 0.45, height: bounds.height)
+        CATransaction.commit()
+        sweep()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        sweep()
+    }
+
+    private func sweep() {
+        let width = bounds.width
+        guard window != nil, width > 0,
+              width != sweptWidth || band.animation(forKey: Self.sweepKey) == nil else { return }
+        let start = sweepStart ?? band.convertTime(CACurrentMediaTime(), from: nil)
+        sweepStart = start
+        sweptWidth = width
+        let sweep = CABasicAnimation(keyPath: "transform.translation.x")
+        sweep.fromValue = -width
+        sweep.toValue = width * 1.2
+        sweep.duration = 2
+        sweep.repeatCount = .infinity
+        sweep.beginTime = start
+        band.add(sweep, forKey: Self.sweepKey)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
