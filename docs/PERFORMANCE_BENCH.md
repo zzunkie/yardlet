@@ -99,7 +99,9 @@ window's first task (`processStartToWindowMs`), to the first frame the main thre
 window out (`processStartToFirstFrameMs`), and to a main thread quiet for a second, with no pass over 16 ms
 (`processStartToSettledMs`). A QA copy launched in the background makes its window only when opened
 again, so the script opens it as soon as the app has finished launching; the window timings include that
-round trip. The `launch` scene is the one with a full sidebar and a long conversation.
+round trip. A fresh QA copy's first launch reads and checks its code for the first time and takes two to
+three times as long, so the script launches it once before the scenes and does not measure that launch.
+The `launch` scene is the one with a full sidebar and a long conversation.
 
 Each phase also notes what flowed through it (`published`: transcript and Codex states the model
 published; `shownTaskItems`), so a run whose fake did not stream is visible as such, and a scene that
@@ -135,8 +137,9 @@ a second, 2 for a count, and 50 ms for launch timings. Every compared number is 
 `comparison`, the summary lists the worse ones it did not show, and `better` lists numbers that shrank as
 much.
 
-- Compare runs on the same Mac, with the same build configuration, at a similar load. A debug build is
-  slower than a release build; the bench is for finding what changed, not for absolute speed.
+- Compare runs on the same Mac, with the same build configuration, at a similar load; the summary says
+  when the two runs' load differed much. A debug build is slower than a release build; the bench is for
+  finding what changed, not for absolute speed.
 - A single run can move by 10% or more. Before calling a number a regression, run the scene again with
   `--repeat 3` (each number is then the median of the rounds) on both commits.
 - A scene with `problems`, or a phase whose `published` count is near zero while it should stream,
