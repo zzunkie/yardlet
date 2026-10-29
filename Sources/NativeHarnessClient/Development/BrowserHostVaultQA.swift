@@ -297,6 +297,41 @@ final class BrowserHostVaultQA {
         check("a snapshot of the filled code page leaves out the code field and each box",
               !read.isError && shown.isEmpty && read.text.components(separatedBy: "\"<redacted>\"").count - 1 >= 7,
               shown.joined(separator: " | ") + " / " + String(read.text.prefix(600)))
+
+        // A code field that says only "code" in a label after it, in a dialog that asks for a two-step code (design §14.3).
+        await navigate("vault/otp/dialog")
+        let dialog = await call(AgentToolCatalog.snapshot)
+        guard let field = Self.ref(in: dialog.text, role: "textbox", name: "코드") else {
+            return check("the two-step dialog's snapshot names its code field", false, dialog.text)
+        }
+        let labeled = await call(VaultToolCatalog.fillCredential, ["ref": .string(field), "kind": .string("one_time_code"),
+                                                                  "submit": .bool(true)])
+        _ = await waitUntilAsync(.seconds(3)) { await self.pageValue("window.qa.code") != .null }
+        let labeledOK = await pageValue("window.qa.code")
+        check("a two-step dialog's code field that only a label after it names gets the current code",
+              !labeled.isError && labeledOK == .bool(true), labeled.text)
+
+        await navigate("vault/otp/decoys")
+        let decoys = Self.refs(in: (await call(AgentToolCatalog.snapshot)).text, role: "textbox")
+        var taken: [String] = []
+        for ref in decoys {
+            let result = await call(VaultToolCatalog.fillCredential, ["ref": .string(ref), "kind": .string("one_time_code"),
+                                                                     "submit": .bool(false)])
+            if !result.isError { taken.append(ref) }
+        }
+        let untouched = await pageValue("Array.from(document.querySelectorAll('input')).every(e => !e.value)")
+        check("no code goes into a search, phone, card, postal code, promo code, birth year or password field",
+              decoys.count == 9 && taken.isEmpty && untouched == .bool(true),
+              "\(decoys.count) fields, filled \(taken), untouched \(untouched == .bool(true))")
+
+        // The rule itself, on fields of other sites and languages, each alone on the page.
+        await navigate("vault/otp/cases")
+        let cases = await pageValue("(() => { \(VaultPageScripts.codeFieldTests) "
+            + "return window.qa.read(isCodeField, looksLikeCodeField); })()")
+        let misread = cases?["misread"]?.arrayValue?.compactMap(\.stringValue)
+        check("the code field rule reads each field of the case page as its section expects",
+              (cases?["cases"]?.integerValue ?? 0) >= 30 && misread == [],
+              "\(cases?["cases"]?.integerValue ?? 0) fields, read otherwise: \(misread ?? ["no answer"])")
     }
 
     private func exerciseReveal() async {
@@ -604,8 +639,10 @@ final class BrowserHostVaultQA {
 
     /// The person's two-factor codes in the panel (design §14): a code field on a site whose item has a
     /// code offers the code bar, whose fill (and the key button's, into one-digit boxes) passes the page's
-    /// check; a site's setup QR code offers its code for the site's item of that account, and saving it
-    /// fills the first code the page asks for; an authenticator app's export QR code offers its accounts,
+    /// check, as does a two-step dialog's field that only a label names, while fields that only look like
+    /// one offer nothing until a code field joins them; a site's setup QR code offers its code for the site's
+    /// item of that account, and saving it fills the first code the page asks for; an authenticator app's
+    /// export QR code offers its accounts,
     /// again from the page's menu, and imports each as an item of its own. Values are the QA server's.
     private func exercisePanelCodes(_ controller: BrowserHostPaneController) async {
         func open(_ path: String) async -> BrowserTab? {
@@ -645,6 +682,33 @@ final class BrowserHostVaultQA {
         let boxesOK = await waitUntilAsync(.seconds(3)) { await page(codes, "window.qa.boxes") == .bool(true) }
         check("panel: the key button in one-digit boxes fills the code a digit each", boxes && boxesOK,
               "filled \(boxes), checked \(boxesOK)")
+
+        guard let dialog = await open("vault/otp/dialog") else { return }
+        let dialogOffered = await waitUntilAsync(.seconds(6)) { controller.vaultCodeOffer != nil }
+        capture(controller, named: "vault-panel-dialog-code-bar.png")
+        if let item = controller.vaultCodeOffer?.items.first { controller.fillCodeForPerson(item) }
+        let dialogFilled = await waitUntilAsync(.seconds(5)) {
+            await page(dialog, "document.getElementById('code').value.length")?.integerValue == 6
+        }
+        _ = await page(dialog, "document.getElementById('continue').click()")
+        let dialogTaken = await waitUntilAsync(.seconds(3)) { await page(dialog, "window.qa.code") == .bool(true) }
+        check("panel: a two-step dialog's code field that only a label after it names offers the code bar, and the page "
+                + "takes its code",
+              dialogOffered && dialogFilled && dialogTaken,
+              "offered \(dialogOffered), filled \(dialogFilled), checked \(dialogTaken)")
+
+        guard let decoys = await open("vault/otp/decoys") else { return }
+        // Longer than the watch takes to look at the page and say what it saw; then a code field joins the page, which
+        // shows the watch was looking.
+        try? await Task.sleep(for: .seconds(3))
+        let quiet = controller.vaultCodeOffer == nil
+        _ = await page(decoys, "document.body.insertAdjacentHTML('beforeend', "
+            + "'<form><input id=\"late\" autocomplete=\"one-time-code\"></form>')")
+        let late = await waitUntilAsync(.seconds(6)) { controller.vaultCodeOffer != nil }
+        check("panel: search, phone, card, postal code, promo code and birth year fields offer no code bar, and a code "
+                + "field added after them does",
+              quiet && late, "before \(quiet ? "none" : "an offer"), after adding a code field \(late ? "an offer" : "none")")
+        controller.vaultCodeOffer = nil
 
         guard let setup = await open("vault/otp/setup") else { return }
         let person = vault.items.first { $0.username == "person@example.test" }

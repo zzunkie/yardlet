@@ -335,9 +335,10 @@ tool that lists items. With no matching item, it answers "No vault item for http
    page before signing in, so it was removed.)
 3. **Field kind check:** a password goes only into `input[type=password]`. A username goes only into a text or email
    field of the same form (`autocomplete=username` first), and TOTP only into a text, number or tel field that has
-   `autocomplete=one-time-code`, a maximum length of 10 or less, numeric input, or a name that means a verification code
-   (section 14.3). A code split into one-character fields is spread over the consecutive fields. This blocks injection
-   that tries to put the password into a public text field on the same site (a comment, a bio).
+   `autocomplete=one-time-code`, or that nothing marks as another field and that has a name or label meaning a code, a
+   maximum length of 10 or less, numeric input, or a page asking for a code around it (section 14.3). A code split into
+   one-character fields is spread over the consecutive fields. This blocks injection that tries to put the password into
+   a public text field on the same site (a comment, a bio).
 4. **Destination check:** before a password or a code goes in, the field's form must send its fields only to the
    item's own sites over https (the form's `action` and every submit button's `formaction`, by the rules of section
    6.2; a `javascript:` action sends nothing). A form that sends them anywhere else is not filled, and the refusal
@@ -718,11 +719,34 @@ apps, and backup and restore work only between devices of the same kind
   Clicking it fills the current code into the field. With several items, the person picks one from a menu. The key
   button fills the code when focus is in a code field, or when the page has only a code field and no sign-in fields. The
   person clicked, so it fills whatever the step (section 6.1), as the key button does.
-- **Deciding what is a code field:** for filling, the step 3 rule of section 5.2 gained fields whose name, id,
-  placeholder or accessible name means a verification code (`otp`, `one-time`, `2fa`, `mfa`, `verification code`,
-  `passcode` and so on); the agent and the person share the same rule. For showing the bar, the check is narrower, to
-  leave out short numeric fields such as postal codes: `autocomplete=one-time-code`, those names, or a numeric-input
-  field of at most 8 characters. It reports a field once while that field is visible in a document.
+- **Deciding what is a code field (2026-10-30):** one rule (`VaultPageScripts.codeFieldTests`) serves the agent's fill
+  check, the person's key button and code bar, and the watcher. It follows Chrome's password manager (`kOneTimePwdRe`
+  on a field's name and id) and Bitwarden (`TotpFieldNames`, and the weaker `AmbiguousTotpFieldNames`, on a field's
+  attributes and labels), and reads labels and the page around the field as well:
+  1. Only a text, number or tel `input`; `autocomplete=one-time-code` settles it.
+  2. A field is something else when another `autocomplete` value marks it (`tel`, `cc-*`, `postal-code`, `username`,
+     `email`, a password and so on), when its words name another code (postal, promo, coupon, gift, referral,
+     captcha, recovery, backup and so on), or, unless they name a one-time code, another field (search, phone, email,
+     user, card, birth year, name, address and so on). A field in a form with a card number or expiry field is the
+     card's security code, which Chrome's `kCardCvcRe` also calls `security code` and `verification`.
+  3. Its words are its name, id, placeholder, title, `aria-label`, `aria-labelledby` and `<label>` text, with camelCase
+     split. Names of a one-time code (`otp`, `one-time`, `2fa`, `mfa`, `totp`, `verification code`, `security code`,
+     `approvals_code`, `login code`, `passcode`, two-step and two-factor, and in Korean, Japanese, Chinese, Spanish,
+     Portuguese, French, German, Italian and Russian, such as 인증번호, 보안 코드, 確認コード and 验证码) mark a code
+     field. A word alone such as `code`, `pin` or 코드 is weaker.
+  4. The page asks for a code around the field when the nearest region holding no other field to type in (checkboxes,
+     buttons and one-character boxes beside a one-character box do not count), within 4,000 characters of text, says
+     a two-step, verification or one-time phrase and a code or digit word. Instagram's two-step dialog is the case that
+     needed it: its field had nothing the earlier rule read (`autocomplete=one-time-code`, a maximum length of 10 or
+     less, numeric input, an English code word in its name, id, placeholder or `aria-label`), so an agent's fill was
+     refused on 2026-10-29. Its accessible name is "코드" and a label "코드" follows it, in a dialog headed "Two Step
+     Verification" that asks for "6자리 코드".
+
+  For filling, a field passes with any of: a name of a one-time code, a weaker word, a maximum length of 10 or less,
+  numeric input, or a page asking for a code around it. For showing the bar, the check is narrower: a name of a
+  one-time code, a numeric field (numeric input, tel or number) of at most 8 characters, or a page asking for a code
+  around it. Before this rule a postal code, a birth year or a card's security code with numeric input offered the
+  bar. The watcher reports a field once while that field is visible in a document.
 - **At setup:** when the watcher script sees an image of QR size and shape on screen (a near-square `img`, `canvas` or
   `svg`, 96 to 640 CSS px), it reports it, and Yardlet captures that tab's screen with CDP `Page.captureScreenshot` and
   reads the QR with Vision (`VNDetectBarcodesRequest`). If it finds an `otpauth://totp/` address whose key is not yet in
@@ -881,6 +905,18 @@ person links them.
   list; a code imported for an account whose sign-in is saved for `qa-partner.test` takes that site, the code bar offers
   it there as the site's own, and an agent's fill there puts in its current code. The panel PNG
   `vault-panel-linked-code-bar` was checked by eye.
+- Deciding what is a code field (2026-10-30): the vault QA, 69 checks. The QA server's `/vault/otp/dialog` (a two-step
+  dialog shaped like Instagram's, whose code field only a label "코드" after it names, below a search field) takes an
+  agent's fill and the code bar's, and its check accepts the code. On `/vault/otp/decoys` an agent's code goes into
+  none of its nine fields (search, phone, card number, expiry, a card's security code, postal code, promo code, birth
+  year, password), and the code bar does not show until a `one-time-code` field is added to the page.
+  `/vault/otp/cases` puts each of 36 fields on the page alone and checks both answers of the rule: Instagram's dialog
+  with a label or an `aria-label`, one-character boxes with and without numeric input, names sites have used
+  (`approvals_code`, `verificationCode`, `totpPin`), an "Enter code" field with numeric input in a verification dialog,
+  Japanese, Korean, Chinese and German names, an SMS code; and search, phone, card security codes (with `cc-csc`, by label, in Korean), postal codes,
+  promo code, birth year, CAPTCHA, recovery code, username and email fields. The earlier rule read 23 of the 36
+  otherwise: it missed 12 code fields and took 11 that are not, offering the code bar at seven of them (card security
+  codes, postal codes and a birth year). The panel PNG `vault-panel-dialog-code-bar` was checked by eye.
 
 
 ## 15. Strong password suggestions (2026-10-28)
