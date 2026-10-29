@@ -102,6 +102,7 @@ Settings > General > Login Items & Extensions**. To remove Yardlet's own data as
 - `~/.yardlet` (task list, drafts, reading state) and `~/Library/Application Support/Yardlet`
   (browser profiles, staged updates). `brew uninstall --zap --cask zzunkie/tap/yardlet` removes
   these together with Yardlet's caches and preferences.
+- `~/Library/Logs/Yardlet`, which holds the hang log described under Privacy.
 - In Keychain Access, the items whose name starts with `Yardlet` (connector sign-ins, the phone
   remote, the password vault), and `Chromium Safe Storage` if you do not use Chromium itself.
 - Yardlet's entries in **System Settings > Privacy & Security**.
@@ -116,7 +117,11 @@ through Yardlet's relay at `relay.yardlet.app`, which cannot read them and store
 macOS Keychain, and connector calls go straight from your Mac to the service. What an agent reads
 through a connector is sent to that agent's provider under your account with it. The daily update
 check asks `yardlet.app` for the appcast with Yardlet's and Sparkle's versions in its user agent and
-sends no system profile; updates download from GitHub Releases. See the
+sends no system profile; updates download from GitHub Releases. When Yardlet's main thread stays
+busy for more than 250 ms, it writes the time and the stack (function names only) to
+`~/Library/Logs/Yardlet/hangs.log`, kept under 2 MB and sent nowhere;
+`defaults write com.zzunkie.yardlet Yardlet.debug.hangLog -bool NO` turns it off from the next
+launch. See the
 [privacy policy](https://yardlet.app/privacy.html).
 
 ## Roadmap and feedback
