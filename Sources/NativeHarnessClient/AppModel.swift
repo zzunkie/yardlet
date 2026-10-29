@@ -1880,14 +1880,15 @@ final class AppModel {
     }
 
     /// Rereads one task's `TaskAttentionDetail` after its transcript or Codex timeline was set.
-    func refreshAttentionDetail(for id: UUID) {
+    /// `sessionToolWaits` is `sessionToolWaitsForPerson(in:)` when the caller just read it.
+    func refreshAttentionDetail(for id: UUID, sessionToolWaits: Bool? = nil) {
         let answerLine = codexPresentations[id].flatMap(TaskAttentionDetail.answerLine)
             ?? transcripts[id].flatMap(TaskAttentionDetail.answerLine)
         if answerLines[id] != answerLine { answerLines[id] = answerLine }
         let transcript = transcripts[id].map(TaskAttentionDetail.reading) ?? .none
         var detail = codexPresentations[id].map { TaskAttentionDetail.reading($0).merged(over: transcript) } ?? transcript
         // A session tool's own approval, or one its subagent waits on, is an approval the task waits on.
-        if sessionToolWaitsForPerson(in: id) { detail.pendingRequest = .approval }
+        if sessionToolWaits ?? sessionToolWaitsForPerson(in: id) { detail.pendingRequest = .approval }
         if restartQuestions[id] != nil {
             if restartQuestion(in: id) != nil {
                 detail.idleRequest = .input

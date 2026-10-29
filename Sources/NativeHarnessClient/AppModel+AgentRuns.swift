@@ -266,7 +266,9 @@ extension AppModel {
     /// A shared-transcript harness's event: its conversation, its requests and the end of its turn.
     func acceptAgentRun(_ payload: HarnessEventPayload, in run: AgentRun) {
         guard !run.state.isFinished else { return }
-        if run.codexState == nil || run.harness != .codex {
+        // A Codex thread's conversation and requests come with its state once it has one.
+        let appliesConversation = run.codexState == nil || run.harness != .codex
+        if appliesConversation {
             run.builder.apply(payload)
             run.entries = run.builder.entries
         }
@@ -302,8 +304,8 @@ extension AppModel {
         default:
             break
         }
-        if run.harness != .codex { run.answer = Self.latestAnswer(in: run.presentation()) }
-        sessionToolApprovalsChanged(in: run.hostTaskID)
+        if run.harness != .codex { run.answer = run.latestAnswer }
+        if appliesConversation { sessionToolApprovalsChanged(in: run.hostTaskID) }
     }
 
     /// A Codex thread's state: its conversation and requests, and the end of its turn.
@@ -316,7 +318,7 @@ extension AppModel {
             run.state = waits ? .waitingForApproval : .running
         }
         if waits, run.isEvaluationJudge { Task { await stopAgentRun(run) } }
-        run.answer = Self.latestAnswer(in: run.presentation())
+        run.answer = run.latestAnswer
         if run.sawWork, state.activeTurnID == nil, let last = state.thread?.turns.last {
             switch last.status {
             case .completed: finishAgentRun(run, state: .completed)
@@ -379,7 +381,7 @@ extension AppModel {
         sessionTools.dequeue(run.id)
         let started = run.state != .queued
         run.state = state
-        run.answer = Self.latestAnswer(in: run.presentation()) ?? run.answer
+        run.answer = run.latestAnswer ?? run.answer
         for consumer in run.consumers { consumer.cancel() }
         run.consumers = []
         agentTools?.releaseAgentTools(for: run.id)
