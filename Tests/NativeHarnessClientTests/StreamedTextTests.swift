@@ -162,12 +162,19 @@ final class StreamedTextTests: XCTestCase {
         XCTAssertEqual(summaryValue(), L10n.string("Expanded"))
     }
 
-    /// Words streamed into a list's last item lay out and draw again only that item: the list is one
-    /// block, and the items before it keep their layout. The text still reads as the message built
-    /// afresh does, after an item is added and when an earlier item changes.
+    /// Words streamed into a list's last item read, build, lay out and draw again only that item: the
+    /// list is one block, and the items before it keep the blocks they were read into and their layout.
+    /// The text still reads as the message read and built afresh does, after an item is added and when
+    /// an earlier item changes.
     func testAStreamedListItemLaysOutAgainOnlyItself() throws {
-        func blocks(_ source: String) -> [TranscriptProseBlock] {
-            TranscriptMarkdownDocument(source).blocks.enumerated().map { TranscriptProseBlock(block: $1, path: [$0]) }
+        let readings = TranscriptMarkdownReadings()
+        func blocks(_ source: String, afresh: Bool = false) -> [TranscriptProseBlock] {
+            TranscriptMarkdownDocument(source, readings: afresh ? nil : readings).blocks.enumerated()
+                .map { TranscriptProseBlock(block: $1, path: [$0]) }
+        }
+        func items(_ blocks: [TranscriptProseBlock]) -> [TranscriptMarkdownListItem] {
+            guard case let .unorderedList(items, _)? = blocks.last?.block else { return [] }
+            return items
         }
         func fragments(_ view: TranscriptProseContainerView) throws -> [NSTextLayoutFragment] {
             let layout = try XCTUnwrap(view.textView.textLayoutManager)
@@ -181,12 +188,19 @@ final class StreamedTextTests: XCTestCase {
         let view = TranscriptProseContainerView()
         var source = "What changed:\n\n" + (0..<6).map { "- Item \($0): words that wrap across the line in a narrow message." }
             .joined(separator: "\n")
-        view.update(blocks: blocks(source), style: TranscriptProseStyle())
+        let earlier = blocks(source)
+        view.update(blocks: earlier, style: TranscriptProseStyle())
         _ = view.size(forWidth: 400)
         let before = try fragments(view)
 
         source += " More words"
-        view.update(blocks: blocks(source), style: TranscriptProseStyle())
+        let streamed = blocks(source)
+        XCTAssertEqual(streamed.first, earlier.first)
+        // The blocks and items before the one being written are the ones read before, not equal copies.
+        XCTAssertTrue(items(streamed).dropLast().elementsEqual(items(earlier).dropLast()) {
+            $0.blocks.sharesStorage(with: $1.blocks)
+        }, "An item before the one being written was read again")
+        view.update(blocks: streamed, style: TranscriptProseStyle())
         _ = view.size(forWidth: 400)
         let after = try fragments(view)
         XCTAssertEqual(after.count, 7)
@@ -196,10 +210,13 @@ final class StreamedTextTests: XCTestCase {
         }
         XCTAssertFalse(before.last === after.last, "The item being written kept its old layout")
 
-        for next in [source + "\n- Item 6: the next item", source.replacingOccurrences(of: "Item 2:", with: "Item two:")] {
-            view.update(blocks: blocks(next), style: TranscriptProseStyle())
+        for next in [source + "\n- Item 6: the next item", source.replacingOccurrences(of: "Item 2:", with: "Item two:"),
+                     source + "\n\n- Item 6: a blank line before it loosens the list"] {
+            let read = blocks(next)
+            XCTAssertEqual(read, blocks(next, afresh: true), "The blocks differ from the message read afresh")
+            view.update(blocks: read, style: TranscriptProseStyle())
             let fresh = TranscriptProseContainerView()
-            fresh.update(blocks: blocks(next), style: TranscriptProseStyle())
+            fresh.update(blocks: blocks(next, afresh: true), style: TranscriptProseStyle())
             let text = try XCTUnwrap(view.textView.textStorage), freshText = try XCTUnwrap(fresh.textView.textStorage)
             XCTAssertTrue(text.isEqual(to: freshText), "The text differs from the message built afresh")
         }

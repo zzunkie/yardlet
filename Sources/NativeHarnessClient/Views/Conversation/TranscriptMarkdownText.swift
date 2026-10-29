@@ -69,11 +69,14 @@ private struct TranscriptMarkdownDocumentView: View {
     let source: String
     let fullSource: String
     let dialect: TranscriptMarkdownDialect
+    /// The blocks the message was last read into, which a streaming message's next words keep
+    /// (`TranscriptMarkdownReadings`). Nothing observes it.
+    @State private var readings = TranscriptMarkdownReadings()
 
     var body: some View {
         TranscriptMarkdownBlocksView(
-            blocks: TranscriptMarkdownDocument(source, dialect: dialect).blocks, fullSource: fullSource,
-            dialect: dialect, path: []
+            blocks: TranscriptMarkdownDocument(source, dialect: dialect, readings: readings).blocks,
+            fullSource: fullSource, dialect: dialect, path: []
         )
     }
 }
