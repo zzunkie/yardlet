@@ -243,6 +243,10 @@ def show(result, comparison):
         print(f"\nCompared with {comparison['againstCommit']} ({comparison['against']}): "
               f"{len(comparison['worse'])} worse, {len(comparison['better'])} better, "
               f"by more than {int(comparison['tolerance'] * 100)}% and the unit's floor.")
+        before_load, now_load = comparison['earlier'].get('loadAtStart'), result.get('loadAtStart')
+        if before_load and now_load and abs(now_load - before_load) > max(3, 0.3 * min(now_load, before_load)):
+            print(f"The Mac was busier in one run (load {before_load} then {now_load} at the start): times and CPU move "
+                  "with load, so run both again at a similar load before reading a number as a change.")
     else:
         print('\nNo earlier result to compare with.')
     budgets = result.get('budgets')

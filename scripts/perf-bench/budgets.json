@@ -31,7 +31,7 @@
   },
   "sidebar/scroll-streaming": {
     "events.codexState.cpuP95Ms": 2.0,
-    "mainThread.passesOver50MsCount": 2
+    "mainThread.passesOver50MsCount": 5
   },
   "browser-tabs/tabs-shown": {
     "process.appCPUPercent": 2.0

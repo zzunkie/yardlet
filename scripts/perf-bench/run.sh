@@ -154,50 +154,57 @@ if (( app_scenes )); then
                            --ui-fixture-browser-ignore-occlusion)
     fi
 
+    # One scene in a fresh launch: <scene> <its output folder> <log name>.
+    run_scene() {
+        local scene=$1 scene_out=$2 name=$3 markers=$bench/scenes/$1/markers extra=() attempt ready marker seconds deadline
+        mkdir -p "$scene_out/samples"
+        rm -rf "$bench/scenes/$scene"
+        print -r -- "{\"loadBefore\": $(load_average)}" > "$scene_out/run.json"
+        [[ $scene == browser-tabs ]] && extra=($browser_arguments)
+        app_pid=$("$QA/qa-launch.sh" "$qa_app" "$qa_home" "$out/logs/$name.log" -- \
+            --ui-fixture=perf --ui-fixture-perf-scene="$scene" --ui-fixture-perf-dir="$bench" $extra \
+            -AppleLanguages "(en)" -AppleLocale en_US)
+        # Launched in the background the app makes its window only when opened again, as clicking the Dock
+        # icon would, and the fixture starts in the window: open it again as soon as the app has launched.
+        for _ in {1..300}; do [[ -e "$markers/launched" ]] && break; sleep 0.05; done
+        for attempt in {1..10}; do
+            /usr/bin/open -g "$qa_app"
+            for _ in {1..60}; do [[ -e "$markers/window" ]] && break; sleep 0.05; done
+            [[ -e "$markers/window" ]] && break
+        done
+        print -r -- "{\"loadBefore\": $(load_average), \"reopens\": $attempt}" > "$scene_out/run.json"
+        deadline=$(( SECONDS + 240 ))
+        while kill -0 "$app_pid" 2>/dev/null && (( SECONDS < deadline )); do
+            [[ -e "$markers/finished" ]] && break
+            for ready in "$markers"/*.ready(N); do
+                marker=${ready:t:r}
+                [[ -e "$markers/$marker.go" ]] && continue
+                seconds=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["seconds"])' "$ready")
+                : > "$markers/$marker.go"
+                "$work/bin/sampler" "$app_pid" "$marker" "$seconds" > "$scene_out/samples/$marker.json" 2>/dev/null || true
+                print -n "${marker#*-} "
+            done
+            sleep 0.05
+        done
+        for _ in {1..100}; do kill -0 "$app_pid" 2>/dev/null || break; sleep 0.1; done
+        quit_app
+        cp "$bench/scenes/$scene/progress.log" "$scene_out/" 2>/dev/null || true
+        if [[ -f "$bench/scenes/$scene/scene.json" ]]; then
+            cp "$bench/scenes/$scene/scene.json" "$scene_out/scene.json"
+            print "done"
+        else
+            print "no result (see $out/logs/$name.log)"
+        fi
+    }
+
+    # A fresh copy's first launch reads and checks its code for the first time and is much slower than the
+    # next. One launch nobody measures goes first, so every scene measures a launch like the person's next one.
+    print -n "warm-up launch: "
+    run_scene launch "$out/warm-up" warm-up
     for (( round = 1; round <= repeat; round++ )); do
         for scene in $scenes; do
-            scene_out=$out/scenes/$scene/$round
-            mkdir -p "$scene_out/samples"
-            markers=$bench/scenes/$scene/markers
-            rm -rf "$bench/scenes/$scene"
             print -n "$scene (round $round): "
-            print -r -- "{\"loadBefore\": $(load_average)}" > "$scene_out/run.json"
-            extra=()
-            [[ $scene == browser-tabs ]] && extra=($browser_arguments)
-            app_pid=$("$QA/qa-launch.sh" "$qa_app" "$qa_home" "$out/logs/$scene-$round.log" -- \
-                --ui-fixture=perf --ui-fixture-perf-scene="$scene" --ui-fixture-perf-dir="$bench" $extra \
-                -AppleLanguages "(en)" -AppleLocale en_US)
-            # Launched in the background the app makes its window only when opened again, as clicking the Dock
-            # icon would, and the fixture starts in the window: open it again as soon as the app has launched.
-            for _ in {1..300}; do [[ -e "$markers/launched" ]] && break; sleep 0.05; done
-            for attempt in {1..10}; do
-                /usr/bin/open -g "$qa_app"
-                for _ in {1..60}; do [[ -e "$markers/window" ]] && break; sleep 0.05; done
-                [[ -e "$markers/window" ]] && break
-            done
-            print -r -- "{\"loadBefore\": $(load_average), \"reopens\": $attempt}" > "$scene_out/run.json"
-            deadline=$(( SECONDS + 240 ))
-            while kill -0 "$app_pid" 2>/dev/null && (( SECONDS < deadline )); do
-                [[ -e "$markers/finished" ]] && break
-                for ready in "$markers"/*.ready(N); do
-                    marker=${ready:t:r}
-                    [[ -e "$markers/$marker.go" ]] && continue
-                    seconds=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["seconds"])' "$ready")
-                    : > "$markers/$marker.go"
-                    "$work/bin/sampler" "$app_pid" "$marker" "$seconds" > "$scene_out/samples/$marker.json" 2>/dev/null || true
-                    print -n "${marker#*-} "
-                done
-                sleep 0.05
-            done
-            for _ in {1..100}; do kill -0 "$app_pid" 2>/dev/null || break; sleep 0.1; done
-            quit_app
-            cp "$bench/scenes/$scene/progress.log" "$scene_out/" 2>/dev/null || true
-            if [[ -f "$bench/scenes/$scene/scene.json" ]]; then
-                cp "$bench/scenes/$scene/scene.json" "$scene_out/scene.json"
-                print "done"
-            else
-                print "no result (see $out/logs/$scene-$round.log)"
-            fi
+            run_scene "$scene" "$out/scenes/$scene/$round" "$scene-$round"
         done
     done
 fi
