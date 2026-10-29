@@ -2748,6 +2748,19 @@
 "“%@” is waiting to make a password for %@." = "“%@” is waiting to make a password for %@.";
 "make a password for %@ for “%@”, on a page where it ran its own scripts" = "make a password for %@ for “%@”, on a page where it ran its own scripts";
 
+/* Finding and picking an item (vault §16) */
+"fill “%@” on %@, which is not one of its sites" = "fill “%@” on %@, which is not one of its sites";
+"This page has no code field, so the code from “%@” is copied. It is cleared from the clipboard in 90 seconds." = "This page has no code field, so the code from “%@” is copied. It is cleared from the clipboard in 90 seconds.";
+"Search passwords" = "Search passwords";
+"Saved for %@" = "Saved for %@";
+"Nothing is saved for this site. Search for a sign-in or code saved elsewhere." = "Nothing is saved for this site. Search for a sign-in or code saved elsewhere.";
+"Other passwords" = "Other passwords";
+"No matching passwords" = "No matching passwords";
+"No site" = "No site";
+"Choose Another Code…" = "Choose Another Code…";
+"Save %@ as the site of “%@”?" = "Save %@ as the site of “%@”?";
+"Also save %@ in “%@”?" = "Also save %@ in “%@”?";
+
 /* Browser profile per task */
 "Keep cookies" = "Keep cookies";
 "Per task" = "Per task";

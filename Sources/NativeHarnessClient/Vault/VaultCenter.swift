@@ -300,9 +300,9 @@ final class VaultCenter: ObservableObject {
             }
             // The password and the code of one account are often two items, so an item here or with no site that
             // lacks what is asked for gives way to the site's one item of the same username that has it.
-            if !named.has(request.kind), named.sites.isEmpty || onSite.contains(where: { $0.id == named.id }) {
-                let account = able.filter { $0.isSameAccount(as: named) }
-                if account.count == 1 { named = account[0] }
+            if !named.has(request.kind), named.sites.isEmpty || onSite.contains(where: { $0.id == named.id }),
+               let account = accountItem(of: named, having: request.kind, on: request.origin) {
+                named = account
             }
             guard onSite.contains(where: { $0.id == named.id }) else {
                 // An item with no site yet, such as a code from an authenticator app, is for no page until the
@@ -498,6 +498,17 @@ final class VaultCenter: ObservableObject {
         try? environment.secrets.save(secret, for: itemID)
     }
 
+    /// The page's one other item of `item`'s account that has what a fill of `kind` needs: a site's password and its
+    /// two-factor code are often two items of one account (design §14.3). Nil when there is none or more than one,
+    /// or the item has no username to tell its account by.
+    private func accountItem(of item: VaultItem, having kind: VaultFillKind, on origin: String) -> VaultItem? {
+        let account = items.filter { other in
+            other.id != item.id && other.has(kind) && other.isSameAccount(as: item)
+                && other.sites.contains { VaultSite.matches($0, origin: origin) }
+        }
+        return account.count == 1 ? account[0] : nil
+    }
+
     /// An item as a refusal lists it: its name, and the username that tells apart items of one name.
     private static func label(_ item: VaultItem) -> String {
         item.username.isEmpty ? "“\(item.name)”" : "“\(item.name)” (\(item.username))"
@@ -628,16 +639,43 @@ final class VaultCenter: ObservableObject {
         return items[index]
     }
 
-    /// The values for the person's own fill: they pressed the key button or the code bar, so no policy
-    /// applies. The code is the one current now.
-    func valuesForPerson(_ item: VaultItem, origin: String) -> VaultFillGrant? {
-        guard item.sites.contains(where: { VaultSite.matches($0, origin: origin) }),
+    /// The values for the person's own fill: they chose the item from the key button's list or the code bar, so its
+    /// agent policy does not apply. The code is the one current now, the item's or, when it has none, that of the
+    /// page's one other item of the same account (design §14.3). An item chosen for a page that is not one of its
+    /// sites gives its password only once the person confirms with Touch ID, as Chrome confirms and Bitwarden warns
+    /// first: filling it hands it to that page. Its code needs nothing, as copying it from Settings →
+    /// Passwords does not (design §16). `codeOnly` leaves the password out. Nil when the person did not confirm.
+    func valuesForPerson(_ item: VaultItem, origin: String, codeOnly: Bool = false) async -> VaultFillGrant? {
+        // The item as saved now: a list or bar drawn before a site was saved in it holds it as it was.
+        guard environment.isAllowedBuild, isEnabled, let item = items.first(where: { $0.id == item.id }),
               let secret = try? trustedSecret(of: item) else { return nil }
         var grant = VaultFillGrant(item: item, confirmedBy: .person)
         grant.username = item.username.isEmpty ? nil : item.username
-        grant.password = secret.password
-        grant.code = secret.oneTimeCode.map { code(for: $0) }
+        grant.password = codeOnly ? nil : secret.password
+        let codeSecret = secret.oneTimeCode
+            ?? accountItem(of: item, having: .oneTimeCode, on: origin).flatMap { try? trustedSecret(of: $0) }?.oneTimeCode
+        grant.code = codeSecret.map { code(for: $0) }
+        if grant.password != nil, !item.sites.contains(where: { VaultSite.matches($0, origin: origin) }) {
+            guard await environment.confirm(L10n.format("fill “%@” on %@, which is not one of its sites",
+                                                        item.name, VaultSite.host(of: origin))) else { return nil }
+            grant.confirmedBy = .touchID
+        }
         return grant
+    }
+
+    /// The key button's list for a page (design §16): the page's own items and, for a search, every other item it
+    /// finds by name, username or site. `codes` keeps to the items with a two-factor code (the code bar's list).
+    /// The list is the person's: no tool gives it to an agent.
+    func pickerItems(for origin: String?, matching query: String, codes: Bool = false)
+        -> (here: [VaultItem], elsewhere: [VaultItem]) {
+        guard environment.isAllowedBuild, isEnabled else { return ([], []) }
+        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let found = items.filter { (!codes || $0.hasOneTimeCode) && $0.matches(query) }
+        let here = origin.map { origin in found.filter { $0.sites.contains { VaultSite.matches($0, origin: origin) } } } ?? []
+        guard searching else { return (here, []) }
+        let elsewhere = found.filter { item in !here.contains { $0.id == item.id } }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        return (here, elsewhere)
     }
 
     /// The code a secret gives at a moment (now by default), as an authenticator app shows it.

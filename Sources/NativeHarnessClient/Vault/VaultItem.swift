@@ -41,6 +41,15 @@ struct VaultItem: Codable, Identifiable, Equatable, Sendable {
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
     }
+
+    /// Whether a search finds the item, as a password manager's search does: each word of `query` is in its name,
+    /// username or one of its sites, apart from case and accents. An empty search finds every item.
+    func matches(_ query: String) -> Bool {
+        let fields = [name, username] + sites
+        return query.split(whereSeparator: \.isWhitespace).allSatisfy { word in
+            fields.contains { $0.localizedStandardContains(word) }
+        }
+    }
 }
 
 /// The secrets of one item, as the keychain keeps them.

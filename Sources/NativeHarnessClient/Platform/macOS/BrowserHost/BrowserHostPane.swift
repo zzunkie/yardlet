@@ -99,6 +99,14 @@ final class BrowserHostPaneController {
     @ObservationIgnored var offeredPasswordPages: Set<String> = []
     @ObservationIgnored var madePassword: BrowserVaultMadePassword?
     @ObservationIgnored var isScanningForCodes = false
+    /// The key button's list (§16): whether it is open, whether it keeps to two-factor codes (opened from the code
+    /// bar), and what its search holds; and an item it filled on a site it is not saved for, offered that site.
+    var isVaultPickerShown = false
+    var vaultPickerCodes = false
+    var vaultPickerQuery = ""
+    var vaultLinkOffer: BrowserVaultLinkOffer?
+    /// Where a code goes when the page has no field for it (QA fixtures put their own, not the person's clipboard).
+    @ObservationIgnored var vaultPasteboard: NSPasteboard = .general
     /// Setup codes the person said no to, not offered again while the tab is shown.
     @ObservationIgnored var dismissedSetups: Set<Data> = []
     @ObservationIgnored var vaultWatch: (tab: BrowserTabID, token: UUID)?
@@ -1245,6 +1253,7 @@ struct BrowserHostPane: View {
                     if let offer = controller.vaultSetupOffer { vaultSetupBar(offer) }
                     if let offer = controller.vaultCodeOffer { vaultCodeBar(offer) }
                     if let offer = controller.vaultPasswordOffer { vaultPasswordBar(offer) }
+                    if let offer = controller.vaultLinkOffer { vaultLinkBar(offer) }
                     if let notice = controller.notice {
                         Label(notice, systemImage: "hand.raised")
                             .font(.callout).foregroundStyle(.secondary)
@@ -1454,30 +1463,27 @@ struct BrowserHostPane: View {
             if !controller.blockedPopups.isEmpty { blockedPopupsMenu }
             ParityIconButton(systemName: "arrow.right", help: L10n.string("Open")) { controller.submitAddress() }
             .disabled(controller.addressInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            let saved = vault.isEnabled ? controller.vaultItemsForPage(controller.tab?.currentURL) : []
-            if !saved.isEmpty {
-                // Chrome's address-field key: the sign-ins saved for this site, filled for the person.
-                Menu {
-                    ForEach(saved) { item in
-                        Button(item.username.isEmpty ? item.name : "\(item.name) · \(item.username)") {
-                            controller.fillForPerson(item)
-                        }
-                    }
-                } label: {
-                    Image(systemName: "key")
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help(L10n.string("Fill a saved sign-in"))
-                .accessibilityLabel(L10n.string("Fill a saved sign-in"))
-            }
+            if controller.showsVaultKey(for: controller.tab?.currentURL) { vaultKeyButton }
             if onPickElement != nil { pickElementButton }
         }
         .padding(.horizontal, 10)
         .frame(height: 40)
         .background(ParityTheme.canvas)
         .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
+    }
+
+    /// Chrome's address-field key, opening a list as Chrome's "Select password" and 1Password's and Bitwarden's toolbar
+    /// buttons do: the site's sign-ins and codes and a search over all of them, filled for the person (design §16).
+    private var vaultKeyButton: some View {
+        ParityIconButton(systemName: "key", help: L10n.string("Fill a saved sign-in")) {
+            if controller.isVaultPickerShown { controller.isVaultPickerShown = false } else { controller.openVaultPicker() }
+        }
+        .popover(isPresented: $controller.isVaultPickerShown, arrowEdge: .bottom) {
+            VaultPickerView(vault: vault, origin: controller.tab?.currentURL.flatMap(VaultSite.origin(of:)),
+                            codes: controller.vaultPickerCodes, query: $controller.vaultPickerQuery) { item in
+                controller.fillForPerson(item)
+            }
+        }
     }
 
     /// DevTools' "Select an element", for the task's next message; lit while the panel picks.
@@ -1643,9 +1649,17 @@ struct BrowserHostPane: View {
         } actions: {
             Button(L10n.string("Not Now")) { controller.vaultCodeOffer = nil }
                 .controlSize(.small)
+            // One code fills at once and its arrow opens the key button's list for another; several are listed first.
             if offer.items.count == 1 {
-                Button(L10n.string("Fill Code")) { controller.fillCodeForPerson(offer.items[0]) }
-                    .controlSize(.small)
+                Menu {
+                    Button(L10n.string("Choose Another Code…")) { controller.openVaultPicker(codes: true) }
+                } label: {
+                    Text(L10n.string("Fill Code"))
+                } primaryAction: {
+                    controller.fillCodeForPerson(offer.items[0])
+                }
+                .controlSize(.small)
+                .fixedSize()
             } else {
                 Menu(L10n.string("Fill Code")) {
                     ForEach(offer.items) { item in
@@ -1653,10 +1667,27 @@ struct BrowserHostPane: View {
                             controller.fillCodeForPerson(item)
                         }
                     }
+                    Divider()
+                    Button(L10n.string("Choose Another Code…")) { controller.openVaultPicker(codes: true) }
                 }
                 .controlSize(.small)
                 .fixedSize()
             }
+        }
+    }
+
+    /// An item the person filled from the key button's list on a site it is not saved for (design §16): saving the
+    /// site makes it the site's own, offered there from then on and filled there for agents as its use allows.
+    private func vaultLinkBar(_ offer: BrowserVaultLinkOffer) -> some View {
+        vaultBar(systemName: "key") {
+            Text(offer.item.sites.isEmpty
+                 ? L10n.format("Save %@ as the site of “%@”?", offer.site, offer.item.name)
+                 : L10n.format("Also save %@ in “%@”?", offer.site, offer.item.name))
+        } actions: {
+            Button(L10n.string("Not Now")) { controller.vaultLinkOffer = nil }
+                .controlSize(.small)
+            Button(L10n.string("Save")) { controller.acceptVaultLinkOffer() }
+                .controlSize(.small)
         }
     }
 

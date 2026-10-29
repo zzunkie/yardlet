@@ -2748,6 +2748,19 @@
 "“%@” is waiting to make a password for %@." = "“%1$@”이(가) %2$@ 비밀번호를 만들려고 기다립니다.";
 "make a password for %@ for “%@”, on a page where it ran its own scripts" = "%1$@ 비밀번호 만들기(“%2$@” 작업이 자기 스크립트를 실행한 페이지)";
 
+/* Finding and picking an item (vault §16) */
+"fill “%@” on %@, which is not one of its sites" = "저장한 사이트가 아닌 %2$@에 “%1$@” 채우기";
+"This page has no code field, so the code from “%@” is copied. It is cleared from the clipboard in 90 seconds." = "이 페이지에 코드 칸이 없어 “%@”의 인증 코드를 복사했습니다. 90초 뒤 클립보드에서 지웁니다.";
+"Search passwords" = "비밀번호 검색";
+"Saved for %@" = "%@에 저장된 항목";
+"Nothing is saved for this site. Search for a sign-in or code saved elsewhere." = "이 사이트에 저장된 항목이 없습니다. 다른 사이트에 저장한 로그인이나 인증 코드를 검색하세요.";
+"Other passwords" = "다른 비밀번호";
+"No matching passwords" = "일치하는 비밀번호가 없습니다";
+"No site" = "사이트 없음";
+"Choose Another Code…" = "다른 코드 고르기…";
+"Save %@ as the site of “%@”?" = "“%2$@”에 %1$@ 사이트를 저장할까요?";
+"Also save %@ in “%@”?" = "“%2$@”에 %1$@ 사이트도 저장할까요?";
+
 /* Browser profile per task */
 "Keep cookies" = "쿠키 보관";
 "Per task" = "작업마다";
