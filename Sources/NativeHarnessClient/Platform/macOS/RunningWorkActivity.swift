@@ -82,8 +82,12 @@ enum KeepScreenAwakePreference {
         followed = model
         let center = NotificationCenter.default
         observers = [
-            center.addObserver(forName: UserDefaults.didChangeNotification, object: defaults, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refresh() }
+            // Delivered on the writing thread and passed on without holding it, as `MenuBarStatusItem`
+            // does: a main-queue observer holds a writer on another thread until the main thread runs
+            // it, and a main thread waiting for that writer then never does.
+            center.addObserver(forName: UserDefaults.didChangeNotification, object: defaults, queue: nil) { [weak self] _ in
+                guard let self else { return }
+                Task { @MainActor in self.refresh() }
             },
             center.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.refresh() }
