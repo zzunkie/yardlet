@@ -30,11 +30,19 @@ struct ConversationTaskSuggestion: Identifiable, Equatable, Sendable {
 /// words only Yardlet's answer has (`TaskSuggestionToolCatalog.taskID(inResult:)`), so a call the
 /// Claude app's own `spawn_task` answered, in a conversation imported from it, stays a tool line.
 enum ConversationTaskSuggestionProjection {
-    /// A shared-transcript call (Claude Code, ACP) that Yardlet answered as a suggestion.
+    /// A shared-transcript call (Claude Code, ACP) that Yardlet answered as a suggestion. The session
+    /// rail asks this of every finished call in the conversation each time it updates, so a call is
+    /// passed over by its answer, which is short when it is Yardlet's, before its input is decoded.
     static func suggestion(from activity: HarnessActivity) -> ConversationTaskSuggestion? {
-        guard activity.outcome != .failed, activity.subtask == nil, activity.diff == nil else { return nil }
-        return suggestion(arguments: ConversationAgentRunProjection.arguments(in: activity.input), result: activity.output)
+        guard activity.outcome != .failed, activity.subtask == nil, activity.diff == nil,
+              let result = activity.output, result.utf8.count <= longestAnswer,
+              TaskSuggestionToolCatalog.taskID(inResult: result) != nil else { return nil }
+        return suggestion(arguments: ConversationAgentRunProjection.arguments(in: activity.input), result: result)
     }
+
+    /// Longer than any answer Yardlet gives a suggestion (`TaskSuggestionToolCatalog.notedResult`),
+    /// however a harness wraps it.
+    private static let longestAnswer = 16_384
 
     /// A Codex MCP call to the `yardlet` server's `spawn_task`.
     static func suggestion(from tool: CodexMCPToolItem) -> ConversationTaskSuggestion? {
