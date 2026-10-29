@@ -71,7 +71,10 @@ final class ConversationProjectionPerformanceTests: XCTestCase {
             }
             running.aggregatedOutput = (running.aggregatedOutput ?? "") + "Line \(line)\n"
             state.thread?.turns[300].items[1].content = .commandExecution(running)
+            let items = cache.codexItems.projected
             expectProjected(1, "output \(line)")
+            // In that turn, only the command is projected again; the request is kept.
+            XCTAssertEqual(cache.codexItems.projected - items, 1, "output \(line)")
         }
 
         // An approval arrives for an earlier turn, then is answered.

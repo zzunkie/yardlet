@@ -51,7 +51,7 @@ enum CodexConversationProjection {
         historySelection: CodexHistorySearchSelection?
     ) -> ConversationPresentation {
         presentation(state, workspaceURL: workspaceURL, historySelection: historySelection) { inputs in
-            inputs.map(turn)
+            inputs.map { turn($0) }
         }
     }
 
@@ -223,20 +223,54 @@ enum CodexConversationProjection {
         return placingAnsweredRequests([request], in: [], turnID: turn.id).last
     }
 
-    static func turn(_ input: TurnInput) -> ConversationTurn {
+    /// Everything one item's projection reads besides the turn's file changes, which an item reads
+    /// only for itself. Equal inputs project equal items.
+    struct ItemInput: Equatable {
+        let item: CodexItemState
+        let isTurnFinished: Bool
+        let workspaceURL: URL
+        let isHistoryMatch: Bool
+        let inHeartbeatTurn: Bool
+    }
+
+    /// `items` keeps each item as it was last projected: a running turn projects again with every
+    /// state it streams, and its other items, an image result decoded or a call's details encoded,
+    /// are then taken as they were.
+    static func turn(_ input: TurnInput, items: CodexItemMemo? = nil) -> ConversationTurn {
         let turn = input.turn
         let layout = CodexTurnLayout(turn: turn)
         let isFinished = turn.status.isTerminal
         let historyItemIDs = historyItemIDs(in: turn, match: input.history)
-        let changes = CodexWorkSurfaceProjection.changes(in: turn, workspaceURL: input.workspaceURL)
+        // Worked out only for an item that is projected and reads them.
+        var turnChanges: [CodexChangeHandoff]?
+        func changes(for item: CodexItemState) -> [CodexChangeHandoff] {
+            guard case .fileChange = item.content else { return [] }
+            if let turnChanges { return turnChanges }
+            let changes = CodexWorkSurfaceProjection.changes(in: turn, workspaceURL: input.workspaceURL)
+            turnChanges = changes
+            return changes
+        }
         let inHeartbeatTurn = isHeartbeatTurn(turn)
-        func project(_ items: [CodexItemState]) -> [ConversationItem] {
-            items.compactMap { codexItem in
-                shownItem(
+        var kept = CodexItemMemo.Turn()
+        defer { items?.keep(kept, for: turn.id) }
+        func project(_ codexItems: [CodexItemState]) -> [ConversationItem] {
+            codexItems.compactMap { codexItem in
+                let itemInput = ItemInput(
+                    item: codexItem, isTurnFinished: isFinished, workspaceURL: input.workspaceURL,
+                    isHistoryMatch: historyItemIDs.contains(codexItem.id), inHeartbeatTurn: inHeartbeatTurn
+                )
+                if let shown = items?.item(itemInput, in: turn.id) {
+                    kept[codexItem.id] = (itemInput, shown)
+                    return shown
+                }
+                let shown = shownItem(
                     codexItem, turnID: turn.id, isTurnFinished: isFinished, workspaceURL: input.workspaceURL,
-                    changes: changes, isHistoryMatch: historyItemIDs.contains(codexItem.id),
+                    changes: changes(for: codexItem), isHistoryMatch: itemInput.isHistoryMatch,
                     inHeartbeatTurn: inHeartbeatTurn
                 )
+                items?.projected += 1
+                kept[codexItem.id] = (itemInput, shown)
+                return shown
             }
         }
 
@@ -742,16 +776,47 @@ enum CodexConversationProjection {
 }
 
 extension ConversationProjectionCache {
-    /// A Codex task's conversation, projecting again only the turns whose input changed.
+    /// A Codex task's conversation, projecting again only the turns whose input changed, and in those
+    /// only the items whose input changed.
     func codex(
         _ state: CodexTaskState,
         workspaceURL: URL,
         historySelection: CodexHistorySearchSelection?
     ) -> ConversationPresentation {
-        CodexConversationProjection.presentation(
+        let items = codexItems
+        let presentation = CodexConversationProjection.presentation(
             state, workspaceURL: workspaceURL, historySelection: historySelection
         ) { inputs in
-            turns(inputs.map { (id: $0.turn.id, input: $0) }, project: CodexConversationProjection.turn)
+            turns(inputs.map { (id: $0.turn.id, input: $0) }) { CodexConversationProjection.turn($0, items: items) }
         }
+        items.forget(turnsOtherThan: Set(presentation.turns.map(\.id)))
+        return presentation
+    }
+}
+
+/// The items of each Codex turn as last projected, by turn and item ID, with what each was projected
+/// from (`CodexConversationProjection.turn`). An item is kept while its input stays the same; an
+/// untouched item shares its storage with the one kept, so comparing them stops there.
+final class CodexItemMemo {
+    typealias Turn = [String: (input: CodexConversationProjection.ItemInput, item: ConversationItem?)]
+
+    private var turns: [String: Turn] = [:]
+    /// Items projected since the memo was made, for tests that count them.
+    var projected = 0
+
+    /// The item kept for `input`, or nil when it must be projected (a nil item that was kept is
+    /// one the conversation leaves out).
+    func item(_ input: CodexConversationProjection.ItemInput, in turnID: String) -> ConversationItem?? {
+        guard let kept = turns[turnID]?[input.item.id], kept.input == input else { return nil }
+        return .some(kept.item)
+    }
+
+    /// The turn's items as it was just projected; items it no longer has are forgotten.
+    func keep(_ items: Turn, for turnID: String) {
+        turns[turnID] = items
+    }
+
+    func forget(turnsOtherThan ids: Set<String>) {
+        if turns.keys.contains(where: { !ids.contains($0) }) { turns = turns.filter { ids.contains($0.key) } }
     }
 }

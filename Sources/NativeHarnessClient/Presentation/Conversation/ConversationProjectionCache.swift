@@ -28,6 +28,8 @@ final class ConversationProjectionCache {
 
     private var memos: [String: Memo] = [:]
     private var update: UInt64 = 0
+    /// The items of the Codex turns projected again (`codex(_:workspaceURL:historySelection:)`).
+    let codexItems = CodexItemMemo()
     /// The last shared-transcript conversation and the very record it came from. The record is kept,
     /// so a changed record is a copy with storage of its own, and an unchanged one is known without
     /// comparing its entries: a long conversation shown again is not projected again.
