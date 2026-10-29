@@ -16,7 +16,11 @@ send the password where it does not belong, VAULT_GET below), /vault/react (fiel
 controlled inputs), /vault/otp (a one-time code field and six one-digit boxes, checked against RFC 6238's
 test key in the page), /vault/otp/setup (a site's two-factor setup: a QR code of an otpauth:// address and a
 field for the first code, checked against the QR code's test key), /vault/otp/export (a picture of Google
-Authenticator's export QR code with two TOTP accounts and one counter-based one, all test keys), /isolation (a blank page whose cookies and localStorage the QA reads and sets), /vault/reveal (a password field with a show button), /vault/step (a first step with the email only), /vault/signup (a
+Authenticator's export QR code with two TOTP accounts and one counter-based one, all test keys), /vault/otp/dialog (a
+two-step dialog shaped like Instagram's, whose code field only a label after it names, checked against RFC 6238's test
+key), /vault/otp/decoys (fields that are not code fields: search, phone, a card's, postal code, promo code, birth year
+and password), /vault/otp/cases (fields of other sites and languages, each with what the code field rule should say of
+it), /isolation (a blank page whose cookies and localStorage the QA reads and sets), /vault/reveal (a password field with a show button), /vault/step (a first step with the email only), /vault/signup (a
 sign-up form whose new password and confirmation fields carry passwordrules), /vault/change (a password change form for
 person@example.test: current, new and confirmation fields, none marked, the current one told apart by its label) and /vault/webauthn (a blank
 page for WebAuthn on localhost), /passkey (a sign-in form with passkey autofill and the passkey requests sites
@@ -327,12 +331,9 @@ window.qa = {submitted: null};
 document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = {...state}; });
 </script>'''
 
-VAULT_OTP = '''<!doctype html><meta charset="utf-8"><title>Vault code</title>
-<form id="one"><input id="code" autocomplete="one-time-code" inputmode="numeric" maxlength="6"><button>Verify</button></form>
-<form id="boxes"><span id="digits">''' + ''.join(f'<input id="d{i}" maxlength="1" inputmode="numeric">' for i in range(6)) + '''</span><button>Verify</button></form>
-<script>
-// RFC 6238's SHA-1 test key, "12345678901234567890", six digits, 30 seconds.
-async function expected(offset) {
+# RFC 6238's SHA-1 test key, "12345678901234567890", six digits, 30 seconds: check(code) says whether a code is the
+# current one or the one before.
+OTP_CHECK = '''async function expected(offset) {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('12345678901234567890'),
     {name: 'HMAC', hash: 'SHA-1'}, false, ['sign']);
   const counter = Math.floor(Date.now() / 1000 / 30) + offset;
@@ -342,12 +343,189 @@ async function expected(offset) {
   const binary = ((hash[o] & 127) << 24) | (hash[o + 1] << 16) | (hash[o + 2] << 8) | hash[o + 3];
   return String(binary % 1000000).padStart(6, '0');
 }
-async function check(code) { return [await expected(0), await expected(-1)].includes(code); }
+async function check(code) { return [await expected(0), await expected(-1)].includes(code); }'''
+
+VAULT_OTP = '''<!doctype html><meta charset="utf-8"><title>Vault code</title>
+<form id="one"><input id="code" autocomplete="one-time-code" inputmode="numeric" maxlength="6"><button>Verify</button></form>
+<form id="boxes"><span id="digits">''' + ''.join(f'<input id="d{i}" maxlength="1" inputmode="numeric">' for i in range(6)) + '''</span><button>Verify</button></form>
+<script>
+''' + OTP_CHECK + '''
 window.qa = {one: null, boxes: null};
 document.getElementById('one').addEventListener('submit', async e => { e.preventDefault();
   window.qa.one = await check(document.getElementById('code').value); });
 document.getElementById('boxes').addEventListener('submit', async e => { e.preventDefault();
   window.qa.boxes = await check([0, 1, 2, 3, 4, 5].map(i => document.getElementById('d' + i).value).join('')); });
+</script>'''
+
+# A two-step verification dialog shaped like Instagram's (vault §14.3): the code field has no name, length, numeric
+# input or autocomplete, only a label after it, and the dialog around it says what it asks for. The page's search
+# field comes first. Its continue button, outside the form, submits it once six characters are in.
+VAULT_OTP_DIALOG = '''<!doctype html><meta charset="utf-8"><title>Vault two-step dialog</title>
+<header><input aria-label="검색 입력" placeholder="검색"></header>
+<div role="dialog" aria-labelledby="title"><h2 id="title">Two Step Verification</h2><button type="button">닫기</button>
+<h2>내 인증 앱으로 이동</h2><span>회원님이 설정한 2단계 인증 앱에 표시된 이 계정의 6자리 코드를 입력하세요.</span>
+<form id="two-step"><div><input id="code" type="text" dir="ltr" autocomplete="off"></div><label for="code">코드</label></form>
+<label><input type="checkbox" checked> 이 기기를 믿을 수 있는 기기로 설정하고 이후에 이 단계 건너뛰기</label>
+<button type="button" id="continue" disabled>계속</button><button type="button">다른 방법 시도</button></div>
+<script>
+''' + OTP_CHECK + '''
+window.qa = {code: null};
+const code = document.getElementById('code'), form = document.getElementById('two-step');
+code.addEventListener('input', () => { document.getElementById('continue').disabled = code.value.length < 6; });
+document.getElementById('continue').addEventListener('click', () => form.requestSubmit());
+form.addEventListener('submit', async e => { e.preventDefault(); window.qa.code = await check(code.value); });
+</script>'''
+
+# Fields a one-time code must not go into, though each is short, numeric or says "code" (vault §14.3), under a heading
+# about turning two-step verification on.
+VAULT_OTP_DECOYS = '''<!doctype html><meta charset="utf-8"><title>Vault not code fields</title>
+<h1>Two-step verification</h1><p>Turn it on and we text a 6-digit code to your phone when you sign in.</p>
+<form id="search"><input name="q" aria-label="Search" placeholder="Search"></form>
+<form id="phone"><label>Phone number <input type="tel" name="phoneNumber" maxlength="11" inputmode="numeric"></label></form>
+<form id="card"><label>Card number <input name="cardNumber" inputmode="numeric" maxlength="19"></label>
+<label>Expiry <input name="expiry" maxlength="5"></label>
+<label>Security code <input name="securityCode" inputmode="numeric" maxlength="4"></label></form>
+<form id="address"><label>Postal code <input name="zip" inputmode="numeric" maxlength="5"></label>
+<label>Promo code <input name="promoCode" maxlength="8"></label>
+<label>Birth year <input name="birthYear" inputmode="numeric" maxlength="4"></label></form>
+<form id="sign-in"><label>Password <input type="password" name="password"></label></form>'''
+
+# Fields from sites and languages the pages above do not show, for the code field rule itself (vault §14.3): each
+# section's data-fill and data-offer say what isCodeField and looksLikeCodeField should answer for its data-target
+# field. window.qa.read(isCodeField, looksLikeCodeField) puts each section on the page alone, as a page would show it,
+# and gives the number of sections and the names of those read otherwise.
+VAULT_OTP_CASES = '''<!doctype html><meta charset="utf-8"><title>Vault code field cases</title>
+<template id="cases">
+<section data-case="instagram dialog" data-fill="1" data-offer="1">
+  <div role="dialog" aria-labelledby="ig-h"><h2 id="ig-h">Two Step Verification</h2><button>닫기</button>
+    <span>QA • Instagram</span><h2>내 인증 앱으로 이동</h2>
+    <span>회원님이 설정한 2단계 인증 앱(Duo Mobile 또는 Google OTP)에 표시된 이 계정의 6자리 코드를 입력하세요.</span>
+    <form><div><div><input data-target id="_r_7_" type="text" dir="ltr" autocomplete="off"></div><label for="_r_7_">코드</label></div></form>
+    <label><input type="checkbox" checked> 이 기기를 믿을 수 있는 기기로 설정하고 이후에 이 단계 건너뛰기</label>
+    <button disabled>계속</button><button>다른 방법 시도</button></div>
+</section>
+<section data-case="instagram aria-label only" data-fill="1" data-offer="1">
+  <div role="dialog"><h2>Two Step Verification</h2><p>Enter the 6-digit code from your authentication app.</p>
+    <form><input data-target aria-label="Code" type="text"></form></div>
+</section>
+<section data-case="one-time-code" data-fill="1" data-offer="1">
+  <form><input data-target autocomplete="one-time-code" inputmode="numeric" maxlength="6"><button>Verify</button></form>
+</section>
+<section data-case="numeric boxes" data-fill="1" data-offer="1">
+  <form><input data-target maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric"><button>Verify</button></form>
+</section>
+<section data-case="plain boxes in verification step" data-fill="1" data-offer="1">
+  <h2>Enter verification code</h2><form><input data-target maxlength="1"><input maxlength="1"><input maxlength="1"><input maxlength="1"><button>Verify</button></form>
+</section>
+<section data-case="facebook approvals_code" data-fill="1" data-offer="1">
+  <form><input data-target type="text" name="approvals_code" id="approvals_code" placeholder="Login code"></form>
+</section>
+<section data-case="old instagram" data-fill="1" data-offer="1">
+  <form><input data-target aria-label="Security Code" maxlength="8" name="verificationCode" type="tel"></form>
+</section>
+<section data-case="google totpPin" data-fill="1" data-offer="1">
+  <form><input data-target type="tel" name="totpPin" id="totpPin" pattern="[0-9 ]*"><input type="text" name="other" hidden></form>
+</section>
+<section data-case="x enter code" data-fill="1" data-offer="1">
+  <div role="dialog"><h1>Enter your verification code</h1><p>Use your code generator app to generate a code and enter it below.</p>
+    <label>Enter code<input data-target name="text" inputmode="numeric" autocomplete="on"></label><button>Next</button></div>
+</section>
+<section data-case="japanese label" data-fill="1" data-offer="1">
+  <form><label>確認コード<input data-target type="text"></label></form>
+</section>
+<section data-case="korean placeholder" data-fill="1" data-offer="1">
+  <form><input data-target placeholder="인증번호 6자리"></form>
+</section>
+<section data-case="chinese placeholder" data-fill="1" data-offer="1">
+  <form><input data-target placeholder="请输入验证码"></form>
+</section>
+<section data-case="german label" data-fill="1" data-offer="1">
+  <form><label for="de">Bestätigungscode</label><input id="de" data-target></form>
+</section>
+<section data-case="sms code" data-fill="1" data-offer="1">
+  <form><input data-target name="smsCode"></form>
+</section>
+<section data-case="generic code alone" data-fill="1" data-offer="0">
+  <form><input data-target aria-label="Code"><input name="email" type="email"></form>
+</section>
+<section data-case="password" data-fill="0" data-offer="0">
+  <div role="dialog"><h2>Two-step verification</h2><p>Enter the code</p><form><input data-target type="password"></form></div>
+</section>
+<section data-case="search" data-fill="0" data-offer="0">
+  <form><input data-target name="q" placeholder="Search"></form>
+</section>
+<section data-case="search type" data-fill="0" data-offer="0">
+  <form><input data-target type="search" maxlength="6"></form>
+</section>
+<section data-case="phone in 2fa setup" data-fill="0" data-offer="0">
+  <h2>Set up two-step verification</h2><p>We'll text a 6-digit code to this number.</p>
+  <form><label>Phone number<input data-target type="tel" name="phoneNumber" maxlength="11" inputmode="numeric"></label></form>
+</section>
+<section data-case="phone autocomplete" data-fill="0" data-offer="0">
+  <h2>Two-step verification</h2><p>Enter your phone to get a code</p><form><input data-target type="tel" autocomplete="tel"></form>
+</section>
+<section data-case="bare tel in 2fa setup" data-fill="1" data-offer="1">
+  <h2>Two-step verification</h2><p>Enter the 6-digit code</p><form><input data-target type="tel"></form>
+</section>
+<section data-case="card security code" data-fill="0" data-offer="0">
+  <form><label>Card number<input inputmode="numeric" maxlength="19"></label><label>Expiry<input maxlength="5"></label>
+    <label>Security code<input data-target inputmode="numeric" maxlength="4" name="securityCode"></label></form>
+</section>
+<section data-case="card csc autocomplete" data-fill="0" data-offer="0">
+  <form><input autocomplete="cc-number"><input data-target autocomplete="cc-csc" maxlength="4" inputmode="numeric"></form>
+</section>
+<section data-case="korean card cvc" data-fill="0" data-offer="0">
+  <form><label>카드 번호<input></label><label>보안코드<input data-target maxlength="3" inputmode="numeric"></label></form>
+</section>
+<section data-case="postal code" data-fill="0" data-offer="0">
+  <form><input data-target name="zip" maxlength="5" inputmode="numeric"></form>
+</section>
+<section data-case="postal autocomplete" data-fill="0" data-offer="0">
+  <form><input data-target autocomplete="postal-code" maxlength="5" inputmode="numeric"></form>
+</section>
+<section data-case="korean postal" data-fill="0" data-offer="0">
+  <form><label>우편번호<input data-target maxlength="5" inputmode="numeric"></label></form>
+</section>
+<section data-case="promo code" data-fill="0" data-offer="0">
+  <form><input data-target name="promoCode" placeholder="Promo code" maxlength="8"></form>
+</section>
+<section data-case="birth year" data-fill="0" data-offer="0">
+  <form><input data-target name="birthYear" maxlength="4" inputmode="numeric"></form>
+</section>
+<section data-case="captcha" data-fill="0" data-offer="0">
+  <form><img alt="" width="100" height="30"><input data-target name="captcha" maxlength="6" placeholder="Enter the code"></form>
+</section>
+<section data-case="chinese captcha" data-fill="0" data-offer="0">
+  <form><input data-target placeholder="图形验证码" maxlength="4"></form>
+</section>
+<section data-case="recovery code" data-fill="0" data-offer="0">
+  <h2>Two-factor recovery</h2><form><input data-target name="recovery_code" aria-label="Recovery code"></form>
+</section>
+<section data-case="username" data-fill="0" data-offer="0">
+  <h2>Sign in</h2><form><input data-target name="username" autocomplete="username"><input type="password"></form>
+</section>
+<section data-case="username lone after verification" data-fill="0" data-offer="0">
+  <h2>Verify it's you</h2><p>Enter your email to get a code</p><form><input data-target name="email" type="text"></form>
+</section>
+<section data-case="plain text in form" data-fill="0" data-offer="0">
+  <form><label>Nickname<input data-target></label></form>
+</section>
+<section data-case="disabled code" data-fill="1" data-offer="0">
+  <form><input data-target autocomplete="one-time-code" disabled></form>
+</section>
+</template>
+<script>
+window.qa = {read(isCode, looksLikeCode) {
+  const sections = Array.from(document.getElementById('cases').content.querySelectorAll('section'));
+  const misread = sections.filter(template => {
+    const section = document.body.appendChild(template.cloneNode(true));
+    const e = section.querySelector('[data-target]');
+    const fill = isCode(e), offer = looksLikeCode(e);
+    section.remove();
+    return fill !== (section.dataset.fill === '1') || offer !== (section.dataset.offer === '1');
+  }).map(section => section.dataset.case);
+  return {cases: sections.length, misread};
+}};
 </script>'''
 
 # Two-factor setup (vault §14). The QR codes are PNGs made with CoreImage's CIQRCodeGenerator, one
@@ -1031,6 +1209,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = VAULT_OTP_SETUP.encode()
         elif self.path.startswith('/vault/otp/export'):
             payload = VAULT_OTP_EXPORT.encode()
+        elif self.path.startswith('/vault/otp/dialog'):
+            payload = VAULT_OTP_DIALOG.encode()
+        elif self.path.startswith('/vault/otp/decoys'):
+            payload = VAULT_OTP_DECOYS.encode()
+        elif self.path.startswith('/vault/otp/cases'):
+            payload = VAULT_OTP_CASES.encode()
         elif self.path.startswith('/vault/otp'):
             payload = VAULT_OTP.encode()
         elif self.path.startswith('/vault/reveal'):

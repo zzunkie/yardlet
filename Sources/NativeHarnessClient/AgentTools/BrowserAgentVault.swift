@@ -185,19 +185,103 @@ enum VaultPageScripts {
     static let offerBinding = "__yardletVaultOffer"
 
     /// `isCodeField(e)`: whether an input takes a one-time code (design §5.2 step 3), for fills.
-    /// `looksLikeCodeField(e)`: the stricter test for offering one, which leaves out other short
-    /// numeric fields such as postal codes.
-    static let codeFieldTests = """
+    /// `looksLikeCodeField(e)`: the stricter test for offering one, which a short numeric field alone passes only when
+    /// it says nothing else, and a field with a weaker name only when the page asks for a code around it (§14.3).
+    static let codeFieldTests = #"""
         const codeTypes = ['text', 'tel', 'number', ''];
-        const codeWords = /one.?time|otp|mfa|2fa|two.?factor|verification.?code|auth\\w*.?code|security.?code|passcode/i;
-        const namesCode = e => codeWords.test([e.name, e.id, e.placeholder, e.getAttribute('aria-label')].join(' '));
-        const isCodeField = e => e instanceof HTMLInputElement && codeTypes.includes(e.type)
-          && ((e.autocomplete || '').includes('one-time-code') || (e.maxLength > 0 && e.maxLength <= 10)
-            || e.inputMode === 'numeric' || namesCode(e));
-        const looksLikeCodeField = e => e instanceof HTMLInputElement && codeTypes.includes(e.type) && !e.disabled && !e.readOnly
-          && ((e.autocomplete || '').includes('one-time-code') || namesCode(e)
-            || (e.maxLength > 0 && e.maxLength <= 8 && (e.inputMode === 'numeric' || e.type === 'tel' || e.type === 'number')));
-        """
+        const codePattern = (...parts) => new RegExp(parts.map(p => p.source).join('|'), 'u');
+        // What the field says it is: its name, id, placeholder, title and accessible name or labels, in words
+        // (camelCase and separators split, lowercased), with a space at each end for whole-word tests.
+        const codeFieldWords = e => ' ' + [e.name, e.id, e.placeholder, e.title, e.getAttribute('aria-label')]
+          .concat((e.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => id && document.getElementById(id)))
+          .concat(Array.from(e.labels || []))
+          .map(p => (p instanceof Element ? p.textContent : p) || '').join(' ')
+          .replace(/(\p{Ll})(\p{Lu})/gu, '$1 $2').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ') + ' ';
+        // Names of a one-time code, as Chrome's password manager (`kOneTimePwdRe`) and Bitwarden (`TotpFieldNames`)
+        // read them, and in other languages.
+        const codeNames = codePattern(
+          /one ?time|\s(otp|otc|totp|mfa|2fa|tfa|2sv|sms)\s|(otp|otc|totp|mfa|2fa|sms)\s?(code|token|pin|pass|input|field|value)/,
+          /(two|2|second)\s?(factor|step)|verif\w*\s?code|\svcode\s|auth\w*\s?code|authenticator|security\s?code|passcode/,
+          /approvals?\s?code|log\s?in\s?code|sign\s?in\s?code|code\s(we\s)?sent|sent\s(you\s)?(a\s)?code/,
+          /인증\s?(번호|코드)|보안\s?코드|확인\s?(코드|번호)|일회용|2\s?단계|otp\s?번호|전송된\s?코드|받은\s?코드/,
+          /認証\s?(コード|番号)|確認\s?(コード|番号)|ワンタイム|セキュリティ\s?コード|2\s?段階|検証\s?コード/,
+          /验证码|驗證碼|认证码|認證碼|动态码|動態碼|校验码|校驗碼|安全码|安全碼|一次性/,
+          /c[oó]digo\s(de\s)?(verifica|seguran|seguridad|autentica|confirma|acceso|acesso)/,
+          /code\s(de\s)?(v[ée]rification|s[ée]curit[ée]|confirmation|connexion|unique)/,
+          /(best[äa]tigungs|sicherheits|verifizierungs|authentifizierungs|anmelde|einmal)\s?code|einmal\s?(passwort|kennwort)/,
+          /codice\s(di\s)?(verifica|sicurezza|conferma|autenticazione)|код\s(подтверждения|безопасности|проверки|из)|одноразов/);
+        // Words too weak to tell a code field alone (Bitwarden's `AmbiguousTotpFieldNames`).
+        const codeHints = /\s(code|pin|token|verification|verify|코드|인증|コード|代码|代碼|código|codigo|codice|kod|код)\s/u;
+        // Other codes and numbers, which no name of a one-time code outweighs.
+        const otherCodeNames = codePattern(
+          /\s(zip|postal|post|promo|promotion|coupon|discount|voucher|gift|referral|invite|invitation)(\s?(code|number|no))?\s/,
+          /\s(country|area|dial|captcha|recovery|backup|redeem|activation|tracking|booking|reservation)(\s?(code|number|no))?\s/,
+          /\s(access|product|bank|branch|tax)(\s?(code|number|no))?\s/,
+          /우편|쿠폰|할인|추천인|초대|국가|지역\s?번호|복구|백업|자동\s?입력\s?방지|郵便|クーポン|招待|復旧/,
+          /邮编|郵遞|优惠|優惠|邀请|邀請|图形|圖形|画像認証|恢复|恢復/);
+        // Other fields, unless the field names a one-time code.
+        const otherFieldNames = codePattern(
+          /\s(search|query|q|keyword|find|phone|mobile|tel|telephone|cell|msisdn|e\s?mail|mail|user\s?name|user|login|account)\s/,
+          /\s(card|cc|cvc|cvv|csc|amount|price|quantity|qty|age|birth|year|month|day|date|name|address|city|street|company|url)\s/,
+          /검색|휴대폰|휴대전화|전화|핸드폰|이메일|메일|아이디|계정|이름|주소|카드|생년|検索|電話|携帯|メール|名前|住所|カード/,
+          /搜索|电话|手机|手機|邮箱|郵箱|姓名|地址|卡号|卡號/);
+        const otherAutocomplete = codePattern(/^(username|email|tel|tel-.+|cc-.+|postal-code|street-address|address-.+)$/,
+          /^(country|country-name|name|given-name|family-name|additional-name|nickname|organization|bday|bday-.+)$/,
+          /^(sex|url|current-password|new-password|transaction-.+)$/);
+        const codeCardNames = codePattern(/card\s?(number|num|no)|cc\s?(number|num)|credit\s?card|expir/,
+          /카드\s?번호|유효\s?기간|カード番号|有効期限|卡号|卡號|有效期/,
+          /n[uú]mero\s(de\s)?(la\s)?tarjeta|kartennummer|num[ée]ro\s(de\s)?(la\s)?carte|numero\s(della\s)?carta/);
+        // What a page asking for a two-factor code says around the field.
+        const codeAsking = codePattern(
+          /two.?step|two.?factor|2.?fa\b|2.?step|verif|authenticat|one.?time|\botp\b|passcode|security code/,
+          /2단계|인증|본인\s?확인|認証|2段階|ワンタイム|验证|驗證|認證/,
+          /verificaci|verificação|vérification|bestätig|verifizier|verifica|подтвержд/);
+        const codeNouns = /code|digit|코드|번호|자리|コード|番号|桁|码|碼|código|codice|код/u;
+        const codeAutocomplete = e => (e.getAttribute('autocomplete') || '').toLowerCase().split(/\s+/);
+        // A field in a form that takes a card: its security code is not a one-time code.
+        const codeInCardForm = e => Array.from((e.form || e.closest('form') || document).querySelectorAll('input'))
+          .some(f => f !== e && (codeAutocomplete(f).some(t => /^cc-(number|exp)/.test(t))
+            || codeCardNames.test(codeFieldWords(f))));
+        // The page asks for a code around the field: the nearest region that holds no other field to type in
+        // (one-character boxes beside one count as one) says it, within a dialog's or a step's length of text.
+        const codeOtherFields = 'textarea, select, input:not([type=hidden]):not([type=checkbox]):not([type=radio])'
+          + ':not([type=submit]):not([type=button]):not([type=reset]):not([type=image])';
+        const codeAsked = e => {
+          for (let area = e.parentElement; area && area !== document.documentElement; area = area.parentElement) {
+            const others = Array.from(area.querySelectorAll(codeOtherFields))
+              .filter(f => f !== e && !(e.maxLength === 1 && f.maxLength === 1));
+            if (others.some(f => { const r = f.getBoundingClientRect(); return r.width > 0 && r.height > 0; })) return false;
+            if ((area.textContent || '').length > 4000) return false;
+            const text = (area.innerText || '').toLowerCase();
+            if (codeAsking.test(text) && codeNouns.test(text)) return true;
+          }
+          return false;
+        };
+        // What tells whether an input takes a one-time code: `sure` for `autocomplete=one-time-code`, else null for a
+        // field that is something else (another autocomplete kind, another code, another field's name), else its names.
+        const codeSignals = e => {
+          if (!(e instanceof HTMLInputElement) || !codeTypes.includes(e.type)) return null;
+          const autocomplete = codeAutocomplete(e);
+          if (autocomplete.includes('one-time-code')) return { sure: true };
+          if (autocomplete.some(t => otherAutocomplete.test(t))) return null;
+          const words = codeFieldWords(e);
+          if (otherCodeNames.test(words)) return null;
+          const named = codeNames.test(words);
+          if (!named && otherFieldNames.test(words)) return null;
+          return { named, hinted: codeHints.test(words),
+                   numeric: e.inputMode === 'numeric' || e.type === 'tel' || e.type === 'number' };
+        };
+        const isCodeField = e => {
+          const s = codeSignals(e);
+          return !!s && (s.sure || ((s.named || s.hinted || (e.maxLength > 0 && e.maxLength <= 10) || e.inputMode === 'numeric'
+            || codeAsked(e)) && !codeInCardForm(e)));
+        };
+        const looksLikeCodeField = e => {
+          const s = codeSignals(e);
+          return !!s && !e.disabled && !e.readOnly && (s.sure || ((s.named || (e.maxLength > 0 && e.maxLength <= 8 && s.numeric)
+            || codeAsked(e)) && !codeInCardForm(e)));
+        };
+        """#
 
     /// `autocompleteOf(e)`, `isCurrentPassword(e)` and `newPasswordFields(e)`: the fields a new password goes
     /// into when `e` is one of them (design §15). The form's fields marked `new-password`; else, past the
@@ -292,7 +376,7 @@ enum VaultPageScripts {
             // Once while a code field shows; again when a later step shows another.
             if (!codeField || !codeField.isConnected || !onScreen(codeField.getBoundingClientRect())) {
               const field = Array.from(document.querySelectorAll('input'))
-                .find(e => !toldFields.has(e) && looksLikeCodeField(e) && onScreen(e.getBoundingClientRect()));
+                .find(e => !toldFields.has(e) && onScreen(e.getBoundingClientRect()) && looksLikeCodeField(e));
               if (field) { codeField = field; toldFields.add(field); send({ kind: 'codeField', page: location.href }); }
             }
             for (const link of document.querySelectorAll('a[href^="otpauth" i]')) {
