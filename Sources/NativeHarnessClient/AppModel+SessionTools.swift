@@ -506,11 +506,7 @@ extension AppModel: SessionToolHandling {
 
     /// The last answer of the latest turn.
     static func latestAnswer(in presentation: ConversationPresentation) -> String? {
-        guard let turn = presentation.turns.last else { return nil }
-        for item in (turn.answers + turn.work).reversed() {
-            if case let .answer(text, _) = item.kind, !text.isEmpty { return text }
-        }
-        return nil
+        presentation.turns.last.flatMap { ConversationTurnLayout.latestAnswer(answers: $0.answers, work: $0.work) }
     }
 
     static func answerExcerpt(_ text: String) -> String {
@@ -1515,9 +1511,9 @@ extension AppModel: SessionToolHandling {
 
     /// The task's state follows what its session tools wait on, as a provider's own request moves it.
     func sessionToolApprovalsChanged(in taskID: UUID) {
-        refreshAttentionDetail(for: taskID)
-        guard let session = store.sessions.first(where: { $0.id == taskID }) else { return }
         let waits = sessionToolWaitsForPerson(in: taskID)
+        refreshAttentionDetail(for: taskID, sessionToolWaits: waits)
+        guard let session = store.sessions.first(where: { $0.id == taskID }) else { return }
         let providerWaits = !NotificationApprovalProjection.pendingRequests(
             harness: session.harness, transcript: transcriptBySessionID[taskID] ?? [],
             codex: codexPresentationBySessionID[taskID]).isEmpty

@@ -86,6 +86,74 @@ final class CodexConversationProjectionTests: XCTestCase {
         var reordered = state
         reordered.approvalsByID = Dictionary(uniqueKeysWithValues: state.approvalsByID.reversed().map { ($0.key, $0.value) })
         XCTAssertEqual(project(reordered), presentation)
+        // A subagent reads its waiting requests, and the line its card shows, without the turns.
+        assertReadAloneAsTheTurnsDraw(state, "requests")
+        state.approvalsByID["alone"]?.resolution = .resolved(nil)
+        state.serverRequestsByID["shared"]?.resolution = .resolved(nil)
+        assertReadAloneAsTheTurnsDraw(state, "requests answered")
+        XCTAssertEqual(CodexConversationProjection.pendingRequests(in: state).map(\.id), [])
+    }
+
+    /// What a subagent reads on every state it streams (its waiting requests, latest answer and the
+    /// line its card shows) is what the full presentation draws, read without projecting the turns.
+    func testASubagentsRequestsAnswerAndLineReadAloneAsTheTurnsDrawThem() {
+        let sentWhileWorking = JSONValue.object(["id": .string("async"), "type": .string("agentMessage"),
+                                      "text": .string("Started on it."), "phase": .string("final_answer"),
+                                      "delivery": .string("async")])
+        let reasoning = JSONValue.object(["id": .string("r1"), "type": .string("reasoning"),
+                                          "summary": .array([.string("Checked")]), "content": .array([])])
+        let cases: [(String, [JSONValue], String)] = [
+            ("closing answer", [user("u", "Go"), command("c", status: "completed", output: "ok"), answer("a", "Done")], "completed"),
+            ("sent while working", [user("u", "Go"), sentWhileWorking, command("c", status: "completed", output: "ok"), answer("a", "Done")], "completed"),
+            ("async last", [user("u", "Go"), command("c", status: "completed", output: "ok"), sentWhileWorking], "inProgress"),
+            ("went on past it", [user("u", "Go"), answer("a", "First"), command("c", status: "inProgress", output: nil)], "inProgress"),
+            ("then notes", [user("u", "Go"), answer("a", "First"), message("m", "Checking", phase: "commentary")], "inProgress"),
+            ("reasoning and plan after", [user("u", "Go"), answer("a", "Done"), reasoning, plan("p", "# Plan")], "completed"),
+            ("plan before", [user("u", "Go"), plan("p", "# Plan"), command("c", status: "completed", output: "ok")], "completed"),
+            ("steered", [user("u", "Go"), answer("a", "First"), user("s", "Also this")], "inProgress"),
+            ("empty answer", [user("u", "Go"), answer("a0", "Earlier"), answer("a", "")], "inProgress"),
+            ("no answer", [user("u", "Go"), command("c", status: "failed", output: "boom")], "failed"),
+            ("interrupted", [user("u", "Go"), answer("a", "Partial"), command("c", status: "inProgress", output: nil)], "interrupted"),
+            ("request only", [user("u", "Go")], "inProgress")
+        ]
+        for (name, items, status) in cases {
+            var state = state([turn("turn-1", status: "completed", items: [user("u0", "Before"), answer("a-old", "Old")]),
+                               turn("turn-2", status: status, items: items)])
+            assertReadAloneAsTheTurnsDraw(state, name)
+            state.approvalsByID["waiting"] = approval("waiting", turnID: "turn-2", itemID: "c", resolution: .pending)
+            state.approvalsByID["earlier"] = approval("earlier", turnID: "turn-1", itemID: nil, resolution: .pending)
+            state.approvalsByID["done"] = approval("done", turnID: "turn-2", itemID: "c", resolution: .resolved(nil))
+            assertReadAloneAsTheTurnsDraw(state, name + " with requests")
+        }
+        for step in CodexPresentationPatchTests.fixtureStream() {
+            assertReadAloneAsTheTurnsDraw(step.state, step.name)
+        }
+    }
+
+    /// A subagent reads its own Codex thread's requests and answer, named for it, and its
+    /// conversation's transcript until the thread has a turn.
+    @MainActor
+    func testASubagentReadsItsTranscriptUntilItsThreadHasATurn() {
+        let host = UUID()
+        let run = AgentRun(callerID: host, hostTaskID: host, harness: .codex, prompt: "Check the build",
+                           workspaceURL: workspace, depth: 1)
+        var builder = TranscriptBuilder()
+        builder.appendUser("Check the build")
+        builder.apply(.assistantMessageCompleted("Looking."))
+        builder.apply(.permissionRequested(PermissionRequest(id: "perm", title: "Run tests", detail: nil, command: "swift test")))
+        run.entries = builder.entries
+        run.codexState = state([])
+        XCTAssertEqual(run.pendingRequests.map(\.id), ["perm"])
+        XCTAssertEqual(run.pendingRequests.first?.title, L10n.format("%@: %@", run.name, "Run tests"))
+        XCTAssertEqual(run.latestAnswer, AppModel.latestAnswer(in: run.presentation()))
+
+        var thread = state([turn("turn-1", status: "inProgress", items: [user("u", "Check the build"), answer("a", "Built.")])])
+        thread.approvalsByID["waiting"] = approval("waiting", turnID: "turn-1", itemID: nil, resolution: .pending)
+        run.codexState = thread
+        XCTAssertEqual(run.pendingRequests.map(\.id), ["waiting"])
+        XCTAssertEqual(run.pendingRequests.first?.title, L10n.format("%@: %@", run.name, CodexApprovalState.cardTitle))
+        XCTAssertEqual(run.latestAnswer, "Built.")
+        XCTAssertEqual(run.progressLine, "Built.")
     }
 
     /// A failed latest turn the server was too busy for, on an idle thread, offers retry and edit,
@@ -128,6 +196,21 @@ final class CodexConversationProjectionTests: XCTestCase {
     }
 
     // MARK: - Fixtures
+
+    private func assertReadAloneAsTheTurnsDraw(
+        _ state: CodexTaskState, _ step: String, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let presentation = project(state)
+        XCTAssertEqual(CodexConversationProjection.pendingRequests(in: state), presentation.turns.flatMap(\.requests),
+                       step, file: file, line: line)
+        XCTAssertEqual(CodexConversationProjection.latestAnswer(in: state, workspaceURL: workspace),
+                       presentation.turns.last.flatMap { ConversationTurnLayout.latestAnswer(answers: $0.answers, work: $0.work) },
+                       step, file: file, line: line)
+        let last = presentation.turns.last.flatMap { ($0.work + $0.answers).last }
+        let read = CodexConversationProjection.lastItem(in: state, workspaceURL: workspace)
+        XCTAssertEqual(read?.id, last?.id, step, file: file, line: line)
+        XCTAssertEqual(read?.kind, last?.kind, step, file: file, line: line)
+    }
 
     private func project(_ state: CodexTaskState) -> ConversationPresentation {
         CodexConversationProjection.presentation(state, workspaceURL: workspace, historySelection: nil)

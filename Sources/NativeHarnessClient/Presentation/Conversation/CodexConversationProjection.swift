@@ -84,17 +84,7 @@ enum CodexConversationProjection {
         let retryableTurnID = latestTurnID.flatMap {
             CodexTurnRecoveryProjection.canRetry($0, in: state) ? $0 : nil
         }
-        // Grouped by ID, so the dictionaries' order never changes a turn's input (the turn orders
-        // its requests itself).
-        func byID(_ lhs: String, _ rhs: String) -> Bool { lhs.compare(rhs, options: [.numeric, .literal]) == .orderedAscending }
-        var approvals: [String: [CodexApprovalState]] = [:]
-        for approval in state.approvalsByID.values.sorted(by: { byID($0.id, $1.id) }) {
-            if let turnID = approval.turnID { approvals[turnID, default: []].append(approval) }
-        }
-        var serverRequests: [String: [CodexServerRequestState]] = [:]
-        for request in state.serverRequestsByID.values.sorted(by: { byID($0.id, $1.id) }) {
-            if let turnID = request.turnID { serverRequests[turnID, default: []].append(request) }
-        }
+        let (approvals, serverRequests) = requestsByTurn(state)
         let history = historyMatch(in: thread, selection: historySelection)
         return thread.turns.enumerated().map { index, turn in
             let next = thread.turns.indices.contains(index + 1) ? thread.turns[index + 1] : nil
@@ -117,6 +107,120 @@ enum CodexConversationProjection {
     static func pendingRequestIDs(in state: CodexTaskState) -> Set<String> {
         Set(state.approvalsByID.values.filter { $0.turnID != nil && $0.resolution == .pending }.map(\.id))
             .union(state.serverRequestsByID.values.filter { $0.turnID != nil && $0.resolution == .pending }.map(\.id))
+    }
+
+    /// Each turn's approvals and server requests, by turn ID. Grouped by ID, so the dictionaries'
+    /// order never changes a turn's input (the turn orders its requests itself).
+    static func requestsByTurn(_ state: CodexTaskState)
+        -> (approvals: [String: [CodexApprovalState]], serverRequests: [String: [CodexServerRequestState]]) {
+        func byID(_ lhs: String, _ rhs: String) -> Bool { lhs.compare(rhs, options: [.numeric, .literal]) == .orderedAscending }
+        var approvals: [String: [CodexApprovalState]] = [:]
+        for approval in state.approvalsByID.values.sorted(by: { byID($0.id, $1.id) }) {
+            if let turnID = approval.turnID { approvals[turnID, default: []].append(approval) }
+        }
+        var serverRequests: [String: [CodexServerRequestState]] = [:]
+        for request in state.serverRequestsByID.values.sorted(by: { byID($0.id, $1.id) }) {
+            if let turnID = request.turnID { serverRequests[turnID, default: []].append(request) }
+        }
+        return (approvals, serverRequests)
+    }
+
+    /// A turn's requests in the order the turn draws them. An approval that is also a server request
+    /// is drawn once, as the server request. Requests keep one order however the state's
+    /// dictionaries hold them: by the item each asks about, then by ID.
+    static func requests(
+        in turn: CodexTurnState, approvals: [CodexApprovalState], serverRequests: [CodexServerRequestState]
+    ) -> [ConversationRequest] {
+        guard !approvals.isEmpty || !serverRequests.isEmpty else { return [] }
+        var itemPositions: [String: Int] = [:]
+        for (index, item) in turn.items.enumerated() where itemPositions[item.id] == nil { itemPositions[item.id] = index }
+        return (approvals
+            .filter { approval in !serverRequests.contains { $0.id == approval.id } }
+            .map(CodexRequestResponseProjection.request)
+            + serverRequests.map(CodexRequestResponseProjection.request))
+            .sorted { ConversationRequest.providerOrder($0, $1, itemPositions: itemPositions) }
+    }
+
+    /// The requests waiting under the turns `presentation` draws, in its order, read without
+    /// projecting any turn's items: what a subagent waits on the person for, checked on every
+    /// state it streams.
+    static func pendingRequests(in state: CodexTaskState) -> [ConversationRequest] {
+        guard let thread = state.thread else { return [] }
+        let waitingTurnIDs = Set(state.approvalsByID.values.filter { $0.resolution == .pending }.compactMap(\.turnID))
+            .union(state.serverRequestsByID.values.filter { $0.resolution == .pending }.compactMap(\.turnID))
+        guard !waitingTurnIDs.isEmpty else { return [] }
+        let (approvals, serverRequests) = requestsByTurn(state)
+        return thread.turns.filter { waitingTurnIDs.contains($0.id) }.flatMap { turn in
+            requests(in: turn, approvals: approvals[turn.id] ?? [], serverRequests: serverRequests[turn.id] ?? [])
+                .filter { $0.state == .pending }
+        }
+    }
+
+    /// The latest turn's items after its request, as `turn` arranges them, and how each one shows,
+    /// for the readers below that project only the few items they need. An item is shown without
+    /// what "Copy item details" copies, and a file change without its handoffs, which none reads.
+    private static func latestWork(in state: CodexTaskState, workspaceURL: URL)
+        -> (turn: CodexTurnState, items: [CodexItemState], shown: (CodexItemState) -> ConversationItem?)? {
+        guard let turn = state.thread?.turns.last else { return nil }
+        let isFinished = turn.status.isTerminal
+        let inHeartbeatTurn = isHeartbeatTurn(turn)
+        let workIDs = Set(CodexTurnLayout(turn: turn).workItems.map(\.id)).union(steeredMessageIDs(in: turn))
+        return (turn, turn.items.filter { workIDs.contains($0.id) }, { item in
+            shownItem(item, turnID: turn.id, isTurnFinished: isFinished, workspaceURL: workspaceURL, changes: [],
+                      isHistoryMatch: false, inHeartbeatTurn: inHeartbeatTurn, copiesDetails: false)
+        })
+    }
+
+    /// What `AppModel.latestAnswer` reads in the latest turn `presentation` draws, without projecting
+    /// the turn's other items: the messages said to the person in its work, and of what follows the
+    /// last of them only as much as decides whether that one closes the turn (`ConversationTurnLayout`).
+    static func latestAnswer(in state: CodexTaskState, workspaceURL: URL) -> String? {
+        guard case let (_, items, shown)? = latestWork(in: state, workspaceURL: workspaceURL) else { return nil }
+        var said: [ConversationItem] = []
+        var lastSaidIndex = 0
+        for (index, item) in items.enumerated() {
+            guard case .agentMessage = item.content, let shown = shown(item), case .answer = shown.kind else { continue }
+            said.append(shown)
+            lastSaidIndex = index
+        }
+        guard let last = said.last else { return nil }
+        let closes = !last.isSentWhileWorking
+            && items[(lastSaidIndex + 1)...].lazy.compactMap(shown).allSatisfy(ConversationTurnLayout.leavesAnswerLast)
+        return ConversationTurnLayout.latestAnswer(answers: closes ? [last] : [],
+                                                   work: closes ? Array(said.dropLast()) : said)
+    }
+
+    /// The last item of the latest turn `presentation` draws, the last of its work and answers, read
+    /// without projecting the turn's other items: what a running subagent's card says it does.
+    static func lastItem(in state: CodexTaskState, workspaceURL: URL) -> ConversationItem? {
+        guard case let (turn, items, shown)? = latestWork(in: state, workspaceURL: workspaceURL) else { return nil }
+        // The answers go under the work: the closing answer and every proposed plan, in order.
+        var lastShown: ConversationItem?
+        var closing: (index: Int, item: ConversationItem)?
+        for index in items.indices.reversed() {
+            guard let item = shown(items[index]) else { continue }
+            if lastShown == nil { lastShown = item }
+            if ConversationTurnLayout.leavesAnswerLast(item) { continue }
+            if case .answer = item.kind, !item.isSentWhileWorking { closing = (index, item) }
+            break
+        }
+        let lastPlan = items.lastIndex { if case .plan = $0.content { true } else { false } }
+        if let lastPlan, lastPlan > closing?.index ?? -1 { return shown(items[lastPlan]) }
+        if let closing { return closing.item }
+        // No answers: the work ends with its last item, or an answered request placed after it or
+        // at the work's end.
+        let (approvals, serverRequests) = requestsByTurn(state)
+        let answered = requests(in: turn, approvals: approvals[turn.id] ?? [],
+                                serverRequests: serverRequests[turn.id] ?? []).filter { $0.state != .pending }
+        guard !answered.isEmpty else { return lastShown }
+        let workIDs = Set(items.filter { item in
+            guard case .agentMessage = item.content else { return true }
+            return shown(item) != nil
+        }.map(\.id))
+        let atEnd = answered.filter { request in request.toolCallID.map { !workIDs.contains($0) } ?? true }
+        let placed = atEnd.isEmpty ? answered.filter { $0.toolCallID != nil && $0.toolCallID == lastShown?.id } : atEnd
+        guard let request = placed.last else { return lastShown }
+        return placingAnsweredRequests([request], in: [], turnID: turn.id).last
     }
 
     static func turn(_ input: TurnInput) -> ConversationTurn {
@@ -153,17 +257,9 @@ enum CodexConversationProjection {
         let workIDs = Set(layout.workItems.map(\.id)).union(steered)
         let arranged = ConversationTurnLayout.arrange(project(turn.items.filter { workIDs.contains($0.id) }))
         result.answers = arranged.answers
-        // An approval that is also a server request is drawn once, as the server request. Requests
-        // keep one order however the state's dictionaries hold them: by the item each asks about,
-        // then by ID. A waiting one is pinned under the turn; an answered one joins the work after
-        // the item it asked about, or at the end of the work (D1).
-        var itemPositions: [String: Int] = [:]
-        for (index, item) in turn.items.enumerated() where itemPositions[item.id] == nil { itemPositions[item.id] = index }
-        let requests = (input.approvals
-            .filter { approval in !input.serverRequests.contains { $0.id == approval.id } }
-            .map(CodexRequestResponseProjection.request)
-            + input.serverRequests.map(CodexRequestResponseProjection.request))
-            .sorted { ConversationRequest.providerOrder($0, $1, itemPositions: itemPositions) }
+        // A waiting request is pinned under the turn; an answered one joins the work after the item
+        // it asked about, or at the end of the work (D1).
+        let requests = requests(in: turn, approvals: input.approvals, serverRequests: input.serverRequests)
         result.requests = requests.filter { $0.state == .pending }
         result.work = placingAnsweredRequests(requests.filter { $0.state != .pending }, in: arranged.work, turnID: turn.id)
         result.outcome = outcome(turn)
@@ -218,11 +314,12 @@ enum CodexConversationProjection {
         workspaceURL: URL,
         changes: [CodexChangeHandoff],
         isHistoryMatch: Bool,
-        inHeartbeatTurn: Bool
+        inHeartbeatTurn: Bool,
+        copiesDetails: Bool = true
     ) -> ConversationItem? {
         var projected = self.item(
             item, turnID: turnID, isTurnFinished: isTurnFinished, workspaceURL: workspaceURL, changes: changes,
-            isHistoryMatch: isHistoryMatch
+            isHistoryMatch: isHistoryMatch, copiesDetails: copiesDetails
         )
         guard case let .agentMessage(message) = item.content else { return projected }
         // The app reads a message as being written only while its turn runs.
@@ -338,7 +435,8 @@ enum CodexConversationProjection {
         isTurnFinished: Bool,
         workspaceURL: URL,
         changes: [CodexChangeHandoff],
-        isHistoryMatch: Bool
+        isHistoryMatch: Bool,
+        copiesDetails: Bool = true
     ) -> ConversationItem {
         let isRunning = item.lifecycle == .inProgress
         var phase: ConversationItemPhase = isRunning ? (isTurnFinished ? .stopped : .running) : .completed
@@ -484,7 +582,9 @@ enum CodexConversationProjection {
         switch kind {
         case .command, .fileChange, .tool, .subagent, .answer, .commentary, .reasoning:
             // A message offers it in its context menu, the rest on the card.
-            result.copyDetails = CodexWorkSurfaceProjection.itemHandoff(for: item, turnID: turnID)?.payload
+            if copiesDetails {
+                result.copyDetails = CodexWorkSurfaceProjection.itemHandoff(for: item, turnID: turnID)?.payload
+            }
         default:
             break
         }

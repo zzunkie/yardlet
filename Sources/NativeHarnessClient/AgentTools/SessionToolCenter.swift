@@ -206,10 +206,15 @@ final class AgentRun: Identifiable {
 
     /// The line its card shows while it works: its latest call or message, in the Mac's words.
     var progressLine: String? {
-        guard let turn = presentation().turns.last else { return nil }
-        let items = turn.work + turn.answers
-        guard let item = items.last,
-              let remote = RemoteConversationProjection.item(item, turnID: turn.id, harness: harness,
+        let latest: (item: ConversationItem, turnID: String)?
+        if let codexThread, let turnID = codexThread.thread?.turns.last?.id {
+            latest = CodexConversationProjection.lastItem(in: codexThread, workspaceURL: workspaceURL)
+                .map { ($0, turnID) }
+        } else {
+            latest = presentation().turns.last.flatMap { turn in (turn.work + turn.answers).last.map { ($0, turn.id) } }
+        }
+        guard let latest,
+              let remote = RemoteConversationProjection.item(latest.item, turnID: latest.turnID, harness: harness,
                                                              workspaceURL: workspaceURL, inWork: false)
         else { return nil }
         let text = remote.title ?? remote.text ?? ""
@@ -269,13 +274,25 @@ final class AgentRun: Identifiable {
     /// Its conversation as every conversation draws: the Codex thread once it has turns, else the
     /// transcript.
     func presentation() -> ConversationPresentation {
-        if let codexState, codexState.thread?.turns.isEmpty == false {
-            return CodexConversationProjection.presentation(codexState, workspaceURL: workspaceURL,
+        if let codexThread {
+            return CodexConversationProjection.presentation(codexThread, workspaceURL: workspaceURL,
                                                             historySelection: nil)
         }
         return TranscriptConversationProjection.presentation(
             from: entries, harness: harness, status: state.isFinished ? .ready : .running,
             latestTurnIsComplete: state == .completed)
+    }
+
+    /// The Codex thread its conversation draws, once it has turns.
+    private var codexThread: CodexTaskState? {
+        codexState?.thread?.turns.isEmpty == false ? codexState : nil
+    }
+
+    /// The last answer of its latest turn (`AppModel.latestAnswer`). A Codex thread's is read from
+    /// its messages alone: a subagent reads it on every state it streams.
+    var latestAnswer: String? {
+        if let codexThread { return CodexConversationProjection.latestAnswer(in: codexThread, workspaceURL: workspaceURL) }
+        return AppModel.latestAnswer(in: presentation())
     }
 
     /// Its name where it is shown: what it was asked, as its card and the rail's Agents card name it.
@@ -284,7 +301,13 @@ final class AgentRun: Identifiable {
     /// The requests it waits on the person for, named for it: they wait in the calling task's
     /// conversation beside the task's own.
     var pendingRequests: [ConversationRequest] {
-        presentation().turns.flatMap(\.requests).filter { $0.state == .pending }.map { request in
+        // A Codex thread's are read from its requests alone: they are checked on every state it streams.
+        let requests = if let codexThread {
+            CodexConversationProjection.pendingRequests(in: codexThread)
+        } else {
+            presentation().turns.flatMap(\.requests).filter { $0.state == .pending }
+        }
+        return requests.map { request in
             var request = request
             request.title = L10n.format("%@: %@", name, request.title)
             return request

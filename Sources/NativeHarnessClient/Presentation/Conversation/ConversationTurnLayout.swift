@@ -40,14 +40,27 @@ enum ConversationTurnLayout {
     static func closingAnswerIndex(in items: [ConversationItem]) -> Int? {
         for index in items.indices.reversed() {
             let item = items[index]
-            switch item.kind {
-            case .reasoning where item.phase == .completed, .proposedPlan:
-                continue
-            case .answer:
-                return item.isSentWhileWorking ? nil : index
-            default:
-                return nil
-            }
+            if leavesAnswerLast(item) { continue }
+            guard case .answer = item.kind else { return nil }
+            return item.isSentWhileWorking ? nil : index
+        }
+        return nil
+    }
+
+    /// An item after an answer that leaves it the turn's last: reasoning that settled after it, or
+    /// a proposed plan.
+    static func leavesAnswerLast(_ item: ConversationItem) -> Bool {
+        switch item.kind {
+        case .reasoning where item.phase == .completed, .proposedPlan: true
+        default: false
+        }
+    }
+
+    /// The answer a turn's outcome reads (`read_task`, a subagent's card): the last one with words
+    /// in its work, else its closing answer.
+    static func latestAnswer(answers: [ConversationItem], work: [ConversationItem]) -> String? {
+        for item in (answers + work).reversed() {
+            if case let .answer(text, _) = item.kind, !text.isEmpty { return text }
         }
         return nil
     }
