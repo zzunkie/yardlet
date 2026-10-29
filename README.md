@@ -192,6 +192,11 @@ For small changes, `./scripts/test-fast.sh` runs every test except the windowles
 fixtures and performance runs, in four parallel processes (about 5 minutes; the whole suite takes
 about 15 minutes serially). Run the whole suite before a release.
 
+`./scripts/perf-bench/run.sh --build` runs the performance bench: fixed scenes of the whole app (launch,
+idle, streaming, a long Codex history, a long sidebar, browser tabs) in a QA copy off the screen, and the
+test suite's benchmarks, compared with the previous run on the same Mac. See
+[docs/PERFORMANCE_BENCH.md](docs/PERFORMANCE_BENCH.md).
+
 Bundles include the in-window browser (Chromium Embedded Framework in a separate browser host
 process). The script uses the pinned CEF distribution in `~/Library/Caches/Yardlet/CEF/`, verifies
 its hash, and stops with the download command when it is missing. A debug bundle can be built without
@@ -278,6 +283,8 @@ first, then the appcast on the site. Everything lands in `.build/release-<versio
 
 - Raise `CFBundleShortVersionString` and `CFBundleVersion` in `Packaging/Info.plist` and commit
   first: Sparkle orders updates by `CFBundleVersion`.
+- Run the performance bench on that commit first; no budget may fail
+  ([docs/PERFORMANCE_BENCH.md](docs/PERFORMANCE_BENCH.md), "Before a release").
 - The EdDSA key, once per maintainer: `.build/artifacts/sparkle/Sparkle/bin/generate_keys --account yardlet`
   makes the private key in the login keychain and prints the public key, which `release.sh` reads back
   with `generate_keys --account yardlet -p` (or set `YARDLET_SPARKLE_PUBLIC_KEY`; another account name

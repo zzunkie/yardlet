@@ -909,6 +909,13 @@ private struct StreamingReport {
         let memoryLine = memory.map { String(format: "%.0fs %.0f MB", $0.seconds, $0.megabytes) }.joined(separator: ", ")
         lines.append("[perf] memory footprint: \(memoryLine)")
         Swift.print(lines.joined(separator: "\n"))
+        PerfBenchRecord.write("ten-streaming-tasks", [
+            "mainThreadBusyPercent": mainBusyFraction * 100, "processCPUPercent": processCPUFraction * 100,
+            "mainActorLatenessP99Ms": lag.p99, "mainActorLatenessMaxMs": lag.max,
+            "windowBodiesPerSecond": windowEvaluationsPerSecond,
+            "shownTaskBodiesPerSecond": shownTaskViewEvaluationsPerSecond,
+            "footprintMiB": memory.last?.megabytes ?? 0
+        ])
     }
 }
 
@@ -1050,6 +1057,9 @@ private struct LongCodexReport {
         }
         line += String(format: ", setup %.1f s", setupSeconds)
         Swift.print(line)
+        var metrics = ["processCPUPercent": processCPUSeconds / seconds * 100, "cpuPerUpdateMs": perUpdate]
+        if let mainThreadCPUSeconds { metrics["mainThreadCPUPercent"] = mainThreadCPUSeconds / seconds * 100 }
+        PerfBenchRecord.write("long-codex-\(route.rawValue)-\(historyTurns)x\(itemsPerTurn)", metrics)
     }
 }
 

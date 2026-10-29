@@ -264,7 +264,10 @@ final class ConversationReopenGapWindowTests: XCTestCase {
             for (index, name) in [(0, "20 turns"), (1, "300 turns")] {
                 for other in 2...5 { window.show(other) }
                 let cost = window.switchCost(to: index)
-                if round > 0 { lines.append("\(name): \(cost)") }
+                if round > 0 {
+                    lines.append("\(name): \(cost)")
+                    cost.record("reopen-\(name.replacingOccurrences(of: " ", with: "-"))-let-go")
+                }
             }
         }
         for line in lines { print("[reopen-cost] \(line)") }

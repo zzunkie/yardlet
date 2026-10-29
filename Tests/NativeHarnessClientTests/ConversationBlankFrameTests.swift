@@ -57,7 +57,10 @@ final class ConversationBlankFrameTests: XCTestCase {
             }
         }
         for name in ["20 turns", "300 turns"] {
-            for cost in costs[name] ?? [] { print("[switch-cost] \(name): \(cost)") }
+            for cost in costs[name] ?? [] {
+                print("[switch-cost] \(name): \(cost)")
+                cost.record("switch-to-\(name.replacingOccurrences(of: " ", with: "-"))")
+            }
         }
     }
 
@@ -96,6 +99,10 @@ final class ConversationBlankFrameTests: XCTestCase {
                 let shown = stream(index, shown: true)
                 let hidden = stream(index, shown: false)
                 if round > 0 {
+                    PerfBenchRecord.write("window-streaming-\(name.replacingOccurrences(of: " ", with: "-"))", [
+                        "drawingPerPublicationMs": (shown.cpu - hidden.cpu) * 1000 / Double(max(shown.publications, 1)),
+                        "mainThreadShownMs": shown.cpu * 1000
+                    ])
                     lines.append(String(
                         format: "%@: drawing %.2f ms a publication (%d publications; main thread %.0f ms shown, %.0f ms hidden)",
                         name, (shown.cpu - hidden.cpu) * 1000 / Double(max(shown.publications, 1)), shown.publications,
@@ -873,6 +880,11 @@ final class ConversationBlankFrameTests: XCTestCase {
             var description: String {
                 String(format: "first frame %.1f ms (main thread %.1f ms), %d updates, main thread %.1f ms in 1.5 s, %d layers, %d turns drawn, %d turn views made",
                        firstFrame * 1000, firstFrameCPU * 1000, passes, cpu * 1000, layers, turnsDrawn, hostingsMade)
+            }
+
+            func record(_ name: String) {
+                PerfBenchRecord.write(name, ["firstFrameMs": firstFrame * 1000, "firstFrameMainThreadMs": firstFrameCPU * 1000,
+                                             "mainThreadMs": cpu * 1000, "turnViewsMadeCount": Double(hostingsMade)])
             }
         }
 

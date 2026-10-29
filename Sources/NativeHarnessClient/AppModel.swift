@@ -285,6 +285,10 @@ final class AppModel {
     @ObservationIgnored private var antigravityHistoryShown: [UUID: AntigravityHistoryShown] = [:]
     @ObservationIgnored private var codexItemPageLoads = Set<String>()
     private let isVisualFixture: Bool
+    /// A DEBUG fixture whose tasks talk to a fake CLI through the real adapters (`--ui-fixture=lifecycle`, and
+    /// the performance bench's `--ui-fixture=perf`), unlike the others, which have no provider at all.
+    private static let fixtureRunsProviders = ["--ui-fixture=lifecycle", "--ui-fixture=perf"]
+        .contains(where: CommandLine.arguments.contains)
     var usesVisualFixture: Bool { isVisualFixture }
     let registry: HarnessRegistry
     /// App preferences read at the moment they apply, such as the Codex follow-up mode.
@@ -1028,7 +1032,7 @@ final class AppModel {
             return child
         }
         if method == .attachedSession, parent.providerSessionID != nil,
-           !isVisualFixture || CommandLine.arguments.contains("--ui-fixture=lifecycle") {
+           !isVisualFixture || Self.fixtureRunsProviders {
             guard let child = await forkAttachedSession(parent, selectsSession: false) else { return nil }
             workspace.sideChatSessionID = child.id
             taskWorkspaces.persistNow()
@@ -1333,7 +1337,7 @@ final class AppModel {
         // provider adapter. Preserve the same client-side queue/fail-closed contract that a
         // disconnected packaged task would expose instead of probing its `/usr/bin/true`
         // placeholder or inventing a provider turn/steer response.
-        if isVisualFixture && !CommandLine.arguments.contains("--ui-fixture=lifecycle") {
+        if isVisualFixture && !Self.fixtureRunsProviders {
             if action == .automatic, followUpMode == .queue,
                codexPresentationBySessionID[session.id]?.activeTurnID != nil {
                 queueCodexDraft(draft, for: session)
@@ -6377,6 +6381,10 @@ final class AppModel {
                 guard !Task.isCancelled else { break }
                 let providerTitle = state.thread?.name
                 await MainActor.run {
+#if DEBUG
+                    let eventStart = EventCostLog.start()
+                    defer { EventCostLog.record(.codexState, since: eventStart) }
+#endif
                     guard let self else { return }
                     guard self.store.sessions.contains(where: { $0.id == handle.localSessionID }) else {
                         return
@@ -6818,6 +6826,10 @@ final class AppModel {
     }
 
     private func publishTranscript(for sessionID: UUID) {
+#if DEBUG
+        let eventStart = EventCostLog.start()
+        defer { EventCostLog.record(.transcriptPublication, since: eventStart) }
+#endif
         transcriptPublicationTasks.removeValue(forKey: sessionID)?.cancel()
         flushTranscriptDeltas(for: sessionID)
         let entries = transcriptBuilders[sessionID]?.entries ?? []

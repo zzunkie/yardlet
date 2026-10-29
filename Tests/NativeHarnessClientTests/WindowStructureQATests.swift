@@ -935,6 +935,9 @@ final class WindowStructureQATests: XCTestCase {
         let sorted = steps.sorted()
         print(String(format: "[sidebar-top] 828 tasks, 120 steps: %.0f ms in all, median %.2f ms, p95 %.2f ms; window bodies %d",
                      steps.reduce(0, +), sorted[60], sorted[113], ViewBodyCensus[.mainWindow]))
+        PerfBenchRecord.write("sidebar-crossing-its-top-828-tasks", [
+            "stepMedianMs": sorted[60], "stepP95Ms": sorted[113], "windowBodiesCount": Double(ViewBodyCensus[.mainWindow])
+        ])
     }
 
     /// A window's model over `sessions` in a project for each of `folders`, which reads nothing from a provider.

@@ -547,8 +547,13 @@ actor InMemorySessionRepository: SessionRepository {
     private var archived: [UUID: (at: Date, providerArchived: Bool)] = [:]
     private var discarded: Set<UUID> = []
 
-    init(sessions: [SessionRecord] = []) {
+    /// `archived` are the IDs among `sessions` that start archived.
+    init(sessions: [SessionRecord] = [], archived: [UUID] = []) {
         self.sessions = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let now = Date()
+        self.archived = Dictionary(uniqueKeysWithValues: archived.enumerated().map {
+            ($0.element, (at: now.addingTimeInterval(-Double($0.offset) * 600), providerArchived: false))
+        })
     }
 
     func loadSessions() async throws -> [SessionRecord] {
