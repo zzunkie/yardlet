@@ -10,8 +10,8 @@ import Foundation
 /// receiver nothing about what to do with it, as a Codex agent's own `followup_task` and
 /// `send_message` reach their target with the sender, the recipient and the text alone; what the
 /// receiver may do is its own permission setting's, which the harness enforces. After it come the
-/// person's own words the sender asked to pass on (`Quote`), each as Yardlet found it in the sending
-/// task's conversation, with when the person sent it.
+/// person's own messages the sender asked to pass on (`Quote`), each as Yardlet found it in the
+/// sending task's conversation, with when the person sent it.
 ///
 /// Claude Code is no exception, its first message or a later one. Its own peer envelope,
 /// `<cross-session-message from="…" from-name="…">` (CLI 2.1.291–2.1.299), would have the CLI add its
@@ -32,11 +32,12 @@ struct TaskMessage: Equatable, Sendable {
     var body: String
     /// Who the sender is to the receiving task; Yardlet's envelope says it in its sentence.
     var relation: Relation = .task
-    /// The person's own words from the sending task, passed on after the sentence.
+    /// The person's own messages from the sending task, passed on after the sentence.
     var quotes: [Quote] = []
 
-    /// Words from one of the person's own messages in the sending task, which Yardlet found there
-    /// before sending (`send_message_to_task`'s and `create_task`'s `person_quotes`).
+    /// One of the person's own messages in the sending task as they typed it, or the paragraphs of a
+    /// long one, which Yardlet found there before sending (`send_message_to_task`'s and `create_task`'s
+    /// `person_quotes` and `quote_latest_person_message`).
     struct Quote: Equatable, Sendable {
         var text: String
         /// When the person sent that message, as written (ISO 8601 with the sender's offset); nil when

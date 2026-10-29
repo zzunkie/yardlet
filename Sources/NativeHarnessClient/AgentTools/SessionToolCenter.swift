@@ -82,6 +82,11 @@ enum SessionToolPolicy {
     static let approvalTimeout: Duration = .seconds(600)
     /// How long a notification for a child or subagent the agent asked about may wait for its end.
     static let notificationWatchLimit: Duration = .seconds(6 * 60 * 60)
+    /// A person's message up to this many characters goes whole with a quote from it: a chat message,
+    /// even several short paragraphs of one. A longer one is mostly a brief or a paste, and only its
+    /// paragraphs that hold the quoted words go, so the receiving task gets their context without the
+    /// rest of what the person asked of the sending task.
+    static let wholeQuotedMessageLength = 1_000
 
     /// The longest a call may wait (`wait`, a foreground `run_agent`, `wait_tasks`, the person's
     /// approval) before it answers with the state instead, below each caller harness's limit on

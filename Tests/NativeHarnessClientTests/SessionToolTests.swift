@@ -628,7 +628,7 @@ final class SessionToolTests: XCTestCase {
         let withQuote = try XCTUnwrap(afterQuoted.last?.0.text)
         let quotedRead = try XCTUnwrap(TaskMessage.parse(withQuote), withQuote)
         XCTAssertEqual(quotedRead.body, "Go ahead.")
-        XCTAssertEqual(quotedRead.quotes.map { $0.text }, ["retry test"])
+        XCTAssertEqual(quotedRead.quotes.map { $0.text }, ["Add the retry test"], "The whole message that holds them")
         XCTAssertNotNil(quotedRead.quotes.first?.sentAt)
         XCTAssertTrue(withQuote.contains(TaskMessage.notice(.task, senderID: fixture.sibling.id.uuidString) + "\n\n"
             + TaskMessage.quoteLead + fixture.sibling.id.uuidString + ", sent "), withQuote)
@@ -641,6 +641,98 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(toClaudeParent, TaskMessage(senderID: fixture.codex.id.uuidString, senderName: "Codex",
                                                    body: "Finished the classification.").text(in: .yardlet))
         XCTAssertEqual(TaskMessage.parse(toClaudeParent)?.relation, .task)
+        await model.shutdown()
+    }
+
+    /// A phrase from the person's message passes on that message as they typed it, whole or, when it is
+    /// long, the paragraphs around the phrase; spaces, line breaks and Unicode composition may differ,
+    /// nothing else. A phrase in different messages, or too short to tell, is refused with how to fix it,
+    /// and only what the person typed is a source: not the agent's answer, a tool's output or another
+    /// task's message. `quote_latest_person_message` passes on the person's latest message whole.
+    func testPersonQuotesPassOnTheMessageAPhraseIsFromAsThePersonTypedIt() async throws {
+        let background = "Background: " + String(repeating: "The staging cluster keeps a copy of last week's data. ",
+                                                  count: 12)
+        let keep = "Keep the database as it is.\nDo not delete the staging rows."
+        let caution = String(repeating: "Ask before anything that cannot be undone. ", count: 14)
+        let typed = "로그인은\n다 해놨어. 이제 retry tests 돌려 줘"
+        var builder = TranscriptBuilder()
+        builder.appendUser("Run the retry tests on staging first.")
+        builder.apply(.activityStarted(HarnessActivity(id: "a1", kind: "Bash", title: "Deploy", input: "make deploy")))
+        builder.apply(.activityCompleted(HarnessActivity(id: "a1", kind: "Bash", title: "Deploy", input: "make deploy",
+                                                         output: "DEPLOY_TOKEN=abc123 written")))
+        builder.apply(.assistantMessageCompleted("Ran them on staging; all green."))
+        builder.apply(.turnCompleted)
+        builder.appendUser(background + "\n\n" + keep + "\n\n" + caution)
+        builder.apply(.turnCompleted)
+        builder.appendUser(TaskMessage(senderID: UUID().uuidString, senderName: "Release",
+                                       body: "Ship the build to production tonight.").text(in: .yardlet))
+        builder.apply(.turnCompleted)
+        builder.appendUser(typed.decomposedStringWithCanonicalMapping)
+        builder.apply(.turnCompleted)
+        builder.appendUser("ㄱㄱ")
+        builder.apply(.turnCompleted)
+        let fixture = try Fixture(callerTranscript: builder.entries)
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        func send(_ arguments: [String: Any]) async -> AgentToolResult {
+            var all: [String: Any] = ["task_id": fixture.codex.id.uuidString, "message": "Go ahead."]
+            all.merge(arguments) { $1 }
+            return await call(model, "send_message_to_task", all, from: fixture.caller)
+        }
+        func quotes(_ arguments: [String: Any], file: StaticString = #filePath,
+                    line: UInt = #line) async throws -> (result: String, quotes: [String]) {
+            let result = await send(arguments)
+            XCTAssertFalse(result.isError, result.text, file: file, line: line)
+            let submissions = await fixture.codexAdapter.codexSubmissions
+            let sent = try XCTUnwrap(submissions.last?.0.text, file: file, line: line)
+            let read = try XCTUnwrap(TaskMessage.parse(sent), sent, file: file, line: line)
+            XCTAssertTrue(read.quotes.allSatisfy { $0.sentAt != nil }, file: file, line: line)
+            return (result.text, read.quotes.map(\.text))
+        }
+
+        // A phrase, its line break written as a space and its Hangul composed, passes on the whole message.
+        let fromTyped = try await quotes(["person_quotes": ["로그인은 다 해놨어"]])
+        XCTAssertEqual(fromTyped.quotes, [typed])
+        XCTAssertTrue(fromTyped.result.contains("\nQuoted the person's message sent "), fromTyped.result)
+        XCTAssertTrue(fromTyped.result.hasSuffix(": \"로그인은 다 해놨어. 이제 retry tests 돌려 줘\""), fromTyped.result)
+        // A long message passes on the paragraph around the phrase, the words before it included.
+        let fromLong = try await quotes(["person_quotes": ["delete the  staging rows"]])
+        XCTAssertEqual(fromLong.quotes, [keep])
+        // A whole message goes as before, a short one too; the latest message goes whole, and once.
+        let whole = try await quotes(["person_quotes": ["Run the retry tests on staging first.", "ㄱㄱ"]])
+        XCTAssertEqual(whole.quotes, ["Run the retry tests on staging first.", "ㄱㄱ"])
+        let latest = try await quotes(["quote_latest_person_message": true, "person_quotes": ["ㄱㄱ", "로그인은 다 해놨어"]])
+        XCTAssertEqual(latest.quotes, ["ㄱㄱ", typed])
+        let delivered = await fixture.codexAdapter.codexSubmissions.count
+
+        // Refused, and nothing sent: a phrase in two messages, one too short to tell, and words the person did not
+        // type here, a typo, the agent's answer, a tool's output and another task's message.
+        let several = await send(["person_quotes": ["retry tests"]])
+        XCTAssertTrue(several.isError && several.text.contains("is in 2 of the person's messages"), several.text)
+        let short = await send(["person_quotes": ["tests"]])
+        XCTAssertTrue(short.isError && short.text.contains("at least \(SessionToolCatalog.minimumPersonQuoteLength) "
+            + "characters of it, or the whole message"), short.text)
+        for elsewhere in ["로그인은 다 해놧어", "all green", "DEPLOY_TOKEN=abc123", "Ship the build to production"] {
+            let refused = await send(["person_quotes": [elsewhere]])
+            XCTAssertTrue(refused.isError && refused.text.contains("do not hold \"\(elsewhere)\""), refused.text)
+        }
+        let submissions = await fixture.codexAdapter.codexSubmissions.count
+        XCTAssertEqual(submissions, delivered)
+
+        // A task the person has not written in has no latest message to pass on.
+        let none = await call(model, "send_message_to_task", ["task_id": fixture.caller.id.uuidString, "message": "Done.",
+                              "quote_latest_person_message": true], from: fixture.codex)
+        XCTAssertTrue(none.isError && none.text.contains("the person has sent no message in this task"), none.text)
+
+        // create_task passes them on in the child's first message.
+        let created = await call(model, "create_task", ["prompt": "Check the login.", "quote_latest_person_message": true],
+                                 from: fixture.caller)
+        XCTAssertFalse(created.isError, created.text)
+        XCTAssertTrue(created.text.contains("\nQuoted the person's message sent "), created.text)
+        let child = try XCTUnwrap(model.store.sessions.first { $0.parentTaskID == fixture.caller.id && $0.id != fixture.sibling.id })
+        let prompts = await fixture.adapter.prompts(for: child.id)
+        let first = try XCTUnwrap(prompts.last)
+        XCTAssertEqual(TaskMessage.parse(first)?.quotes.map(\.text), ["ㄱㄱ"])
         await model.shutdown()
     }
 
@@ -2002,7 +2094,7 @@ final class SessionToolTests: XCTestCase {
         init(callerOptions: [String: String] = [:], siblingOptions: [String: String] = [:],
              codexOptions: [String: String] = [:], codexState: CodexTaskState? = nil,
              repository: (([SessionRecord]) -> any SessionRepository)? = nil,
-             connections: ProviderConnectionStore? = nil) throws {
+             connections: ProviderConnectionStore? = nil, callerTranscript: [TranscriptEntry] = []) throws {
             root = FileManager.default.temporaryDirectory.appending(path: "session-tools-\(UUID().uuidString.prefix(8))")
             let appRoot = root.appending(path: "app", directoryHint: .isDirectory)
             let siteRoot = root.appending(path: "site", directoryHint: .isDirectory)
@@ -2037,6 +2129,8 @@ final class SessionToolTests: XCTestCase {
             builder.apply(.assistantMessageCompleted("Added RetryTests."))
             builder.apply(.turnCompleted)
             let sessions = [caller, sibling, busy, codex, other, neighbor]
+            var transcripts = [sibling.id: builder.entries]
+            if !callerTranscript.isEmpty { transcripts[caller.id] = callerTranscript }
             let defaults = SuggestionVolatileDefaults()
             let selections = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
             for harness in [HarnessKind.claudeCode, .codex, .openCode] { selections.select(runtime, for: harness) }
@@ -2050,7 +2144,7 @@ final class SessionToolTests: XCTestCase {
                 runtimeSelections: selections,
                 registry: HarnessRegistry { kind, _ in kind == .codex ? codexAdapter as any HarnessAdapter : adapter },
                 connections: connections,
-                initialTranscripts: [sibling.id: builder.entries],
+                initialTranscripts: transcripts,
                 initialCodexPresentation: codexPresentation,
                 codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults),
                 preferences: defaults,
