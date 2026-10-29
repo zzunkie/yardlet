@@ -107,8 +107,13 @@ retire() {
             "$LSREGISTER" -u "$nested" 2>/dev/null
         done
     fi
-    # Everything here is this script's own: the QA copy, its home and the logs. The result stays in results/.
+    # Everything here is this script's own: the QA copy, its home and the logs, and the settings macOS keeps for
+    # the copy's identifiers (its window's frame) outside the temporary home. The result stays in results/.
     rm -rf "$root/run"
+    for plist in "$HOME"/Library/Preferences/com.zzunkie.yardletqa.perf*.plist(N); do
+        /usr/bin/defaults delete "${plist:t:r}" 2>/dev/null
+        rm -f "$plist"
+    done
 }
 trap retire EXIT
 
