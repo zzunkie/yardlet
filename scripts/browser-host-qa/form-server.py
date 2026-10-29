@@ -33,7 +33,8 @@ reached as localhost, another site: /checkout/frame (in frames, posting to the i
 a sign-in's cookie check across two sites, /cookie-check/start (COOKIE_SIGN_IN below), for picking an element
 /pick (PICK below), and for the agent's browser use /viewport (what the page sees of its screen size, device and color
 scheme, and a tap target), /frames (an open and a closed shadow root, a frame from this site and one from another that
-holds a frame from this site again) and /handoff (a check only the person passes).
+holds a frame from this site again) and /handoff (a check only the person passes), and for video /media (MEDIA below)
+with the files media-fixtures.swift wrote to the output directory's media folder under /media/<name>.
 Each records what the page received in window.qa."""
 import time
 import argparse
@@ -974,6 +975,100 @@ SAVER_FORM = """<!doctype html><meta charset="utf-8"><title>Saver form</title><h
 SAVER_CSP = """<!doctype html><meta charset="utf-8"><title>Saver CSP</title><h1>No script of its own</h1>"""
 SAVER_NEXT = """<!doctype html><meta charset="utf-8"><title>Saver next</title><h1>Next page</h1>"""
 
+# Video a site shows before it is posted, as X does when an MP4 is attached, and streams, as X and YouTube do with
+# Media Source Extensions: what the page says it can play, whether each of /media's files plays from a blob address, as
+# an attached file does, and whether the fragmented MP4 plays through a MediaSource. VP9 and AV1 recordings the page
+# makes itself show that playback works without H.264 and AAC, and VP9 through a MediaSource too.
+# window.qa.media.done is set once every answer is in.
+MEDIA = """<!doctype html><meta charset="utf-8"><title>Media</title><h1>Media</h1>
+<script>
+window.qa = {media: {}};
+const types = {
+  h264: 'video/mp4; codecs="avc1.42E01E"', h264High: 'video/mp4; codecs="avc1.640028"',
+  aac: 'audio/mp4; codecs="mp4a.40.2"', h264Aac: 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"',
+  vp9: 'video/webm; codecs="vp9"', av1: 'video/webm; codecs="av01.0.05M.08"', av1Mp4: 'video/mp4; codecs="av01.0.05M.08"',
+  mp3: 'audio/mpeg'
+};
+// A muted video element, which may start without a click (an audio element may not), playing a blob or a MediaSource.
+function play(source) {
+  const element = document.createElement('video');
+  element.muted = true;
+  element.src = URL.createObjectURL(source);
+  document.body.append(element);
+  return new Promise(resolve => {
+    const done = result => {
+      clearTimeout(timer);
+      resolve(Object.assign(result, {width: element.videoWidth || 0, height: element.videoHeight || 0,
+                                     readyState: element.readyState, audioBytes: element.webkitAudioDecodedByteCount,
+                                     videoBytes: element.webkitVideoDecodedByteCount}));
+    };
+    const timer = setTimeout(() => done({ok: false, error: 'no progress in 8 s'}), 8000);
+    element.addEventListener('error', () => done({ok: false, error: element.error ? element.error.code + ' ' + element.error.message : 'error'}));
+    element.addEventListener('timeupdate', () => { if (element.currentTime > 0.2) done({ok: true}); });
+    element.play().catch(error => done({ok: false, error: String(error)}));
+  });
+}
+// The whole file appended to one SourceBuffer of `type`, then the stream ended, as a site's player does in pieces.
+async function playThroughSource(data, type) {
+  if (!MediaSource.isTypeSupported(type)) return {ok: false, error: 'MediaSource.isTypeSupported false'};
+  const source = new MediaSource();
+  const result = play(source);
+  await new Promise(resolve => source.addEventListener('sourceopen', resolve, {once: true}));
+  const buffer = source.addSourceBuffer(type);
+  await new Promise((resolve, reject) => {
+    buffer.addEventListener('updateend', resolve, {once: true});
+    buffer.addEventListener('error', () => reject(new Error('the SourceBuffer did not take the file')), {once: true});
+    buffer.appendBuffer(data);
+  });
+  source.endOfStream();
+  return result;
+}
+// 1.2 s of a canvas recorded with the first of `mimeTypes` MediaRecorder takes.
+async function record(mimeTypes) {
+  const mimeType = mimeTypes.find(type => MediaRecorder.isTypeSupported(type));
+  if (!mimeType) throw new Error('MediaRecorder takes none of ' + mimeTypes.join(', '));
+  const canvas = Object.assign(document.createElement('canvas'), {width: 160, height: 90});
+  const context = canvas.getContext('2d');
+  let frame = 0;
+  const paint = setInterval(() => { context.fillStyle = 'hsl(' + (frame++ * 12) + ' 70% 50%)'; context.fillRect(0, 0, 160, 90); }, 33);
+  const recorder = new MediaRecorder(canvas.captureStream(30), {mimeType});
+  const chunks = [];
+  recorder.ondataavailable = event => chunks.push(event.data);
+  const stopped = new Promise(resolve => recorder.onstop = resolve);
+  recorder.start();
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  recorder.stop();
+  await stopped;
+  clearInterval(paint);
+  return new Blob(chunks, {type: 'video/webm'});
+}
+(async () => {
+  const media = window.qa.media;
+  const probe = document.createElement('video');
+  media.canPlayType = Object.fromEntries(Object.entries(types).map(([name, type]) => [name, probe.canPlayType(type)]));
+  media.mediaSource = Object.fromEntries(Object.entries(types).map(([name, type]) => [name, MediaSource.isTypeSupported(type)]));
+  media.videoDecoder = (await VideoDecoder.isConfigSupported({codec: 'avc1.42E01E'}).catch(() => ({}))).supported === true;
+  media.audioDecoder = (await AudioDecoder.isConfigSupported({codec: 'mp4a.40.2', sampleRate: 44100, numberOfChannels: 1})
+    .catch(() => ({}))).supported === true;
+  media.play = {};
+  const attempt = async (name, run) => {
+    try { media.play[name] = await run(); } catch (error) { media.play[name] = {ok: false, error: String(error)}; }
+  };
+  const file = async name => (await fetch('/media/' + name)).blob();
+  for (const name of ['h264-aac.mp4', 'h264.mp4', 'aac.m4a']) {
+    await attempt(name, async () => play(await file(name)));
+  }
+  let vp9 = null;
+  await attempt('vp9.webm', async () => play(vp9 = await record(['video/webm; codecs=vp9'])));
+  await attempt('av1.webm', async () => play(await record(['video/webm; codecs=av01', 'video/webm; codecs=av1'])));
+  // media-fixtures.swift writes H.264 High level 1.3 (avc1.64000d).
+  await attempt('h264-aac-fragmented.mp4 through a MediaSource', async () =>
+    playThroughSource(await (await file('h264-aac-fragmented.mp4')).arrayBuffer(), 'video/mp4; codecs="avc1.64000d, mp4a.40.2"'));
+  await attempt('vp9.webm through a MediaSource', async () => playThroughSource(await vp9.arrayBuffer(), types.vp9));
+  media.done = true;
+})();
+</script>"""
+
 ICONS = {'/icon-blue.png': icon_png((37, 99, 235)), '/icon-green.png': icon_png((22, 163, 74))}
 
 
@@ -1127,6 +1222,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = CHECKOUT.encode()
         elif self.path.startswith('/acs/popup'):
             payload = sites(ISSUER_POPUP).encode()
+        elif self.path.startswith('/media/'):
+            name = Path(unquote(self.path.partition('?')[0])).name
+            payload = (args.output_dir / 'media' / name).read_bytes()
+            headers = {'Content-Type': 'audio/mp4' if name.endswith('.m4a') else 'video/mp4'}
+        elif self.path.startswith('/media'):
+            payload = MEDIA.encode()
         elif self.path.startswith('/saver/frame'):
             payload = SAVER_FRAME.encode()
         elif self.path.startswith('/saver/page'):

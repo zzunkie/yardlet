@@ -218,6 +218,16 @@ private final class BrowserHostQARunner {
             }
             return await finish()
         }
+        // `--ui-fixture-browser-check-only=media` runs H.264 and AAC video, as sites show an attached MP4, alone.
+        if BrowserHostQAFixture.argument("ui-fixture-browser-check-only") == "media" {
+            if let controller = await openPanel(label: "media", address: base + "media") {
+                _ = await waitUntil(.seconds(10)) { controller.title == "Media" && !controller.isLoading }
+                await exerciseMedia(controller)
+                await closePanel()
+                client.closeTabs(forSession: session)
+            }
+            return await finish()
+        }
         // A QA window launched in the background may sit under other windows; run-check.sh passes
         // --ui-fixture-browser-ignore-occlusion so the panel paints anyway. Recorded for the reader.
         record["windowVisibleAtStart"] = .bool(qaWindow?.occlusionState.contains(.visible) ?? false)
@@ -1460,6 +1470,46 @@ private final class BrowserHostQARunner {
         }
         check("tooltips: a name shows after the Codex app's 200 ms", abs(delay - 0.2) < 0.001,
               "AppKit's delay \(delay) s, NSInitialToolTipDelay \(UserDefaults.standard.integer(forKey: "NSInitialToolTipDelay")) ms")
+    }
+
+    // MARK: Video
+
+    /// H.264 and AAC, which an MP4 from a phone or a screen recording carries and X plays before it posts one
+    /// (`/media`): what the page says it can play, whether an MP4 with both tracks, one with the video only and an M4A
+    /// with the audio only play from a blob address, as an attached file does, and whether the same tracks as
+    /// fragmented MP4 play through a MediaSource, as X and YouTube stream video. VP9 and AV1 recordings the page makes
+    /// itself show that the codecs Chromium always had still play, VP9 through a MediaSource too. A file with audio
+    /// must have had its audio decoded, not only its video. The page's answers are in `result.json` under `media`.
+    private func exerciseMedia(_ controller: BrowserHostPaneController) async {
+        var report = ""
+        let deadline = ContinuousClock.now + .seconds(60)
+        while report.isEmpty, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(250))
+            report = (try? await evaluate(controller, "window.qa.media.done ? JSON.stringify(window.qa.media) : ''")) ?? ""
+        }
+        guard let media = try? JSONDecoder().decode(JSONValue.self, from: Data(report.utf8)) else {
+            return check("media: the page's answers", false, "none in 60 s")
+        }
+        record["media"] = media
+        let canPlay = media["canPlayType"]?["h264Aac"]?.stringValue ?? ""
+        check("media: an MP4 of H.264 and AAC can play", !canPlay.isEmpty, "canPlayType \"\(canPlay)\"")
+        let withAudio: Set = ["h264-aac.mp4", "aac.m4a", "h264-aac-fragmented.mp4 through a MediaSource"]
+        func bytes(_ value: JSONValue?) -> Int64 {
+            switch value {
+            case let .integer(count)?: count
+            case let .number(count)?: Int64(count)
+            default: 0
+            }
+        }
+        for name in ["h264-aac.mp4", "h264.mp4", "aac.m4a", "vp9.webm", "av1.webm",
+                     "h264-aac-fragmented.mp4 through a MediaSource", "vp9.webm through a MediaSource"] {
+            let result = media["play"]?[name]
+            let audioBytes = bytes(result?["audioBytes"])
+            let ok = result?["ok"] == .bool(true) && (!withAudio.contains(name) || audioBytes > 0)
+            let detail = result?["error"]?.stringValue
+                ?? "\(bytes(result?["videoBytes"])) video and \(audioBytes) audio bytes decoded"
+            check("media: \(name) plays", ok, detail)
+        }
     }
 
     // MARK: Resizing the panel
