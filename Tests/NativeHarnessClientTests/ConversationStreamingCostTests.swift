@@ -172,6 +172,120 @@ final class ConversationStreamingCostTests: XCTestCase {
                     layers: Self.layerCount(host.hosting.layer), turnsDrawn: ViewBodyCensus[.conversationTurn])
     }
 
+    private struct CodexBesideListHost: View {
+        let feed: CodexFeed
+        let renderState: ConversationRenderState
+        var body: some View {
+            HStack(spacing: 0) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(0..<400, id: \.self) { row in
+                            Text(verbatim: "Task \(row): look at the parser module")
+                                .lineLimit(1)
+                                .padding(.horizontal, 12)
+                                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                        }
+                    }
+                }
+                .frame(width: 280)
+                TaskConversationView(harness: .codex, workspaceURL: LongConversationFixture.workspace, entries: [],
+                                     sessionStatus: .running, codexTaskState: feed.state, renderState: renderState)
+            }
+            .frame(width: 1338, height: 900)
+        }
+    }
+
+    /// The condition of the report this benchmark answers: a Codex answer, a list, streams at the
+    /// end of a turn of 72 calls under four finished turns (125 items in all) while the list beside
+    /// the conversation scrolls. Each step streams one fragment, scrolls the list, lays the window out
+    /// and draws it, and turns the run loop for 2 ms. `NHC_PERF_STEPS` sets the steps (120), and
+    /// `NHC_PERF_ANSWERS` which answers stream (`short,long`).
+    func testBenchmarkACodexFragmentBesideAScrollingList() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["NHC_PERF_BENCH"] == "1" else {
+            throw XCTSkip("Set NHC_PERF_BENCH=1 to run the streaming cost benchmark")
+        }
+        let steps = environment["NHC_PERF_STEPS"].flatMap(Int.init) ?? 120
+        let answers = (environment["NHC_PERF_ANSWERS"] ?? "none,short,long").split(separator: ",").map(String.init)
+        var lines: [String] = []
+        for answer in answers {
+            for round in 0..<2 {
+                lines.append("\(answer) list, round \(round + 1): " + measureBesideList(answer: answer, steps: steps))
+            }
+        }
+        for line in lines { print("[issue-183] \(line)") }
+    }
+
+    private func measureBesideList(answer: String, steps: Int) -> String {
+        let finished = (0..<4).map { LongConversationFixture.codexTurn($0) }
+        let running = LongConversationFixture.runningCodexTurn(4, request: "Write up what changed", calls: 72, paragraphs: 1)
+        var state = LongConversationFixture.codex(threadID: "thread-183", turns: finished + [running])
+        let turn = state.thread!.turns.count - 1, item = state.thread!.turns[turn].items.count - 1
+        state.thread!.turns[turn].items[item].lifecycle = .inProgress
+        // A short list grows from nothing to about 1,000 characters, a long one from about 2,000 to 3,000.
+        let earlier = answer == "long"
+            ? (0..<24).map { "- Item \($0): the parser returned early on an empty input, so the lexer never saw it." }
+                .joined(separator: "\n") + "\n"
+            : ""
+        let opening = "## Summary\n\n" + earlier + "- Working"
+        var text = opening
+        guard case var .agentMessage(message) = state.thread!.turns[turn].items[item].content else { return "" }
+        message.text = text
+        state.thread!.turns[turn].items[item].content = .agentMessage(message)
+        let feed = CodexFeed(state)
+        func publish(_ fragment: Int) {
+            // A run longer than the default starts the answer again every 130 fragments, so it stays
+            // as long as the default's.
+            if fragment.isMultiple(of: 130) { text = opening }
+            text += fragment.isMultiple(of: 12) ? "\n- Item \(fragment / 12) " : " word\(fragment)"
+            guard case var .agentMessage(message) = feed.state.thread!.turns[turn].items[item].content else { return }
+            message.text = text
+            feed.state.thread!.turns[turn].items[item].content = .agentMessage(message)
+        }
+        let renderState = ConversationRenderState()
+        let host = WindowlessRender.Host(CodexBesideListHost(feed: feed, renderState: renderState),
+                                         size: NSSize(width: 1338, height: 900), appearance: .light)
+        defer { host.close() }
+        host.settle(passes: 20)
+        let list = Self.scrollViews(in: host.hosting).min { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
+        func step(_ index: Int) {
+            if answer != "none" { publish(index) }
+            if let list {
+                list.contentView.scroll(to: NSPoint(x: 0, y: CGFloat(index % 60) * 24))
+                list.reflectScrolledClipView(list.contentView)
+            }
+            host.hosting.layoutSubtreeIfNeeded()
+            host.window.displayIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.002))
+        }
+        for index in 0..<10 { step(index) }
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        defer { ViewBodyCensus.isEnabled = false }
+        let projected = renderState.projection.counts.projected
+        if let file = ProcessInfo.processInfo.environment["NHC_PERF_MARK"] {
+            FileManager.default.createFile(atPath: file, contents: Data("\(getpid())".utf8))
+        }
+        var durations: [Double] = []
+        let start = Self.mainThreadCPU()
+        for index in 10..<(10 + steps) {
+            let stepStart = CACurrentMediaTime()
+            step(index)
+            durations.append(CACurrentMediaTime() - stepStart)
+        }
+        let cpu = Self.mainThreadCPU() - start
+        durations.sort()
+        return String(format: "median step %.1f ms, p95 %.1f ms, main thread %.2f s over %d steps (%.2f ms a step), "
+                      + "%d turns drawn whole, %d turns projected, answer %d characters",
+                      durations[durations.count / 2] * 1000, durations[durations.count * 95 / 100] * 1000, cpu, steps,
+                      cpu / Double(steps) * 1000, ViewBodyCensus[.conversationTurn],
+                      renderState.projection.counts.projected - projected, text.count)
+    }
+
+    private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews)
+    }
+
     @Observable
     final class Shown {
         var isShown = true
