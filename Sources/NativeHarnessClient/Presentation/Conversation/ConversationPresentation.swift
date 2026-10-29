@@ -232,6 +232,14 @@ struct ConversationItem: Identifiable, Equatable, Sendable {
     /// question it asked with `request_user_input_async`): an answer in shape, but the turn goes on
     /// past it, so it never closes the turn and folds with the work (`ConversationTurnLayout`).
     var isSentWhileWorking: Bool = false
+    /// What the provider said to the person without marking it its final answer (a Codex message with
+    /// no `final_answer` phase): it can still close the turn, drawn under the work, but it neither folds
+    /// the work nor stays in view of folded work, as the Codex app counts only a final answer there.
+    var isUnmarkedAnswer: Bool = false
+    /// A call the provider refused to run because it needs an approval the task's policy never asks
+    /// for: it stays in view of folded work, as the Codex app keeps it, so the person sees what did
+    /// not run.
+    var wasRefusedForApproval: Bool = false
     /// What the provider wrote reached Yardlet only as a summary: a note Claude wrote between tool
     /// calls, which the API sent back as thinking (`TranscriptEntry.isProgressUpdate`). The message
     /// says so, as Claude Code's terminal marks it "summarized".
@@ -451,8 +459,14 @@ struct ConversationRequest: Identifiable, Equatable, Sendable {
 
     /// A question form the person answered: its card reads as the answers.
     var isAnsweredQuestion: Bool {
+        isQuestion && (state == .answered || state == .allowed)
+    }
+
+    /// Questions to the person (Claude's `AskUserQuestion`, Codex `item/tool/requestUserInput`), however
+    /// they ended.
+    var isQuestion: Bool {
         switch form {
-        case .choices, .freeText: state == .answered || state == .allowed
+        case .choices, .freeText: true
         case .planReview, .mcpForm, nil: false
         }
     }

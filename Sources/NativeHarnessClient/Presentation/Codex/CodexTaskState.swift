@@ -376,6 +376,10 @@ struct CodexAgentMessageItem: Equatable, Sendable {
     /// Working notes (`commentary`), which the turn's work folds. Anything else Codex writes is said to
     /// the person: its answer, or a question it asked while it worked.
     var isCommentary: Bool { phase == .commentary && !isDeliveredAsync }
+
+    /// Said to the person with no `final_answer` phase (an older model, another provider): the Codex
+    /// app draws it as the turn's last message but counts only a final answer when it folds the work.
+    var isUnmarkedAnswer: Bool { !isCommentary && !isDeliveredAsync && phase != .finalAnswer }
 }
 
 /// A question a Codex message asks the person (`agentMessage.questions`), answered with one of its

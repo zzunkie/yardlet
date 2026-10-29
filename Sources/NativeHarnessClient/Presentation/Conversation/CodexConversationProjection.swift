@@ -480,7 +480,15 @@ enum CodexConversationProjection {
         )
         if let attachments = prompt?.attachments, !attachments.isEmpty { result.promptAttachments = attachments }
         result.taskMessage = taskMessage
-        if case let .agentMessage(message) = item.content { result.isSentWhileWorking = message.isDeliveredAsync }
+        switch item.content {
+        case let .agentMessage(message):
+            result.isSentWhileWorking = message.isDeliveredAsync
+            result.isUnmarkedAnswer = message.isUnmarkedAnswer
+        case let .mcpToolCall(tool):
+            result.wasRefusedForApproval = tool.wasRefusedForApproval
+        default:
+            break
+        }
         switch kind {
         case .command, .fileChange, .tool, .subagent, .answer, .commentary, .reasoning:
             // A message offers it in its context menu, the rest on the card.

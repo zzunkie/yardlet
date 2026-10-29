@@ -178,4 +178,10 @@ extension CodexMCPToolItem {
         guard let message, !message.isEmpty else { return nil }
         return message
     }
+
+    /// Codex refused the call because it needs an approval the thread's policy never asks for, which
+    /// the Codex app keeps in view of folded work.
+    var wasRefusedForApproval: Bool {
+        errorMessage == "MCP tool call requires approval, but approval policy is never"
+    }
 }

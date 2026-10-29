@@ -81,6 +81,111 @@ final class ConversationTurnOrderTests: XCTestCase {
         XCTAssertFalse(try project(stopped).foldsWork, "the person stopped it, as the Codex app keeps a cancelled turn open")
     }
 
+    /// A turn whose last message Codex sent with no phase still closes with it under the work, but
+    /// does not fold, as the Codex app 26.1023 folds only once a final answer began (`Mj`) and keeps
+    /// only final answers in view of folded work (`Tj`): every note stays in view. A message without a
+    /// phase that the turn went on past folds like a note. Drawn in both appearances
+    /// (`.build/commentary-qa/`).
+    func testAMessageWithoutAPhaseClosesTheTurnWithoutFoldingIt() throws {
+        let directory = try WindowlessRender.directory("commentary-qa")
+        func command(_ id: String, _ command: String) -> JSONValue {
+            .object(["id": .string(id), "type": .string("commandExecution"), "command": .string(command),
+                     "cwd": .string(Self.workspace.path), "status": .string("completed"), "commandActions": .array([]),
+                     "aggregatedOutput": .string("ok\n"), "exitCode": .integer(0)])
+        }
+        func turn(_ items: [JSONValue]) -> CodexTurnState {
+            decoder.turn(from: .object([
+                "id": .string("turn-unphased"), "status": .string("completed"), "durationMs": .integer(95_000),
+                "items": .array([Self.user("u1", "Find out why the nightly export started late.")] + items)
+            ]), fallbackID: "turn-unphased")!
+        }
+        let closing = turn([
+            Self.message("n1", "Reading the export job’s log.", phase: "commentary"),
+            command("c1", "tail -n 40 logs/export.log"),
+            Self.message("n2", "The job waited 41 minutes for the database lock the backup holds until 02:10.",
+                         phase: "commentary"),
+            command("c2", "crontab -l"),
+            Self.message("a1", "It waited for the backup’s lock. I moved the export to 02:30, after the backup ends.",
+                         phase: nil)
+        ])
+        let projected = try project(closing)
+        XCTAssertEqual(projected.answers.map(\.id), ["a1"], "the last message closes the turn under its work")
+        XCTAssertFalse(projected.foldsWork, "no final answer began")
+        XCTAssertEqual(ConversationDrawOrder.rows(projected, harness: .codex).map(\.id), ["u1", "n1", "c1", "n2", "c2", "a1"],
+                       ConversationDrawOrder.listing(projected, harness: .codex))
+
+        var thread = try XCTUnwrap(decoder.thread(from: .object(["id": .string("thread-unphased")])))
+        thread.turns = [closing]
+        let timeline = ConversationTimeline(source: .codex(CodexTaskState(thread: thread), workspaceURL: Self.workspace,
+                                                           historySelection: nil))
+        for appearance in WindowlessRender.Appearance.allCases {
+            let drawing = try ConversationDrawing.draw(timeline, size: NSSize(width: 760, height: 700), appearance: appearance)
+            try WindowlessRender.writePNG(drawing.capture.bitmap, to: directory.appending(
+                path: "codex-unphased-closing-\(appearance.suffix).png"))
+            let texts = drawing.elements.map(\.description).joined(separator: "\n")
+            XCTAssertTrue(texts.contains("The job waited 41 minutes"), "the notes stay in view:\n\(texts)")
+        }
+
+        let passed = try project(turn([
+            Self.message("m1", "Looking at the log first.", phase: nil),
+            command("c1", "tail -n 40 logs/export.log"),
+            Self.message("a1", "It waited for the backup’s lock.", phase: "final_answer")
+        ]))
+        XCTAssertTrue(passed.foldsWork)
+        XCTAssertEqual(drawnIDs(passed, folded: true), ["u1", "a1"], "a message without a phase that the turn went on past folds")
+    }
+
+    /// What a folded turn keeps in view besides its answers and messages, by the Codex app 26.1023's `Tj`:
+    /// a call Codex refused because it needs an approval the task's policy never asks for, and a question
+    /// the person did not answer, as well as one they did (13.48). A turn whose agent still runs stays
+    /// open, while the turn runs too (`preventAutoCollapse`).
+    func testAFoldedTurnKeepsWhatTheCodexAppKeeps() throws {
+        let refused = try project(decoder.turn(from: .object([
+            "id": .string("turn-refused"), "status": .string("completed"), "durationMs": .integer(30_000),
+            "items": .array([
+                Self.user("u1", "File the bug."),
+                Self.message("n1", "Opening the issue.", phase: "commentary"),
+                .object(["id": .string("t1"), "type": .string("mcpToolCall"), "server": .string("github"),
+                         "tool": .string("create_issue"), "status": .string("failed"), "arguments": .object([:]),
+                         "result": .null,
+                         "error": .object(["message": .string("MCP tool call requires approval, but approval policy is never")])]),
+                .object(["id": .string("t2"), "type": .string("mcpToolCall"), "server": .string("github"),
+                         "tool": .string("search_issues"), "status": .string("failed"), "arguments": .object([:]),
+                         "result": .null, "error": .object(["message": .string("timed out")])]),
+                Self.message("a1", "The issue was not filed: it needs your approval.", phase: "final_answer")
+            ])
+        ]), fallbackID: "turn-refused")!)
+        XCTAssertTrue(refused.foldsWork)
+        XCTAssertEqual(drawnIDs(refused, folded: true), ["u1", "t1", "a1"], "the refused call stays; the failed one folds (D2)")
+
+        let entry = TranscriptEntry(createdAt: Self.start, content: .user(text: "Ask me first."))
+        func item(_ id: String, _ kind: ConversationItemKind, _ phase: ConversationItemPhase = .completed) -> ConversationItem {
+            ConversationItem(id: id, kind: kind, phase: phase, source: .transcript(entry))
+        }
+        func question(_ id: String, _ state: ConversationRequestState) -> ConversationItem {
+            item(id, .request(ConversationRequest(
+                id: id, title: "Which branch?", form: .freeText([ConversationRequestQuestion(id: "q", text: "Which branch?")]),
+                state: state, source: .transcript(entry)
+            )))
+        }
+        var asked = ConversationTurn(id: "turn-asked", status: .completed, timing: ConversationTurnTiming())
+        asked.prompt = [item("u1", .userMessage(text: "Ask me first.", images: []))]
+        asked.work = [question("q1", .expired(message: nil)), question("q2", .answered),
+                      item("n1", .commentary(text: "Going on.", isStreaming: false))]
+        asked.answers = [item("a1", .answer(text: "Done.", isStreaming: false))]
+        XCTAssertTrue(asked.foldsWork)
+        XCTAssertEqual(asked.workKeptWhenFolded.map(\.id), ["q1", "q2"])
+
+        var delegating = asked
+        delegating.status = .running
+        delegating.work = [item("s1", .subagent(ConversationSubagent(title: "Reviewer", status: "running", detail: nil, routes: [])),
+                                .running)]
+        delegating.answers = [item("a1", .answer(text: "The review is", isStreaming: true), .running)]
+        XCTAssertFalse(delegating.foldsWork, "its agent still runs")
+        delegating.work[0].phase = .completed
+        XCTAssertTrue(delegating.foldsWork)
+    }
+
     /// A question Codex asked while it goes on working waits under the running turn for the person, as
     /// the Codex app offers it in its question panel (`y7t`) while the question itself stays where it was
     /// asked; the answer goes into the running turn, and once a reply names the question, it waits no
@@ -460,8 +565,8 @@ final class ConversationTurnOrderTests: XCTestCase {
                  "content": .array([.object(["type": .string("text"), "text": .string(text)])])])
     }
 
-    private static func message(_ id: String, _ text: String, phase: String, asks: Bool = false) -> JSONValue {
-        .object(["id": .string(id), "type": .string("agentMessage"), "text": .string(text), "phase": .string(phase),
+    private static func message(_ id: String, _ text: String, phase: String?, asks: Bool = false) -> JSONValue {
+        .object(["id": .string(id), "type": .string("agentMessage"), "text": .string(text), "phase": phase.map(JSONValue.string) ?? .null,
                  "memoryCitation": .null, "delivery": asks ? .string("async") : .null,
                  "questions": asks ? .array([.object(["title": .string(text), "options": .null])]) : .null])
     }
