@@ -113,8 +113,11 @@ struct TranscriptProsePiece {
 @MainActor
 struct TranscriptProseBuilder {
     let style: TranscriptProseStyle
+    /// What the items of the message's top-level lists were last built into, kept and replaced as
+    /// this builder builds them.
+    var listItems: ListItems? = nil
 
-    private struct Context {
+    fileprivate struct Context: Equatable {
         var indent: CGFloat = 0
         var color: NSColor = .labelColor
         var listDepth = 0
@@ -122,7 +125,7 @@ struct TranscriptProseBuilder {
         var marker: Marker?
     }
 
-    private struct Marker {
+    fileprivate struct Marker: Equatable {
         let text: String
         /// Where the marker starts, so markers of one list end at one column.
         let start: CGFloat
@@ -130,16 +133,70 @@ struct TranscriptProseBuilder {
         let copyText: String
     }
 
-    private struct Paragraph {
+    fileprivate struct Paragraph {
         let text: NSMutableAttributedString
         let style: NSMutableParagraphStyle
         let decoration: TranscriptProseDecoration
+
+        /// Another paragraph alike, whose text and style can be changed apart from this one's.
+        func copy() -> Paragraph {
+            Paragraph(text: NSMutableAttributedString(attributedString: text),
+                      style: style.mutableCopy() as! NSMutableParagraphStyle, decoration: decoration)
+        }
     }
 
     private final class Output {
         var paragraphs: [Paragraph] = []
         var segments: [(key: ConversationFindSegmentKey, paragraph: Int, range: NSRange, text: String)] = []
         var codeBlocks: [(paragraph: Int, language: String?, path: [Int], isTruncated: Bool)] = []
+
+        /// A list item built earlier, after what is here.
+        func append(_ item: ListItems.Item) {
+            let first = paragraphs.count
+            paragraphs += item.paragraphs.map { $0.copy() }
+            segments += item.segments.map { ($0.key, $0.paragraph + first, $0.range, $0.text) }
+            codeBlocks += item.codeBlocks.map { ($0.paragraph + first, $0.language, $0.path, $0.isTruncated) }
+        }
+    }
+
+    /// The paragraphs each item of a message's top-level lists was last built into, by the item's
+    /// path. A list being written changes in its last item; the items before it, the same values
+    /// under the same marker, take their paragraphs from here instead of being built again.
+    final class ListItems {
+        fileprivate struct Item {
+            let item: TranscriptMarkdownListItem
+            let context: Context
+            let spacing: CGFloat
+            /// Numbered from the item's first paragraph.
+            let paragraphs: [Paragraph]
+            let segments: [(key: ConversationFindSegmentKey, paragraph: Int, range: NSRange, text: String)]
+            let codeBlocks: [(paragraph: Int, language: String?, path: [Int], isTruncated: Bool)]
+        }
+
+        private var earlier: [[Int]: Item] = [:]
+        private var built: [[Int]: Item] = [:]
+        /// Each list marker's width in the text's marker font.
+        fileprivate var markerWidths: [String: CGFloat] = [:]
+
+        init() {}
+
+        /// Starts a build: what the last one built is what this one may keep.
+        func begin() {
+            earlier = built
+            built = [:]
+        }
+
+        fileprivate func item(at path: [Int], _ item: TranscriptMarkdownListItem, context: Context,
+                              spacing: CGFloat) -> Item? {
+            guard let kept = earlier[path], kept.spacing == spacing, kept.context == context, kept.item == item
+            else { return nil }
+            built[path] = kept
+            return kept
+        }
+
+        fileprivate func keep(_ item: Item, at path: [Int]) {
+            built[path] = item
+        }
     }
 
     // MARK: - Fonts
@@ -362,10 +419,19 @@ struct TranscriptProseBuilder {
             item.checked.map { $0 ? "☑" : "☐" } ?? start.map { "\($0 + offset)." } ?? "•"
         }
         let markerFont = markerFont()
-        let widths = markers.map { ($0 as NSString).size(withAttributes: [.font: markerFont]).width }
+        // A list being written measures only the markers the message did not have yet.
+        let widths = markers.map { marker in
+            if let width = listItems?.markerWidths[marker] { return width }
+            let width = (marker as NSString).size(withAttributes: [.font: markerFont]).width
+            listItems?.markerWidths[marker] = width
+            return width
+        }
         let column = widths.max() ?? 0
         let contentIndent = context.indent + ceil(column) + TranscriptProseMetrics.listMarkerSpacing
         let itemSpacing = (isLoose ? 15 : 10) * style.scale
+        // A top-level list's items keep what they were built into; a nested or quoted one is built with
+        // the item around it.
+        let kept = path.count == 1 ? listItems : nil
         for (offset, item) in items.enumerated() {
             let spacing = offset == items.count - 1 ? spacingAfter : itemSpacing
             var inner = context
@@ -374,15 +440,30 @@ struct TranscriptProseBuilder {
             inner.marker = Marker(
                 text: markers[offset], start: context.indent + ceil(column) - widths[offset], contentIndent: contentIndent,
                 copyText: String(repeating: "  ", count: context.listDepth) + markers[offset] + " ")
+            let itemPath = path + [offset]
+            if let built = kept?.item(at: itemPath, item, context: inner, spacing: spacing) {
+                output.append(built)
+                continue
+            }
+            let first = (paragraph: output.paragraphs.count, segment: output.segments.count, code: output.codeBlocks.count)
+            let marker = inner
             if item.blocks.isEmpty {
                 emptyParagraph(context: inner, spacingAfter: spacing, into: output)
             }
             for (index, child) in item.blocks.enumerated() {
-                append(child, path: path + [offset, index], context: inner,
+                append(child, path: itemPath + [index], context: inner,
                        spacingAfter: index == item.blocks.count - 1 ? spacing : ParityTheme.proseBlockSpacing,
                        into: output)
                 inner.marker = nil
             }
+            kept?.keep(ListItems.Item(
+                item: item, context: marker, spacing: spacing,
+                paragraphs: output.paragraphs[first.paragraph...].map { $0.copy() },
+                segments: output.segments[first.segment...].map { ($0.key, $0.paragraph - first.paragraph, $0.range, $0.text) },
+                codeBlocks: output.codeBlocks[first.code...].map {
+                    ($0.paragraph - first.paragraph, $0.language, $0.path, $0.isTruncated)
+                }
+            ), at: itemPath)
         }
     }
 
