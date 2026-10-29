@@ -19,6 +19,15 @@ enum CodexProtocol {
         CodexRPCRequest(id: id, method: "account/rateLimits/read", params: .null)
     }
 
+    /// Uses one banked reset of the account's plan limits. `idempotencyKey` names one attempt: a
+    /// retry after an answer that did not arrive sends the same key, so the reset is used once.
+    /// Without `creditID` the service picks the reset.
+    static func consumeRateLimitResetCredit(id: Int64, idempotencyKey: String, creditID: String?) -> CodexRPCRequest {
+        var params: [String: JSONValue] = ["idempotencyKey": .string(idempotencyKey)]
+        if let creditID { params["creditId"] = .string(creditID) }
+        return CodexRPCRequest(id: id, method: "account/rateLimitResetCredit/consume", params: .object(params))
+    }
+
     static func accountUsage(id: Int64) -> CodexRPCRequest {
         CodexRPCRequest(id: id, method: "account/usage/read", params: .null)
     }

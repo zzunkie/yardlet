@@ -197,6 +197,18 @@ enum ProviderConnectionError: LocalizedError {
 typealias AccountSnapshotLoader = @Sendable (HarnessDescriptor, URL?) async -> HarnessAccountSnapshot
 /// Reads a saved account. Tests inject one; the app reads through the runtime.
 typealias ConnectionSnapshotLoader = @Sendable (ProviderConnection, URL?) async -> HarnessAccountSnapshot
+/// Uses one reset of an account's plan limits (the account, the attempt's ID, the reset to take).
+/// Tests inject one; the app calls the harness.
+typealias UsageResetRunner = @MainActor (AccountChoice, String, String?) async throws -> AccountUsageResetOutcome
+
+/// Where the person's use of a reset of an account's plan limits stands.
+enum UsageResetState: Equatable {
+    case using
+    /// The harness answered; `left` is how many resets the account holds afterwards, when known.
+    case answered(AccountUsageResetOutcome, left: Int?)
+    /// The attempt got no answer. Using a reset again sends the same attempt, so at most one is used.
+    case failed(String)
+}
 
 /// When a check request may reuse what is already known.
 enum AccountCheckPolicy: Sendable {
@@ -280,6 +292,12 @@ final class ProviderConnectionStore {
     @ObservationIgnored private var liveUpdateClients = 0
     @ObservationIgnored private var liveBroker: HarnessAccountBroker?
     @ObservationIgnored private var liveUpdates: Task<Void, Never>?
+    /// Each account's use of a reset that the person has not dismissed, keyed like `AccountChoice.id`.
+    private(set) var usageResetStates: [String: UsageResetState] = [:]
+    /// The attempt each account's last use sent without getting an answer.
+    @ObservationIgnored private var unansweredResetAttempts: [String: String] = [:]
+    /// Replaces the harness call that uses a reset; nil calls the account's harness.
+    @ObservationIgnored var usageResetRunner: UsageResetRunner?
     #if DEBUG
     var usesFixtureSnapshots = false
     #endif
@@ -893,6 +911,67 @@ final class ProviderConnectionStore {
         let broker = liveBroker
         liveBroker = nil
         await broker?.stopCodexAccountUpdates()
+    }
+
+    // MARK: - Usage resets
+
+    /// The account a task runs under, as its row in an account list shows it.
+    func choice(for harness: HarnessKind, connection: ProviderConnection?) -> AccountChoice {
+        let saved = connection.map { connection in connections.first { $0.id == connection.id } ?? connection }
+        return AccountChoice(harness: harness, connection: saved,
+            snapshot: saved.map { snapshots[$0.id] } ?? defaultSnapshots[harness])
+    }
+
+    /// Checks the one account `choice` names.
+    func check(_ choice: AccountChoice, policy: AccountCheckPolicy = .ifStale,
+               runtimeSelections: RuntimeSelectionStore) async {
+        await check(defaultsOf: choice.connection == nil ? [choice.harness] : [],
+            savedOf: choice.connection == nil ? [] : [choice.harness],
+            connectionIDs: Set(choice.connection.map { [$0.id] } ?? []), policy: policy,
+            runtimeSelections: runtimeSelections)
+    }
+
+    /// The person uses one reset of `choice`'s plan limits, after confirming it: the harness's own
+    /// call under that account's login takes the reset that expires first, then the account is
+    /// checked again so its limits and count show what changed. An attempt that got no answer is
+    /// sent again as it was, so a reset is never used twice for one press.
+    func useUsageReset(_ choice: AccountChoice, runtimeSelections: RuntimeSelectionStore) async {
+        let key = choice.id
+        guard usageResetStates[key] != .using else { return }
+        usageResetStates[key] = .using
+        let attemptID = unansweredResetAttempts[key] ?? UUID().uuidString
+        unansweredResetAttempts[key] = attemptID
+        let current = self.choice(for: choice.harness, connection: choice.connection)
+        let before = current.snapshot?.usageResets
+        do {
+            let outcome: AccountUsageResetOutcome
+            if let usageResetRunner {
+                outcome = try await usageResetRunner(current, attemptID, before?.next?.id)
+            } else {
+                guard let executable = runtimeSelections.selectedURL(for: choice.harness) else {
+                    throw AccountUsageResetError.unsupported
+                }
+                let broker = current.connection.map { HarnessAccountBroker(connection: $0) }
+                    ?? HarnessAccountBroker(codexEnvironmentManager: codexEnvironmentManager)
+                outcome = try await broker.useUsageReset(harness: choice.harness, executableURL: executable,
+                    attemptID: attemptID, resetID: before?.next?.id)
+            }
+            unansweredResetAttempts[key] = nil
+            await check(current, policy: .restart, runtimeSelections: runtimeSelections)
+            let after = self.choice(for: choice.harness, connection: choice.connection)
+            let left = readingStatus[key] == .current ? after.snapshot?.usageResets?.availableCount
+                : before.map { max(0, $0.availableCount - (outcome == .reset ? 1 : 0)) }
+            usageResetStates[key] = .answered(outcome, left: left)
+        } catch {
+            usageResetStates[key] = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Forgets an answered or failed use once the person has seen it. An unanswered attempt is still
+    /// sent again by the next use.
+    func dismissUsageReset(for choice: AccountChoice) {
+        guard let state = usageResetStates[choice.id], state != .using else { return }
+        usageResetStates[choice.id] = nil
     }
 
     func usageSummary(for connection: ProviderConnection) -> String {

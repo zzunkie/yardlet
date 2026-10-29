@@ -4,7 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 
 /// Claude's provider notices: the cards on their own, and as the conversation draws them (images in
-/// `.build/claude-provider-notices-qa`).
+/// `.build/claude-provider-notices-qa`). The limit card is every harness's; a Codex one is drawn with
+/// them.
 @MainActor
 final class ClaudeProviderNoticeRenderingTests: XCTestCase {
     /// The limit cards, compaction markers and the lines above the composer, in both appearances.
@@ -33,8 +34,23 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
             canContinue: true,
             accounts: { accounts }
         )
+        // A Codex task stopped by its weekly limit, whose account holds two resets (D7: no reset
+        // time, no other account).
+        let resetsStore = ProviderConnectionStore()
+        resetsStore.usesFixtureSnapshots = true
+        resetsStore.publishDefaults([HarnessAccountSnapshot(id: "codex", harness: .codex, providerID: "openai-codex",
+            state: .signedIn, accountLabel: "codex@example.test", detail: "", credentialOwner: "", checkedAt: Date(),
+            usage: [], usageResets: AccountUsageResets(availableCount: 2), canLogin: false, canLogout: true)])
+        let resetContext = UsageResetContext(store: resetsStore,
+            runtimeSelections: RuntimeSelectionStore(discoversRuntimes: false))
+        let codexNotices = TaskProviderNotices(canContinue: true, usageReset: {
+            (resetsStore.choice(for: .codex, connection: nil), resetContext)
+        })
         for appearance in [ColorScheme.light, .dark] {
             let view = VStack(alignment: .leading, spacing: 18) {
+                UsageLimitCard(entryID: UUID(), limit: HarnessRateLimit(status: .rejected,
+                    message: "You've hit your usage limit. Upgrade to Pro, or try again later."),
+                    isLatest: true, notices: codexNotices)
                 UsageLimitCard(entryID: latest, limit: session, isLatest: true, notices: notices)
                 UsageLimitCard(entryID: armed, limit: model, isLatest: true, notices: notices)
                 UsageLimitCard(entryID: UUID(), limit: HarnessRateLimit(status: .rejected,

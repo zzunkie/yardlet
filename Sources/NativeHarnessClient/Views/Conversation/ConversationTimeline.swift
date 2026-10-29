@@ -351,6 +351,9 @@ struct ConversationTimeline: View {
         var context = ConversationItemContext(harness: presentation.harness, workspaceURL: workspaceURL, actions: actions)
         if case let .transcript(entries, _, _, _) = source {
             context.lastEntryID = entries.last?.id
+        } else if case let .usageLimit(_, entryID)? = presentation.turns.last?.outcome {
+            // A Codex limit card is named after its turn, so the last turn's card is the latest.
+            context.lastEntryID = entryID
         }
         return context
     }

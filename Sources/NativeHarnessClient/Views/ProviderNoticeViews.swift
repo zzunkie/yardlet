@@ -20,6 +20,9 @@ struct TaskProviderNotices {
     var refreshAccounts: @MainActor () async -> Void = {}
     var continueWithAccount: @MainActor (ProviderConnection) -> Void = { _ in }
     var setAutoContinue: @MainActor (_ enabled: Bool, _ entryID: UUID, _ resetsAt: Date) -> Void = { _, _, _ in }
+    /// The account the task runs under, for a limit card to offer its resets; nil where its
+    /// harness reports none.
+    var usageReset: @MainActor () -> (choice: AccountChoice, context: UsageResetContext)? = { nil }
 }
 
 /// What a limit card's "Continue with another account" opens: the task's account list, with the
@@ -32,8 +35,8 @@ struct UsageLimitAccounts {
 }
 
 /// The card a turn shows when a plan limit stopped it: which limit, when it resets, the windows the
-/// report measured as limit window rows, and, on the latest card of an idle task, continuing under
-/// another account or once the limit resets.
+/// report measured as limit window rows, and, on the latest card of an idle task, using a reset the
+/// task's account holds, continuing under another account or once the limit resets.
 struct UsageLimitCard: View {
     let entryID: UUID
     let limit: HarnessRateLimit
@@ -46,6 +49,7 @@ struct UsageLimitCard: View {
     var body: some View {
         // Read while drawing, so a saved or removed account shows or hides the button.
         let accounts = offersActions ? notices?.accounts() : nil
+        let usageReset = offersActions ? notices?.usageReset() : nil
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "gauge.with.dots.needle.100percent")
@@ -75,6 +79,10 @@ struct UsageLimitCard: View {
             }
             if let notices, offersActions {
                 ControlRowLayout(spacing: 14, rowSpacing: 8) {
+                    if let usageReset {
+                        UsageResetButton(choice: usageReset.choice, placement: .limitCard)
+                            .environment(\.usageResetContext, usageReset.context)
+                    }
                     if let accounts, !accounts.others.isEmpty {
                         Button { showsAccounts.toggle() } label: {
                             HStack(spacing: 4) {

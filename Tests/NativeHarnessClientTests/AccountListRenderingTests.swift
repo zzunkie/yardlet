@@ -259,10 +259,8 @@ import XCTest
         let laptop = ProviderConnection(id: "opencode-laptop", name: "Laptop", harness: .openCode,
             providerID: "openai-codex", homePath: root.appending(path: "opencode").path, credentialSelector: nil)
         try store.save(laptop)
-        let codexUsage = try claude("codex@example.test", short: 1, weekly: 12, at: now).usage
-        let codex = HarnessAccountSnapshot(id: "codex", harness: .codex, providerID: "openai-codex", state: .signedIn,
-            accountLabel: "codex@example.test", accountPlan: "ChatGPT Pro", detail: "", credentialOwner: "",
-            checkedAt: now.addingTimeInterval(-180), usage: codexUsage, canLogin: false, canLogout: true)
+        let codex = codexReading(resets: 2, at: now)
+        let codexUsage = codex.usage
         store.publish(HarnessAccountSnapshot(id: laptop.id, harness: .openCode, providerID: "openai-codex",
             state: .signedIn, accountLabel: "codex@example.test", accountPlan: "ChatGPT Pro", detail: "",
             credentialOwner: "", checkedAt: now.addingTimeInterval(-180), usage: codexUsage, canLogin: false,
@@ -274,6 +272,57 @@ import XCTest
         let task = SessionRecord(harness: .claudeCode, workspaceURL: root,
             runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Switch Yardlet account", connection: developer)
         return (store, task)
+    }
+
+    /// The fixture's ChatGPT account through Codex's default login, holding `resets` resets of its
+    /// limits; the first expires in two hours.
+    private func codexReading(resets: Int, at now: Date) -> HarnessAccountSnapshot {
+        let usage = (try? claude("codex@example.test", short: 1, weekly: 12, at: now).usage) ?? []
+        let available = [AccountUsageResets.Reset(id: "sooner", title: "Full reset", expiresAt: now.addingTimeInterval(7_200)),
+                         AccountUsageResets.Reset(id: "later", title: "Full reset", expiresAt: now.addingTimeInterval(9 * 86_400))]
+        return HarnessAccountSnapshot(id: "codex", harness: .codex, providerID: "openai-codex", state: .signedIn,
+            accountLabel: "codex@example.test", accountPlan: "ChatGPT Pro", detail: "", credentialOwner: "",
+            checkedAt: now.addingTimeInterval(-180), usage: usage,
+            usageResets: AccountUsageResets(availableCount: resets, resets: Array(available.suffix(resets)),
+                                            purchaseURL: HarnessAccountBroker.codexResetPurchaseURL,
+                                            restores: usage.prefix(2).map(\.id)),
+            canLogin: false, canLogout: true)
+    }
+
+    /// The confirmation an account list's and a limit card's "Use a reset" opens, before the person
+    /// confirms, after a reset was used, and after a use that got no answer.
+    func testUsageResetConfirmationAndItsAnswersRender() async throws {
+        let directory = try WindowlessRender.directory("account-list-qa")
+        let (store, _) = try fixture()
+        let context = UsageResetContext(store: store, runtimeSelections: RuntimeSelectionStore(discoversRuntimes: false))
+        let choice = store.choice(for: .codex, connection: nil)
+        XCTAssertEqual(choice.snapshot?.usageResets?.next?.id, "sooner")
+        let size = NSSize(width: 380, height: 330)
+        func render(_ name: String) throws {
+            for capture in try WindowlessRender.hostedInBothAppearances(name, in: directory, size: size, content: { appearance in
+                UsageResetConfirmation(choice: choice, context: context, close: {})
+                    .frame(width: size.width, height: size.height, alignment: .top)
+                    .background(ParityTheme.elevated)
+                    .environment(\.colorScheme, appearance.colorScheme)
+            }) {
+                XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 4, from: 4, background: (1, 1)), name)
+            }
+        }
+        try render("usage-reset-confirm")
+
+        let now = Date()
+        store.usageResetRunner = { _, _, resetID in
+            XCTAssertEqual(resetID, "sooner")
+            store.publishDefaults([self.codexReading(resets: 1, at: now)])
+            return .reset
+        }
+        await store.useUsageReset(choice, runtimeSelections: context.runtimeSelections)
+        XCTAssertEqual(store.usageResetStates[choice.id], .answered(.reset, left: 1))
+        try render("usage-reset-answered")
+
+        store.usageResetRunner = { _, _, _ in throw AccountUsageResetError.unrecognizedAnswer }
+        await store.useUsageReset(choice, runtimeSelections: context.runtimeSelections)
+        try render("usage-reset-failed")
     }
 
     private func claude(_ email: String, short: Double, weekly: Double, at checkedAt: Date) throws

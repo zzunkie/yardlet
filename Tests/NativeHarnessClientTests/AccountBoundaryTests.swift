@@ -956,6 +956,112 @@ final class AccountBoundaryTests: XCTestCase {
         XCTAssertFalse(requestMethods.contains("turn/start"))
     }
 
+    /// Codex resets go through each account's own App Server (`scripts/fixtures/codex-usage-reset.py`):
+    /// the count and the reset that expires first come with the limits, a use names that reset and
+    /// one attempt ID, the account is read again afterwards, an attempt without an answer is sent
+    /// again with the same ID, and another account's home sees none of it.
+    func testCodexResetsAreReadAndUsedUnderEachAccountsOwnLogin() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-usage-reset-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appending(path: "codex")
+        let source = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: "scripts/fixtures/codex-usage-reset.py")
+        try Data(String(contentsOf: source, encoding: .utf8)
+            .replacingOccurrences(of: "#!/usr/bin/env python3", with: "#!/usr/bin/python3").utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path())
+
+        func account(_ name: String, plan: String, limits: JSONValue) throws -> ProviderConnection {
+            let home = root.appending(path: name)
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            try JSONEncoder().encode(JSONValue.object(["planType": .string(plan)])).write(to: home.appending(path: "account.json"))
+            try JSONEncoder().encode(limits).write(to: home.appending(path: "rate-limits.json"))
+            return ProviderConnection(id: name, name: name, harness: .codex, providerID: nil,
+                                      homePath: home.path(percentEncoded: false), credentialSelector: nil)
+        }
+        func credit(_ id: String, expiresAt: Int64, status: String = "available") -> JSONValue {
+            .object(["id": .string(id), "resetType": .string("codexRateLimits"), "status": .string(status),
+                     "grantedAt": .integer(1), "expiresAt": .integer(expiresAt), "title": .string("Full reset")])
+        }
+        func answer(_ value: JSONValue, for connection: ProviderConnection) throws {
+            try JSONEncoder().encode(value).write(to: URL(filePath: connection.homePath!).appending(path: "consume.json"))
+        }
+        func requests(_ connection: ProviderConnection) throws -> [JSONValue] {
+            let log = URL(filePath: connection.homePath!).appending(path: "consume-requests.jsonl")
+            guard FileManager.default.fileExists(atPath: log.path()) else { return [] }
+            return try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
+                .map { try JSONDecoder().decode(JSONValue.self, from: Data($0.utf8)) }
+        }
+        let weeklyCap = JSONValue.object(["limitId": .string("codex"),
+            "primary": .object(["usedPercent": .integer(100), "windowDurationMins": .integer(10_080)])])
+        let personal = try account("personal", plan: "pro", limits: .object([
+            "rateLimits": weeklyCap,
+            "rateLimitResetCredits": .object(["availableCount": .integer(2), "credits": .array([
+                credit("later", expiresAt: 2_000_000_000), credit("sooner", expiresAt: 1_900_000_000),
+                credit("spent", expiresAt: 1_800_000_000, status: "redeemed")
+            ])])
+        ]))
+        let team = try account("team", plan: "team", limits: .object([
+            "rateLimits": weeklyCap,
+            "rateLimitResetCredits": .object(["availableCount": .integer(0), "credits": .array([])])
+        ]))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("NativeHarnessClientTests.UsageReset")))
+        let selections = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
+        selections.select(executable, for: .codex)
+        let store = ProviderConnectionStore()
+        try store.save(personal)
+        try store.save(team)
+
+        await store.check(defaultsOf: [], savedOf: [.codex], runtimeSelections: selections)
+        let resets = try XCTUnwrap(store.snapshots["personal"]?.usageResets)
+        XCTAssertEqual(resets.availableCount, 2)
+        XCTAssertEqual(resets.resets.map(\.id), ["sooner", "later"], "Available resets, the one expiring first first")
+        XCTAssertEqual(resets.next?.title, "Full reset")
+        XCTAssertEqual(resets.purchaseURL, HarnessAccountBroker.codexResetPurchaseURL)
+        XCTAssertEqual(resets.restores, ["codex:primary"], "A reset restores the general Codex limit")
+        XCTAssertEqual(store.snapshots["team"]?.usageResets?.availableCount, 0)
+        XCTAssertNil(store.snapshots["team"]?.usageResets?.purchaseURL, "A team plan is not sold an instant reset")
+        XCTAssertTrue(MenuBarMenuProjection.usage(choices: store.choices(for: [.codex]))
+            .contains { $0.detail.contains(UsageResetText.available(2)) })
+
+        let choice = store.choice(for: .codex, connection: personal)
+        await store.useUsageReset(choice, runtimeSelections: selections)
+        XCTAssertEqual(store.usageResetStates["personal"], .answered(.reset, left: 1))
+        XCTAssertEqual(store.snapshots["personal"]?.usageResets?.availableCount, 1, "The account is read again")
+        let first = try requests(personal)
+        XCTAssertEqual(first.count, 1)
+        XCTAssertEqual(first.first?["creditId"]?.stringValue, "sooner")
+        XCTAssertFalse(first.first?["idempotencyKey"]?.stringValue?.isEmpty ?? true)
+        XCTAssertEqual(try requests(team), [], "Another account's App Server is not asked")
+
+        try answer(.object(["outcome": .string("nothingToReset")]), for: personal)
+        await store.useUsageReset(choice, runtimeSelections: selections)
+        XCTAssertEqual(store.usageResetStates["personal"], .answered(.nothingToReset, left: 1))
+        try answer(.object(["outcome": .string("noCredit")]), for: personal)
+        await store.useUsageReset(choice, runtimeSelections: selections)
+        XCTAssertEqual(store.usageResetStates["personal"], .answered(.noResets, left: 1))
+
+        // No answer: the next use sends the same attempt, which the service may already have done.
+        try answer(.object(["error": .object(["code": .integer(-32000), "message": .string("upstream timeout")])]),
+                   for: personal)
+        await store.useUsageReset(choice, runtimeSelections: selections)
+        guard case .failed? = store.usageResetStates["personal"] else {
+            return XCTFail("A use without an answer fails: \(String(describing: store.usageResetStates["personal"]))")
+        }
+        try answer(.object(["outcome": .string("alreadyRedeemed")]), for: personal)
+        await store.useUsageReset(choice, runtimeSelections: selections)
+        XCTAssertEqual(store.usageResetStates["personal"], .answered(.reset, left: 1))
+        let keys = try requests(personal).compactMap { $0["idempotencyKey"]?.stringValue }
+        XCTAssertEqual(keys.count, 5)
+        XCTAssertEqual(Set(keys.prefix(3)).count, 3, "Each answered use is its own attempt")
+        XCTAssertEqual(keys[3], keys[4], "The retry sends the unanswered attempt again")
+        XCTAssertFalse(keys.prefix(3).contains(keys[3]))
+
+        store.dismissUsageReset(for: choice)
+        XCTAssertNil(store.usageResetStates["personal"])
+        XCTAssertEqual(try requests(team), [])
+    }
+
     func testPiUnavailableSnapshotUsesThePiDescriptorIdentity() async throws {
         let store = ProviderConnectionStore()
         let defaults = UserDefaults(suiteName: testDefaultsSuite("NativeHarnessClientTests.AccountBoundary"))!
