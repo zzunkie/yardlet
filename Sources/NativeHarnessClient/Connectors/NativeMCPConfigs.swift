@@ -521,7 +521,9 @@ enum NativeMCPConfigFiles {
             .sorted { $0.1 < $1.1 }
         var names: [String: String] = [:]
         for (file, _) in files {
-            for (id, name) in parsed(file, CodexAppToolsCache.names) ?? [:] { names[id] = name }
+            if let tools = parsed(file, CodexAppToolsCache.names) {
+                names.merge(tools) { _, new in new }
+            }
         }
         return names
     }

@@ -205,7 +205,7 @@ final class OtherAppImportTests: XCTestCase {
         XCTAssertEqual(lists.count, 2)
         for request in lists {
             XCTAssertNil(request.params["cwd"], "Every folder's threads")
-            XCTAssertEqual(request.params["sourceKinds"], .array([.string("cli"), .string("vscode"), .string("appServer")]))
+            XCTAssertEqual(request.params["sourceKinds"], .array([.string("cli"), .string("vscode"), .string("appServer"), .string("cloud")]))
             XCTAssertEqual(request.params["archived"], .bool(false))
         }
         XCTAssertNil(lists[0].params["cursor"])

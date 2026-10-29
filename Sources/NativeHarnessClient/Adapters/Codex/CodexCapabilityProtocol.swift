@@ -51,9 +51,9 @@ extension CodexProtocol {
     }
 
     /// The source kinds of threads a person started: the CLI and TUI, the IDE extension and the
-    /// Codex desktop app (both `vscode`), and App Server clients. `exec` runs and subagent threads
+    /// Codex desktop app (both `vscode`), App Server clients, and cloud sessions. `exec` runs and subagent threads
     /// are the other kinds.
-    static let interactiveSourceKinds = ["cli", "vscode", "appServer"]
+    static let interactiveSourceKinds = ["cli", "vscode", "appServer", "cloud"]
 
     /// Every folder's threads a person started, not archived (or, with `archived`, only the
     /// archived ones), the most recently updated first.
@@ -379,6 +379,14 @@ struct CodexCapabilityProjector: Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? sent
         let name = thread["name"]?.stringValue
         let title = (name?.isEmpty == false ? name : nil) ?? preview
+        let source = thread["source"]
+        let kind = source?.stringValue ?? source.flatMap { value -> String? in
+            guard case let .object(object) = value else { return nil }
+            return object.keys.first
+        }
+        let isCloud = kind == "cloud"
+            || thread["isCloud"]?.boolValue == true
+            || thread["environment"]?.stringValue?.lowercased() == "cloud"
         return CodexThreadSummary(
             id: id,
             title: title,
@@ -388,7 +396,8 @@ struct CodexCapabilityProjector: Sendable {
             forkedFromID: thread["forkedFromId"]?.stringValue,
             recencyAt: thread["recencyAt"]?.integerValue.flatMap {
                 $0 > 0 ? Date(timeIntervalSince1970: TimeInterval($0)) : nil
-            }
+            },
+            isCloud: isCloud
         )
     }
 }

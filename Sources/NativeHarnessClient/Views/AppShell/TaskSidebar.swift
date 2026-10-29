@@ -919,6 +919,12 @@ struct SidebarRowTrailingItemsView: View {
     var body: some View {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
             switch item {
+            case .cloud:
+                Image(systemName: "cloud")
+                    .font(.system(size: 10 * interfaceScale, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14, height: 14)
+                    .accessibilityHidden(true)
             case .worktree:
                 Image(systemName: "arrow.triangle.branch")
                     .font(.system(size: 10 * interfaceScale, weight: .medium))
@@ -1093,6 +1099,12 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
             onArchive: { onArchive(session) }
         )
         .contextMenu {
+            if session.isCloud, let url = session.cloudTargetURL() {
+                Button(session.harness == .codex ? L10n.string("Open in Codex…") : L10n.string("Open in Browser…")) {
+                    NSWorkspace.shared.open(url)
+                }
+                Divider()
+            }
             if let openInNewTab {
                 Button(L10n.string("Open in New Tab")) { openInNewTab.open(.session(session.id)) }
             }
@@ -1569,8 +1581,8 @@ private struct TaskRow: View {
     }
 
     private var trailingItems: [SidebarRowTrailingItem] {
-        SidebarTaskIndicatorProjection.trailingItems(isWorktree: worktreeDetail != nil, pullRequest: pullRequestMark,
-                                                     cpuPercent: cpuPercent, status: status)
+        SidebarTaskIndicatorProjection.trailingItems(isCloud: session.isCloud, isWorktree: worktreeDetail != nil,
+                                                     pullRequest: pullRequestMark, cpuPercent: cpuPercent, status: status)
     }
 
     private var rowHeight: CGFloat {
@@ -1589,6 +1601,7 @@ private struct TaskRow: View {
     private var accessibilityStatus: String {
         var parts = [status.map(\.accessibilityName) ?? session.status.displayName]
         if session.hasUnreadUpdate, status != .unread { parts.append(SidebarTaskStatus.unread.accessibilityName) }
+        if session.isCloud { parts.append(L10n.string("Cloud session")) }
         if let subtitle { parts.append(subtitle) }
         if isScheduledRun { parts.append(L10n.string("Scheduled task")) }
         if familyPlace != nil { parts.append(L10n.string("Nested session")) }

@@ -70,6 +70,8 @@ enum SidebarTaskStatus: Equatable, Sendable {
 /// One mark at the end of a sidebar row. The row draws `SidebarTaskIndicatorProjection
 /// .trailingItems` in order, so a new mark is one more case there, placed by that function.
 enum SidebarRowTrailingItem: Equatable, Sendable {
+    /// A cloud-hosted session.
+    case cloud
     /// The Codex worktree mark: the task runs in a linked worktree.
     case worktree
     /// The task's pull request while it still needs something (`TaskPullRequestRowMark`).
@@ -110,15 +112,17 @@ enum SidebarTaskIndicatorProjection {
             .min { $0.urgency < $1.urgency }
     }
 
-    /// Everything a row shows at its end, in order: the worktree mark, the pull request, the CPU,
+    /// Everything a row shows at its end, in order: the cloud mark, the worktree mark, the pull request, the CPU,
     /// then the state.
     static func trailingItems(
+        isCloud: Bool = false,
         isWorktree: Bool = false,
         pullRequest: TaskPullRequestRowMark? = nil,
         cpuPercent: Int? = nil,
         status: SidebarTaskStatus?
     ) -> [SidebarRowTrailingItem] {
         var items: [SidebarRowTrailingItem] = []
+        if isCloud { items.append(.cloud) }
         if isWorktree { items.append(.worktree) }
         if let pullRequest { items.append(.pullRequest(pullRequest)) }
         if let cpuPercent { items.append(.cpu(cpuPercent)) }

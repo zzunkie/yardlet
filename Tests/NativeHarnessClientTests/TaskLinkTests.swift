@@ -24,7 +24,10 @@ final class TaskLinkTests: XCTestCase {
         XCTAssertEqual(TaskLink(try XCTUnwrap(URL(string: "codex://threads/019a2b3c-4d5e-7f80-9a1b-2c3d4e5f6a7b"))),
                        .codexThread("019a2b3c-4d5e-7f80-9a1b-2c3d4e5f6a7b"))
         XCTAssertEqual(TaskLink(try XCTUnwrap(URL(string: "codex://threads/019a2b3c?view=review")))?.opensElsewhere, true)
-        for other in ["#what-changed", "#local_../../etc", "https://claude.ai/code/session_01abcdef",
+        let cloudURL = try XCTUnwrap(URL(string: "https://claude.ai/code/session_01abcdef"))
+        XCTAssertEqual(TaskLink(cloudURL), .cloudSession(cloudURL))
+        XCTAssertEqual(TaskLink(cloudURL)?.opensElsewhere, true)
+        for other in ["#what-changed", "#local_../../etc",
                       "file:///tmp/a.swift#L3", "Sources/Parser.swift", "codex://threads/a/b", "codex://skills/x",
                       "mailto:someone@example.com"] {
             XCTAssertNil(TaskLink(try XCTUnwrap(URL(string: other))), other)

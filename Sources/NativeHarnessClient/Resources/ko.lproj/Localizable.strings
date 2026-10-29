@@ -3187,3 +3187,9 @@
 "Remove from history" = "방문 기록에서 제거";
 "Suggest pages on new tabs" = "새 탭에 페이지 추천";
 "Shows the pages this task opened and the sites you visit most on a new tab and in the side panel. Turned off, tasks keep no list of the pages they opened." = "새 탭과 오른쪽 패널에 이 작업에서 연 페이지와 자주 방문한 사이트를 보여 줍니다. 끄면 작업이 연 페이지를 따로 남기지 않습니다.";
+
+"Cloud session" = "클라우드 세션";
+
+"Open in Browser…" = "브라우저에서 열기…";
+
+"Open in Codex…" = "Codex에서 열기…";

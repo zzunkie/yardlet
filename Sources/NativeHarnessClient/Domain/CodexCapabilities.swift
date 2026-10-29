@@ -167,6 +167,7 @@ struct CodexThreadSummary: Equatable, Identifiable, Sendable {
     /// threads in. `updatedAt` also moves when only the thread's settings are written. Absent from
     /// older App Servers.
     var recencyAt: Date? = nil
+    var isCloud: Bool = false
 
     /// The thread's last activity as the Codex app orders its list.
     var lastActivityAt: Date { recencyAt ?? updatedAt }

@@ -18,6 +18,8 @@ extension AppModel {
                 ClaudeDesktopSessionCatalog.session(desktopSessionID: id, in: root)?.cliSessionID
             }.value
             return cliSessionID.flatMap { task(providerSessionID: $0, harness: .claudeCode) }
+        case let .cloudSession(url):
+            return store.sessions.first { $0.cloudURL == url || $0.cloudTargetURL() == url }
         }
     }
 

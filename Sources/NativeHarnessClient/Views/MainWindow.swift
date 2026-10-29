@@ -725,8 +725,15 @@ struct MainWindow: View {
     }
 
     /// A sidebar row chosen: shown in the active tab, or with ⌘ held on the click in a new tab, as
-    /// a browser opens a link.
+    /// a browser opens a link. A cloud session opens in the agent's web page or app.
     private func activateRow(_ item: WindowItem) {
+        if case let .session(id) = item,
+           let session = model.store.sessions.first(where: { $0.id == id }),
+           session.isCloud,
+           let url = session.cloudTargetURL() {
+            NSWorkspace.shared.open(url)
+            return
+        }
         if let event = NSApp.currentEvent, event.modifierFlags.contains(.command),
            [.leftMouseDown, .leftMouseUp].contains(event.type) {
             return openInNewTab(item)

@@ -326,7 +326,7 @@ final class SessionListFollowTests: XCTestCase {
         XCTAssertEqual(methods, ["initialize", "thread/list", "thread/list"])
         let lists = await fixture.codex.requests.filter { $0.method == "thread/list" }
         XCTAssertEqual(lists.map { $0.params["archived"] }, [.bool(false), .bool(true)])
-        XCTAssertEqual(lists[1].params["sourceKinds"], .array([.string("cli"), .string("vscode"), .string("appServer")]))
+        XCTAssertEqual(lists[1].params["sourceKinds"], .array([.string("cli"), .string("vscode"), .string("appServer"), .string("cloud")]))
         XCTAssertEqual(try desktopFiles(fixture.desktop), filesBefore, "The Claude app's files are only read")
         XCTAssertEqual(try transcripts.map { try Data(contentsOf: $0) }, transcriptsBefore)
 

@@ -125,8 +125,8 @@ final class AppModelRemoteBridge: RemoteBridge {
     func conversation(of taskID: String) -> RemoteConversation? {
         guard let model, let id = UUID(uuidString: taskID) else { return nil }
         if let cached = cachedConversations[id] { return cached }
-        let conversation = withObservationTracking {
-            listedSession(id).map { conversation(of: $0, in: model) }
+        let conversation: RemoteConversation? = withObservationTracking {
+            listedSession(id).map { self.conversation(of: $0, in: model) }
         } onChange: { [weak self] in
             Task { @MainActor in self?.conversationChanged(id) }
         }

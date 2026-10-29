@@ -767,6 +767,10 @@ thread in `~/.codex` without an import, Yardlet follows the two sources, read-on
   `thread/resume`, `thread/read` or `turn/start`, only `thread/list`). There is no model turn, runtime attach,
   credential copy or account change. What changes is Yardlet's index rows (new rows, `updated_at`, provider titles,
   `archived`), the projects that import creates, and the one preference above.
+- **Cloud sessions:** Claude Code cloud sessions and Codex cloud threads appear in Yardlet's task list next to local
+  tasks. A cloud session in the sidebar displays a cloud indicator (`cloud` SF Symbol) beside its title and status;
+  activating the row or selecting its menu action opens the session in the agent's web page or app (`https://claude.ai/code/<id>`
+  or `codex://threads/<id>`).
 - **Measured (read-only, copies from 2026-10-22 14:51):** over temporary copies of the real Claude app files and
   `~/.yardlet/session-index.sqlite3`, `testLiveDryRunOverTheClaudeAppsSessions`, which only plans: 293 in the source (69
   open), 24 to import (1 chat, 23 in projects), 19 activity moves, 0 titles, 20 archives (busy state counted as

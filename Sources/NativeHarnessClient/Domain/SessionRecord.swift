@@ -101,6 +101,30 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         originWorkspacePath.map { URL(filePath: $0, directoryHint: .isDirectory) }
     }
 
+    /// Whether this task represents a cloud-hosted session.
+    var isCloud: Bool {
+        providerOptions["is_cloud"] == "true" || cloudURL != nil
+    }
+
+    /// Explicit remote or web URL for the session, if configured.
+    var cloudURL: URL? {
+        providerOptions["cloud_url"].flatMap(URL.init(string:))
+    }
+
+    /// The target URL to open when this cloud session is opened in the agent's web page or app.
+    func cloudTargetURL() -> URL? {
+        if let cloudURL { return cloudURL }
+        guard isCloud, let id = providerSessionID else { return nil }
+        switch harness {
+        case .claudeCode:
+            return URL(string: "https://claude.ai/code/\(id)")
+        case .codex:
+            return URL(string: "codex://threads/\(id)")
+        default:
+            return nil
+        }
+    }
+
     init(
         id: UUID = UUID(),
         harness: HarnessKind,

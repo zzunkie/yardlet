@@ -34,6 +34,8 @@ enum ClaudeDesktopSessionCatalog {
         /// (`forkedFromSessionId`), as the app's sidebar picks it. Nil once the person moved it to
         /// top level (`lineageDetached`).
         var startedFromDesktopSessionID: String? = nil
+        var isCloud: Bool = false
+        var cloudURL: String? = nil
     }
 
     static func defaultRoot(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
@@ -62,6 +64,13 @@ enum ClaudeDesktopSessionCatalog {
             guard CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue > 0 else { return nil }
             return Date(timeIntervalSince1970: number.doubleValue / 1_000)
         }
+        let desktopID = text(value["sessionId"])
+        let isCloud = (value["isCloud"] as? Bool) == true
+            || (value["isRemote"] as? Bool) == true
+            || text(value["environment"])?.lowercased() == "cloud"
+            || desktopID?.hasPrefix("cloud_") == true
+            || desktopID?.hasPrefix("remote_") == true
+        let cloudURL = text(value["webUrl"]) ?? text(value["url"])
         return Session(
             cliSessionID: id.lowercased(), title: SessionTitleProjection.normalizedProviderTitle(text(value["title"])),
             workspaceURL: workspace, originWorkspaceURL: origin,
@@ -69,9 +78,11 @@ enum ClaudeDesktopSessionCatalog {
             branch: origin == nil ? nil : text(value["branch"]),
             model: text(value["model"]), effort: text(value["effort"]), permissionMode: text(value["permissionMode"]),
             isArchived: (value["isArchived"] as? Bool) == true, lastActivityAt: activity,
-            desktopSessionID: text(value["sessionId"]),
+            desktopSessionID: desktopID,
             startedFromDesktopSessionID: (value["lineageDetached"] as? Bool) == true ? nil
-                : text((value["spawnedFrom"] as? [String: Any])?["sessionId"]) ?? text(value["forkedFromSessionId"]))
+                : text((value["spawnedFrom"] as? [String: Any])?["sessionId"]) ?? text(value["forkedFromSessionId"]),
+            isCloud: isCloud,
+            cloudURL: cloudURL)
     }
 
     /// Each session's parent by provider session ID (child `cliSessionId` → parent `cliSessionId`),
@@ -106,7 +117,8 @@ enum ClaudeDesktopSessionCatalog {
         var files: [URL] = []
         for organization in entries(root) where isFolder(organization) {
             for account in entries(organization) where isFolder(account) {
-                for file in entries(account) where file.lastPathComponent.hasPrefix("local_")
+                for file in entries(account) where (file.lastPathComponent.hasPrefix("local_")
+                    || file.lastPathComponent.hasPrefix("cloud_") || file.lastPathComponent.hasPrefix("remote_"))
                     && file.pathExtension == "json" {
                     guard let values = try? file.resourceValues(forKeys: keys), values.isRegularFile == true,
                           values.isSymbolicLink != true, (values.fileSize ?? 0) <= maximumFileBytes else { continue }
@@ -122,7 +134,7 @@ enum ClaudeDesktopSessionCatalog {
     /// organization and account: the one file is read, not the whole folder. Nil for anything that
     /// is not such an ID, so a link cannot name a path.
     static func session(desktopSessionID: String, in root: URL) -> Session? {
-        guard desktopSessionID.wholeMatch(of: /local_[A-Za-z0-9-]{1,64}/) != nil else { return nil }
+        guard desktopSessionID.wholeMatch(of: /(local|cloud|remote)_[A-Za-z0-9-]{1,64}/) != nil else { return nil }
         let manager = FileManager.default
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey]
         func folders(_ url: URL) -> [URL] {
@@ -218,6 +230,8 @@ enum ClaudeDesktopSessionCatalog {
         if let mode = session.permissionMode {
             options[ClaudeLaunchOption.permissionMode] = mode == "default" ? ClaudePermissionMode.manual : mode
         }
+        if session.isCloud { options["is_cloud"] = "true" }
+        if let cloudURL = session.cloudURL { options["cloud_url"] = cloudURL }
         return options
     }
 

@@ -21,6 +21,9 @@ struct ImportableConversation: Identifiable, Equatable, Sendable {
     /// The provider session it was started from, when the other app records one (`TaskLineage`):
     /// a Claude app session another session started, a forked Codex thread.
     var parentProviderSessionID: String? = nil
+    /// The remote or cloud URL for a cloud session.
+    var cloudURL: URL? = nil
+    var isCloud: Bool { cloudURL != nil || providerOptions["is_cloud"] == "true" }
 
     var id: String { harness.rawValue + ":" + providerSessionID }
 }
@@ -35,6 +38,10 @@ extension ImportableConversation {
                   workspaceURL: thread.workspaceURL, updatedAt: thread.lastActivityAt, isOpenElsewhere: false,
                   snippet: snippet)
         parentProviderSessionID = TaskLineage.codexParentThreadID(forkedFromID: thread.forkedFromID, parentThreadID: nil)
+        if thread.isCloud {
+            providerOptions["is_cloud"] = "true"
+            cloudURL = URL(string: "codex://threads/\(thread.id)")
+        }
     }
 }
 
