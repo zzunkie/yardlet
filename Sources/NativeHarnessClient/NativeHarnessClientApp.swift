@@ -214,6 +214,9 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
             sparkle.start()
         }
         WindowTooltipRelease.start()
+#if DEBUG
+        PerfBenchFixture.applicationDidFinishLaunching()
+#endif
         // QA runs launched with `open -g` must not take focus from the person using the Mac, nor show them
         // a window to click.
         if QABackground.isOn { return QABackground.start() }
@@ -551,6 +554,7 @@ struct NativeHarnessClientApp: App {
                     if model.usesVisualFixture {
                         WindowTabsKeyQA.runIfRequested(model: model)
                         ShowcaseFixture.install(in: model)
+                        PerfBenchFixture.install(in: model)
                     }
 #endif
                     // The newest install of each harness the person chose no runtime for, read off

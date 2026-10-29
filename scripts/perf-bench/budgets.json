@@ -1,0 +1,42 @@
+{
+  "launch/launch": {
+    "launch.processStartToFirstFrameMs": 5000
+  },
+  "launch/settled": {
+    "process.yardletCPUPercent": 1.0
+  },
+  "idle-running/idle": {
+    "process.yardletCPUPercent": 1.0
+  },
+  "idle-running/idle-running": {
+    "process.yardletCPUPercent": 3.0,
+    "mainThread.passesOver50MsCount": 0
+  },
+  "stream-claude/streaming": {
+    "events.transcriptPublication.cpuP95Ms": 2.0
+  },
+  "stream-codex/streaming": {
+    "events.codexState.cpuP95Ms": 2.0
+  },
+  "codex-history/streaming": {
+    "events.codexState.cpuP95Ms": 2.0
+  },
+  "subagent/streaming": {
+    "events.agentRunState.cpuP95Ms": 2.0,
+    "events.agentRunEvent.cpuP95Ms": 1.0
+  },
+  "sidebar/scroll": {
+    "mainThread.passP95Ms": 16.0,
+    "mainThread.passesOver50MsCount": 0
+  },
+  "sidebar/scroll-streaming": {
+    "events.codexState.cpuP95Ms": 2.0,
+    "mainThread.passesOver50MsCount": 2
+  },
+  "browser-tabs/tabs-shown": {
+    "process.appCPUPercent": 2.0
+  },
+  "browser-tabs/tabs-hidden": {
+    "process.yardletCPUPercent": 5.0
+  }
+}

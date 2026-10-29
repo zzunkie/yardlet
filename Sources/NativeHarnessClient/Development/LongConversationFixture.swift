@@ -1,10 +1,11 @@
+#if DEBUG
 import Foundation
-@testable import NativeHarnessClient
 
 /// Long working conversations, as a Claude Code task and a Codex thread have them after a day of
 /// work: requests, thinking, many tool calls (reads, searches, commands, edits), and answers with
 /// headings, lists, code blocks and tables, in turns of very different heights. Nothing here reads or
-/// writes the workspace it names.
+/// writes the workspace it names. The tests and the performance bench (`PerfBenchFixture`) share them;
+/// product builds never compile them.
 enum LongConversationFixture {
     static let workspace = URL(filePath: "/tmp/yardlet-long-conversation", directoryHint: .isDirectory)
     private static let start = Date(timeIntervalSince1970: 1_800_000_000)
@@ -118,6 +119,41 @@ enum LongConversationFixture {
                         "startedAt": .integer(Int64(1_800_000_000 + turn * 60)),
                         "completedAt": .integer(Int64(1_800_000_000 + turn * 60 + 42)),
                         "durationMs": .integer(42_000)])
+    }
+
+    // MARK: - A Codex task with many saved cards
+
+    /// Finished turns of `counts` commands each, every one with `outputLength` characters of build
+    /// output, in the App Server's item shapes: a day of builds in one task.
+    static func codexCommandTurns(_ counts: [Int], outputLength: Int) -> [JSONValue] {
+        let output = String(repeating: "Compiling module\n", count: outputLength / 17)
+        return counts.enumerated().map { turn, count in
+            let request: JSONValue = .object([
+                "id": .string("turn-\(turn)-request"), "type": .string("userMessage"),
+                "content": .array([.object(["type": .string("text"), "text": .string("Keep going")])])
+            ])
+            let commands: [JSONValue] = (0..<count).map { slot in
+                .object([
+                    "id": .string("call_\(turn)_\(slot)_0123456789abcdef"), "type": .string("commandExecution"),
+                    "command": .string("swift build \(slot)"), "cwd": .string("/tmp/workspace"),
+                    "status": .string("completed"), "aggregatedOutput": .string(output), "exitCode": .number(0)
+                ])
+            }
+            return .object(["id": .string("turn-\(turn)"), "status": .string("completed"), "itemsView": .string("full"),
+                            "items": .array([request] + commands)])
+        }
+    }
+
+    /// The cards Yardlet saved as the items of `turns` streamed in: every item but the requests.
+    static func savedCards(of turns: [JSONValue]) -> [CodexPersistedTimelineItem] {
+        turns.flatMap { turn -> [CodexPersistedTimelineItem] in
+            let turnID = turn["id"]?.stringValue ?? ""
+            return (turn["items"]?.arrayValue ?? []).compactMap { raw in
+                guard raw["type"]?.stringValue != "userMessage", let id = raw["id"]?.stringValue else { return nil }
+                return CodexPersistedTimelineItem(
+                    turnID: turnID, item: CodexTaskDecoder().item(from: raw, fallbackID: id, lifecycle: .completed))
+            }
+        }
     }
 
     // MARK: - Claude Code's saved conversation
@@ -274,3 +310,4 @@ enum LongConversationFixture {
         }
     }
 }
+#endif

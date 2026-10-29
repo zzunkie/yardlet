@@ -68,6 +68,10 @@ final class LongTranscriptRenderPerformanceTests: XCTestCase {
                   + "\(Self.ms(mount.median)) ms, stream update median \(Self.ms(stream.median)) ms "
                   + "(p90 \(Self.ms(stream.p90))), new request median \(Self.ms(request.median)) ms "
                   + "(p90 \(Self.ms(request.p90)))")
+            PerfBenchRecord.write("claude-transcript-\(turns)x5-\(variant.name)", [
+                "firstLayoutMs": mount.median * 1000, "streamUpdateMs": stream.median * 1000,
+                "streamUpdateP90Ms": stream.p90 * 1000, "newRequestMs": request.median * 1000
+            ])
         }
 
         // The projection's share of an update: projecting the transcript again through the renderer's
@@ -86,6 +90,9 @@ final class LongTranscriptRenderPerformanceTests: XCTestCase {
         }
         print("[perf] transcript-\(turns)x5 projection per stream update: median \(Self.ms(projection.median)) ms "
               + "(p90 \(Self.ms(projection.p90))), turns reused \(cache.counts.reused), projected \(cache.counts.projected)")
+        PerfBenchRecord.write("claude-transcript-\(turns)x5-projection", [
+            "streamUpdateMs": projection.median * 1000, "streamUpdateP90Ms": projection.p90 * 1000
+        ])
     }
 
     // MARK: - Measuring

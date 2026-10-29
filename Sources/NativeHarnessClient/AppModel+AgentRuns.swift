@@ -270,6 +270,10 @@ extension AppModel {
 
     /// A shared-transcript harness's event: its conversation, its requests and the end of its turn.
     func acceptAgentRun(_ payload: HarnessEventPayload, in run: AgentRun) {
+#if DEBUG
+        let eventStart = EventCostLog.start()
+        defer { EventCostLog.record(.agentRunEvent, since: eventStart) }
+#endif
         guard !run.state.isFinished else { return }
         // A Codex thread's conversation and requests come with its state once it has one.
         let appliesConversation = run.codexState == nil || run.harness != .codex
@@ -315,6 +319,10 @@ extension AppModel {
 
     /// A Codex thread's state: its conversation and requests, and the end of its turn.
     func acceptAgentRun(_ state: CodexTaskState, in run: AgentRun) {
+#if DEBUG
+        let eventStart = EventCostLog.start()
+        defer { EventCostLog.record(.agentRunState, since: eventStart) }
+#endif
         guard !run.state.isFinished else { return }
         run.codexState = state
         if state.activeTurnID != nil { run.sawWork = true }

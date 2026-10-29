@@ -23,7 +23,8 @@ final class CodexTimelineMergeCostTests: XCTestCase {
         if let path = environment["NHC_CODEX_CARDS"], !path.isEmpty {
             saved = try JSONDecoder().decode([CodexPersistedTimelineItem].self, from: Data(contentsOf: URL(filePath: path)))
         } else {
-            saved = Self.syntheticCards(turns: [263, 237], outputLength: 5_000)
+            saved = LongConversationFixture.savedCards(
+                of: LongConversationFixture.codexCommandTurns([263, 237], outputLength: 5_000))
         }
         var provider = Self.providerState(resuming: saved)
         let reducer = CodexTaskReducer()
@@ -76,6 +77,11 @@ final class CodexTimelineMergeCostTests: XCTestCase {
                      Self.percentile(stepTimes, 0.5) * 1000, Self.percentile(stepTimes, 0.95) * 1000,
                      stepCPU / measured * 1000))
         print("[codex-merge-cost] merged state digest \(Self.digest(last))")
+        PerfBenchRecord.write("codex-merge-500-saved-cards", [
+            "mergeMedianMs": Self.percentile(mergeTimes, 0.5) * 1000, "mergeP95Ms": Self.percentile(mergeTimes, 0.95) * 1000,
+            "stateMedianMs": Self.percentile(stepTimes, 0.5) * 1000, "stateP95Ms": Self.percentile(stepTimes, 0.95) * 1000,
+            "stateCPUMs": stepCPU / measured * 1000
+        ])
     }
 
     // MARK: - Fixture
@@ -117,21 +123,6 @@ final class CodexTimelineMergeCostTests: XCTestCase {
             turnsNextCursor: nil, turnsBackwardsCursor: nil, itemsBackwardsCursor: nil, raw: .object([:])
         )
         return state
-    }
-
-    private static func syntheticCards(turns: [Int], outputLength: Int) -> [CodexPersistedTimelineItem] {
-        let output = String(repeating: "Compiling module\n", count: outputLength / 17)
-        return turns.enumerated().flatMap { turnIndex, count in
-            (0..<count).map { slot in
-                let id = "call_\(turnIndex)_\(slot)_0123456789abcdef"
-                let item = CodexTaskDecoder().item(from: .object([
-                    "id": .string(id), "type": .string("commandExecution"), "command": .string("swift build \(slot)"),
-                    "cwd": .string("/tmp/workspace"), "status": .string("completed"),
-                    "aggregatedOutput": .string(output), "exitCode": .number(0)
-                ]), fallbackID: id, lifecycle: .completed)
-                return CodexPersistedTimelineItem(turnID: "turn-\(turnIndex)", item: item)
-            }
-        }
     }
 
     private static func user(_ id: String) -> CodexItemState {

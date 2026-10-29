@@ -53,8 +53,15 @@ struct VisualFixtureScenario: Sendable {
     /// Projects already there at launch, so tasks in a worktree sit under the project of the
     /// repository they came from rather than getting one of their own.
     var projects: ProjectSnapshot? = nil
+    /// Codex cards Yardlet saved for its tasks, there before the provider streams anything.
+    var codexTimelineItems: [UUID: [CodexPersistedTimelineItem]] = [:]
+    /// Tasks already archived, in the index beside `sessions`.
+    var archivedSessions: [SessionRecord] = []
 
     static func requested(arguments: [String] = CommandLine.arguments) -> VisualFixtureScenario? {
+        if arguments.contains(PerfBenchFixture.argument) {
+            return PerfBenchFixture.scenario()
+        }
         if arguments.contains("--ui-fixture=lifecycle"),
            let runtime = arguments.first(where: { $0.hasPrefix("--ui-fixture-runtime=") }) {
             let executable = URL(filePath: String(runtime.dropFirst("--ui-fixture-runtime=".count)))
@@ -145,7 +152,8 @@ struct VisualFixtureScenario: Sendable {
 
     @MainActor
     func makeModel(preferences: UserDefaults = .yardlet) -> AppModel {
-        let preferences = ShowcaseFixture.isRequested ? ShowcaseFixture.preferences() : preferences
+        let preferences = ShowcaseFixture.isRequested ? ShowcaseFixture.preferences()
+            : PerfBenchFixture.isRequested ? PerfBenchFixture.preferences() : preferences
         let defaults = UserDefaults(suiteName: "NativeHarnessClient.VisualFixture") ?? .standard
         defaults.removePersistentDomain(forName: "NativeHarnessClient.VisualFixture")
         let notificationCenter: any SystemNotificationCenter = if let initialNotificationAuthorization {
@@ -183,8 +191,14 @@ struct VisualFixtureScenario: Sendable {
            ) {
             sessionRepository = TaskManagementFixtureRepository(sessions: sessions, failOnce: operation)
         } else {
-            sessionRepository = InMemorySessionRepository(sessions: sessions)
+            sessionRepository = InMemorySessionRepository(sessions: sessions + archivedSessions,
+                                                          archived: archivedSessions.map(\.id))
         }
+        // The bench keeps saved Codex cards in files, as the app does; other fixtures in their settings.
+        if PerfBenchFixture.isRequested { PerfBenchFixture.selectRuntimes(in: selections) }
+        let timelineItems: any CodexTimelineItemRepository = PerfBenchFixture.isRequested
+            ? PerfBenchFixture.timelineItemRepository() : UserDefaultsCodexTimelineItemRepository(defaults: defaults)
+        for (id, items) in codexTimelineItems { timelineItems.save(items, for: id) }
         let connections = ProviderConnectionStore()
         if ShowcaseFixture.isRequested { ShowcaseFixture.Accounts.add(to: connections, selections: selections) }
         if CommandLine.arguments.contains("--ui-fixture=connections") {
@@ -232,7 +246,7 @@ struct VisualFixtureScenario: Sendable {
             codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults),
             preferences: preferences,
             codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
-            codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
+            codexTimelineItemRepository: timelineItems,
             codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(
                 defaults: defaults,
                 keyPrefix: "history."
@@ -253,6 +267,7 @@ struct VisualFixtureScenario: Sendable {
         )
         model.visualFixtureCodexHistory = codexHistory
         if ShowcaseFixture.isRequested { ShowcaseFixture.prepare(model, root: ShowcaseFixture.root()) }
+        if PerfBenchFixture.isRequested { PerfBenchFixture.prepare(model) }
         openFixtureSplit(in: model)
         return model
     }

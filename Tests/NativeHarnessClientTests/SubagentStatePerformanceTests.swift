@@ -88,6 +88,10 @@ final class SubagentStatePerformanceTests: XCTestCase {
                      runCount, cardsPerLatestTurn, earlierTurns, cardsPerEarlierTurn, resultCharacters, streamedStates,
                      streamedResultCharacters, median(accept).milliseconds, accept.max()!.milliseconds,
                      median(held).milliseconds, held.max()!.milliseconds, median(line).milliseconds, line.max()!.milliseconds))
+        PerfBenchRecord.write("subagent-states-\(runCount)-runs", [
+            "acceptAgentRunMedianMs": median(accept).milliseconds, "acceptAgentRunMaxMs": accept.max()!.milliseconds,
+            "sessionToolRequestsMedianMs": median(held).milliseconds, "progressLineMedianMs": median(line).milliseconds
+        ])
         XCTAssertLessThan(median(accept), .milliseconds(20), "A subagent's state does not draw its cards")
         XCTAssertLessThan(median(held), .milliseconds(20), "The held requests do not draw any subagent's cards")
         XCTAssertLessThan(median(line), .milliseconds(20), "The card's line does not draw the turn's cards")
