@@ -313,12 +313,15 @@ final class MacBrowserHost: NativeSurfaceResource {
 #endif
         client.memorySaverLevel = MemorySaverPreference.level()
         client.isMemorySaverOn = MemorySaverPreference.isOn()
+        // Any defaults written on any thread post this; it is passed on to the main thread without
+        // holding the writer, which a main thread waiting for it would never let go.
         memorySaverObserver = NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+            forName: UserDefaults.didChangeNotification, object: nil, queue: nil
         ) { [weak client] _ in
-            MainActor.assumeIsolated {
-                client?.memorySaverLevel = MemorySaverPreference.level()
-                client?.isMemorySaverOn = MemorySaverPreference.isOn()
+            guard let client else { return }
+            Task { @MainActor in
+                client.memorySaverLevel = MemorySaverPreference.level()
+                client.isMemorySaverOn = MemorySaverPreference.isOn()
             }
         }
         let source = DispatchSource.makeMemoryPressureSource(eventMask: .critical, queue: .main)
