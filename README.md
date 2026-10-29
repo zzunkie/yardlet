@@ -2,6 +2,11 @@
 
 [![CI](https://github.com/zzunkie/yardlet/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zzunkie/yardlet/actions/workflows/ci.yml)
 
+<a href="https://www.producthunt.com/products/yardlet-2"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1294326&theme=dark">
+  <img alt="Yardlet, featured on Product Hunt" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1294326&theme=light" width="200">
+</picture></a>
+
 A native macOS app for running coding agents. Codex, Claude Code and other agent CLIs open side by
 side in one window of projects and tasks, while each agent keeps its own agent loop, sign-in and
 session history.
