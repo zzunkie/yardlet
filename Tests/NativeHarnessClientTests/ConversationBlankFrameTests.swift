@@ -234,6 +234,134 @@ final class ConversationBlankFrameTests: XCTestCase {
         try readBack(window, loads: 3)
     }
 
+    /// What reading saved conversations costs the window once the reads arrive, with no answer being
+    /// written: 828 tasks in 10 projects, the shown one a finished Codex conversation, and 8 saved
+    /// Codex tasks nothing has read yet this launch at the top of their projects. The sidebar scrolls
+    /// 240 steps, each laying out and drawing the window and turning the run loop for 16 ms; in the
+    /// second run the pointer rests on one of the 8 every 30 steps, which reads its newest turns
+    /// (`prefetchSavedConversation`), and in the third on the same 8 again. Run with
+    /// `NHC_PERF_BENCH=1`; it prints the numbers and checks nothing else.
+    func testBenchmarkHoverReadsArrivingWhileTheSidebarScrolls() throws {
+        guard ProcessInfo.processInfo.environment["NHC_PERF_BENCH"] == "1" else {
+            throw XCTSkip("Set NHC_PERF_BENCH=1 to run the hover read benchmark")
+        }
+        var specs = (0..<819).map { TaskSpec(title: "Task \($0)", content: .empty, folder: "project-\($0 % 10)") }
+        specs += (0..<8).map { TaskSpec(title: "Saved \($0)", content: .savedCodex(30, cached: false), folder: "project-\($0)") }
+        specs.append(TaskSpec(title: "Shown", content: .codex(5), folder: "project-9"))
+        let window = try makeWindow(specs)
+        defer { window.close() }
+        window.show(specs.count - 1)
+        let saved = window.tasks.filter { $0.title.hasPrefix("Saved") }.map(\.id)
+        let host = window.host
+        let scroll = try XCTUnwrap(Self.scrollViews(in: host.hosting).first { scroll in
+            let frame = scroll.convert(scroll.bounds, to: nil)
+            return frame.maxX <= SidebarWidth.maximum && (scroll.documentView?.frame.height ?? 0) > frame.height
+        }, "the sidebar's list")
+        func cpu() -> Double { Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)) / 1_000_000 }
+        func run(_ name: String, reads: Bool) -> String {
+            let height = scroll.documentView?.frame.height ?? 0
+            let read = saved.filter { window.model.codexPresentationBySessionID[$0] != nil }.count
+            var steps: [Double] = []
+            ViewBodyCensus.isEnabled = true
+            ViewBodyCensus.reset()
+            defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+            for step in 0..<240 {
+                let start = cpu()
+                if reads, step % 30 == 20 { window.model.prefetchSavedConversation(of: saved[step / 30]) }
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: 120 + CGFloat(step % 40) * 8))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                host.hosting.layoutSubtreeIfNeeded()
+                host.window.displayIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.016))
+                steps.append(cpu() - start)
+            }
+            let sorted = steps.sorted()
+            return String(format: "%@: max %.2f ms, p95 %.2f ms, %.0f ms in all; %d read; window bodies %d, "
+                          + "conversation bodies %d, sidebar rows %d; list %.0f to %.0f pt", name, sorted.last ?? 0,
+                          sorted[sorted.count * 95 / 100], steps.reduce(0, +),
+                          saved.filter { window.model.codexPresentationBySessionID[$0] != nil }.count - read,
+                          ViewBodyCensus[.mainWindow], ViewBodyCensus[.conversationTimeline], ViewBodyCensus[.sidebarRow],
+                          height, scroll.documentView?.frame.height ?? 0)
+        }
+        let lines = [run("no reads", reads: false), run("8 first reads", reads: true), run("the same 8 again", reads: true)]
+        for line in lines { print("[hover-reads] \(line)") }
+    }
+
+    /// What an earlier page costs the window as it arrives: a saved Codex task of 60 turns opened on
+    /// its newest 5 and read up near their top, 120 steps, each laying out and drawing the window and
+    /// turning the run loop for 16 ms. The reader moves the view a little each of the first 30 steps;
+    /// at step 30 their mouse wheel reaches the top, which brings in the 10 turns before them. Then
+    /// they read where they are, holding the view still, or keep turning the wheel up a notch a step,
+    /// which brings in more at each top. Each round opens the task anew. Run with `NHC_PERF_BENCH=1`;
+    /// it prints the numbers and checks nothing else.
+    func testBenchmarkAnEarlierPageArriving() throws {
+        guard ProcessInfo.processInfo.environment["NHC_PERF_BENCH"] == "1" else {
+            throw XCTSkip("Set NHC_PERF_BENCH=1 to run the earlier page benchmark")
+        }
+        func cpu() -> Double { Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)) / 1_000_000 }
+        enum Reader: String, CaseIterable { case reads = "reads where it arrived", wheels = "keeps wheeling up" }
+        var lines: [String] = []
+        for reader in Reader.allCases {
+            for round in 0..<2 {
+                let window = try makeWindow([.claude("Short", turns: 3), .savedCodex("Saved", turns: 60, cached: false)])
+                defer { window.close() }
+                window.show(1)
+                let task = window.tasks[1].id
+                for _ in 0..<150 where window.model.codexPresentationBySessionID[task]?.thread?.turns.count != 5 {
+                    window.probe.run("reading", for: 0.02)
+                }
+                let host = window.host
+                let scroll = try XCTUnwrap(BlankFrameProbe.conversationScrollView(in: host.hosting,
+                                                                                  minX: SidebarWidth.minimum))
+                func move(to y: CGFloat) {
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                }
+                // One notch of a classic mouse wheel toward the top, which SwiftUI reports as the reader's.
+                func wheelUp() {
+                    guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: 3,
+                                              wheel2: 0, wheel3: 0), let wheel = NSEvent(cgEvent: event) else { return }
+                    scroll.scrollWheel(with: wheel)
+                }
+                move(to: 400)
+                host.settle(passes: 10, interval: 0.03)
+                let height = scroll.documentView?.frame.height ?? 0
+                var steps: [Double] = []
+                ViewBodyCensus.isEnabled = true
+                ViewBodyCensus.reset()
+                defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+                for step in 0..<120 {
+                    let start = cpu()
+                    if step < 30 {
+                        move(to: max(0, scroll.contentView.bounds.minY + (step.isMultiple(of: 2) ? 12 : -12)))
+                    } else if step == 30 {
+                        move(to: 150)
+                        wheelUp()
+                    } else if reader == .wheels {
+                        wheelUp()
+                    }
+                    host.hosting.layoutSubtreeIfNeeded()
+                    host.window.displayIfNeeded()
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.016))
+                    steps.append(cpu() - start)
+                }
+                let sorted = steps.sorted()
+                lines.append(String(
+                    format: "%@, round %d: max %.2f ms, p95 %.2f ms, %.0f ms in all, %d steps over 50 ms; %d turns; "
+                    + "%d turn views made, %d conversation bodies; content %.0f to %.0f pt", reader.rawValue, round + 1,
+                    sorted.last ?? 0, sorted[sorted.count * 95 / 100], steps.reduce(0, +), steps.filter { $0 > 50 }.count,
+                    window.model.codexPresentationBySessionID[task]?.thread?.turns.count ?? 0,
+                    ViewBodyCensus[.conversationTurnHosting], ViewBodyCensus[.conversationTimeline], height,
+                    scroll.documentView?.frame.height ?? 0))
+            }
+        }
+        for line in lines { print("[earlier-page] \(line)") }
+    }
+
+    private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews)
+    }
+
     // MARK: - Sending and responding
 
     /// A message sent in a Codex task that was only read: the task connects, the App Server's resumed
@@ -486,6 +614,8 @@ final class ConversationBlankFrameTests: XCTestCase {
         let content: Content
         var status: SessionStatus = .completed
         var unread = false
+        /// The folder the task works in, which tasks of one project share; by default one of its own.
+        var folder: String?
 
         static func claude(_ title: String, turns: Int) -> Self { .init(title: title, content: .claude(turns)) }
         static func codex(_ title: String, turns: Int) -> Self { .init(title: title, content: .codex(turns)) }
@@ -869,13 +999,13 @@ final class ConversationBlankFrameTests: XCTestCase {
         let savedCodexRuntime = root.appending(path: "codex")
         try Data("#!/bin/sh\nprintf 'codex-cli 0.163.0\\n'\n".utf8).write(to: savedCodexRuntime)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: savedCodexRuntime.path)
-        var savedCodexResponses: [String: [JSONValue]] = ["initialize": [.object(["platformOs": .string("macos")])]]
+        var savedCodexThreads: [String: JSONValue] = [:]
         for (index, spec) in specs.enumerated() {
             let harness: HarnessKind = switch spec.content {
             case .codex, .savedCodex: .codex
             default: .claudeCode
             }
-            var workspace = LongConversationFixture.workspace.appending(path: "p\(index)")
+            var workspace = LongConversationFixture.workspace.appending(path: spec.folder ?? "p\(index)")
             var runtime = URL(filePath: "/tmp/yardlet-missing-\(harness.rawValue)")
             var providerSessionID: String?
             var connection: ProviderConnection?
@@ -883,17 +1013,8 @@ final class ConversationBlankFrameTests: XCTestCase {
             if case let .savedCodex(turns, _) = spec.content {
                 runtime = savedCodexRuntime
                 providerSessionID = "thread-\(index)"
-                let thread = LongConversationFixture.codexThread(
+                savedCodexThreads["thread-\(index)"] = LongConversationFixture.codexThread(
                     threadID: "thread-\(index)", turns: (0..<turns).map { LongConversationFixture.codexTurn($0, tag: "\(spec.title) ") })
-                savedCodexResponses["thread/read", default: []].append(CodexSavedThreadResponses.metadata(thread))
-                // The newest page, then the pages before it, as the thread is read back.
-                var cursor: String?
-                for limit in [5] + Array(repeating: 10, count: 12) {
-                    let page = CodexSavedThreadResponses.page(thread, before: cursor, limit: limit)
-                    savedCodexResponses["thread/turns/list", default: []].append(page)
-                    guard let next = page["nextCursor"]?.stringValue else { break }
-                    cursor = next
-                }
             }
             if case let .savedClaude(turns, _) = spec.content {
                 workspace = root.appending(path: "project-\(index)")
@@ -948,7 +1069,7 @@ final class ConversationBlankFrameTests: XCTestCase {
         ]
         let appServer = YHPCodexCompatibilityAdapter(
             adapter: CodexAdapter(executableURL: savedCodexRuntime,
-                                  transport: FakeCodexTransport(responses: savedCodexResponses)),
+                                  transport: CodexSavedThreadsTransport(threads: savedCodexThreads)),
             manifest: HarnessProtocolCompatibilityManifest.codex())
         let model = AppModel(
             store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),

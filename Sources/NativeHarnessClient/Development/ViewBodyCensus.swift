@@ -14,6 +14,8 @@ enum ViewBodyCensus {
         case conversationTurnHosting
         /// A dot's picture, which plays its pet on a layer without being worked out again.
         case personalAgentAvatar
+        /// The conversation's timeline (`ConversationTimeline`), which projects and lays out its turns.
+        case conversationTimeline
     }
 
     static var isEnabled = false

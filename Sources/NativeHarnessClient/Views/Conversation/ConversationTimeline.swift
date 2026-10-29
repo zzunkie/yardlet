@@ -86,6 +86,9 @@ struct ConversationTimeline: View {
     @Environment(\.transcriptWorkspaceURL) private var transcriptWorkspaceURL
 
     var body: some View {
+#if DEBUG
+        let _ = ViewBodyCensus.note(.conversationTimeline)
+#endif
         // The whole conversation is what find searches and saved places resolve against; the window
         // is what is drawn.
         let whole = project()

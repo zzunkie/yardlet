@@ -26,3 +26,41 @@ enum CodexSavedThreadResponses {
         ])
     }
 }
+
+/// An App Server holding saved threads, which answers each read by the thread and cursor it names, as
+/// a real one does: tasks may read their threads in any order, and the same page again.
+actor CodexSavedThreadsTransport: CodexTransport {
+    private let threads: [String: JSONValue]
+    private let stream: AsyncStream<CodexRawFrame>
+    private let continuation: AsyncStream<CodexRawFrame>.Continuation
+
+    init(threads: [String: JSONValue]) {
+        self.threads = threads
+        (stream, continuation) = AsyncStream<CodexRawFrame>.makeStream()
+    }
+
+    func start() async throws {}
+
+    func request(_ request: CodexRPCRequest) async throws -> CodexRPCIncomingMessage {
+        let thread = request.params["threadId"]?.stringValue.flatMap { threads[$0] }
+        let result: JSONValue
+        switch (request.method, thread) {
+        case ("initialize", _):
+            result = .object(["platformOs": .string("macos")])
+        case let ("thread/read", thread?):
+            result = CodexSavedThreadResponses.metadata(thread)
+        case let ("thread/turns/list", thread?):
+            let limit = request.params["limit"]?.integerValue.map(Int.init) ?? 5
+            result = CodexSavedThreadResponses.page(thread, before: request.params["cursor"]?.stringValue, limit: limit)
+        default:
+            throw HarnessAdapterError.invalidProviderEvent("No saved thread answers \(request.method)")
+        }
+        return CodexRPCIncomingMessage(id: request.id, method: nil, params: nil, result: result, error: nil,
+                                       emittedAtMs: nil)
+    }
+
+    func sendResponse(_ response: CodexRPCResponse) async throws {}
+    func sendErrorResponse(_ response: CodexRPCErrorResponse) async throws {}
+    func notifications() async -> AsyncStream<CodexRawFrame> { stream }
+    func stop() async { continuation.finish() }
+}
