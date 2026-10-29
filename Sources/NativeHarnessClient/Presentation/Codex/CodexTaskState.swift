@@ -60,6 +60,11 @@ enum CodexThreadRuntimeStatus: Equatable, Sendable {
     case active(flags: [String])
     case systemError
     case unknown(JSONValue?)
+
+    /// A loaded thread with no turn running, which takes a new turn: idle, or ended on an error. The
+    /// App Server reports `systemError` from a turn's failure (a busy server, a lost connection)
+    /// until the next turn starts, and a `turn/start` continues the thread from it.
+    var isSettled: Bool { self == .idle || self == .systemError }
 }
 
 enum CodexThreadStatusTone: Equatable, Sendable {

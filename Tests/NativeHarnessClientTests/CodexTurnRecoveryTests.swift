@@ -7,8 +7,12 @@ import XCTest
 @MainActor
 final class CodexTurnRecoveryTests: XCTestCase {
     func testNativeCapacityRetryUsesEmptyInputThroughBothRoutesAndCannotRepeatAfterAcceptance() async throws {
-        for routed in [false, true] {
-            let transport = FakeCodexTransport(responses: responses())
+        // The App Server reports `systemError` from the failure until the next turn, and `idle` once
+        // the thread was loaded again; it takes the empty turn from either.
+        for routed in [false, true] { for status in ["systemError", "idle"] {
+            var fixture = responses()
+            fixture["thread/read"] = [threadResult(status: status)]
+            let transport = FakeCodexTransport(responses: fixture)
             let adapter = makeAdapter(transport: transport, routed: routed)
             let handle = try await adapter.createSession(.init(localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp"), initialPrompt: nil))
             let recovery = try XCTUnwrap(adapter as? any CodexTurnRecovering)
@@ -27,7 +31,7 @@ final class CodexTurnRecoveryTests: XCTestCase {
             let after = await transport.requests
             XCTAssertEqual(after.filter { $0.method == "turn/start" }.count, 1)
             await adapter.close(handle)
-        }
+        } }
     }
 
     func testNativeRetryRechecksBusyChangedLatestAndErrorTypeBeforeSending() async throws {
@@ -234,7 +238,8 @@ final class CodexTurnRecoveryTests: XCTestCase {
          "turn/start": [.object(["turn": .object(["id": .string("continued")])])]]
     }
 
-    private func threadResult(status: String = "idle") -> JSONValue {
+    /// The thread as the App Server reports it after a turn failed (Codex 0.163).
+    private func threadResult(status: String = "systemError") -> JSONValue {
         .object(["thread": .object(["id": .string("original"), "status": .object(["type": .string(status)]),
             "historyMode": .string("paginated"), "turns": .array([turn()])])])
     }

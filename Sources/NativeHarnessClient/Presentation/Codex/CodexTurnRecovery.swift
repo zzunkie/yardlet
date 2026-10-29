@@ -10,7 +10,7 @@ enum CodexTurnRecoveryProjection {
     /// A latest turn that failed because the server was too busy, or because its connection was lost
     /// (the Codex app's Resume on it, `resume_interrupted_task`), with nothing waiting on the person.
     static func canRetry(_ turnID: String, in state: CodexTaskState) -> Bool {
-        guard let thread = state.thread, thread.status == .idle, state.activeTurnID == nil,
+        guard let thread = state.thread, thread.status.isSettled, state.activeTurnID == nil,
               let latest = thread.turns.last, latest.id == turnID, latest.status == .failed,
               retryTrigger(latest.error) != nil else { return false }
         return !state.approvalsByID.values.contains { $0.resolution == .pending }

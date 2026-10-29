@@ -1426,11 +1426,12 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
             id: takeRequestID(), threadID: session.providerSessionID, includeTurns: false))
         try requireRegistered(session)
         guard response.result?["thread"]?["id"]?.stringValue == session.providerSessionID,
-              taskDecoder.thread(from: response.result?["thread"] ?? .null)?.status == .idle else {
+              let status = taskDecoder.thread(from: response.result?["thread"] ?? .null)?.status,
+              status.isSettled else {
             throw HarnessAdapterError.capabilityUnavailable(L10n.string("This turn can no longer be retried."))
         }
         if var state = presentationStateByLocalSessionID[session.localSessionID] {
-            state.thread?.status = .idle
+            state.thread?.status = status
             publish(state, for: session.localSessionID)
         }
         let page = try await loadTurns(for: session, cursor: nil, limit: 1)
@@ -1475,7 +1476,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
             id: takeRequestID(), threadID: session.providerSessionID, includeTurns: false))
         try requireRegistered(session)
         guard response.result?["thread"]?["id"]?.stringValue == session.providerSessionID,
-              taskDecoder.thread(from: response.result?["thread"] ?? .null)?.status == .idle else { return false }
+              taskDecoder.thread(from: response.result?["thread"] ?? .null)?.status.isSettled == true else { return false }
         let page = try await loadTurns(for: session, cursor: nil, limit: 1)
         try requireRegistered(session)
         guard let latest = page.turns.last else { return false }
@@ -1511,14 +1512,14 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         let response = try await transport.request(CodexProtocol.readThread(id: takeRequestID(), threadID: session.providerSessionID, includeTurns: false))
         let state = presentationStateByLocalSessionID[session.localSessionID] ?? .empty
         try requireRegistered(session)
-        guard taskDecoder.thread(from: response.result?["thread"] ?? .null)?.status == .idle, state.activeTurnID == nil,
+        guard taskDecoder.thread(from: response.result?["thread"] ?? .null)?.status.isSettled == true, state.activeTurnID == nil,
               !state.serverRequestsByID.values.contains(where: { $0.resolution == .pending }) else {
             throw HarnessAdapterError.capabilityUnavailable(L10n.string("Stop active work before compacting this chat."))
         }
         _ = try await transport.request(CodexProtocol.compactConversation(id: takeRequestID(), threadID: session.providerSessionID))
         try requireRegistered(session)
         let updated = presentationStateByLocalSessionID[session.localSessionID]
-        if updated?.lastAppliedSequence != state.lastAppliedSequence, updated?.thread?.status == .idle,
+        if updated?.lastAppliedSequence != state.lastAppliedSequence, updated?.thread?.status.isSettled == true,
            updated?.activeTurnID == nil { return }
         emit(.sessionStatusChanged(.running), for: session.localSessionID)
     }
@@ -2073,13 +2074,13 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
             // launch or resurrecting stale activity.
             state.thread?.turns.removeAll { !pageTurnIDs.contains($0.id) }
         }
-        let threadIsIdle = state.thread?.status == .idle
+        let threadIsSettled = state.thread?.status.isSettled == true
         let newestInitialTimestamp = initialPage?.turns
             .compactMap { $0.completedAt ?? $0.startedAt }
             .max()
         state.thread?.turns.removeAll { turn in
             guard turn.status == .inProgress else { return false }
-            if threadIsIdle { return true }
+            if threadIsSettled { return true }
             guard let newestInitialTimestamp else { return false }
             // A resume snapshot can retain orphaned in-progress turns without timestamps even
             // when the bounded history page already proves newer completed work exists. Those
