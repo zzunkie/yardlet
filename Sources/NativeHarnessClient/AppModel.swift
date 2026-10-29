@@ -285,7 +285,7 @@ final class AppModel {
     /// App preferences read at the moment they apply, such as the Codex follow-up mode.
     private let preferences: UserDefaults
     private let codexPendingRequestRepository: any CodexPendingServerRequestRepository
-    private let codexTimelineItemRepository: any CodexTimelineItemRepository
+    private let codexTimelineItemRepository: CachedCodexTimelineItemRepository
     /// The files each task read and edited, for a file's related tasks (`AppModel+FileTasks`). Nil in
     /// tests and visual fixtures, which have no tasks of the person's to read.
     let fileTaskIndex: FileTaskIndex?
@@ -5035,6 +5035,7 @@ final class AppModel {
         }
         codexItemSaveTasks.values.forEach { $0.cancel() }
         codexItemSaveTasks.removeAll()
+        await codexTimelineItemRepository.flushed()
         codexSnapshotCheckpointTasks.values.forEach { $0.cancel() }
         codexSnapshotCheckpointTasks.removeAll()
         codexModelRestoreErrors.removeAll()
