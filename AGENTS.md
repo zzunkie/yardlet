@@ -25,6 +25,10 @@ Maintainers keep working notes outside this repository, in the ignored folder `d
 - Fix a cause where it lives, in the shared rule or path, rather than patching the one case that
   showed it. Add a test only when it pins a contract that could otherwise break unnoticed; prefer
   extending an existing test.
+- Main-thread code that runs for every provider event, publication or timer tick does work in
+  proportion to what changed, not to the whole history: a conversation can hold thousands of items
+  and an agent run thousands of events. When such a path changes, check it with a long history and
+  count the publications and redraws, not only the result.
 - A test that checks something happened in its own time waits for it with `waitUntil`
   (`Tests/NativeHarnessClientTests/Support/WaitUntil.swift`), not a fixed sleep: CI runs slower than
   a Mac. A sleep is only for checking that something did not happen.
