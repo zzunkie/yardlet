@@ -3,8 +3,9 @@ import Foundation
 /// The last successful account reading per connection, kept so the accounts list can show it the
 /// moment it opens while a new check runs. An entry holds only what the list displays: whether the
 /// login was signed in, the account name the runtime reported, its organization (which separates
-/// two accounts that share an address), the plan line, the limit rows and when they were read.
-/// No credential, token, config path or CLI output is stored.
+/// two accounts that share an address), the plan line, the limit rows, how many resets of them it
+/// holds and when they expire, and when they were read. No credential, token, config path, reset ID
+/// or CLI output is stored.
 struct AccountSnapshotCache {
     struct Entry: Codable, Equatable, Sendable {
         let harness: HarnessKind
@@ -16,6 +17,7 @@ struct AccountSnapshotCache {
         let accountPlan: String?
         let checkedAt: Date
         let usage: [AccountUsageMetric]
+        let usageResets: AccountUsageResets?
 
         /// A check that completed is remembered; one that needs attention, found no runtime or
         /// could not finish has nothing to remember.
@@ -29,6 +31,12 @@ struct AccountSnapshotCache {
             accountPlan = snapshot.state == .signedIn ? snapshot.accountPlan : nil
             checkedAt = snapshot.checkedAt
             usage = snapshot.state == .signedIn ? snapshot.usage.filter { $0.evidence != .localSession } : []
+            // A use reads the account again first, so the reset it takes needs no remembered ID.
+            usageResets = snapshot.state == .signedIn ? snapshot.usageResets.map { resets in
+                AccountUsageResets(availableCount: resets.availableCount,
+                    resets: resets.resets.map { AccountUsageResets.Reset(title: $0.title, expiresAt: $0.expiresAt) },
+                    purchaseURL: resets.purchaseURL, restores: resets.restores)
+            } : nil
         }
 
         /// The remembered reading as a snapshot to display. It offers no sign-in or sign-out
@@ -43,7 +51,7 @@ struct AccountSnapshotCache {
                     : "No usable runtime-owned account was found."),
                 credentialOwner: HarnessCatalog.descriptor(for: harness)
                     .map { L10n.format("%@ credential store", $0.displayName) } ?? "",
-                checkedAt: checkedAt, usage: usage, canLogin: false, canLogout: false
+                checkedAt: checkedAt, usage: usage, usageResets: usageResets, canLogin: false, canLogout: false
             )
         }
     }

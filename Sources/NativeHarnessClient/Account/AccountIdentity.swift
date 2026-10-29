@@ -170,6 +170,8 @@ struct AccountUsageBlock: Identifiable, Equatable, Sendable {
     let coversWholeAccount: Bool
     let metrics: [AccountUsageMetric]
     let checkedAt: Date?
+    /// The connection under the account whose harness reported resets of these limits.
+    var resetChoiceID: String? = nil
 
     var title: String? {
         coversWholeAccount ? nil : (sources.isEmpty ? harnesses.map(\.displayName) : sources).joined(separator: ", ")
@@ -183,6 +185,11 @@ struct AccountGroup: Identifiable, Equatable {
     let usageBlocks: [AccountUsageBlock]
 
     var id: String { identity.id }
+
+    /// The connection under the account whose harness reported resets of `block`'s limits.
+    func resetChoice(for block: AccountUsageBlock) -> AccountChoice? {
+        block.resetChoiceID.flatMap { id in choices.first { $0.id == id } }
+    }
 
     var harnesses: [HarnessKind] {
         var seen: Set<HarnessKind> = []
@@ -248,6 +255,7 @@ enum AccountGroupProjection {
         var sources: [String: [String]] = [:]
         var metrics: [String: [AccountUsageMetric]] = [:]
         var checkedAt: [String: Date] = [:]
+        var resetChoiceIDs: [String: String] = [:]
         for choice in choices {
             let quotas = choice.quotas
             guard !quotas.isEmpty else { continue }
@@ -256,6 +264,7 @@ enum AccountGroupProjection {
                 order.append(key)
                 metrics[key] = quotas
             }
+            if resetChoiceIDs[key] == nil, choice.snapshot?.usageResets != nil { resetChoiceIDs[key] = choice.id }
             if !(harnesses[key]?.contains(choice.harness) ?? false) {
                 harnesses[key, default: []].append(choice.harness)
             }
@@ -274,7 +283,8 @@ enum AccountGroupProjection {
                 sources: sources[key] ?? [],
                 coversWholeAccount: coversWholeAccount,
                 metrics: values,
-                checkedAt: checkedAt[key]
+                checkedAt: checkedAt[key],
+                resetChoiceID: resetChoiceIDs[key]
             )
         }
     }

@@ -1121,10 +1121,27 @@ struct MainWindow: View {
     }
 
     /// A Claude task's retries, limit warning and limit-card actions, which other harnesses do not
-    /// report, and for any task that Yardlet continued it after a restart.
+    /// report, a Codex task's limit-card resets, and for any task that Yardlet continued it after a
+    /// restart.
     private func providerNotices(for session: SessionRecord) -> TaskProviderNotices? {
         let resumedAfterRestart = model.restartResumeNoticeSessionIDs.contains(session.id)
         let reconnecting = model.connectionResumes[session.id]?.isWaiting == true
+        let canContinue = session.status != .running && session.status != .waitingForApproval
+            && !model.switchingAccounts.contains(session.id) && !model.sessionMutations.contains(session.id)
+        // Read when a limit card draws, so it names the account the task runs under now.
+        let usageReset: @MainActor () -> (choice: AccountChoice, context: UsageResetContext)? = {
+            (model.connections.choice(for: session.harness, connection: session.connection),
+             UsageResetContext(store: model.connections, runtimeSelections: model.runtimeSelections))
+        }
+        if session.harness == .codex {
+            return TaskProviderNotices(
+                resumedAfterRestart: resumedAfterRestart, reconnecting: reconnecting, canContinue: canContinue,
+                refreshAccounts: {
+                    await model.connections.check(model.connections.choice(for: .codex, connection: session.connection),
+                        runtimeSelections: model.runtimeSelections)
+                },
+                usageReset: usageReset)
+        }
         guard session.harness == .claudeCode else {
             return resumedAfterRestart || reconnecting
                 ? TaskProviderNotices(resumedAfterRestart: resumedAfterRestart, reconnecting: reconnecting) : nil
@@ -1135,8 +1152,7 @@ struct MainWindow: View {
             resumedAfterRestart: resumedAfterRestart,
             reconnecting: reconnecting,
             autoContinueEntryID: model.usageLimitAutoContinue[session.id]?.entryID,
-            canContinue: session.status != .running && session.status != .waitingForApproval
-                && !model.switchingAccounts.contains(session.id) && !model.sessionMutations.contains(session.id),
+            canContinue: canContinue,
             switchError: model.usageLimitSwitchErrorBySessionID[session.id],
             accounts: { model.usageLimitAccountOptions(for: session) },
             refreshAccounts: { await model.refreshUsageLimitAccounts(for: session) },
@@ -1145,7 +1161,8 @@ struct MainWindow: View {
             },
             setAutoContinue: { enabled, entryID, resetsAt in
                 model.setUsageLimitAutoContinue(enabled, entryID: entryID, resetsAt: resetsAt, for: session)
-            }
+            },
+            usageReset: usageReset
         )
     }
 

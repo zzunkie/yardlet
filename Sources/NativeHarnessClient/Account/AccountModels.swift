@@ -48,6 +48,98 @@ struct AccountUsageMetric: Identifiable, Codable, Equatable, Sendable {
     var model: String? = nil
 }
 
+/// The banked resets of an account's plan limits, as its harness reported them beside the limits
+/// (Codex: `rateLimitResetCredits` in `account/rateLimits/read`). Using one restores the limits the
+/// reset covers at once; only the person uses one, after confirming it.
+struct AccountUsageResets: Codable, Equatable, Sendable {
+    struct Reset: Codable, Equatable, Sendable {
+        /// The harness's opaque name for the reset, which a use passes back. Not remembered between
+        /// launches.
+        var id: String?
+        /// The harness's own name for it ("Full reset"), when it gave one.
+        var title: String?
+        var expiresAt: Date?
+    }
+
+    var availableCount: Int
+    /// The available resets the harness listed, soonest to expire first. It may list fewer than it
+    /// counts.
+    var resets: [Reset] = []
+    /// Where the provider sells an immediate reset, for a plan it sells one to. Yardlet only opens
+    /// the page; paying happens there.
+    var purchaseURL: URL? = nil
+    /// The usage rows (`AccountUsageMetric.id`) a reset restores; empty when the harness did not say.
+    var restores: [String] = []
+
+    /// The reset a use takes: the one that expires first.
+    var next: Reset? { resets.first }
+}
+
+/// What the harness answered when the person used a reset.
+enum AccountUsageResetOutcome: Equatable, Sendable {
+    /// A reset was used and the limits it covers were restored. An attempt the harness had already
+    /// completed (a retry after an answer that did not arrive) counts the same.
+    case reset
+    /// No limit was close enough to its cap for a reset to restore anything; none was used.
+    case nothingToReset
+    /// The account had no reset left.
+    case noResets
+}
+
+/// The words for an account's resets, the same beside its limits, on a limit card and in the Usage
+/// lines.
+enum UsageResetText {
+    static func available(_ count: Int) -> String {
+        count == 1 ? L10n.string("1 reset available") : L10n.format("%lld resets available", Int64(count))
+    }
+
+    static func left(afterUse resets: AccountUsageResets) -> String {
+        let left = max(0, resets.availableCount - 1)
+        if left == 0 { return L10n.string("No resets left after this one") }
+        return left == 1 ? L10n.string("1 reset left after this one")
+            : L10n.format("%lld resets left after this one", Int64(left))
+    }
+
+    static func answer(_ state: UsageResetState) -> String? {
+        switch state {
+        case .using: return nil
+        case let .answered(.reset, left):
+            guard let left else { return L10n.string("Usage limits reset.") }
+            if left == 0 { return L10n.string("Usage limits reset. No resets left.") }
+            return left == 1 ? L10n.string("Usage limits reset. 1 reset left.")
+                : L10n.format("Usage limits reset. %lld resets left.", Int64(left))
+        case .answered(.nothingToReset, _):
+            return L10n.string("Your usage doesn't need a reset right now. No reset was used.")
+        case .answered(.noResets, _):
+            return L10n.string("No resets are available.")
+        case let .failed(message):
+            return L10n.format("Couldn't reset usage: %@", message)
+        }
+    }
+
+    /// "Full reset · Expires Oct 30, 3:59 AM".
+    static func reset(_ reset: AccountUsageResets.Reset) -> String {
+        let title = reset.title ?? L10n.string("Usage reset")
+        guard let expiresAt = reset.expiresAt else { return title }
+        return title + " · " + L10n.format("Expires %@", expiresAt.formatted(date: .abbreviated, time: .shortened))
+    }
+}
+
+enum AccountUsageResetError: LocalizedError, Equatable {
+    /// The account's harness offers no call that uses a reset.
+    case unsupported
+    /// The harness answered with an outcome Yardlet does not know; whether a reset was used is
+    /// unknown, so the attempt can be sent again as it was.
+    case unrecognizedAnswer
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupported: L10n.string("This account's harness can't use a reset from Yardlet.")
+        case .unrecognizedAnswer: L10n.string("The harness gave an answer Yardlet doesn't know.")
+        }
+    }
+}
+
 /// A stable, provider-labelled row for the account-wide usage surface. Rate-limit
 /// windows stay attached to their harness card; only provider-reported account
 /// history is promoted into this overview so the UI cannot imply that lifetime
@@ -177,6 +269,8 @@ struct HarnessAccountSnapshot: Identifiable, Codable, Equatable, Sendable {
     let credentialOwner: String
     let checkedAt: Date
     let usage: [AccountUsageMetric]
+    /// The resets of the plan limits the account holds, when its harness reports them.
+    let usageResets: AccountUsageResets?
     let canLogin: Bool
     let canLogout: Bool
 
@@ -192,6 +286,7 @@ struct HarnessAccountSnapshot: Identifiable, Codable, Equatable, Sendable {
         credentialOwner: String,
         checkedAt: Date,
         usage: [AccountUsageMetric],
+        usageResets: AccountUsageResets? = nil,
         canLogin: Bool,
         canLogout: Bool
     ) {
@@ -206,6 +301,7 @@ struct HarnessAccountSnapshot: Identifiable, Codable, Equatable, Sendable {
         self.credentialOwner = credentialOwner
         self.checkedAt = checkedAt
         self.usage = usage
+        self.usageResets = usageResets
         self.canLogin = canLogin
         self.canLogout = canLogout
     }
@@ -216,7 +312,7 @@ struct HarnessAccountSnapshot: Identifiable, Codable, Equatable, Sendable {
         HarnessAccountSnapshot(id: id, harness: harness, providerID: providerID, state: state,
             accountLabel: accountLabel, accountOrganization: accountOrganization, accountPlan: accountPlan,
             detail: detail, credentialOwner: credentialOwner, checkedAt: checkedAt, usage: usage,
-            canLogin: canLogin, canLogout: canLogout)
+            usageResets: usageResets, canLogin: canLogin, canLogout: canLogout)
     }
 
     static func unavailable(for descriptor: HarnessDescriptor) -> HarnessAccountSnapshot {

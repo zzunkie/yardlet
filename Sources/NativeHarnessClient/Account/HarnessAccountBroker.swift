@@ -870,9 +870,61 @@ actor HarnessAccountBroker {
                     evidence: .notExposed
                 )
             ] : usage,
+            usageResets: signedIn ? codexUsageResets(from: rateLimits, plan: plan).map { resets in
+                // A reset restores the general Codex limit (`codex`), not a model's own.
+                var resets = resets
+                resets.restores = usage.filter { $0.evidence == .exactQuota && $0.id.hasPrefix("codex:") }.map(\.id)
+                return resets
+            } : nil,
             canLogin: !signedIn,
             canLogout: signedIn
         )
+    }
+
+    /// The Codex app's "Buy an instant reset" page. The app offers it to personal plans only.
+    static let codexResetPurchaseURL = URL(string: "https://chatgpt.com/codex/purchase/reset")!
+
+    /// The resets of its plan limits the account holds (`rateLimitResetCredits`): the count, and the
+    /// available ones the service listed, soonest to expire first. An App Server that reports none
+    /// gives nil.
+    static func codexUsageResets(from value: JSONValue?, plan: String? = nil) -> AccountUsageResets? {
+        guard let summary = value?["rateLimitResetCredits"], summary.objectValue != nil,
+              let count = summary["availableCount"]?.doubleValue, count.isFinite else { return nil }
+        let resets = (summary["credits"]?.arrayValue ?? []).compactMap { credit -> AccountUsageResets.Reset? in
+            guard credit["status"]?.stringValue == "available" else { return nil }
+            let title = credit["title"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return AccountUsageResets.Reset(id: credit["id"]?.stringValue,
+                title: title?.isEmpty == false ? title : nil,
+                expiresAt: credit["expiresAt"]?.doubleValue.map(Date.init(timeIntervalSince1970:)))
+        }
+        return AccountUsageResets(availableCount: max(0, Int(count)),
+            resets: resets.sorted { ($0.expiresAt ?? .distantFuture) < ($1.expiresAt ?? .distantFuture) },
+            purchaseURL: ["plus", "pro", "prolite", "promax"].contains(plan ?? "") ? codexResetPurchaseURL : nil)
+    }
+
+    /// Uses one reset of the account's plan limits through the harness's own call. Only Codex has
+    /// one: the App Server's `account/rateLimitResetCredit/consume`, under this broker's login.
+    /// The caller keeps `attemptID` until it gets an answer, and sends it again on a retry.
+    func useUsageReset(harness: HarnessKind, executableURL: URL, attemptID: String,
+                       resetID: String?) async throws -> AccountUsageResetOutcome {
+        guard harness == .codex else { throw AccountUsageResetError.unsupported }
+        let transport = CodexProcessTransport(executableURL: executableURL, environmentManager: codexEnvironmentManager)
+        let result: JSONValue?
+        do {
+            _ = try await transport.request(CodexProtocol.initialize(id: 1, clientVersion: "0.2"))
+            result = try await transport.request(CodexProtocol.consumeRateLimitResetCredit(
+                id: 2, idempotencyKey: attemptID, creditID: resetID)).result
+            await transport.stop()
+        } catch {
+            await transport.stop()
+            throw error
+        }
+        switch result?["outcome"]?.stringValue {
+        case "reset", "alreadyRedeemed": return .reset
+        case "nothingToReset": return .nothingToReset
+        case "noCredit": return .noResets
+        default: throw AccountUsageResetError.unrecognizedAnswer
+        }
     }
 
     static func codexAccountIsSignedIn(_ account: JSONValue?) -> Bool {

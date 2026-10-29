@@ -182,7 +182,8 @@ enum MenuBarMenuProjection {
     /// it, the harnesses that use it in words (the mark alone did not tell one address's Claude and
     /// Codex accounts apart), then the five-hour and weekly windows as the Codex app's Usage menu
     /// words them ("{window} 72% left"); a reading with neither lists its windows by their own
-    /// names. A reading an hour old or older ends with its age, and one whose latest check could not
+    /// names, and the resets of them the account holds follow. A reading an hour old or older ends
+    /// with its age, and one whose latest check could not
     /// finish says so, in the account list's words, before its age ("Couldn't refresh · 2 days ago").
     /// The help has each window with its reset time.
     static func usage(choices: [AccountChoice], status: (AccountChoice) -> AccountReadingStatus? = { _ in nil },
@@ -195,6 +196,11 @@ enum MenuBarMenuProjection {
                 windows.first { $0.kind == kind }.map { "\(kind.title) \(leftText($0.window))" }
             }
             if parts.isEmpty { parts = windows.map { "\($0.window.name) \(leftText($0.window))" } }
+            // As the Codex app's profile menu counts them ("2 available resets").
+            if let resets = account.group.choices.compactMap({ $0.snapshot?.usageResets?.availableCount }).max(),
+               resets > 0 {
+                parts.append(UsageResetText.available(resets))
+            }
             let harnesses = account.group.harnesses.map(\.displayName).joined(separator: ", ")
             var detail = [harnesses] + parts
             let freshness = AccountFreshnessProjection.freshness(of: account.group.choices, status: status,

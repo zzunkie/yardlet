@@ -148,6 +148,29 @@ is deleted at the end. The response's `limits` rows (`session` for 5 hours, `wee
 group is not shown as a limit. `rate_limits_available: false` (API keys and the like) or a failed lookup shows "Claude
 Code did not report plan limits for this login." and is not turned into 0.
 
+## Usage limit resets
+
+A Codex account can hold banked resets of its plan limits. The App Server reports them in the
+`account/rateLimits/read` answer Yardlet already reads for the limits (`rateLimitResetCredits`: `availableCount` and,
+for each available reset, an opaque `id`, a `title` and `expiresAt`), so counting them takes no extra request.
+Settings › Accounts shows "N resets available" under the account's limits, the sidebar account menu and the menu bar
+item add the count to the account's Usage line, and a Codex task's limit card offers "Use a reset (N left)" for the
+account the task runs under. Each place opens the same confirmation: the limits a reset restores (the general `codex`
+limit, not a model's own), the reset it takes (the one that expires first) and how many are left after it.
+
+Only after the person confirms does Yardlet send `account/rateLimitResetCredit/consume` with an `idempotencyKey` and
+that reset's `creditId` to that account's own App Server. The answers are `reset`; `nothingToReset`, when no limit is
+close enough to its cap and nothing was used; `noCredit`; and `alreadyRedeemed`, an attempt sent again that had
+already gone through, which reads as a reset. A use that got no answer keeps its key, and trying again sends the same
+key, so one press never uses two resets. After an answer Yardlet checks the account again. No agent tool can use a
+reset. For a personal ChatGPT plan the confirmation also links "Buy an instant reset…" to
+`https://chatgpt.com/codex/purchase/reset`, the page the Codex app opens; Yardlet takes no payment.
+
+Claude Code offers banked resets to some accounts behind a server-side flag, but only in its interactive
+`/limit-reset` panel: no control request reads or uses them, and `get_usage` carries no count. Yardlet does not read
+Claude's OAuth token to call the service itself, so Claude accounts show no resets. The same path takes them once
+Claude Code reports them.
+
 ## Account folder shape, finding sign-ins and removing accounts (2026-10-27)
 
 The user asked that Yardlet alone give the multi-account experience Session Switch gives (continuing a conversation

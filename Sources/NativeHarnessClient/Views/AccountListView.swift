@@ -51,6 +51,7 @@ struct AccountList: View {
             footer
         }
         .lineSpacing(3)
+        .environment(\.usageResetContext, UsageResetContext(store: store, runtimeSelections: runtimeSelections))
         .task(id: mode) {
             // Settings checks once per presentation, whichever section shows, so its list does not.
             guard mode != .manage else { return }
@@ -351,7 +352,9 @@ struct AccountRow: View {
     @ViewBuilder private var trailing: some View {
         if let usage, !usage.usageBlocks.isEmpty {
             VStack(alignment: .trailing, spacing: 8) {
-                ForEach(usage.usageBlocks) { block in AccountUsageBlockView(title: choice.title, block: block) }
+                ForEach(usage.usageBlocks) { block in
+                    AccountUsageBlockView(title: choice.title, block: block, resetChoice: usage.resetChoice(for: block))
+                }
             }
         } else {
             Text(usage == nil ? choice.status : (usage?.usageUnavailableText ?? choice.usageUnavailableText))
@@ -385,7 +388,8 @@ private struct AccountGroupHeader: View {
             } else {
                 VStack(alignment: .trailing, spacing: 8) {
                     ForEach(group.usageBlocks) { block in
-                        AccountUsageBlockView(title: group.identity.displayLabel, block: block)
+                        AccountUsageBlockView(title: group.identity.displayLabel, block: block,
+                                              resetChoice: group.resetChoice(for: block))
                     }
                 }
             }
@@ -483,10 +487,12 @@ struct AccountFreshnessLine: View {
 }
 
 /// One reading of an account's limits: the first two as limit window rows, and every limit with
-/// its exact reset a click away.
+/// its exact reset a click away. Resets of the limits the account holds show under them.
 struct AccountUsageBlockView: View {
     let title: String
     let block: AccountUsageBlock
+    /// The connection whose harness reported resets of these limits.
+    var resetChoice: AccountChoice? = nil
     @State private var showsAllLimits = false
 
     var body: some View {
@@ -514,6 +520,7 @@ struct AccountUsageBlockView: View {
             .popover(isPresented: $showsAllLimits) {
                 AccountLimitsView(title: title, metrics: block.metrics, checkedAt: block.checkedAt)
             }
+            if let resetChoice { UsageResetButton(choice: resetChoice) }
         }
     }
 
