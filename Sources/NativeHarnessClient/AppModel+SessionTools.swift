@@ -308,7 +308,7 @@ extension AppModel: SessionToolHandling {
             return .failure("Not sent: that is this task.", .invalidArguments, retry: .withChanges)
         }
         let quotes: [TaskMessage.Quote]
-        switch personQuotes(arguments["person_quotes"], caller: caller) {
+        switch personQuotes(arguments, caller: caller) {
         case let .success(found): quotes = found
         case let .failure(error): return error.result("Not sent")
         }
@@ -318,18 +318,19 @@ extension AppModel: SessionToolHandling {
         let sender = TaskMessage(senderID: caller.hostTaskID.uuidString, senderName: caller.title, body: message,
                                  quotes: quotes)
         let title = target.title.isEmpty ? "" : " (\(target.title))"
+        let quoted = Self.quotedLines(quotes)
         switch await deliverTaskMessage(sender, to: target) {
         case .delivered:
-            return .text("Delivered to task \(target.id.uuidString)\(title); it started a turn on the message.")
+            return .text("Delivered to task \(target.id.uuidString)\(title); it started a turn on the message." + quoted)
         case .steered:
             return .text("Delivered to task \(target.id.uuidString)\(title) while it works: it reads the message at its "
-                + "next step, in the same turn. wait_tasks or read_task show what it did.")
+                + "next step, in the same turn. wait_tasks or read_task show what it did." + quoted)
         case .queued:
             return .text("Queued for task \(target.id.uuidString)\(title): it runs when that task's current turn "
-                + "ends. wait_tasks or read_task show what it did.")
+                + "ends. wait_tasks or read_task show what it did." + quoted)
         case .afterStart:
             return .text("Queued for task \(target.id.uuidString)\(title): that task is queued, and this follows its "
-                + "first message when it starts. wait_tasks waits for it.")
+                + "first message when it starts. wait_tasks waits for it." + quoted)
         case let .undelivered(reason):
             return .error("Not delivered to task \(target.id.uuidString)\(title): \(reason)")
         }
@@ -548,7 +549,7 @@ extension AppModel: SessionToolHandling {
                 + "\(SessionToolCatalog.maximumMessageLength) characters.")
         }
         let quotes: [TaskMessage.Quote]
-        switch personQuotes(arguments["person_quotes"], caller: caller) {
+        switch personQuotes(arguments, caller: caller) {
         case let .success(found): quotes = found
         case let .failure(error): return error.result("Not created")
         }
@@ -636,10 +637,11 @@ extension AppModel: SessionToolHandling {
             })
             if notifies { watchForNotification(child.id, caller: caller) }
             let queued = "Queued task \(child.id.uuidString) (\(child.title)), \(createdTaskPlacement(parentTaskID, caller: caller)); it starts when "
-                + "there is room. wait_tasks with this id waits for it.\n" + Self.createdTaskLinkLine(child) + account.assignment.toolLine
+                + "there is room. wait_tasks with this id waits for it." + Self.quotedLines(quotes) + "\n"
+                + Self.createdTaskLinkLine(child) + account.assignment.toolLine
             guard wait else { return .text(queued) }
             let ended = await waitForAny([child.id], timeout: caller.remaining)
-            return createdChildResult(child.id, ended: ended)
+            return createdChildResult(child.id, ended: ended, quotes: quotes)
         }
         sessionTools.starting.insert(child.id)
         await startHeldTask(child, text: first)
@@ -650,11 +652,12 @@ extension AppModel: SessionToolHandling {
         if notifies { watchForNotification(child.id, caller: caller) }
         guard wait else {
             return .text("Created task \(child.id.uuidString) (\(child.title)), \(createdTaskPlacement(parentTaskID, caller: caller)); its first "
-                + "turn is running. wait_tasks or read_task show its answer.\n" + Self.createdTaskLinkLine(child)
+                + "turn is running. wait_tasks or read_task show its answer." + Self.quotedLines(quotes) + "\n"
+                + Self.createdTaskLinkLine(child)
                 + account.assignment.toolLine)
         }
         let ended = await waitForAny([child.id], timeout: caller.remaining)
-        return createdChildResult(child.id, ended: ended)
+        return createdChildResult(child.id, ended: ended, quotes: quotes)
     }
 
     /// Where `create_task` nests the new task: under the caller, under the open task `parent_task_id`
@@ -689,12 +692,13 @@ extension AppModel: SessionToolHandling {
 
     /// What `create_task` with `wait` answers: the child's state and latest answer, and that it goes
     /// on when the call's time ran out first.
-    private func createdChildResult(_ id: UUID, ended: Bool) -> AgentToolResult {
+    private func createdChildResult(_ id: UUID, ended: Bool, quotes: [TaskMessage.Quote]) -> AgentToolResult {
         let note = ended ? "" : sessionTools.isQueued(id)
             ? " It is queued and starts when there is room; wait_tasks with this id waits for it."
             : " It is still running; wait_tasks with this id waits again."
         let account = accountAssignments.assignment(for: id).map { "\n" + $0.toolLine } ?? ""
-        return .text("Created task \(id.uuidString).\(note)\(account)\n" + SessionToolText.json(sessionToolOutcome(of: id)))
+        return .text("Created task \(id.uuidString).\(note)\(Self.quotedLines(quotes))\(account)\n"
+            + SessionToolText.json(sessionToolOutcome(of: id)))
     }
 
     // MARK: - archive_task
@@ -1603,42 +1607,144 @@ extension AppModel: SessionToolHandling {
 
     // MARK: - The person's words
 
-    /// The words `person_quotes` names, each found in one of the person's own messages in the calling
-    /// task, the latest that holds it, with when they sent it; an error names the first it cannot find.
-    private func personQuotes(_ value: JSONValue?, caller: SessionToolCaller) -> Result<[TaskMessage.Quote], SessionToolError> {
-        guard let value, value != .null else { return .success([]) }
-        guard let items = value.arrayValue,
-              items.allSatisfy({ $0.stringValue != nil }) else {
-            return .failure(SessionToolError(message: "person_quotes must be a list of strings.",
-                                             failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
+    /// The person's own messages a call passes on, from the calling task's conversation, with when they
+    /// sent each: the latest whole with `quote_latest_person_message`, and for each `person_quotes`
+    /// phrase the message that holds it (`personQuote`). Each part of a message goes once; an error
+    /// names the first phrase that places none.
+    private func personQuotes(_ arguments: JSONValue, caller: SessionToolCaller) -> Result<[TaskMessage.Quote], SessionToolError> {
+        let latest = Self.bool(arguments["quote_latest_person_message"]) == true
+        var phrases: [String] = []
+        if let value = arguments["person_quotes"], value != .null {
+            guard let items = value.arrayValue, items.allSatisfy({ $0.stringValue != nil }) else {
+                return .failure(SessionToolError(message: "person_quotes must be a list of strings.",
+                                                 failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
+            }
+            phrases = items.compactMap(\.stringValue).filter { !Self.quoteKey($0).isEmpty }
         }
-        let wanted = items.compactMap(\.stringValue)
-            .map { $0.replacingOccurrences(of: "\r\n", with: "\n").trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard wanted.count <= SessionToolCatalog.maximumPersonQuotes else {
+        guard phrases.count <= SessionToolCatalog.maximumPersonQuotes else {
             return .failure(SessionToolError(message: "at most \(SessionToolCatalog.maximumPersonQuotes) person_quotes.",
                                              failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
         }
-        guard !wanted.isEmpty else { return .success([]) }
+        guard latest || !phrases.isEmpty else { return .success([]) }
         guard let session = store.sessions.first(where: { $0.id == caller.hostTaskID }) else {
             return .failure(SessionToolError(message: "this task's conversation is not open in Yardlet.",
                                              failure: AgentToolFailure(.refused, retry: .no)))
         }
-        let messages = personMessages(in: session)
+        // Read as Unicode composes them (NFC), which draws and compares as typed, so a phrase matches
+        // however either side composed its characters.
+        let messages = personMessages(in: session).map {
+            (text: $0.text.precomposedStringWithCanonicalMapping, sentAt: $0.sentAt)
+        }
+        var parts: [QuotedPart] = []
+        if latest {
+            guard let message = messages.first else {
+                return .failure(SessionToolError(message: "the person has sent no message in this task.",
+                                                 failure: AgentToolFailure(.refused, retry: .withChanges)))
+            }
+            parts.append(QuotedPart(message: 0, range: message.text.startIndex..<message.text.endIndex))
+        }
+        for phrase in phrases {
+            let part: QuotedPart
+            switch Self.personQuote(phrase, in: messages.map(\.text)) {
+            case let .success(found): part = found
+            case let .failure(error): return .failure(error)
+            }
+            guard !parts.contains(where: { $0.covers(part) }) else { continue }
+            parts.removeAll { part.covers($0) }
+            parts.append(part)
+        }
         let time = ISO8601DateFormatter()
         time.formatOptions = [.withInternetDateTime]
         time.timeZone = .current
-        var quotes: [TaskMessage.Quote] = []
-        for words in wanted {
-            guard let message = messages.first(where: { $0.text.contains(words) }) else {
-                let shown = words.count > 80 ? String(words.prefix(80)) + "…" : words
-                // The words must be the person's own, exactly: other words are refused however often they are sent.
-                return .failure(SessionToolError(message: "the person's messages in this task do not hold \"\(shown)\".",
-                                                 failure: AgentToolFailure(.refused, retry: .withChanges)))
-            }
-            quotes.append(TaskMessage.Quote(text: words, sentAt: message.sentAt.map(time.string(from:))))
+        return .success(parts.map { part in
+            let message = messages[part.message]
+            return TaskMessage.Quote(text: message.text[part.range].trimmingCharacters(in: .whitespacesAndNewlines),
+                                     sentAt: message.sentAt.map(time.string(from:)))
+        })
+    }
+
+    /// Part of one of the person's messages, by its place in `personMessages` (latest first).
+    private struct QuotedPart {
+        var message: Int
+        var range: Range<String.Index>
+
+        func covers(_ other: QuotedPart) -> Bool {
+            message == other.message && range.lowerBound <= other.range.lowerBound
+                && other.range.upperBound <= range.upperBound
         }
-        return .success(quotes)
+    }
+
+    /// Where a `person_quotes` phrase comes from: the person's message that holds it (latest first), all
+    /// of it, or past `wholeQuotedMessageLength` the paragraphs the phrase stands in. Whitespace and line
+    /// breaks may run differently; anything else must be as the person typed it, since the point is that
+    /// the words are theirs. A phrase that is a whole message is the latest such; any other must be
+    /// `minimumPersonQuoteLength` long and come from one message, or from messages that read the same.
+    private static func personQuote(_ phrase: String, in messages: [String]) -> Result<QuotedPart, SessionToolError> {
+        let key = quoteKey(phrase)
+        let shown = key.count > 80 ? String(key.prefix(80)) + "…" : key
+        if let whole = messages.firstIndex(where: { quoteKey($0) == key }) {
+            return .success(QuotedPart(message: whole, range: messages[whole].startIndex..<messages[whole].endIndex))
+        }
+        guard key.count(where: { !$0.isWhitespace }) >= SessionToolCatalog.minimumPersonQuoteLength else {
+            return .failure(SessionToolError(
+                message: "\"\(shown)\" is too short to tell which of the person's messages it is from: give at least "
+                    + "\(SessionToolCatalog.minimumPersonQuoteLength) characters of it, or the whole message.",
+                failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
+        }
+        // The phrase's words in order, whatever whitespace runs between them.
+        let pattern = key.split(separator: " ").map { NSRegularExpression.escapedPattern(for: String($0)) }
+            .joined(separator: "\\s+")
+        let found = messages.indices.compactMap { index in
+            messages[index].range(of: pattern, options: .regularExpression)
+                .map { QuotedPart(message: index, range: quotedPart(of: messages[index], holding: $0)) }
+        }
+        guard let first = found.first else {
+            return .failure(SessionToolError(
+                message: "the person's messages in this task do not hold \"\(shown)\". Give part of what the person "
+                    + "typed here, as they typed it; spaces and line breaks may differ.",
+                failure: AgentToolFailure(.refused, retry: .withChanges)))
+        }
+        guard Set(found.map { quoteKey(messages[$0.message][$0.range]) }).count == 1 else {
+            return .failure(SessionToolError(
+                message: "\"\(shown)\" is in \(found.count) of the person's messages in this task: give more of the "
+                    + "one you mean.",
+                failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
+        }
+        return .success(first)
+    }
+
+    /// The part of a person's message a quote passes on for the words at `found`: all of it, or past
+    /// `wholeQuotedMessageLength` the run of paragraphs (lines between blank lines) they stand in.
+    private static func quotedPart(of message: String, holding found: Range<String.Index>) -> Range<String.Index> {
+        guard message.trimmingCharacters(in: .whitespacesAndNewlines).count > SessionToolPolicy.wholeQuotedMessageLength
+        else { return message.startIndex..<message.endIndex }
+        var paragraphs: [Range<String.Index>] = []
+        for line in message.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            if line.allSatisfy(\.isWhitespace) { continue }
+            if let last = paragraphs.last, message[last.upperBound..<line.startIndex].count(where: \.isNewline) == 1 {
+                paragraphs[paragraphs.count - 1] = last.lowerBound..<line.endIndex
+            } else {
+                paragraphs.append(line.startIndex..<line.endIndex)
+            }
+        }
+        // The found words start and end on characters that are not whitespace, so inside paragraphs.
+        guard let start = paragraphs.first(where: { $0.upperBound > found.lowerBound }),
+              let end = paragraphs.last(where: { $0.lowerBound < found.upperBound }) else { return found }
+        return start.lowerBound..<end.upperBound
+    }
+
+    /// Text as a quote is matched: Unicode composed (NFC), each run of whitespace and line breaks one space.
+    private static func quoteKey(_ text: some StringProtocol) -> String {
+        String(text).precomposedStringWithCanonicalMapping.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// The lines a result adds for the person's messages it passed on: how each starts and when it was sent.
+    private static func quotedLines(_ quotes: [TaskMessage.Quote]) -> String {
+        quotes.map { quote in
+            let flat = quoteKey(quote.text)
+            let shown = flat.count > 80 ? String(flat.prefix(80)) + "…" : flat
+            return "\nQuoted the person's message" + (quote.sentAt.map { " sent \($0)" } ?? "") + ": \"\(shown)\""
+        }.joined()
     }
 
     /// What the person typed in a task, latest first, with when they sent it: not another task's

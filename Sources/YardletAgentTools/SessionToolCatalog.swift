@@ -39,6 +39,10 @@ package enum SessionToolCatalog {
     /// A message or prompt longer than this is refused rather than cut.
     package static let maximumMessageLength = 32_000
     package static let maximumPersonQuotes = 5
+    /// A `person_quotes` phrase shorter than this many characters, spaces aside, is refused unless it is
+    /// a whole message: shorter words ("PR", a three-syllable Korean verb) turn up in a message by
+    /// chance, while a short Korean clause (eight syllables or so) or two English words still fit.
+    package static let minimumPersonQuoteLength = 6
     /// `wait_tasks` waits for at most this many, as the Codex app's `wait_threads` does.
     package static let maximumWaitTargets = 8
     /// `archive_task` archives at most this many on one approval card, a `list_tasks` page.
@@ -69,6 +73,16 @@ package enum SessionToolCatalog {
     private static let effort = property("string", "A reasoning effort the model accepts.")
     private static let account = property("string", "An account id or name from list_accounts, of the harness it "
         + "runs on. Defaults to the one list_accounts names as automaticChoice.")
+    private static let personQuotes: ToolJSON = .object([
+        "type": .string("array"),
+        "items": .object(["type": .string("string")]),
+        "description": .string("Phrases copied from the person's own messages in this task, each at least "
+            + "\(minimumPersonQuoteLength) characters or a whole message. After yours, Yardlet sends the message "
+            + "that holds each (a long one's paragraphs around it) as the person wrote it, with when they sent it. "
+            + "A phrase it cannot find, or finds in several messages, stops the message. At most \(maximumPersonQuotes).")
+    ])
+    private static let quoteLatestPersonMessage = property("boolean", "true also sends the person's latest message "
+        + "in this task after yours, as they wrote it, with when they sent it.")
 
     package static let tools: [AgentToolDefinition] = [
         AgentToolDefinition(
@@ -125,13 +139,8 @@ package enum SessionToolCatalog {
             inputSchema: object([
                 "task_id": property("string", "The receiving task's id from list_tasks."),
                 "message": property("string", "The message."),
-                "person_quotes": .object([
-                    "type": .string("array"),
-                    "items": .object(["type": .string("string")]),
-                    "description": .string("Words from the person's own messages in this task, exactly as they "
-                        + "wrote them. Yardlet finds each there and sends it after the message with when they sent "
-                        + "it; one it cannot find stops the message. At most \(maximumPersonQuotes).")
-                ]),
+                "person_quotes": personQuotes,
+                "quote_latest_person_message": quoteLatestPersonMessage,
             ], required: ["task_id", "message"]),
             readOnly: false,
             openWorld: false
@@ -162,13 +171,8 @@ package enum SessionToolCatalog {
                 + "Another project waits for the person's approval unless this task runs without asking.",
             inputSchema: object([
                 "prompt": property("string", "The first message."),
-                "person_quotes": .object([
-                    "type": .string("array"),
-                    "items": .object(["type": .string("string")]),
-                    "description": .string("Words from the person's own messages in this task, exactly as they "
-                        + "wrote them. Yardlet finds each there and sends it after the message with when they sent "
-                        + "it; one it cannot find stops the message. At most \(maximumPersonQuotes).")
-                ]),
+                "person_quotes": personQuotes,
+                "quote_latest_person_message": quoteLatestPersonMessage,
                 "harness": harness,
                 "model": model,
                 "effort": effort,
