@@ -321,6 +321,21 @@ final class SessionStore {
         sessions[currentIndex].connection = connection
     }
 
+    /// Points an archived task at another account binding, as `updateConnection` does for a listed
+    /// one. It stays archived, with everything else as it was archived.
+    func updateArchivedConnection(id: UUID, connection: ProviderConnection) async throws {
+        guard let archived = archivedSessions?.first(where: { $0.id == id }) else {
+            throw ProviderConnectionError.invalidBinding
+        }
+        try connection.validate(for: archived.session.harness)
+        var updated = archived.session
+        updated.connection = connection
+        try await repository.upsert(updated)
+        guard let index = archivedSessions?.firstIndex(where: { $0.id == id }) else { return }
+        archivedSessions?[index] = ArchivedSessionRecord(session: updated, archivedAt: archived.archivedAt,
+                                                         isProviderArchived: archived.isProviderArchived)
+    }
+
     /// Archives a task so it can be restored from the archived list. `providerArchived` says the
     /// provider's thread was archived as well.
     func archiveSession(id: UUID, providerArchived: Bool = false) async throws {

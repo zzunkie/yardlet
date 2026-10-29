@@ -68,10 +68,14 @@ enum AccountIdentityProjection {
     /// The account-identifying value a snapshot exposes, if any. Runtimes publish an
     /// account label only when they actually read one.
     static func accountKey(snapshot: HarnessAccountSnapshot?) -> String? {
-        guard let label = snapshot?.accountLabel?
+        accountKey(label: snapshot?.accountLabel, organization: snapshot?.accountOrganization)
+    }
+
+    static func accountKey(label: String?, organization: String?) -> String? {
+        guard let label = label?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased(), !label.isEmpty else { return nil }
-        if let organization = snapshot?.accountOrganization?
+        if let organization = organization?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased(), !organization.isEmpty {
             return label + "\u{1F}org:" + organization

@@ -162,6 +162,23 @@ extension TaskAccountSwitch {
     }
 }
 
+/// A saved account whose tasks are moving to another of its folders before it leaves the list
+/// (`AppModel.moveTasks(from:to:)`): how many still wait for their turn to end, or why some could not move.
+struct AccountTaskMove: Equatable {
+    let target: ProviderConnection
+    var waiting = 0
+    var failure: String?
+}
+
+/// The tasks on a saved account, for confirming its removal: archived ones count too, and the working
+/// ones are in a turn or waiting for an answer now.
+struct AccountTaskCount: Equatable {
+    var listed = 0
+    var archived = 0
+    var working = 0
+    var total: Int { listed + archived }
+}
+
 enum ProviderConnectionError: LocalizedError {
     case invalidBinding, unreadableStore, signedOut
     /// The harness (named) could not sign an account out, so nothing was deleted.
@@ -250,6 +267,8 @@ final class ProviderConnectionStore {
     @ObservationIgnored var moveToTrash: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
     /// Folders with a Claude or Codex login or history that are not saved accounts, as last found.
     private(set) var discoveredHomes: [DiscoveredAccountHome] = []
+    /// Saved accounts whose tasks are moving to another folder of the same account, by connection ID.
+    private(set) var taskMoves: [String: AccountTaskMove] = [:]
     @ObservationIgnored private var readFailed = false
     @ObservationIgnored private var cache: AccountSnapshotCache
     /// The check running for each key; another request for the key waits for it.
@@ -520,12 +539,53 @@ final class ProviderConnectionStore {
         snapshots[connection.id] = nil
         readingStatus[connection.id] = nil
         confirmedAt[connection.id] = nil
+        taskMoves[connection.id] = nil
         cache.forget(connection.id)
         if selection[connection.harness] == connection.id { selection[connection.harness] = nil }
         if automaticAssignment.removeValue(forKey: connection.id) != nil {
             if automaticAssignment.isEmpty { assignmentDefaults?.removeObject(forKey: Self.automaticAssignmentKey) }
             else { assignmentDefaults?.set(automaticAssignment, forKey: Self.automaticAssignmentKey) }
         }
+    }
+
+    // MARK: - Moving an account's tasks
+
+    /// The saved accounts `connection`'s tasks can move to before it leaves the list: other folders
+    /// signed in to the same account (the same address and organization, as the list groups them;
+    /// another organization has its own limits) whose conversations are the same folder's, so each
+    /// task goes on with its own history (`TaskAccountSwitch`). An account being moved itself is no
+    /// target.
+    func taskMoveTargets(for connection: ProviderConnection) -> [ProviderConnection] {
+        guard TaskAccountSwitch.supports(connection.harness),
+              let account = AccountIdentityProjection.accountKey(snapshot: snapshots[connection.id]) else { return [] }
+        return connections.filter { target in
+            target.id != connection.id && target.harness == connection.harness && taskMoves[target.id] == nil
+                && snapshots[target.id]?.state == .signedIn
+                && AccountIdentityProjection.accountKey(snapshot: snapshots[target.id]) == account
+                && ClaudeConversationStorage.isShared(connection, target)
+        }
+    }
+
+    /// Whether a login a Claude CLI reported just now is the account `connection` was last read as.
+    func isSameAccount(_ reported: HarnessAccountBroker.ClaudeAccountIdentity?, as connection: ProviderConnection) -> Bool {
+        guard let reported, let account = AccountIdentityProjection.accountKey(snapshot: snapshots[connection.id]) else {
+            return false
+        }
+        return AccountIdentityProjection.accountKey(label: reported.displayLabel,
+                                                    organization: reported.groupingOrganization) == account
+    }
+
+    /// Shows how moving an account's tasks goes on its row; nil once it is over.
+    func noteTaskMove(_ move: AccountTaskMove?, for connectionID: String) {
+        if taskMoves[connectionID] != move { taskMoves[connectionID] = move }
+    }
+
+    /// Takes an account whose tasks all moved to `target` off the list. New tasks that started on it
+    /// start on `target` instead.
+    func remove(_ connection: ProviderConnection, movedTo target: ProviderConnection) throws {
+        let chosen = selection[connection.harness] == connection.id
+        try remove(connection)
+        if chosen { selection[connection.harness] = target.id }
     }
 
     /// Whether deleting the account's folder leaves its conversations where they are: a Claude

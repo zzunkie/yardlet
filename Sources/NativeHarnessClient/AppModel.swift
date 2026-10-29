@@ -174,6 +174,9 @@ final class AppModel {
     @ObservationIgnored var connectionResumeSleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     /// Waits out `RestartResumePolicy.startWindow`; tests hand it a clock of their own.
     @ObservationIgnored var restartResumeSleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    /// Waits before moving an account's tasks looks again at the ones still working (`moveTasks`); tests
+    /// hand it a clock of their own.
+    @ObservationIgnored var accountMoveSleep: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(1)) }
     /// Tasks whose running turn Yardlet continued after a restart while nobody had them open, with
     /// how many times in a row it has. A quit writes one down again until
     /// `RestartResumePolicy.unseenContinuationLimit`.
@@ -5084,12 +5087,6 @@ final class AppModel {
         switchingAccounts.insert(current.id)
         defer { switchingAccounts.remove(current.id) }
         cancelUsageLimitAutoContinue(for: current.id)
-        func stillIdle() -> Bool {
-            guard let value = store.sessions.first(where: { $0.id == current.id }) else { return false }
-            return value.connection == current.connection && value.providerSessionID == current.providerSessionID
-                && value.environmentScope == current.environmentScope && value.runtimeExecutableURL == current.runtimeExecutableURL
-                && value.workspaceURL == current.workspaceURL && value.status != .running && value.status != .waitingForApproval
-        }
         do {
             try connection.validate(for: current.harness)
             // The task resumes under the target's own login, so that CLI must report one first.
@@ -5097,25 +5094,147 @@ final class AppModel {
                 arguments: ["auth", "status"], environment: connection.environment)
             guard HarnessAccountBroker.commandAccountState(for: .claudeCode, result: status) == .signedIn
             else { throw ProviderConnectionError.signedOut }
-            guard stillIdle(), TaskAccountSwitch.allows(connection, for: current) else {
-                throw ProviderConnectionError.invalidBinding
-            }
-            eventTasksBySessionID.removeValue(forKey: current.id)?.cancel()
-            flushTranscriptDeltas(for: current.id)
-            if let adapter = adaptersBySessionID.removeValue(forKey: current.id),
-               let handle = handlesBySessionID.removeValue(forKey: current.id) { await adapter.close(handle) }
-            await registry.invalidate(harness: current.harness, executableURL: current.runtimeExecutableURL,
-                environmentScope: current.environmentScope, connection: current.connection)
-            guard stillIdle() else {
-                throw ProviderConnectionError.invalidBinding
-            }
-            try await store.updateConnection(id: current.id, connection: connection)
+            try await rebind(current, to: connection)
             // The previous account's warning and limits say nothing about the next one.
             rateLimitWarningBySessionID.removeValue(forKey: current.id)
             codexStatusBySessionID.removeValue(forKey: current.id)
             guard let updated = store.sessions.first(where: { $0.id == current.id }) else { return }
             try await attach(updated, resumesExistingSession: updated.providerSessionID != nil)
         } catch { errorBySessionID[current.id] = error.localizedDescription }
+    }
+
+    /// Closes an idle task's runtime and binds it to another account that keeps the same conversations
+    /// (`TaskAccountSwitch`). The provider session, storage scope and history stay; the caller holds
+    /// `switchingAccounts` for the task and starts its runtime again if it wants one.
+    private func rebind(_ current: SessionRecord, to connection: ProviderConnection) async throws {
+        func stillIdle() -> Bool {
+            guard let value = store.sessions.first(where: { $0.id == current.id }) else { return false }
+            return value.connection == current.connection && value.providerSessionID == current.providerSessionID
+                && value.environmentScope == current.environmentScope && value.runtimeExecutableURL == current.runtimeExecutableURL
+                && value.workspaceURL == current.workspaceURL && value.status != .running && value.status != .waitingForApproval
+        }
+        guard stillIdle(), TaskAccountSwitch.allows(connection, for: current) else {
+            throw ProviderConnectionError.invalidBinding
+        }
+        eventTasksBySessionID.removeValue(forKey: current.id)?.cancel()
+        flushTranscriptDeltas(for: current.id)
+        if let adapter = adaptersBySessionID.removeValue(forKey: current.id),
+           let handle = handlesBySessionID.removeValue(forKey: current.id) { await adapter.close(handle) }
+        await registry.invalidate(harness: current.harness, executableURL: current.runtimeExecutableURL,
+            environmentScope: current.environmentScope, connection: current.connection)
+        guard stillIdle() else {
+            throw ProviderConnectionError.invalidBinding
+        }
+        try await store.updateConnection(id: current.id, connection: connection)
+    }
+
+    /// Moves every task on a saved Claude account, archived ones included, to another of the same
+    /// account's folders (`ProviderConnectionStore.taskMoveTargets`), then takes the account off the
+    /// list. Each listed task changes as Choose account changes it, without being started: one with a
+    /// runtime gets it back under the target's login, one without starts there at its next turn. A task
+    /// in a turn, waiting for an answer, or with messages on their way moves once that is over. A task
+    /// that cannot move stays on the account, and then the account stays on the list with the reason.
+    /// Nothing is moved unless the target's own CLI reports it signed in to the same account.
+    func moveTasks(from source: ProviderConnection, to target: ProviderConnection) async {
+        guard connections.connections.contains(where: { $0.id == source.id }),
+              connections.taskMoves[source.id].map({ $0.failure != nil }) ?? true,
+              connections.taskMoveTargets(for: source).contains(target) else { return }
+        connections.noteTaskMove(AccountTaskMove(target: target), for: source.id)
+        do {
+            try target.validate(for: target.harness)
+            guard let runtime = runtimeSelections.selectedURL(for: target.harness) else {
+                throw HarnessAdapterError.capabilityUnavailable(L10n.string("Runtime unavailable"))
+            }
+            let status = try await AccountCommandRunner.run(executableURL: runtime, arguments: ["auth", "status"],
+                environment: target.environment)
+            guard HarnessAccountBroker.commandAccountState(for: target.harness, result: status) == .signedIn
+            else { throw ProviderConnectionError.signedOut }
+            guard connections.isSameAccount(HarnessAccountBroker.claudeAccountIdentity(from: status.output), as: source)
+            else { throw ProviderConnectionError.invalidBinding }
+            if store.archivedSessions == nil { try await store.loadArchivedSessions() }
+        } catch {
+            connections.noteTaskMove(AccountTaskMove(target: target, failure: error.localizedDescription), for: source.id)
+            return
+        }
+        var failures: [UUID: String] = [:]
+        while true {
+            var waiting = 0
+            for record in store.archivedSessions ?? [] where record.session.connection?.id == source.id
+                && failures[record.id] == nil {
+                guard !unarchivingSessionIDs.contains(record.id) else { waiting += 1; continue }
+                do { try await store.updateArchivedConnection(id: record.id, connection: target) }
+                catch { failures[record.id] = error.localizedDescription }
+            }
+            for task in store.sessions where task.connection?.id == source.id && failures[task.id] == nil {
+                guard settlesForAccountMove(task) else { waiting += 1; continue }
+                do { try await moveSettledTask(task, to: target) }
+                catch { failures[task.id] = error.localizedDescription }
+            }
+            guard waiting > 0 else { break }
+            connections.noteTaskMove(AccountTaskMove(target: target, waiting: waiting), for: source.id)
+            try? await accountMoveSleep()
+            // Taken off the list by hand meanwhile: the tasks left keep their own copy of the binding.
+            guard connections.connections.contains(where: { $0.id == source.id }) else { return }
+        }
+        if let reason = failures.values.first {
+            connections.noteTaskMove(AccountTaskMove(target: target, failure: L10n.format(
+                "%lld tasks could not move, so they and this account stay: %@", Int64(failures.count), reason)),
+                for: source.id)
+            return
+        }
+        do {
+            try connections.remove(source, movedTo: target)
+        } catch {
+            connections.noteTaskMove(AccountTaskMove(target: target, failure: error.localizedDescription), for: source.id)
+        }
+    }
+
+    /// The tasks on a saved account, archived ones included, for confirming its removal.
+    func accountTasks(on connection: ProviderConnection) -> AccountTaskCount {
+        let listed = store.sessions.filter { $0.connection?.id == connection.id }
+        return AccountTaskCount(listed: listed.count,
+            archived: (store.archivedSessions ?? []).count(where: { $0.session.connection?.id == connection.id }),
+            working: listed.count(where: Self.isWorking))
+    }
+
+    /// Whether a task's account can change now, closing its runtime if it has one. It waits for what the
+    /// memory saver waits for (`memorySaverKeeps`) but being on screen and session jobs, which the
+    /// runtime brings back on resuming: a turn or question, messages or a shell command on their way,
+    /// the harness's background commands, subagents it hosts, another change, or a continuation. An
+    /// armed continue after a limit goes on under the same account (`moveSettledTask`).
+    private func settlesForAccountMove(_ session: SessionRecord) -> Bool {
+        let id = session.id
+        return !Self.isWorking(session) && followUps.queue(for: id).isEmpty
+            && runningShellCommandBySessionID[id] == nil && pendingShellDeliveries[id]?.isEmpty != false
+            && TaskAttentionProjection.waitingRequest(of: session, detail: taskAttentionDetails[id]) == nil
+            && heldRequests(in: id).isEmpty
+            && BackgroundTasksProjection(entries: transcriptBySessionID[id] ?? []).rows.isEmpty
+            && !sessionTools.runs(hostedBy: id).contains(where: { !$0.state.isFinished })
+            && !sessionTools.isQueued(id) && !sessionTools.starting.contains(id)
+            && composerDrafts.tasks.existingDraft(for: id)?.editState == nil
+            && !sessionMutations.contains(id) && !switchingAccounts.contains(id) && !forkingSessions.contains(id)
+            && !restartingSessions.contains(id) && !openingSideChats.contains(id) && !unarchivingSessionIDs.contains(id)
+            && !recreatingTaskWorktrees.contains(id)
+            && restartResumesToContinue[id] == nil && restartResumesWhenOpened[id] == nil
+            && !restartResumeLine.waiting.contains(id) && !restartResumeLine.starting.contains(id)
+            && connectionResumes[id] == nil
+    }
+
+    /// Moves one settled task to another folder of its account. It keeps a runtime only if it had one,
+    /// and an armed continue after the limit, which is the same account's.
+    private func moveSettledTask(_ current: SessionRecord, to connection: ProviderConnection) async throws {
+        guard switchingAccounts.insert(current.id).inserted else { throw ProviderConnectionError.invalidBinding }
+        defer { switchingAccounts.remove(current.id) }
+        let hadRuntime = handlesBySessionID[current.id] != nil
+        let armed = usageLimitAutoContinue[current.id]
+        try await rebind(current, to: connection)
+        guard let updated = store.sessions.first(where: { $0.id == current.id }) else { return }
+        if let armed {
+            setUsageLimitAutoContinue(true, entryID: armed.entryID, resetsAt: armed.resetsAt, for: updated)
+        }
+        guard hadRuntime else { return }
+        do { try await attach(updated, resumesExistingSession: updated.providerSessionID != nil) }
+        catch { errorBySessionID[current.id] = error.localizedDescription }
     }
 
     /// Saved accounts a task stopped by a plan limit can continue under (the ones that share its

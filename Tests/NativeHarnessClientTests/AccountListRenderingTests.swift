@@ -128,6 +128,71 @@ import XCTest
         }
     }
 
+    /// Removing an account whose tasks can go on under another folder of the same account: the sheet
+    /// that offers to move them, then the account's row while two of them wait for their turns to end.
+    func testRemovingAnAccountOffersToMoveItsTasks() throws {
+        let directory = try WindowlessRender.directory("account-list-qa")
+        let root = FileManager.default.temporaryDirectory.appending(path: "account-move-render-\(UUID().uuidString)")
+        roots.append(root)
+        let projects = root.appending(path: "shared/projects")
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+        let store = ProviderConnectionStore()
+        store.usesFixtureSnapshots = true
+        store.defaultLoginEnvironment = ["CLAUDE_CONFIG_DIR": root.appending(path: "shared").path]
+        let now = Date()
+        let personal = "owner@example.test's Organization"
+        func account(_ folder: String, name: String, organization: String, short: Double) throws -> ProviderConnection {
+            let home = root.appending(path: folder)
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(at: home.appending(path: "projects"), withDestinationURL: projects)
+            let connection = ProviderConnection(id: folder, name: name, harness: .claudeCode, providerID: nil,
+                homePath: home.path, credentialSelector: nil)
+            try store.save(connection)
+            let reading = try claude("owner@example.test", short: short, weekly: 40, at: now)
+            store.publish(HarnessAccountSnapshot(id: folder, harness: .claudeCode, providerID: nil, state: .signedIn,
+                accountLabel: "owner@example.test", accountOrganization: organization, accountPlan: reading.accountPlan,
+                detail: "", credentialOwner: "", checkedAt: now, usage: reading.usage, canLogin: false, canLogout: true),
+                for: connection)
+            return connection
+        }
+        // A folder another tool made, named by the address, and the one added with Yardlet's own sign-in.
+        let old = try account("a1b2c3d4-0000-4000-8000-000000000002", name: "owner@example.test",
+                              organization: personal, short: 22)
+        let new = try account("new", name: "Claude Code account 6", organization: personal, short: 22)
+        _ = try account("team", name: "owner@example.test", organization: "Example Team", short: 61)
+        XCTAssertEqual(store.taskMoveTargets(for: old), [new], "The team organization is another account")
+
+        let choices = store.choices(for: [.claudeCode])
+        let target = try XCTUnwrap(choices.first { $0.connection == new })
+        let request = AccountRemovalSheet.Request(connection: old,
+            targets: [.init(connection: new, title: AccountGroupProjection.memberTitle(target, among: choices))],
+            tasks: AccountTaskCount(listed: 10, archived: 122, working: 2))
+        let sheetSize = NSSize(width: 520, height: 400)
+        for capture in try WindowlessRender.hostedInBothAppearances("move-sheet", in: directory, size: sheetSize, content: { appearance in
+            AccountRemovalSheet(request: request, onMove: { _ in }, onRemove: {}, onCancel: {})
+                .frame(width: sheetSize.width, height: sheetSize.height, alignment: .top)
+                .background(ParityTheme.elevated)
+                .environment(\.colorScheme, appearance.colorScheme)
+        }) {
+            XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 4, from: 4, background: (1, 1)))
+        }
+
+        store.noteTaskMove(AccountTaskMove(target: new, waiting: 2), for: old.id)
+        let runtime = RuntimeSelectionStore(discoversRuntimes: false)
+        let size = NSSize(width: 629, height: 420)
+        for capture in try WindowlessRender.hostedInBothAppearances("move-waiting", in: directory, size: size, content: { appearance in
+            AccountList(mode: .manage, store: store, runtimeSelections: runtime, onChoose: { _ in },
+                onConnect: { _ in }, onAdd: { _ in }, onShare: { _ in }, onRemove: { _, _ in },
+                harnessUsage: AccountHarnessScope.Usage(withTasks: [.claudeCode], chosenForNewTask: .claudeCode))
+                .padding(.horizontal, 16).padding(.top, 16)
+                .frame(width: size.width, height: size.height, alignment: .top)
+                .background(ParityTheme.canvas)
+                .environment(\.colorScheme, appearance.colorScheme)
+        }) {
+            XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 4, from: 4, background: (1, 1)))
+        }
+    }
+
     private func list(_ mode: AccountListMode, store: ProviderConnectionStore, runtime: RuntimeSelectionStore)
         -> some View {
         let isSheet: Bool = if case .switchTask = mode { true } else { false }
