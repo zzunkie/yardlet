@@ -75,6 +75,8 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     }
 
     private var built: [Built] = []
+    /// What the items of the text's top-level lists were built into, for the blocks built next.
+    private var listItems = TranscriptProseBuilder.ListItems()
     private var style: TranscriptProseStyle?
     private var segments: [TranscriptProsePiece.Segment] = []
     private var codeBlocks: [TranscriptProsePiece.CodeBlock] = []
@@ -128,15 +130,17 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
 
     /// Builds again only the blocks that changed and replaces the text from the first paragraph that
     /// changed on, so a streaming message lays out and draws again only its end: a list is one block,
-    /// and its items before the one being written stay as they were. Returns whether the text changed.
+    /// and its items before the one being written are taken as they were built and stay as they were
+    /// laid out. Returns whether the text changed.
     @discardableResult
     func update(blocks: [TranscriptProseBlock], style: TranscriptProseStyle) -> Bool {
         if style != self.style {
             self.style = style
             built = []
+            listItems = .init()
             textView.textStorage?.setAttributedString(NSAttributedString())
         }
-        let builder = TranscriptProseBuilder(style: style)
+        let builder = TranscriptProseBuilder(style: style, listItems: listItems)
         var next: [Built] = []
         var firstChange: Int?
         for (index, block) in blocks.enumerated() {
@@ -145,6 +149,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
                 next.append(built[index])
                 continue
             }
+            if firstChange == nil { listItems.begin() }
             firstChange = firstChange ?? index
             next.append(Built(block: block, isFirst: isFirst, isLast: isLast,
                               piece: builder.piece(block, isFirst: isFirst, isLast: isLast)))
