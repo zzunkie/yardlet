@@ -228,6 +228,7 @@ struct AccountListSection: View {
             freshness: style == .account ? freshness : nil,
             usage: style == .account ? group : nil,
             automaticAssignment: mode == .manage ? store.isInAutomaticAssignment(choice) : nil,
+            taskMove: mode == .manage ? choice.connection.flatMap { store.taskMoves[$0.id] } : nil,
             onSelect: { if canChoose { onChoose(choice) } },
             onConnect: onConnect.flatMap { connect in
                 AccountListProjection.offersConnect(choice, mode: mode) ? { connect(choice) } : nil
@@ -275,6 +276,8 @@ struct AccountRow: View {
     var usage: AccountGroup? = nil
     /// Whether tasks an agent starts may run on it; nil where the list does not say.
     var automaticAssignment: Bool? = nil
+    /// How moving its tasks to another folder of the account goes, while it does (Settings only).
+    var taskMove: AccountTaskMove? = nil
     let onSelect: () -> Void
     var onConnect: (() -> Void)? = nil
     /// The row's menu item that includes it in automatic assignment or leaves it out (Settings only).
@@ -318,6 +321,13 @@ struct AccountRow: View {
         automaticAssignment == false && choice.snapshot?.state == .signedIn
     }
 
+    private var taskMoveLine: String? {
+        guard let taskMove else { return nil }
+        if let failure = taskMove.failure { return failure }
+        return taskMove.waiting == 0 ? L10n.format("Moving its tasks to %@…", taskMove.target.name)
+            : L10n.format("%lld tasks move to %@ when their turns end", Int64(taskMove.waiting), taskMove.target.name)
+    }
+
     private var identityButton: some View {
         Button(action: onSelect) {
             HStack(spacing: 10) {
@@ -335,6 +345,11 @@ struct AccountRow: View {
                         Text(L10n.string("Excluded from automatic assignment"))
                             .font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
                     }
+                    if let taskMoveLine {
+                        Text(taskMoveLine).font(.system(size: 10.5))
+                            .foregroundStyle(taskMove?.failure == nil ? Color.secondary : Color.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.contentShape(Rectangle())
         }
@@ -343,7 +358,8 @@ struct AccountRow: View {
         .disabled(!canChoose && !selected)
         .allowsHitTesting(canChoose)
         .accessibilityLabel(title + (organization.map { ", " + $0 } ?? "") + ", " + subtitle
-            + (isExcludedFromAutomaticAssignment ? ", " + L10n.string("Excluded from automatic assignment") : ""))
+            + (isExcludedFromAutomaticAssignment ? ", " + L10n.string("Excluded from automatic assignment") : "")
+            + (taskMoveLine.map { ", " + $0 } ?? ""))
         .accessibilityValue(selected ? selectedValue : choice.status)
         .help(choice.snapshot?.detail ?? choice.status)
     }

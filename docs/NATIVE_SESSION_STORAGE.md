@@ -14,7 +14,10 @@ Apart from GJC's account choice within the same authentication store, no action 
 another account folder. Exception from 2026-10-06: Claude changes a task's account binding only when the `projects` of
 the two account folders resolve to the same real folder. The history is in the same place from the start, so nothing is
 moved or copied, and the provider ID, scope and history location stay the same. Reading Claude history follows only the
-one `projects` link directly under the config folder, and still rejects links and FIFOs below it. For the current
+one `projects` link directly under the config folder, and still rejects links and FIFOs below it. Since 2026-10-30,
+removing a saved Claude account can first move all its tasks, archived ones included, to another saved folder signed in
+to the same account under the same rule; only the binding changes (see [PROVIDER_CONNECTIONS.md](PROVIDER_CONNECTIONS.md),
+"Removing an account"). For the current
 implementation, verification and the scope for each CLI, see [PROVIDER_CONNECTIONS.md](PROVIDER_CONNECTIONS.md). The
 installation records below are history from that time.
 
