@@ -42,32 +42,76 @@ enum TranscriptTableAlignment: Equatable, Sendable {
     case leading, center, trailing
 }
 
+/// The blocks a message's Markdown was last read into, by the source each was read from: its top-level
+/// blocks and the items of its top-level lists. Reading the message again, as it streams, keeps those
+/// whose source is unchanged as the very same values instead of building them anew. Besides the
+/// building, that spares every comparison after it: SwiftUI and the text view compare a message's
+/// blocks with the ones they drew, and two equal `AttributedString`s compare in an instant when they
+/// share storage, but character by character, at about 140 ns a character, when they do not.
+///
+/// A block's reading depends on its own source alone, except where a link reference definition
+/// elsewhere in the message resolves a link; a message that may hold one is read whole.
+final class TranscriptMarkdownReadings {
+    fileprivate var blocks: [Substring: TranscriptMarkdownBlock] = [:]
+    fileprivate var items: [Substring: TranscriptMarkdownListItem] = [:]
+
+    init() {}
+}
+
 struct TranscriptMarkdownDocument: Equatable, Sendable {
     let blocks: [TranscriptMarkdownBlock]
 
-    init(_ source: String, dialect: TranscriptMarkdownDialect = .standard) {
+    /// - Parameter readings: what an earlier reading of the same message kept, which this reading
+    ///   reuses and then replaces.
+    init(_ source: String, dialect: TranscriptMarkdownDialect = .standard, readings: TranscriptMarkdownReadings? = nil) {
+        let reading = readings.flatMap { source.contains("]:") ? nil : Reading(earlier: $0) }
         switch dialect {
-        case .standard: blocks = Self.blocks(source)
-        case .codex: blocks = Self.codexBlocks(source, depth: 0)
+        case .standard: blocks = Self.blocks(source, reading: reading)
+        case .codex: blocks = Self.codexBlocks(source, depth: 0, reading: reading)
+        }
+        if let readings {
+            readings.blocks = reading?.blocks ?? [:]
+            readings.items = reading?.items ?? [:]
         }
     }
 
-    private static func blocks(_ source: String) -> [TranscriptMarkdownBlock] {
+    /// One reading's blocks by their source, and the earlier reading's it takes from.
+    private final class Reading {
+        let earlier: TranscriptMarkdownReadings
+        var blocks: [Substring: TranscriptMarkdownBlock] = [:]
+        var items: [Substring: TranscriptMarkdownListItem] = [:]
+
+        init(earlier: TranscriptMarkdownReadings) { self.earlier = earlier }
+
+        func block(_ source: Substring, read: () -> TranscriptMarkdownBlock) -> TranscriptMarkdownBlock {
+            let block = blocks[source] ?? earlier.blocks[source] ?? read()
+            blocks[source] = block
+            return block
+        }
+
+        func item(_ source: Substring, read: () -> TranscriptMarkdownListItem) -> TranscriptMarkdownListItem {
+            let item = items[source] ?? earlier.items[source] ?? read()
+            items[source] = item
+            return item
+        }
+    }
+
+    private static func blocks(_ source: String, reading: Reading?) -> [TranscriptMarkdownBlock] {
         let document = Document(parsing: source, options: [.disableSmartOpts])
         let context = SourceContext(source)
-        return document.children.map { context.block($0, depth: 0) }
+        return document.children.map { context.topLevelBlock($0, reading: reading) }
     }
 
     /// A Codex message's Markdown with its directive cards in place; a disclosure's Markdown is read the
     /// same way, to a bounded depth.
-    private static func codexBlocks(_ source: String, depth: Int) -> [TranscriptMarkdownBlock] {
-        guard depth < 8 else { return blocks(source) }
+    private static func codexBlocks(_ source: String, depth: Int, reading: Reading?) -> [TranscriptMarkdownBlock] {
+        guard depth < 8 else { return blocks(source, reading: reading) }
         return CodexMessageDirectives.blocks(source).flatMap { block -> [TranscriptMarkdownBlock] in
             switch block {
-            case let .markdown(text): blocks(text)
+            case let .markdown(text): blocks(text, reading: reading)
             case let .suggestedTask(task): [.suggestedTask(task)]
             case let .details(summary, isOpen, body):
-                [.details(summary: summary, isOpen: isOpen, blocks: codexBlocks(body, depth: depth + 1))]
+                [.details(summary: summary, isOpen: isOpen, blocks: codexBlocks(body, depth: depth + 1, reading: reading))]
             case let .reviewComments(comments): [.reviewComments(comments)]
             case let .visualization(visualization): [.visualization(visualization)]
             }
@@ -96,10 +140,12 @@ struct TranscriptMarkdownDocument: Equatable, Sendable {
     }
 
     private struct SourceContext {
+        let source: String
         let lines: [Substring]
         let endings: [String]
 
         init(_ source: String) {
+            self.source = source
             // CommonMark source positions count CR, LF and CRLF, not Unicode separators.
             let lines = source.split(omittingEmptySubsequences: false) {
                 $0 == "\r" || $0 == "\n" || $0 == "\r\n"
@@ -109,6 +155,36 @@ struct TranscriptMarkdownDocument: Equatable, Sendable {
                 let end = index + 1 < lines.count ? lines[index + 1].startIndex : source.endIndex
                 return String(source[lines[index].endIndex..<end])
             }
+        }
+
+        /// A block of the document itself, kept from the earlier reading when its source is unchanged;
+        /// a list's items likewise.
+        func topLevelBlock(_ markup: any Markup, reading: Reading?) -> TranscriptMarkdownBlock {
+            guard let reading, let key = text(of: markup) else { return block(markup, depth: 0) }
+            return reading.block(key) {
+                switch markup {
+                case let list as UnorderedList:
+                    .unorderedList(list.listItems.map { topLevelItem($0, reading: reading) }, isLoose: isLoose(list))
+                case let list as OrderedList:
+                    .orderedList(start: Int(list.startIndex), items: list.listItems.map { topLevelItem($0, reading: reading) },
+                                 isLoose: isLoose(list))
+                default:
+                    block(markup, depth: 0)
+                }
+            }
+        }
+
+        private func topLevelItem(_ markup: ListItem, reading: Reading) -> TranscriptMarkdownListItem {
+            guard let key = text(of: markup) else { return item(markup, depth: 0) }
+            return reading.item(key) { item(markup, depth: 0) }
+        }
+
+        /// The whole lines `markup` was read from, with the line breaks between them.
+        private func text(of markup: any Markup) -> Substring? {
+            guard let range = markup.range else { return nil }
+            let first = range.lowerBound.line - 1, last = min(lines.count, range.upperBound.line) - 1
+            guard lines.indices.contains(first), first <= last else { return nil }
+            return source[lines[first].startIndex..<lines[last].endIndex]
         }
 
         func block(_ markup: any Markup, depth: Int) -> TranscriptMarkdownBlock {
