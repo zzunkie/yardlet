@@ -154,6 +154,24 @@ final class StreamingWindowRedrawTests: XCTestCase {
         XCTAssertLessThanOrEqual(streaming[.mainWindow], 2, "Streaming redrew the window")
         // Ten publications a second for the fragments, and the finished message's frames.
         XCTAssertLessThanOrEqual(publications, fragments / 10 + 8, "Fragments were published faster than the cadence")
+
+        // A background agent reports its progress as often, and is published at the same cadence.
+        let reports = 200
+        let beforeReports = model.publicationCounts.transcripts
+        await transport.emit(json(["type": "system", "subtype": "task_started", "task_id": "task-agent",
+                                   "tool_use_id": "toolu_agent", "description": "Survey the sources",
+                                   "task_type": "local_agent", "prompt": "Look around", "session_id": "s"]))
+        for report in 1...reports {
+            await transport.emit(json(["type": "system", "subtype": "task_progress", "task_id": "task-agent",
+                                       "tool_use_id": "toolu_agent", "description": "Survey the sources",
+                                       "last_tool_name": "Read", "session_id": "s",
+                                       "usage": ["tool_uses": report, "total_tokens": report * 100, "duration_ms": report * 10]]))
+            window.host.settle(passes: 1, interval: 0.01)
+        }
+        window.host.settle(passes: 20, interval: 0.01)
+        let reportPublications = model.publicationCounts.transcripts - beforeReports
+        print("[redraw] \(reports) progress reports: \(reportPublications) publications")
+        XCTAssertLessThanOrEqual(reportPublications, reports / 10 + 8, "Progress was published faster than the cadence")
     }
 
     // MARK: - Window

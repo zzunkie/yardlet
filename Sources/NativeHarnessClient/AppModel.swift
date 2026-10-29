@@ -6415,6 +6415,13 @@ final class AppModel {
         case let .reasoningDelta(delta):
             enqueueTranscriptDelta(.reasoning(delta), for: event.localSessionID)
             scheduleTranscriptPublication(for: event.localSessionID)
+        case .activityUpdated:
+            // A call's progress (its output so far, a subagent's steps) comes as often as text
+            // streams, so it is published at the same cadence. A call's start and end, requests and
+            // errors are published at once.
+            mutateTranscript(for: event.localSessionID, publishImmediately: false) { builder in
+                builder.apply(event.payload)
+            }
         case _ where !Self.changesTranscript(event.payload):
             // Status, usage and capability reports leave the transcript as it is; republishing
             // it would only re-render and rewrite an unchanged conversation.
