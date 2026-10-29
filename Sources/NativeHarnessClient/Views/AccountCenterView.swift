@@ -166,11 +166,14 @@ struct ConnectionCenterContent: View {
     let localSessionUsage: LocalSessionUsageOverview?
     /// Called when an add or sign-in step that a task opened is over.
     let onFinish: () -> Void
-    /// How many tasks run under a saved account; removing accounts is offered only with it.
-    var tasksUsingAccount: ((ProviderConnection) -> Int)? = nil
+    /// The tasks on a saved account, archived ones included; removing accounts is offered only with it.
+    var tasksUsingAccount: ((ProviderConnection) -> AccountTaskCount)? = nil
+    /// Moves an account's tasks to another folder of the same account, then removes it.
+    var moveTasks: ((ProviderConnection, ProviderConnection) -> Void)? = nil
     @State private var pendingLogout: HarnessDescriptor?
     @State private var shareRequest: AccountHomeShareSheet.Request?
     @State private var pendingRemoval: (connection: ProviderConnection, kind: AccountRemoval)?
+    @State private var movingRemoval: AccountRemovalSheet.Request?
     @State private var accountNote: String?
     @State private var selectedHarness: HarnessKind?
     @State private var showsLoginDetails = false
@@ -196,7 +199,8 @@ struct ConnectionCenterContent: View {
         setupExpanded: Binding<Bool>,
         isFixture: Bool = false,
         localSessionUsage: LocalSessionUsageOverview? = nil,
-        tasksUsingAccount: ((ProviderConnection) -> Int)? = nil,
+        tasksUsingAccount: ((ProviderConnection) -> AccountTaskCount)? = nil,
+        moveTasks: ((ProviderConnection, ProviderConnection) -> Void)? = nil,
         onFinish: @escaping () -> Void
     ) {
         self.tab = tab
@@ -211,6 +215,7 @@ struct ConnectionCenterContent: View {
         self.isFixture = isFixture
         self.localSessionUsage = localSessionUsage
         self.tasksUsingAccount = tasksUsingAccount
+        self.moveTasks = moveTasks
         self.onFinish = onFinish
         _accountFilter = State(initialValue: initialHarness)
     }
@@ -232,7 +237,7 @@ struct ConnectionCenterContent: View {
                 AccountList(mode: .manage, store: connections, runtimeSelections: runtimeSelections,
                     onChoose: { connections.choose($0) }, onConnect: connectAccount,
                     onAdd: { accountFilter = $0; connectChoice = nil; addingAccount = true },
-                    onShare: share, onRemove: tasksUsingAccount == nil ? nil : { pendingRemoval = ($0, $1) },
+                    onShare: share, onRemove: tasksUsingAccount == nil ? nil : { confirmRemoval($0, $1) },
                     onAddFound: addFound,
                     harnessFilter: $accountFilter, harnessUsage: harnessUsage)
                     .padding(.horizontal, 16).padding(.top, 16)
@@ -269,6 +274,12 @@ struct ConnectionCenterContent: View {
             }
         } message: {
             Text(disconnectConfirmationMessage)
+        }
+        .sheet(item: $movingRemoval) { request in
+            AccountRemovalSheet(request: request,
+                onMove: { target in movingRemoval = nil; moveTasks?(request.connection, target) },
+                onRemove: { movingRemoval = nil; remove(request.connection, .fromList) },
+                onCancel: { movingRemoval = nil })
         }
         .sheet(item: $shareRequest) { request in
             AccountHomeShareSheet(request: request, defaultFolder: connections.claudeDefaultHome,
@@ -333,7 +344,23 @@ struct ConnectionCenterContent: View {
         }
     }
 
-    private func tasksUsing(_ connection: ProviderConnection) -> Int { tasksUsingAccount?(connection) ?? 0 }
+    private func tasksUsing(_ connection: ProviderConnection) -> Int { tasksUsingAccount?(connection).total ?? 0 }
+
+    /// Removing an account whose tasks could go on under another folder of the same account offers to
+    /// move them there first; any other removal is confirmed as before.
+    private func confirmRemoval(_ connection: ProviderConnection, _ kind: AccountRemoval) {
+        let tasks = tasksUsingAccount?(connection) ?? AccountTaskCount()
+        let targets = connections.taskMoveTargets(for: connection)
+        guard kind == .fromList, moveTasks != nil, tasks.total > 0, !targets.isEmpty else {
+            pendingRemoval = (connection, kind)
+            return
+        }
+        let choices = connections.choices(for: [connection.harness])
+        movingRemoval = AccountRemovalSheet.Request(connection: connection, targets: targets.map { target in
+            AccountRemovalSheet.Target(connection: target, title: choices.first { $0.connection?.id == target.id }
+                .map { AccountGroupProjection.memberTitle($0, among: choices) } ?? target.name)
+        }, tasks: tasks)
+    }
 
     private var removalTitle: String {
         guard let pending = pendingRemoval else { return "" }

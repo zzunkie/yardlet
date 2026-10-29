@@ -105,8 +105,10 @@ struct SettingsAccountsContext {
     var harnessUsage: AccountHarnessScope.Usage? = nil
     var codexEnvironmentManager: CodexEnvironmentManager? = nil
     var localSessionUsage: LocalSessionUsageOverview? = nil
-    /// How many tasks run under a saved account, so removing one keeps a folder they use.
-    var tasksUsingAccount: ((ProviderConnection) -> Int)? = nil
+    /// The tasks on a saved account, archived ones included, so removing one keeps a folder they use.
+    var tasksUsingAccount: ((ProviderConnection) -> AccountTaskCount)? = nil
+    /// Moves a saved account's tasks to another folder of the same account, then removes it.
+    var moveTasks: ((ProviderConnection, ProviderConnection) -> Void)? = nil
     var fixtureSnapshots: [HarnessAccountSnapshot]? = nil
     var fixtureLogin: (HarnessKind, AccountInteractiveCommand)? = nil
 }
@@ -355,6 +357,7 @@ struct SettingsCenterView: View {
             isFixture: accounts.fixtureSnapshots != nil,
             localSessionUsage: accounts.localSessionUsage,
             tasksUsingAccount: accounts.tasksUsingAccount,
+            moveTasks: accounts.moveTasks,
             // Settings stays open after an add or sign-in step; the list shows the result.
             onFinish: {}
         )

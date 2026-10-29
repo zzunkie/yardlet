@@ -2211,9 +2211,8 @@ struct MainWindow: View {
                         chosenForNewTask: newTaskDraft.harness),
                     codexEnvironmentManager: model.codexEnvironmentManager,
                     localSessionUsage: selectedLocalSessionUsage,
-                    tasksUsingAccount: { connection in
-                        model.store.sessions.filter { $0.connection?.id == connection.id }.count
-                    },
+                    tasksUsingAccount: { model.accountTasks(on: $0) },
+                    moveTasks: { source, target in Task { await model.moveTasks(from: source, to: target) } },
                     fixtureSnapshots: accountFixtureSnapshots, fixtureLogin: accountFixtureLogin),
                 remote: model.remoteControl,
                 cliUpdates: model.cliUpdates,

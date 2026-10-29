@@ -250,7 +250,27 @@ keeps only the harness page's sign-out, as before. That sign-out applies only to
   and its automatic-assignment answer (`ProviderConnectionStore.remove`). The sign-in and folder stay. Tasks on that
   account keep their own copy of the binding (`SessionRecord.connection`), so they go on in the same folder with the same
   scope. The confirmation is short: "The login and its folder stay. The N tasks on this account go on in that folder as
-  before." This is the only removal for a Session Switch folder.
+  before." N counts archived tasks too, since they keep the binding as well. This is the only removal for a Session
+  Switch folder.
+- **Moving the tasks first (2026-10-30):** when a Claude account with tasks has another saved folder signed in to the
+  same account, Remove from List opens a sheet (`Views/AccountRemovalSheet.swift`) instead of the confirmation, as account
+  tools offer to hand a removed account's work to another account. It chooses between moving the tasks to that folder
+  (the default, with a picker when there are several) and leaving them in this one (Remove from List as above). A folder
+  qualifies when its last reading is signed in with the same address and organization as the account's (the same key the
+  list groups accounts by; another organization has its own limits) and its `projects` resolve to the same folder
+  (`ProviderConnectionStore.taskMoveTargets`). **Move and Remove** (`AppModel.moveTasks(from:to:)`) first asks the
+  target folder's own CLI `auth status` and goes on only when it reports signed in to that address and organization.
+  Then each task changes as **Choose account** changes one: the binding alone changes, and the provider session ID,
+  scope and history stay. Archived tasks move too and stay archived. A listed task that had a runtime gets it back under
+  the target's login with the same session ID; one without starts there at its next turn. A task waits while the memory
+  saver would keep its runtime, except for being on screen and for session jobs, which the resumed runtime brings back:
+  a turn or a question, messages or a shell command on their way, the harness's background commands (closing the
+  runtime would end them), subagents it hosts, an edit, or another change or continuation. It moves once that is over,
+  and the account's row shows how many still wait. Only when every task has moved does the account leave the list; the new-task account
+  choice, if it was this account, moves to the target. A task that cannot move stays on the account, and the account
+  then stays on the list with the reason on its row; choosing Remove from List again moves the rest. The wait lives only
+  while Yardlet runs: after a quit, the account and the tasks not yet moved stay as they were. Nothing in either folder
+  is copied, moved or deleted.
 - **Sign Out and Delete…:** offered only for a Claude or Codex folder Yardlet made (`<connections>/<UUID>/<harness>`,
   `signOutAndDelete`). Yardlet runs that CLI's `auth logout` (Codex: `logout`) in the folder's environment; only when it
   succeeds does it take the account off the list, remove every link in the folder first (only `unlink`), and move the
@@ -304,3 +324,13 @@ for the sign-out), `AccountIdentityTests` (the organization), and
 `AccountListRenderingTests.testSettingsNamesOrganizationsAndOffersFoldersFound` (Settings › Accounts and the sheet, light
 and dark, `.build/account-list-qa/manage-found-*` and `share-sheet-*`). The confirmations are AppKit alerts that a
 windowless render cannot draw, so only their text is given above.
+
+Moving the tasks first: `ClaudeAccountFolderTests.testMovingAnAccountsTasksKeepsTheirSessionsAndRemovesItOnceAllMoved`
+(fake account folders and CLI: which folders qualify, a target whose CLI reports another address takes nothing, a task in
+a turn waits for its end, the archived task stays archived with the new binding saved, only the task that had a runtime
+resumes, and the account and new-task choice change only at the end) and
+`AccountListRenderingTests.testRemovingAnAccountOffersToMoveItsTasks` (the sheet and the waiting row, light and dark,
+`.build/account-list-qa/move-sheet-*` and `move-waiting-*`). With the Claude Code 2.1.308 CLI and two empty account
+folders linking `projects` to one folder, starting the CLI as Yardlet resumes a task (`--resume=<id>`, stream JSON, only
+the `initialize` request) found the saved conversation through either folder and answered; an unknown ID ended with "No
+conversation found". No sign-in or model turn was involved.
