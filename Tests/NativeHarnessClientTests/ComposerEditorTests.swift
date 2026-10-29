@@ -630,7 +630,9 @@ final class ComposerEditorTests: XCTestCase {
         let wheel = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -3,
                                           wheel2: 0, wheel3: 0).flatMap(NSEvent.init(cgEvent:)))
         editor.scrollWheel(with: wheel)
-        composer.host.settle()
+        // AppKit moves the scroll view on a later turn of the run loop, later still on a busy Mac.
+        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
+        while scroll.contentView.bounds.minY <= 1, Date() < deadline { composer.host.settle(passes: 1) }
         XCTAssertGreaterThan(scroll.contentView.bounds.minY, 1, "The wheel scrolls the field")
         task.draft.text = "Short"
         composer.host.settle()
