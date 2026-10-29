@@ -64,8 +64,24 @@ final class CodexPersistedTimelineTests: XCTestCase {
         let entries = timeline.supplementEntries(for: state, saved: cards)
         XCTAssertEqual(entries, Self.referenceEntries(state, cards))
         XCTAssertFalse(entries.isEmpty, "The fixture must supplement something")
-        XCTAssertTrue(entries.contains { $0.item.id == "turn-2-item-5" })
+        XCTAssertEqual(entries.filter { $0.item.id == "turn-2-item-5" }.count, 2)
         XCTAssertFalse(entries.contains { $0.item.id == "turn-1-extra" })
+
+        // Merged as one page, the cards land as merged one at a time: a card whose ID came earlier
+        // in the page, turns interleaved, and turns the page adds in the order it names them.
+        let page = Array(entries.prefix(2)) + [
+            CodexItemPageEntry(turnID: "unloaded-b", item: Self.answer("b", "B")),
+            CodexItemPageEntry(turnID: "unloaded-a", item: Self.answer("a", "A"))
+        ] + entries.dropFirst(2) + [CodexItemPageEntry(turnID: "unloaded-b", item: Self.reasoning("b"))]
+        var merged = state, oneByOne = state
+        CodexTaskReducer().mergeItemPage(CodexItemPage(entries: page, nextCursor: "next", backwardsCursor: nil), into: &merged)
+        for entry in page {
+            CodexTaskReducer().mergeItemPage(
+                CodexItemPage(entries: [entry], nextCursor: "next", backwardsCursor: nil), into: &oneByOne
+            )
+        }
+        XCTAssertEqual(merged, oneByOne)
+        XCTAssertEqual(merged.thread!.turns.suffix(2).map(\.id), ["unloaded-b", "unloaded-a"])
 
         // Remembered turns answer the same as long as they are the same, and change with them.
         XCTAssertEqual(timeline.supplementEntries(for: state, saved: cards), entries)
