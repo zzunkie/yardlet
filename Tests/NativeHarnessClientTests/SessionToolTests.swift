@@ -118,6 +118,29 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(listing.tasks.first?.taskId, fixture.caller.id.uuidString)
         XCTAssertEqual(listing.tasks.first?.isSelf, true)
 
+        // Arguments are checked against the listed schema before the tool runs: a missing required one is named
+        // with what the call gave instead and what the tool takes, while one the tool does not take alone is
+        // left aside, as the MCP SDKs leave it.
+        func handle(_ tool: String, _ arguments: [String: ToolJSON]) async -> AgentToolResult {
+            await broker.handle(AgentToolCall(token: token, session: fixture.caller.id.uuidString, tool: tool,
+                                              arguments: .object(arguments)))
+        }
+        let misspelt = await handle("archive_task", ["task_id": .string(fixture.sibling.id.uuidString)])
+        XCTAssertEqual(misspelt.text, "archive_task was not run: it needs task_ids. It takes no task_id. Its arguments: "
+                       + "task_ids (required).")
+        XCTAssertEqual(misspelt.failure?.kind, .invalidArguments)
+        XCTAssertEqual(misspelt.failure?.retry, .withChanges)
+        XCTAssertEqual(misspelt.failure?.details["missing"], .array([.string("task_ids")]))
+        XCTAssertEqual(misspelt.failure?.details["unexpected"], .array([.string("task_id")]))
+        XCTAssertEqual(misspelt.structuredContent?["error"]?["message"], .string(misspelt.text),
+                       "A harness that shows the structured content shows the message too")
+        XCTAssertTrue(fixture.model.store.sessions.contains { $0.id == fixture.sibling.id }, "Nothing ran")
+        let extra = await handle("list_tasks", ["bogus": .integer(1)])
+        XCTAssertFalse(extra.isError, extra.text)
+        let unknown = await handle("list_task", [:])
+        XCTAssertEqual(unknown.failure?.kind, .unknownTool)
+        XCTAssertEqual(unknown.failure?.details["similar"]?.arrayValue?.contains(.string("list_tasks")), true, unknown.text)
+
         let forged = AgentToolCall(token: "wrong", session: fixture.caller.id.uuidString, tool: "list_tasks",
                                    arguments: .object([:]))
         let refused = await broker.handle(forged)
@@ -295,8 +318,26 @@ final class SessionToolTests: XCTestCase {
         let bad = await call(model, "read_task", ["task_id": fixture.sibling.id.uuidString, "cursor": "before:nope"],
                              from: fixture.caller)
         XCTAssertTrue(bad.isError)
+        XCTAssertTrue(bad.text.contains("names no turn of this task"), bad.text)
+        let listCursor = await call(model, "read_task", ["task_id": fixture.sibling.id.uuidString,
+                                                         "cursor": SessionToolText.listCursorPrefix + "x"], from: fixture.caller)
+        XCTAssertTrue(listCursor.text.contains("is list_tasks' cursor"), listCursor.text)
         let missing = await call(model, "read_task", ["task_id": UUID().uuidString], from: fixture.caller)
         XCTAssertTrue(missing.isError)
+        XCTAssertEqual(missing.failure?.kind, .notFound, missing.text)
+
+        // One reading of a task reference for every tool: a whole id is needed, and one cut short is answered with
+        // the whole id of the one task it begins; a task suggestion's id is told apart.
+        let shortened = String(fixture.sibling.id.uuidString.prefix(8))
+        let short = await call(model, "read_task", ["task_id": shortened.lowercased()], from: fixture.caller)
+        XCTAssertEqual(short.failure?.kind, .invalidArguments, short.text)
+        XCTAssertEqual(short.failure?.details["taskId"], .string(fixture.sibling.id.uuidString))
+        XCTAssertTrue(short.text.contains("Yardlet takes task ids whole") && short.text.contains(fixture.sibling.id.uuidString),
+                      short.text)
+        let chip = await call(model, "read_task", ["task_id": "task_1a2b3c4d"], from: fixture.caller)
+        XCTAssertTrue(chip.text.contains("task suggestion's id"), chip.text)
+        let made = await call(model, "read_task", ["task_id": "task_42"], from: fixture.caller)
+        XCTAssertTrue(made.text.contains("is not a task id"), made.text)
         let selfRead = await call(model, "read_task", ["task_id": "self"], from: fixture.caller)
         XCTAssertTrue(selfRead.text.contains("\"isSelf\":true"), selfRead.text)
         XCTAssertFalse(selfRead.text.contains("\"servers\""), "A task with no server has none listed")
@@ -455,7 +496,8 @@ final class SessionToolTests: XCTestCase {
             (["task_id": fixture.sibling.id.uuidString, "message": "  /clear  "], "slash commands"),
             (["task_id": fixture.caller.id.uuidString, "message": "Hello me"], "that is this task"),
             (["task_id": UUID().uuidString, "message": "Hi"], "no task"),
-            (["task_id": "not-an-id", "message": "Hi"], "no task"),
+            (["task_id": "not-an-id", "message": "Hi"], "is not a task id"),
+            (["task_id": "self", "message": "Hello me"], "that is this task"),
             (["task_id": fixture.sibling.id.uuidString, "message": "   "], "message is required"),
             (["message": "Hi"], "task_id is required"),
             (["task_id": fixture.sibling.id.uuidString,
@@ -848,7 +890,8 @@ final class SessionToolTests: XCTestCase {
         XCTAssertTrue(both.isError && both.text.contains("not both"), both.text)
         let missing = await call(model, "create_task", ["prompt": "No", "parent_task_id": UUID().uuidString],
                                  from: fixture.caller)
-        XCTAssertTrue(missing.isError && missing.text.contains("no open task"), missing.text)
+        XCTAssertTrue(missing.isError && missing.text.contains("no task") && missing.text.contains("Omit parent_task_id"),
+                      missing.text)
 
         let elsewhere = Task { await self.call(model, "create_task", ["prompt": "Port it", "project": "site"], from: fixture.caller) }
         let request = try await waitForApproval(in: fixture.caller.id, model: model)
@@ -1277,6 +1320,18 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(archived.first { $0.id == fixture.sibling.id }?.isProviderArchived, false)
         let afterward = try decode(Listing.self, await call(model, "list_tasks", [:], from: fixture.caller).text)
         XCTAssertFalse(afterward.tasks.contains { $0.taskId == fixture.sibling.id.uuidString })
+        XCTAssertEqual(report.tasks[2].retry, "later", "A running task can be archived once it stops")
+
+        // An archived task reads as archived, with no turn started, and is not archived twice.
+        let readArchived = await call(model, "read_task", ["task_id": fixture.sibling.id.uuidString], from: fixture.caller)
+        XCTAssertEqual(readArchived.failure?.kind, .archived, readArchived.text)
+        XCTAssertEqual(readArchived.failure?.retry, .no)
+        let again = try decode(ArchiveReport.self, await call(model, "archive_task", [
+            "task_ids": [fixture.sibling.id.uuidString]], from: fixture.caller).text)
+        XCTAssertEqual(again.tasks.first?.reason, "it is already archived.")
+        XCTAssertEqual(again.tasks.first?.retry, "no")
+        let promptsAfterArchive = await fixture.adapter.prompts(for: fixture.sibling.id)
+        XCTAssertTrue(promptsAfterArchive.isEmpty, "Reading an archived task starts no turn")
 
         // Archiving goes back: unarchived, the sibling returns as it was, still nested under the caller.
         await model.unarchive(try XCTUnwrap(archived.first { $0.id == fixture.sibling.id }))
@@ -1857,6 +1912,7 @@ final class SessionToolTests: XCTestCase {
         var archived: Bool
         var reason: String?
         var worktree: String?
+        var retry: String?
     }
 
     private struct Listing: Decodable {

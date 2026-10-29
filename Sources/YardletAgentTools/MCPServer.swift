@@ -119,7 +119,9 @@ package struct MCPServer: Sendable {
             // or switched-off one with an error result.
             if toolName.hasPrefix(AgentToolCatalog.browserToolPrefix), !tools.contains(where: { $0.name == toolName }),
                VaultToolCatalog.definition(named: toolName) == nil {
-                return errorReply(id: id, code: ErrorCode.invalidParams, message: "Unknown tool: \(toolName)")
+                let browserTools = AgentToolNames.family(of: toolName, in: tools.map(\.name))
+                return errorReply(id: id, code: ErrorCode.invalidParams, message: "Unknown tool: \(toolName). "
+                    + "Yardlet's browser tools are \(AgentToolNames.listed(browserTools)).")
             }
             let arguments = params["arguments"] ?? .object([:])
             guard case .object = arguments else {

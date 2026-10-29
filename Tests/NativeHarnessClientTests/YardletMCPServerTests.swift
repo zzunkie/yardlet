@@ -127,6 +127,8 @@ final class YardletMCPServerTests: XCTestCase {
         XCTAssertEqual(unknownMethod?["error"]?["code"], .integer(-32601))
         let unknownTool = try await reply(server, #"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"browser_fly"}}"#)
         XCTAssertEqual(unknownTool?["error"]?["code"], .integer(-32602))
+        XCTAssertEqual(unknownTool?["error"]?["message"]?.stringValue?.contains("Yardlet's browser tools are browser_navigate, "),
+                       true, "It names the tools there are")
         let noName = try await reply(server, #"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{}}"#)
         XCTAssertEqual(noName?["error"]?["code"], .integer(-32602))
         let badArguments = try await reply(server, #"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"browser_snapshot","arguments":[1]}}"#)
@@ -180,20 +182,63 @@ final class YardletMCPServerTests: XCTestCase {
         }
     }
 
+    /// An endpoint that does not answer says whether the Yardlet that started the server has quit or still runs
+    /// with the connection gone; a server from an earlier build, which does not know, says either.
     func testTheServerSaysSoWhenYardletIsNotRunningOrDidNotStartIt() async throws {
         let missing = privateDirectory().appending(path: "tools.sock").path(percentEncoded: false)
-        let notRunning = await UnixSocketToolInvoker(environment: [
-            AgentToolEnvironment.endpoint: missing,
-            AgentToolEnvironment.token: "t",
-            AgentToolEnvironment.session: "s"
-        ]).call(tool: "browser_snapshot", arguments: .object([:]))
+        func call(appProcess: Int32?) async -> AgentToolResult {
+            var environment = [
+                AgentToolEnvironment.endpoint: missing,
+                AgentToolEnvironment.token: "t",
+                AgentToolEnvironment.session: "s"
+            ]
+            environment[AgentToolEnvironment.appProcess] = appProcess.map(String.init)
+            return await UnixSocketToolInvoker(environment: environment).call(tool: "browser_snapshot", arguments: .object([:]))
+        }
+        let notRunning = await call(appProcess: nil)
         XCTAssertTrue(notRunning.isError)
         XCTAssertTrue(notRunning.text.contains("Yardlet is not running"), notRunning.text)
+        XCTAssertEqual(notRunning.failure?.kind, .unreachable)
+
+        let ended = Process()
+        ended.executableURL = URL(filePath: "/usr/bin/true")
+        try ended.run()
+        ended.waitUntilExit()
+        let quit = await call(appProcess: ended.processIdentifier)
+        XCTAssertTrue(quit.text.contains("has quit"), quit.text)
+        let running = await call(appProcess: ProcessInfo.processInfo.processIdentifier)
+        XCTAssertTrue(running.text.contains("Yardlet is running, but this task's connection to it is gone"), running.text)
+        XCTAssertEqual(running.failure?.retry, .no)
 
         let unmanaged = await UnixSocketToolInvoker(environment: [:])
             .call(tool: "browser_snapshot", arguments: .object([:]))
         XCTAssertTrue(unmanaged.isError)
         XCTAssertTrue(unmanaged.text.contains("did not start this MCP server"), unmanaged.text)
+        XCTAssertEqual(unmanaged.failure?.kind, .refused)
+    }
+
+    /// A call that went out and got no answer may have run: it says so, rather than that Yardlet could not be
+    /// reached. The server waits longer than the app runs a connector call, so the app's own answer comes first.
+    func testACallYardletDoesNotAnswerHasAnUnknownOutcome() async throws {
+        let directory = privateDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appending(path: "tools.sock").path(percentEncoded: false)
+        let listener = try UnixSocketListener(path: path) { _, _ in
+            try? await Task.sleep(for: .seconds(5))
+            return Data()
+        }
+        defer { listener.stop() }
+        var invoker = UnixSocketToolInvoker(environment: [
+            AgentToolEnvironment.endpoint: path, AgentToolEnvironment.token: "t", AgentToolEnvironment.session: "s"
+        ])
+        invoker.timeout = 1
+        let result = await invoker.call(tool: "slack_send_message", arguments: .object([:]))
+        XCTAssertEqual(result.failure?.kind, .outcomeUnknown, result.text)
+        XCTAssertEqual(result.failure?.retry, .afterChecking)
+        XCTAssertTrue(result.text.hasPrefix("Yardlet did not answer within 1 seconds."), result.text)
+
+        XCTAssertGreaterThan(UnixSocketToolInvoker(environment: [:]).timeout,
+                             TimeInterval(AgentToolTimeLimits.connectorCall.components.seconds) + 15)
     }
 
     func testTheListenerRefusesADirectoryThatIsNotADirectory() throws {

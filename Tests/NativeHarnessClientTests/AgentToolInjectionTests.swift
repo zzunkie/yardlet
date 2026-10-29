@@ -299,7 +299,9 @@ final class AgentToolInjectionTests: XCTestCase {
         XCTAssertFalse(AgentToolPreference.isEnabled(in: defaults))
     }
 
-    func testTheEndpointStartsOnceAndAFailedStartLeavesTheTaskWithoutTools() {
+    /// Each injection makes sure the endpoint listens (the platform starts it once, and again when its socket is
+    /// gone), and a failed start leaves the task without tools.
+    func testEachInjectionChecksTheEndpointAndAFailedStartLeavesTheTaskWithoutTools() {
         let failing = broker()
         failing.startEndpoint = { throw CocoaError(.fileWriteNoPermission) }
         XCTAssertNil(failing.agentToolServer(for: UUID(), workspaceRoots: []))
@@ -311,7 +313,9 @@ final class AgentToolInjectionTests: XCTestCase {
         let a = working.agentToolServer(for: first, workspaceRoots: [])
         let b = working.agentToolServer(for: first, workspaceRoots: [])
         _ = working.agentToolServer(for: UUID(), workspaceRoots: [])
-        XCTAssertEqual(starts, 1)
+        XCTAssertEqual(starts, 3)
+        XCTAssertEqual(a?.environment[AgentToolEnvironment.appProcess], String(ProcessInfo.processInfo.processIdentifier),
+                       "The server can tell whether the app run that started it ended")
         XCTAssertEqual(a?.environment[AgentToolEnvironment.token], b?.environment[AgentToolEnvironment.token],
                        "A task keeps one token for the app run, so a server kept across a resume still works")
         XCTAssertEqual(a?.environment[AgentToolEnvironment.token]?.count, 64)

@@ -28,6 +28,18 @@ saying "this task has no such tab". Input is CDP trusted input (`Input.dispatchM
 `insertText`), so the page gets `isTrusted: true` events. Failures come back as `isError: true` results, as the MCP
 protocol specifies.
 
+A failure Yardlet can tell apart also carries `structuredContent` `{"error": {"kind", "retry", "message", …}}`
+(`AgentToolFailure`), with every Yardlet tool and connector tool. `kind` is `invalid_arguments`, `unknown_tool`,
+`not_found`, `archived`, `refused`, `timed_out`, `outcome_unknown` or `unreachable`; `retry` says what calling again can
+do: `no` (refused again until the person or a setting changes something), `with_changes`, `later`, or `after_checking`
+(it may have taken effect, so check before calling again). Claude Code and Codex show the model `structuredContent` in
+place of the text when there is one, so it repeats the message. Before one of Yardlet's own tools runs, its arguments are
+checked against the schema it is listed with (`AgentToolArgumentCheck`): a missing required argument stops the call, and
+the answer names it, what the call gave that the tool does not take (most often the missing one misspelt) and every
+argument the tool takes. An argument the tool does not take, with nothing missing, is ignored, as the MCP SDKs ignore
+one. A call to a tool the task does not have answers with the task's tools that share the name's first word
+(`browser_`, `slack_`).
+
 | Tool | Arguments | Behavior |
 |---|---|---|
 | `browser_navigate` | `url` | Resolves the address with the same rules as the panel's address field (`BrowserURLPolicy`: http, https, file, data and about; a bare host name gets https), runs `Page.navigate` and waits for `Page.loadEventFired` (30 seconds). An error when the host blocks it (`navigationBlocked`). A `file:` address (2026-10-27) is resolved the way Chromium reads it and then taken as its real path, with `..` and symbolic links resolved: inside the task's folders (the main folder and the other roots) it opens as is. Outside them, a task that runs without asking (Claude Code bypassing permissions, Codex full access, Antigravity bypass; the same judgment as the session tools' `sessionToolAsksPerson`) opens it as is, and any other permission asks with the task's approval card ("Open a file outside this task's folders?", with the path as the body). When the person declines, the call fails with "The person did not allow opening ‹path›.", and a path allowed once is not asked again in that task (`AppModel.allowsBrowserFile`). A `file:` address the person types in the panel's address field is unchanged |
@@ -206,7 +218,7 @@ keeps them behind tool search). The descriptions say only what each tool does, n
 | `send_message_to_task` | `task_id`, `message` (required, 32,000 characters) | The same path as the composer, with the receiving task's model, permissions and account: a new turn for an idle task, and Steer into the turn for a running one (it does not stop the turn). When the receiving task was started from this task (`parentTaskID`), the message reads as a follow-up instruction for the work handed over; otherwise as another task's message ("Shape of a sent message" below, 2026-10-23). Refuses slash commands and the task itself. Sending to a task of another project (except a split neighbor), or to a task that runs without asking, needs an approval card in the calling task |
 | `create_task` | `prompt` (required), `harness`, `model`, `effort`, `account` (2026-10-27, an ID or name from `list_accounts`; assigned automatically when omitted), `project` (a name or folder), `chat` (2026-10-23, as a chat with no project: a new chat folder, no approval card, not together with `project`), `topLevel` and `parent_task_id` (2026-10-27, after the table below), `wait`, `notify` | Creates a sidebar task nested under the calling task (`parentTaskID`) and sends the first message as the calling task's message ("Shape of a sent message" below, the night of 2026-10-23). It does not move the window. Another project, or a folder outside the calling task's when neither is a project, needs an approval card. With `wait` it waits until the end of the first turn; with `notify` it messages the calling task when the turn ends. When there is no room, the task appears in the sidebar at once and waits in the queue with its first message (`Queued task …`, "Limits" below). The answer has the new task's link on a line of its own (`Link: [title](#<task id>)`), or in `link` with `wait` |
 | `run_agent` | `harness`, `prompt` (required), `model`, `effort`, `account` (2026-10-27, as for `create_task`), `folder`, `background`, `notify` | Starts one harness session headless, sends the prompt and returns the final answer as the tool result (first line `agent_id: …`). No sidebar row. The calling task's folder, an automatically assigned account and default permissions (read-only when the calling task is read-only; refused when that is not possible). With `background` it returns the ID at once, and the answer comes through `wait_tasks` or `notify`. When there is no room it queues with state `queued` (`Queued agent …`, "Limits" below), and a foreground call waits for room and for the end within the call deadline. It leaves no history in the harness itself (Claude `--no-session-persistence`, a Codex ephemeral thread, Pi `--no-session`; a harness with no way to do this keeps it) |
-| `archive_task` | `task_ids` (required, at most 30 task IDs; `self` and its own ID are allowed, and a duplicate counts once) | Archives with the sidebar's archive (`AppModel.archive(_:)`): archives the attached provider session (Codex `thread/archive`), archives the index entry, and cleans up a Yardlet worktree that no task uses. When the calling task runs at a level that asks, one approval card ("Archive task"/"Archive %d tasks", or "Archive this task" when it is the task alone; per task "• title · project", itself "(this task)", child tasks that go with it "(started by this task)", and when itself is included, at the end "This task's turn stops after this call, and its conversation ends."); no card when the task runs with bypass permissions or full access (`sessionToolAsksPerson`, 2026-10-23). When another task is running (a turn, a queued message, a shell command or a subagent), waits for approval or an answer, is switching accounts or being edited, or has an unsent draft, it refuses before the card, and it also refuses when the task starts running while the card waits. For itself, see "Self-archive" below. Result JSON `{archived, notArchived, tasks:[{taskId, title, archived, reason, worktree}], alsoArchived, keptChildTasks, note}` (the last two only for a self-archive), with `isError` when nothing was archived. Argument errors are `Not archived: …` |
+| `archive_task` | `task_ids` (required, at most 30 task IDs; `self` and its own ID are allowed, and a duplicate counts once) | Archives with the sidebar's archive (`AppModel.archive(_:)`): archives the attached provider session (Codex `thread/archive`), archives the index entry, and cleans up a Yardlet worktree that no task uses. When the calling task runs at a level that asks, one approval card ("Archive task"/"Archive %d tasks", or "Archive this task" when it is the task alone; per task "• title · project", itself "(this task)", child tasks that go with it "(started by this task)", and when itself is included, at the end "This task's turn stops after this call, and its conversation ends."); no card when the task runs with bypass permissions or full access (`sessionToolAsksPerson`, 2026-10-23). When another task is running (a turn, a queued message, a shell command or a subagent), waits for approval or an answer, is switching accounts or being edited, or has an unsent draft, it refuses before the card, and it also refuses when the task starts running while the card waits. For itself, see "Self-archive" below. Result JSON `{archived, notArchived, tasks:[{taskId, title, archived, reason, worktree, retry}], alsoArchived, keptChildTasks, note}` (the last two only for a self-archive), with `isError` when nothing was archived. `retry` is there for each task left as it was: `later` while it works, waits or changes, and `no` for the person's unsent draft, a declined card or a task already archived. Argument errors are `Not archived: …` |
 | `list_projects` | none | The projects in sidebar order, then the hidden projects. JSON `{projects:[{projectId, name, folder, otherFolders, tasks, pinned, hidden, containsThisTask}], note}` (flags only when true). With no projects, "No projects in Yardlet; every task is a chat." |
 | `hide_project` | `project` (required: a name, folder path or `projectId`) | `ProjectStore.hide`, the same as the sidebar's "Remove project". The folder, tasks and schedules stay, and its tasks leave the sidebar with it. It does not touch the selection or the new task screen. No card (the description says to call it only when the person asked). For a shared name the visible project comes first, and if several still match, an error asks for `projectId`. When it is already hidden, "already hidden", not an error. Argument errors are `Nothing was hidden: …` |
 | `show_project` | `project` (required: a name, folder path or `projectId`) | `ProjectStore.reveal`. For a shared name the hidden project comes first. When it is already visible, "already in the sidebar". Argument errors are `Nothing was shown: …` |
@@ -222,6 +234,14 @@ line, with the characters that would end the link, format its text or split a ta
 backslash-escaped as CommonMark escapes them. Only the `list_tasks` description says what a link does. A short task ID
 (its first eight digits) is not a link: an anchor of eight hex digits is also a `#RRGGBBAA` color, and agents link a
 task by its whole ID.
+
+Task references: `task_id`, `task_ids`, `ids` and `parent_task_id` are read the same way (`sessionToolTask`), as a whole
+task ID in either case or `"self"`. What names no open task is answered for what it is: an archived task (`archived`,
+read from the index without starting a turn; the person can unarchive it), a subagent's ID, a task suggestion's `task_…`
+ID (with the task the person started from it, if they did), or an ID Yardlet has no task for (`not_found`). Yardlet does
+not take a task ID cut short, as agents write one in prose; one that begins exactly one task's ID is answered with that
+whole ID. A `read_task` cursor that names no turn of the task says whether it is `list_tasks`' cursor or another
+task's.
 
 Where `create_task` puts the task (2026-10-27): left empty, the task is nested under the calling task. `topLevel: true`
 makes a top-level task with no parent, as if it were created in the new task window, and `parent_task_id` makes it under
@@ -289,7 +309,8 @@ gets them as another task's messages. The name is the same as `topLevel` of the 
 - **Call deadline:** Everything that waits (approval, room, `wait`, a foreground `run_agent`, `wait_tasks`) shares the
   deadline of one call: 25 minutes for Claude Code and Codex, 50 seconds for other harnesses
   (`SessionToolPolicy.waitCeiling`). The `tool_timeout_sec` of the `yardlet` server put into Codex is 1,800 seconds, and
-  `yardlet-mcp` waits on the app socket 31 minutes for session tools only (180 seconds for the rest). When the deadline
+  `yardlet-mcp` waits on the app socket 31 minutes for session tools only (180 seconds for the rest, longer than the 150
+  seconds a connector call may take in the app, [CONNECTORS](CONNECTORS.md) section 4). When the deadline
   passes, the call answers with the state and ID, and the work goes on. For a `tools/call` that gave
   `_meta.progressToken`, the server sends `notifications/progress` (no text) every 20 seconds until the end
   (`MCPStdioLoop`), because Claude Code drops a stdio call that sends nothing for 30 minutes
@@ -401,12 +422,14 @@ stopped at the wrapper).
 
 ## 4. Local connection (IPC)
 
-- App: at the first injection it opens `$TMPDIR/Yardlet-tools-<pid>/tools.sock`. The folder is 0700 (when it already
+- App: each injection makes sure `$TMPDIR/Yardlet-tools-<pid>/tools.sock` listens. It opens it the first time, and again
+  at the same path when its file is gone (the system may clear old files from the temporary folder), so every task's
+  server reaches it again. The folder is 0700 (when it already
   exists, its owner and permissions are checked and narrowed), the socket is 0600, and each connection is checked with
   `getpeereid` for the same user. When the app ends it removes them, and at start it removes the folders of processes
   that ended. The path must be short (`sun_path` is 104 bytes), so it uses the PID instead of the bundle ID.
 - Server: the environment variables `YARDLET_TOOLS_SOCKET`, `YARDLET_TOOLS_TOKEN` (a 256-bit random value per task, kept
-  while the app runs) and `YARDLET_TOOLS_SESSION` (the task ID). Each call is one request and one answer on one
+  while the app runs), `YARDLET_TOOLS_SESSION` (the task ID) and `YARDLET_TOOLS_APP_PID` (the app run's process ID). Each call is one request and one answer on one
   connection, framed as a 4-byte length + JSON. When the request's `method` is `tools/list`, the app returns that task's
   tool list and its fingerprint (`{"tools": [...], "fingerprint": "…"}`); otherwise it returns the tool call result. The
   MCP content items and `structuredContent` of connector results pass through as they are.
@@ -421,9 +444,12 @@ stopped at the wrapper).
   process (with the task's terminals), any Codex App Server for a Codex task, Yardlet itself for an ACP harness
   (`AppModel.agentToolHarnessProcesses`). When a task is archived or deleted, the app revokes its token and closes all
   of that task's tabs.
-- When Yardlet is not running, "Yardlet is not running…"; for a server started without the environment variables,
-  "Yardlet did not start this MCP server…"; for a build without CEF, "no browser engine…". Each comes back as a tool
-  error.
+- When nothing answers at the socket, the server says whether the Yardlet that started it has quit (its
+  `YARDLET_TOOLS_APP_PID` is gone) or still runs with the connection gone, which starting or resuming a task in Yardlet
+  connects again; a server without the variable says either. A call that went out and got no answer in time, or whose
+  connection closed first, may have run there: its error says that the outcome is unknown (`outcome_unknown`). For a
+  server started without the environment variables, "Yardlet did not start this MCP server…"; for a build without CEF,
+  "no browser engine…". Each comes back as a tool error.
 - During a tool call, `ProcessInfo.beginActivity(.userInitiated, .latencyCritical)` keeps App Nap off (so that wait
   timers do not stretch to seconds while the window is in the background).
 

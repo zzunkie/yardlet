@@ -27,14 +27,16 @@ extension AppModel {
         let harness: HarnessKind
         switch sessionToolHarness(arguments["harness"], default: caller.harness) {
         case let .success(value): harness = value
-        case let .failure(error): return .error("Not started: \(error.message)")
+        case let .failure(error): return error.result("Not started")
         }
-        if let refusal = sessionToolSpawnRefusal(caller: caller) { return .error("Not started: \(refusal)") }
+        if let refusal = sessionToolSpawnRefusal(caller: caller) {
+            return .failure("Not started: \(refusal)", .refused, retry: .no)
+        }
         var options: [String: String]
         switch Self.providerOptions(for: harness, model: arguments["model"]?.stringValue,
                                     effort: arguments["effort"]?.stringValue) {
         case let .success(value): options = sessionToolInheritedOptions(harness: harness, caller: caller, chosen: value)
-        case let .failure(error): return .error("Not started: \(error.message)")
+        case let .failure(error): return error.result("Not started")
         }
         let permission: TaskPermissionLevel = caller.permission == .readOnly ? .readOnly : .standard
         if permission == .readOnly {
@@ -47,21 +49,21 @@ extension AppModel {
         let folder: URL
         switch agentRunFolder(arguments["folder"]?.stringValue, caller: caller) {
         case let .success(value): folder = value
-        case let .failure(error): return .error("Not started: \(error.message)")
+        case let .failure(error): return error.result("Not started")
         }
         if !caller.roots.contains(where: { Self.folder(folder, isInside: $0) }), sessionToolAsksPerson(caller) {
             let detail = L10n.format("%@ → %@", caller.title, folder.path(percentEncoded: false))
                 + "\n\n" + String(prompt.prefix(600))
             guard await askPerson(title: L10n.string("Run a subagent outside this task's folders"), detail: detail,
                                   caller: caller) else {
-                return .error("Not started: the person did not approve a subagent in that folder.")
+                return .failure("Not started: the person did not approve a subagent in that folder.", .refused, retry: .no)
             }
         }
         let account: AccountStart
         switch await assignAccount(harness: harness, model: Self.modelOption(options, harness: harness),
                                    requested: arguments["account"]?.stringValue) {
         case let .success(value): account = value
-        case let .failure(error): return .error("Not started: \(error.message)")
+        case let .failure(error): return error.result("Not started")
         }
         let model = arguments["model"]?.stringValue?.trimmingCharacters(in: .whitespaces)
         let run = AgentRun(callerID: caller.id, hostTaskID: caller.hostTaskID, harness: harness,

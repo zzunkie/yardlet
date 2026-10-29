@@ -211,10 +211,12 @@ extension AppModel: SessionToolHandling {
     private func readTask(_ arguments: JSONValue, caller: SessionToolCaller) async -> AgentToolResult {
         guard let reference = arguments["task_id"]?.stringValue?.trimmingCharacters(in: .whitespaces),
               !reference.isEmpty else { return .error("task_id is required.") }
-        let id = reference == SessionToolCatalog.selfReference ? caller.hostTaskID : UUID(uuidString: reference)
-        guard let id, var session = store.sessions.first(where: { $0.id == id }) else {
-            return .error("No task \(reference). list_tasks gives the task ids.")
+        var session: SessionRecord
+        switch await sessionToolTask(reference, caller: caller) {
+        case let .success(found): session = found
+        case let .failure(error): return error.result("Not read")
         }
+        let id = session.id
         // A task nothing has opened since Yardlet started reads its saved history first; no turn starts.
         if transcriptBySessionID[session.id]?.isEmpty != false, codexPresentationBySessionID[session.id] == nil {
             await refreshConversationStatus(for: session)
@@ -224,7 +226,12 @@ extension AppModel: SessionToolHandling {
         let cursor = arguments["cursor"]?.stringValue
         guard let conversation = SessionToolText.conversation(
             sessionToolPresentation(of: session), workspaceURL: session.workspaceURL, turns: turns, cursor: cursor)
-        else { return .error("That cursor is not a turn of this task. Read again without cursor.") }
+        else {
+            let what = cursor?.hasPrefix(SessionToolText.listCursorPrefix) == true ? "is list_tasks' cursor, not read_task's"
+                : "names no turn of this task: it is another task's, or its turn is no longer loaded"
+            return .failure("Not read: that cursor \(what). Read task \(session.id.uuidString) again without cursor.",
+                            .invalidArguments, retry: .withChanges)
+        }
         let neighbors = Set(splits.split(containing: caller.hostTaskID)?.sessionIDs ?? [])
         var details = SessionToolText.entry(
             session, projectName: project(for: session)?.name, detail: taskAttentionDetails[session.id],
@@ -292,17 +299,21 @@ extension AppModel: SessionToolHandling {
         guard !message.hasPrefix("/") else {
             return .error("Not sent: slash commands are not sent to other tasks. Send the request in words instead.")
         }
-        guard let id = UUID(uuidString: reference), let target = store.sessions.first(where: { $0.id == id }) else {
-            return .error("Not sent: no task \(reference). list_tasks gives the task ids.")
+        let target: SessionRecord
+        switch await sessionToolTask(reference, caller: caller) {
+        case let .success(found): target = found
+        case let .failure(error): return error.result("Not sent")
         }
-        guard target.id != caller.hostTaskID else { return .error("Not sent: that is this task.") }
+        guard target.id != caller.hostTaskID else {
+            return .failure("Not sent: that is this task.", .invalidArguments, retry: .withChanges)
+        }
         let quotes: [TaskMessage.Quote]
         switch personQuotes(arguments["person_quotes"], caller: caller) {
         case let .success(found): quotes = found
-        case let .failure(error): return .error("Not sent: \(error.message)")
+        case let .failure(error): return error.result("Not sent")
         }
         if let reason = await sessionToolMessageApproval(to: target, message: message, caller: caller) {
-            return .error("Not sent: \(reason)")
+            return .failure("Not sent: \(reason)", .refused, retry: .no)
         }
         let sender = TaskMessage(senderID: caller.hostTaskID.uuidString, senderName: caller.title, body: message,
                                  quotes: quotes)
@@ -422,15 +433,26 @@ extension AppModel: SessionToolHandling {
 
     private func waitTasks(_ arguments: JSONValue, caller: SessionToolCaller) async -> AgentToolResult {
         guard case let .array(values)? = arguments["ids"] else { return .error("ids is required.") }
-        let ids = values.compactMap(\.stringValue).compactMap { UUID(uuidString: $0) }
-        guard !ids.isEmpty, ids.count == values.count else {
-            return .error("ids must be task ids or agent ids.")
+        let references = values.compactMap { $0.stringValue?.trimmingCharacters(in: .whitespaces) }
+        guard !references.isEmpty, references.count == values.count else {
+            return .failure("ids must be task ids or agent ids.", .invalidArguments, retry: .withChanges)
         }
-        guard ids.count <= SessionToolCatalog.maximumWaitTargets else {
+        guard references.count <= SessionToolCatalog.maximumWaitTargets else {
             return .error("At most \(SessionToolCatalog.maximumWaitTargets) ids.")
         }
-        for id in ids where store.sessions.first(where: { $0.id == id }) == nil && sessionTools.run(id) == nil {
-            return .error("No task or agent \(id.uuidString).")
+        var ids: [UUID] = []
+        for reference in references {
+            if let id = UUID(uuidString: reference), sessionTools.run(id) != nil {
+                ids.append(id)
+                continue
+            }
+            switch await sessionToolTask(reference, caller: caller) {
+            case let .success(task) where task.id == caller.hostTaskID:
+                return .failure("\(reference) is this task, which cannot wait for itself.", .invalidArguments,
+                                retry: .withChanges)
+            case let .success(task): ids.append(task.id)
+            case let .failure(error): return error.result()
+            }
         }
         let requested = Self.integer(arguments["timeout_seconds"]).map { Duration.seconds(max(0, $0)) }
             ?? SessionToolPolicy.waitDefault
@@ -528,28 +550,30 @@ extension AppModel: SessionToolHandling {
         let quotes: [TaskMessage.Quote]
         switch personQuotes(arguments["person_quotes"], caller: caller) {
         case let .success(found): quotes = found
-        case let .failure(error): return .error("Not created: \(error.message)")
+        case let .failure(error): return error.result("Not created")
         }
         let harness: HarnessKind
         switch sessionToolHarness(arguments["harness"], default: caller.harness) {
         case let .success(value): harness = value
-        case let .failure(error): return .error("Not created: \(error.message)")
+        case let .failure(error): return error.result("Not created")
         }
-        if let refusal = sessionToolSpawnRefusal(caller: caller) { return .error("Not created: \(refusal)") }
+        if let refusal = sessionToolSpawnRefusal(caller: caller) {
+            return .failure("Not created: \(refusal)", .refused, retry: .no)
+        }
         let options: [String: String]
         switch Self.providerOptions(for: harness, model: arguments["model"]?.stringValue,
                                     effort: arguments["effort"]?.stringValue) {
         case let .success(value): options = sessionToolInheritedOptions(harness: harness, caller: caller, chosen: value)
-        case let .failure(error): return .error("Not created: \(error.message)")
+        case let .failure(error): return error.result("Not created")
         }
         guard let runtime = runtimeSelections.selectedURL(for: harness) else {
-            return .error("Not created: \(harness.displayName) is not set up in Yardlet.")
+            return .failure("Not created: \(harness.displayName) is not set up in Yardlet.", .refused, retry: .no)
         }
         let account: AccountStart
         switch await assignAccount(harness: harness, model: Self.modelOption(options, harness: harness),
                                    requested: arguments["account"]?.stringValue) {
         case let .success(value): account = value
-        case let .failure(error): return .error("Not created: \(error.message)")
+        case let .failure(error): return error.result("Not created")
         }
         let chat = Self.bool(arguments["chat"]) == true
         if chat, !(arguments["project"]?.stringValue ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
@@ -565,13 +589,13 @@ extension AppModel: SessionToolHandling {
         } else {
             switch sessionToolPlace(arguments["project"]?.stringValue, caller: caller) {
             case let .success(value): place = value
-            case let .failure(error): return .error("Not created: \(error.message)")
+            case let .failure(error): return error.result("Not created")
             }
         }
         let parentTaskID: UUID?
-        switch createdTaskParent(arguments, caller: caller) {
+        switch await createdTaskParent(arguments, caller: caller) {
         case let .success(value): parentTaskID = value
-        case let .failure(error): return .error("Not created: \(error.message)")
+        case let .failure(error): return error.result("Not created")
         }
         if !chat, sessionToolPlaceReachesPast(folder: place.folder, project: place.project, caller: caller),
            sessionToolAsksPerson(caller) {
@@ -580,7 +604,7 @@ extension AppModel: SessionToolHandling {
                 + "\n\n" + Self.cardPreview(prompt)
             guard await askPerson(title: L10n.string("Create a task in another project"), detail: detail,
                                   caller: caller) else {
-                return .error("Not created: the person did not approve a task in another project.")
+                return .failure("Not created: the person did not approve a task in another project.", .refused, retry: .no)
             }
         }
         // The task is made with its first message held, so it can wait for room in the sidebar.
@@ -635,7 +659,8 @@ extension AppModel: SessionToolHandling {
 
     /// Where `create_task` nests the new task: under the caller, under the open task `parent_task_id`
     /// names, or under none with `topLevel`, as New Task starts one.
-    private func createdTaskParent(_ arguments: JSONValue, caller: SessionToolCaller) -> Result<UUID?, SessionToolError> {
+    private func createdTaskParent(_ arguments: JSONValue,
+                                   caller: SessionToolCaller) async -> Result<UUID?, SessionToolError> {
         let reference = arguments["parent_task_id"]?.stringValue?.trimmingCharacters(in: .whitespaces) ?? ""
         if Self.bool(arguments["topLevel"]) == true {
             guard reference.isEmpty else {
@@ -644,11 +669,12 @@ extension AppModel: SessionToolHandling {
             return .success(nil)
         }
         guard !reference.isEmpty, reference != SessionToolCatalog.selfReference else { return .success(caller.hostTaskID) }
-        guard let id = UUID(uuidString: reference), store.sessions.contains(where: { $0.id == id }) else {
-            return .failure(SessionToolError(message: "no open task \(reference) to nest under. list_tasks gives "
-                + "the task ids; omit parent_task_id to nest it under this task."))
+        switch await sessionToolTask(reference, caller: caller) {
+        case let .success(parent): return .success(parent.id)
+        case let .failure(error):
+            return .failure(SessionToolError(message: error.message + " Omit parent_task_id to nest it under this task.",
+                                             failure: error.failure))
         }
-        return .success(id)
     }
 
     private func createdTaskPlacement(_ parentTaskID: UUID?, caller: SessionToolCaller) -> String {
@@ -697,19 +723,24 @@ extension AppModel: SessionToolHandling {
         // The harness's record of its session tool calls before this one answers: archiving this
         // task waits until the record has this call's result.
         let callsBefore = sessionToolCallRecords(named: SessionToolCatalog.archiveTask, in: caller.hostTaskID)
-        var results = unique.map { reference -> ArchivedTaskResult in
-            let id = reference == SessionToolCatalog.selfReference ? caller.hostTaskID : UUID(uuidString: reference)
-            guard let id, let session = store.sessions.first(where: { $0.id == id }) else {
-                return ArchivedTaskResult(taskId: reference, reason: "no task \(reference); list_tasks gives the task ids.")
+        var results: [ArchivedTaskResult] = []
+        for reference in unique {
+            switch await sessionToolTask(reference, caller: caller) {
+            case let .success(session):
+                results.append(ArchivedTaskResult(taskId: session.id.uuidString, title: session.title,
+                                                  reason: sessionToolArchiveRefusal(session, caller: caller)))
+            case let .failure(error) where error.failure?.kind == .archived:
+                results.append(ArchivedTaskResult(taskId: reference, reason: "it is already archived.", retry: .no))
+            case let .failure(error):
+                results.append(ArchivedTaskResult(taskId: reference, reason: error.message,
+                                                  retry: error.failure?.retry ?? .withChanges))
             }
-            return ArchivedTaskResult(taskId: id.uuidString, title: session.title,
-                                      reason: sessionToolArchiveRefusal(session, caller: caller))
         }
         let selfIndex = results.firstIndex { $0.taskId == caller.hostTaskID.uuidString && $0.title != nil }
         var cascade = SelfArchiveCascade()
         if let selfIndex, results[selfIndex].reason == nil {
             if sessionTools.isArchivingSelf(caller.hostTaskID) {
-                results[selfIndex].reason = "this task is already being archived."
+                results[selfIndex].reason = Self.alreadyArchivingSelf
             } else {
                 (results[selfIndex].reason, cascade) = await sessionToolSelfArchiveCheck(caller: caller)
             }
@@ -781,8 +812,17 @@ extension AppModel: SessionToolHandling {
                     archiveSelfAfterResult(caller: caller, with: joiningNow.map(\.id), callsBefore: callsBefore)
                 }
             } else {
-                for index in candidates { results[index].reason = "the person did not approve archiving it." }
+                for index in candidates {
+                    results[index].reason = "the person did not approve archiving it."
+                    results[index].retry = .no
+                }
             }
+        }
+        // What calling again can do for each task left as it was: a task that works, waits or changes
+        // stops doing so by itself; what is the person's, or a subagent's place, does not change by asking.
+        for index in results.indices where !results[index].archived && results[index].retry == nil {
+            guard let reason = results[index].reason else { continue }
+            results[index].retry = Self.lastingArchiveRefusals.contains(reason) ? .no : .later
         }
         let archivedCount = results.filter(\.archived).count
         let archivesSelf = selfIndex.map { results[$0].archived } == true
@@ -820,7 +860,15 @@ extension AppModel: SessionToolHandling {
         var reason: String?
         /// What became of its worktree, when archiving kept it or could not remove it.
         var worktree: String?
+        /// What calling again can do for a task it did not archive (`AgentToolFailure.Retry`).
+        var retry: AgentToolFailure.Retry?
     }
+
+    /// The refusals asking again does not change: the person's draft, and a subagent's or an archive's own place.
+    static let lastingArchiveRefusals: Set<String> = [unsentDraftRefusal, subagentArchivesHostRefusal, alreadyArchivingSelf]
+    static let unsentDraftRefusal = "the person has an unsent draft in it."
+    static let subagentArchivesHostRefusal = "a subagent cannot archive the task it runs in."
+    static let alreadyArchivingSelf = "this task is already being archived."
 
     private struct ChildTaskResult: Encodable {
         var taskId: String
@@ -850,7 +898,7 @@ extension AppModel: SessionToolHandling {
             return "that task is changing (an account switch or an edit); try again shortly."
         }
         if composerDrafts.tasks.existingDraft(for: session.id)?.snapshot.isEmpty == false {
-            return "the person has an unsent draft in it."
+            return Self.unsentDraftRefusal
         }
         return nil
     }
@@ -864,7 +912,7 @@ extension AppModel: SessionToolHandling {
     /// person, a subagent or a command it started, messages waiting behind the turn, a change in
     /// progress, or the person's unsent draft. A subagent cannot archive the task it runs in.
     func sessionToolSelfArchiveRefusal(_ session: SessionRecord, caller: SessionToolCaller) -> String? {
-        if caller.id != caller.hostTaskID { return "a subagent cannot archive the task it runs in." }
+        if caller.id != caller.hostTaskID { return Self.subagentArchivesHostRefusal }
         if let request = taskAttentionDetails[session.id]?.pendingRequest {
             return request == .input ? "it waits for the person's answer." : "it waits for the person's approval."
         }
@@ -879,7 +927,7 @@ extension AppModel: SessionToolHandling {
             return "that task is changing (an account switch or an edit); try again shortly."
         }
         if composerDrafts.tasks.existingDraft(for: session.id)?.snapshot.isEmpty == false {
-            return "the person has an unsent draft in it."
+            return Self.unsentDraftRefusal
         }
         return nil
     }
@@ -1089,7 +1137,83 @@ extension AppModel: SessionToolHandling {
 
     struct SessionToolError: LocalizedError {
         let message: String
+        /// What went wrong and what calling again can do, for the agent; nil leaves the message as it is.
+        var failure: AgentToolFailure?
         var errorDescription: String? { message }
+
+        /// The call's answer: what it did not do ("Not sent"), then why; without it, the reason alone.
+        func result(_ outcome: String? = nil) -> AgentToolResult {
+            let text = outcome.map { "\($0): \(message)" } ?? message.prefix(1).uppercased() + message.dropFirst()
+            return failure.map { .failure(text, $0) } ?? .error(text)
+        }
+    }
+
+    /// The open task a session tool's `task_id` names, or why it names none, read the same way for every
+    /// tool: "self" is the calling task, and a reference that is no task id, an archived task, a subagent's
+    /// id and an id Yardlet has no task for are told apart. Yardlet takes a task id only whole; a shortened
+    /// one that begins one task's id is answered with that task's whole id. Reading the archived tasks starts
+    /// no turn.
+    func sessionToolTask(_ reference: String, caller: SessionToolCaller) async -> Result<SessionRecord, SessionToolError> {
+        let reference = reference.trimmingCharacters(in: .whitespaces)
+        let id = reference == SessionToolCatalog.selfReference ? caller.hostTaskID : UUID(uuidString: reference)
+        guard let id else { return .failure(await sessionToolUnreadTaskReference(reference, caller: caller)) }
+        if let task = store.sessions.first(where: { $0.id == id }) { return .success(task) }
+        if store.archivedSessions == nil { try? await store.loadArchivedSessions() }
+        if let archived = store.archivedSessions?.first(where: { $0.id == id }) {
+            return .failure(SessionToolError(
+                message: "task \(id.uuidString) (\(archived.session.title)) is archived. The person can unarchive it "
+                    + "from Archived tasks in the sidebar.",
+                failure: AgentToolFailure(.archived, retry: .no, details: ["taskId": .string(id.uuidString)])))
+        }
+        if sessionTools.run(id) != nil {
+            return .failure(SessionToolError(
+                message: "\(id.uuidString) is a subagent's id from run_agent, not a task's. wait_tasks gives its state "
+                    + "and answer.", failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
+        }
+        return .failure(SessionToolError(
+            message: "no task \(id.uuidString); list_tasks gives the task ids.",
+            failure: AgentToolFailure(.notFound, retry: .withChanges, details: ["taskId": .string(id.uuidString)])))
+    }
+
+    /// Why a reference that is no task id names no task: a task suggestion's id from spawn_task, a task id
+    /// cut short (as an agent may write one in prose), or anything else.
+    private func sessionToolUnreadTaskReference(_ reference: String, caller: SessionToolCaller) async -> SessionToolError {
+        if TaskSuggestionToolCatalog.isTaskID(reference) {
+            if let started = taskSuggestions.resolution(of: reference, in: caller.hostTaskID)?.startedTaskID {
+                return SessionToolError(
+                    message: "\(reference) is a task suggestion's id. The task the person started from it is "
+                        + "\(started.uuidString): call again with that id.",
+                    failure: AgentToolFailure(.invalidArguments, retry: .withChanges,
+                                              details: ["taskId": .string(started.uuidString)]))
+            }
+            return SessionToolError(
+                message: "\(reference) is a task suggestion's id from spawn_task, not a task's: dismiss_task takes it, "
+                    + "and a task the person starts from it has a task id of its own in list_tasks.",
+                failure: AgentToolFailure(.invalidArguments, retry: .withChanges))
+        }
+        let start = reference.uppercased()
+        if start.count >= 4, start.allSatisfy({ $0.isHexDigit || $0 == "-" }) {
+            if store.archivedSessions == nil { try? await store.loadArchivedSessions() }
+            let open = store.sessions.filter { $0.id.uuidString.hasPrefix(start) }
+            let archived = (store.archivedSessions ?? []).map(\.session).filter { $0.id.uuidString.hasPrefix(start) }
+            if open.count + archived.count == 1, let task = (open + archived).first {
+                let state = archived.isEmpty ? "" : ", which is archived"
+                return SessionToolError(
+                    message: "\(reference) is not a whole task id, and Yardlet takes task ids whole. It begins the id of "
+                        + "task \(task.id.uuidString) (\(task.title))\(state).",
+                    failure: AgentToolFailure(.invalidArguments, retry: archived.isEmpty ? .withChanges : .no,
+                                              details: ["taskId": .string(task.id.uuidString)]))
+            }
+            if open.count + archived.count > 1 {
+                return SessionToolError(
+                    message: "\(reference) is not a whole task id, and Yardlet takes task ids whole; it begins the ids of "
+                        + "\(open.count + archived.count) tasks. list_tasks gives them whole.",
+                    failure: AgentToolFailure(.invalidArguments, retry: .withChanges))
+            }
+        }
+        return SessionToolError(
+            message: "\(reference) is not a task id. A task id is a whole UUID as list_tasks gives it, or \"self\" for "
+                + "this task.", failure: AgentToolFailure(.invalidArguments, retry: .withChanges))
     }
 
     func sessionToolHarness(_ value: JSONValue?, default fallback: HarnessKind) -> Result<HarnessKind, SessionToolError> {
@@ -1098,10 +1222,12 @@ extension AppModel: SessionToolHandling {
         }
         let harness = HarnessKind(rawValue: raw)
         guard HarnessCatalog.descriptor(for: harness) != nil else {
-            return .failure(SessionToolError(message: "no harness \(raw). Use an id such as claude-code or codex."))
+            return .failure(SessionToolError(message: "no harness \(raw). Use an id such as claude-code or codex.",
+                                             failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
         }
         guard runtimeSelections.selectedURL(for: harness) != nil else {
-            return .failure(SessionToolError(message: "\(harness.displayName) is not set up in Yardlet."))
+            return .failure(SessionToolError(message: "\(harness.displayName) is not set up in Yardlet.",
+                                             failure: AgentToolFailure(.refused, retry: .no)))
         }
         return .success(harness)
     }
@@ -1483,17 +1609,20 @@ extension AppModel: SessionToolHandling {
         guard let value, value != .null else { return .success([]) }
         guard let items = value.arrayValue,
               items.allSatisfy({ $0.stringValue != nil }) else {
-            return .failure(SessionToolError(message: "person_quotes must be a list of strings."))
+            return .failure(SessionToolError(message: "person_quotes must be a list of strings.",
+                                             failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
         }
         let wanted = items.compactMap(\.stringValue)
             .map { $0.replacingOccurrences(of: "\r\n", with: "\n").trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         guard wanted.count <= SessionToolCatalog.maximumPersonQuotes else {
-            return .failure(SessionToolError(message: "at most \(SessionToolCatalog.maximumPersonQuotes) person_quotes."))
+            return .failure(SessionToolError(message: "at most \(SessionToolCatalog.maximumPersonQuotes) person_quotes.",
+                                             failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
         }
         guard !wanted.isEmpty else { return .success([]) }
         guard let session = store.sessions.first(where: { $0.id == caller.hostTaskID }) else {
-            return .failure(SessionToolError(message: "this task's conversation is not open in Yardlet."))
+            return .failure(SessionToolError(message: "this task's conversation is not open in Yardlet.",
+                                             failure: AgentToolFailure(.refused, retry: .no)))
         }
         let messages = personMessages(in: session)
         let time = ISO8601DateFormatter()
@@ -1503,7 +1632,9 @@ extension AppModel: SessionToolHandling {
         for words in wanted {
             guard let message = messages.first(where: { $0.text.contains(words) }) else {
                 let shown = words.count > 80 ? String(words.prefix(80)) + "…" : words
-                return .failure(SessionToolError(message: "the person's messages in this task do not hold \"\(shown)\"."))
+                // The words must be the person's own, exactly: other words are refused however often they are sent.
+                return .failure(SessionToolError(message: "the person's messages in this task do not hold \"\(shown)\".",
+                                                 failure: AgentToolFailure(.refused, retry: .withChanges)))
             }
             quotes.append(TaskMessage.Quote(text: words, sentAt: message.sentAt.map(time.string(from:))))
         }

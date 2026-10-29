@@ -48,7 +48,7 @@ extension AppModel {
         let project: Project
         switch projectForTool(arguments["project"]?.stringValue, preferringHidden: false) {
         case let .success(value): project = value
-        case let .failure(error): return .error("Nothing was hidden: \(error.message)")
+        case let .failure(error): return error.result("Nothing was hidden")
         }
         guard !project.isHidden else {
             return .text("Project \"\(project.name)\" (projectId: \(project.id.uuidString)) is already hidden.")
@@ -62,7 +62,7 @@ extension AppModel {
         let project: Project
         switch projectForTool(arguments["project"]?.stringValue, preferringHidden: true) {
         case let .success(value): project = value
-        case let .failure(error): return .error("Nothing was shown: \(error.message)")
+        case let .failure(error): return error.result("Nothing was shown")
         }
         guard project.isHidden else {
             return .text("Project \"\(project.name)\" (projectId: \(project.id.uuidString)) is already in the sidebar.")

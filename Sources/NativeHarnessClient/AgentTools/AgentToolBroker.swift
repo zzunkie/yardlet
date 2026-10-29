@@ -99,8 +99,9 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     weak var handoffs: (any BrowserHandoffPresenting)? {
         didSet { tools.handoffs = handoffs }
     }
-    private var endpointStarted = false
-    /// Starts the endpoint the first time a task is injected; a failure leaves the task without tools.
+    /// Makes sure the endpoint listens, each time a task is injected: the platform starts it the first time, and
+    /// again when it is gone (the socket's file was cleared away), which a task's server cannot reach. A failure
+    /// leaves the task without tools.
     var startEndpoint: @MainActor () throws -> Void = {}
     /// Whether a call naming a task may come from the process that sent it (its ID; nil when the endpoint
     /// could not tell). A task's token is in its harness's configuration, which other processes of the same
@@ -141,13 +142,10 @@ final class AgentToolBroker: AgentToolLaunchProviding {
               let executable = environment.executableURL,
               FileManager.default.isExecutableFile(atPath: executable.path(percentEncoded: false))
         else { return nil }
-        if !endpointStarted {
-            do {
-                try startEndpoint()
-                endpointStarted = true
-            } catch {
-                return nil
-            }
+        do {
+            try startEndpoint()
+        } catch {
+            return nil
         }
         // One token per task for this app run: a harness that keeps its server across a resume
         // keeps working, and a new app run issues new ones.
@@ -161,7 +159,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             environment: [
                 AgentToolEnvironment.endpoint: environment.endpoint,
                 AgentToolEnvironment.token: token,
-                AgentToolEnvironment.session: localSessionID.uuidString
+                AgentToolEnvironment.session: localSessionID.uuidString,
+                AgentToolEnvironment.appProcess: String(ProcessInfo.processInfo.processIdentifier)
             ],
             privateDirectory: environment.privateDirectory,
             leftOutServerURLs: connectorScope?.leftOutNativeServers.map(\.url) ?? []
@@ -212,6 +211,13 @@ final class AgentToolBroker: AgentToolLaunchProviding {
 
     func handle(_ call: AgentToolCall) async -> AgentToolResult {
         guard let sessionID = authorizedSession(call) else { return Self.unrecognizedToken }
+        // Yardlet's own tools are checked against the schemas they are listed with before they run; a
+        // connector's are checked where its tools are known (`ConnectorCenter.callConnectorTool`).
+        if let definition = Self.ownDefinition(named: call.tool),
+           let failure = AgentToolArgumentCheck.failure(tool: call.tool, arguments: call.arguments,
+                                                        schema: definition.inputSchema) {
+            return failure
+        }
         if AgentToolCatalog.definition(named: call.tool) != nil {
             guard browserToolsByTask[sessionID] != false else {
                 return .error("The browser tools were off in Yardlet's settings when this task started. Turn them "
@@ -238,7 +244,25 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                                                              for: connectorContext(sessionID)) {
             return result
         }
-        return .error("Unknown tool: \(call.tool)")
+        return await unknownTool(call.tool, for: sessionID)
+    }
+
+    private static func ownDefinition(named name: String) -> AgentToolDefinition? {
+        AgentToolCatalog.definition(named: name) ?? VaultToolCatalog.definition(named: name)
+            ?? TaskSuggestionToolCatalog.definition(named: name) ?? SessionToolCatalog.definition(named: name)
+            ?? ScheduleToolCatalog.definition(named: name)
+    }
+
+    /// A call to a tool the task does not have, such as one its harness listed before a connector went off,
+    /// or a name the model made up: the task's tools that share its first word, which it was most likely
+    /// meant as.
+    private func unknownTool(_ name: String, for sessionID: UUID) async -> AgentToolResult {
+        let family = AgentToolNames.family(of: name, in: await tools(for: sessionID).compactMap { $0["name"]?.stringValue })
+        let message = family.isEmpty
+            ? "This task has no Yardlet tool named \(name); its Yardlet tools are the ones its harness lists."
+            : "This task has no Yardlet tool named \(name). Its tools of that kind: \(AgentToolNames.listed(family))."
+        return .failure(message, .unknownTool, retry: .withChanges,
+                        details: ["tool": .string(name), "similar": .array(family.map(ToolJSON.string))])
     }
 
     /// The task's tools: the browser catalog when it was on, the task suggestion tools, the session

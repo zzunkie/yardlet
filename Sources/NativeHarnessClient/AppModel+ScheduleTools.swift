@@ -81,7 +81,7 @@ extension AppModel: ScheduleToolHandling {
         let prompt: String
         switch Self.schedulePrompt(arguments[Key.prompt]?.stringValue ?? "") {
         case let .success(value): prompt = value
-        case let .failure(error): return .error("Nothing was created: \(error.message)")
+        case let .failure(error): return error.result("Nothing was created")
         }
         let now = scheduledTasks.now()
         let trigger: ScheduleTrigger
@@ -89,17 +89,17 @@ extension AppModel: ScheduleToolHandling {
         case let .success(value?): trigger = value
         case .success(nil):
             return .error("Nothing was created: give cronExpression (repeating) or fireAt (one run).")
-        case let .failure(error): return .error("Nothing was created: \(error.message)")
+        case let .failure(error): return error.result("Nothing was created")
         }
         let destination: ScheduleDestination
         switch scheduleToolDestination(arguments, caller: caller, base: nil) {
         case let .success(value): destination = value
-        case let .failure(error): return .error("Nothing was created: \(error.message)")
+        case let .failure(error): return error.result("Nothing was created")
         }
         let name = Self.scheduleName(arguments[Key.name]?.stringValue, prompt: prompt)
         if let refusal = await scheduleAgentRefusal(destination, previous: nil, promptChanged: true, prompt: prompt,
                                                     trigger: trigger, name: name, caller: caller) {
-            return .error("Nothing was created: \(refusal)")
+            return .failure("Nothing was created: \(refusal)", .refused, retry: .no)
         }
         scheduledTasks.create(ScheduledTask(name: name, prompt: prompt, trigger: trigger, destination: destination,
                                             createdAt: now, agentTaskID: caller.hostTaskID))
@@ -243,7 +243,7 @@ extension AppModel: ScheduleToolHandling {
         let schedule: ScheduledTask
         switch scheduleForTool(arguments) {
         case let .success(value): schedule = value
-        case let .failure(error): return .error("Nothing was updated: \(error.message)")
+        case let .failure(error): return error.result("Nothing was updated")
         }
         var edited = schedule
         var parts: [String] = []
@@ -252,7 +252,7 @@ extension AppModel: ScheduleToolHandling {
             case let .success(prompt):
                 if prompt != edited.prompt { parts.append("prompt") }
                 edited.prompt = prompt
-            case let .failure(error): return .error("Nothing was updated: \(error.message)")
+            case let .failure(error): return error.result("Nothing was updated")
             }
         }
         if let given = arguments[Key.name]?.stringValue {
@@ -265,14 +265,14 @@ extension AppModel: ScheduleToolHandling {
             edited.trigger = trigger
             parts.append("schedule (\(ScheduleToolText.summary(trigger, calendar: scheduledTasks.calendar())))")
         case .success(nil): break
-        case let .failure(error): return .error("Nothing was updated: \(error.message)")
+        case let .failure(error): return error.result("Nothing was updated")
         }
         if Key.destination.contains(where: { arguments[$0] != nil }) {
             switch scheduleToolDestination(arguments, caller: caller, base: schedule.destination) {
             case let .success(value):
                 if value != edited.destination { parts.append("where each run goes") }
                 edited.destination = value
-            case let .failure(error): return .error("Nothing was updated: \(error.message)")
+            case let .failure(error): return error.result("Nothing was updated")
             }
         }
         let enabled = Self.bool(arguments[Key.enabled])
@@ -287,7 +287,7 @@ extension AppModel: ScheduleToolHandling {
             if let refusal = await scheduleAgentRefusal(edited.destination, previous: schedule.destination,
                                                         promptChanged: promptChanged, prompt: edited.prompt,
                                                         trigger: edited.trigger, name: edited.name, caller: caller) {
-                return .error("Nothing was updated: \(refusal)")
+                return .failure("Nothing was updated: \(refusal)", .refused, retry: .no)
             }
             // The schedule may have changed or gone while the card waited.
             guard scheduledTasks.schedule(id: schedule.id) == schedule else {
@@ -315,7 +315,7 @@ extension AppModel: ScheduleToolHandling {
         let schedule: ScheduledTask
         switch scheduleForTool(arguments) {
         case let .success(value): schedule = value
-        case let .failure(error): return .error("Nothing was deleted: \(error.message)")
+        case let .failure(error): return error.result("Nothing was deleted")
         }
         scheduledTasks.delete(schedule.id)
         return .text("Scheduled task \"\(ScheduleToolCatalog.oneLine(schedule.name))\" (scheduleId: "
@@ -328,7 +328,7 @@ extension AppModel: ScheduleToolHandling {
         let schedule: ScheduledTask
         switch scheduleForTool(arguments) {
         case let .success(value): schedule = value
-        case let .failure(error): return .error("Not run: \(error.message)")
+        case let .failure(error): return error.result("Not run")
         }
         guard !scheduledTasks.startingIDs.contains(schedule.id) else {
             return .error("Not run: a run of scheduled task \(schedule.id.uuidString) is starting now.")

@@ -34,6 +34,16 @@ package enum UnixSocketError: Error, Equatable, CustomStringConvertible {
         }
         return false
     }
+
+    /// True when the call went out and no answer came: the peer did not answer in time, or closed the
+    /// connection first. The call may have run.
+    package var meansTheCallWentUnanswered: Bool {
+        switch self {
+        case .closed: true
+        case .system(let call, let code): call == "recv" && (code == EAGAIN || code == EWOULDBLOCK || code == ECONNRESET)
+        default: false
+        }
+    }
 }
 
 #if canImport(Darwin) || canImport(Glibc)
@@ -290,7 +300,10 @@ package struct UnixSocketToolInvoker: AgentToolInvoking {
     package let endpoint: String?
     package let token: String?
     package let session: String?
-    /// Longer than any single browser tool, so the app's own time limits decide.
+    /// The app run that started this server (`AgentToolEnvironment.appProcess`); nil from an earlier build.
+    package let appProcess: Int32?
+    /// Longer than any single browser tool and than a connector call (`AgentToolTimeLimits.connectorCall`),
+    /// so the app's own time limits decide.
     package var timeout: TimeInterval = 180
     /// A session tool may wait for another task's turn or the person's approval, and a scheduled-task
     /// call from a scheduled run for the person's approval; the app answers
@@ -302,12 +315,13 @@ package struct UnixSocketToolInvoker: AgentToolInvoking {
         endpoint = environment[AgentToolEnvironment.endpoint].flatMap { $0.isEmpty ? nil : $0 }
         token = environment[AgentToolEnvironment.token].flatMap { $0.isEmpty ? nil : $0 }
         session = environment[AgentToolEnvironment.session].flatMap { $0.isEmpty ? nil : $0 }
+        appProcess = environment[AgentToolEnvironment.appProcess].flatMap { Int32($0) }.flatMap { $0 > 0 ? $0 : nil }
     }
 
     package func call(tool: String, arguments: ToolJSON) async -> AgentToolResult {
         guard let endpoint, let token, let session else {
-            return .error("Yardlet did not start this MCP server, so it has no task to act on. "
-                + "Yardlet's tools work in tasks that Yardlet starts.")
+            return .failure("Yardlet did not start this MCP server, so it has no task to act on. "
+                + "Yardlet's tools work in tasks that Yardlet starts.", .refused, retry: .no)
         }
         let call = AgentToolCall(token: token, session: session, tool: tool, arguments: arguments)
         guard let request = try? JSONEncoder().encode(call) else {
@@ -317,9 +331,11 @@ package struct UnixSocketToolInvoker: AgentToolInvoking {
         let waits = SessionToolCatalog.definition(named: tool) != nil || ScheduleToolCatalog.definition(named: tool) != nil
             || tool == AgentToolCatalog.handoff
         let timeout = waits ? sessionToolTimeout : timeout
+        let appProcess = appProcess
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: Self.exchange(endpoint: endpoint, request: request, timeout: timeout))
+                continuation.resume(returning: Self.exchange(endpoint: endpoint, request: request, timeout: timeout,
+                                                             appProcess: appProcess))
             }
         }
     }
@@ -368,7 +384,8 @@ package struct UnixSocketToolInvoker: AgentToolInvoking {
         }
     }
 
-    private static func exchange(endpoint: String, request: Data, timeout: TimeInterval) -> AgentToolResult {
+    private static func exchange(endpoint: String, request: Data, timeout: TimeInterval,
+                                 appProcess: Int32?) -> AgentToolResult {
         #if canImport(Darwin) || canImport(Glibc)
         do {
             let reply = try UnixDomainSocket.exchange(
@@ -376,18 +393,46 @@ package struct UnixSocketToolInvoker: AgentToolInvoking {
                 maximumReplyLength: AgentToolFraming.maximumResultLength
             )
             guard let result = try? JSONDecoder().decode(AgentToolResult.self, from: reply) else {
-                return .error("Yardlet sent a reply this MCP server could not read. Yardlet and yardlet-mcp may be "
-                    + "from different builds.")
+                return .failure("Yardlet sent a reply this MCP server could not read, so whether the call took effect "
+                    + "is unknown. Yardlet and yardlet-mcp may be from different builds.", .outcomeUnknown,
+                    retry: .afterChecking)
             }
             return result
         } catch let error as UnixSocketError where error.meansNothingIsListening {
-            return .error("Yardlet is not running, so its browser, task suggestion and connector tools are "
-                + "unavailable. Open Yardlet and resume this task to use them.")
+            return notListening(appProcess: appProcess)
+        } catch let error as UnixSocketError where error.meansTheCallWentUnanswered {
+            let what = error == .closed ? "Yardlet closed the connection before it answered"
+                : "Yardlet did not answer within \(Int(timeout)) seconds"
+            return .failure("\(what). The call may still have run there, so whether it took effect is unknown: check "
+                + "before calling it again.", .outcomeUnknown, retry: .afterChecking)
         } catch {
-            return .error("Could not reach Yardlet: \(error)")
+            return .failure("Could not reach Yardlet: \(error)", .unreachable, retry: .later)
         }
         #else
         return .error(UnixSocketError.unsupportedPlatform.description)
         #endif
+    }
+
+    /// Nothing answers at the endpoint: the app run that started this server ended (Yardlet quit, or quit and
+    /// opened again), or it runs and its endpoint went (the system clears old files from the temporary folder
+    /// it is in), which the next task Yardlet starts or resumes sets up again. A server from an earlier build
+    /// does not know its app run.
+    private static func notListening(appProcess: Int32?) -> AgentToolResult {
+        let tools = "its browser, task suggestion and connector tools are unavailable"
+        guard let appProcess else {
+            return .failure("Yardlet is not running, or this task's connection to it is gone, so \(tools). Open Yardlet "
+                + "and resume this task to use them.", .unreachable, retry: .no)
+        }
+        #if canImport(Darwin) || canImport(Glibc)
+        let running = kill(appProcess, 0) == 0 || errno == EPERM
+        #else
+        let running = false
+        #endif
+        guard running else {
+            return .failure("The Yardlet that started this task's tools has quit, so \(tools). Open Yardlet and "
+                + "resume this task to use them.", .unreachable, retry: .no)
+        }
+        return .failure("Yardlet is running, but this task's connection to it is gone, so \(tools) for now. Starting "
+            + "or resuming a task in Yardlet connects them again.", .unreachable, retry: .no)
     }
 }

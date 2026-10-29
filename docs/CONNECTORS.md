@@ -302,7 +302,18 @@ registry package, or a server that another app or harness starts (the "Harnesses
 - Titles start with `Linear: …` and descriptions with `[Linear] …`. `inputSchema`, `outputSchema` and `annotations` are
   exactly what the server gave.
 - Results pass on the server's `content` items (text, images, audio, resource links and others), `structuredContent` and
-  `isError` as they are. The server's JSON-RPC errors and connection failures become `isError` results.
+  `isError` as they are. The server's JSON-RPC errors and connection failures become `isError` results. Yardlet leaves
+  checking a server's arguments to the server; a refusal in the MCP SDKs' own words (TypeScript "Invalid arguments for
+  tool …", Python "… validation error for …", JSON-RPC `-32602`) is marked as one (`invalid_arguments`), with each JSON
+  issue written as "argument: what is wrong". The tools of Yardlet's own servers (Google, Microsoft, Apple) are checked
+  against the schemas Yardlet lists them with, as Yardlet's other tools are ([AGENT_BROWSER_TOOLS](AGENT_BROWSER_TOOLS.md)
+  section 2).
+- One call has one time limit, 150 seconds (`AgentToolTimeLimits.connectorCall`), for everything it takes: renewing the
+  sign-in, initializing the server, a new session when the server forgot the old one, and the call. `yardlet-mcp` waits
+  180 seconds for the app, so the app's answer comes first. Past the limit Yardlet cancels the request: a read
+  (`readOnlyHint: true`) answers that calling again is safe, and any other call that whether it took effect is unknown
+  (`outcome_unknown`). A read the server could not answer (connection lost, timed out, HTTP 502–504) goes once more within
+  the limit; a call that changes something never goes twice, and its failure says whether it went out at all.
 - Injection: harnesses with an injection path always get the Yardlet MCP server. A task started with the browser tools
   off gets only the other tools, and a call to a browser tool returns an error that points to the setting.
 - Tool lists are kept in `connectors.json`, so a session start does not wait for the network. A list older than 12 hours
@@ -1261,7 +1272,7 @@ Tests:
 
 | Location | Contents |
 |---|---|
-| `Tests/NativeHarnessClientTests/ConnectorTests.swift` | The whole flow with fake authorization and MCP servers, names, the broker, loopback, refresh (retrying temporary failures, refresh token rotation, refresh by another copy), Keychain (opt-in `NHC_KEYCHAIN_LIVE=1`) |
+| `Tests/NativeHarnessClientTests/ConnectorTests.swift` | The whole flow with fake authorization and MCP servers, names, the broker, loopback, refresh (retrying temporary failures, refresh token rotation, refresh by another copy), a call's time limit and what goes again, Keychain (opt-in `NHC_KEYCHAIN_LIVE=1`) |
 | `Tests/NativeHarnessClientTests/ConnectorDirectoryTests.swift` | The directory, discovery with real metadata shapes, your own client, public clients and the key in the address, the per-task switch, duplicate exclusion and standing in for Claude harness servers (`--settings`), settings parsing (fake values), import, the claude.ai environment, injection documents, tool rows |
 | `Tests/NativeHarnessClientTests/ConnectorLiveToolsTests.swift` | `list_changed` and list refresh with a fake MCP client, `tools/watch` over the socket, per-task changes in a real `ConnectorCenter`, clients that re-read and clients that do not, notification at the end of a turn, per-harness text |
 | `Tests/NativeHarnessClientTests/GmailConnectorTests.swift`, `GoogleCalendarDriveConnectorTests.swift`, `GoogleBuiltInAppTests.swift`, `GoogleAnalyticsAdsConnectorTests.swift` | With a fake Google (`FakeGoogle`, `FakeGoogleWorkspace`, `FakeAnalyticsAds`): sign-in, scopes, accounts, and the requests and asking for each tool; the app in the build; Analytics reports and Ads reading only |

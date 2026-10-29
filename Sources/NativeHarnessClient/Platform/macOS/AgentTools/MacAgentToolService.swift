@@ -98,12 +98,16 @@ final class MacAgentToolService: NativeSurfaceResource {
         return KeychainConnectorCredentialStore.live()
     }
 
+    /// Listens on the socket, unless it already does. The system may clear old files from the temporary
+    /// folder, the socket among them, and a listener whose file is gone takes no new call; the next task
+    /// injected then listens again at the same path, which every task's server still names.
     private func startListener() throws {
-        guard listener == nil else { return }
+        let path = directory.appending(path: "tools.sock").path(percentEncoded: false)
+        if listener != nil, FileManager.default.fileExists(atPath: path) { return }
+        listener?.stop()
+        listener = nil
         let broker = broker
-        listener = try UnixSocketListener(
-            path: directory.appending(path: "tools.sock").path(percentEncoded: false)
-        ) { body, peer in
+        listener = try UnixSocketListener(path: path) { body, peer in
             // An agent works while Yardlet sits behind other windows. Without an activity, App Nap
             // coalesces the timers a call waits on (page loads, text waits) into seconds.
             let activity = ProcessInfo.processInfo.beginActivity(

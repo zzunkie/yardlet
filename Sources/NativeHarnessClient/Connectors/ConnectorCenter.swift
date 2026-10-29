@@ -218,6 +218,11 @@ final class ConnectorCenter: ConnectorToolProviding {
         /// How long a program may take to list its tools the first time: a first `npx` or `uvx`
         /// downloads the package.
         var programStartTimeout: Duration = .seconds(180)
+        /// The longest one call to a connector's tool runs, everything it takes included
+        /// (`AgentToolTimeLimits.connectorCall`); tests shorten it.
+        var toolCallLimit: Duration = AgentToolTimeLimits.connectorCall
+        /// Waits before a read the server could not answer is sent again (tests pass one that does not).
+        var toolRetrySleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
         /// The MCP registries Add connector reads; nil where none is asked (tests and renders).
         var registries: MCPRegistryClient.Endpoints?
         /// The Mac's calendars, reminders, and contacts; nil where this build has none.
@@ -1298,7 +1303,7 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     private func callXcodeTool(_ record: ConnectorRecord, tool: String, arguments: ToolJSON) async -> AgentToolResult {
         do {
-            return Self.toolResult(try await xcodeClient(record).callTool(name: tool, arguments: arguments))
+            return Self.toolResult(try await xcodeClient(record).callTool(name: tool, arguments: arguments), server: "Xcode")
         } catch let failure as MCPStdioError {
             if case .rpc(_, let message) = failure { return .error("Xcode: \(message)") }
             return .error("Xcode: \(failure.localizedDescription) Xcode's tools work while Xcode is open with a project and "
@@ -1428,7 +1433,8 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     private func callProgramTool(_ record: ConnectorRecord, tool: String, arguments: ToolJSON) async -> AgentToolResult {
         do {
-            return Self.toolResult(try await programClient(record).callTool(name: tool, arguments: arguments))
+            return Self.toolResult(try await programClient(record).callTool(name: tool, arguments: arguments),
+                                   server: record.name)
         } catch let failure as MCPStdioError {
             if case .rpc(_, let message) = failure { return .error("\(record.name): \(message)") }
             return .error("\(record.name): \(failure.localizedDescription)")
@@ -1542,29 +1548,61 @@ final class ConnectorCenter: ConnectorToolProviding {
         return tools
     }
 
+    /// Runs a connector's tool within one limit for the whole call (`toolCallLimit`), which ends before the
+    /// MCP server stops waiting for the app, so the agent hears what Yardlet knows of the call rather than
+    /// that the connection gave out. A call that changes something is never sent again by Yardlet once it
+    /// may have reached the server; a read is, once, when the server could not answer it.
     func callConnectorTool(named name: String, arguments: ToolJSON, for context: ConnectorToolContext) async -> AgentToolResult? {
         guard let (record, toolName) = owner(ofTool: name) else { return nil }
         switch state(of: record, inTask: context.taskID, scope: context.scope) {
         case .on:
             break
         case .off:
-            return .error("\(record.name) is turned off for this task in Yardlet. The user can turn it on in the "
-                + "composer's + → Connectors.")
+            return .failure("\(record.name) is turned off for this task in Yardlet. The user can turn it on in the "
+                + "composer's + → Connectors.", .refused, retry: .no)
         case .harnessHasIt:
-            return .error("This task's harness has its own \(record.name) server; use that one's tools.")
+            return .failure("This task's harness has its own \(record.name) server; use that one's tools.", .refused,
+                            retry: .withChanges)
         case .unsupportedHarness:
-            return .error("Yardlet's connectors are not offered to this harness.")
+            return .failure("Yardlet's connectors are not offered to this harness.", .refused, retry: .no)
         }
         switch record.status {
         case .connected:
             break
         case .signInRequired:
-            return .error("\(record.displayName) needs the user to sign in again: Yardlet Settings → Connectors → "
-                + "\(record.name). Once they have, the same tool works again.")
+            return .failure("\(record.displayName) needs the user to sign in again: Yardlet Settings → Connectors → "
+                + "\(record.name). Once they have, the same tool works again.", .refused, retry: .no)
         case .notConnected:
-            return .error("\(record.displayName) is not connected in Yardlet. The user can connect it in Yardlet "
-                + "Settings → Connectors; the same tool works again once they have.")
+            return .failure("\(record.displayName) is not connected in Yardlet. The user can connect it in Yardlet "
+                + "Settings → Connectors; the same tool works again once they have.", .refused, retry: .no)
         }
+        let tool = record.offeredTools.first { $0["name"]?.stringValue == toolName }
+        // A tool of Yardlet's own servers is checked against the schema Yardlet lists it with, as Yardlet's
+        // other tools are (`AgentToolBroker.handle`); another server checks the calls to its tools itself.
+        if record.localService?.tools != nil, let schema = tool?["inputSchema"],
+           let failure = AgentToolArgumentCheck.failure(tool: name, arguments: arguments, schema: schema) {
+            return failure
+        }
+        let readOnly = tool?["annotations"]?["readOnlyHint"] == .bool(true)
+        let limit = environment.toolCallLimit
+        let answer = await Self.answer(within: limit) { [self] in
+            await runConnectorTool(record, tool: toolName, arguments: arguments, readOnly: readOnly, context: context)
+        }
+        guard let answer else {
+            let seconds = Int(limit.components.seconds)
+            guard readOnly else {
+                return .failure("\(record.name) did not answer within \(seconds) seconds, so Yardlet stopped waiting and "
+                    + "cancelled the request. Whether \(name) took effect is unknown: check before calling it again.",
+                    .outcomeUnknown, retry: .afterChecking)
+            }
+            return .failure("\(record.name) did not answer within \(seconds) seconds, so Yardlet stopped waiting. \(name) "
+                + "changes nothing, so calling it again is safe.", .timedOut, retry: .later)
+        }
+        return answer
+    }
+
+    private func runConnectorTool(_ record: ConnectorRecord, tool toolName: String, arguments: ToolJSON, readOnly: Bool,
+                                  context: ConnectorToolContext) async -> AgentToolResult {
         if record.program != nil { return await callProgramTool(record, tool: toolName, arguments: arguments) }
         switch record.localService {
         case let service? where service.isGoogle:
@@ -1575,21 +1613,103 @@ final class ConnectorCenter: ConnectorToolProviding {
         case let service?: return await callMacTool(record, service: service, tool: toolName, arguments: arguments)
         case nil: break
         }
-        do {
-            let result = try await session(for: record).callTool(name: toolName, arguments: arguments)
-            return Self.toolResult(result)
-        } catch ConnectorSession.Failure.signInRequired {
-            update(record.id) { $0.status = .signInRequired }
-            failures[record.id] = L10n.string("The server asked for a new sign-in.")
-            return .error("\(record.name) needs the user to sign in again: Yardlet Settings → Connectors → \(record.name).")
-        } catch ConnectorSession.Failure.refreshUnavailable(let detail) {
-            // The sign-in stands: the connector stays connected and the next call tries again.
-            return .error("Could not renew \(record.name)'s sign-in just now (\(detail)). The connection stays; "
-                + "try the call again shortly.")
-        } catch MCPHTTPError.rpc(_, let message) {
-            return .error("\(record.name): \(message)")
-        } catch {
-            return .error("Could not reach \(record.name): \(error.localizedDescription)")
+        let session = session(for: record)
+        var triedAgain = false
+        while true {
+            do {
+                let result = try await session.callTool(name: toolName, arguments: arguments)
+                return Self.toolResult(result, server: record.name)
+            } catch ConnectorSession.Failure.signInRequired {
+                update(record.id) { $0.status = .signInRequired }
+                failures[record.id] = L10n.string("The server asked for a new sign-in.")
+                return .failure("\(record.name) needs the user to sign in again: Yardlet Settings → Connectors → "
+                    + "\(record.name).", .refused, retry: .no)
+            } catch ConnectorSession.Failure.refreshUnavailable(let detail) {
+                // The sign-in stands: the connector stays connected and the next call tries again. The server
+                // refused the call for its token, so it did not run.
+                return .failure("Could not renew \(record.name)'s sign-in just now (\(detail)). The connection stays; "
+                    + "try the call again shortly.", .unreachable, retry: .later)
+            } catch MCPHTTPError.rpc(let code, let message) {
+                guard code == MCPServer.ErrorCode.invalidParams else { return .error("\(record.name): \(message)") }
+                return .failure("\(record.name) refused the arguments: \(message)", .invalidArguments, retry: .withChanges)
+            } catch where readOnly && !triedAgain && !Task.isCancelled && Self.mayAskAgain(error) {
+                triedAgain = true
+                try? await environment.toolRetrySleep(.seconds(1))
+            } catch {
+                return Self.transportFailure(error, server: record.name, tool: toolName, readOnly: readOnly)
+            }
+        }
+    }
+
+    /// Whether a read may simply be sent again: the server could not be reached or did not answer, or said
+    /// it could not answer for now.
+    private static func mayAskAgain(_ error: Error) -> Bool {
+        switch error {
+        case let error as URLError:
+            [.timedOut, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed].contains(error.code)
+        case MCPHTTPError.http(let status, _): [502, 503, 504].contains(status)
+        default: false
+        }
+    }
+
+    /// A call to a server that failed on the way: it did not go out (the server could not be reached), the
+    /// server refused it, or it went out and no answer came, when a call that changes something may have taken
+    /// effect.
+    private static func transportFailure(_ error: Error, server: String, tool: String, readOnly: Bool) -> AgentToolResult {
+        let detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        let unsent: Set<URLError.Code> = [.cannotFindHost, .cannotConnectToHost, .dnsLookupFailed, .notConnectedToInternet,
+                                          .secureConnectionFailed, .appTransportSecurityRequiresSecureConnection]
+        if let error = error as? URLError, unsent.contains(error.code) {
+            return .failure("Could not reach \(server): \(detail) The call did not go out; try it again shortly.",
+                            .unreachable, retry: .later)
+        }
+        if case MCPHTTPError.sessionExpired = error {
+            return .failure("\(server) ended its session twice, so the call did not run; try it again shortly.",
+                            .unreachable, retry: .later)
+        }
+        if case MCPHTTPError.http(let status, _) = error, (400..<500).contains(status) {
+            return .failure("\(server) refused the call: \(detail)", .refused,
+                            retry: status == 429 ? .later : status == 403 ? .no : .withChanges)
+        }
+        guard readOnly else {
+            return .failure("\(server) did not answer \(tool) (\(detail)), so whether it took effect is unknown: check "
+                + "before calling it again.", .outcomeUnknown, retry: .afterChecking)
+        }
+        return .failure("\(server) did not answer \(tool) (\(detail)). It changes nothing, so calling it again is safe.",
+                        .timedOut, retry: .later)
+    }
+
+    /// `call`'s answer, or nil once `limit` passes without one: the call is then cancelled, and what it answers
+    /// afterwards goes nowhere. A server that does not stop when cancelled (a program's) does not hold this back.
+    static func answer(within limit: Duration,
+                       _ call: @escaping @MainActor () async -> AgentToolResult) async -> AgentToolResult? {
+        let first = FirstAnswer()
+        let work = Task { @MainActor in await first.give(await call()) }
+        let timer = Task {
+            try? await Task.sleep(for: limit)
+            await first.give(nil)
+        }
+        let answer = await first.value()
+        work.cancel()
+        timer.cancel()
+        return answer
+    }
+
+    /// The first of the answers given, once one is.
+    private actor FirstAnswer {
+        private var answer: AgentToolResult??
+        private var waiter: CheckedContinuation<AgentToolResult?, Never>?
+
+        func give(_ value: AgentToolResult?) {
+            guard answer == nil else { return }
+            answer = .some(value)
+            waiter?.resume(returning: value)
+            waiter = nil
+        }
+
+        func value() async -> AgentToolResult? {
+            if let answer { return answer }
+            return await withCheckedContinuation { waiter = $0 }
         }
     }
 
@@ -1629,12 +1749,41 @@ final class ConnectorCenter: ConnectorToolProviding {
         return .object(fields)
     }
 
-    static func toolResult(_ result: ToolJSON) -> AgentToolResult {
-        AgentToolResult(
+    /// A server's `CallToolResult` as Yardlet answers it. A refusal of the call's arguments in the words the MCP
+    /// SDKs give one (TypeScript: "Invalid arguments for tool …" and the schema validator's issues, as JSON or as
+    /// lines; Python: "… validation error for …") is also told as one, with each JSON issue as the argument and
+    /// what is wrong with it, so the agent reads that the arguments were wrong rather than that the call failed.
+    static func toolResult(_ result: ToolJSON, server: String) -> AgentToolResult {
+        let answer = AgentToolResult(
             content: (result["content"]?.arrayValue ?? []).map { .json($0) },
             isError: result["isError"] == .bool(true),
             structuredContent: result["structuredContent"]
         )
+        guard answer.isError, answer.structuredContent == nil,
+              answer.text.contains("Invalid arguments for tool ") || answer.text.contains(" validation error for ")
+        else { return answer }
+        return .failure("\(server) refused the arguments: \(argumentIssues(in: answer.text) ?? answer.text)",
+                        .invalidArguments, retry: .withChanges)
+    }
+
+    /// The issues of a TypeScript SDK refusal whose validator wrote them as JSON, one "argument: what is wrong"
+    /// each, after the words before them; nil when the text holds none.
+    private static func argumentIssues(in text: String) -> String? {
+        guard let start = text.firstIndex(of: "["), let end = text.lastIndex(of: "]"), start < end,
+              let issues = try? JSONDecoder().decode([ToolJSON].self, from: Data(text[start...end].utf8)),
+              !issues.isEmpty else { return nil }
+        let lines = issues.compactMap { issue -> String? in
+            guard let message = issue["message"]?.stringValue else { return nil }
+            let path = (issue["path"]?.arrayValue ?? []).map { part -> String in
+                if case .integer(let index) = part { return "[\(index)]" }
+                return part.stringValue ?? ""
+            }.joined(separator: ".").replacingOccurrences(of: ".[", with: "[")
+            let expected = issue["expected"]?.stringValue.map { " (expected \($0))" } ?? ""
+            return (path.isEmpty ? "" : path + ": ") + message + expected
+        }
+        guard !lines.isEmpty else { return nil }
+        let lead = text[..<start].trimmingCharacters(in: .whitespacesAndNewlines)
+        return (lead.isEmpty ? "" : lead + " ") + lines.joined(separator: "; ")
     }
 
     private func refreshToolsIfStale(_ record: ConnectorRecord) {

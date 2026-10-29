@@ -402,7 +402,8 @@ final class GmailConnectorTests: XCTestCase {
         let before = google.requests.count
         let missing = try await call(center, "gmail_get_thread")
         XCTAssertTrue(missing.isError)
-        XCTAssertEqual(missing.text, "threadId is required.")
+        XCTAssertTrue(missing.text.hasPrefix("gmail_get_thread was not run: it needs threadId."), missing.text)
+        XCTAssertEqual(missing.failure?.kind, .invalidArguments, "Checked against the schema Yardlet lists the tool with")
         let odd = try await call(center, "gmail_get_message", ["messageId": .string("../drafts")])
         XCTAssertEqual(odd.text, "Not a Gmail ID: ../drafts")
         let format = try await call(center, "gmail_get_message", ["messageId": .string("m1"), "messageFormat": .string("RAW")])

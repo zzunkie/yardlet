@@ -12,6 +12,16 @@ package enum AgentToolEnvironment {
     package static let token = "YARDLET_TOOLS_TOKEN"
     /// The Yardlet task (local session) the token belongs to.
     package static let session = "YARDLET_TOOLS_SESSION"
+    /// The process ID of the app run that started the server, so that a server whose endpoint does not answer
+    /// can tell whether that run ended or only the connection went.
+    package static let appProcess = "YARDLET_TOOLS_APP_PID"
+}
+
+/// How long the app runs one call to a connector's tool at most: renewing its sign-in, initializing its
+/// server, a second try and the call itself together. The MCP server waits longer for any call's answer
+/// (`UnixSocketToolInvoker.timeout`), so the app's answer, with what it knows of the call, comes first.
+package enum AgentToolTimeLimits {
+    package static let connectorCall: Duration = .seconds(150)
 }
 
 /// One request the MCP server forwards to the running app: a tool call, the task's tool list, or

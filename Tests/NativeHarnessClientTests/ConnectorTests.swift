@@ -171,9 +171,10 @@ final class ConnectorTests: XCTestCase {
         agent: FakeUserAgent? = FakeUserAgent(),
         credentials: InMemoryConnectorCredentialStore = InMemoryConnectorCredentialStore(),
         repository: InMemoryConnectorRepository = InMemoryConnectorRepository(),
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        toolCallLimit: Duration = AgentToolTimeLimits.connectorCall
     ) -> ConnectorCenter {
-        ConnectorCenter(environment: ConnectorCenter.Environment(
+        var environment = ConnectorCenter.Environment(
             repository: repository,
             credentials: credentials,
             http: server,
@@ -182,7 +183,10 @@ final class ConnectorTests: XCTestCase {
             clientVersion: "9.9",
             now: now,
             refreshRetrySleep: { _ in }
-        ))
+        )
+        environment.toolCallLimit = toolCallLimit
+        environment.toolRetrySleep = { _ in }
+        return ConnectorCenter(environment: environment)
     }
 
     func testConnectingSignsInOnceAndOffersTheServersTools() async throws {
@@ -438,6 +442,55 @@ final class ConnectorTests: XCTestCase {
         XCTAssertEqual(center.record(record.id)?.status, .signInRequired)
     }
 
+    /// One limit covers a whole connector call, so the app answers before the MCP server stops waiting: past it, a
+    /// read says that calling again is safe, and a call that changes something that its outcome is unknown. A read
+    /// the server could not answer goes once more; a call that changes something never goes twice. An MCP SDK's
+    /// refusal of the arguments reads as one, argument by argument.
+    func testACallEndsWithinItsLimitAndOnlyAReadIsSentAgain() async throws {
+        let server = FakeConnectorServer()
+        let center = makeCenter(server: server, toolCallLimit: .seconds(1))
+        let record = try await center.add(name: "Example", serverURL: FakeConnectorServer.mcpURL)
+        center.connect(record.id)
+        await center.waitForConnection(record.id)
+        func call(_ name: String, _ arguments: [String: ToolJSON] = [:]) async -> AgentToolResult? {
+            await center.callConnectorTool(named: name, arguments: .object(arguments), for: ConnectorToolContext())
+        }
+        func calls() -> Int { server.requests.filter { FakeConnectorServer.rpcMethod($0) == "tools/call" }.count }
+
+        server.callDelay = .seconds(60)
+        let started = ContinuousClock.now
+        let write = await call("example_create_issue", ["title": .string("Hi")])
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(30), "The limit ends the call, not the server")
+        XCTAssertEqual(write?.failure?.kind, .outcomeUnknown, write?.text ?? "")
+        XCTAssertEqual(write?.failure?.retry, .afterChecking)
+        XCTAssertTrue(write?.text.contains("Whether example_create_issue took effect is unknown") == true, write?.text ?? "")
+        let read = await call("example_list_issues")
+        XCTAssertEqual(read?.failure?.kind, .timedOut, read?.text ?? "")
+        XCTAssertEqual(read?.failure?.retry, .later)
+        server.callDelay = nil
+
+        var before = calls()
+        server.failNextCalls([.networkConnectionLost])
+        let readAgain = await call("example_list_issues")
+        XCTAssertEqual(readAgain?.isError, false, readAgain?.text ?? "")
+        XCTAssertEqual(calls(), before + 2, "A read the server could not answer goes once more")
+        before = calls()
+        server.failNextCalls([.networkConnectionLost])
+        let writeOnce = await call("example_create_issue", ["title": .string("Hi")])
+        XCTAssertEqual(writeOnce?.failure?.kind, .outcomeUnknown, writeOnce?.text ?? "")
+        XCTAssertEqual(calls(), before + 1, "A call that changes something goes once")
+        server.failNextCalls([.cannotConnectToHost])
+        let unsent = await call("example_create_issue", ["title": .string("Hi")])
+        XCTAssertEqual(unsent?.failure?.kind, .unreachable, unsent?.text ?? "")
+        XCTAssertEqual(unsent?.failure?.retry, .later)
+
+        let refused = await call("example_create_issue")
+        XCTAssertEqual(refused?.failure?.kind, .invalidArguments, refused?.text ?? "")
+        XCTAssertEqual(refused?.failure?.retry, .withChanges)
+        XCTAssertEqual(refused?.text, "Example refused the arguments: MCP error -32602: Input validation error: Invalid "
+                       + "arguments for tool create_issue: title: Required (expected string)")
+    }
+
     func testTheServerForgettingTheSessionStartsANewOne() async throws {
         let server = FakeConnectorServer()
         let center = makeCenter(server: server)
@@ -608,7 +661,11 @@ final class ConnectorTests: XCTestCase {
         let connectorCall = await broker.handle(AgentToolCall(token: secondToken, session: withoutBrowser.uuidString, tool: "example_whoami", arguments: .object([:])))
         XCTAssertEqual(connectorCall.text, "you")
         let unknown = await broker.handle(AgentToolCall(token: secondToken, session: withoutBrowser.uuidString, tool: "nobody_tool", arguments: .object([:])))
-        XCTAssertEqual(unknown.text, "Unknown tool: nobody_tool")
+        XCTAssertEqual(unknown.text, "This task has no Yardlet tool named nobody_tool; its Yardlet tools are the ones its harness lists.")
+        XCTAssertEqual(unknown.failure?.kind, .unknownTool)
+        let misspelt = await broker.handle(AgentToolCall(token: secondToken, session: withoutBrowser.uuidString, tool: "example_list_issue", arguments: .object([:])))
+        XCTAssertEqual(misspelt.text, "This task has no Yardlet tool named example_list_issue. Its tools of that kind: "
+                       + "example_list_issues, example_create_issue, example_whoami.", "The tools that share its first word")
         let forged = await broker.list(AgentToolCall(token: "0", session: withoutBrowser.uuidString, tool: "", arguments: .object([:]), method: AgentToolCall.listMethod))
         XCTAssertNil(forged)
 
@@ -803,6 +860,8 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
         var tokenFailures: [TokenFailure] = []
         var tokenRequests = 0
         var beforeRefresh: (@Sendable () -> Void)?
+        var callDelay: Duration?
+        var callFailures: [URLError.Code] = []
     }
 
     /// How the token endpoint fails one request: no network, or an HTTP status.
@@ -860,6 +919,15 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
     }
 
     func failNextTokenRequests(_ failures: [TokenFailure]) { lock.withLock { state.tokenFailures = failures } }
+
+    /// How long a `tools/call` waits before the server answers it; nil answers at once.
+    var callDelay: Duration? {
+        get { lock.withLock { state.callDelay } }
+        set { lock.withLock { state.callDelay = newValue } }
+    }
+
+    /// The next `tools/call` requests fail on the way, one failure each.
+    func failNextCalls(_ failures: [URLError.Code]) { lock.withLock { state.callFailures = failures } }
 
     /// A refresh by another copy of the app: spends the live refresh token as the server would.
     func refreshElsewhere() -> (access: String, refresh: String) {
@@ -938,6 +1006,13 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
             if Self.form(request)["grant_type"] == "refresh_token", let hook = beforeRefresh { hook() }
             return token(request, url: url)
         case ("mcp.example.test", "/mcp", "POST"):
+            if Self.rpcMethod(request) == "tools/call" {
+                let (delay, failure) = lock.withLock {
+                    (state.callDelay, state.callFailures.isEmpty ? nil : state.callFailures.removeFirst())
+                }
+                if let delay { try await Task.sleep(for: delay) }
+                if let failure { throw URLError(failure) }
+            }
             return mcp(request, url: url)
         default:
             return (Data("not found".utf8), response(url, status: 404, headers: ["Content-Type": "text/plain"]))
@@ -1026,6 +1101,15 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
                 return first ? rpc(id: id, result: .object(result), url: url) : eventStream(id: id, result: .object(result), url: url)
             case "tools/call":
                 let name = message["params"]?["name"]?.stringValue
+                if name == "create_issue", message["params"]?["arguments"]?["title"] == nil {
+                    // The TypeScript SDK's refusal of arguments its schema does not take.
+                    let issue = #"[{"code":"invalid_type","expected":"string","received":"undefined","path":["title"],"message":"Required"}]"#
+                    return rpc(id: id, result: .object([
+                        "content": .array([.object(["type": .string("text"), "text": .string(
+                            "MCP error -32602: Input validation error: Invalid arguments for tool create_issue: \(issue)")])]),
+                        "isError": .bool(true)
+                    ]), url: url)
+                }
                 if name == "create_issue" {
                     let title = message["params"]?["arguments"]?["title"]?.stringValue ?? ""
                     return rpc(id: id, result: .object([
