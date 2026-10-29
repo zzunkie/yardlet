@@ -616,6 +616,15 @@ final class TaskShellCommand: ShellCommandRunning {
         return output.isEmpty ? note : note + "\n" + output
     }
 
+    /// A line without the whitespace it ends with. The output is read again every
+    /// `outputInterval` while a command writes, a line at a time through its whole scrollback;
+    /// a regular expression for this took 80–90 ms for 4,000 lines (2026-10), this a tenth of it.
+    private static func droppingTrailingWhitespace(_ line: String) -> String {
+        var end = line.endIndex
+        while end > line.startIndex, line[line.index(before: end)].isWhitespace { end = line.index(before: end) }
+        return end == line.endIndex ? line : String(line[..<end])
+    }
+
     /// The terminal's text from the top of its scrollback: wrapped rows joined into their line,
     /// trailing blanks and empty lines at either end dropped. An unmarked shell's new prompt, the
     /// cursor's line, is cut.
@@ -635,7 +644,7 @@ final class TaskShellCommand: ShellCommandRunning {
             let continues = terminal.getScrollInvariantLine(row: row + 1)?.isWrapped == true
             current += line.translateToString(trimRight: !continues, skipNullCellsFollowingWide: true)
             if !continues {
-                lines.append(current.replacingOccurrences(of: "\u{0}", with: " ").replacing(/\s+$/, with: ""))
+                lines.append(Self.droppingTrailingWhitespace(current.replacingOccurrences(of: "\u{0}", with: " ")))
                 current = ""
             }
             row += 1
