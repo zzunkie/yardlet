@@ -1,14 +1,46 @@
 # Yardlet Harness Protocol v1
 
-Status: implementation-proven contract candidate (`1.0`)
+Status: protocol version `1.0`. Yardlet's built-in harnesses use it inside the app process; an external
+adapter process can be run and checked with the SDK, but the app has no way yet to add one as a harness.
 
-Yardlet Harness Protocol (YHP) is the process boundary between the independent Yardlet product and
-any built-in or externally installed agent harness. It normalizes portable lifecycle and timeline
-behavior into a Yardlet-owned shape without erasing provider-native features. Provider-native
-features use declared, namespaced extensions and remain typed by their owning adapter.
+Yardlet Harness Protocol (YHP) is the request, response and event contract between Yardlet and an agent harness
+adapter. It normalizes portable lifecycle and timeline behavior into a Yardlet-owned shape without erasing
+provider-native features. Provider-native features use declared, namespaced extensions and remain typed by their owning
+adapter.
 
 The distributable schema, CLI runner, and sample live in
 [`../SDK/YardletHarnessProtocolV1`](../SDK/YardletHarnessProtocolV1).
+
+## Where YHP runs
+
+**Built-in harnesses, in the app process.** `HarnessRegistry` builds the adapter for each built-in harness family
+(Codex, Claude Code, MSP, ACP, Pi RPC, and the structured headless family of Cursor Agent and Antigravity CLI). Its
+default routing (`HarnessRoutingPolicy.productDefault`) wraps every family adapter in `YHPCodexCompatibilityAdapter`
+(Codex) or `YHPProviderCompatibilityAdapter` (the others). Both rest on `YHPCompatibilityAdapter`, which creates a
+`LegacyHarnessProtocolBridge` around the family adapter and hands it each request as a typed `HarnessProtocolRequest`,
+in the same process. Sessions, turns, permissions and timeline events cross this bridge as YHP requests and canonical
+events, while the wrapped adapter keeps starting and supervising the provider's own process over the provider's own
+transport (Codex App Server, Claude Code stream-json, ACP, MSP, Pi RPC or headless stream-json). Launch settings that
+must reach the provider before a session starts (launch options, extra workspace roots, Yardlet's MCP server and
+instructions) and a few reads YHP has no place for, such as a session's MCP servers, go to the wrapped adapter directly
+(`WrappedAdapterLaunchFacets`). On this path there is no JSONL stream and no `hello`/`ready`
+handshake: each built-in manifest is written in code (`HarnessProtocolCompatibilityManifest`) and declares the
+`yardlet.compat` namespace plus `yardlet.provider` or, for Codex, `yardlet.codex`. The bridge still admits each method
+against that manifest (`HarnessProtocolMethodAdmission`), validates its parameters (`HarnessProtocolRequestSchema`) and
+checks each session's event sequence (`HarnessProtocolEventContractValidator`).
+
+**External adapters, as a separate process.** `HarnessProtocolProcessHost` implements the JSONL process boundary
+described below: it launches an adapter executable, negotiates the version, correlates requests and responses, checks
+events, and ends the process tree on failure. Today it is used by the conformance runner
+(`HarnessProtocolExternalConformanceRunner`) and by Yardlet's tests, against the sample adapter in
+[`../Examples/YardletSampleAdapter`](../Examples/YardletSampleAdapter). The app's registry has no path to register or
+launch an external adapter: it builds only the built-in families above, and a harness it does not know gets
+`UnsupportedHarnessAdapter`. An adapter that passes conformance can therefore not yet be installed in Yardlet or chosen
+for a task. The SDK and the sample are for building an adapter and checking it against this contract.
+
+The rest of this document is the contract an adapter process follows. Built-in harnesses follow its method, capability,
+event and extension rules through the in-process bridge; the transport, handshake and process rules apply to an
+external adapter process.
 
 ## Transport and negotiation
 
@@ -170,11 +202,18 @@ Extensions cannot:
 
 ## Process ownership and failure semantics
 
+For an external adapter process (`HarnessProtocolProcessHost`):
+
 - Yardlet owns the launched adapter process tree and closes it on explicit stop, handshake failure,
   invalid frame direction, wrong version, malformed schema, invalid sequence, timeout, cancellation,
   or crash.
-- Handshake and request deadlines are bounded. stderr retention and JSONL line size are bounded.
+- Handshake and request deadlines are bounded. stderr retention and JSONL line size are bounded. The
+  host's defaults are 5 seconds for the handshake, 60 seconds per request, 1 MiB per line and 64 KiB
+  of retained stderr.
 - A request cancellation releases its waiter; a connection-level violation terminates the process.
+
+For every adapter, built-in or external:
+
 - Unknown or already-resolved permission/server-request identities fail before provider dispatch.
 - Unsupported content and mismatched response variants fail closed and remain unresolved unless the
   provider contract explicitly says otherwise.
@@ -182,7 +221,10 @@ Extensions cannot:
 
 ## Conformance
 
-The baseline conformance runner requires a real external process to:
+Two runners check a real external adapter process against this baseline: the dependency-free
+`bin/yardlet-harness-conformance` in the SDK, and `HarnessProtocolExternalConformanceRunner` in Yardlet's
+own sources, which uses only YHP requests and events through `HarnessProtocolProcessHost`. The adapter
+must:
 
 1. negotiate `1.0` and advertise the portable baseline plus resume and interrupt;
 2. report a runtime matching the manifest;
@@ -193,6 +235,7 @@ The baseline conformance runner requires a real external process to:
 7. preserve contiguous per-session event identity and extension data;
 8. exit after stdin closes, with bounded forced cleanup as fallback.
 
-Yardlet's host additionally runs negative conformance for incompatible versions, missing
-capabilities, bad directions, malformed payloads, duplicate IDs, wrong correlations, oversized
-lines, timeouts, crashes, sequence gaps, undeclared extensions, and descendant cleanup.
+Yardlet's tests additionally check the host against incompatible versions, missing capabilities,
+bad directions, malformed payloads, duplicate IDs, wrong correlations, oversized lines, timeouts,
+crashes, sequence gaps, undeclared extensions, and descendant cleanup. Passing conformance shows that
+an adapter follows this contract; it does not make the adapter available in the app.
