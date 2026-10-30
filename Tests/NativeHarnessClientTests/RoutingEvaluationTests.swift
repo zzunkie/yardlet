@@ -287,8 +287,8 @@ import XCTest
         try await waitUntil { !FileManager.default.fileExists(atPath: store.directory.path(percentEncoded: false)) }
     }
 
-    func testADayOfLedgerIsJudgedReadOnlyAndTheRoutingFollowsTheOutcomes() async throws {
-        let adapter = LedgerRecordingAdapter()
+    /// A model whose Antigravity runtime is `adapter`, with the evaluation on.
+    private func judgingModel(_ adapter: LedgerRecordingAdapter) throws -> (AppModel, RoutingEvaluationStore) {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RoutingEvaluationRun")))
         let model = AppModel(
             store: SessionStore(repository: InMemorySessionRepository()),
@@ -306,6 +306,31 @@ import XCTest
         let evaluation = RoutingEvaluationStore(directory: root.appending(path: "evaluation"), defaults: defaults)
         evaluation.isEnabled = true
         model.routingEvaluation = evaluation
+        return (model, evaluation)
+    }
+
+    /// A judge starts only where its harness keeps none of it in its own history; one whose harness
+    /// cannot is passed over before any session starts, and the report says why.
+    func testAJudgeWhoseHarnessWouldKeepItsOwnHistoryIsPassedOver() async throws {
+        let adapter = LedgerRecordingAdapter(keepsNoHistory: false)
+        let (model, evaluation) = try judgingModel(adapter)
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        await evaluation.record(RoutingLedgerEntry(
+            kind: .turn, taskID: UUID(), origin: .person, harness: HarnessKind.antigravityCLI.rawValue, model: "argon",
+            workspacePath: root.path(percentEncoded: false), startedAt: start, endedAt: start, outcome: .completed))
+
+        await model.runRoutingEvaluationIfDue(now: start.addingTimeInterval(3_600))
+
+        let sessions = await adapter.sessionsStarted
+        XCTAssertEqual(sessions, 0)
+        let report = try String(contentsOf: XCTUnwrap(evaluation.lastReportURL), encoding: .utf8)
+        XCTAssertTrue(report.contains(L10n.string("it cannot run without keeping a history of its own")), report)
+        XCTAssertEqual(evaluation.state.routing, [])
+    }
+
+    func testADayOfLedgerIsJudgedReadOnlyAndTheRoutingFollowsTheOutcomes() async throws {
+        let adapter = LedgerRecordingAdapter()
+        let (model, evaluation) = try judgingModel(adapter)
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         let ids = (0..<3).map { _ in UUID() }
         for (index, id) in ids.enumerated() {
@@ -358,8 +383,10 @@ import XCTest
 }
 
 /// An Antigravity runtime that reports what the test tells it to.
-private actor LedgerRecordingAdapter: HarnessAdapter, HarnessLaunchOptionConfiguring {
+private actor LedgerRecordingAdapter: HarnessAdapter, HarnessLaunchOptionConfiguring, HarnessHistoryFreeSessionConfiguring {
     nonisolated let kind = HarnessKind.antigravityCLI
+    private let keepsNoHistory: Bool
+    private(set) var sessionsStarted = 0
     private(set) var sent: [String] = []
     private(set) var launchOptions: [String: String] = [:]
     private(set) var interrupts = 0
@@ -373,7 +400,12 @@ private actor LedgerRecordingAdapter: HarnessAdapter, HarnessLaunchOptionConfigu
                                  capabilities: .unavailable, fingerprint: "stub")
     }
 
+    init(keepsNoHistory: Bool = true) { self.keepsNoHistory = keepsNoHistory }
+
+    func keepNoHistory(for localSessionID: UUID) -> Bool { keepsNoHistory }
+
     func createSession(_ request: CreateHarnessSessionRequest) async throws -> HarnessSessionHandle {
+        sessionsStarted += 1
         let handle = HarnessSessionHandle(harness: kind, localSessionID: request.localSessionID,
                                           providerSessionID: request.localSessionID.uuidString,
                                           workspaceURL: request.workspaceURL)

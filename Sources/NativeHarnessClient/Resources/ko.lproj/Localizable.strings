@@ -2630,6 +2630,7 @@
 "%@: own %@, others %@, gap %@" = "%@: 자기 점수 %@, 남이 준 점수 %@, 차이 %@";
 "Judges disagree" = "심사가 엇갈린 작업";
 "it cannot run read only" = "읽기 전용으로 띄울 수 없음";
+"it cannot run without keeping a history of its own" = "자체 기록을 남기지 않고 띄울 수 없음";
 "it ran out of time" = "시간이 다 됨";
 "it gave no answer" = "답이 없음";
 "it asked for a permission and was stopped" = "권한을 물어 멈춤";

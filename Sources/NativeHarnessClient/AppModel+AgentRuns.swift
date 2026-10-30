@@ -202,6 +202,11 @@ extension AppModel {
         if let history = adapter as? any HarnessHistoryFreeSessionConfiguring {
             run.keepsNoProviderHistory = await history.keepNoHistory(for: run.id)
         }
+        // A judge reads excerpts of the person's tasks, so it starts only where its harness keeps none
+        // of it: turning the evaluation off then leaves nothing of it behind.
+        if run.isEvaluationJudge, !run.keepsNoProviderHistory {
+            throw SessionToolError(message: L10n.string("it cannot run without keeping a history of its own"))
+        }
         // A subagent is a launch Yardlet makes, so it carries Yardlet instructions by its harness's route too:
         // those of the project its folder belongs to, else of the task it works for.
         // A judge gets none: the routing it judges must not steer it.
