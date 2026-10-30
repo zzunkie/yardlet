@@ -178,7 +178,7 @@ enum VaultPageScripts {
     /// - `typedSecret`: someone typed into a password field (trusted input), told once a document.
     /// - `passwordFocus`, with `page`, and `isNew` set for a new-password field still empty; `passwordBlur`:
     ///   a password field took or lost the focus.
-    /// - `madeCleared`: the person emptied a field that held a password the vault made (Chrome then drops it).
+    /// - `madeCleared`: the person emptied the fields that held a password the vault made (Chrome then drops it).
     /// - `codeField`, with `page`: a one-time code field showed.
     /// - `qr`, with `page`: a graphic the size and shape of a QR code showed; Yardlet reads the screen.
     /// - `setup`, with `page` and `text`: a link to set up a code (`otpauth://`).
@@ -315,7 +315,8 @@ enum VaultPageScripts {
     /// Runs in the vault's isolated world of every document of a panel's tab. It listens for the person
     /// submitting a form whose password field they typed into, or that holds a password the vault made
     /// (not one the vault filled from an item), and tells Yardlet through the binding, once per submission.
-    /// It tells when a password field takes or loses the focus, and whether it is an empty new-password
+    /// A page that sends a new password with its own script from a `[role=button]` counts once the password
+    /// leaves the page (`inPlace`). It tells when a password field takes or loses the focus, and whether it is an empty new-password
     /// field, for the strong password suggestion. It also looks, at most twice a second while the
     /// page changes, for a one-time code field (told once while it shows) and for a QR code's square on
     /// screen (each element once, ten QR looks a document) and tells Yardlet; no value leaves the page
@@ -333,30 +334,75 @@ enum VaultPageScripts {
             if (!e.isTrusted || !(e.target instanceof HTMLInputElement) || e.target.type !== 'password') return;
             typed.add(e.target);
             if (!toldTyped) { toldTyped = true; send({ kind: 'typedSecret' }); }
-            if (madePasswords().delete(e.target) && !e.target.value) send({ kind: 'madeCleared' });
+            // Once no field of its form holds it: a confirmation emptied alone leaves the new password in.
+            if (madePasswords().delete(e.target) && !e.target.value
+                && !newPasswordFields(e.target).some(f => f.value && madePasswords().has(f))) send({ kind: 'madeCleared' });
           }, true);
           let last = '';
-          const offer = scope => {
-            const fields = Array.from((scope || document).querySelectorAll('input'));
-            const made = fields.find(e => e.type === 'password' && e.value && madePasswords().has(e));
-            const own = fields.filter(e => e.type === 'password' && e.value && typed.has(e) && !(window.__yardletVault || []).includes(e));
-            // A change form's new password, not the current one typed above it.
-            const pass = made || own.find(e => newPasswordFields(e).length) || own[0];
-            if (!pass) return;
-            const user = fields.find(e => textTypes.includes(e.type) && (e.autocomplete || '').split(/\\s+/).includes('username') && e.value)
-              || fields.slice(0, fields.indexOf(pass)).reverse().find(e => textTypes.includes(e.type) && e.value);
-            const message = made ? { kind: 'signIn', username: user ? user.value : '', made: '1' }
-              : { kind: 'signIn', username: user ? user.value : '', password: pass.value };
+          const tell = message => {
             const payload = JSON.stringify(message);
             if (payload === last) return;
             last = payload;
             send(message);
           };
+          // What submitting the scope tells: the password field it is about, and the message.
+          const reading = scope => {
+            const fields = Array.from((scope || document).querySelectorAll('input'));
+            const made = fields.find(e => e.type === 'password' && e.value && madePasswords().has(e));
+            const own = fields.filter(e => e.type === 'password' && e.value && typed.has(e) && !(window.__yardletVault || []).includes(e));
+            // A change form's new password, not the current one typed above it.
+            const pass = made || own.find(e => newPasswordFields(e).length) || own[0];
+            if (!pass) return null;
+            const user = fields.find(e => textTypes.includes(e.type) && (e.autocomplete || '').split(/\\s+/).includes('username') && e.value)
+              || fields.slice(0, fields.indexOf(pass)).reverse().find(e => textTypes.includes(e.type) && e.value);
+            return { pass, message: made ? { kind: 'signIn', username: user ? user.value : '', made: '1' }
+              : { kind: 'signIn', username: user ? user.value : '', password: pass.value } };
+          };
+          const offer = scope => { const read = reading(scope); if (read) tell(read.message); };
+          // A page that sends a new password with its own script from a [role=button] (a dialog changing it in
+          // place), as Chrome's dynamic form submission counts a form that goes away: the person's click or key on
+          // one after the password, made or typed into a new-password field, in the nearest region holding a filled
+          // password field, counts once that field is removed or hidden and no other field shown holds the password
+          // (a page that redraws its form after an error keeps it), within 30 seconds and before another click. An
+          // emptied field still shown does not count, nor does a button that says it cancels, closes or goes back.
+          const shown = e => { if (!e.isConnected) return false; const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+            return r.width > 0 && r.height > 0 && s.visibility !== 'hidden'; };
+          const dismissing = /\\b(cancel|close|dismiss|back|not now|skip)\\b|취소|닫기|뒤로|이전|나중에|건너뛰기/i;
+          let sentInPlace = null;
+          const inPlace = button => {
+            if (button.getAttribute('aria-disabled') === 'true'
+                || dismissing.test((button.getAttribute('aria-label') || '') + ' ' + button.textContent)) return null;
+            for (let area = button.parentElement; area && area !== document.documentElement; area = area.parentElement) {
+              if (!Array.from(area.querySelectorAll('input[type=password]')).some(f => f.value)) continue;
+              const read = reading(area);
+              if (!read || !(madePasswords().has(read.pass) || newPasswordFields(read.pass).length)
+                  || !(read.pass.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING)) return null;
+              return { field: read.pass, value: read.pass.value, message: read.message, until: Date.now() + 30000 };
+            }
+            return null;
+          };
+          const sentAway = () => {
+            if (!sentInPlace) return;
+            const sent = sentInPlace;
+            if (Date.now() > sent.until) { sentInPlace = null; return; }
+            if (shown(sent.field) || Array.from(document.querySelectorAll('input')).some(f => f.value === sent.value && shown(f))) return;
+            sentInPlace = null;
+            tell(sent.message);
+          };
           addEventListener('submit', e => offer(e.target), true);
-          addEventListener('click', e => { const b = e.target instanceof Element && e.target.closest('button, input[type=submit]');
-            if (b) offer(b.form || b.closest('form')); }, true);
-          addEventListener('keydown', e => { if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.type === 'password')
-            offer(e.target.form || e.target.closest('form')); }, true);
+          addEventListener('click', e => {
+            const target = e.target instanceof Element ? e.target : null;
+            const b = target && target.closest('button, input[type=submit]');
+            const role = !b && e.isTrusted && target && target.closest('[role=button]');
+            sentInPlace = role ? inPlace(role) : null;
+            if (b) offer(b.form || b.closest('form'));
+          }, true);
+          addEventListener('keydown', e => {
+            if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.type === 'password')
+              offer(e.target.form || e.target.closest('form'));
+            const role = e.isTrusted && (e.key === 'Enter' || e.key === ' ') && e.target instanceof Element && e.target.closest('[role=button]');
+            if (role) sentInPlace = inPlace(role);
+          }, true);
           addEventListener('focusin', e => {
             if (!(e.target instanceof HTMLInputElement) || e.target.type !== 'password') return;
             const fresh = newPasswordFields(e.target);
@@ -373,6 +419,7 @@ enum VaultPageScripts {
           let codeField = null, qrLooks = 0, pending = 0;
           const look = () => {
             pending = 0;
+            sentAway();
             // Once while a code field shows; again when a later step shows another.
             if (!codeField || !codeField.isConnected || !onScreen(codeField.getBoundingClientRect())) {
               const field = Array.from(document.querySelectorAll('input'))
@@ -497,12 +544,17 @@ enum VaultPageScripts {
         return (objectID, frame, context["result"]?["value"] ?? .null)
     }
 
+    /// What a fill of a made password did: it went in; nothing went in for sure (the page moved on first, or the fill
+    /// found no password field); or the page gave no answer (the call timed out or its script broke off), so the
+    /// field may hold it.
+    enum NewPasswordFill { case filled, nothing, unanswered }
+
     /// Puts a password the vault made into the field and its confirmation, as `fillForPerson` puts a saved one: only
-    /// into the document of `frame`, recorded on the tab before it goes in; false when the page took nothing.
+    /// into the document of `frame`, recorded on the tab before it goes in, and taken back only when nothing went in.
     static func fillNewPassword(_ cdp: any BrowserAgentCDP, frame: (id: String, loaderID: String, origin: String),
                                 fills: BrowserVaultFills, into objectID: String, password: String,
-                                timeout: Duration = .seconds(10)) async -> Bool {
-        guard (try? await mainFrame(cdp, timeout: timeout))?.loaderID == frame.loaderID else { return false }
+                                timeout: Duration = .seconds(10)) async -> NewPasswordFill {
+        guard (try? await mainFrame(cdp, timeout: timeout))?.loaderID == frame.loaderID else { return .nothing }
         let record = BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: cdp.eventLog.count)
         fills.record(record)
         let filled = try? await cdp.send("Runtime.callFunctionOn", [
@@ -511,15 +563,18 @@ enum VaultPageScripts {
                                  .string(frame.origin)].map { .object(["value": $0]) }),
             "returnByValue": .bool(true)
         ], timeout: timeout)
-        guard filled?["result"]?["value"]?["kinds"] != nil else {
+        let answer = filled?["result"]?["value"]
+        guard answer?["kinds"] != nil else {
+            // The fill says why it put nothing in; with no answer the page may hold the value.
+            guard answer?["error"] != nil else { return .unanswered }
             fills.withdraw(record)
-            return false
+            return .nothing
         }
         if let now = try? await mainFrame(cdp, timeout: timeout), now.loaderID != frame.loaderID {
             // The page went on to another document of its own as the fill went in; it may hold the value too.
             fills.record(BrowserAgentVaultFill(loaderID: now.loaderID, eventMark: record.eventMark))
         }
-        return true
+        return .filled
     }
 
     /// The tab's main frame: its ID, the document it shows and its origin, as the browser reports them.
@@ -877,7 +932,8 @@ extension BrowserAgentTools {
         }
         let item: VaultItem
         do {
-            item = try vault.presaveMadePassword(password, origin: frame.origin, username: username, name: itemName)
+            item = try vault.presaveMadePassword(password, origin: frame.origin, username: username, name: itemName,
+                                                 taskID: sessionID)
         } catch {
             throw BrowserAgentToolError("Yardlet could not save a new password, so it filled none.")
         }
@@ -889,13 +945,22 @@ extension BrowserAgentTools {
         if password.count >= VaultScrubList.shortest {
             page.guardFilledValues(VaultScrubList.spellings(of: password))
         }
-        let filled = try await callInVaultWorld(page, objectID, Self.fillFunction, arguments: [
-            .string(VaultFillKind.newPassword.rawValue), .null, .string(password), .null, .string(frame.origin)
-        ])
+        let filled: JSONValue
+        do {
+            filled = try await callInVaultWorld(page, objectID, Self.fillFunction, arguments: [
+                .string(VaultFillKind.newPassword.rawValue), .null, .string(password), .null, .string(frame.origin)
+            ])
+        } catch {
+            // No answer: the field may hold the password, so the item and the page's record stay.
+            vault.logMadePassword(item, .saved, origin: frame.origin, taskID: sessionID,
+                                  "The page gave no answer to the fill, so the item stays.")
+            throw error
+        }
         let kinds = filled["kinds"]?.arrayValue?.compactMap(\.stringValue) ?? []
         if let failure = filled["error"]?.stringValue {
             page.vaultFills.withdraw(record)
-            try? vault.delete(item.id)
+            try? vault.deleteMadePassword(item.id, origin: frame.origin, taskID: sessionID,
+                                          "The page took nothing (\(failure)).")
             let message = Self.fillFailure(failure, ref: ref)
             vault.record(grant, for: request, filled: [], failure: message)
             throw BrowserAgentToolError(message)

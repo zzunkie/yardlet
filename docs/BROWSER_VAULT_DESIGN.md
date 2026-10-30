@@ -450,8 +450,9 @@ section 5.3).
 ### 6.3 Usage log and notifications
 
 - **Usage log** (`usage.jsonl`): time, task ID and title, harness, item, site, kind filled, result (filled, or refused
-  with the reason), confirmation method (Touch ID, unlocked, always). It shows in the item sheet's "Recent use" and the
-  settings list's "Last used".
+  with the reason), confirmation method (Touch ID, unlocked, always). Its fills and refusals show in the item sheet's
+  "Recent use" and the settings list's "Last used". It also keeps what became of each password the vault made (section
+  15.4), never the value.
 - **Notifications** (Yardlet notifications; clicking one opens that task) are sent only when the person has something to
   do: when "Every time" or a locked vault is waiting for Touch ID, and when an item named explicitly was refused because
   it belongs to another site. The notification on every fill was removed (nobody reads notifications that pile up with
@@ -952,6 +953,7 @@ the vendors' help pages; these may differ from released builds).
 | Confirmation field | Filled ([password_generation_agent.cc](https://github.com/chromium/chromium/blob/main/components/autofill/content/renderer/password_generation_agent.cc)) | Filled (older screenshots only) | Filled | Filled |
 | When it is saved | On acceptance (presave); "Clear the username value if there are already saved credentials with the same username in order to prevent overwriting." Committed without a prompt when the submission succeeds; an update may still prompt. Emptying the field deletes the presave ([password_generation_manager.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_generation_manager.cc), [password_manager.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_manager.cc)) | With the sign-up; the exact moment is unconfirmed | Into the generator history at once; the login when the person saves ([help](https://support.1password.com/recover-unsaved-password/)) | Into the generator history at once (up to 200); the login after the person confirms |
 | Old passwords | Not kept | — | Item history | The last 5 per item ([help](https://bitwarden.com/help/password-and-generator-history/)) |
+| A form the page sends with its own script | After a request the page made succeeds or a same-document navigation, the form or formless field the person last used counts as sent once it is removed or all its fields are hidden; no click is weighed (`CanInferFormSubmitted`, `XHR_SUCCEEDED`, `SAME_DOCUMENT_NAVIGATION` in [form_submission_tracker.cc](https://github.com/chromium/chromium/blob/main/components/autofill/content/renderer/form_submission_tracker.cc), read 2026-10-30) | — | — | — |
 
 `passwordrules` is Apple's proposal to the HTML standard: `required:`, `allowed:`, `max-consecutive:`, `minlength:` and
 `maxlength:` rules separated by `;`, with the classes `upper`, `lower`, `digit`, `special` (ASCII punctuation and the
@@ -981,9 +983,37 @@ space), `ascii-printable`, `unicode` and custom ones in brackets, where `-` come
   username the form holds); submitting the form gives the item the username typed by then, without asking. Beside an
   item of the same username (a change form), the new item has no username, as Chrome's has, so the saved password stays
   the one filled; after the change is submitted, the save bar asks "Update the saved password for github.com?", and
-  updating gives the saved item the new password and deletes the item beside it. If the person empties the field before
-  submitting, the item made for it is deleted (Chrome's `PasswordNoLongerGenerated`). Choosing again on the same page
+  updating gives the saved item the new password and deletes the item beside it. A form that shows no username (a change
+  dialog, a recovery's new password page) leaves the new item without one; once it is sent, the bar asks to update the
+  site's one item with a password, if it has exactly one, and otherwise asks nothing. Choosing again on the same page
   replaces the password in the same item.
+- **A made password stays unless the page certainly took nothing:** Yardlet deletes the item made for it only when
+  the fill put nothing in for sure: the page had moved to another document before the fill was sent, or the fill
+  stopped before writing because the field was no password field or the page was on another origin. A fill the page
+  did not answer (the call timed out, or the page's script broke off) may have put it in, so the item stays. When the
+  fields holding a made password are emptied before the form is seen to be sent (the new password and its
+  confirmation, by the person's or an agent's typing), Chrome deletes its presave (`PasswordNoLongerGenerated`);
+  Yardlet keeps the item as it is and only logs it. Yardlet, unlike the site, cannot tell whether the site already took
+  the password: a page may send its fields with its own script, and a person may empty a field the password went into
+  by mistake while another still holds it. Losing a password the site took locks the person out of the account,
+  while an item nobody used costs one deletion in Settings → Passwords, and in the meantime an agent's fill on that
+  site names its item. Moving the password to the item's previous passwords was weighed and left out: in the very
+  case it guards against, the key button would show the item without the password the site now has. Choosing a
+  strong password again on the page puts a new one into the same item, the earlier one going to its previous
+  passwords. Otherwise the item goes only when the person updates a saved item with its password from the bar, or
+  deletes it.
+- **A form the page sends itself:** a submit event, a click on a `button` or submit input, and Enter in a password field
+  count as submitting, as before. A page that sends a new password with its own script from a `[role=button]` (a dialog
+  that changes it in place) counts as sending it when the person clicks or presses Enter or Space on one after the
+  password, made or typed into a new password field, in the nearest region of the page that holds a filled password
+  field, and then, within 30 seconds and before another click, that field is removed or hidden and no field shown holds
+  the password. This follows Chrome's inference that a form which goes away was sent (section 15.1); the watch runs in an
+  isolated world and does not see the page's requests, so the person's click stands in for the request Chrome waits for.
+  To keep wrong save prompts away: a button that says it cancels, closes, goes back, skips or is "not now" (in English
+  or Korean) does not count, nor one before the password or marked `aria-disabled`; a field emptied but still shown, as
+  after an error, does not count, nor a form redrawn with the password still in it; and a sign-in's lone password field
+  is not watched this way. What follows is the same as for a submitted form: the username, the update bar, the save bar
+  for a typed password.
 - **Previous passwords:** whenever an item's password is replaced (the update bar, the item sheet, a made password), the
   old one stays in the item, the last five with when each was replaced (Bitwarden keeps five). The item sheet shows them
   after Touch ID. So a change the site refused, then updated by mistake, loses nothing.
@@ -1018,8 +1048,14 @@ address guard before it goes in; submitted only when the form is safe; and the u
   tab's record of filled documents and the address guard before the page takes it, so the agent's snapshots, scripts
   and screenshots on that document are refused as for any filled one (section 5.3), and the bar never holds or shows
   it. The watch tells Yardlet that a form with a made password was submitted without sending the value (`made`), since
-  Yardlet has it already. No clipboard, no log, no tool result. Copying a previous password out of the item sheet
-  marks the copy as concealed and clears it, as the sheet's other secrets.
+  Yardlet has it already. No clipboard, no tool result, and no value in any log. Copying a previous password out of the
+  item sheet marks the copy as concealed and clears it, as the sheet's other secrets.
+- What becomes of a made password is in the usage log (section 6.3), without the value, so that one missing later can
+  be traced: kept in a new item or in the page's earlier one, a fill the page did not answer, its fields emptied, the
+  form sent (and whether the item took a username or the bar asked to update an item), updated into a saved item, and
+  its item deleted with why. These entries have the kind `new_password`, the result `saved` or
+  `deleted`, the task whose panel or agent made it, and a reason; the item sheet's "Recent use" keeps to fills and
+  refusals.
 - The site comes from the browser's main frame origin, as for every fill; only https sites and local development
   origins get an item.
 - Nothing new in Settings and no shortcuts. Added: one bar, one menu item, and the previous passwords row in the item

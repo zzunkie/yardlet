@@ -25,7 +25,8 @@ final class InMemoryVaultSecretStore: VaultSecretStoring {
 
 /// One use of an item, as the usage log keeps it (design §6.3). No value is ever written here.
 struct VaultUse: Codable, Equatable, Sendable {
-    enum Outcome: String, Codable, Sendable { case filled, refused }
+    /// A fill, or what became of a password Yardlet made (design §15): kept in an item, or its item deleted.
+    enum Outcome: String, Codable, Sendable { case filled, refused, saved, deleted }
     /// How the fill was allowed.
     enum Confirmation: String, Codable, Sendable { case always, unlocked, touchID, person }
 
@@ -462,7 +463,7 @@ final class VaultCenter: ObservableObject {
     /// as Chrome's does, so the saved password stays the one filled until the person updates it.
     @discardableResult
     func presaveMadePassword(_ password: String, origin: String, username: String, name: String? = nil,
-                             into presaved: UUID? = nil) throws -> VaultItem {
+                             into presaved: UUID? = nil, taskID: UUID? = nil) throws -> VaultItem {
         guard let site = VaultSite.suggestion(for: origin, suffixes: suffixes) else {
             throw VaultRefusal(message: "Yardlet saves new passwords only for https sites.")
         }
@@ -473,13 +474,35 @@ final class VaultCenter: ObservableObject {
             var secret = (try trustedSecret(of: item)) ?? VaultSecret()
             secret.password = password
             try save(item, secret: secret)
+            logMadePassword(item, .saved, origin: origin, taskID: taskID,
+                            "Saved a new made password before the page took it, in the item made on this page before.")
             return item
         }
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let item = VaultItem(name: trimmed.isEmpty ? VaultSite.host(of: origin) : trimmed, sites: [site],
                              username: taken ? "" : username)
         try save(item, secret: VaultSecret(password: password))
+        logMadePassword(item, .saved, origin: origin, taskID: taskID, "Saved a made password before the page took it.")
         return item
+    }
+
+    /// Deletes the item a made password was presaved in, which the page certainly did not take (it moved on first,
+    /// or had no field for it), or which went into another item.
+    func deleteMadePassword(_ itemID: UUID, origin: String, taskID: UUID? = nil, _ reason: String) throws {
+        let item = items.first { $0.id == itemID }
+        try delete(itemID)
+        if let item { logMadePassword(item, .deleted, origin: origin, taskID: taskID, reason) }
+    }
+
+    /// Logs what became of a password Yardlet made (design §15), never the value, so that one missing later can be
+    /// traced: where it was kept, the form's submission, an update, or why its item was deleted.
+    func logMadePassword(_ item: VaultItem, _ outcome: VaultUse.Outcome, origin: String, taskID: UUID? = nil,
+                         _ reason: String) {
+        let task = taskID.flatMap(describeTask)
+        environment.repository.appendUse(VaultUse(
+            at: environment.now(), taskID: taskID, taskTitle: task?.title, harness: task?.harness, itemID: item.id,
+            itemName: item.name, origin: origin, kinds: [VaultFillKind.newPassword.rawValue], outcome: outcome,
+            reason: reason, confirmedBy: nil))
     }
 
     /// Logs a fill the page took (or failed to take after the grant), and counts the item as used.
@@ -692,8 +715,14 @@ final class VaultCenter: ObservableObject {
         await environment.confirm(reason)
     }
 
+    /// Every entry the usage log keeps, oldest first.
+    func allUses() -> [VaultUse] { environment.repository.allUses() }
+
+    /// The item's fills and refusals, latest first, for the item sheet's "Recent use"; what became of a made password
+    /// stays in the log for tracing.
     func uses(of itemID: UUID, limit: Int = 20) -> [VaultUse] {
-        environment.repository.uses(of: itemID, limit: limit)
+        Array(environment.repository.uses(of: itemID, limit: .max)
+            .filter { $0.outcome == .filled || $0.outcome == .refused }.prefix(limit))
     }
 
     /// The agents' fills the log keeps (90 days): each task and the site of the page filled. A task signed in

@@ -15,10 +15,11 @@ struct BrowserVaultSaveOffer: Equatable {
 }
 
 /// A password the vault made in a tab and the item it was presaved in (design §15): submitting the form
-/// completes the item; emptying the field before that drops it, as Chrome drops its presave.
+/// completes the item; emptying the field before that leaves the item as it is, where Chrome drops it.
 struct BrowserVaultMadePassword: Equatable {
     var tab: BrowserTabID
     var item: UUID
+    var origin: String
     var submitted = false
 }
 
@@ -198,7 +199,10 @@ extension BrowserHostPaneController {
                 // The replaced password stays in the item's previous ones (`VaultCenter.save`).
                 try vault.save(item, secret: secret)
                 if let presaved = offer.presaved {
-                    try vault.delete(presaved)
+                    vault.logMadePassword(item, .saved, origin: offer.origin, taskID: session,
+                                          "The person updated the item with the password made on this page.")
+                    try vault.deleteMadePassword(presaved, origin: offer.origin, taskID: session,
+                                                 "Its password went into “\(item.name)”, which the person updated.")
                     if madePassword?.item == presaved { madePassword = nil }
                 }
             } else {
@@ -251,10 +255,11 @@ extension BrowserHostPaneController {
                 return self.showVaultNotice(L10n.string("Yardlet could not make a password."))
             }
             let earlier = self.madePassword.flatMap { $0.tab == tab.id && !$0.submitted ? $0.item : nil }
+            let origin = field.frame.origin
             let item: VaultItem
             do {
-                item = try self.vault.presaveMadePassword(password, origin: field.frame.origin,
-                                                          username: context["username"]?.stringValue ?? "", into: earlier)
+                item = try self.vault.presaveMadePassword(password, origin: origin, username: context["username"]?.stringValue ?? "",
+                                                          into: earlier, taskID: self.session)
             } catch {
                 return self.showVaultNotice((error as? VaultRefusal)?.message ?? error.localizedDescription)
             }
@@ -264,39 +269,67 @@ extension BrowserHostPaneController {
                 tab.send(.guardFilledValues(tab: tab.id, values: VaultScrubList.spellings(of: password)))
             }
             MacBrowserHost.shared.loginFollow.personFilling(on: tab)
-            guard await VaultPageScripts.fillNewPassword(tab.devTools, frame: field.frame, fills: tab.vaultFills,
-                                                         into: field.objectID, password: password) else {
-                if earlier != item.id { try? self.vault.delete(item.id) }
+            switch await VaultPageScripts.fillNewPassword(tab.devTools, frame: field.frame, fills: tab.vaultFills,
+                                                          into: field.objectID, password: password) {
+            case .nothing:
+                // Only a fill that certainly put nothing in drops the item made for it.
+                if earlier != item.id {
+                    try? self.vault.deleteMadePassword(item.id, origin: origin, taskID: self.session,
+                                                       "The page took nothing: it moved on first or had no password field.")
+                }
                 return self.showVaultNotice(L10n.string("This page has no password field to fill."))
+            case .unanswered:
+                self.vault.logMadePassword(item, .saved, origin: origin, taskID: self.session,
+                                           "The page gave no answer to the fill, so the item stays.")
+            case .filled:
+                break
             }
-            self.madePassword = BrowserVaultMadePassword(tab: tab.id, item: item.id)
+            self.madePassword = BrowserVaultMadePassword(tab: tab.id, item: item.id, origin: origin)
             self.showVaultNotice(L10n.format("Saved the new password in “%@”.", item.name))
         }
     }
 
-    /// The person submitted a form holding the password the vault made (Chrome saves it then): the presaved
-    /// item takes the username the form held; beside a saved item of that username, the bar asks to update it.
+    /// The person submitted a form holding the password the vault made (Chrome saves it then), or the page sent it
+    /// with its own script (the watch's `inPlace`): the presaved item takes the username the form held. Beside a saved
+    /// item of that username, or, when neither the form nor the item has one (a change dialog, a recovery's new
+    /// password page), beside the site's one item with a password, the bar asks to update it.
     private func madePasswordSubmitted(username: String, origin: String, site: String, on tab: BrowserTab) {
         guard let made = madePassword, made.tab == tab.id,
               var item = vault.items(for: origin).first(where: { $0.id == made.item }),
               let password = vault.secret(of: item.id)?.password else { return }
         madePassword?.submitted = true
         let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !username.isEmpty, let saved = vault.items(for: origin).first(where: { $0.id != item.id && $0.username == username }) {
-            guard vault.secret(of: saved.id)?.password != password else { return }
-            vaultOffer = BrowserVaultSaveOffer(origin: origin, site: site, username: username, password: password,
+        let others = vault.items(for: origin).filter { $0.id != item.id }
+        let signIns = others.filter(\.hasPassword)
+        let saved: VaultItem? = !username.isEmpty ? others.first(where: { $0.username == username })
+            : item.username.isEmpty && signIns.count == 1 ? signIns[0] : nil
+        if let saved {
+            guard vault.secret(of: saved.id)?.password != password else {
+                return vault.logMadePassword(item, .saved, origin: origin, taskID: session,
+                                             "The form holding it was sent; “\(saved.name)” already has it.")
+            }
+            vaultOffer = BrowserVaultSaveOffer(origin: origin, site: site, username: saved.username, password: password,
                                                updates: saved, presaved: item.id)
-            return
+            return vault.logMadePassword(item, .saved, origin: origin, taskID: session,
+                                         "The form holding it was sent; the bar asks to update “\(saved.name)”.")
         }
-        guard !username.isEmpty, item.username != username, let secret = vault.secret(of: item.id) else { return }
+        guard !username.isEmpty, item.username != username, let secret = vault.secret(of: item.id) else {
+            return vault.logMadePassword(item, .saved, origin: origin, taskID: session, "The form holding it was sent.")
+        }
         item.username = username
         try? vault.save(item, secret: secret)
+        vault.logMadePassword(item, .saved, origin: origin, taskID: session,
+                              "The form holding it was sent; the item took the form's username.")
     }
 
+    /// The fields holding the made password were emptied before the form was seen to be sent. Chrome drops its presave
+    /// then; the item keeps the password (design §15), since the page may have taken it already, and choosing a strong
+    /// password again on the page puts a new one into the same item.
     private func madePasswordCleared(on tab: BrowserTab) {
-        guard let made = madePassword, made.tab == tab.id, !made.submitted else { return }
-        madePassword = nil
-        try? vault.delete(made.item)
+        guard let made = madePassword, made.tab == tab.id, !made.submitted,
+              let item = vault.items.first(where: { $0.id == made.item }) else { return }
+        vault.logMadePassword(item, .saved, origin: made.origin, taskID: session,
+                              "Its fields were emptied before the form was seen to be sent; the item keeps it.")
     }
 
     // MARK: The key button
