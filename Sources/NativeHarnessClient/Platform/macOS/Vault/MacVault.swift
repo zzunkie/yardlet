@@ -8,6 +8,11 @@ import Security
 /// keyed hash for one-time codes, whether this build is team-signed, and the screen locking.
 @MainActor
 enum MacVault {
+#if DEBUG
+    /// A QA fixture's own answer to Touch ID while it is set, in place of the run's (`YARDLET_VAULT_QA_CONFIRM`).
+    static var qaConfirm: ((String) -> Bool)?
+#endif
+
     static func makeCenter() -> VaultCenter {
 #if DEBUG
         // QA runs keep the vault in memory (a temporary home has no login keychain) and allow it in
@@ -17,7 +22,7 @@ enum MacVault {
             let confirms = ProcessInfo.processInfo.environment["YARDLET_VAULT_QA_CONFIRM"] == "1"
             return VaultCenter(environment: VaultCenter.Environment(
                 secrets: InMemoryVaultSecretStore(), repository: InMemoryVaultRepository(), hmac: hmac,
-                isAllowedBuild: true, confirm: { _ in confirms }, randomBytes: randomBytes))
+                isAllowedBuild: true, confirm: { reason in qaConfirm?(reason) ?? confirms }, randomBytes: randomBytes))
         }
 #endif
         let center = VaultCenter(environment: VaultCenter.Environment(
