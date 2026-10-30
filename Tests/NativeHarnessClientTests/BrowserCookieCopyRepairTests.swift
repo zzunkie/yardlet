@@ -4,9 +4,9 @@ import Foundation
 import XCTest
 @testable import NativeHarnessClient
 
-/// The one-time removal of the cookie pairs the profile cookie copy left before 2026-10-25 deletes a person's
-/// cookies: only copied domain cookies that pair with a host-only one may go, each changed database is in the
-/// Trash first, and it runs once (docs/BROWSER_SESSION_ISOLATION.md 8). Databases in a temporary folder only.
+/// The one-time removal of the cookies the profile cookie copy left in the wrong form before 2026-10-25 deletes a
+/// person's cookies: only copied domain cookies the profiles show to be the old copy's may go, each changed database
+/// is in the Trash first, and it runs once (docs/BROWSER_SESSION_ISOLATION.md 8). Databases in a temporary folder only.
 final class BrowserCookieCopyRepairTests: XCTestCase {
     private var folder: URL!
     private var root: URL { folder.appending(path: "Browser") }
@@ -26,8 +26,9 @@ final class BrowserCookieCopyRepairTests: XCTestCase {
     /// A cookie row: host, name, source type (1 HTTP, 2 script, 3 set through the cookie manager), partition.
     private typealias Row = (host: String, name: String, source: Int, partition: String)
 
-    /// A `Cookies` database with Chromium 154's table (schema 24) and its unique index.
-    private func makeDatabase(_ profile: String, _ rows: [Row], journal: Bool = false) throws {
+    /// A `Cookies` database with Chromium 154's table (schema 24) and its unique index. Its cookies are HttpOnly but
+    /// those named in `scripted`.
+    private func makeDatabase(_ profile: String, _ rows: [Row], scripted: Set<String> = [], journal: Bool = false) throws {
         let directory = root.appending(path: profile)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var handle: OpaquePointer?
@@ -46,7 +47,7 @@ final class BrowserCookieCopyRepairTests: XCTestCase {
             """
         for (index, row) in rows.enumerated() {
             sql += "INSERT INTO cookies VALUES(\(index), '\(row.host)', '\(row.partition)', '\(row.name)', '', X'00', '/', "
-                + "0, 1, 1, 0, 1, 1, 1, -1, 2, 443, 0, \(row.source), 0);"
+                + "0, 1, \(scripted.contains(row.name) ? 0 : 1), 0, 1, 1, 1, -1, 2, 443, 0, \(row.source), 0);"
         }
         XCTAssertEqual(sqlite3_exec(handle, sql, nil, nil, nil), SQLITE_OK)
         // Chromium truncates its journal after each write.
@@ -84,7 +85,7 @@ final class BrowserCookieCopyRepairTests: XCTestCase {
         let untouched = cookies("Default").filter { $0 != ".accounts.example.com signin" && $0 != ".y.example.com carried" }
 
         let outcome = BrowserCookieCopyRepair.runOnce(root: root, trash: trash, now: now)
-        XCTAssertEqual(outcome, .done(.init(ranAt: now, removed: ["Default": 2, task: 1], round: 3)))
+        XCTAssertEqual(outcome, .done(.init(ranAt: now, removed: ["Default": 2, task: 1], round: 4)))
         XCTAssertEqual(cookies("Default"), untouched)
         XCTAssertEqual(cookies(task), ["accounts.example.com signin"])
         XCTAssertEqual(cookies("Profile 1").count, 2, "only the default profile and task profiles")
@@ -106,11 +107,12 @@ final class BrowserCookieCopyRepairTests: XCTestCase {
         XCTAssertEqual(cookies("Default").count, 2)
 
         // An earlier round's record lets this round run once: the first (no round), as the copy spread the pairs
-        // again until 2026-10-26, and round 2, which left pairs of two copies.
-        let second = #"{"ranAt":"2026-10-26T13:57:02Z","removed":{"Default":3},"round":2}"#
-        try Data(second.utf8).write(to: root.appending(path: BrowserCookieCopyRepair.recordName))
+        // again until 2026-10-26, round 2, which left pairs of two copies, and round 3, which compared each profile
+        // alone.
+        let third = #"{"ranAt":"2026-10-26T16:13:05Z","removed":{"Default":6},"round":3}"#
+        try Data(third.utf8).write(to: root.appending(path: BrowserCookieCopyRepair.recordName))
         XCTAssertEqual(BrowserCookieCopyRepair.runOnce(root: root, trash: trash, now: now),
-                       .done(.init(ranAt: now, removed: ["Default": 1], round: 3)))
+                       .done(.init(ranAt: now, removed: ["Default": 1], round: 4)))
         XCTAssertEqual(cookies("Default"), ["accounts.example.com signin"])
     }
 
@@ -131,7 +133,35 @@ final class BrowserCookieCopyRepairTests: XCTestCase {
 
         try FileManager.default.removeItem(at: trash)
         XCTAssertEqual(BrowserCookieCopyRepair.runOnce(root: root, trash: trash, now: now),
-                       .done(.init(ranAt: now, removed: ["Default": 1], round: 3)))
+                       .done(.init(ranAt: now, removed: ["Default": 1], round: 4)))
         XCTAssertEqual(cookies("Default"), ["accounts.example.com signin"])
+    }
+
+    /// Starting copies and followed sign-ins carried the old copy's domain cookies into every profile, often apart
+    /// from the site's host-only one, and some with none left anywhere: a site's host-only cookie in any profile
+    /// shows the domain one to be the copy's, and on a host that shows it, an HttpOnly copy with no host-only one goes
+    /// too unless a profile holds it as the site's server set it.
+    func testJudgesTheOldCopysDomainCookiesAcrossProfiles() throws {
+        let other = "Task-" + UUID().uuidString
+        try makeDatabase("Default", [
+            (".shop.example.com", "prb", 3, ""),     // the site set it host-only in the task: goes
+            (".shop.example.com", "npw", 3, ""),     // no host-only one anywhere, on a host the old copy changed: goes
+            (".shop.example.com", "_ga", 3, ""),     // a script's: stays
+            (".chat.example.com", "lang", 3, ""),    // the site set it host-only in the other task: goes
+            (".chat.example.com", "d", 3, ""),       // the other task holds it as the server set it: stays
+            (".bank.example.com", "device", 3, ""),  // a host where nothing shows the old copy: stays
+            ("shop.example.com", "cart", 3, "")      // a host-only copy: stays
+        ], scripted: ["_ga"])
+        try makeDatabase(task, [("shop.example.com", "prb", 1, ""), (".shop.example.com", "prb", 3, ""),
+                                (".shop.example.com", "npw", 3, "")])
+        try makeDatabase(other, [("chat.example.com", "lang", 2, ""), (".chat.example.com", "d", 1, ""),
+                                 ("bank.example.com", "session", 1, "")])
+
+        XCTAssertEqual(BrowserCookieCopyRepair.runOnce(root: root, trash: trash, now: now),
+                       .done(.init(ranAt: now, removed: ["Default": 3, task: 2], round: 4)))
+        XCTAssertEqual(cookies("Default"), [".bank.example.com device", ".chat.example.com d", ".shop.example.com _ga",
+                                            "shop.example.com cart"])
+        XCTAssertEqual(cookies(task), ["shop.example.com prb"])
+        XCTAssertEqual(cookies(other).count, 3)
     }
 }
