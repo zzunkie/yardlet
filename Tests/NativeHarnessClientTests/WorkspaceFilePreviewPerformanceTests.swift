@@ -94,7 +94,9 @@ final class WorkspaceFilePreviewPerformanceTests: XCTestCase {
         work.start()
         let started = DispatchTime.now().uptimeNanoseconds
         state.open(.init(relativePath: name), in: root)
-        while state.isLoading { RunLoop.main.run(until: Date().addingTimeInterval(0.002)) }
+        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
+        while state.isLoading, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.002)) }
+        XCTAssertFalse(state.isLoading, "\(name) was still loading after \(testWaitLimitSeconds) seconds")
         let read = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
         for _ in 0..<5 { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
         work.record(time { host.hosting.layoutSubtreeIfNeeded(); host.window.displayIfNeeded() })

@@ -59,10 +59,11 @@ final class ConnectorLiveToolsTests: XCTestCase {
         await client.connect(MCPServer(version: "1", invoker: app))
         _ = await client.initialize()
         _ = await client.list()
-        try await Task.sleep(for: .milliseconds(80))
+        try await waitUntil { await !app.askedAbout.isEmpty }
         async let call = client.request("tools/call", .object(["name": .string("slow"), "arguments": .object([:])]))
-        try await Task.sleep(for: .milliseconds(100))
+        try await waitUntil { await app.slowCalls == 1 }
         await app.change()
+        await app.releaseSlowCall()
         let reply = await call
         XCTAssertEqual(reply["result"]?["content"]?.arrayValue?.first?["text"], .string("ran slow"))
         XCTAssertEqual(reply["result"]?["isError"], .bool(false))
@@ -340,9 +341,27 @@ private actor FakeApp: AgentToolInvoking {
 
     static func fingerprint(_ version: Int) -> String { AgentToolListWatching.fingerprint(of: tools(version)) }
 
+    /// The calls to `slow` that started. Each holds until `releaseSlowCall()`, so a test can change the list while
+    /// one is surely running.
+    private(set) var slowCalls = 0
+    private var slowCallsReleased = false
+    private var heldSlowCalls: [CheckedContinuation<Void, Never>] = []
+
     nonisolated func call(tool: String, arguments: ToolJSON) async -> AgentToolResult {
-        if tool == "slow" { try? await Task.sleep(for: .milliseconds(400)) }
+        if tool == "slow" { await holdSlowCall() }
         return .text("ran \(tool)")
+    }
+
+    private func holdSlowCall() async {
+        slowCalls += 1
+        guard !slowCallsReleased else { return }
+        await withCheckedContinuation { heldSlowCalls.append($0) }
+    }
+
+    func releaseSlowCall() {
+        slowCallsReleased = true
+        for call in heldSlowCalls { call.resume() }
+        heldSlowCalls = []
     }
 
     func listTools() async -> AgentToolList? {

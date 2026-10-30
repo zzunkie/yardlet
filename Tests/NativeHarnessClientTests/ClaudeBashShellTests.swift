@@ -145,6 +145,16 @@ import XCTest
         let late = try await run("sleep 1; echo late", in: shell)
         XCTAssertEqual(late.output, "late", "A quiet program still holding the terminal is still running")
         XCTAssertNil(late.exitCode, "An unmarked shell does not say")
+        // The main thread held from the middle of the program to past its output, as on a loaded Mac: the
+        // watch did not see that time, so it is not quiet, and the output that came in it is read.
+        let held = shell.command("sleep 1; echo late", note: nil)
+        var heldResult: ShellCommandResult?
+        held.onFinish = { heldResult = $0 }
+        held.start()
+        try await Task.sleep(for: .milliseconds(500))
+        holdTheMainThread(for: 1.5)
+        try await waitUntil { heldResult != nil }
+        XCTAssertEqual(heldResult?.output, "late", "The command ended before reading what came while the main thread was held")
         try await expectStop("echo started; sleep 30", in: shell)
         try await expect("/bin/pwd -P", in: shell, output: sub)
     }
@@ -313,6 +323,11 @@ import XCTest
         process.start()
         try await waitUntil(timeout: .seconds(20)) { finished != nil }
         return try XCTUnwrap(finished)
+    }
+
+    /// Keeps the main thread busy, as a loaded Mac can.
+    private func holdTheMainThread(for seconds: TimeInterval) {
+        Thread.sleep(forTimeInterval: seconds)
     }
 
     private func path(_ url: URL) -> String {

@@ -134,7 +134,7 @@ final class WindowFrameAutosaveTests: XCTestCase {
 
     /// The SwiftUI view behind the window's content applies the saved frame once SwiftUI has placed
     /// the window, and lets go of it when it leaves the window.
-    func testTheViewInTheWindowContentRestoresAndReleasesTheFrame() throws {
+    func testTheViewInTheWindowContentRestoresAndReleasesTheFrame() async throws {
         let screen = try XCTUnwrap(NSScreen.screens.first?.visibleFrame)
         let saved = NSRect(x: screen.minX + 20, y: screen.minY + 10, width: 800, height: 580)
         let store = WindowFrameStore(defaults: temporaryDefaults())
@@ -142,8 +142,7 @@ final class WindowFrameAutosaveTests: XCTestCase {
         let window = makeWindow()
         window.contentView = NSHostingView(rootView: Color.clear.background(MainWindowFrameAutosave(store: store)))
         XCTAssertNotEqual(window.frame, saved, "Nothing changes in the turn the view joins the window")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
-        XCTAssertEqual(window.frame, saved)
+        try await waitUntil { window.frame == saved }
         window.contentView = nil
         // The frame is free again, as for the window of the next launch.
         let next = makeWindow()
