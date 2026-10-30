@@ -151,6 +151,7 @@ swift run --build-system native NativeHarnessClient
 The default build system also compiles SwiftTerm's Metal shaders and stops when the Metal toolchain
 is not installed; `--build-system native` builds without it. `scripts/test-fast.sh` runs every test
 except renders, QA fixtures and performance runs, as CI does for each pull request;
+`scripts/test-fast.sh --excluded` runs only those, as CI does every night on `main`, and
 `swift test --build-system native` runs them all.
 
 For a normal registered macOS application bundle during development:
