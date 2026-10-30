@@ -26,27 +26,7 @@ struct PersonalAgentsSidebar: View {
                         .padding(.horizontal, 13 - SidebarMetrics.rowInset)
                         .padding(.bottom, 2)
                     ForEach(center.agents) { agent in
-                        Button { Task { await center.select(agent.id) } } label: {
-                            HStack(spacing: 8) {
-                                PersonalAgentAvatarView(name: agent.name, data: center.avatar(for: agent),
-                                                        sheet: center.spriteSheet(for: agent), size: 22)
-                                Text(agent.name).font(.system(size: 13 * scale)).lineLimit(1)
-                                Spacer(minLength: 4)
-                                if agent.isPaused {
-                                    Text(L10n.string("Paused")).font(.system(size: 11 * scale)).foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(.horizontal, 8)
-                            .frame(height: 32 * scale)
-                            .background(center.selectedID == agent.id ? ParityTheme.selectedFill : .clear,
-                                        in: SidebarMetrics.rowShape())
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .parityPointer()
-                        .accessibilityLabel(agent.name)
-                        .accessibilityValue(agent.isPaused ? L10n.string("Paused") : "")
-                        .accessibilityAddTraits(center.selectedID == agent.id ? .isSelected : [])
+                        PersonalAgentRow(center: center, agent: agent)
                     }
                     if center.hasLoaded, center.agents.isEmpty, center.failure == nil {
                         Text(L10n.string("No dots in this account"))
@@ -111,6 +91,83 @@ struct PersonalAgentsSidebar: View {
     }
 }
 
+/// A dot in the list. Whether its room has it at work reaches the row itself, so only a change of
+/// that redraws it.
+private struct PersonalAgentRow: View {
+    let center: PersonalAgentCenter
+    let agent: PersonalAgent
+    @Environment(\.yardletInterfaceScale) private var scale
+
+    var body: some View {
+        Button { Task { await center.select(agent.id) } } label: {
+            HStack(spacing: 8) {
+                PersonalAgentAvatarView(name: agent.name, data: center.avatar(for: agent),
+                                        sheet: center.spriteSheet(for: agent),
+                                        motion: center.motion(for: agent), size: 22)
+                Text(agent.name).font(.system(size: 13 * scale)).lineLimit(1)
+                Spacer(minLength: 4)
+                if center.isPaused(agent) {
+                    Text(L10n.string("Paused")).font(.system(size: 11 * scale)).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 32 * scale)
+            .background(center.selectedID == agent.id ? ParityTheme.selectedFill : .clear,
+                        in: SidebarMetrics.rowShape())
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .parityPointer()
+        .accessibilityLabel(agent.name)
+        // Whether it is paused or at work, not the room's words for the work, which change far more often.
+        .accessibilityValue(center.isPaused(agent) ? L10n.string("Paused")
+                            : center.motion(for: agent) == .working ? L10n.string("Working") : "")
+        .accessibilityAddTraits(center.selectedID == agent.id ? .isSelected : [])
+    }
+}
+
+/// The parts of a dot's header and details that follow its room: its pet's motion, the words for
+/// what it is doing, and its pause. Each reads the window's state itself, so a new state of the room
+/// redraws only them, never the conversation around them. Without that state (a render of the
+/// conversation alone) the dot is idle and paused as its profile says.
+private struct PersonalAgentLiveAvatar: View {
+    let live: PersonalAgentCenter?
+    let agent: PersonalAgent
+    let data: Data?
+    let sheet: PersonalAgentSpriteSheet?
+    let size: CGFloat
+
+    var body: some View {
+        PersonalAgentAvatarView(name: agent.name, data: data, sheet: sheet,
+                                motion: live?.motion(for: agent) ?? .idle, size: size)
+    }
+}
+
+private struct PersonalAgentLiveLabel: View {
+    let live: PersonalAgentCenter?
+    let agent: PersonalAgent
+    let reconnecting: Bool
+
+    var body: some View {
+#if DEBUG
+        let _ = ViewBodyCensus.note(.personalAgentStatus)
+#endif
+        if reconnecting { Text(L10n.string("Reconnecting")).font(.caption).foregroundStyle(.secondary) }
+        else if let label = (live?.status(for: agent) ?? PersonalAgentStatus(live: nil, isPaused: agent.isPaused)).label {
+            Text(label).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+        }
+    }
+}
+
+private struct PersonalAgentLivePause: View {
+    let live: PersonalAgentCenter?
+    let agent: PersonalAgent
+
+    var body: some View {
+        if live?.isPaused(agent) ?? agent.isPaused { Text(L10n.string("Paused")).foregroundStyle(.secondary) }
+    }
+}
+
 /// A dot's profile picture: its pet, where a sheet is given, playing or, beside a message and with
 /// Reduce Motion, still on its first frame; else the provider's static snapshot, or its initial while
 /// there is none. The bytes are bounded by the transport; a picture larger than any avatar is not drawn.
@@ -118,6 +175,8 @@ struct PersonalAgentAvatarView: View {
     let name: String
     let data: Data?
     var sheet: PersonalAgentSpriteSheet? = nil
+    /// The row the pet plays: its working row only while the dot is at work.
+    var motion: PersonalAgentSpriteLayout.Motion = .idle
     /// Whether the pet plays here; a message's picture holds its first frame.
     var plays = true
     let size: CGFloat
@@ -134,7 +193,7 @@ struct PersonalAgentAvatarView: View {
         Group {
             // The pet stands in its square uncut, with nothing behind it, as the provider's app shows it.
             if let frames, plays, !reduceMotion {
-                PersonalAgentSpriteAvatar(frames: frames, size: size)
+                PersonalAgentSpriteAvatar(frames: frames, motion: motion, size: size)
             } else if let frames {
                 Image(decorative: frames.still, scale: 1).resizable().interpolation(.medium)
             } else {
@@ -195,12 +254,16 @@ struct PersonalAgentsContent: View {
     private var showsDetailsRaised: Bool { !detailsFit && raisesDetails }
 
     var body: some View {
+#if DEBUG
+        let _ = ViewBodyCensus.note(.personalAgentContent)
+#endif
         Group {
             if let agent = center.selected, let conversation = center.conversation {
                 HStack(spacing: 0) {
                     PersonalAgentConversationView(agent: agent, conversation: conversation,
                         avatar: center.avatar(for: agent),
                         sheet: center.spriteSheet(for: agent),
+                        live: center,
                         reconnecting: center.isReconnecting,
                         connectionFailure: center.failure,
                         showsDetails: showsDetailsBeside || showsDetailsRaised,
@@ -268,6 +331,8 @@ struct PersonalAgentsContent: View {
             }
         }
         .background(ParityTheme.canvas)
+        // The selected room is observed only while the window shows it.
+        .background(PersonalAgentWindowVisibility { [center] in center.setVisible($0, reporter: $1) })
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .onChange(of: detailsFit) { _, _ in raisesDetails = false }
         .sheet(item: $preview) { file in
@@ -278,7 +343,7 @@ struct PersonalAgentsContent: View {
     private func details(agent: PersonalAgent, conversation: PersonalAgentConversation,
                          close: (() -> Void)? = nil) -> some View {
         PersonalAgentDetailsPanel(agent: agent, avatar: center.avatar(for: agent), sheet: center.spriteSheet(for: agent),
-                                  accountTitle: accountTitle,
+                                  live: center, accountTitle: accountTitle,
             details: center.details, attachments: PersonalAgentDetailsPanel.attachments(in: conversation.visibleMessages),
             isLoadingAttachment: loadingAttachment, open: open,
             retry: { center.refreshDetails() },
@@ -335,6 +400,9 @@ struct PersonalAgentConversationView: View {
     var avatar: Data?
     /// The pet the header's picture plays; each message's picture holds its first frame.
     var sheet: PersonalAgentSpriteSheet?
+    /// The window's state, which only the header's picture and words read: what the dot is doing,
+    /// as its room says, never redraws the conversation.
+    var live: PersonalAgentCenter?
     var reconnecting = false
     var connectionFailure: PersonalAgentFailure?
     var showsDetails = false
@@ -357,12 +425,14 @@ struct PersonalAgentConversationView: View {
     private var original: PersonalAgentOriginalOpener { opener ?? .live }
 
     var body: some View {
+#if DEBUG
+        let _ = ViewBodyCensus.note(.personalAgentConversation)
+#endif
         VStack(spacing: 0) {
             HStack(spacing: 9) {
-                PersonalAgentAvatarView(name: agent.name, data: avatar, sheet: sheet, size: 24)
+                PersonalAgentLiveAvatar(live: live, agent: agent, data: avatar, sheet: sheet, size: 24)
                 Text(agent.name).font(.system(size: 14 * scale, weight: .semibold)).lineLimit(1)
-                if reconnecting { Text(L10n.string("Reconnecting")).font(.caption).foregroundStyle(.secondary) }
-                else if agent.isPaused { Text(L10n.string("Paused")).font(.caption).foregroundStyle(.secondary) }
+                PersonalAgentLiveLabel(live: live, agent: agent, reconnecting: reconnecting)
                 Spacer(minLength: 8)
                 originalMenu
                 Button(action: refresh) { Image(systemName: "arrow.clockwise").frame(width: 26, height: 26) }
@@ -596,6 +666,8 @@ struct PersonalAgentDetailsPanel: View {
     let agent: PersonalAgent
     let avatar: Data?
     var sheet: PersonalAgentSpriteSheet?
+    /// The window's state, which only the picture and the pause read.
+    var live: PersonalAgentCenter?
     let accountTitle: String?
     let details: PersonalAgentDetails?
     let attachments: [PersonalAgentAttachment]
@@ -643,13 +715,13 @@ struct PersonalAgentDetailsPanel: View {
 
     private var profile: some View {
         HStack(spacing: 12) {
-            PersonalAgentAvatarView(name: agent.name, data: avatar, sheet: sheet, size: 48)
+            PersonalAgentLiveAvatar(live: live, agent: agent, data: avatar, sheet: sheet, size: 48)
             VStack(alignment: .leading, spacing: 3) {
                 Text(agent.name).font(.system(size: 14 * scale, weight: .semibold)).lineLimit(1)
                 if let accountTitle {
                     Text(accountTitle).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
-                if agent.isPaused { Text(L10n.string("Paused")).foregroundStyle(.secondary) }
+                PersonalAgentLivePause(live: live, agent: agent)
             }
             Spacer(minLength: 0)
             if let close {

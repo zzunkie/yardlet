@@ -411,6 +411,149 @@ final class PersonalAgentRenderingTests: XCTestCase {
         XCTAssertEqual(ViewBodyCensus[.personalAgentAvatar], 0, "A playing pet worked out its picture again")
     }
 
+    /// A dot at work plays its working row where its name is: in the list, the conversation's header
+    /// and its details, while each message's picture stays still, as every picture does with Reduce
+    /// Motion. The header says what the dot is doing. The window is not shown, so the room is told it
+    /// is; a repeated working state does not restart the row.
+    func testADotAtWorkPlaysItsWorkingRowWhereItsNameIs() async throws {
+        try await renderDotAtWork(size: NSSize(width: 1280, height: 920), reduceMotion: [false, true])
+    }
+
+    /// In a compact window the details are not beside the conversation: the header and the list play
+    /// the working row, and the header keeps its words beside its buttons.
+    func testADotAtWorkInACompactWindow() async throws {
+        try await renderDotAtWork(size: NSSize(width: 920, height: 680), reduceMotion: [false])
+    }
+
+    /// A room reports its work again and again; in a long conversation each new heading redraws the
+    /// words in the header, and neither the conversation, its messages, the window nor any picture.
+    func testANewHeadingRedrawsOnlyItsWordsInALongConversation() async throws {
+        let (model, _) = try makeWindowModel()
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: "root", isPaused: false, isPrimary: true,
+                                  avatar: .init(location: "https://files.oaiusercontent.com/example-avatar", version: "v1"),
+                                  petID: "pet")
+        let live = PersonalAgentLiveState(roomID: "room", subscriptionID: "subscription", revision: 1, threads: [
+            .init(threadID: "root", streamState: .attached, turnID: "turn", turnStatus: .inProgress, isActive: true,
+                  computerStatus: nil, activityType: "Working", activityLabel: "Reading the notes")])
+        let messages = (0..<400).map { index in
+            PersonalAgentMessage(id: "m\(index)", author: index.isMultiple(of: 2) ? .person : .agent,
+                                 text: "Message \(index) of a long conversation about the launch.",
+                                 createdAt: nil, isDeleted: false, attachments: [])
+        }
+        let shownBefore = PersonalAgentWindowVisibility.ReportingView.isOnScreen
+        PersonalAgentWindowVisibility.ReportingView.isOnScreen = { _ in true }
+        defer { PersonalAgentWindowVisibility.ReportingView.isOnScreen = shownBefore }
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+        let size = NSSize(width: 1280, height: 920)
+        let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages, live: live)
+        let host = WindowlessRender.Host(MainWindow(model: model) { reader }.frame(width: size.width, height: size.height),
+                                         size: size)
+        defer { host.close() }
+        host.settle()
+        XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+        let shows = { (words: String) in host.accessibilityElements().contains { $0.label == words || $0.value == words } }
+        await host.settle(until: { shows("Reading the notes") })
+        try await waitUntil { await reader.sheetReads > 0 }
+        await host.settle(until: { Self.views(PersonalAgentSpriteView.self, in: host.hosting).count == 3 })
+        host.settle(passes: 12)
+        // The counts are read where they are drawn: the content and the conversation, with the details
+        // open beside it, were drawn to show at all.
+        XCTAssertTrue(host.accessibilityElements().contains { $0.label == L10n.string("Dot details") })
+        XCTAssertGreaterThan(ViewBodyCensus[.personalAgentContent], 0)
+        XCTAssertGreaterThan(ViewBodyCensus[.personalAgentConversation], 0)
+        XCTAssertGreaterThan(ViewBodyCensus[.personalAgentStatus], 0)
+
+        ViewBodyCensus.reset()
+        let headings = ["Checking the dates", "Comparing the drafts", "Writing the summary", "Reviewing the list",
+                        "Sending nothing yet"]
+        for heading in headings {
+            await reader.repeatLive(label: heading)
+            await host.settle(until: { shows(heading) })
+            XCTAssertTrue(shows(heading), "The header shows \(heading)")
+        }
+        host.settle(passes: 6)
+        XCTAssertGreaterThanOrEqual(ViewBodyCensus[.personalAgentStatus], headings.count, "Each heading drew the words")
+        XCTAssertEqual(ViewBodyCensus[.personalAgentContent], 0, "A new heading gathered the messages and attachments again")
+        XCTAssertEqual(ViewBodyCensus[.personalAgentConversation], 0, "A new heading drew the conversation again")
+        XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "A new heading drew the window again")
+        XCTAssertEqual(ViewBodyCensus[.personalAgentAvatar], 0, "A new heading with the same motion drew a picture again")
+    }
+
+    private func renderDotAtWork(size: NSSize, reduceMotion motions: [Bool]) async throws {
+        let (model, _) = try makeWindowModel()
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: "root", isPaused: false, isPrimary: true,
+                                  avatar: .init(location: "https://files.oaiusercontent.com/example-avatar", version: "v1"),
+                                  petID: "pet")
+        let live = PersonalAgentLiveState(roomID: "room", subscriptionID: "subscription", revision: 1, threads: [
+            .init(threadID: "root", streamState: .attached, turnID: "turn", turnStatus: .inProgress, isActive: true,
+                  computerStatus: nil, activityType: "Working", activityLabel: "**Checking the launch checklist**")])
+        let messages: [PersonalAgentMessage] = [
+            .init(id: "m1", author: .person, text: "Check the launch checklist before the review.",
+                  createdAt: nil, isDeleted: false, attachments: []),
+            .init(id: "m2", author: .agent, text: "I am going through it now and will note anything missing.",
+                  createdAt: nil, isDeleted: false, attachments: [])
+        ]
+        let shownBefore = PersonalAgentWindowVisibility.ReportingView.isOnScreen
+        PersonalAgentWindowVisibility.ReportingView.isOnScreen = { _ in true }
+        defer { PersonalAgentWindowVisibility.ReportingView.isOnScreen = shownBefore }
+        let directory = try WindowlessRender.directory("dots-live-state-qa")
+        for appearance in WindowlessRender.Appearance.allCases {
+            for reduceMotion in motions {
+                let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages, live: live)
+                let window = MainWindow(model: model) { reader }
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .environment(\._accessibilityReduceMotion, reduceMotion)
+                    .frame(width: size.width, height: size.height)
+                let host = WindowlessRender.Host(window, size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+                // A line of text names itself by its value.
+                let heading = "Checking the launch checklist"
+                let says = { host.accessibilityElements().contains { $0.label == heading || $0.value == heading } }
+                await host.settle(until: says)
+                XCTAssertTrue(says(), "The header says what the dot is doing")
+                try await waitUntil { await reader.sheetReads > 0 }
+                host.settle(passes: 6)
+                let requests = await reader.liveRequests
+                XCTAssertEqual(requests, 1, "The room is observed once on opening, not \(requests) times")
+                try await waitUntil { await reader.sheetReads > 0 }
+                let pets = { Self.views(PersonalAgentSpriteView.self, in: host.hosting) }
+                if reduceMotion {
+                    host.settle(passes: 12)
+                    XCTAssertTrue(pets().isEmpty, "With Reduce Motion every picture is still")
+                } else {
+                    // The header, the list and, where they fit beside it, the details; the messages'
+                    // pictures stay still.
+                    let playing = size.width >= 1280 ? 3 : 2
+                    await host.settle(until: { pets().count == playing })
+                    XCTAssertEqual(pets().count, playing)
+                    XCTAssertTrue(pets().allSatisfy { $0.motion == .working })
+                    let pet = try XCTUnwrap(pets().first)
+                    pet.isOnScreen = { _ in true }
+                    pet.updatePlayback()
+                    CATransaction.flush()
+                    let layer = try XCTUnwrap(pet.layer?.sublayers?.first)
+                    let started = try XCTUnwrap(layer.animation(forKey: "Yardlet.sprite"))
+                    await reader.repeatLive()
+                    try await waitUntil { await reader.liveRepeats == 1 }
+                    host.settle(passes: 6)
+                    CATransaction.flush()
+                    XCTAssertTrue(layer.animation(forKey: "Yardlet.sprite") === started, "The same motion again does not restart it")
+                }
+                host.settle(passes: 6)
+                let capture = try host.capture()
+                XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6))
+                try WindowlessRender.writePNG(capture.bitmap, to: directory.appending(
+                    path: "working-\(Int(size.width))x\(Int(size.height))-\(appearance.suffix)\(reduceMotion ? "-reduce-motion" : "").png"))
+            }
+        }
+    }
+
     private static func views<View: NSView>(_ type: View.Type, in root: NSView) -> [View] {
         ((root as? View).map { [$0] } ?? []) + root.subviews.flatMap { views(type, in: $0) }
     }
@@ -631,9 +774,34 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
     let values: [PersonalAgent]
     let page: [PersonalAgentMessage]
     let older: [PersonalAgentMessage]
+    let live: PersonalAgentLiveState?
     private(set) var olderReads = 0
-    init(agents: [PersonalAgent], messages: [PersonalAgentMessage], older: [PersonalAgentMessage] = []) {
-        values = agents; page = messages; self.older = older
+    private(set) var liveRequests = 0
+    private(set) var liveRepeats = 0
+    private var liveStream: AsyncStream<PersonalAgentLiveUpdate>.Continuation?
+    init(agents: [PersonalAgent], messages: [PersonalAgentMessage], older: [PersonalAgentMessage] = [],
+         live: PersonalAgentLiveState? = nil) {
+        values = agents; page = messages; self.older = older; self.live = live
+    }
+    func liveState(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentLiveUpdate> {
+        liveRequests += 1
+        let pair = AsyncStream<PersonalAgentLiveUpdate>.makeStream()
+        liveStream = pair.continuation
+        pair.continuation.yield(.state(live))
+        return pair.stream
+    }
+    /// The same work again a revision later, with other words for it when `label` is given.
+    func repeatLive(label: String? = nil) {
+        guard let live else { return }
+        liveRepeats += 1
+        var threads = live.threads
+        if let label, let first = threads.first {
+            threads[0] = .init(threadID: first.threadID, streamState: first.streamState, turnID: first.turnID,
+                               turnStatus: first.turnStatus, isActive: first.isActive, computerStatus: first.computerStatus,
+                               activityType: first.activityType, activityLabel: label)
+        }
+        liveStream?.yield(.state(.init(roomID: live.roomID, subscriptionID: live.subscriptionID,
+                                       revision: live.revision + Int64(liveRepeats), threads: threads)))
     }
     func agents() async throws -> [PersonalAgent] { values }
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {

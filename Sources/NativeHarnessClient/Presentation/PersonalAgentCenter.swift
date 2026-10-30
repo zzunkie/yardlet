@@ -81,6 +81,22 @@ final class PersonalAgentCenter {
     /// Sprite sheets read in this window, by pet; each carries its version. Memory only.
     private var spriteSheets: [String: PersonalAgentSpriteSheet] = [:]
     @ObservationIgnored private var unavailableSprites: Set<String> = []
+    /// What the selected dot is doing, from its room's bound state; idle while none is shown.
+    private(set) var liveStatus: PersonalAgentStatus = .idle
+    /// The selected dot's motion, kept apart from its words so a new heading redraws no picture.
+    private(set) var liveMotion: PersonalAgentSpriteLayout.Motion = .idle
+    @ObservationIgnored private var live: Task<Void, Never>?
+    /// Which dot and connection the observation is for: asked again for the same, it carries on.
+    @ObservationIgnored private var liveKey: (identity: PersonalAgentIdentity, generation: Int)?
+    /// Dots whose profile, read paused, has since shown a turn under way in its room: its pause is
+    /// older than that, and stands no longer until the profiles are read again.
+    private var resumedSinceRead: Set<PersonalAgentIdentity> = []
+    /// The views that report the window shows the dots: the room is observed only while one does.
+    /// A view replaced by another may report after it, so each speaks only for itself.
+    @ObservationIgnored private var visibleReporters: Set<UUID> = []
+    private var isVisible: Bool { !visibleReporters.isEmpty }
+    /// The reporter a caller that speaks for the whole window uses.
+    static let windowReporter = UUID()
 
     private struct AvatarKey: Hashable {
         let identity: PersonalAgentIdentity
@@ -101,10 +117,68 @@ final class PersonalAgentCenter {
         agent.petID.flatMap { spriteSheets[$0] }
     }
 
+    /// The pet's motion for `agent`: only the selected dot's room is observed, so any other is idle.
+    func motion(for agent: PersonalAgent) -> PersonalAgentSpriteLayout.Motion {
+        agent.id == selectedID ? liveMotion : .idle
+    }
+
+    func status(for agent: PersonalAgent) -> PersonalAgentStatus {
+        agent.id == selectedID ? liveStatus : PersonalAgentStatus(live: nil, isPaused: isPaused(agent))
+    }
+
+    /// Whether `agent` is paused, as far as anything read since its profile says.
+    func isPaused(_ agent: PersonalAgent) -> Bool { agent.isPaused && !resumedSinceRead.contains(agent.id) }
+
     init(drafts: PersonalAgentDrafts = PersonalAgentDrafts(),
          preparer: any PersonalAgentFilePreparing = PersonalAgentUnchangedFiles()) {
         self.drafts = drafts
         self.preparer = preparer
+    }
+
+    /// The window shows the dots, or no longer does (covered, minimized, hidden), as `reporter` sees
+    /// it: the selected room is observed only while it does. Its conversation keeps reading either way.
+    func setVisible(_ visible: Bool, reporter: UUID = PersonalAgentCenter.windowReporter) {
+        let was = isVisible
+        if visible { visibleReporters.insert(reporter) } else { visibleReporters.remove(reporter) }
+        guard isVisible != was else { return }
+        if isVisible { observeSelected() } else { stopObserving() }
+    }
+
+    private func observeSelected() {
+        if let key = liveKey, live != nil, key.identity == selectedID, key.generation == generation, isVisible { return }
+        stopObserving()
+        guard isVisible, let agent = selected, let client else { return }
+        let current = generation
+        liveKey = (agent.id, current)
+        live = Task { [weak self] in
+            let stream = await client.liveState(for: agent)
+            for await update in stream {
+                // A state that arrives after the window moved on belongs to nothing shown here.
+                guard let self, !Task.isCancelled, self.generation == current, self.selectedID == agent.id else { break }
+                switch update {
+                case let .state(state): self.showLive(state)
+                case let .failed(failure): self.accept(failure)
+                }
+            }
+        }
+    }
+
+    private func stopObserving() {
+        live?.cancel()
+        live = nil
+        liveKey = nil
+        showLive(nil)
+    }
+
+    private func showLive(_ state: PersonalAgentLiveState?) {
+        if let agent = selected, agent.isPaused, let thread = state?.threads.first, thread.streamState == .attached,
+           thread.isActive == true || thread.isInProgressTurn, !resumedSinceRead.contains(agent.id) {
+            // Inserted once: writing the same set again would tell every view of it to redraw.
+            resumedSinceRead.insert(agent.id)
+        }
+        let status = PersonalAgentStatus(live: state, isPaused: selected.map(isPaused) ?? false)
+        if status != liveStatus { liveStatus = status }
+        if status.motion != liveMotion { liveMotion = status.motion }
     }
 
     func connect(sourceKey: String, draftSourceKey: String? = nil, makeClient: () -> any PersonalAgentClient) async {
@@ -134,7 +208,8 @@ final class PersonalAgentCenter {
             if !values.contains(where: { $0.id == selectedID }) {
                 selectedID = values.first(where: \.isPrimary)?.id ?? values.first?.id
             }
-            // A new connection rereads the profiles, whose signed picture locations may be new.
+            // A new connection rereads the profiles, whose signed picture locations and pauses may be new.
+            resumedSinceRead = []
             unavailableAvatars = []
             unavailableSprites = []
             loadAvatars(values, from: reader, generation: current)
@@ -150,6 +225,7 @@ final class PersonalAgentCenter {
         guard agents.contains(where: { $0.id == id }), selectedID != id else { return }
         events?.cancel()
         selectedID = id
+        stopObserving()
         await showSelected()
     }
 
@@ -179,6 +255,7 @@ final class PersonalAgentCenter {
                 }
             }
         }
+        observeSelected()
     }
 
     func refreshConversation(older: Bool = false) async {
@@ -528,6 +605,7 @@ final class PersonalAgentCenter {
         uploadQueues = [:]
         events?.cancel()
         events = nil
+        stopObserving()
         avatarTask?.cancel()
         avatarTask = nil
         pendingRefresh = false
@@ -551,6 +629,8 @@ final class PersonalAgentCenter {
     }
 
     private func clear() {
+        stopObserving()
+        resumedSinceRead = []
         agents = []
         selectedID = nil
         conversations = [:]
@@ -566,6 +646,7 @@ final class PersonalAgentCenter {
     private func accept(_ error: Error) {
         let value = error as? PersonalAgentFailure ?? .network
         if value == .accountChanged || value == .signInRequired {
+            stopObserving()
             agents = []
             selectedID = nil
             conversations = [:]

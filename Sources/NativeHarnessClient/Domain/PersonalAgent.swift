@@ -310,6 +310,9 @@ protocol PersonalAgentClient: Actor {
     func agents() async throws -> [PersonalAgent]
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage
     func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate>
+    /// The dot's room as its provider observes it: each bound state, nil while there is none. Asking
+    /// for another dot's ends the first; ending the stream ends the observation.
+    func liveState(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentLiveUpdate>
     func send(_ submission: PersonalAgentSubmission, to agent: PersonalAgent) async throws -> PersonalAgentMessage
     /// One file into the dot's room, for a later message to name by its returned ID.
     func upload(_ file: PersonalAgentPreparedFile, to agent: PersonalAgent) async throws -> PersonalAgentUploadedFile
@@ -324,6 +327,11 @@ protocol PersonalAgentClient: Actor {
     func schedules(for agent: PersonalAgent) async throws -> [PersonalAgentSchedule]
     func computers(for agent: PersonalAgent) async throws -> [PersonalAgentComputer]
     func stop() async
+}
+
+extension PersonalAgentClient {
+    /// A reader that observes no room shows every dot idle.
+    func liveState(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentLiveUpdate> { AsyncStream { $0.finish() } }
 }
 
 enum DotsProjection {

@@ -555,6 +555,232 @@ final class PersonalAgentTests: XCTestCase {
         return (folder, file)
     }
 
+    /// The room-live wire format is read as the provider's client reads it, and anything else ends
+    /// the observation: before the stream names its subscription, the newest event of at most four
+    /// subscriptions waits, and an event for another room is never kept for this one.
+    func testRoomLiveStatesBindToTheirSubscriptionAndFailClosed() throws {
+        func thread(_ fields: String = "") -> String {
+            #"{"thread_id":"t","stream_state":"attached","turn_id":"turn","turn_status":"in_progress","is_active":true\#(fields)}"#
+        }
+        func event(_ subscription: String, _ revision: String, room: String = "room", threads: String? = nil) throws -> JSONValue {
+            try value(#"{"type":"calpico-room-live","payload":{"type":"calpico-room-live-state","version":1,"room_id":"\#(room)","subscription_id":"\#(subscription)","revision":\#(revision),"threads":[\#(threads ?? thread())]}}"#)
+        }
+        func ready(_ subscription: String, room: String = "room") throws -> JSONValue {
+            try value(#"{"type":"calpico-room-live-ready","version":1,"room_id":"\#(room)","subscription_id":"\#(subscription)"}"#)
+        }
+        XCTAssertNotNil(DotsLiveProtocol.event(try event("s", "0", threads: thread(#","summary":["a"],"summary_item_id":null,"activity_status":null"#))))
+        for malformed in [try event("s", "-1"), try event("s", "1.5"), try event("s", "\"1\""),
+                          try event("s", "1", threads: thread(#","computer_status":null"#)),
+                          try event("s", "1", threads: thread(#","computer_status":"browsing""#)),
+                          try event("s", "1", threads: #"{"thread_id":"t","stream_state":"attached","turn_status":"paused"}"#),
+                          try event("s", "1", threads: thread(#","summary":[1]"#)),
+                          try event("s", "1", threads: thread(#","activity_status":{"status_type":"Working"}"#)),
+                          try event("s", "1", threads: #"{"thread_id":"t","stream_state":"detached"}"#),
+                          try value(#"{"type":"calpico-room-live","payload":{"type":"calpico-room-live-error","version":1,"room_id":"room","subscription_id":"s","revision":0,"code":"gone"}}"#),
+                          try value(#"{"type":"calpico-room-live","payload":{"type":"calpico-room-live-state","version":2,"room_id":"room","subscription_id":"s","revision":0,"threads":[]}}"#)] {
+            XCTAssertNil(DotsLiveProtocol.event(malformed))
+            var observation = PersonalAgentLiveObservation(roomID: "room")
+            XCTAssertEqual(observation.receive(malformed), .ended(retry: false))
+        }
+        XCTAssertNil(DotsLiveProtocol.ready(try value(#"{"type":"calpico-room-live-ready","version":1,"room_id":"room"}"#)))
+
+        // Five subscriptions before ready keep the newest four; ready takes its own and drops the rest.
+        var observation = PersonalAgentLiveObservation(roomID: "room")
+        for name in ["a", "b", "c", "d", "e"] { XCTAssertEqual(observation.receive(try event(name, "1")), .ignored) }
+        XCTAssertEqual(observation.ready(try ready("a")), .ignored, "The oldest held subscription was let go")
+        XCTAssertEqual(observation.receive(try event("b", "5")), .ignored, "Another subscription is never shown")
+        guard case let .shown(first, _) = observation.receive(try event("a", "2")) else { return XCTFail("Expected a state") }
+        XCTAssertEqual(first.subscriptionID, "a")
+        XCTAssertEqual(observation.receive(try event("a", "2")), .ignored, "A revision is taken once")
+        XCTAssertEqual(observation.receive(try event("a", "1")), .ignored)
+        XCTAssertEqual(observation.ready(try ready("b")), .ended(retry: false), "A second subscription ends it")
+
+        // Another room's event before ready ends the observation rather than wait as this room's.
+        var waiting = PersonalAgentLiveObservation(roomID: "room")
+        XCTAssertEqual(waiting.receive(try event("s", "1")), .ignored)
+        XCTAssertEqual(waiting.receive(try event("s", "2", room: "elsewhere")), .ended(retry: false))
+        var other = PersonalAgentLiveObservation(roomID: "room")
+        XCTAssertEqual(other.ready(try ready("s", room: "elsewhere")), .ended(retry: false))
+        var errors = PersonalAgentLiveObservation(roomID: "room")
+        _ = errors.ready(try ready("s"))
+        XCTAssertEqual(errors.receive(try value(#"{"type":"calpico-room-live","payload":{"type":"calpico-room-live-error","version":1,"room_id":"room","subscription_id":"s","revision":0,"code":"temporarily_unavailable"}}"#)), .ended(retry: true))
+
+        // Using the computer lasts through the same turn's states that omit it, until its hold ends,
+        // and never into another turn. A held state before ready passes it on the same way.
+        var computer = PersonalAgentLiveObservation(roomID: "room")
+        XCTAssertEqual(computer.receive(try event("s", "1", threads: thread(#","computer_status":"using_computer""#))), .ignored)
+        XCTAssertEqual(computer.receive(try event("s", "2")), .ignored)
+        guard case let .shown(held, holds) = computer.ready(try ready("s")) else { return XCTFail("Expected the held state") }
+        XCTAssertEqual(held.threads.first?.computerStatus, .usingComputer)
+        XCTAssertTrue(holds)
+        guard case let .shown(same, renewed) = computer.receive(try event("s", "3")) else { return XCTFail("Expected a state") }
+        XCTAssertEqual(same.threads.first?.computerStatus, .usingComputer)
+        XCTAssertFalse(renewed, "An omitted status keeps the running hold without renewing it")
+        XCTAssertNil(computer.computerHoldEnded()?.threads.first?.computerStatus)
+        _ = computer.receive(try event("s", "4", threads: thread(#","computer_status":"using_computer""#)))
+        guard case let .shown(next, _) = computer.receive(try event("s", "5", threads:
+            #"{"thread_id":"t","stream_state":"attached","turn_id":"another","turn_status":"in_progress","is_active":true}"#))
+        else { return XCTFail("Expected a state") }
+        XCTAssertNil(next.threads.first?.computerStatus, "A new turn does not inherit the computer")
+    }
+
+    /// The dot's status comes from its room's attached state only. Waiting for input, a failure, a
+    /// pause or a finished turn are idle; a turn under way is the working row whatever its label.
+    func testADotWorksOnlyWhileItsAttachedRoomSaysSo() {
+        func state(_ stream: PersonalAgentLiveThread.StreamState = .attached, turn: PersonalAgentLiveThread.TurnStatus? = .inProgress,
+                   active: Bool? = true, type: String? = "Working", label: String? = "**Drafting** the plan\n") -> PersonalAgentLiveState {
+            .init(roomID: "room", subscriptionID: "s", revision: 1, threads: [
+                .init(threadID: "t", streamState: stream, turnID: "turn", turnStatus: turn, isActive: active,
+                      computerStatus: nil, activityType: type, activityLabel: label)])
+        }
+        let working = PersonalAgentStatus(live: state(), isPaused: false)
+        XCTAssertEqual(working.kind, .working)
+        XCTAssertEqual(working.motion, .working)
+        XCTAssertEqual(working.label, "Drafting the plan")
+        XCTAssertEqual(PersonalAgentStatus.heading("Checking sources\n**Searching the web**\n<!-- note -->"), "Searching the web")
+        for (type, kind) in [("Searching", PersonalAgentStatus.Kind.searching), ("Creating", .creating), ("Payment", .payment),
+                             ("Something new", .thinking)] {
+            let status = PersonalAgentStatus(live: state(type: type), isPaused: false)
+            XCTAssertEqual(status.kind, kind)
+            XCTAssertEqual(status.motion, .working)
+        }
+        XCTAssertEqual(PersonalAgentStatus(live: state(type: nil, label: nil), isPaused: false).label, L10n.string("Thinking"))
+        let idle: [(PersonalAgentStatus, PersonalAgentStatus.Kind)] = [
+            (PersonalAgentStatus(live: nil, isPaused: false), .none),
+            (PersonalAgentStatus(live: state(.attaching), isPaused: false), .none),
+            (PersonalAgentStatus(live: .init(roomID: "room", subscriptionID: "s", revision: 1, threads: []), isPaused: false), .none),
+            (PersonalAgentStatus(live: state(type: "Needs input"), isPaused: false), .needsInput),
+            (PersonalAgentStatus(live: state(type: "Paused"), isPaused: false), .paused),
+            (PersonalAgentStatus(live: state(turn: .failed), isPaused: false), .error),
+            (PersonalAgentStatus(live: state(type: "Ready"), isPaused: false), .ready),
+            (PersonalAgentStatus(live: state(turn: .completed, active: false), isPaused: false), .ready),
+            (PersonalAgentStatus(live: state(turn: .completed, active: false), isPaused: true), .paused),
+            (PersonalAgentStatus(live: nil, isPaused: true), .paused),
+            (PersonalAgentStatus(live: state(), isPaused: false, mode: .local), .none)
+        ]
+        for (status, kind) in idle {
+            XCTAssertEqual(status.kind, kind)
+            XCTAssertEqual(status.motion, .idle, "\(kind) is idle")
+        }
+        XCTAssertEqual(PersonalAgentStatus(live: nil, isPaused: true).label, L10n.string("Paused"))
+        XCTAssertNil(PersonalAgentStatus(live: state(turn: .completed, active: false, label: "Done"), isPaused: false).label,
+                     "A finished turn's words are not shown")
+        // The profile's pause was read when the dots were; a turn the room shows under way since is newer.
+        XCTAssertEqual(PersonalAgentStatus(live: state(), isPaused: true).kind, .working)
+    }
+
+    /// The selected room is observed only while the window shows it. A pending send is not work, a
+    /// state that arrives after the window moved to another dot or account shows nothing, and leaving
+    /// the section ends the observation.
+    func testTheSelectedRoomIsObservedOnlyWhileShownAndLateStatesStayOut() async throws {
+        let first = fixtureAgent()
+        let second = PersonalAgent(id: .init(accountID: "account", userID: "person", agentID: "dot-2", roomID: "room-2"),
+                                   name: "Juniper", rootThreadID: nil, isPaused: true, isPrimary: false)
+        let reader = FixturePersonalAgentReader(agents: [first, second])
+        let center = PersonalAgentCenter()
+        // The window is seen while the first conversation is still being read: the dot is observed
+        // then, and once only when the reading ends.
+        await reader.delayNextMessageRead()
+        let connecting = Task { await center.connect(sourceKey: "a") { reader } }
+        try await waitUntil { await reader.hasPendingMessageRead() }
+        let requestsWhileHidden = await reader.liveRequests
+        XCTAssertTrue(requestsWhileHidden.isEmpty, "A window that does not show the dots observes no room")
+        center.conversation?.draft.isSending = true
+        XCTAssertEqual(center.liveMotion, .idle, "A pending send is not work")
+        center.setVisible(true)
+        try await waitUntil { await reader.liveRequests == [first.id] }
+        await reader.releaseMessageRead()
+        await connecting.value
+        // A second view of the same window saying so changes nothing either.
+        let otherView = UUID()
+        center.setVisible(true, reporter: otherView)
+        try await Task.sleep(for: .milliseconds(50))
+        let opened = await reader.liveRequests
+        XCTAssertEqual(opened, [first.id], "Opening observes the room once, not \(opened.count) times")
+        let endedOnOpening = await reader.liveEnded
+        XCTAssertEqual(endedOnOpening, 0)
+        await reader.pushLive(Self.working(first, label: "Drafting the plan"), to: 0)
+        try await waitUntil { center.liveMotion == .working }
+        XCTAssertEqual(center.liveStatus.label, "Drafting the plan")
+        XCTAssertEqual(center.motion(for: second), .idle, "Only the selected room is observed")
+        XCTAssertEqual(center.status(for: second).label, L10n.string("Paused"))
+        var waiting = Self.working(first, label: "Waiting")
+        waiting.threads[0] = .init(threadID: "t", streamState: .attached, turnID: "turn", turnStatus: .inProgress, isActive: true,
+                                   computerStatus: nil, activityType: "Needs input", activityLabel: nil)
+        await reader.pushLive(waiting, to: 0)
+        try await waitUntil { center.liveStatus.kind == .needsInput }
+        XCTAssertEqual(center.liveMotion, .idle)
+        await reader.pushLive(nil, to: 0)
+        try await waitUntil { center.liveStatus == .idle }
+
+        // Another dot: the first room's observation ends, and its late state shows nothing.
+        await reader.pushLive(Self.working(first, label: "Drafting"), to: 0)
+        try await waitUntil { center.liveMotion == .working }
+        await center.select(second.id)
+        XCTAssertEqual(center.liveMotion, .idle)
+        XCTAssertEqual(center.liveStatus.label, L10n.string("Paused"))
+        XCTAssertTrue(center.isPaused(second))
+        try await waitUntil { await reader.liveRequests == [first.id, second.id] }
+        try await waitUntil { await reader.liveEnded >= 1 }
+        await reader.pushLive(Self.working(first, label: "Late"), to: 0)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(center.liveMotion, .idle)
+
+        // A covered window ends the observation; shown again, it observes anew.
+        await reader.pushLive(Self.working(second, label: "Working"), to: 1)
+        try await waitUntil { center.liveMotion == .working }
+        center.setVisible(false)
+        XCTAssertEqual(center.liveMotion, .working, "Another view still sees the window")
+        center.setVisible(false, reporter: otherView)
+        XCTAssertEqual(center.liveMotion, .idle)
+        try await waitUntil { await reader.liveEnded >= 2 }
+        center.setVisible(true)
+        try await waitUntil { await reader.liveRequests.count == 3 }
+
+        // A dot read paused that the room has since shown at work is not paused any more when its turn
+        // ends, in the header or the list, until its profile is read again.
+        var finished = Self.working(second, label: "Done")
+        finished.threads[0] = .init(threadID: "t", streamState: .attached, turnID: "turn", turnStatus: .completed,
+                                    isActive: false, computerStatus: nil, activityType: nil, activityLabel: nil)
+        await reader.pushLive(finished, to: 2)
+        try await waitUntil { center.liveStatus.kind == .ready }
+        XCTAssertFalse(center.isPaused(second))
+        XCTAssertNil(center.liveStatus.label)
+        await reader.pushLive(Self.working(second, label: "Working"), to: 2)
+        try await waitUntil { center.liveMotion == .working }
+
+        // Another account clears it, and leaving the section ends the new one's observation.
+        await reader.pushLive(Self.working(second, label: "Working"), to: 2)
+        try await waitUntil { center.liveMotion == .working }
+        let next = FixturePersonalAgentReader(agents: [fixtureAgent(account: "other")])
+        await center.connect(sourceKey: "b") { next }
+        XCTAssertEqual(center.liveMotion, .idle)
+        try await waitUntil { await reader.liveEnded >= 3 }
+        await reader.pushLive(Self.working(second, label: "Late"), to: 2)
+        try await waitUntil { await next.liveRequests.count == 1 }
+        await center.disconnect()
+        try await waitUntil { await next.liveEnded == 1 }
+        XCTAssertEqual(center.liveMotion, .idle)
+
+        // A login the observer finds gone ends the account's whole reading, as any read's would.
+        let lost = FixturePersonalAgentReader(agents: [first])
+        await center.connect(sourceKey: "c") { lost }
+        try await waitUntil { await lost.liveRequests.count == 1 }
+        XCTAssertNotNil(center.conversation)
+        await lost.failLive(.accountChanged, at: 0)
+        try await waitUntil { center.failure == .accountChanged }
+        XCTAssertTrue(center.agents.isEmpty)
+        XCTAssertNil(center.conversation)
+        XCTAssertEqual(center.liveMotion, .idle)
+        await center.disconnect()
+    }
+
+    private static func working(_ agent: PersonalAgent, label: String) -> PersonalAgentLiveState {
+        .init(roomID: agent.id.roomID, subscriptionID: "s", revision: 1, threads: [
+            .init(threadID: "t", streamState: .attached, turnID: "turn", turnStatus: .inProgress, isActive: true,
+                  computerStatus: nil, activityType: "Working", activityLabel: label)])
+    }
+
     private func fixtureAgent(account: String = "account") -> PersonalAgent {
         .init(id: .init(accountID: account, userID: "person", agentID: "dot", roomID: "room"),
               name: "Atlas", rootThreadID: "thread", isPaused: false, isPrimary: true)
@@ -606,6 +832,19 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
               before: paged && before == nil ? "m1" : nil)
     }
     func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate> { AsyncStream { $0.finish() } }
+    private var liveStreams: [AsyncStream<PersonalAgentLiveUpdate>.Continuation] = []
+    private(set) var liveRequests: [PersonalAgentIdentity] = []
+    private(set) var liveEnded = 0
+    func liveState(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentLiveUpdate> {
+        let pair = AsyncStream<PersonalAgentLiveUpdate>.makeStream()
+        liveRequests.append(agent.id)
+        liveStreams.append(pair.continuation)
+        pair.continuation.onTermination = { [weak self] _ in Task { await self?.endLive() } }
+        return pair.stream
+    }
+    private func endLive() { liveEnded += 1 }
+    func pushLive(_ state: PersonalAgentLiveState?, to index: Int) { liveStreams[index].yield(.state(state)) }
+    func failLive(_ failure: PersonalAgentFailure, at index: Int) { liveStreams[index].yield(.failed(failure)) }
     func send(_ submission: PersonalAgentSubmission, to agent: PersonalAgent) async throws -> PersonalAgentMessage {
         sends.append(submission)
         if delaysSend { await withCheckedContinuation { pendingSend = $0 } }
