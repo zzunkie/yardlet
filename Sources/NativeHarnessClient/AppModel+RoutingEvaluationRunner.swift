@@ -4,7 +4,8 @@ import Foundation
 /// works, while the person has it on, the models they use judge the tasks the ledger recorded since
 /// the last run, and the routing they settle on joins Yardlet instructions.
 extension AppModel {
-    /// Harnesses that can judge: those Yardlet can run read only.
+    /// Harnesses that can judge: those Yardlet can run read only. Each judge also needs its harness to
+    /// keep none of it in its own history (`startAgentRun`).
     static let routingJudgeHarnesses: [HarnessKind] = [.claudeCode, .codex, .antigravityCLI]
     /// A judge's account needs at least this share of its plan left.
     static let routingJudgeMinimumRemaining = 0.2

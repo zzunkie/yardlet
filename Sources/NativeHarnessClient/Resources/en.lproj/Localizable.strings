@@ -2629,6 +2629,7 @@
 "%@: own %@, others %@, gap %@" = "%@: own %@, others %@, gap %@";
 "Judges disagree" = "Judges disagree";
 "it cannot run read only" = "it cannot run read only";
+"it cannot run without keeping a history of its own" = "it cannot run without keeping a history of its own";
 "it ran out of time" = "it ran out of time";
 "it gave no answer" = "it gave no answer";
 "it asked for a permission and was stopped" = "it asked for a permission and was stopped";
