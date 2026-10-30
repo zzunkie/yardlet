@@ -116,13 +116,6 @@ actor HarnessRegistry {
         return adapter
     }
 
-    func invalidate(harness: HarnessKind, executableURL: URL) {
-        adapters = adapters.filter {
-            $0.key.harness != harness
-                || $0.key.executableURL != executableURL.standardizedFileURL
-        }
-    }
-
     func invalidateAll() {
         adapters.removeAll()
     }
@@ -132,10 +125,16 @@ actor HarnessRegistry {
         adapters = adapters.filter { $0.key.harness != harness }
     }
 
+    /// Drops the adapter kept for one harness, CLI, storage and account, so the next request for
+    /// them makes a new one; other accounts and storages keep theirs. Given `adapter`, only that one
+    /// goes: an adapter made in its place since stays.
     func invalidate(harness: HarnessKind, executableURL: URL, environmentScope: SessionEnvironmentScope,
-                    connection: ProviderConnection?) {
-        adapters.removeValue(forKey: Key(harness: harness, executableURL: executableURL.standardizedFileURL,
-            environmentScope: environmentScope, connection: connection))
+                    connection: ProviderConnection?, ifStill adapter: (any HarnessAdapter)? = nil) {
+        let key = Key(harness: harness, executableURL: executableURL.standardizedFileURL,
+                      environmentScope: environmentScope, connection: connection)
+        if let adapter, let kept = adapters[key],
+           ObjectIdentifier(kept as AnyObject) != ObjectIdentifier(adapter as AnyObject) { return }
+        adapters.removeValue(forKey: key)
     }
 
     private func makeDefaultAdapter(

@@ -2952,10 +2952,9 @@ final class AppModel {
                 ObjectIdentifier($0 as AnyObject) == closedIdentity
             }
             if !remainsInUse {
-                await registry.invalidate(
-                    harness: session.harness,
-                    executableURL: session.runtimeExecutableURL
-                )
+                await registry.invalidate(harness: session.harness, executableURL: session.runtimeExecutableURL,
+                                          environmentScope: session.environmentScope, connection: session.connection,
+                                          ifStill: adapter)
             }
         }
         // The split view lets go of the task first, so the window moves to the split's remaining
@@ -5683,7 +5682,8 @@ final class AppModel {
             let identity = ObjectIdentifier(adapter as AnyObject)
             if !self.adaptersBySessionID.values.contains(where: { ObjectIdentifier($0 as AnyObject) == identity }) {
                 await registry.invalidate(harness: session.harness, executableURL: session.runtimeExecutableURL,
-                                          environmentScope: session.environmentScope, connection: session.connection)
+                                          environmentScope: session.environmentScope, connection: session.connection,
+                                          ifStill: adapter)
             }
         }
         memorySaverClosings[id] = closing
@@ -6259,10 +6259,9 @@ final class AppModel {
                 startCodexPresentationCollection(provider: provider, handle: handle)
             }
         } catch {
-            await registry.invalidate(
-                harness: session.harness,
-                executableURL: session.runtimeExecutableURL
-            )
+            await registry.invalidate(harness: session.harness, executableURL: session.runtimeExecutableURL,
+                                      environmentScope: session.environmentScope, connection: session.connection,
+                                      ifStill: adapter)
             throw error
         }
     }
@@ -6335,8 +6334,11 @@ final class AppModel {
         } else {
             finalState = nil
         }
-        // Drop the dead adapter from the registry before a new attachment can reuse it.
-        await registry.invalidate(harness: session.harness, executableURL: session.runtimeExecutableURL)
+        // Drop the dead adapter from the registry before a new attachment can reuse it. Its account's
+        // and storage's only: another account's App Server on the same CLI is alive.
+        await registry.invalidate(harness: session.harness, executableURL: session.runtimeExecutableURL,
+                                  environmentScope: session.environmentScope, connection: session.connection,
+                                  ifStill: adapter)
         guard !Task.isCancelled, handlesBySessionID[id] == handle,
               store.sessions.contains(where: { $0.id == id }) else { return }
         eventTasksBySessionID.removeValue(forKey: id)
