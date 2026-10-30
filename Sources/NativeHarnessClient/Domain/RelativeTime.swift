@@ -24,8 +24,9 @@ enum RelativeTime {
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: now)
         #else
-        return Date.AnchoredRelativeFormatStyle(anchor: now, presentation: .numeric, unitsStyle: .abbreviated,
-                                                locale: locale, capitalizationContext: .middleOfSentence).format(date)
+        // The anchor is the date said; the formatted input is the moment it is said from.
+        return Date.AnchoredRelativeFormatStyle(anchor: date, presentation: .numeric, unitsStyle: .abbreviated,
+                                                locale: locale, capitalizationContext: .middleOfSentence).format(now)
         #endif
     }
 }
