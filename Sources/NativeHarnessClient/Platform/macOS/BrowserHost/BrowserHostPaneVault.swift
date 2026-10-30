@@ -12,6 +12,34 @@ struct BrowserVaultSaveOffer: Equatable {
     /// The item a password the vault made was presaved in beside `updates` (design §15), which updating
     /// makes needless.
     var presaved: UUID?
+    /// The form's other fields the person filled, such as an account ID (design §17), which the item keeps.
+    var fields: [VaultFormField] = []
+    /// `updates` has this password already: the bar adds the username or the other fields to it.
+    var addsAccount = false
+
+    /// The account the bar names: the item it updates as updating leaves it.
+    var account: String {
+        guard var item = updates else { return "" }
+        if item.username.isEmpty { item.username = username }
+        item.fields = item.merging(fields)
+        return item.identity
+    }
+}
+
+/// A sign-in's earlier step in a tab (design §17), as Chrome keeps a username-first flow's username: the username the
+/// person typed there, or the item they filled there from the key button, for the password step that follows on the
+/// same site in the same tab, within five minutes.
+struct BrowserVaultSignInStep: Equatable {
+    static let keep: Duration = .seconds(300)
+    var tab: BrowserTabID
+    var site: String
+    var username: String
+    var item: UUID?
+    var at = ContinuousClock.now
+
+    func holds(_ tab: BrowserTabID, origin: String) -> Bool {
+        self.tab == tab && VaultSite.matches(site, origin: origin) && ContinuousClock.now - at < Self.keep
+    }
 }
 
 /// A password the vault made in a tab and the item it was presaved in (design §15): submitting the form
@@ -151,6 +179,7 @@ extension BrowserHostPaneController {
         case "passwordFocus": passwordFieldFocused(on: tab, page: fields["page"] ?? "", isNew: fields["isNew"] == "1")
         case "passwordBlur": focusedPasswordPage = nil
         case "madeCleared": madePasswordCleared(on: tab)
+        case "username": usernameStepTyped(fields["username"] ?? "", on: tab)
         default: personSignedIn(fields, on: tab)
         }
     }
@@ -163,23 +192,65 @@ extension BrowserHostPaneController {
         // A form sent in the address carries what the person typed there too: no tool result does. A made
         // password is on that list since it was filled.
         if let password = fields["password"] { MacAgentToolService.shared.broker.noteVaultValues([password]) }
-        let username = fields["username"] ?? ""
+        let typedUsername = (fields["username"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let others = fields["fields"].flatMap { try? JSONDecoder().decode([VaultFormField].self, from: Data($0.utf8)) } ?? []
         Task { @MainActor [weak self] in
             // The origin comes from the browser, not from the page's script.
             guard let self, let frame = try? await VaultPageScripts.mainFrame(tab.devTools, timeout: .seconds(10)),
                   let site = VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) else { return }
             MacBrowserHost.shared.loginFollow.signInSubmitted(on: tab)
             guard self.vault.isAllowedBuild, self.vault.isEnabled else { return }
-            if made { return self.madePasswordSubmitted(username: username, origin: frame.origin, site: site, on: tab) }
+            // A password step with no username takes the one its earlier step asked for.
+            let step = self.signInStep.flatMap { $0.holds(tab.id, origin: frame.origin) ? $0 : nil }
+            let username = typedUsername.isEmpty ? step?.username ?? "" : typedUsername
+            if made {
+                return self.madePasswordSubmitted(username: username, fields: others, origin: frame.origin, site: site, on: tab)
+            }
             guard let password = fields["password"] else { return }
             let never = UserDefaults.yardlet.stringArray(forKey: Self.neverSaveKey) ?? []
             guard !never.contains(site) else { return }
             let here = self.vault.items(for: frame.origin)
-            let sameUser = here.first { $0.username == username }
-            if let sameUser, self.vault.secret(of: sameUser.id)?.password == password { return }
+            // The item of this account: the same username, and no other value in a field the form had (one IAM user
+            // name in two AWS accounts is two items).
+            if let same = here.first(where: { $0.username == username && $0.admits(others) }) {
+                let samePassword = self.vault.secret(of: same.id)?.password == password
+                guard !samePassword || Set(same.merging(others) ?? []) != Set(same.fields ?? []) else { return }
+                self.vaultOffer = BrowserVaultSaveOffer(origin: frame.origin, site: site, username: username, password: password,
+                                                        updates: same, fields: others, addsAccount: samePassword)
+                return
+            }
+            // An item saved without a username (a password step's before Yardlet kept the first step's) takes it once
+            // its password signs in; it is not changed until the person says so.
+            if !username.isEmpty, let blank = here.first(where: {
+                $0.username.isEmpty && $0.admits(others) && self.vault.secret(of: $0.id)?.password == password
+            }) {
+                self.vaultOffer = BrowserVaultSaveOffer(origin: frame.origin, site: site, username: username, password: password,
+                                                        updates: blank, fields: others, addsAccount: true)
+                return
+            }
             self.vaultOffer = BrowserVaultSaveOffer(origin: frame.origin, site: site, username: username,
-                                                    password: password, updates: sameUser)
+                                                    password: password, updates: nil, fields: others)
         }
+    }
+
+    /// The person typed a username on a step that asks for it alone: the password step after it in the tab takes it.
+    private func usernameStepTyped(_ username: String, on tab: BrowserTab) {
+        let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !username.isEmpty, vault.isAllowedBuild, vault.isEnabled else { return }
+        Task { @MainActor [weak self] in
+            guard let self, let frame = try? await VaultPageScripts.mainFrame(tab.devTools, timeout: .seconds(10)),
+                  let site = VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) else { return }
+            // An item filled on the step keeps its place while the username is its own.
+            let item = self.signInStep.flatMap { $0.holds(tab.id, origin: frame.origin) && $0.username == username ? $0.item : nil }
+            self.signInStep = BrowserVaultSignInStep(tab: tab.id, site: site, username: username, item: item)
+        }
+    }
+
+    /// The item the key button's list puts first on the page: the one the person filled on the sign-in's earlier step.
+    func vaultItemFromEarlierStep(on address: String?) -> UUID? {
+        guard let tab, let origin = address.flatMap(VaultSite.origin(of:)), let step = signInStep,
+              step.holds(tab.id, origin: origin) else { return nil }
+        return step.item
     }
 
     /// The person typed a password into the page (the agent's typing is no use of the panel): the agent's tools treat
@@ -194,8 +265,12 @@ extension BrowserHostPaneController {
         vaultOffer = nil
         do {
             if let item = offer.updates {
+                var item = item
                 var secret = vault.secret(of: item.id) ?? VaultSecret()
                 secret.password = offer.password
+                // An item saved without a username takes the sign-in's, and the form's other fields.
+                if item.username.isEmpty { item.username = offer.username }
+                item.fields = item.merging(offer.fields)
                 // The replaced password stays in the item's previous ones (`VaultCenter.save`).
                 try vault.save(item, secret: secret)
                 if let presaved = offer.presaved {
@@ -206,7 +281,8 @@ extension BrowserHostPaneController {
                     if madePassword?.item == presaved { madePassword = nil }
                 }
             } else {
-                let item = VaultItem(name: VaultSite.host(of: offer.origin), sites: [offer.site], username: offer.username)
+                let item = VaultItem(name: VaultSite.host(of: offer.origin), sites: [offer.site], username: offer.username,
+                                     fields: offer.fields.isEmpty ? nil : offer.fields)
                 try vault.save(item, secret: VaultSecret(password: offer.password))
             }
         } catch {
@@ -293,7 +369,8 @@ extension BrowserHostPaneController {
     /// with its own script (the watch's `inPlace`): the presaved item takes the username the form held. Beside a saved
     /// item of that username, or, when neither the form nor the item has one (a change dialog, a recovery's new
     /// password page), beside the site's one item with a password, the bar asks to update it.
-    private func madePasswordSubmitted(username: String, origin: String, site: String, on tab: BrowserTab) {
+    private func madePasswordSubmitted(username: String, fields: [VaultFormField], origin: String, site: String,
+                                       on tab: BrowserTab) {
         guard let made = madePassword, made.tab == tab.id,
               var item = vault.items(for: origin).first(where: { $0.id == made.item }),
               let password = vault.secret(of: item.id)?.password else { return }
@@ -301,7 +378,7 @@ extension BrowserHostPaneController {
         let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
         let others = vault.items(for: origin).filter { $0.id != item.id }
         let signIns = others.filter(\.hasPassword)
-        let saved: VaultItem? = !username.isEmpty ? others.first(where: { $0.username == username })
+        let saved: VaultItem? = !username.isEmpty ? others.first(where: { $0.username == username && $0.admits(fields) })
             : item.username.isEmpty && signIns.count == 1 ? signIns[0] : nil
         if let saved {
             guard vault.secret(of: saved.id)?.password != password else {
@@ -309,14 +386,17 @@ extension BrowserHostPaneController {
                                              "The form holding it was sent; “\(saved.name)” already has it.")
             }
             vaultOffer = BrowserVaultSaveOffer(origin: origin, site: site, username: saved.username, password: password,
-                                               updates: saved, presaved: item.id)
+                                               updates: saved, presaved: item.id, fields: fields)
             return vault.logMadePassword(item, .saved, origin: origin, taskID: session,
                                          "The form holding it was sent; the bar asks to update “\(saved.name)”.")
         }
-        guard !username.isEmpty, item.username != username, let secret = vault.secret(of: item.id) else {
+        let merged = item.merging(fields)
+        guard !username.isEmpty && item.username != username || Set(merged ?? []) != Set(item.fields ?? []),
+              let secret = vault.secret(of: item.id) else {
             return vault.logMadePassword(item, .saved, origin: origin, taskID: session, "The form holding it was sent.")
         }
-        item.username = username
+        if !username.isEmpty { item.username = username }
+        item.fields = merged
         try? vault.save(item, secret: secret)
         vault.logMadePassword(item, .saved, origin: origin, taskID: session,
                               "The form holding it was sent; the item took the form's username.")
@@ -402,7 +482,7 @@ extension BrowserHostPaneController {
             MacBrowserHost.shared.loginFollow.personFilling(on: tab)
             let filled = await VaultPageScripts.fillForPerson(tab.devTools, frame: frame, fills: tab.vaultFills,
                                                               username: grant.username, password: grant.password,
-                                                              code: grant.code, codeOnly: codeOnly)
+                                                              code: grant.code, fields: grant.item.fields, codeOnly: codeOnly)
             guard filled else {
                 if codeOnly, let code = grant.code {
                     // As Settings → Passwords copies a code: marked concealed and cleared after 90 seconds.
@@ -413,6 +493,11 @@ extension BrowserHostPaneController {
                 }
                 return self.showVaultNotice(codeOnly ? L10n.string("This page has no code field to fill.")
                                                      : L10n.string("This page has no sign-in field to fill."))
+            }
+            // A sign-in in steps asks for the password next: the key button's list puts this item first there.
+            if !codeOnly, let site = VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) {
+                self.signInStep = BrowserVaultSignInStep(tab: tab.id, site: site, username: grant.username ?? item.username,
+                                                         item: grant.item.id)
             }
             if !grant.item.sites.contains(where: { VaultSite.matches($0, origin: frame.origin) }),
                let site = VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes), self.tab === tab {

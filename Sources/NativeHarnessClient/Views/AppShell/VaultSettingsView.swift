@@ -168,7 +168,7 @@ struct VaultSettingsView: View {
                             Text(item.name)
                                 .font(.callout.weight(.medium))
                                 .lineLimit(1)
-                            let detail = [item.username, item.sites.joined(separator: ", ")].filter { !$0.isEmpty }
+                            let detail = [item.identity, item.sites.joined(separator: ", ")].filter { !$0.isEmpty }
                                 .joined(separator: " · ")
                             if !detail.isEmpty {
                                 Text(detail)
@@ -358,9 +358,20 @@ private struct VaultItemRow: View {
             HStack(spacing: 12) {
                 VaultSettingsIcon(systemName: "key.horizontal")
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(1)
+                    // The account beside the name tells apart a site's items (design §17): the name gives way first.
+                    HStack(spacing: 8) {
+                        Text(item.name)
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if !item.identity.isEmpty {
+                            Text(item.identity)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .layoutPriority(1)
+                        }
+                    }
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -389,7 +400,7 @@ private struct VaultItemRow: View {
         .parityPointer()
         .accessibilityElement(children: .combine)
         .accessibilityLabel(item.name)
-        .accessibilityValue([detail, item.policy.title, lastUsed].joined(separator: ", "))
+        .accessibilityValue(([item.identity, detail, item.policy.title, lastUsed]).filter { !$0.isEmpty }.joined(separator: ", "))
     }
 
     private var detail: String {

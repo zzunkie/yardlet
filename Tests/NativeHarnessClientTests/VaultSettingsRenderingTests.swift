@@ -12,6 +12,7 @@ import XCTest
 /// - `vault-item-new-*`: a new item from a page, with its site and username filled in.
 /// - `settings-vault-unlinked-*`: codes with no site, with the sites suggested for them and one left to type.
 /// - `settings-vault-search-*`: the lists narrowed by a search.
+/// - `settings-vault-accounts-*`, `vault-item-account-*`: two accounts of one username, and one's item sheet.
 /// - `vault-picker-*`, `vault-picker-search-*`, `vault-picker-codes-*`, `vault-picker-empty-*`: the browser panel's
 ///   key button list on a site's page, searched, searched for a code from the code bar, and on a site with nothing.
 @MainActor
@@ -212,6 +213,38 @@ final class VaultSettingsRenderingTests: XCTestCase {
         try WindowlessRender.hostedInBothAppearances("vault-item-new", in: directory, size: NSSize(width: size.width, height: 360)) {
             appearance in
             draft.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        }
+    }
+
+    /// Two AWS accounts with one IAM username (design §17): the list shows each one's username and account beside its
+    /// name, and the item sheet shows the account field under the page's own label.
+    func testAccountsOfOneUsernameDraw() throws {
+        let directory = try WindowlessRender.directory("vault-qa")
+        let account = { (value: String) in
+            [VaultFormField(id: "account", name: "account", label: "Account ID (12 digits) or account alias", value: value)]
+        }
+        let one = VaultItem(name: "ap-southeast-2.signin.aws.amazon.com", sites: ["amazon.com"], username: "dev",
+                            hasPassword: true, fields: account("111122223333"))
+        let two = VaultItem(name: "ap-southeast-2.signin.aws.amazon.com", sites: ["amazon.com"], username: "dev",
+                            hasPassword: true, fields: account("444455556666"))
+        let vault = vault(items: [Self.github, one, two])
+        let size = NSSize(width: 640, height: 560)
+        let list = VaultSettingsView(vault: vault).padding(20).frame(width: size.width, height: size.height, alignment: .top)
+        try WindowlessRender.hostedInBothAppearances("settings-vault-accounts", in: directory, size: size) { appearance in
+            list.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        }
+        let host = WindowlessRender.Host(list, size: size)
+        defer { host.close() }
+        host.settle()
+        let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+        for text in ["dev · 111122223333", "dev · 444455556666", "ada@example.test"] {
+            XCTAssertTrue(spoken.contains { $0.contains(text) }, "No \(text): \(spoken)")
+        }
+        let sheetSize = NSSize(width: 520, height: 520)
+        let sheet = VaultItemSheet(vault: vault, item: two, onDone: {})
+            .frame(width: sheetSize.width, height: sheetSize.height, alignment: .top)
+        try WindowlessRender.hostedInBothAppearances("vault-item-account", in: directory, size: sheetSize) { appearance in
+            sheet.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
         }
     }
 

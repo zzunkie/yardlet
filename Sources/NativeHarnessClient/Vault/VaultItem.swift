@@ -26,10 +26,13 @@ struct VaultItem: Codable, Identifiable, Equatable, Sendable {
     var policy: Policy
     var createdAt: Date
     var lastUsedAt: Date?
+    /// The sign-in form's other fields the person filled, such as an account ID beside the username (design §17); nil
+    /// for none. Never a secret: only text the page showed as typed.
+    var fields: [VaultFormField]?
 
     init(id: UUID = UUID(), name: String, sites: [String], username: String, hasPassword: Bool = false,
          hasOneTimeCode: Bool = false, hasPasskey: Bool = false, policy: Policy = .always,
-         createdAt: Date = Date(), lastUsedAt: Date? = nil) {
+         createdAt: Date = Date(), lastUsedAt: Date? = nil, fields: [VaultFormField]? = nil) {
         self.id = id
         self.name = name
         self.sites = sites
@@ -40,16 +43,59 @@ struct VaultItem: Codable, Identifiable, Equatable, Sendable {
         self.policy = policy
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
+        self.fields = fields
+    }
+
+    /// The account the item signs in to, as lists show it beside its name: the username, then the other fields'
+    /// values (`ada · 123456789012`).
+    var identity: String {
+        ([username] + (fields ?? []).map(\.value)).filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     /// Whether a search finds the item, as a password manager's search does: each word of `query` is in its name,
-    /// username or one of its sites, apart from case and accents. An empty search finds every item.
+    /// username, another field's value or one of its sites, apart from case and accents. An empty search finds every item.
     func matches(_ query: String) -> Bool {
-        let fields = [name, username] + sites
+        let fields = [name, username] + (self.fields ?? []).map(\.value) + sites
         return query.split(whereSeparator: \.isWhitespace).allSatisfy { word in
             fields.contains { $0.localizedStandardContains(word) }
         }
     }
+
+    /// Whether a sign-in with these other fields could be this item's account: none of its saved fields holds another
+    /// value for the same field.
+    func admits(_ submitted: [VaultFormField]) -> Bool {
+        !(fields ?? []).contains { saved in submitted.contains { $0.isSameField(as: saved) && $0.value != saved.value } }
+    }
+
+    /// The item's fields with these put in, each in place of the saved one of the same field.
+    func merging(_ submitted: [VaultFormField]) -> [VaultFormField]? {
+        var merged = fields ?? []
+        for field in submitted where !field.value.isEmpty {
+            merged.removeAll { $0.isSameField(as: field) }
+            merged.append(field)
+        }
+        return merged.isEmpty ? nil : merged
+    }
+}
+
+/// A sign-in form's field other than the username and password, as the person filled it (design §17): what tells the
+/// field on a page (its `id`, `name` and label, as Bitwarden's custom fields and 1Password's form details match it)
+/// and its value.
+struct VaultFormField: Codable, Equatable, Hashable, Sendable {
+    var id: String
+    var name: String
+    /// The field's label, `aria-label` or placeholder.
+    var label: String
+    var value: String
+
+    /// The same field of a page: the same `id`, `name` or label, apart from case.
+    func isSameField(as other: VaultFormField) -> Bool {
+        func same(_ a: String, _ b: String) -> Bool { !a.isEmpty && a.caseInsensitiveCompare(b) == .orderedSame }
+        return same(id, other.id) || same(name, other.name) || same(label, other.label)
+    }
+
+    /// What the item sheet calls the field.
+    var title: String { [label, name, id].first { !$0.isEmpty } ?? "" }
 }
 
 /// The secrets of one item, as the keychain keeps them.

@@ -98,6 +98,8 @@ final class BrowserHostPaneController {
     @ObservationIgnored var focusedPasswordPage: String?
     @ObservationIgnored var offeredPasswordPages: Set<String> = []
     @ObservationIgnored var madePassword: BrowserVaultMadePassword?
+    /// A sign-in's earlier step in a tab (§17): the username typed or the item filled there, for the password step.
+    @ObservationIgnored var signInStep: BrowserVaultSignInStep?
     @ObservationIgnored var isScanningForCodes = false
     /// The key button's list (§16): whether it is open, whether it keeps to two-factor codes (opened from the code
     /// bar), and what its search holds; and an item it filled on a site it is not saved for, offered that site.
@@ -1480,7 +1482,9 @@ struct BrowserHostPane: View {
         }
         .popover(isPresented: $controller.isVaultPickerShown, arrowEdge: .bottom) {
             VaultPickerView(vault: vault, origin: controller.tab?.currentURL.flatMap(VaultSite.origin(of:)),
-                            codes: controller.vaultPickerCodes, query: $controller.vaultPickerQuery) { item in
+                            codes: controller.vaultPickerCodes,
+                            first: controller.vaultItemFromEarlierStep(on: controller.tab?.currentURL),
+                            query: $controller.vaultPickerQuery) { item in
                 controller.fillForPerson(item)
             }
         }
@@ -1614,9 +1618,12 @@ struct BrowserHostPane: View {
     private func vaultOfferBar(_ offer: BrowserVaultSaveOffer) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "key").foregroundStyle(.secondary)
-            Text(offer.updates == nil
-                 ? L10n.format("Save the password for %@?", VaultSite.host(of: offer.origin))
-                 : L10n.format("Update the saved password for %@?", VaultSite.host(of: offer.origin)))
+            // An update names the account, which a site with several tells apart (design §17).
+            let host = VaultSite.host(of: offer.origin)
+            Text(offer.updates == nil ? L10n.format("Save the password for %@?", host)
+                 : offer.addsAccount ? L10n.format("Add %@ to the saved password for %@?", offer.account, host)
+                 : offer.account.isEmpty ? L10n.format("Update the saved password for %@?", host)
+                 : L10n.format("Update the saved password of %@ for %@?", offer.account, host))
                 .font(.callout)
                 .lineLimit(2)
             Spacer(minLength: 8)

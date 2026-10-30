@@ -2690,6 +2690,8 @@
 "Fill a saved sign-in" = "Fill a saved sign-in";
 "Save the password for %@?" = "Save the password for %@?";
 "Update the saved password for %@?" = "Update the saved password for %@?";
+"Add %@ to the saved password for %@?" = "Add %@ to the saved password for %@?";
+"Update the saved password of %@ for %@?" = "Update the saved password of %@ for %@?";
 "Not for This Site" = "Not for This Site";
 "This page has no sign-in field to fill." = "This page has no sign-in field to fill.";
 "Add to Password Manager…" = "Add to Password Manager…";

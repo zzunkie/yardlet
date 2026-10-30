@@ -28,13 +28,15 @@ package enum VaultToolCatalog {
                 ]),
                 "item": .object([
                     "type": .string("string"),
-                    "description": .string("The saved item's name or username. Omit when one item is saved for this site. "
+                    "description": .string("The saved item's name, username or another saved value such as an account ID. "
+                        + "Omit when one item is saved for this site. "
                         + "For new_password, the new item's name (the site by default).")
                 ]),
                 "kind": .object([
                     "type": .string("string"),
                     "enum": .array([.string("login"), .string("one_time_code"), .string("passkey"), .string("new_password")]),
-                    "description": .string("login (the default): username and password. one_time_code: the "
+                    "description": .string("login (the default): username and password, and the item's other saved fields "
+                        + "such as an account ID. one_time_code: the "
                         + "authenticator code. passkey: the item's passkey answers the page's next passkey request "
                         + "within 60 seconds. new_password: a new password for a sign-up form, with ref its new password "
                         + "field, saved with the username the form holds.")

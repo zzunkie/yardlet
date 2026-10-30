@@ -2690,6 +2690,8 @@
 "Fill a saved sign-in" = "저장한 로그인 정보 채우기";
 "Save the password for %@?" = "%@ 비밀번호를 저장할까요?";
 "Update the saved password for %@?" = "%@에 저장한 비밀번호를 바꿀까요?";
+"Add %@ to the saved password for %@?" = "%2$@에 저장한 비밀번호에 %1$@도 저장할까요?";
+"Update the saved password of %@ for %@?" = "%2$@에 저장한 %1$@의 비밀번호를 바꿀까요?";
 "Not for This Site" = "이 사이트는 안 함";
 "This page has no sign-in field to fill." = "이 페이지에는 채울 로그인 칸이 없습니다.";
 "Add to Password Manager…" = "비밀번호 관리자에 추가…";
