@@ -1,184 +1,126 @@
-# Engine portability review (2026-09-27)
+# Engine portability
 
-Status: checklist written, three pieces of macOS code that could be moved mechanically moved to `Platform/macOS/`, and
-a check that blocks new violations added. macOS behavior did not change.
-Basis: the code and product decisions as of 2026-09-27 (macOS and Windows support, the engine in cross-platform
-Swift, the screens per platform). Nothing was actually built on Windows. For dependencies and Foundation behavior, only
-what was checked in the official source is written as "confirmed"; the rest is left as "not confirmed".
+Yardlet runs on macOS. Windows is planned: the engine is kept in cross-platform Swift, and each platform gets its own
+screens. Nothing has been built or run on Windows. For dependencies and Foundation behavior on Windows, what was checked
+in the official source is marked "confirmed"; the rest is "not confirmed".
 
-## Scope
+## Engine and platform layers
 
-- **Engine:** `Account`, `Adapters`, `Diff`, `Domain`, `Files`, `Presentation`, `Runtime`, `Store`,
-  `Transcript`, and at the root `AppModel.swift`, `Localization.swift` and `ProductIdentity.swift`: 127 files.
-  New folders count as engine by default.
-- **Screen and platform layer (excluded from the check):** `Views/` (40), `Browser/` (1, the WebKit preview, which the
-  product decision replaces with CEF and WebView2), `Development/` (6, visual fixtures), `Platform/macOS/` (3, created
-  in this pass), `NativeHarnessClientApp.swift`.
+- **Engine:** every Swift file of the `NativeHarnessClient` target and of `YardletAgentTools` (the library the app
+  shares with the Yardlet MCP server, `yardlet-mcp`), except the screen and platform layers below. New folders count as
+  engine by default.
+- **Screen and platform layers (outside the check):** `Views/`, `Browser/` (the WebKit preview), `Development/` (visual
+  fixtures and QA), `Platform/` and `NativeHarnessClientApp.swift`.
+- `Platform/macOS/` holds the macOS implementations the engine reaches through a small protocol, an injected value or
+  an extension with the same name. For example, `LocalSystemNotificationCenter` (UserNotifications) implements the
+  engine's `SystemNotificationCenter`; `HarnessLogoCatalog` loads the logos, while the engine keeps only the asset names
+  (`Domain/HarnessLogoAsset.swift`); and `AntigravityKeychainProbe` gives `HarnessAccountBroker` its
+  `antigravityCredentialState()`. A Windows layer has to provide the same pieces.
 
-## Summary
+## The check that blocks new violations
 
-| Category | Files at review | After the move | Files |
-| --- | --- | --- | --- |
-| UI framework imports (SwiftUI, AppKit, WebKit, SwiftTerm) | 3 | 1 | `AccountLoginController` (before the move also: `HarnessLogoCatalog`, `SystemNotificationCenter`) |
-| Darwin and POSIX APIs (signals, process groups, `proc_*`, `waitpid`, PTY, `copyfile`) | 3 | 3 | `NativeProcessTree`, `AccountLoginController`, `CodexEnvironmentManager` |
-| macOS-only frameworks (Security, UserNotifications, NSWorkspace, CryptoKit, NSDataDetector) | 5 | 2 | `AccountLoginController`, `CodexEnvironmentManager` (before the move also: `HarnessAccountBroker`, `SystemNotificationCenter`, `HarnessLogoCatalog`) |
-| Path assumptions and executable lookup | 15 | 15 | Section 3 below |
-| Windows differences in Foundation `Process`, `FileHandle` and file permissions | 19 | 19 | Section 4 below |
-| External dependencies (swift-markdown, SwiftTerm, SQLite) | 3 dependencies, 5 engine files | Same | Section 5 below |
+`Tests/NativeHarnessClientTests/EnginePortabilityTests.swift` scans every engine file.
 
-The three biggest obstacles:
+- It looks for forbidden imports (SwiftUI, AppKit, UIKit, Cocoa, WebKit, SwiftTerm, Darwin, Security,
+  UserNotifications, CryptoKit, CoreServices, Carbon, ServiceManagement, IOKit, CoreGraphics, QuartzCore, Combine,
+  OSLog and os) and macOS-only API rules: names qualified with `Darwin.`, POSIX process control (signals, `waitpid`,
+  `pid_t` and the like), `proc_*` and `sysctl`, PTY functions, `posix_spawn`, `copyfile` and cloning, Keychain, `UN*`
+  notification types, AppKit types, FSEvents and kqueue, Foundation APIs missing outside Apple platforms
+  (`NSDataDetector` and others) and `x-apple.` URLs. Line comments are skipped.
+- The allow list is a set of rule names per file. It has 3 files and 13 entries: `Account/AccountLoginController.swift`
+  (6), `Runtime/CodexEnvironmentManager.swift` (3) and `Runtime/NativeProcessTree.swift` (4).
+- A violation in a file that is not on the allow list, or a new kind of violation in an allowed file, fails. When an
+  allowed entry no longer applies, the test fails and asks for it to be removed. The ceiling of 13 entries can only go
+  down.
+- Path assumptions and `Process` semantics (below) are string and behavior problems, so they are not in the check.
 
-1. **Process lifetime management.** Every harness transport, Git and the account commands leave termination to
-   `NativeProcessTree`. This code collects descendants with `proc_listchildpids` and sends signals with `kill`, up to
-   the process group. On Windows, Foundation's `Process` creates no job object, and `terminate()` ends only the root
-   process with `TerminateProcess`, so grandchild processes such as node and MCP servers stay behind. On Windows
-   `interrupt()` is also `TerminateProcess(handle, SIGINT)`, not a graceful stop (confirmed:
-   [swift-corelibs-foundation `Process.swift`](https://github.com/swiftlang/swift-corelibs-foundation/blob/main/Sources/Foundation/Process.swift)).
-2. **Executable lookup and run environment.** The code assumes a `PATH` joined with `:`, Homebrew, `/usr/local` and
-   `.app/Contents` paths, `HOME`, and executable names without extensions. It does not handle Windows's `;` separator,
-   `PATHEXT` and `.exe`, npm's `.cmd` shims or `USERPROFILE`. Foundation `Process` does not send `.cmd` and `.bat` to
-   `cmd.exe` (confirmed: same source).
-3. **Account sign-in terminal.** `AccountLoginController` is a controller attached to SwiftTerm's
-   `LocalProcessTerminalView` (a PTY and an AppKit view), yet the engine's `AccountCenterModel` owns it directly, and
-   `HarnessAccountBroker` parses output with its static functions. SwiftTerm builds on Windows without the PTY layer,
-   and `NSDataDetector`, which URL detection uses, does not exist in Foundation outside Apple platforms.
+## macOS-only code left in the engine
 
-## What moved in this pass
+These are the three allow-listed files. Each is a blocker for Windows.
 
-Behavior is the same. The moved code is unchanged, and on the engine side only name references changed. Moved files
-are not added to the check's allow list.
-
-| Before | New location (macOS layer) | What stays in the engine |
+| File | macOS-only part | What Windows needs |
 | --- | --- | --- |
-| All of `Domain/HarnessLogoCatalog.swift` (NSImage loading and cache, SwiftUI icon view) | `Platform/macOS/HarnessLogoCatalog.swift` | `Domain/HarnessLogoAsset.swift`: the asset name and subfolder name per harness |
-| `LocalSystemNotificationCenter` (UserNotifications), `systemSettingsURL` and `openSystemSettings()` (NSWorkspace) from `Domain/SystemNotificationCenter.swift` | `Platform/macOS/LocalSystemNotificationCenter.swift` | The `SystemNotificationCenter` protocol, `SystemNotificationAuthorization`, `SystemNotificationSettingsModel` (an unused default argument removed) |
-| `HarnessAccountBroker.antigravityCredentialState` (Keychain `SecItemCopyMatching`) | `Platform/macOS/AntigravityKeychainProbe.swift` (an extension with the same name) | The call site `Self.antigravityCredentialState()`. The Windows layer must provide the same function |
+| `Runtime/NativeProcessTree.swift` | Collects descendants with `proc_listchildpids` and ends the tree with `kill` (also on the process group), `waitpid` and `usleep`. Every harness transport, Git, the account commands and the protocol process host leave termination to it (`terminate(process:)`, `terminate(rootPID:)`) | Abstract: keep a protocol with these two functions in the engine and move the current code unchanged into the macOS implementation. Replace: on Windows, put the process in a job object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) right after it starts and end it with `TerminateJobObject`. Adding it after Foundation `Process` has started leaves a short gap, so also consider creating the process with `CREATE_SUSPENDED`. Foundation's `Process` creates no job object on Windows, and `terminate()` ends only the root with `TerminateProcess`, so grandchildren such as node and MCP servers would stay behind (confirmed: [swift-corelibs-foundation `Process.swift`](https://github.com/swiftlang/swift-corelibs-foundation/blob/main/Sources/Foundation/Process.swift)) |
+| `Account/AccountLoginController.swift` | `import AppKit`, `Darwin` and `SwiftTerm`; a `LocalProcessTerminalViewDelegate` driving a PTY; `pid_t`; `NSWorkspace.open`; URL detection with `NSDataDetector` (`firstHTTPSURL`). `AccountCenterModel` owns it, and `HarnessAccountBroker` parses output with its `stripANSI` | Abstract: an engine sign-in session protocol (state, phase, sending input) and pure text parsing (`stripANSI`, device codes, input prompts, finding URLs) in the engine; find URLs with a regular expression, because `NSDataDetector` does not exist in Foundation outside Apple platforms (confirmed: [swift-corelibs-foundation #4305](https://github.com/swiftlang/swift-corelibs-foundation/issues/4305)). Move the SwiftTerm host to the macOS layer. Replace: a ConPTY (`CreatePseudoConsole`) host on Windows |
+| `Runtime/CodexEnvironmentManager.swift` | `import CryptoKit` (a `SHA256` fingerprint); `import Darwin` and `copyfile(COPYFILE_ALL \| COPYFILE_CLONE)`, with a `FileManager.copyItem` fallback | Replace CryptoKit with `Crypto` from swift-crypto, which has the same API (adding a package needs approval). Put the clone behind the platform layer or `#if canImport(Darwin)`; the fallback already works without it. `Transcript/NameBasedUUID.swift` computes its SHA-1 itself so as not to add another CryptoKit use |
 
-## Checklist and recommended handling
+Other macOS-specific values that the check does not catch:
 
-There are three kinds of recommended handling. **Move:** move the code to the platform layer. **Abstract:** keep only a
-small protocol or values in the engine and let the platform layer provide the implementation. **Replace:** the means to
-use on Windows.
+- `Domain/HarnessKind.swift`: `symbolName` holds SF Symbols names. The screen layer should pick the icon by harness ID;
+  Windows uses the logo assets.
+- `Account/HarnessAccountBroker.swift`: the user-facing text names macOS Keychain as the Antigravity CLI credential
+  location. Where Antigravity CLI keeps credentials on Windows is not confirmed.
+- `AppModel.swift`: the default argument `LocalSystemNotificationCenter()` names the macOS implementation. The app
+  should inject it once the targets split.
+- PTY: besides `AccountLoginController`, the screen layer's `Views/TerminalPane.swift` and the macOS layer's task shell
+  (`Platform/macOS/ShellCommandProcess.swift`, SwiftTerm `LocalProcess`) use a PTY. Windows needs ConPTY.
 
-### 1. UI frameworks and macOS-only frameworks
+## Paths and executable lookup
 
-| File | Item | Recommended handling |
+| Where | Assumption | Recommended handling |
 | --- | --- | --- |
-| `Account/AccountLoginController.swift` | `import AppKit`, `SwiftTerm`, `Darwin`; `NSWorkspace.open`, `NSPasteboard`; `LocalProcessTerminalView` (PTY); `pid_t`; `NSDataDetector` (`firstHTTPSURL`) | Abstract: put a sign-in session protocol (state, phase, sending input) and pure text parsing (`stripANSI`, `firstDeviceCode`, `outputRequiresInput`, finding URLs) in the engine. Find URLs with a regular expression instead of `NSDataDetector`. Move the SwiftTerm host. Replace: a ConPTY host on Windows. **Why it was not moved:** it is tied to the PTY and to process termination, and `AccountCenterModel`, `HarnessAccountBroker` and several tests refer to its types directly, so it is not a mechanical move. |
-| `Runtime/CodexEnvironmentManager.swift` | `import CryptoKit` (`SHA256` fingerprint); `import Darwin` and `copyfile(COPYFILE_ALL | COPYFILE_CLONE)` | Replace: CryptoKit with `Crypto` from swift-crypto, which has the same API (this needs a package added, so it was not done this time). `copyfile` already has a `FileManager.copyItem` fallback, so either abstract only the clone function into the platform layer or wrap it in `#if canImport(Darwin)`. |
-| `Account/HarnessAccountBroker.swift` | 4 user-facing strings that name Keychain as the Antigravity credential location; `Self.antigravityCredentialState()` is in a macOS-layer extension | Abstract: the platform provides the credential location text and the detection. Where the Antigravity CLI stores credentials on Windows is not confirmed. |
-| `Domain/HarnessKind.swift` | SF Symbols names in `symbolName` (macOS icon names inside engine data) | Abstract: the screen layer picks the icon by harness ID. Windows uses the logo assets first. They are strings, so the check does not cover them. |
-| `AppModel.swift` | The default argument `LocalSystemNotificationCenter()` names the macOS implementation | Move: the app injects it when the targets split. For now it stays, because there are many call sites. |
+| `Runtime/RuntimeProcessEnvironment.swift` | Splits and joins `PATH` with `:`. Fixed `~/.local/bin`, `~/.bun/bin`, `/opt/homebrew/bin`, `/usr/local/bin` and the system folders; `searchDirectories` adds package managers' folders (`~/.volta/bin`, `~/.cargo/bin`, `~/.deno/bin`, `~/.npm-global/bin`, `~/Library/pnpm`), nvm's `~/.nvm/versions/node/*/bin` and Docker Desktop's `bin` | Abstract: the platform provides the separator and the default folders. On Windows: `;`, a case-insensitive `Path` key, `USERPROFILE`, `%APPDATA%\npm` and so on |
+| `Runtime/RuntimeSelectionStore.swift`, `Runtime/RuntimeRelocation.swift` | Install candidates are `searchDirectories`, the ChatGPT app's bundled Codex under `/Applications/ChatGPT.app` and the Claude app's `~/Library/Application Support/Claude/claude-code/…`; relative paths are split at `/` | Abstract: the platform provides the install candidates per harness. The Windows install locations of each CLI are not confirmed |
+| `Domain/HarnessKind.swift` | `relativeExecutablePaths` are POSIX paths without extensions (`.local/bin/codex`, `.hermes/hermes-agent/venv/bin/hermes` and others) | Candidates per platform. A Windows venv uses `Scripts\*.exe` |
+| `Diff/GitExecutableLocator.swift` | `/opt/homebrew/bin/git`, `/usr/local/bin/git`, `/opt/local/bin/git`, then `/usr/bin/git` | The platform provides the candidates. On Windows: `git.exe` in `PATH` and the Git for Windows install path |
+| `Diff/GitDiffService.swift` | `/dev/null` as a Git argument (`hash-object -t tree`, `diff --no-index`) | Whether Git for Windows accepts this path is not confirmed. For the empty tree, a way without a path, such as `git hash-object -t tree --stdin`. The `/dev/null` that `UnifiedDiffParser` reads is Git's output format and stays |
+| `Account/ProviderConnections.swift`, `Domain/ProviderSessionTitleResolver.swift`, `Domain/WorkspaceGitOrigin.swift` and others | Absolute paths are recognized with `hasPrefix("/")` | One shared check that also accepts `C:\` and UNC paths |
+| `Files/WorkspaceFileService.swift`, `Domain/TaskWorktree.swift`, `Domain/Project.swift` and others | Whether a path is inside a folder is a `root + "/"` string prefix | Compare path components instead, and account for the case-insensitive file system on Windows. Workspace containment is a security boundary, so it needs tests during the Windows work |
+| `Account/HarnessAccountBroker.swift` | Finds the Grok home from the `HOME` environment variable (usually missing on Windows) | Use `homeDirectoryForCurrentUser` |
+| `Store/SessionRepository.swift`, `Domain/ProviderSessionTitleResolver.swift` | Pass the `URL.path(percentEncoded: false)` string to SQLite | `withUnsafeFileSystemRepresentation`. Whether `path()` becomes `/C:/…` on Windows is not confirmed |
 
-### 2. Darwin and POSIX process APIs
+Foundation also provides `~/.yardlet`, `applicationSupportDirectory` and `UserDefaults` on Windows. The actual storage
+location there (AppData, the registry and so on) is not confirmed.
 
-| File | Item | Recommended handling |
-| --- | --- | --- |
-| `Runtime/NativeProcessTree.swift` | Collecting descendants with `proc_listchildpids`, `kill(pid, SIGHUP/SIGKILL)`, `kill(-pgid, …)`, `waitpid`, `usleep`, `pid_t` | Abstract: put a protocol with `terminate(process:) -> Int32` and `terminate(rootPID:)` in the engine, and move the current code unchanged into the macOS implementation. Replace: on Windows, put the process in a job object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) right after it starts and end it with `TerminateJobObject`. Adding it after Foundation `Process` has started it leaves a short gap, so also consider creating the process directly with `CREATE_SUSPENDED`. **Why it was not moved:** it is the termination path of every transport, so moving it risks changing behavior. |
-| `NativeProcessTree` call sites (9 in the engine): `AccountCommandRunner`, `AccountLoginController`, `ACPProcessTransport`, `ClaudeProcessTransport`, `CodexProcessTransport`, `PiRPCProcessTransport`, `StructuredHeadlessAdapter`, `GitDiffService`, `HarnessProtocolProcessHost` | Leave termination to the functions above | With the protocol above, only the names change at the call sites. |
-| `Adapters/Headless/StructuredHeadlessAdapter.swift` | `process.interrupt()` (SIGINT on macOS) | Replace: on Windows this becomes an immediate kill, so use the harness protocol's cancel first, and if there is none, consider `CREATE_NEW_PROCESS_GROUP` with `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)`. Whether each CLI treats this as a stop is not confirmed. |
-| PTY | In the engine, only `AccountLoginController` (through SwiftTerm `LocalProcess`). The screen layer's `Views/TerminalPane` also uses a PTY | Replace: Windows ConPTY (`CreatePseudoConsole`). |
-
-### 3. Path assumptions and executable lookup
-
-| File | Item | Recommended handling |
-| --- | --- | --- |
-| `Runtime/RuntimeProcessEnvironment.swift` | Splits and joins `PATH` with `:`. Fixed `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`, `/usr/sbin`, `/sbin`, `~/.local/bin`, `~/.bun/bin`; `HOME`. `searchDirectories` adds the package managers' folders (`~/.volta/bin`, `~/.cargo/bin`, `~/.deno/bin`, `~/.npm-global/bin`, `~/Library/pnpm`), nvm's `~/.nvm/versions/node/*/bin` and Docker Desktop's `bin` | Abstract: the platform provides the separator and the default path list. On Windows: `;`, a case-insensitive `Path` key, `USERPROFILE`, `%APPDATA%\npm` and so on. |
-| `Runtime/RuntimeSelectionStore.swift` | Candidates in `RuntimeProcessEnvironment.searchDirectories`, `/Applications/ChatGPT.app/Contents/Resources/codex`, `~/Library/Application Support/Claude/claude-code/<version>/claude.app/Contents/MacOS/claude`, splitting `PATH` at `:`, breaking relative paths apart at `/` | Abstract: the platform provides the install candidates per harness. The Windows candidates (each CLI's install location) are not confirmed. |
-| `Diff/GitExecutableLocator.swift` | `/opt/homebrew/bin/git`, `/usr/local/bin/git`, `/opt/local/bin/git`, fallback `/usr/bin/git` | Abstract: the platform provides the candidate list. On Windows: `git.exe` in `PATH` and the Git for Windows install path. |
-| `Diff/GitDiffService.swift` | `/dev/null` as a Git argument (`hash-object`, `diff --no-index`) | Whether Git for Windows accepts this path is not confirmed. For the empty tree, consider a way without a path, such as `git hash-object -t tree --stdin`. The `/dev/null` in `UnifiedDiffParser` is Git's output format, so it stays. |
-| `Domain/HarnessKind.swift` | `relativeExecutablePaths` are POSIX paths without extensions (`.local/bin/codex`, `.hermes/hermes-agent/venv/bin/hermes` and others) | Abstract: candidates per platform. A Windows venv uses `Scripts\*.exe`. |
-| `Account/ProviderConnections.swift`, `Account/ProviderConnectionService.swift`, `Domain/ProviderSessionTitleResolver.swift`, `Domain/WorkspaceGitOrigin.swift` | Decide absolute paths with `hasPrefix("/")` | Replace: gather them into one shared check that accepts `C:\` and UNC paths. |
-| `Domain/CodexWorkSurfaceProjection.swift`, `Files/WorkspaceFileService.swift`, `Domain/Project.swift` | Decide whether a path is inside the workspace folder with a `root + "/"` string prefix, and split at `/` | Replace: compare path components instead, and account for the case-insensitive file system on Windows. The containment check is a security boundary, so add tests with it during the Windows work. |
-| `Runtime/CodexEnvironmentManager.swift` | `~/` expansion | Usable on Windows too, but it should also accept `\` as a separator. |
-| `Account/HarnessAccountBroker.swift` | Finds the Grok home from the `HOME` environment variable (usually missing on Windows) | Use `homeDirectoryForCurrentUser` throughout. |
-| `Store/SessionRepository.swift`, `Domain/ProviderSessionTitleResolver.swift` | Pass the `URL.path(percentEncoded: false)` string to SQLite | Replace: `withUnsafeFileSystemRepresentation`. Whether `path()` becomes `/C:/…` on Windows is not confirmed. |
-
-Foundation also provides `~/.yardlet`, `applicationSupportDirectory` and `UserDefaults` from `ProductIdentity.swift` and
-`AppModel.swift` on Windows. The actual storage location (AppData, the registry and so on) is not confirmed.
-
-### 4. Foundation `Process`, `FileHandle` and file permissions
-
-The 19 files: `AccountCommandRunner`, `AccountLoginController`, `ProviderConnections`, `ACPAdapter`,
-`ACPProcessTransport`, `ClaudeAdapter`, `ClaudeProcessTransport`, `CodexAdapter`, `CodexProcessTransport`,
-`StructuredHeadlessAdapter`, `MuseAdapter`, `PiRPCAdapter`, `PiRPCProcessTransport`, `GitDiffService`,
-`GitExecutableLocator`, `HarnessProtocolProcessHost`, `HarnessRuntimeCompatibility`, `RuntimeSelectionStore` and
-`ComposerDraftRepository`.
+## Foundation `Process`, `FileHandle` and file permissions on Windows
 
 | Item | Windows behavior | Recommended handling |
 | --- | --- | --- |
-| `Process.run()` (12 files) | Quotes the arguments by Windows rules, passes them to `CreateProcessW`, and does not handle `.cmd` and `.bat` separately (confirmed) | Find the real `.exe` in the lookup step. If there is only a shim, wrap it in `cmd.exe /d /s /c`, but take care with argument escaping (the BatBadBut family). |
-| `isExecutableFile(atPath:)` (8 files) | swift-foundation decides with `SHGetFileInfoW(SHGFI_EXETYPE)` | Whether it treats a `.cmd` shim as executable is not confirmed. Put the check in the lookup abstraction. |
-| `terminate()` / `interrupt()` | Both are `TerminateProcess` and end only the root (confirmed) | The job object from section 2. |
-| `readabilityHandler` | Supported through `DuplicateHandle`, `_open_osfhandle` and a Dispatch read source (confirmed: [`FileHandle.swift`](https://github.com/swiftlang/swift-corelibs-foundation/blob/main/Sources/Foundation/FileHandle.swift)) | No change needed. |
-| `process.environment` | Windows environment variable names are case-insensitive | Normalize the keys so that `PATH` and `Path` do not both appear. |
-| `.posixPermissions` 0o600 and 0o700 (`ProviderConnections`, `ComposerDraftRepository`) | There are no POSIX modes, so access by the user alone is not guaranteed | Replace: store under the user profile + ACL. How Foundation applies this attribute is not confirmed. |
+| `Process.run()` | Quotes the arguments by Windows rules, passes them to `CreateProcessW`, and does not send `.cmd` and `.bat` to `cmd.exe` (confirmed) | Find the real `.exe` during lookup. If there is only a shim, wrap it in `cmd.exe /d /s /c`, with care for argument escaping (the BatBadBut family). `PATHEXT` and npm's `.cmd` shims have to be handled in lookup |
+| `isExecutableFile(atPath:)` | swift-foundation decides with `SHGetFileInfoW(SHGFI_EXETYPE)` | Whether it treats a `.cmd` shim as executable is not confirmed. Put the check in the lookup abstraction |
+| `terminate()` / `interrupt()` | Both are `TerminateProcess` and end only the root (confirmed) | The job object above. `Adapters/Headless/StructuredHeadlessAdapter.swift` stops a turn with `process.interrupt()` (SIGINT on macOS), which becomes an immediate kill on Windows: use the harness's own cancel first, and otherwise consider `CREATE_NEW_PROCESS_GROUP` with `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)`. Whether each CLI treats that as a stop is not confirmed |
+| `readabilityHandler` | Supported through `DuplicateHandle`, `_open_osfhandle` and a Dispatch read source (confirmed: [`FileHandle.swift`](https://github.com/swiftlang/swift-corelibs-foundation/blob/main/Sources/Foundation/FileHandle.swift)) | No change needed |
+| `process.environment` | Windows environment variable names are case-insensitive | Normalize the keys so that `PATH` and `Path` do not both appear |
+| `.posixPermissions` 0o600 and 0o700 (private files such as provider connections, drafts and the vault: `ProviderConnections`, `ComposerDraftRepository`, `VaultCenter` and others) | There are no POSIX modes, so access by the user alone is not guaranteed | Store under the user profile with an ACL. How Foundation applies this attribute on Windows is not confirmed |
 
-### 5. External dependencies
+## External dependencies
 
 CryptoKit, Observation and `NSDataDetector` are not package dependencies, but they need the same judgment, so they are
 listed here too.
 
 | Dependency | Engine use | Windows | Evidence | Recommended handling |
 | --- | --- | --- | --- | --- |
-| swift-markdown 0.8.0 (swift-cmark 0.8.0) | `TranscriptInlineContent`, `TranscriptMarkdownDocument` | The manifest has Windows-specific settings. An actual build is not confirmed | `CMARK_GFM_STATIC_DEFINE` `.when(platforms: [.windows])` in swift-markdown's `Package.swift`, `#if os(Windows)` in swift-cmark's `Package.swift` | Keep it in the engine. Confirm with a build in the Windows preview. |
-| SwiftTerm 1.18.0 | `AccountLoginController` | Only the terminal parser builds. No PTY or view (confirmed) | The manifest's `os(Windows)` branch leaves out the `Apple`, `Mac` and `iOS` sources, and `LocalProcess.swift`, `Pty.swift` and `HeadlessTerminal.swift` are under `#if !os(iOS) && !os(Windows)` | Take it out of the engine (section 1). The Windows terminal uses ConPTY and a Windows view. |
-| CSQLite (`systemLibrary`, `pkgConfig: "sqlite3"`, brew provider, `link "sqlite3"`) | `Store/SessionRepository`, `Domain/ProviderSessionTitleResolver` | Relies on the macOS SDK's libsqlite3. Windows has no default header or pkg-config | `Package.swift`, `Sources/CSQLite/module.modulemap` | Replace: the conventional way, adding the SQLite amalgamation as a C target. Decide the approach at the Windows preview. |
-| CryptoKit | `CodexEnvironmentManager` | Apple only | None | `Crypto` from swift-crypto (adding the package needs approval). |
-| Observation | Many `@Observable` models | A Swift toolchain module. Not confirmed with a Windows build | None | Keep as is. |
-| Foundation `NSDataDetector` | `AccountLoginController` | Missing (confirmed) | [swift-corelibs-foundation #4305](https://github.com/swiftlang/swift-corelibs-foundation/issues/4305), closed with no plans | Replace with a regular expression. |
+| swift-markdown 0.8.0 (swift-cmark 0.8.0) | `Transcript/TranscriptInlineContent`, `Transcript/TranscriptMarkdownDocument`, `Diff/MarkdownReviewDiff` | The manifest has Windows-specific settings. An actual build is not confirmed | `CMARK_GFM_STATIC_DEFINE` `.when(platforms: [.windows])` in swift-markdown's `Package.swift`, `#if os(Windows)` in swift-cmark's `Package.swift` | Keep it in the engine. Confirm with a Windows build |
+| SwiftTerm 1.18.0 | `AccountLoginController` | Only the terminal parser builds. No PTY or view (confirmed) | The manifest's `os(Windows)` branch leaves out the `Apple`, `Mac` and `iOS` sources, and `LocalProcess.swift`, `Pty.swift` and `HeadlessTerminal.swift` are under `#if !os(iOS) && !os(Windows)` | Take it out of the engine. The Windows terminal uses ConPTY and a Windows view |
+| Sparkle 2.10.1 | None; only the macOS layer imports it (`Platform/macOS/YardletSparkle.swift`), and it is linked only on macOS (`.when(platforms: [.macOS])`) | Not used | `Package.swift` | Windows needs its own update mechanism |
+| CSQLite (`systemLibrary`, `pkgConfig: "sqlite3"`, `link "sqlite3"`) | `Store/SessionRepository`, `Domain/ProviderSessionTitleResolver` | Relies on the macOS SDK's libsqlite3. Windows has no default header or pkg-config | `Package.swift`, `Sources/CSQLite/module.modulemap` | Replace: the conventional way, adding the SQLite amalgamation as a C target |
+| CryptoKit | `CodexEnvironmentManager` | Apple only | None | `Crypto` from swift-crypto (adding the package needs approval) |
+| Observation | Many `@Observable` models | A Swift toolchain module. Not confirmed with a Windows build | None | Keep as is |
+| Foundation `NSDataDetector` | `AccountLoginController` | Missing (confirmed) | [swift-corelibs-foundation #4305](https://github.com/swiftlang/swift-corelibs-foundation/issues/4305), closed with no plans | Replace with a regular expression |
 
-## Checks that block new violations
+## Splitting SwiftPM targets
 
-`Tests/NativeHarnessClientTests/EnginePortabilityTests.swift`.
+`NativeHarnessClient` is one executable target holding the engine and the macOS screens, so its declarations are
+`internal` and tests reach them with `@testable import`. Splitting it into an engine library and a macOS app target
+needs the following.
 
-- In engine files (the scope above, new folders included), it looks for forbidden imports (SwiftUI, AppKit, UIKit, Cocoa,
-  WebKit, SwiftTerm, Darwin, Security, UserNotifications, CryptoKit and others) and macOS-only API rules (names qualified
-  with `Darwin.`, signals, `waitpid` and `pid_t`, `proc_*` and `sysctl`, PTY functions, `posix_spawn`, `copyfile`,
-  Keychain, `UN*` notification types, AppKit types, FSEvents and kqueue, APIs missing from Foundation outside Apple
-  platforms, `x-apple.` URLs). Line comments are skipped.
-- The allow list is a set of rule names per file. Right now it has 3 files and 13 entries:
-  `AccountLoginController` (6), `CodexEnvironmentManager` (3), `NativeProcessTree` (4).
-- A violation in a file that is not on the allow list, or a new kind of violation in an allowed file, fails. When an
-  allowed entry no longer applies, the test fails and asks for it to be removed from the list. The cap of 13 entries can
-  only go down.
-- Path assumptions (section 3) and `Process` semantics (section 4) are string and behavior problems, so they are not in
-  the check.
-
-## Suggested next steps
-
-1. Split the text parsing of `AccountLoginController` into engine types (no behavior change, small).
-2. Abstract the executable candidates and `PATH` composition into lists that the platform provides, keeping the macOS
-   values as they are.
-3. Move `NativeProcessTree` behind a protocol, keeping the macOS implementation as it is. Build the Windows job object
-   implementation in the Windows preview.
-4. Decide on adopting swift-crypto and on how to include SQLite (adding packages needs separate approval).
-
-## To do when splitting SwiftPM targets
-
-Right now there is a single executable target, so every declaration is `internal`, and tests reach them with
-`@testable import`. This is what splitting into an engine library target and a macOS app target needs.
-
-- **Visibility:** the engine types and members that the screens use (`AppModel`, stores, projections and so on) must be
-  opened outside the target. Using the `package` access level, which is visible only inside the same package, instead
-  of `public` allows the split without creating an external API. There are many of them, so change them mechanically
-  by following the compile errors.
+- **Visibility:** the engine types and members the screens use (`AppModel`, stores, projections and so on) must be
+  visible outside the target. The `package` access level, visible only inside the same package, allows the split
+  without creating an external API. There are many, so change them mechanically by following the compile errors.
 - **Removing circular dependencies:** turn the places where the engine calls platform code into injection. The engine
   cannot call an extension in another module, so calls that rely on macOS-layer extensions belong here too.
   - `AppModel`'s default argument `LocalSystemNotificationCenter()` → the app injects it.
   - `AccountLoginController`, owned by `AccountCenterModel` → injected through an engine protocol.
-  - `HarnessAccountBroker` → `AccountLoginController.stripANSI` → move to an engine text utility.
-  - `HarnessAccountBroker` → `antigravityCredentialState()` (macOS-layer extension) → an injected credential detection
-    protocol.
+  - `HarnessAccountBroker` → `AccountLoginController.stripANSI` → an engine text utility.
+  - `HarnessAccountBroker` → `antigravityCredentialState()` (a macOS-layer extension) → an injected credential
+    detection protocol.
   - The transports → `NativeProcessTree` → a protocol, or per-platform implementations inside the engine.
-  - The opposite direction (`Platform/macOS` → `HarnessLogoAsset`, the `SystemNotificationSettingsModel` extension) is
-    not a problem.
-- **Resources:** both the engine and the screens use `Localizable.strings` through `L10n`, so the engine target owns it;
-  check that `L10n`'s rule of trying `Bundle.main` first still works in the app bundle. The `HarnessLogos` PNGs go to
-  the macOS target.
+  - The opposite direction (`Platform/macOS` → `HarnessLogoAsset`, `SystemNotificationCenter`) is not a problem.
+- **Resources:** both the engine and the screens use `Localizable.strings` through `L10n`, so the engine target owns
+  it; check that `L10n`'s rule of trying `Bundle.main` first still works in the app bundle. The `HarnessLogos` images
+  go to the macOS target.
 - **Dependency placement:** `CSQLite` and `Markdown` go to the engine. `SwiftTerm` goes only to the macOS target, after
-  `AccountLoginController` is split. The fixtures in `Development/` (SwiftUI) go to the macOS target or a separate
-  fixture target.
-- **Test targets:** of 114 test files, 12 import AppKit, SwiftUI, SwiftTerm, WebKit, Darwin or Security. Split them
-  into engine tests (`@testable import` of the engine, also run on Windows) and macOS tests. After the split, building
-  the engine target on Windows becomes the strongest check, so `EnginePortabilityTests` is reduced or removed then.
+  `AccountLoginController` is split. The code in `Development/` goes to the macOS target or a separate fixture target.
+- **Test targets:** split the tests into engine tests (`@testable import` of the engine, also run on Windows) and macOS
+  tests (the ones that import AppKit, SwiftUI, SwiftTerm, WebKit, Darwin or Security). Once the engine target builds on
+  Windows, that build is the strongest check, and `EnginePortabilityTests` can be reduced or removed.
