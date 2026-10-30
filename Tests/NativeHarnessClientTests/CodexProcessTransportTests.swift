@@ -117,6 +117,26 @@ final class CodexProcessTransportTests: XCTestCase {
         await transport.stop()
     }
 
+    /// An App Server that stopped reading before Yardlet wrote (it exited, or closed its input) makes the request fail;
+    /// the write must not end Yardlet with SIGPIPE, as it did in a test process whose fake CLI exited at once.
+    func testARequestToAnAppServerThatStoppedReadingFailsWithoutEndingYardlet() async throws {
+        let executable = try script("""
+        #!/bin/sh
+        exec 0<&-
+        touch "$0.closed"
+        sleep 20
+        """)
+        defer { try? FileManager.default.removeItem(at: executable.deletingLastPathComponent()) }
+        let transport = CodexProcessTransport(executableURL: executable, requestTimeout: .seconds(20))
+        try await transport.start()
+        try await waitUntil { FileManager.default.fileExists(atPath: executable.path + ".closed") }
+        do {
+            _ = try await transport.request(.init(id: 22, method: "thread/list", params: .object([:])))
+            XCTFail("A request nobody read must not report success")
+        } catch {}
+        await transport.stop()
+    }
+
     /// `emittedAtMs` is only a diagnostic timestamp: a frame that carries it as a fraction or a
     /// string is still read, so its response still answers its request.
     func testAReplyWithAnUnexpectedTimestampStillAnswersItsRequest() async throws {
