@@ -132,32 +132,48 @@ final class StreamingWindowRedrawTests: XCTestCase {
     /// A long answer streamed for two seconds, as a model writes one: the conversation is published
     /// on the publication cadence (`AppModel.scheduleTranscriptPublication`), not once per fragment.
     /// Each publication lays the whole window out again, in the window's display cycle.
+    ///
+    /// The cadence is a time, so the publications are counted against the time the fragments took:
+    /// on a Mac 200 fragments take about two seconds, on CI, where each pause lays the window out
+    /// again, several.
     func testALongAnswerIsPublishedOnTheCadenceNotPerFragment() async throws {
         let window = try await makeWindow(tasks: 12)
         defer { window.close() }
         let model = window.model, shown = window.tasks[0]
         let transport = try XCTUnwrap(window.fixture.transport(shown.id))
         let fragments = 200
+        let clock = ContinuousClock()
+        /// At most one publication per interval of `elapsed`, and `extra` besides.
+        func cadence(over elapsed: Duration, extra: Int) -> Int {
+            Int((elapsed / AppModel.transcriptPublicationInterval).rounded(.up)) + extra
+        }
         let published = model.publicationCounts.transcripts
         var text = ""
+        let streamStart = clock.now
         let streaming = await window.measure("\(fragments) answer fragments 10 ms apart") {
             text = await ClaudeAnswerStream(emit: { await transport.emit($0) },
                                             pause: { window.host.settle(passes: 1, interval: 0.01) }).run(fragments: fragments)
         }
+        let streamTime = clock.now - streamStart
         let publications = model.publicationCounts.transcripts - published
-        print("[redraw] \(fragments) answer fragments: \(publications) publications")
+        print("[redraw] \(fragments) answer fragments in \(streamTime): \(publications) publications")
         let answers = (model.transcriptBySessionID[shown.id] ?? []).compactMap { entry -> String? in
             if case let .assistant(text, _) = entry.content { return text }
             return nil
         }
         XCTAssertTrue(answers.contains(text), "The whole answer arrived")
         XCTAssertLessThanOrEqual(streaming[.mainWindow], 2, "Streaming redrew the window")
+        // The count tells the cadence from one publication per fragment only while the fragments came
+        // faster than the cadence.
+        XCTAssertLessThan(cadence(over: streamTime, extra: 0), fragments / 2, "The fragments came too slowly to tell")
         // Ten publications a second for the fragments, and the finished message's frames.
-        XCTAssertLessThanOrEqual(publications, fragments / 10 + 8, "Fragments were published faster than the cadence")
+        XCTAssertLessThanOrEqual(publications, cadence(over: streamTime, extra: 8),
+                                 "Fragments were published faster than the cadence")
 
         // A background agent reports its progress as often, and is published at the same cadence.
         let reports = 200
         let beforeReports = model.publicationCounts.transcripts
+        let reportStart = clock.now
         await transport.emit(json(["type": "system", "subtype": "task_started", "task_id": "task-agent",
                                    "tool_use_id": "toolu_agent", "description": "Survey the sources",
                                    "task_type": "local_agent", "prompt": "Look around", "session_id": "s"]))
@@ -169,9 +185,12 @@ final class StreamingWindowRedrawTests: XCTestCase {
             window.host.settle(passes: 1, interval: 0.01)
         }
         window.host.settle(passes: 20, interval: 0.01)
+        let reportTime = clock.now - reportStart
         let reportPublications = model.publicationCounts.transcripts - beforeReports
-        print("[redraw] \(reports) progress reports: \(reportPublications) publications")
-        XCTAssertLessThanOrEqual(reportPublications, reports / 10 + 8, "Progress was published faster than the cadence")
+        print("[redraw] \(reports) progress reports in \(reportTime): \(reportPublications) publications")
+        XCTAssertLessThan(cadence(over: reportTime, extra: 0), reports / 2, "The reports came too slowly to tell")
+        XCTAssertLessThanOrEqual(reportPublications, cadence(over: reportTime, extra: 8),
+                                 "Progress was published faster than the cadence")
     }
 
     // MARK: - Window
