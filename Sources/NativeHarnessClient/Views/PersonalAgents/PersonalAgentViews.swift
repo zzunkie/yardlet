@@ -285,7 +285,8 @@ struct PersonalAgentsContent: View {
                             }
                         },
                         loadOlder: { Task { await center.refreshConversation(older: true) } },
-                        toggleDetails: toggleDetails)
+                        toggleDetails: toggleDetails,
+                        requestActions: requestActions)
                         .id(agent.id)
                     if showsDetailsBeside {
                         Rectangle().fill(ParityTheme.separator).frame(width: 1)
@@ -351,6 +352,14 @@ struct PersonalAgentsContent: View {
             close: close)
     }
 
+    private var requestActions: PersonalAgentRequestActions {
+        PersonalAgentRequestActions(
+            respond: { item, result in Task { await center.respond(to: item, with: result) } },
+            check: { item in Task { await center.checkInputRequest(item) } },
+            choose: { id, index in Task { await center.chooseOption(index, in: id) } },
+            retryOption: { Task { await center.retryOptionReply() } })
+    }
+
     private func toggleDetails() {
         withAnimation(.easeInOut(duration: 0.18)) {
             if detailsFit { hidesDetails.toggle() } else { raisesDetails.toggle() }
@@ -414,6 +423,7 @@ struct PersonalAgentConversationView: View {
     let refresh: () -> Void
     let loadOlder: () -> Void
     var toggleDetails: () -> Void = {}
+    var requestActions = PersonalAgentRequestActions()
     @Environment(\.yardletInterfaceScale) private var scale
     @Environment(\.personalAgentOriginalOpener) private var opener
     /// The provider's app, where it is installed, looked up once the conversation shows.
@@ -487,6 +497,13 @@ struct PersonalAgentConversationView: View {
                     else if openFailed { Text(L10n.string("Dots could not be opened.")) }
                 }
                 .font(.caption).foregroundStyle(.secondary).padding(.bottom, 4)
+            }
+            if conversation.optionReply.storageFailed || conversation.optionReply.pending != nil && !showsWaitingQuestion {
+                PersonalAgentOptionAnswerStatus(reply: conversation.optionReply, showsQuestion: showsWaitingQuestion,
+                                                actions: requestActions)
+                    .frame(maxWidth: ParityTheme.contentWidth)
+                    .padding(.horizontal, 24).padding(.top, 6)
+                    .frame(maxWidth: .infinity)
             }
             PersonalAgentComposer(draft: conversation.draft, send: send, files: files,
                                   allowsFiles: conversation.allowsAttachments)
@@ -620,10 +637,40 @@ struct PersonalAgentConversationView: View {
                         .textSelection(.enabled)
                 }
                 attachments(of: message)
+                requests(in: message)
                 unsupportedLink(message)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
+        }
+    }
+
+    /// Whether the question a waiting option answer replies to is drawn, with its own way to stop waiting.
+    private var showsWaitingQuestion: Bool {
+        let id = conversation.optionReply.pending?.replyToMessageID
+        return conversation.visibleMessages.contains {
+            $0.id == id && !$0.isDeleted && $0.author == .agent && DotsOptionPicker(metadata: $0.metadata) != nil
+        }
+    }
+
+    /// What the dot's message asks of the person: an input request to answer, or an option question.
+    @ViewBuilder
+    private func requests(in message: PersonalAgentMessage) -> some View {
+        if !message.isDeleted, message.author == .agent {
+            if let item = conversation.requests[message.id] {
+                PersonalAgentRequestCard(item: item, actions: requestActions,
+                                         openWeb: DotsLinks.web(for: agent).map { page in { openWeb(page) } })
+            }
+            if let picker = DotsOptionPicker(metadata: message.metadata) {
+                let replies = conversation.visibleMessages.filter {
+                    !$0.isDeleted && $0.replyToMessageID == message.id && DotsOptionPicker.selection($0.metadata) != nil
+                }
+                let chosen = picker.selected.flatMap { $0 >= 0 ? $0 : nil }
+                    ?? replies.last.flatMap { DotsOptionPicker.selection($0.metadata) }
+                PersonalAgentOptionQuestion(messageID: message.id, picker: picker, chosen: chosen,
+                    isAnswered: picker.selected != nil || !replies.isEmpty, reply: conversation.optionReply,
+                    actions: requestActions)
+            }
         }
     }
 

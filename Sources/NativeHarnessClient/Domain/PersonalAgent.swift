@@ -139,6 +139,12 @@ struct PersonalAgentMessage: Identifiable, Equatable, Sendable {
     var requestID: String? = nil
     /// The provider sent something here that Yardlet does not show yet; the dot's own page does.
     var isUnsupported = false
+    /// The input request the message carries (`content.elicitation`), exactly as the provider sent it.
+    var inputRequest: JSONValue? = nil
+    /// The message's own metadata (`message_metadata`): an option question, or the option a reply chose.
+    var metadata: JSONValue? = nil
+    /// The message this one replies to.
+    var replyToMessageID: String? = nil
 }
 
 struct PersonalAgentAttachment: Equatable, Sendable {
@@ -179,6 +185,9 @@ struct PersonalAgentSubmission: Codable, Equatable, Sendable {
     let timezoneOffsetMinutes: Int
     /// Files the room already accepted for this message, in the order they were added.
     let attachments: [PersonalAgentUploadedFile]
+    /// The question this message answers, with the option chosen there; nil for an ordinary message.
+    var replyToMessageID: String? = nil
+    var optionSelection: Int? = nil
 
     init(text: String, attachments: [PersonalAgentUploadedFile] = [], requestID: String = UUID().uuidString) {
         self.requestID = requestID
@@ -187,15 +196,19 @@ struct PersonalAgentSubmission: Codable, Equatable, Sendable {
         timezoneOffsetMinutes = -TimeZone.current.secondsFromGMT() / 60
     }
 
-    private enum CodingKeys: String, CodingKey { case requestID, text, timezoneOffsetMinutes, attachments }
+    private enum CodingKeys: String, CodingKey {
+        case requestID, text, timezoneOffsetMinutes, attachments, replyToMessageID, optionSelection
+    }
 
-    /// A request saved before attachments existed carries none.
+    /// A request saved before attachments or option replies existed carries neither.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         requestID = try container.decode(String.self, forKey: .requestID)
         text = try container.decode(String.self, forKey: .text)
         timezoneOffsetMinutes = try container.decode(Int.self, forKey: .timezoneOffsetMinutes)
         attachments = try container.decodeIfPresent([PersonalAgentUploadedFile].self, forKey: .attachments) ?? []
+        replyToMessageID = try container.decodeIfPresent(String.self, forKey: .replyToMessageID)
+        optionSelection = try container.decodeIfPresent(Int.self, forKey: .optionSelection)
     }
 
     /// Words or a file: an attachment alone is a message.
@@ -326,12 +339,39 @@ protocol PersonalAgentClient: Actor {
     func activity(for agent: PersonalAgent, cursor: String?) async throws -> PersonalAgentActivityPage
     func schedules(for agent: PersonalAgent) async throws -> [PersonalAgentSchedule]
     func computers(for agent: PersonalAgent) async throws -> [PersonalAgentComputer]
+    /// What the provider says now of the input request in a message, read without answering it.
+    func inspectRequest(in messageID: String, for agent: PersonalAgent) async throws -> DotsRequestInspection
+    /// Sends one answer to the input request in a message, once: it is never retried (`DotsResponseFailure`).
+    func respond(_ result: DotsInputResult, fingerprint: String, in messageID: String,
+                 for agent: PersonalAgent) async throws -> DotsResponseOutcome
     func stop() async
 }
 
 extension PersonalAgentClient {
     /// A reader that observes no room shows every dot idle.
     func liveState(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentLiveUpdate> { AsyncStream { $0.finish() } }
+
+    func inspectRequest(in messageID: String, for agent: PersonalAgent) async throws -> DotsRequestInspection {
+        throw PersonalAgentFailure.unavailable
+    }
+
+    func respond(_ result: DotsInputResult, fingerprint: String, in messageID: String,
+                 for agent: PersonalAgent) async throws -> DotsResponseOutcome {
+        throw DotsResponseFailure.notDispatched(.unavailable)
+    }
+}
+
+/// What the provider answered to a response it received.
+enum DotsResponseOutcome: Equatable, Sendable {
+    case applied
+    /// Any other status: the answer may or may not have taken effect, and nothing is resent.
+    case unconfirmed
+}
+
+/// Why an answer did not return applied: either it was certainly never sent, or it may have been.
+enum DotsResponseFailure: Error, Equatable, Sendable {
+    case notDispatched(PersonalAgentFailure)
+    case uncertain(PersonalAgentFailure)
 }
 
 enum DotsProjection {
@@ -514,11 +554,16 @@ enum DotsProjection {
                           type: value["type"]?.stringValue ?? (fileID == nil ? "unknown" : "file"))
                 }
             } else { attachments = [] }
-            let unsupported = !deleted && text.isEmpty && attachments.isEmpty
+            let request = item["content"]?["elicitation"].flatMap { $0 == .null ? nil : $0 }
+            // A request whose identity cannot be read is shown as something Yardlet cannot display yet.
+            let unsupported = !deleted && text.isEmpty && attachments.isEmpty && request.flatMap(DotsInputRequest.init) == nil
             if unsupported { text = L10n.string("This message cannot be displayed yet.") }
             return PersonalAgentMessage(id: id, author: author, text: deleted ? "" : text,
                 createdAt: date(item["created_at"]?.stringValue), isDeleted: deleted, attachments: deleted ? [] : attachments,
-                requestID: item["request_id"]?.stringValue, isUnsupported: unsupported)
+                requestID: item["request_id"]?.stringValue, isUnsupported: unsupported,
+                inputRequest: deleted ? nil : request,
+                metadata: item["message_metadata"].flatMap { $0 == .null ? nil : $0 },
+                replyToMessageID: item["reply_to"]?["message_id"]?.stringValue)
         }
         guard Set(messages.map(\.id)).count == messages.count else { throw PersonalAgentFailure.invalidResponse }
         // The provider's room client also uses the oldest item when prev_cursor

@@ -25,7 +25,8 @@ struct MainWindow: View {
     /// This window's place in `AppModel.taskWindowIDs`: windows share one model, each says for itself
     /// whether it shows Tasks.
     @State private var windowID = UUID()
-    @State private var personalAgents = PersonalAgentCenter(drafts: .live, preparer: PersonalAgentImagePreparation.live)
+    @State private var personalAgents = PersonalAgentCenter(
+        drafts: .live, preparer: PersonalAgentImagePreparation.live, responses: DotsResponseJournalFiles.live)
     @State private var personalAccountID = AccountChoice.nativeID(for: .codex)
     /// The width the person set by dragging the sidebar's line (`SidebarWidth`), kept across launches.
     /// Only the sidebar's column and the title bar read it, so a drag does not rebuild the window.

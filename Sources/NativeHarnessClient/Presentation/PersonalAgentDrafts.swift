@@ -422,6 +422,7 @@ final class PersonalAgentDraft {
 final class PersonalAgentDrafts {
     private let fileURL: ([String]) -> URL?
     private var values: [String: PersonalAgentDraft] = [:]
+    private var optionReplies: [String: PersonalAgentOptionReply] = [:]
 
     init(fileURL: @escaping ([String]) -> URL? = { _ in nil }) { self.fileURL = fileURL }
 
@@ -432,6 +433,17 @@ final class PersonalAgentDrafts {
         let draft = PersonalAgentDraft(file: fileURL(binding))
         values[key] = draft
         return draft
+    }
+
+    /// The waiting option answer for the same binding, in its own file beside the draft.
+    func optionReply(source: String, identity: PersonalAgentIdentity) -> PersonalAgentOptionReply {
+        let binding = [source, identity.accountID, identity.userID, identity.agentID, identity.roomID]
+        let key = String(decoding: try! JSONEncoder().encode(binding), as: UTF8.self)
+        if let reply = optionReplies[key] { return reply }
+        let file = fileURL(binding).map { $0.deletingPathExtension().appendingPathExtension("option-reply.json") }
+        let reply = PersonalAgentOptionReply(file: file)
+        optionReplies[key] = reply
+        return reply
     }
 
     #if DEBUG

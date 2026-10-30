@@ -40,8 +40,10 @@ waits for **Try again**, and **Load earlier messages** reads another page by han
 Yardlet does not download the whole history in advance, and reading sends no read
 receipt. File attachments open in a native preview, with an explicit save action.
 Other attachment types are named but cannot be opened here yet. Reacting,
-replying to a message, answering approvals, pausing an agent and changing its
-settings are not implemented.
+replying to a message other than by choosing a question's option, pausing an
+agent and changing its settings are not implemented. Files and photos are added
+from the composer, and approvals, forms and option questions are answered where
+the message asks them (both below).
 
 ## Opening the dot where the provider shows it
 
@@ -185,6 +187,94 @@ made while the draft could not be saved is kept and comes back the same way. A
 draft without files is saved in the same format as before. The copies are deleted
 when the message that carried them is confirmed or the file is removed.
 
+Uploading and sending files act on the provider account. Their behavior here was
+checked with synthetic responses, not against the provider.
+
+## Requests and questions
+
+A dot's message can carry an input request (`content.elicitation`). Yardlet keeps it
+as the provider sent it and shows a card in that message, in the same form as a coding
+task's request card. A request is answered only through its card; an ordinary reply in
+the conversation never stands in for it. The request is classified in the provider's
+own order of checks:
+
+- **Approvals.** An empty form that says what it asks (a nonblank message) is a plain
+  approval: Allow, Deny (sent as `decline`) and Cancel. A connector's tool call
+  (`codex_approval_kind` `mcp_tool_call`, with an empty form and the metadata the
+  provider's schema requires) shows the tool, its parameters as the provider lists
+  them and the full parameters on request. Denying it sends `cancel` with
+  `_meta.codex_approval_cancellation_reason` `user`, as the provider's own client does.
+  **Always allow** and **Allow this conversation** appear only for the scopes
+  (`persist`) the request offers. A browser approval with an origin and offered scopes
+  is shown the same way.
+- **One database change.** A sites database delete, insert or update is allowed only
+  when its confirmation summary is the provider's canonical form of a valid change
+  bound to its row, at most 500 characters. It is allowed once and never remembered,
+  even when a scope is offered. If the summary cannot be checked, Allow stays off.
+- **Forms.** A form (mode `form` or none) is filled in with the same strict field rules
+  as a coding task's MCP form: text, numbers, switches and single or multiple choices,
+  each checked before Submit turns on. The two OpenAI form modes are taken only when
+  their schema is that same strict subset with no extensions or confirmation. A field
+  Yardlet does not check, such as a nested object, an extension or a confirmation makes
+  the form one it cannot answer; the unknown parts are never dropped to submit the rest. A browser sign-in request is
+  recognized before any form mode, as the provider's client does, and only in form mode.
+  As a limit of this first version, rather than the provider's behavior, an OpenAI form
+  that names any approval kind (`codex_approval_kind`) is not answered here.
+- **Not answered here.** Tool setup suggestions, sign-in and other links, sign-ins in the
+  dot's browser, email codes, location, payment setup, device verification, approval
+  kinds Yardlet does not know and tool metadata the schema does not take are shown
+  with the provider's words, a reason and **Open This Dot on the Web**. Yardlet sends
+  no answer for them, and never answers an unknown approval as an empty form.
+
+Before an answer is sent, Yardlet reads the request again
+(`GET …/messages/{message}/elicitation?inspect=true`). It sends only if the provider
+still describes exactly the request the message showed (request, thread, turn and
+parameters), says it can be answered and is pending, and gives a request fingerprint.
+It then claims the request in a journal shared by every window and account home of
+the current macOS user, in `~/.yardlet/personal-agent-responses/`. The journal's key is
+the account, user, room, thread, turn and request; it keeps only whether an answer was
+claimed and, once applied, its fingerprint, action and scope, never form values. A
+request with a record is not answered again, and a journal that cannot be written
+blocks the answer.
+
+The answer (`POST …/elicitation/response` with the fingerprint and
+`{action, content, _meta}`) is sent once and never retried, for every kind including the
+OpenAI form modes; this is Yardlet's own choice. The login may be renewed and the
+account is checked before it leaves. A failure up to then releases the claim, and the
+card says the answer was not sent. From the moment the request is handed to the
+network, any outcome other than an `applied` status keeps the claim: an expired login,
+a rejection, a server error, a lost connection or a changed account. The card then
+reads **Status unknown** with **Check status**, which reads the request and the
+journal again and sends nothing. The same holds after a restart or in another window.
+When the provider says the request was resolved or expired, or its acknowledgement
+matches, the card closes and the record stays.
+
+Requests are read again after the conversation is read: when it opens, on refresh and
+after a change the room's subscription reports. Reads of one request are coalesced,
+and nothing polls.
+
+An option question (`message_metadata.option_picker`) shows its options under the
+message. Choosing one first reads the displayed range of the conversation again. The
+question must still be there, undeleted, with the same option text and no answer, or
+nothing is sent; a read that fails sends nothing either. The answer is an ordinary reply
+to the question carrying the option's exact text and
+`message_metadata.option_picker.selection`. It is kept with its request identity beside
+the draft, apart from the draft and its text, which stay as they were. If delivery is
+uncertain, only **Send the same answer again** with the same request identity, or
+**Stop waiting** after confirming that it may have arrived, continues. Sending again
+checks the question as choosing did. If the question is deleted or loses its options
+meanwhile, a line above the editor says an answer could not be confirmed and offers
+**Stop waiting**, without showing the question; until then other questions wait.
+An answer that cannot be saved is not sent, and the same line says so, with **Try
+again** to save without sending. A saved answer that cannot be read locks the options
+until the person keeps it as a backup: its bytes are copied to a private file beside
+it, and then the waiting record itself is removed. Each confirmation to stop waiting
+names the answer it was asked for and lets no later answer go.
+
+These answers act on the provider account. Their behavior here was checked with
+synthetic responses, not against the provider, and the response statuses other than
+`applied` are not known in full.
+
 ## Provider boundary
 
 Dots currently uses private ChatGPT service routes and a legacy authentication
@@ -196,7 +286,7 @@ and an account binding checked before results are displayed.
 
 Opening or refreshing the section only reads and subscribes; it starts no model
 turn. The room observer's registration sends nothing but the account's credential:
-no message, approval, pause or resume. A person's explicit send can start cloud work on their existing dot. The
+no message, approval, pause or resume. A person's explicit send or answer can start cloud work on their existing dot. The
 transport does not read authentication files, change the runtime's configuration,
 copy credentials between account homes, or fabricate service-verification data.
 Signed attachment downloads on provider storage hosts receive no account token.
