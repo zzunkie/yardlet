@@ -17,13 +17,15 @@ MACOS_ICON="$ICON_WORK_DIR/AppIcon-1024.png"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 
 # Chromium for the in-window browser (docs/BROWSER_HOST.md). Bundles carry this pinned CEF build,
-# verified before use. YARDLET_WITHOUT_CEF=1 builds a debug bundle without it; its browser panel
-# falls back to the WebKit preview, like a plain `swift run`.
+# verified before use: CEF's minimal distribution built from source with Chromium's H.264 and AAC
+# decoders, which CEF's own downloads leave out (scripts/build-cef.sh made it). YARDLET_WITHOUT_CEF=1
+# builds a debug bundle without it; its browser panel falls back to the WebKit preview, like a plain
+# `swift run`.
 CEF_VERSION="154.0.28+g564dd6c+chromium-154.0.8037.58"
-CEF_NAME="cef_binary_${CEF_VERSION}_macosarm64_minimal"
-CEF_ARCHIVE_URL="https://cef-builds.spotifycdn.com/cef_binary_154.0.28%2Bg564dd6c%2Bchromium-154.0.8037.58_macosarm64_minimal.tar.bz2"
-CEF_ARCHIVE_SHA1="f7c50c2719deb8aa0c78de517c1228d0b8c3fced"
-CEF_FRAMEWORK_SHA256="e2f817695b598f92dcc671238e508a7d7b984983072c36d5257d6c67ff776112"
+CEF_NAME="cef_binary_${CEF_VERSION}_macosarm64_codecs_minimal"
+CEF_ARCHIVE_URL="https://github.com/zzunkie/yardlet/releases/download/cef-154.0.28-codecs/cef_binary_154.0.28%2Bg564dd6c%2Bchromium-154.0.8037.58_macosarm64_codecs_minimal.tar.bz2"
+CEF_ARCHIVE_SHA256="a44771fb3c5fbc3658320c3258f03e0b4d0ee7085d70c36d48c03ef08e44d0ad"
+CEF_FRAMEWORK_SHA256="02b51a9be1f8e4a4b97410bd4144a4d8063e8aa6f3fcd0a87f16c9b111a708eb"
 CEF_CACHE="$HOME/Library/Caches/Yardlet/CEF"
 CEF_DIR=""
 if [[ "${YARDLET_WITHOUT_CEF:-}" == 1 ]]; then
@@ -36,8 +38,8 @@ else
     CEF_ARCHIVE="$CEF_CACHE/$CEF_NAME.tar.bz2"
     CEF_BINARY="$CEF_DIR/Release/Chromium Embedded Framework.framework/Chromium Embedded Framework"
     if [[ ! -f "$CEF_BINARY" && -f "$CEF_ARCHIVE" ]]; then
-        if [[ "$(/usr/bin/shasum -a 1 "$CEF_ARCHIVE" | cut -d' ' -f1)" != "$CEF_ARCHIVE_SHA1" ]]; then
-            echo "error: $CEF_ARCHIVE does not match the pinned SHA-1 $CEF_ARCHIVE_SHA1" >&2
+        if [[ "$(/usr/bin/shasum -a 256 "$CEF_ARCHIVE" | cut -d' ' -f1)" != "$CEF_ARCHIVE_SHA256" ]]; then
+            echo "error: $CEF_ARCHIVE does not match the pinned SHA-256 $CEF_ARCHIVE_SHA256" >&2
             exit 1
         fi
         /usr/bin/tar -xjf "$CEF_ARCHIVE" -C "$CEF_CACHE"
@@ -48,7 +50,7 @@ error: CEF $CEF_VERSION is not in $CEF_CACHE.
 Download and verify the pinned build, then run this script again:
   mkdir -p "$CEF_CACHE" && cd "$CEF_CACHE"
   curl -fL -o "$CEF_NAME.tar.bz2" "$CEF_ARCHIVE_URL"
-  echo "$CEF_ARCHIVE_SHA1  $CEF_NAME.tar.bz2" | shasum -a 1 -c -
+  echo "$CEF_ARCHIVE_SHA256  $CEF_NAME.tar.bz2" | shasum -a 256 -c -
 EOF
         exit 1
     fi

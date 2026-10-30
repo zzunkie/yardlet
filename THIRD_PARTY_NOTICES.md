@@ -645,14 +645,25 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ## Chromium Embedded Framework 154.0.28 (Chromium 154.0.8037.58)
 
-Source: https://github.com/chromiumembedded/cef (binary distribution
-`cef_binary_154.0.28+g564dd6c+chromium-154.0.8037.58_macosarm64_minimal` from
-https://cef-builds.spotifycdn.com)
+Source: https://github.com/chromiumembedded/cef (commit `564dd6c4aafff558154bd3176eb5d13551db6734`) and
+https://chromium.googlesource.com/chromium/src (tag `154.0.8037.58`)
 
 The in-window browser's host bundle (`Contents/Frameworks/Yardlet Browser Host.app`) contains the
-Chromium Embedded Framework unchanged. Chromium and the third-party code it includes carry their own
-licenses; the distribution's `CREDITS.html` lists them all and is included in the app as
-`Contents/Resources/CHROMIUM_CREDITS.html`.
+Chromium Embedded Framework, built from these sources without changes by `scripts/build-cef.sh`, with
+Chromium's proprietary codecs turned on (`proprietary_codecs=true`, `ffmpeg_branding="Chrome"`).
+Chromium and the third-party code it includes carry their own licenses; the build's `CREDITS.html`
+lists them all and is included in the app as `Contents/Resources/CHROMIUM_CREDITS.html`.
+
+### FFmpeg
+
+The framework includes FFmpeg as Chromium builds it (`third_party/ffmpeg` at the Chromium version
+above), with its H.264 and AAC decoders. FFmpeg is licensed under the GNU Lesser General Public
+License, version 2.1 or later (https://ffmpeg.org/legal.html); the license text is in
+`CHROMIUM_CREDITS.html`. Its source is part of the Chromium source above, and `scripts/build-cef.sh`
+builds the framework from it, so the framework can be rebuilt with a changed FFmpeg.
+
+H.264 (AVC) and AAC are covered by patents in some countries. Neither Yardlet's license nor these
+notices grant any patent rights for them.
 
 ### LICENSE.txt
 
