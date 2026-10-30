@@ -457,6 +457,76 @@ final class PersonalAgentRenderingTests: XCTestCase {
         ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap { scrollViews(in: $0) }
     }
 
+    /// The dot's composer with a photo uploading, a document that failed and a photo ready, at both
+    /// window sizes and in both appearances: thumbnails, names, progress, the failure and its Retry.
+    func testComposerFilesShowTheirUploadsInTheWindow() async throws {
+        let (model, _) = try makeWindowModel()
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        let messages: [PersonalAgentMessage] = [
+            .init(id: "m1", author: .agent, text: "Send me the photos and the signed form when they are ready.",
+                  createdAt: nil, isDeleted: false, attachments: [])
+        ]
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        func photo(_ name: String, _ from: NSColor, _ to: NSColor) throws -> URL {
+            let image = NSImage(size: NSSize(width: 120, height: 90), flipped: false) { rect in
+                NSGradient(starting: from, ending: to)?.draw(in: rect, angle: 30)
+                return true
+            }
+            let data = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?
+                .representation(using: .png, properties: [:]))
+            let url = folder.appending(path: name)
+            try data.write(to: url)
+            return url
+        }
+        let sources = [try photo("site-visit.png", .systemOrange, .systemPink),
+                       folder.appending(path: "signed-application-form.pdf"),
+                       try photo("floor-plan.png", .systemTeal, .systemBlue)]
+        try Data("%PDF-1.4 synthetic".utf8).write(to: sources[1])
+        let directory = try WindowlessRender.directory("personal-agent-uploads-qa")
+        for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 680)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let drafts = PersonalAgentDrafts()
+                let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages)
+                let window = MainWindow(model: model, personalAgentDrafts: drafts) { reader }
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .frame(width: size.width, height: size.height)
+                let host = WindowlessRender.Host(window, size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+                await host.settle(until: { !drafts.opened.isEmpty })
+                let draft = try XCTUnwrap(drafts.opened.first)
+                draft.editor.text = "현장 사진과 서명한 신청서입니다."
+                let ids = await draft.addFiles(sources.map { .init(url: $0) })
+                XCTAssertEqual(ids.count, 3)
+                draft.setState(ids[0], .uploading)
+                draft.setState(ids[1], .failed(.uploadFailed))
+                draft.setState(ids[2], .uploaded(.init(fileID: "file", name: "floor-plan.png", mimeType: "image/png", sizeBytes: 1)))
+                let retry = L10n.string("Retry upload")
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == retry } })
+                // The thumbnails are decoded off the main thread; the capture waits for them.
+                for file in draft.files where file.isImage { _ = await TranscriptImageThumbnails.shared.preview(for: file.copy) }
+                host.settle(passes: 40)
+                let capture = try host.capture()
+                XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6))
+                try WindowlessRender.writePNG(capture.bitmap,
+                    to: directory.appending(path: "files-\(Int(size.width))-\(appearance.suffix).png"))
+                let visible = host.accessibilityElements(visibleOnly: true)
+                for label in [retry, L10n.string("Add files or photos"), L10n.string("Send message")] {
+                    XCTAssertTrue(visible.contains { $0.label == label }, "\(label) is on screen at \(size)")
+                }
+                let labels = visible.map(\.label)
+                XCTAssertTrue(labels.contains("signed-application-form.pdf, " + L10n.string("Upload failed")), "\(labels)")
+                XCTAssertTrue(labels.contains("site-visit.png, " + L10n.string("Uploading")), "\(labels)")
+                XCTAssertTrue(labels.contains("floor-plan.png"), "\(labels)")
+                XCTAssertEqual(try Data(contentsOf: sources[1]), Data("%PDF-1.4 synthetic".utf8))
+            }
+        }
+    }
+
     func testUncertainDeliveryAndAttachmentPreviewRemainReadable() throws {
         let directory = try WindowlessRender.directory("personal-agent-qa")
         let center = PersonalAgentCenter()
@@ -574,6 +644,9 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
     func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate> { AsyncStream { $0.finish() } }
     func send(_ submission: PersonalAgentSubmission, to agent: PersonalAgent) async throws -> PersonalAgentMessage {
         throw PersonalAgentFailure.invalidResponse
+    }
+    func upload(_ file: PersonalAgentPreparedFile, to agent: PersonalAgent) async throws -> PersonalAgentUploadedFile {
+        throw PersonalAgentFailure.uploadFailed
     }
     func download(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> PersonalAgentDownload {
         throw PersonalAgentFailure.invalidResponse

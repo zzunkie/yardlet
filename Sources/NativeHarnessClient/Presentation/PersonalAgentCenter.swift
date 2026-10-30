@@ -14,6 +14,10 @@ final class PersonalAgentConversation {
     var anchor: String?
     var loaded = false
     var isLoading = false
+    /// The room's lifecycle as last read; an unknown or missing one keeps the earlier value.
+    var roomLifecycle: String?
+    /// Whether the room takes files; the picker, a drop, a paste, a retry and Send all ask this.
+    var allowsAttachments: Bool { DotsProjection.allowsAttachments(lifecycle: roomLifecycle) }
     @ObservationIgnored var loadID: UUID?
     var failure: PersonalAgentFailure?
     /// Why the last read of earlier messages failed; the conversation stays as it was.
@@ -39,6 +43,13 @@ final class PersonalAgentDetails {
     var computers: Part<[PersonalAgentComputer]> = .loading
 }
 
+/// The draft files go to, fixed when the person starts choosing them.
+struct PersonalAgentFileTarget {
+    let agent: PersonalAgent
+    let draft: PersonalAgentDraft
+    let generation: Int
+}
+
 /// Window-owned reading state. Switching the shell does not modify the selected
 /// coding task, its draft, or provider history. Nothing here writes read receipts.
 @MainActor @Observable
@@ -56,6 +67,11 @@ final class PersonalAgentCenter {
     @ObservationIgnored private var events: Task<Void, Never>?
     @ObservationIgnored private var pendingRefresh = false
     @ObservationIgnored private let drafts: PersonalAgentDrafts
+    @ObservationIgnored private let preparer: any PersonalAgentFilePreparing
+    /// This window's uploads, by draft file; a changed connection cancels them all.
+    @ObservationIgnored private var uploads: [UUID: Task<Void, Never>] = [:]
+    /// The last upload queued for each draft, which the next one waits for: one at a time, in order.
+    @ObservationIgnored private var uploadQueues: [ObjectIdentifier: Task<Void, Never>] = [:]
     private var conversations: [PersonalAgentIdentity: PersonalAgentConversation] = [:]
     private var detailsByAgent: [PersonalAgentIdentity: PersonalAgentDetails] = [:]
     /// Profile pictures read in this window, by dot and picture version; memory only.
@@ -85,7 +101,11 @@ final class PersonalAgentCenter {
         agent.petID.flatMap { spriteSheets[$0] }
     }
 
-    init(drafts: PersonalAgentDrafts = PersonalAgentDrafts()) { self.drafts = drafts }
+    init(drafts: PersonalAgentDrafts = PersonalAgentDrafts(),
+         preparer: any PersonalAgentFilePreparing = PersonalAgentUnchangedFiles()) {
+        self.drafts = drafts
+        self.preparer = preparer
+    }
 
     func connect(sourceKey: String, draftSourceKey: String? = nil, makeClient: () -> any PersonalAgentClient) async {
         let sameSource = self.sourceKey == sourceKey
@@ -200,6 +220,7 @@ final class PersonalAgentCenter {
                 }
             }
             state.messages = older ? DotsProjection.merge(state.messages, with: incoming, older: true) : incoming
+            if !older, let lifecycle = page.roomLifecycle { state.roomLifecycle = lifecycle }
             let confirmed = Set(state.messages.map(\.id))
             // A successful latest read is authoritative even if an accepted
             // message was deleted before that read. Do not retain a ghost copy.
@@ -352,12 +373,119 @@ final class PersonalAgentCenter {
         await old?.stop()
     }
 
+    /// Where files picked or dropped now go: the shown dot's draft on this connection. Taken when the
+    /// person starts choosing, so a dot, account or home chosen before the files arrive never gets them.
+    func fileTarget() -> PersonalAgentFileTarget? {
+        guard client != nil, let agent = selected, let state = conversation, state.allowsAttachments else { return nil }
+        let draft = state.draft
+        return .init(agent: agent, draft: draft, generation: generation)
+    }
+
+    /// Copies the files into the target's draft, and uploads each once copied.
+    func attach(_ sources: [PersonalAgentFileSource], to target: PersonalAgentFileTarget) async {
+        await attach(to: target) { await $0.addFiles(sources) }
+    }
+
+    /// A pasted picture, as the PNG bytes `encode` makes.
+    func attachImage(to target: PersonalAgentFileTarget, encode: @escaping @Sendable () -> Data?) async {
+        await attach(to: target) { await $0.addImage(name: "image.png", mimeType: "image/png", encode: encode) }
+    }
+
+    private func attach(to target: PersonalAgentFileTarget, _ add: (PersonalAgentDraft) async -> [UUID]) async {
+        guard target.generation == generation else { return }
+        let added = await add(target.draft)
+        // Files copied after the connection changed stay in their own dot's draft, for a retry there.
+        for id in added {
+            if target.generation == generation { startUpload(id, in: target.draft, for: target.agent) }
+            else { target.draft.setState(id, .failed(.uploadInterrupted)) }
+        }
+    }
+
+    /// Uploads again every file of the selected dot's draft whose upload failed or was interrupted.
+    func retryUploads() {
+        guard let agent = selected, let state = conversation, state.allowsAttachments else { return }
+        let draft = state.draft
+        guard draft.pending == nil, !draft.isSending else { return }
+        for file in draft.files where file.failure != nil { startUpload(file.id, in: draft, for: agent) }
+    }
+
+    /// Removing a file stops its upload here; what the room may already hold stays there.
+    func removeFile(_ id: UUID) {
+        guard let draft = conversation?.draft, draft.pending == nil, !draft.isSending else { return }
+        uploads.removeValue(forKey: id)?.cancel()
+        draft.removeFile(id)
+    }
+
+    private func startUpload(_ id: UUID, in draft: PersonalAgentDraft, for agent: PersonalAgent) {
+        guard let reader = client else { return draft.setState(id, .failed(.uploadInterrupted)) }
+        let current = generation
+        let previous = uploadQueues[ObjectIdentifier(draft)]
+        let preparer = preparer
+        draft.setState(id, .queued)
+        let task = Task { [weak self] in
+            await previous?.value
+            guard let self, let file = draft.file(id), file.state == .queued else { return }
+            guard !Task.isCancelled, generation == current else { return draft.setState(id, .failed(.uploadInterrupted)) }
+            draft.setState(id, .uploading)
+            do {
+                let prepared = try await preparer.prepare(file.copy, name: file.name, mimeType: file.mimeType)
+                // Preparation may convert or re-encode a picture; what goes up is checked again.
+                guard PersonalAgentFileRules.accepts(size: prepared.data.count) else { throw PersonalAgentFailure.attachmentLimit }
+                try Task.checkCancellation()
+                let uploaded = try await reader.upload(prepared, to: agent)
+                // A result that outlives its connection is not this draft's to keep.
+                guard !Task.isCancelled, generation == current else { throw CancellationError() }
+                draft.setState(id, .uploaded(uploaded))
+            } catch {
+                let failure = error as? PersonalAgentFailure
+                if Task.isCancelled || generation != current || error is CancellationError
+                    || failure == .accountChanged || failure == .signInRequired || failure == .stopped {
+                    draft.setState(id, .failed(.uploadInterrupted))
+                } else {
+                    let known: Set<PersonalAgentFailure> = [.attachmentLimit, .filePreparation, .uploadFailed, .attachmentsNotAllowed]
+                    draft.setState(id, .failed(failure.flatMap { known.contains($0) ? $0 : nil } ?? .uploadFailed))
+                }
+                if generation == current, let failure, failure == .accountChanged || failure == .signInRequired {
+                    accept(failure)
+                }
+            }
+        }
+        uploads[id] = task
+        uploadQueues[ObjectIdentifier(draft)] = task
+    }
+
     func send() async {
         guard let agent = selected, let reader = client, let state = conversation else { return }
-        let retry = state.draft.pending != nil
-        guard let submission = state.draft.prepare() else { return }
         let current = generation
         let draft = state.draft
+        var intended: PersonalAgentDraft.Intended?
+        if draft.pending == nil {
+            // Files still being copied in are not yet part of what Send would take.
+            guard !draft.isSending, !draft.isAddingFiles else { return }
+            // Send during uploads sends this text and these files once they are in, as the provider's
+            // composer does; the editor stays locked meanwhile, and a file that fails stops the send.
+            let pressed = draft.intended
+            intended = pressed
+            if !pressed.files.isEmpty, !state.allowsAttachments {
+                draft.failure = .attachmentsNotAllowed
+                return
+            }
+            if pressed.files.contains(where: { draft.file($0)?.isInProgress == true }) {
+                draft.isSending = true
+                draft.waitsForUploads = true
+                draft.failure = nil
+                await draft.uploadsSettled()
+                draft.isSending = false
+                draft.waitsForUploads = false
+                guard current == generation, !Task.isCancelled else { return }
+            }
+            if pressed.files.contains(where: { draft.file($0)?.uploaded == nil }) {
+                draft.failure = .attachmentsIncomplete
+                return
+            }
+        }
+        let retry = draft.pending != nil
+        guard let submission = draft.prepare(intended) else { return }
         draft.isSending = true
         draft.failure = nil
         var refreshAfterSend = false
@@ -394,6 +522,10 @@ final class PersonalAgentCenter {
 
     private func detach() -> (any PersonalAgentClient)? {
         generation += 1
+        // A local stop: each file is left to retry, and nothing is deleted on the provider.
+        uploads.values.forEach { $0.cancel() }
+        uploads = [:]
+        uploadQueues = [:]
         events?.cancel()
         events = nil
         avatarTask?.cancel()

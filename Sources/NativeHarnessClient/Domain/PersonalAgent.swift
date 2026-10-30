@@ -171,15 +171,91 @@ enum DotsLinks {
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
 }
 
+/// A message as it is sent, fixed once its request is saved: a retry sends these same words and
+/// file IDs under the same request ID, never files uploaded again.
 struct PersonalAgentSubmission: Codable, Equatable, Sendable {
     let requestID: String
     let text: String
     let timezoneOffsetMinutes: Int
+    /// Files the room already accepted for this message, in the order they were added.
+    let attachments: [PersonalAgentUploadedFile]
 
-    init(text: String, requestID: String = UUID().uuidString) {
+    init(text: String, attachments: [PersonalAgentUploadedFile] = [], requestID: String = UUID().uuidString) {
         self.requestID = requestID
         self.text = text
+        self.attachments = attachments
         timezoneOffsetMinutes = -TimeZone.current.secondsFromGMT() / 60
+    }
+
+    private enum CodingKeys: String, CodingKey { case requestID, text, timezoneOffsetMinutes, attachments }
+
+    /// A request saved before attachments existed carries none.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        requestID = try container.decode(String.self, forKey: .requestID)
+        text = try container.decode(String.self, forKey: .text)
+        timezoneOffsetMinutes = try container.decode(Int.self, forKey: .timezoneOffsetMinutes)
+        attachments = try container.decodeIfPresent([PersonalAgentUploadedFile].self, forKey: .attachments) ?? []
+    }
+
+    /// Words or a file: an attachment alone is a message.
+    var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty }
+}
+
+/// A file the dot's room accepted (`POST /messaging/rooms/{room}/files`): its ID there, with the name,
+/// type and size of the bytes that were sent. The ID belongs to that account's room and nowhere else.
+struct PersonalAgentUploadedFile: Codable, Equatable, Sendable {
+    let fileID: String
+    let name: String
+    let mimeType: String
+    let sizeBytes: Int
+}
+
+/// The bytes that go up for one attachment, after the provider's image preparation.
+struct PersonalAgentPreparedFile: Sendable {
+    let data: Data
+    let name: String
+    let mimeType: String
+}
+
+/// The provider composer's rules for what a file attachment may be (`addFiles`): at most eight in a
+/// message, each of 1 byte to 20 MiB, named by its last path component without control characters.
+enum PersonalAgentFileRules {
+    static let maximumCount = 8
+    static let maximumBytes = 20 * 1024 * 1024
+
+    static func accepts(size: Int) -> Bool { size >= 1 && size <= maximumBytes }
+
+    static func displayName(_ raw: String) -> String {
+        let cleaned = String(String.UnicodeScalarView(raw.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }))
+        let last = cleaned.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? ""
+        let name = last.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty || name == "." || name == ".." ? "Attachment" : name
+    }
+
+    /// A declared type is kept unless it says nothing (`application/octet-stream`); otherwise the
+    /// provider names a few extensions it recognizes, and anything else is octet-stream.
+    static func mimeType(name: String, declared: String?) -> String {
+        if let declared = declared?.lowercased(), !declared.isEmpty, declared != "application/octet-stream" { return declared }
+        let known = ["png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif",
+                     "webp": "image/webp", "heic": "image/heic", "heif": "image/heif", "pdf": "application/pdf",
+                     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                     "txt": "text/plain", "zip": "application/zip"]
+        let ext = name.split(separator: ".").count > 1 ? name.split(separator: ".").last.map { $0.lowercased() } : nil
+        return ext.flatMap { known[$0] } ?? "application/octet-stream"
+    }
+}
+
+/// What turns a saved copy of a chosen file into the bytes to upload. The platform's version prepares
+/// pictures as the provider's composer does; this one sends the copy as it is.
+protocol PersonalAgentFilePreparing: Sendable {
+    func prepare(_ file: URL, name: String, mimeType: String) async throws -> PersonalAgentPreparedFile
+}
+
+struct PersonalAgentUnchangedFiles: PersonalAgentFilePreparing {
+    func prepare(_ file: URL, name: String, mimeType: String) async throws -> PersonalAgentPreparedFile {
+        let data = try await Task.detached { try Data(contentsOf: file) }.value
+        return .init(data: data, name: name, mimeType: mimeType)
     }
 }
 
@@ -191,12 +267,15 @@ struct PersonalAgentDownload: Sendable {
 struct PersonalAgentPage: Equatable, Sendable {
     let messages: [PersonalAgentMessage]
     let before: String?
+    /// The room's lifecycle when the page was read, if it named one the provider knows.
+    var roomLifecycle: String? = nil
 }
 
 enum PersonalAgentFailure: Error, Equatable, Sendable {
     case runtimeUnavailable, signInRequired, accountChanged, accessDenied
     case unavailable, invalidResponse, network, stopped
     case deliveryUnknown, sendRejected, verificationRequired, draftStorage, attachmentUnavailable
+    case attachmentLimit, uploadFailed, uploadInterrupted, filePreparation, attachmentsIncomplete, attachmentsNotAllowed
 
     var message: String {
         switch self {
@@ -213,6 +292,12 @@ enum PersonalAgentFailure: Error, Equatable, Sendable {
         case .verificationRequired: L10n.string("ChatGPT requires verification before this message can be sent. Your draft is still here.")
         case .draftStorage: L10n.string("The draft could not be saved. Nothing new will be sent until it is saved.")
         case .attachmentUnavailable: L10n.string("This attachment cannot be opened here yet.")
+        case .attachmentLimit: L10n.string("Add up to 8 files, each up to 20 MB.")
+        case .uploadFailed: L10n.string("A file could not be uploaded. Retry it or remove it.")
+        case .uploadInterrupted: L10n.string("A file upload stopped before it finished. Retry it or remove it.")
+        case .filePreparation: L10n.string("This photo could not be prepared for upload. Convert it to JPEG and try again.")
+        case .attachmentsIncomplete: L10n.string("Nothing was sent because a file did not upload. Retry it or remove it.")
+        case .attachmentsNotAllowed: L10n.string("Files cannot be sent in this conversation. Remove them to send the message.")
         }
     }
 }
@@ -226,6 +311,8 @@ protocol PersonalAgentClient: Actor {
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage
     func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate>
     func send(_ submission: PersonalAgentSubmission, to agent: PersonalAgent) async throws -> PersonalAgentMessage
+    /// One file into the dot's room, for a later message to name by its returned ID.
+    func upload(_ file: PersonalAgentPreparedFile, to agent: PersonalAgent) async throws -> PersonalAgentUploadedFile
     func download(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> PersonalAgentDownload
     /// The bytes of the dot's profile picture, bounded; never read with an account credential on storage hosts.
     func avatar(for agent: PersonalAgent) async throws -> Data
@@ -364,6 +451,33 @@ enum DotsProjection {
         }
     }
 
+    /// The lifecycle states the provider's room normalizer knows; any other value says nothing.
+    static let roomLifecycles: Set<String> = ["share_only", "pending_request", "connected", "accepted"]
+
+    /// The room's lifecycle under the names the provider reads, in its order, if it is a known one.
+    static func roomLifecycle(_ room: JSONValue) -> String? {
+        let raw = [room["dmLifecycleState"], room["dm_lifecycle_state"], room["lifecycleState"]]
+            .lazy.compactMap { $0?.stringValue }.first { !$0.isEmpty }
+        return raw.flatMap { roomLifecycles.contains($0) ? $0 : nil }
+    }
+
+    /// The provider's gate for files and replies (`mayAttachOrReply`): a room only shared with the
+    /// person, or waiting on a message request in either direction, takes none. A room whose
+    /// lifecycle is unknown is not refused, as the provider's own composer does not refuse it.
+    static func allowsAttachments(lifecycle: String?) -> Bool {
+        lifecycle != "share_only" && lifecycle != "pending_request"
+    }
+
+    /// The room a file is written to, checked as the provider's room reader checks it: this dot's
+    /// room, a direct messaging room, and one that takes files now.
+    static func attachmentRoom(_ room: JSONValue, agent: PersonalAgent) throws {
+        _ = try messages(.object(["items": .array([])]), room: room, agent: agent)
+        guard room["type"]?.stringValue == "DM", room["app_source"]?.stringValue == "chatgpt:messaging" else {
+            throw PersonalAgentFailure.invalidResponse
+        }
+        guard allowsAttachments(lifecycle: roomLifecycle(room)) else { throw PersonalAgentFailure.attachmentsNotAllowed }
+    }
+
     static func messages(_ page: JSONValue, room: JSONValue, agent: PersonalAgent) throws -> PersonalAgentPage {
         guard room["id"]?.stringValue == agent.id.roomID, room["aeon_id"]?.stringValue == agent.id.agentID,
               case let .array(members)? = room["members"], case let .array(items)? = page["items"] else {
@@ -401,7 +515,8 @@ enum DotsProjection {
         guard Set(messages.map(\.id)).count == messages.count else { throw PersonalAgentFailure.invalidResponse }
         // The provider's room client also uses the oldest item when prev_cursor
         // is absent; an empty page ends backfill.
-        return .init(messages: messages, before: messages.isEmpty ? nil : page["prev_cursor"]?.stringValue ?? messages.first?.id)
+        return .init(messages: messages, before: messages.isEmpty ? nil : page["prev_cursor"]?.stringValue ?? messages.first?.id,
+                     roomLifecycle: roomLifecycle(room))
     }
 
     static func merge(_ existing: [PersonalAgentMessage], with incoming: [PersonalAgentMessage], older: Bool) -> [PersonalAgentMessage] {
