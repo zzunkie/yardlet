@@ -25,7 +25,8 @@ sign-up form whose new password and confirmation fields carry passwordrules; ?sl
 goes in), /vault/change (a password change form for person@example.test: current, new and confirmation fields, none
 marked, the current one told apart by its label), /vault/change-dialog (VAULT_CHANGE_DIALOG below), /vault/recover (a
 recovery's new password form with no username), /vault/first and /vault/second (a sign-in in two steps, VAULT_FIRST
-below), /vault/iam (an account, username and password, VAULT_IAM below) and /vault/webauthn (a blank
+below), /vault/iam (an account, username and password, VAULT_IAM below), /vault/address and /vault/card (a checkout's
+address and card forms, VAULT_ADDRESS and VAULT_CARD below) and /vault/webauthn (a blank
 page for WebAuthn on localhost), /passkey (a sign-in form with passkey autofill and the passkey requests sites
 make, started by window.passkey(kind)), for what ordinary sites ask of a browser /compat (window.compat(kind)
 starts each request and window.qa.compat says how it ended; links to other apps' addresses, mailto:, tel: and one
@@ -727,6 +728,36 @@ window.qa = {submitted: null, values: () => [account.value, username.value]};
 document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = password.value !== ''; });
 </script>'''
 
+# A checkout's shipping address, marked with the HTML autocomplete names: name, two street lines, city, postal code, a
+# country select and a phone. window.qa.values() gives the fields' values.
+VAULT_ADDRESS = '''<!doctype html><meta charset="utf-8"><title>Vault address</title>
+<form id="form" method="post">
+<label>Full name <input id="fullname" autocomplete="shipping name"></label>
+<label>Address <input id="line1" autocomplete="shipping address-line1"></label>
+<label>Apartment, suite <input id="line2" autocomplete="shipping address-line2"></label>
+<label>City <input id="city" autocomplete="shipping address-level2"></label>
+<label>Postal code <input id="zip" autocomplete="shipping postal-code"></label>
+<label>Country <select id="country" autocomplete="shipping country"><option value="">Choose</option>
+<option value="KR">South Korea</option><option value="US">United States</option></select></label>
+<label>Phone <input id="phone" type="tel" autocomplete="shipping tel"></label><button id="go">Continue</button></form>
+<script>
+window.qa = {submitted: null, values: () => [fullname, line1, line2, city, zip, country, phone].map(e => e.value).join('|')};
+document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = true; });
+</script>'''
+
+# A card form with no autocomplete names, as many payment pages make one (autocomplete="off" on the number), told by
+# its labels and placeholder. Only a card network's published test number goes into it.
+VAULT_CARD = '''<!doctype html><meta charset="utf-8"><title>Vault card</title>
+<form id="form" method="post">
+<label>Name on card <input id="holder"></label>
+<label>Card number <input id="number" autocomplete="off" inputmode="numeric"></label>
+<label>Expiry <input id="expiry" placeholder="MM / YY"></label>
+<label>CVC <input id="cvc" inputmode="numeric" maxlength="4"></label><button id="pay">Pay</button></form>
+<script>
+window.qa = {submitted: null, values: () => [holder, number, expiry, cvc].map(e => e.value).join('|')};
+document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = true; });
+</script>'''
+
 ISOLATION = '''<!doctype html><meta charset="utf-8"><title>Isolation</title><h1>Isolation</h1>'''
 
 # The sign-ins tasks follow (BrowserHostIsolationQA, docs/BROWSER_SESSION_ISOLATION.md 11). /follow/signin has a
@@ -1421,6 +1452,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = VAULT_SECOND.encode()
         elif self.path.startswith('/vault/iam'):
             payload = VAULT_IAM.encode()
+        elif self.path.startswith('/vault/address'):
+            payload = VAULT_ADDRESS.encode()
+        elif self.path.startswith('/vault/card'):
+            payload = VAULT_CARD.encode()
         elif self.path.startswith('/vault/webauthn'):
             payload = VAULT_WEBAUTHN.encode()
         elif self.path.startswith('/passkey'):

@@ -62,7 +62,50 @@ struct KeychainVaultSecretStore: VaultSecretStoring {
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status: status) }
     }
 
-    /// Every item of this service: on macOS a delete removes all that match.
+    /// The person's addresses and cards (design §18): one item of this service, account `wallet`.
+    private var walletQuery: [CFString: Any] {
+        [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: "wallet"]
+    }
+
+    func loadWallet() throws -> VaultWallet? {
+        var search = walletQuery
+        search[kSecReturnData] = true
+        search[kSecMatchLimit] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(search as CFDictionary, &item)
+        switch status {
+        case errSecSuccess:
+            guard let data = item as? Data else { return nil }
+            return try JSONDecoder().decode(VaultWallet.self, from: data)
+        case errSecItemNotFound:
+            return nil
+        default:
+            throw KeychainError(status: status)
+        }
+    }
+
+    /// Saves the wallet, or deletes its item when there is none (nil or empty).
+    func saveWallet(_ wallet: VaultWallet?) throws {
+        guard let wallet, !wallet.isEmpty else {
+            let status = SecItemDelete(walletQuery as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status: status) }
+            return
+        }
+        let data = try JSONEncoder().encode(wallet)
+        let status = SecItemUpdate(walletQuery as CFDictionary, [kSecValueData: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var item = walletQuery
+            item[kSecValueData] = data
+            item[kSecAttrLabel] = "Yardlet addresses and cards"
+            item[kSecAttrDescription] = "Yardlet browser autofill"
+            let added = SecItemAdd(item as CFDictionary, nil)
+            guard added == errSecSuccess else { throw KeychainError(status: added) }
+        } else if status != errSecSuccess {
+            throw KeychainError(status: status)
+        }
+    }
+
+    /// Every item of this service, the wallet's too: on macOS a delete removes all that match.
     func deleteAll() throws {
         let status = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service] as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status: status) }

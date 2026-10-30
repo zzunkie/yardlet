@@ -59,6 +59,22 @@ struct BrowserVaultPasswordOffer: Equatable {
     var page: String
 }
 
+/// Saved addresses or cards the bar offers to fill at an empty field of their form (design §18).
+struct BrowserWalletFillOffer: Equatable {
+    enum Which: String { case address, card }
+    var which: Which
+    /// The document the field is in; moving to another one ends the offer.
+    var page: String
+}
+
+/// An address or a card the person sent in a form, offered for saving (design §18); `updates` when it is a saved card
+/// whose expiry or name changed.
+struct BrowserWalletSaveOffer: Equatable {
+    var address: VaultAddress?
+    var card: VaultCard?
+    var updates = false
+}
+
 /// A new item the person starts from the page ("Add to Password Manager…").
 struct BrowserVaultDraft: Identifiable, Equatable {
     let id = UUID()
@@ -126,7 +142,7 @@ extension BrowserHostPaneController {
         }
         // The watch tells of the person's sign-ins: the vault offers saving them, and with per-task
         // profiles the tasks that follow the person's sign-ins take the site's cookies.
-        let offers = vault.isAllowedBuild && vault.isEnabled
+        let offers = vault.isAllowedBuild && (vault.isEnabled || vault.isWalletEnabled)
         guard offers || MacBrowserHost.shared.profiles.storage == .perTask else { return }
         let token = tab.devTools.observeEvents { [weak self, weak tab] method, params in
             guard method == "Runtime.bindingCalled", params["name"]?.stringValue == VaultPageScripts.offerBinding,
@@ -149,6 +165,9 @@ extension BrowserHostPaneController {
         focusedPasswordPage = nil
         offeredPasswordPages = []
         madePassword = nil
+        walletFillOffer = nil
+        walletSaveOffer = nil
+        dismissedWalletPages = []
         dismissedSetups = []
         passkeyTask?.cancel()
         view?.extraContextMenuItems = nil
@@ -162,6 +181,7 @@ extension BrowserHostPaneController {
         // A filled code often sends the page on at once; the offer stays while the page is on that site.
         if let offer = vaultLinkOffer, !VaultSite.matches(offer.site, origin: address) { vaultLinkOffer = nil }
         if focusedPasswordPage != address { focusedPasswordPage = nil }
+        if let offer = walletFillOffer, offer.page != address { walletFillOffer = nil }
     }
 
     /// What the watch in the page saw (`VaultPageScripts.offerBinding`).
@@ -180,6 +200,9 @@ extension BrowserHostPaneController {
         case "passwordBlur": focusedPasswordPage = nil
         case "madeCleared": madePasswordCleared(on: tab)
         case "username": usernameStepTyped(fields["username"] ?? "", on: tab)
+        case "walletFocus": walletFieldFocused(on: tab, page: fields["page"] ?? "", which: fields["which"] ?? "")
+        case "card": cardSent(fields, on: tab)
+        case "address": addressSent(fields["values"] ?? "", on: tab)
         default: personSignedIn(fields, on: tab)
         }
     }
@@ -256,7 +279,8 @@ extension BrowserHostPaneController {
     /// The person typed a password into the page (the agent's typing is no use of the panel): the agent's tools treat
     /// the page as one the vault filled, as after the key button, though the value is not known until it is sent.
     private func personTypedSecret(on tab: BrowserTab) {
-        guard vault.isAllowedBuild, vault.isEnabled, let used = tab.lastPersonUse, ContinuousClock.now - used < .seconds(5) else { return }
+        guard vault.isAllowedBuild, vault.isEnabled || vault.isWalletEnabled, let used = tab.lastPersonUse,
+              ContinuousClock.now - used < .seconds(5) else { return }
         Task { await VaultPageScripts.noteSecretsShown([], on: tab.devTools, fills: tab.vaultFills) }
     }
 
@@ -410,6 +434,90 @@ extension BrowserHostPaneController {
               let item = vault.items.first(where: { $0.id == made.item }) else { return }
         vault.logMadePassword(item, .saved, origin: made.origin, taskID: session,
                               "Its fields were emptied before the form was seen to be sent; the item keeps it.")
+    }
+
+    // MARK: Addresses and cards (design §18)
+
+    /// An empty field of a card or an address form took the focus: the bar offers the saved ones, once a page.
+    private func walletFieldFocused(on tab: BrowserTab, page: String, which: String) {
+        guard vault.offersWallet, let which = BrowserWalletFillOffer.Which(rawValue: which), walletFillOffer == nil,
+              !dismissedWalletPages.contains(page),
+              which == .card ? !vault.wallet.cards.isEmpty : !vault.wallet.addresses.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.tab === tab, await VaultPageScripts.shows(page, tab.devTools) else { return }
+            self.walletFillOffer = BrowserWalletFillOffer(which: which, page: page)
+        }
+    }
+
+    func dismissWalletFillOffer() {
+        guard let offer = walletFillOffer else { return }
+        walletFillOffer = nil
+        dismissedWalletPages.insert(offer.page)
+    }
+
+    /// The person sent a card: a new one is offered for saving, a saved one whose expiry or name changed for updating.
+    /// Its number goes on the scrubbing list at once, as a typed password does.
+    private func cardSent(_ fields: [String: String], on tab: BrowserTab) {
+        guard vault.offersWallet, let number = fields["number"], VaultCard.isCardNumber(number),
+              let month = Int(fields["month"] ?? ""), (1...12).contains(month), let year = Int(fields["year"] ?? "") else { return }
+        let card = VaultCard(name: (fields["name"] ?? "").trimmingCharacters(in: .whitespaces), number: number,
+                             expiryMonth: month, expiryYear: year)
+        MacAgentToolService.shared.broker.noteVaultValues(card.spellings)
+        guard var saved = vault.wallet.cards.first(where: { $0.number == card.number }) else {
+            walletSaveOffer = BrowserWalletSaveOffer(card: card)
+            return
+        }
+        guard saved.expiryMonth != card.expiryMonth || saved.expiryYear != card.expiryYear
+                || !card.name.isEmpty && saved.name != card.name else { return }
+        saved.expiryMonth = card.expiryMonth
+        saved.expiryYear = card.expiryYear
+        if !card.name.isEmpty { saved.name = card.name }
+        walletSaveOffer = BrowserWalletSaveOffer(card: saved, updates: true)
+    }
+
+    /// The person sent an address the wallet does not have: the bar offers to save it.
+    private func addressSent(_ json: String, on tab: BrowserTab) {
+        guard vault.offersWallet, let values = try? JSONDecoder().decode([String: String].self, from: Data(json.utf8)),
+              let address = VaultAddress(values: values),
+              !vault.wallet.addresses.contains(where: { $0.isSame(as: address) }) else { return }
+        walletSaveOffer = BrowserWalletSaveOffer(address: address)
+    }
+
+    func acceptWalletOffer() {
+        guard let offer = walletSaveOffer else { return }
+        walletSaveOffer = nil
+        do {
+            if let card = offer.card { try vault.saveCard(card) }
+            if let address = offer.address { try vault.saveAddress(address) }
+        } catch {
+            showVaultNotice(error.localizedDescription)
+        }
+    }
+
+    func fillWallet(address: VaultAddress) {
+        fillWallet(values: address.values, card: nil)
+    }
+
+    /// A card fills after Touch ID or the login password, as Chrome and Safari ask; its number is on the scrubbing list
+    /// and the address guard before it goes in, and its document is recorded as filled, as a password's is.
+    func fillWallet(card: VaultCard) {
+        fillWallet(values: card.values, card: card)
+    }
+
+    private func fillWallet(values: [String: String], card: VaultCard?) {
+        walletFillOffer = nil
+        guard let tab, vault.offersWallet else { return }
+        Task { @MainActor [weak self] in
+            guard let self, let frame = try? await VaultPageScripts.mainFrame(tab.devTools, timeout: .seconds(10)) else { return }
+            if let card {
+                guard await self.vault.confirmPerson(L10n.format("fill the card %@", card.label)) else { return }
+                MacAgentToolService.shared.broker.noteVaultValues(card.spellings)
+                tab.send(.guardFilledValues(tab: tab.id, values: card.spellings.filter { $0.count >= 12 }))
+            }
+            let kinds = await VaultPageScripts.fillWallet(tab.devTools, frame: frame, fills: tab.vaultFills, values: values,
+                                                          secret: card != nil)
+            if kinds?.isEmpty != false { self.showVaultNotice(L10n.string("This page has no field to fill.")) }
+        }
     }
 
     // MARK: The key button

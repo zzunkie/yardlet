@@ -1278,3 +1278,84 @@ and its file of websites with shared credential backends was removed in 2024
   with their accounts; the key button's fill put an item's account back; and a new password typed over a filled one
   offered to update that account, named in the bar. The PNGs `vault-panel-add-username` and
   `vault-panel-update-account` were checked by eye.
+
+## 18. Addresses and payment cards for the person (2026-10-31)
+
+The request: a person typing the same address and card into sign-up and checkout forms again and again wanted the
+browser panel to save and fill them, as Chrome and Safari do. Cards are the person's alone: no agent tool gives or
+fills one, and what an agent can read of a page after a card goes in follows the filled-document rules of section 5.3.
+
+### 18.1 Other browsers and managers compared
+
+Read from public sources on 2026-10-31 (a subagent read Chromium's and Bitwarden's source on their `main` branches and
+the vendors' help pages; these may differ from released builds; Safari's card pages read were those of macOS 11 to 13).
+
+| | Chrome | Safari | 1Password | Bitwarden |
+|---|---|---|---|---|
+| Saving an address | Offered after the form is sent, when it has a country and, for Korea and the US, a street, city, state and postal code ([help](https://support.google.com/chrome/answer/142893?co=GENIE.Platform%3DDesktop), [address_import_requirement_util.cc](https://github.com/chromium/chromium/blob/main/components/autofill/core/browser/data_quality/addresses/address_import_requirement_util.cc)) | Not offered; the Contacts card "My Card" is used ([help](https://support.apple.com/guide/safari/ibrwa005/mac)) | Offered after the form is sent, with the extension's setting ([help](https://support.1password.com/credit-card-address-filling/)) | Not offered; "New identity" from the inline menu ([help](https://bitwarden.com/help/auto-fill-card-id/)) |
+| Saving a card | Offered when a valid number and an expiry month and year were sent ([credit_card_save_manager.cc](https://github.com/chromium/chromium/blob/main/components/autofill/core/browser/payments/credit_card_save_manager.cc), [payments_form_data_importer.cc](https://github.com/chromium/chromium/blob/main/components/autofill/core/browser/form_import/payments/payments_form_data_importer.cc)) | A card not saved yet, used in a purchase ([help](https://support.apple.com/en-mn/guide/safari/ibrwa005/16.0/mac/11.7)) | Offered after the form is sent ([help](https://support.1password.com/credit-card-address-filling/)) | "New card" from the inline menu takes what the form holds ([help](https://bitwarden.com/help/auto-fill-card-id/)) |
+| Security code | Kept by default ("Save security codes", `kAutofillPaymentCvcStorage` on; turning it off deletes them) ([autofill_prefs.cc](https://github.com/chromium/chromium/blob/main/components/autofill/core/common/autofill_prefs.cc), [help](https://support.google.com/chrome/answer/16580822)) | Kept ([help](https://support.apple.com/en-mn/guide/safari/ibrwa005/16.0/mac/11.7)) | A card item has a verification number field ([help](https://support.1password.com/item-categories/)) | A card item has a code ([card.view.ts](https://github.com/bitwarden/clients/blob/main/libs/common/src/vault/models/view/card.view.ts)) |
+| Asking who is there before a card fills | Off by default on macOS (`kAutofillPaymentMethodsMandatoryReauth`), offered after a fill ([autofill_prefs.cc](https://github.com/chromium/chromium/blob/main/components/autofill/core/common/autofill_prefs.cc), [mandatory_reauth_manager.cc](https://github.com/chromium/chromium/blob/main/components/autofill/core/browser/payments/mandatory_reauth_manager.cc)) | Touch ID, when set in System Settings ([help](https://support.apple.com/guide/safari/ibrw1103/16.1/mac/13.0)) | The extension's unlock; no per-item step documented | A per-item "Master password re-prompt" ([help](https://bitwarden.com/help/master-password-re-prompt/)) |
+| Telling fields | `autocomplete` first, then patterns, Korean among them (`카드`, `우편.?번호`, `^주소.?$`, `시·군·구`, `시·도`) ([autocomplete_parsing_util.cc](https://github.com/chromium/chromium/blob/main/components/autofill/core/common/autocomplete_parsing_util.cc), [legacy_regex_patterns.json](https://github.com/chromium/chromium/blob/main/components/autofill/core/browser/form_parsing/resources/legacy_regex_patterns.json)) | `autocomplete` read by WebKit ([Autofill.cpp](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/html/Autofill.cpp)); patterns unconfirmed | `autocomplete` and labels help it ([guide](https://www.1password.dev/web/compatible-website-design/)) | `autocomplete`, name, id, title, label and placeholder against keyword lists ([autofill-constants.ts](https://github.com/bitwarden/clients/blob/main/apps/browser/src/autofill/services/autofill-constants.ts)) |
+| Where it is kept | `Web Data`, the number and code encrypted with a key in the keychain ([payments_autofill_table.h](https://github.com/chromium/chromium/blob/main/components/autofill/core/browser/webdata/payments/payments_autofill_table.h)) | The keychain ([help](https://support.apple.com/guide/safari/ibrw1103/16.1/mac/13.0)) | Card and Identity items | Card and Identity items |
+| A card in a list | The nickname or network and `••4242`, and the expiry ([credit_card.cc](https://github.com/chromium/chromium/blob/main/components/autofill/core/browser/data_model/payments/credit_card.cc)) | Unconfirmed | Unconfirmed | "Visa, *4242" ([card.view.ts](https://github.com/bitwarden/clients/blob/main/libs/common/src/vault/models/view/card.view.ts)) |
+
+### 18.2 Decisions
+
+- **Where:** Settings → Passwords has an "Addresses and cards" section: a switch ("Save and fill addresses and cards",
+  on by default as in Chrome and Safari, in a team-signed build), the saved addresses (the name, then the street, city
+  and postal code) and cards (the nickname or network and the last four digits, then the expiry and the name), adding
+  and editing one in a sheet, and "Delete All Addresses and Cards…". They are one keychain item of the vault's service
+  (account `wallet`), apart from the passwords' items: "Delete all passwords…" leaves it, its own Delete All removes the
+  keychain item. Turning the switch off stops every bar and fill and keeps what is saved, as Chrome's and the vault's
+  own switch do; nothing else is written anywhere.
+- **Saving:** when the person sends a form, a card form (a card number field) holding a number that passes the Luhn
+  check and an expiry month and year is offered for saving ("Save the card Visa •••• 4242?"), as Chrome asks; a saved
+  card whose expiry or name changed is offered for updating. An address form (a street and two more address fields)
+  holding a street and a city or postal code is offered ("Save the address …?") unless the same one is saved. The bar
+  closes with its X for now. A card the vault filled is not offered again.
+- **No security code:** Yardlet does not keep it, unlike Chrome by default, Safari, 1Password and Bitwarden. The code
+  is what a site asks for to know the card is at hand: kept beside the number, a copy of the keychain item would be
+  the whole card. Typing three or four digits at each payment is the cost. The fill leaves the code field empty.
+- **Filling:** when an empty field of a card or address form takes the focus, a bar offers the saved one ("Fill the
+  card Visa •••• 4242?") or, with several, a Fill menu; "Not Now" ends it for the page. A card fills only after Touch ID
+  or the login password (Safari's way; Chrome's step is off by default on macOS); an address fills without asking, as
+  in Chrome. A fill puts each value into the empty field of its kind in the focused field's form (a select takes the
+  option of that value or text; an expiry takes `MM/YY`, `MMYY` or `MM/YYYY` as the field asks).
+- **Telling fields:** the field's `autocomplete` token (past `section-*`, `shipping`, `billing` and the like; `off`
+  is not read, as Chrome does not), else its name, id, labels and placeholder against English and Korean patterns, as
+  Chrome's and Bitwarden's are. Card fields inside another site's frame (a payment provider's) are not filled: the
+  vault fills only the page's own fields (section 5.2).
+- **For agents:** no tool gives an address or a card, and no agent fill uses one. A card's number and expiry go onto
+  the scrubbing list and the number onto the address guard before they go in; the document is recorded as filled, so
+  the agent's scripts and screenshots are refused there and its snapshot leaves out the filled fields (section 5.3). A
+  card number, expiry or code the person types in closes the page to the agent's scripts the same way, as a typed
+  password does.
+- **Agents and addresses (a proposal, not done):** an agent filling a sign-up's or a delivery's address could take the
+  person's address as a sign-in's username is taken, with the same step and usage log, since an address is personal
+  but no secret. That needs the person's say first; cards stay out of it whatever is chosen.
+
+### 18.3 Rules kept
+
+- Card values never reach a tool result, a log or the clipboard; the bars and Settings show a card by its last four
+  digits, and its sheet shows the number only as "Unchanged" until the person types another.
+- The site and origin rules of section 5.2 hold: a fill goes only into the main frame's document of the origin it
+  was given for.
+- With the switch off, the panel takes nothing from what the watch reports of address and card fields: no bar, no
+  fill, nothing kept.
+
+### 18.4 Verification
+
+- Unit and render: `VaultTests.testAddressesAndCardsAreKeptWithoutASecurityCode` (the Luhn check, a card's label,
+  values and spellings, an American Express number's grouping, no security code in what is kept, an address from a
+  form's fields and back, one keychain item that emptying the passwords leaves and its own Delete All removes, the
+  switch) and `VaultSettingsRenderingTests.testAddressesAndCardsDraw` (`settings-vault-wallet`, `vault-card`,
+  `vault-address`, `vault-wallet-bars`, light and dark, checked by eye; no card number in the section's text).
+- Real CEF QA (`com.zzunkie.yardlet.vaultqa` run as in section 15.5; 96 checks passed), on the QA server's
+  `/vault/address` (a shipping address with `autocomplete` names and a country select) and `/vault/card` (a card form
+  with no `autocomplete` names, `autocomplete="off"` on the number), with only Stripe's published test number
+  4242 4242 4242 4242: the address sent was offered and saved, and filled an empty form back; the card typed in was
+  offered with its number, expiry and name and no code, and the page was closed to the agent's scripts; the saved card
+  waited for Touch ID, filled nothing on a no, and on a yes filled the number, expiry and name with the code field
+  left empty, after which the agent's script was refused and its snapshot held no part of the number. The panel PNGs
+  (`vault-panel-wallet-save-address`, `-save-card`, `-fill-card`) were checked by eye.

@@ -7,20 +7,31 @@ protocol VaultSecretStoring {
     func load(_ id: UUID) throws -> VaultSecret?
     func save(_ secret: VaultSecret, for id: UUID) throws
     func delete(_ id: UUID) throws
+    /// Every item, the wallet's too.
     func deleteAll() throws
+    /// The person's addresses and cards (design §18), one item beside the vault's; nil saves none.
+    func loadWallet() throws -> VaultWallet?
+    func saveWallet(_ wallet: VaultWallet?) throws
 }
 
 final class InMemoryVaultSecretStore: VaultSecretStoring {
     private var secrets: [UUID: VaultSecret] = [:]
+    private var wallet: VaultWallet?
 
-    init(_ secrets: [UUID: VaultSecret] = [:]) {
+    init(_ secrets: [UUID: VaultSecret] = [:], wallet: VaultWallet? = nil) {
         self.secrets = secrets
+        self.wallet = wallet
     }
 
     func load(_ id: UUID) throws -> VaultSecret? { secrets[id] }
     func save(_ secret: VaultSecret, for id: UUID) throws { secrets[id] = secret }
     func delete(_ id: UUID) throws { secrets[id] = nil }
-    func deleteAll() throws { secrets = [:] }
+    func deleteAll() throws {
+        secrets = [:]
+        wallet = nil
+    }
+    func loadWallet() throws -> VaultWallet? { wallet }
+    func saveWallet(_ wallet: VaultWallet?) throws { self.wallet = wallet }
 }
 
 /// One use of an item, as the usage log keeps it (design §6.3). No value is ever written here.
@@ -226,6 +237,7 @@ final class VaultCenter: ObservableObject {
     }
 
     static let enabledKey = "Yardlet.vault.enabled"
+    static let walletEnabledKey = "Yardlet.vault.wallet.enabled"
 
     private var environment: Environment
     @Published private(set) var items: [VaultItem]
@@ -237,6 +249,14 @@ final class VaultCenter: ObservableObject {
             onToolsChanged?()
         }
     }
+    /// Whether the browser panel saves and fills addresses and cards (design §18).
+    @Published var isWalletEnabled: Bool {
+        didSet {
+            guard isWalletEnabled != oldValue else { return }
+            environment.defaults.set(isWalletEnabled, forKey: Self.walletEnabledKey)
+        }
+    }
+    private var storedWallet: VaultWallet?
     /// Whether a "while unlocked" item fills without asking. Touch ID unlocks it; the screen locking
     /// or the Mac sleeping locks it (design §6.4).
     private(set) var isUnlocked = false
@@ -253,6 +273,7 @@ final class VaultCenter: ObservableObject {
         self.environment = environment
         items = environment.repository.loadItems()
         isEnabled = environment.defaults.object(forKey: Self.enabledKey) as? Bool ?? true
+        isWalletEnabled = environment.defaults.object(forKey: Self.walletEnabledKey) as? Bool ?? true
     }
 
     var isAllowedBuild: Bool { environment.isAllowedBuild }
@@ -719,6 +740,56 @@ final class VaultCenter: ObservableObject {
         await environment.confirm(reason)
     }
 
+    // MARK: Addresses and cards (design §18)
+
+    /// Whether the browser panel offers to save and fill the person's addresses and cards: on by default, as Chrome's
+    /// and Safari's are, and only in a build whose keychain items trust its team alone (design §4.3).
+    var offersWallet: Bool { environment.isAllowedBuild && isWalletEnabled }
+
+    /// The addresses and cards, read from the keychain the first time they are needed.
+    var wallet: VaultWallet {
+        if storedWallet == nil { storedWallet = (try? environment.secrets.loadWallet()) ?? VaultWallet() }
+        return storedWallet ?? VaultWallet()
+    }
+
+    func saveAddress(_ address: VaultAddress) throws {
+        var wallet = wallet
+        if let index = wallet.addresses.firstIndex(where: { $0.id == address.id }) {
+            wallet.addresses[index] = address
+        } else {
+            wallet.addresses.append(address)
+        }
+        try storeWallet(wallet)
+    }
+
+    func saveCard(_ card: VaultCard) throws {
+        var wallet = wallet
+        if let index = wallet.cards.firstIndex(where: { $0.id == card.id }) {
+            wallet.cards[index] = card
+        } else {
+            wallet.cards.append(card)
+        }
+        try storeWallet(wallet)
+    }
+
+    func deleteWalletEntry(_ id: UUID) throws {
+        var wallet = wallet
+        wallet.addresses.removeAll { $0.id == id }
+        wallet.cards.removeAll { $0.id == id }
+        try storeWallet(wallet)
+    }
+
+    /// Deletes every address and card, and their keychain item.
+    func deleteWallet() throws {
+        try storeWallet(VaultWallet())
+    }
+
+    private func storeWallet(_ wallet: VaultWallet) throws {
+        try environment.secrets.saveWallet(wallet.isEmpty ? nil : wallet)
+        objectWillChange.send()
+        storedWallet = wallet
+    }
+
     /// Every entry the usage log keeps, oldest first.
     func allUses() -> [VaultUse] { environment.repository.allUses() }
 
@@ -798,7 +869,10 @@ final class VaultCenter: ObservableObject {
     @discardableResult
     func clear() throws -> [String] {
         let passkeySites = items.filter(\.hasPasskey).flatMap(\.sites)
+        // The addresses and cards have their own Delete All (design §18).
+        let kept = wallet
         try environment.secrets.deleteAll()
+        try environment.secrets.saveWallet(kept)
         environment.repository.removeAll()
         items = []
         isUnlocked = false

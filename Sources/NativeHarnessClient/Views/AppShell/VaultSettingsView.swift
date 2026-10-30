@@ -95,6 +95,8 @@ struct VaultSettingsView: View {
             } message: {
                 Text(L10n.string("Every saved sign-in and its history is deleted from this Mac."))
             }
+            // The person's own addresses and cards, filled in the browser panel and never for agents (design §18).
+            if !isSearching { VaultWalletSection(vault: vault).padding(.top, 8) }
         }
         .alert(L10n.string("Remove Yardlet's passkey on these sites too"),
                isPresented: Binding(get: { !passkeySites.isEmpty }, set: { if !$0 { passkeySites = [] } })) {
@@ -412,7 +414,7 @@ private struct VaultItemRow: View {
     }
 }
 
-private struct VaultSettingsIcon: View {
+struct VaultSettingsIcon: View {
     let systemName: String
 
     var body: some View {

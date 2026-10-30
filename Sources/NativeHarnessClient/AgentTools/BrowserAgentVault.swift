@@ -283,6 +283,58 @@ enum VaultPageScripts {
         };
         """#
 
+    /// `walletKind(e)`: what an address or card form's field takes (design §18), by the HTML `autocomplete` names: the
+    /// field's own token (past `section-*`, `shipping`, `billing` and the like; `off` is not read, as Chrome does not),
+    /// else its name, id, labels and placeholder in English or Korean; null for any other field. `walletFields(scope)`:
+    /// the shown fields of the scope (a form, else the page) that take one, each with its kind; `isCardForm` and
+    /// `isAddressForm` tell a card form (a card number field) and an address form (a street and two more address fields).
+    static let walletFieldTests = #"""
+        const walletKindNames = ['cc-name', 'cc-number', 'cc-exp', 'cc-exp-month', 'cc-exp-year', 'cc-csc', 'name',
+          'given-name', 'family-name', 'organization', 'street-address', 'address-line1', 'address-line2', 'address-line3',
+          'address-level1', 'address-level2', 'postal-code', 'country', 'country-name', 'tel', 'email'];
+        const walletGuesses = [
+          ['cc-csc', /cvc|cvv|csc|card.?(security|verification)|security.?code|보안\s?코드|cvc\s?번호/],
+          ['cc-number', /card.?(number|no\b|num)|cc.?num|cardnum|credit.?card|카드\s?번호/],
+          ['cc-name', /card.?holder|name.?on.?card|cc.?name|카드\s?(소유자|명의)/],
+          ['cc-exp', /mm\s?\/?\s?yy|exp.?date|valid.?thru/],
+          ['cc-exp-month', /(exp|expir|유효).*(month|\bmm\b|월)|cc.?month/],
+          ['cc-exp-year', /(exp|expir|유효).*(year|\byy|년)|cc.?year/],
+          ['cc-exp', /expir|유효\s?기간/],
+          ['email', /e-?mail|이메일/],
+          ['postal-code', /zip|postal|post.?code|우편\s?번호/],
+          ['address-line2', /address.?(line)?.?2|addr2|apartment|\bapt\b|suite|상세\s?주소|나머지\s?주소/],
+          ['address-line1', /address.?(line)?.?1|addr1|street|address|주소/],
+          ['address-level2', /city|town|suburb|시\s?[\/·]\s?군|도시/],
+          ['address-level1', /state|province|region|시\s?[\/·]\s?도/],
+          ['country', /country|국가/],
+          ['given-name', /first.?name|given.?name/],
+          ['family-name', /last.?name|family.?name|surname/],
+          ['organization', /company|organi[sz]ation|회사/],
+          ['tel', /phone|\btel\b|mobile|휴대|전화/],
+          ['name', /full.?name|recipient|\bname\b|받는\s?(분|사람)|이름|성명/]];
+        const walletKind = e => {
+          if (!(e instanceof HTMLInputElement || e instanceof HTMLSelectElement || e instanceof HTMLTextAreaElement)) return null;
+          if (e instanceof HTMLInputElement && !['text', 'email', 'tel', 'number', 'search', ''].includes(e.type)) return null;
+          const tokens = (e.getAttribute('autocomplete') || '').toLowerCase().split(/\s+/)
+            .filter(t => t && t !== 'on' && t !== 'off' && !/^(section-|shipping|billing|home|work|mobile|fax|pager)/.test(t));
+          const token = tokens[tokens.length - 1];
+          if (token) return walletKindNames.includes(token) ? (token === 'country-name' ? 'country' : token) : null;
+          if (e instanceof HTMLInputElement && e.type === 'email') return 'email';
+          const words = [e.name, e.id, e.placeholder, e.getAttribute('aria-label')]
+            .concat(Array.from(e.labels || []).map(l => l.textContent)).join(' ').toLowerCase();
+          if (/search|query|coupon|promo|captcha|password|user.?name|login/.test(words)) return null;
+          const found = walletGuesses.find(guess => guess[1].test(words));
+          return found ? found[0] : null;
+        };
+        const walletShown = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+        const walletFields = scope => Array.from((scope || document).querySelectorAll('input, select, textarea'))
+          .filter(f => !f.disabled && walletShown(f)).map(field => ({ field, kind: walletKind(field) })).filter(x => x.kind);
+        const isCardForm = fields => fields.some(x => x.kind === 'cc-number');
+        const isAddressForm = fields => fields.some(x => x.kind === 'street-address' || x.kind === 'address-line1')
+          && new Set(fields.filter(x => !x.kind.startsWith('cc-')).map(x => x.kind)).size >= 3;
+        const walletScope = e => (e && (e.form || e.closest('form'))) || null;
+        """#
+
     /// `autocompleteOf(e)`, `isCurrentPassword(e)` and `newPasswordFields(e)`: the fields a new password goes
     /// into when `e` is one of them (design §15). The form's fields marked `new-password`; else, past the
     /// current password (marked so, or named so in its name, id, placeholder or label), the form's other one
@@ -327,12 +379,18 @@ enum VaultPageScripts {
           window.__yardletVaultWatch = true;
           const send = message => { if (typeof window.__yardletVaultOffer === 'function') window.__yardletVaultOffer(JSON.stringify(message)); };
           \(newPasswordTests)
+          \(walletFieldTests)
           const typed = new WeakSet(), typedText = new WeakSet();
           const textTypes = ['text', 'email', 'tel', ''];
           let toldTyped = false;
           addEventListener('input', e => {
             if (!e.isTrusted || !(e.target instanceof HTMLInputElement)) return;
-            if (e.target.type !== 'password') { typedText.add(e.target); return; }
+            if (e.target.type !== 'password') {
+              typedText.add(e.target);
+              // A card's number, expiry or security code typed in keeps the page from the agent's scripts (design §18).
+              if (!toldTyped && /^cc-(number|csc|exp)/.test(walletKind(e.target) || '')) { toldTyped = true; send({ kind: 'typedSecret' }); }
+              return;
+            }
             typed.add(e.target);
             if (!toldTyped) { toldTyped = true; send({ kind: 'typedSecret' }); }
             // Once no field of its form holds it: a confirmation emptied alone leaves the new password in.
@@ -394,10 +452,28 @@ enum VaultPageScripts {
             return named.length === 1 ? named[0].value : null;
           };
           const offer = scope => {
+            walletSent(scope);
             const read = reading(scope);
             if (read) return tell(read.message);
             const username = usernameStep(scope);
             if (username) tell({ kind: 'username', username });
+          };
+          // A card or an address the person sent, for Yardlet to offer saving (design §18): never a card's security
+          // code, and not a card the vault filled.
+          const walletSent = scope => {
+            const fields = walletFields(scope);
+            const value = kind => { const x = fields.find(f => f.kind === kind && f.field.value); return x ? x.field.value.trim() : ''; };
+            const number = value('cc-number').replace(/[\\s-]/g, '');
+            if (isCardForm(fields) && number && !(window.__yardletVaultSecrets || []).includes(number)) {
+              const exp = value('cc-exp').match(/(\\d{1,2})\\s*[\\/-]?\\s*(\\d{2,4})$/);
+              tell({ kind: 'card', name: value('cc-name'), number, month: exp ? exp[1] : value('cc-exp-month'),
+                     year: exp ? exp[2] : value('cc-exp-year') });
+            }
+            if (isAddressForm(fields)) {
+              const values = {};
+              for (const x of fields) if (!x.kind.startsWith('cc-') && x.field.value && !values[x.kind]) values[x.kind] = x.field.value.trim();
+              tell({ kind: 'address', values: JSON.stringify(values) });
+            }
           };
           // A page that sends a new password with its own script from a [role=button] (a dialog changing it in
           // place), as Chrome's dynamic form submission counts a form that goes away: the person's click or key on
@@ -444,6 +520,13 @@ enum VaultPageScripts {
             if (role) sentInPlace = inPlace(role);
           }, true);
           addEventListener('focusin', e => {
+            // An empty field of a card or an address form: Yardlet offers to fill a saved one (design §18).
+            const kind = !e.target.value && walletKind(e.target);
+            if (kind) {
+              const fields = walletFields(walletScope(e.target));
+              const which = kind.startsWith('cc-') ? (isCardForm(fields) ? 'card' : '') : (isAddressForm(fields) ? 'address' : '');
+              if (which) send({ kind: 'walletFocus', which, page: location.href });
+            }
             if (!(e.target instanceof HTMLInputElement) || e.target.type !== 'password') return;
             const fresh = newPasswordFields(e.target);
             send({ kind: 'passwordFocus', page: location.href,
@@ -622,6 +705,88 @@ enum VaultPageScripts {
         guard let fields, !fields.isEmpty else { return .null }
         return .array(fields.map { .object(["id": .string($0.id), "name": .string($0.name), "label": .string($0.label),
                                              "value": .string($0.value)]) })
+    }
+
+    /// The person's fill of an address or a card (design §18), in the vault's world: into the empty fields of the form
+    /// of the focused field, else of the page, each by its kind (`values` by `autocomplete` name). A select takes the
+    /// option of that value or text; an expiry takes the length its field asks for. A card's fields and values are kept
+    /// in the vault's world as a password's are, for snapshots to leave out (`secretElements`). Nothing goes into a
+    /// document of another origin than the one the values were given for.
+    static let walletFillFunction = """
+        function(values, secret, origin) {
+          \(walletFieldTests)
+          if (location.origin !== origin) return { error: 'moved' };
+          const card = Object.keys(values).some(k => k.startsWith('cc-'));
+          const focused = document.activeElement;
+          const fields = walletFields(walletKind(focused) ? walletScope(focused) : null)
+            .filter(x => x.kind.startsWith('cc-') === card && x.kind !== 'cc-csc');
+          const lower = v => String(v).trim().toLowerCase();
+          const put = (e, v) => {
+            e.focus();
+            if (e instanceof HTMLSelectElement) {
+              const wanted = lower(v), bare = wanted.replace(/^0/, '');
+              const options = Array.from(e.options);
+              const option = options.find(o => lower(o.value) === wanted || lower(o.text) === wanted)
+                || options.find(o => lower(o.value).replace(/^0/, '') === bare || lower(o.value) === wanted.slice(-2)
+                  || (wanted.length > 1 && lower(o.text).startsWith(wanted)));
+              if (!option) return false;
+              Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(e, option.value);
+            } else {
+              if (e.value) return false;
+              const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              Object.getOwnPropertyDescriptor(proto, 'value').set.call(e, v);
+              e.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText' }));
+            }
+            e.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          };
+          const shaped = (e, kind, v) => {
+            if (kind === 'cc-exp') {
+              const [month, year] = v.split('/'), long = values['cc-exp-year'] || '';
+              if (e.maxLength === 4 || /mmyy/i.test(e.placeholder || '')) return month + year;
+              if (e.maxLength >= 7 || /yyyy/i.test(e.placeholder || '')) return month + '/' + long;
+              return v;
+            }
+            if (kind === 'cc-exp-year' && e instanceof HTMLInputElement && e.maxLength === 2) return v.slice(-2);
+            if (kind === 'street-address' && !(e instanceof HTMLTextAreaElement)) return v.split('\\n').join(' ');
+            return v;
+          };
+          const secrets = [], kinds = [];
+          for (const x of fields) {
+            const v = values[x.kind];
+            if (typeof v !== 'string' || !v || kinds.includes(x.kind)) continue;
+            if (!put(x.field, shaped(x.field, x.kind, v))) continue;
+            kinds.push(x.kind);
+            if (secret && x.kind !== 'cc-name') secrets.push(x.field);
+          }
+          if (secret && secrets.length) {
+            window.__yardletVault = (window.__yardletVault || []).concat(secrets);
+            window.__yardletVaultSecrets = (window.__yardletVaultSecrets || []).concat(Object.values(values).filter(v => v.length >= 4));
+          }
+          return { kinds };
+        }
+        """
+
+    /// Fills an address or a card for the person into the document of `frame` (`walletFillFunction`): a card is recorded
+    /// on the tab before it goes in, as a password is, and taken back when nothing went in. The kinds filled, or nil.
+    static func fillWallet(_ cdp: any BrowserAgentCDP, frame: (id: String, loaderID: String, origin: String),
+                           fills: BrowserVaultFills, values: [String: String], secret: Bool,
+                           timeout: Duration = .seconds(10)) async -> [String]? {
+        guard let context = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout),
+              (try? await mainFrame(cdp, timeout: timeout))?.loaderID == frame.loaderID else { return nil }
+        let record = BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: cdp.eventLog.count)
+        if secret { fills.record(record) }
+        let filled = try? await cdp.send("Runtime.callFunctionOn", [
+            "functionDeclaration": .string(walletFillFunction), "executionContextId": .integer(context),
+            "arguments": .array([.object(["value": .object(values.mapValues(JSONValue.string))]),
+                                 .object(["value": .bool(secret)]), .object(["value": .string(frame.origin)])]),
+            "returnByValue": .bool(true)
+        ], timeout: timeout)
+        let answer = filled?["result"]?["value"]
+        let kinds = answer?["kinds"]?.arrayValue?.compactMap(\.stringValue)
+        // Taken back only when the fill said it put nothing in.
+        if secret, answer?["error"] != nil || kinds?.isEmpty == true { fills.withdraw(record) }
+        return kinds
     }
 
     /// The tab's main frame: its ID, the document it shows and its origin, as the browser reports them.
