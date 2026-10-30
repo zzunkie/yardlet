@@ -3143,6 +3143,8 @@
 "Dot details" = "Dot 정보";
 "Show dot details" = "Dot 정보 보기";
 "Hide dot details" = "Dot 정보 숨기기";
+"Searching" = "검색 중";
+"Making a payment" = "결제 중";
 "Loading earlier messages…" = "이전 메시지를 불러오는 중…";
 "Earlier messages could not be loaded." = "이전 메시지를 불러오지 못했습니다.";
 "No activity yet" = "아직 활동이 없습니다";

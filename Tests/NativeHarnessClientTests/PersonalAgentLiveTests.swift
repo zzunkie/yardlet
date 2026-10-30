@@ -115,4 +115,60 @@ final class PersonalAgentLiveTests: XCTestCase {
             throw error
         }
     }
+
+    /// Registers the room observer on the existing primary dot and reads its first bound state, then
+    /// leaves. It sends no message, typing, read receipt, approval or pause, and starts no work. This
+    /// opt-in is separate from the read-only check above, since registering is a request of its own.
+    /// Only whether a state bound to the room arrived is checked; nothing of it is printed or saved. A
+    /// registration that never yields a state fails here rather than passing as a quiet room.
+    func testExistingDotsRoomObserverOnlyWhenSeparatelyApproved() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["YARDLET_DOTS_LIVE_ROOM"] == "1", let runtime = env["YARDLET_DOTS_RUNTIME"] else {
+            throw XCTSkip("Set YARDLET_DOTS_LIVE_ROOM and YARDLET_DOTS_RUNTIME to observe a real dot's room.")
+        }
+        let reader = DotsService(executable: URL(filePath: runtime),
+                                 environmentManager: CodexEnvironmentManager(paths: .live()), connection: nil)
+        // The provider's own first wait is 30 seconds; this allows one attempt beyond it.
+        let timeout = Task {
+            try? await Task.sleep(for: .seconds(70))
+            if !Task.isCancelled { await reader.stop() }
+        }
+        defer { timeout.cancel() }
+        do {
+            let agents = try await reader.agents()
+            guard let agent = agents.first(where: \.isPrimary) ?? agents.first else {
+                await reader.stop()
+                throw XCTSkip("This account has no existing dot.")
+            }
+            let messages = await reader.updates(for: agent)
+            var connected = false
+            for await event in messages {
+                if case .connected = event { connected = true; break }
+                if case .failed = event { break }
+            }
+            guard connected else {
+                await reader.stop()
+                return XCTFail("The messaging socket did not connect")
+            }
+            var bound = false
+            var failure: PersonalAgentFailure?
+            for await update in await reader.liveState(for: agent) {
+                switch update {
+                case let .state(state?) where state.roomID == agent.id.roomID && !state.subscriptionID.isEmpty:
+                    bound = true
+                case let .failed(value):
+                    failure = value
+                case .state:
+                    continue
+                }
+                if bound || failure != nil { break }
+            }
+            await reader.stop()
+            XCTAssertNil(failure, "The observer's login ended")
+            XCTAssertTrue(bound, "No state bound to the room arrived in time; the observation is unverified")
+        } catch {
+            await reader.stop()
+            throw error
+        }
+    }
 }

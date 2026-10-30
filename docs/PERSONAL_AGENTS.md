@@ -18,8 +18,9 @@ account, user, profile, messaging room and root coding thread are separate ident
 The native conversation shows text and attachments, with the dot's picture. In the
 agent list, the conversation's header and the dot's details, the picture is the
 dot's pet moving as it does in the provider's app: the pet its profile names, read
-from the account's pets, plays its idle motion. Beside each message and with Reduce
-Motion on, the same pet holds the motion's first frame. Until the pet's sheet is
+from the account's pets, plays its idle motion, and its working motion while the
+dot is at work (see "What the dot is doing" below). Beside each message and with
+Reduce Motion on, the same pet holds the idle motion's first frame. Until the pet's sheet is
 read, or without one, the picture is the still snapshot the profile names. Only a
 sheet of the provider's known sizes is shown, and only its two rows the dot uses
 are kept. The pet plays only while its window is on screen and uncovered, not
@@ -84,6 +85,32 @@ The reading cache is in memory only. It is scoped to the chosen runtime/account
 connection. A changed login clears the old view and asks the person to reconnect.
 No credentials, messages, provider history or browser profile are copied into the
 Yardlet session index.
+
+## What the dot is doing
+
+While a window shows the personal agents, on screen and not covered, minimized or
+hidden (another app being in front does not count), Yardlet observes the selected
+dot's room as the provider's app does: it subscribes to the room's live topic on the
+same WebSocket, and once that subscription is answered, registers an observer with
+a request that carries no body. Only states bound to that registration are shown,
+in increasing revision order. A malformed state, or one for another room, ends the
+observation until the window asks again; a dropped connection, a temporary
+unavailability, a timeout or a server error registers again after a wait that
+doubles up to 30 seconds. Covering the window, choosing another dot, another
+account and leaving the section end the observation, leave the topic and clear
+what was shown. Reading and sending messages do not depend on it.
+
+The pet plays its working motion only while the room's attached thread is working,
+searching, creating, paying or thinking. Waiting for input, a failure, a finished
+turn, a pause and no state at all show the idle motion; a message being sent or a
+conversation being read is never taken for work. While the room's turn is active,
+the conversation's header shows the provider's words for it; a paused dot shows
+Paused. Yardlet reads no runtime from the dot's host, so it knows only what the
+room says: a question the host is waiting on shows only if the room names it, and a
+thread run on a local computer is judged by its room like any other. A dot's pause
+is its profile as last read; once its room shows a turn under way, that pause no
+longer stands until the profiles are read again. A changed login found by the
+observer clears the view, as any read's does.
 
 ## Sending and drafts
 
@@ -168,7 +195,8 @@ Requests use native URLSession with no cookies or browser process, no redirects,
 and an account binding checked before results are displayed.
 
 Opening or refreshing the section only reads and subscribes; it starts no model
-turn. A person's explicit send can start cloud work on their existing dot. The
+turn. The room observer's registration sends nothing but the account's credential:
+no message, approval, pause or resume. A person's explicit send can start cloud work on their existing dot. The
 transport does not read authentication files, change the runtime's configuration,
 copy credentials between account homes, or fabricate service-verification data.
 Signed attachment downloads on provider storage hosts receive no account token.

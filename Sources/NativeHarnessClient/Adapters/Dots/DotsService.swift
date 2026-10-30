@@ -10,24 +10,35 @@ private final class DotsRedirectPolicy: NSObject, URLSessionTaskDelegate {
 /// The runtime owns sign-in and renewal. Credentials are confined to this
 /// transport actor, never published to views, saved, or included in errors.
 actor DotsService: PersonalAgentClient {
-    private struct Identity: Equatable { let account: String; let user: String }
-    private struct Credential { let identity: Identity; let token: String; let expires: TimeInterval? }
+    struct Identity: Equatable { let account: String; let user: String }
+    struct Credential { let identity: Identity; let token: String; let expires: TimeInterval? }
     private let transport: any CodexTransport
     private let session: URLSession
     /// The same policy with room for a 20 MiB file on a slow connection.
     private let uploadSession: URLSession
+    /// The room-live stream's session: the same policy, read for as long as the observer lasts.
+    let streamSession: URLSession
+    let liveTiming: DotsLiveTiming
+    private let makeSocket: @Sendable (URL, URLSession) -> any DotsEventSocket
     private let redirectPolicy = DotsRedirectPolicy()
     private var initialized = false
     private var initializing: Task<Void, Error>?
     private var requestID: Int64 = 2
     private var identity: Identity?
-    private var stopped = false
+    private(set) var stopped = false
     private var eventTask: Task<Void, Never>?
-    private var eventSocket: URLSessionWebSocketTask?
+    private var eventSocket: (any DotsEventSocket)?
     private var watchID: UUID?
+    /// The user's event socket once its first commands are sent, which the room-live topic rides on.
+    var openSocket: (any DotsEventSocket)?
+    var live: DotsRoomLive?
+    /// Commands after the socket's own two (connect, then the messaging topic).
+    var nextCommand: Int64 = 3
 
     init(executable: URL, environmentManager: CodexEnvironmentManager?, connection: ProviderConnection?,
-         transport: (any CodexTransport)? = nil, configuration: URLSessionConfiguration? = nil) {
+         transport: (any CodexTransport)? = nil, configuration: URLSessionConfiguration? = nil,
+         liveTiming: DotsLiveTiming = .init(),
+         socket: (@Sendable (URL, URLSession) -> any DotsEventSocket)? = nil) {
         self.transport = transport ?? CodexProcessTransport(executableURL: executable,
             environmentManager: connection?.codexEnvironmentManager() ?? environmentManager
                 ?? CodexEnvironmentManager(paths: .live()), environmentScope: .native,
@@ -45,6 +56,17 @@ actor DotsService: PersonalAgentClient {
         uploads.timeoutIntervalForRequest = 60
         uploads.timeoutIntervalForResource = 600
         uploadSession = URLSession(configuration: uploads, delegate: redirectPolicy, delegateQueue: nil)
+        // The stream idles up to a minute between events, as the provider's client allows it.
+        let stream = config.copy() as! URLSessionConfiguration
+        stream.timeoutIntervalForRequest = 60
+        stream.timeoutIntervalForResource = 7 * 24 * 60 * 60
+        streamSession = URLSession(configuration: stream, delegate: redirectPolicy, delegateQueue: nil)
+        self.liveTiming = liveTiming
+        makeSocket = socket ?? { url, session in
+            let task = session.webSocketTask(with: url)
+            task.maximumMessageSize = 512 * 1024
+            return task
+        }
     }
 
     func agents() async throws -> [PersonalAgent] {
@@ -276,6 +298,7 @@ actor DotsService: PersonalAgentClient {
         eventTask?.cancel()
         eventTask = nil
         eventSocket?.cancel(with: .normalClosure, reason: nil)
+        if let eventSocket { liveSocketClosed(eventSocket) }
         eventSocket = nil
     }
 
@@ -283,13 +306,15 @@ actor DotsService: PersonalAgentClient {
         guard !stopped else { return }
         stopped = true
         initializing?.cancel()
+        stopLive()
         stopWatching()
         session.invalidateAndCancel()
         uploadSession.invalidateAndCancel()
+        streamSession.invalidateAndCancel()
         await transport.stop()
     }
 
-    private func credentials(refresh: Bool = false) async throws -> Credential {
+    func credentials(refresh: Bool = false) async throws -> Credential {
         guard !stopped else { throw PersonalAgentFailure.stopped }
         if !initialized {
             if initializing == nil {
@@ -414,9 +439,11 @@ actor DotsService: PersonalAgentClient {
                       url.scheme == "wss", url.host == "ws.chatgpt.com", url.port == nil else {
                     throw PersonalAgentFailure.invalidResponse
                 }
-                let socket = session.webSocketTask(with: url)
-                defer { socket.cancel(with: .normalClosure, reason: nil) }
-                socket.maximumMessageSize = 512 * 1024
+                let socket = makeSocket(url, session)
+                defer {
+                    socket.cancel(with: .normalClosure, reason: nil)
+                    liveSocketClosed(socket)
+                }
                 eventSocket = socket
                 socket.resume()
                 let commands: JSONValue = .array([
@@ -425,6 +452,8 @@ actor DotsService: PersonalAgentClient {
                     .object(["id": .integer(2), "command": .object(["type": .string("subscribe"), "topic_id": .string(topic)])])
                 ])
                 try await socket.send(.string(String(decoding: JSONEncoder().encode(commands), as: UTF8.self)))
+                guard watchID == id, !Task.isCancelled else { return }
+                liveSocketOpened(socket)
                 while !Task.isCancelled, !stopped {
                     let incoming = try await socket.receive()
                     let data: Data
@@ -436,15 +465,24 @@ actor DotsService: PersonalAgentClient {
                     guard let value = try? JSONDecoder().decode(JSONValue.self, from: data),
                           case let .array(frames) = value else { continue }
                     for frame in frames {
-                        if frame["reply"]?["type"]?.stringValue == "subscribe" {
-                            output.yield(.connected)
-                            // Cover messages that arrived between the initial read and subscription.
-                            output.yield(.changed)
-                            delay = 1
+                        // A reply names its command by id; the room-live topic's are its own.
+                        if let command = frame["id"], let reply = frame["reply"] {
+                            if command == .integer(2) {
+                                if reply["type"]?.stringValue == "subscribe" {
+                                    output.yield(.connected)
+                                    // Cover messages that arrived between the initial read and subscription.
+                                    output.yield(.changed)
+                                    delay = 1
+                                }
+                            } else {
+                                liveReply(command, reply)
+                            }
                         }
                         if frame["topic_id"]?.stringValue == topic,
                            frame["payload"]?["payload"]?["room_id"]?.stringValue == agent.id.roomID {
                             output.yield(.changed)
+                        } else if frame["type"]?.stringValue == "message", let other = frame["topic_id"]?.stringValue {
+                            liveMessage(topic: other, payload: frame["payload"])
                         }
                     }
                 }
@@ -463,7 +501,7 @@ actor DotsService: PersonalAgentClient {
         }
     }
 
-    private func component(_ value: String) -> String {
+    func component(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(.init(charactersIn: "-_~")))!
     }
 }

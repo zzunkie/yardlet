@@ -5,7 +5,8 @@ import SwiftUI
 
 /// A dot's animated form: its pet's idle or working row played by Core Animation on one layer, in the
 /// square its still picture fills. SwiftUI lays it out once; no view state changes as it plays. The
-/// window shows only the idle row: what tells a dot at work is not read yet.
+/// working row plays only while the dot's room says it is at work; a motion given again does not
+/// restart it.
 struct PersonalAgentSpriteAvatar: NSViewRepresentable {
     let frames: PersonalAgentSpriteFrames
     var motion: PersonalAgentSpriteLayout.Motion = .idle
@@ -148,7 +149,7 @@ final class PersonalAgentSpriteView: NSView {
     private static let playKey = "Yardlet.sprite"
     private let sprite = CALayer()
     private var frames: PersonalAgentSpriteFrames?
-    private var motion: PersonalAgentSpriteLayout.Motion = .idle
+    private(set) var motion: PersonalAgentSpriteLayout.Motion = .idle
     private var observers: [NSObjectProtocol] = []
     /// Whether the window can be seen now. Replaced only to check playback in a window that is not shown.
     var isOnScreen: (NSWindow) -> Bool = { window in
