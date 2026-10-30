@@ -788,7 +788,8 @@ struct CodexTaskReducer: Sendable {
         for turnIndex in turns.indices where turns[turnIndex].status.isTerminal {
             let turnID = turns[turnIndex].id
             if let known = settledTurns.items[turnID], known == turns[turnIndex].items {
-                settled[turnID] = known
+                // Kept in this state's storage, so the next comparison is immediate rather than item by item.
+                settled[turnID] = turns[turnIndex].items
                 continue
             }
             var stillRunning = false
