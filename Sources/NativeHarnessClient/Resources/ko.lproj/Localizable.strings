@@ -2148,7 +2148,7 @@
 "Restart to update" = "업데이트하려면 다시 시작";
 "Yardlet Instructions" = "Yardlet 지침";
 "Use Yardlet instructions" = "Yardlet 지침 사용";
-"Added to every task Yardlet starts or resumes, from the next turn or resume. Never written to a harness's own files." = "Yardlet이 시작하거나 다시 여는 모든 작업에 덧붙입니다. 다음 턴이나 다시 열 때부터 적용되며, 하네스 자체 파일에는 쓰지 않습니다.";
+"Added when Yardlet starts or resumes a task; a task whose harness is already running keeps the instructions it started with until it resumes, for example after Yardlet reopens. Never written to a harness's own files." = "Yardlet이 작업을 시작하거나 다시 열 때 덧붙입니다. 하네스가 이미 실행 중인 작업은 다시 열 때까지(예: Yardlet을 다시 연 뒤) 처음 받은 지침을 그대로 씁니다. 하네스 자체 파일에는 쓰지 않습니다.";
 "Global instruction files such as AGENTS.md and CLAUDE.md also apply outside Yardlet; Yardlet instructions apply only to tasks Yardlet launches." = "AGENTS.md·CLAUDE.md 같은 전역 지침 파일은 Yardlet 밖에서도 적용되고, Yardlet 지침은 Yardlet이 띄운 작업에만 적용됩니다.";
 "Not supported: %@" = "지원하지 않음: %@";
 "Turn off in this project" = "이 프로젝트에서 끄기";

@@ -18,7 +18,7 @@ struct YardletInstructionsSettingsView: View {
                     .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(L10n.string("Use Yardlet instructions")).font(.callout.weight(.medium))
-                    Text(L10n.string("Added to every task Yardlet starts or resumes, from the next turn or resume. Never written to a harness's own files."))
+                    Text(L10n.string("Added when Yardlet starts or resumes a task; a task whose harness is already running keeps the instructions it started with until it resumes, for example after Yardlet reopens. Never written to a harness's own files."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
