@@ -178,6 +178,7 @@ numbers to the file as a JSON line (`PerfBenchRecord`), which the bench collects
 | `ConversationBlankFrameTests/testBenchmarkStreamingInTheWholeWindow` | what drawing one publication costs the window under 1, 9 and 300 turns |
 | `ConversationReopenGapWindowTests/testBenchmarkOpeningATaskWhoseTurnsWereLetGo` | reopening a task after four others were opened |
 | `LongTranscriptRenderPerformanceTests` | laying out and streaming a 400-turn Claude Code transcript |
+| `StreamingTurnRenderPerformanceTests` | a Claude Code fragment after 120 calls in its turn, which fails over 15 ms of the main thread's time |
 | `WindowStructureQATests/testBenchmarkTheSidebarCrossingItsTop` | the sidebar of 828 tasks crossing its top |
 | `SubagentStatePerformanceTests` | a long Codex subagent's state handled by the app, beside three others (also a check that runs with every `swift test`) |
 
