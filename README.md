@@ -334,7 +334,8 @@ Previously created isolated Codex tasks retain their saved scope and continue to
 resume and fork under `~/.yardlet/harnesses/codex/home`. They are not moved or silently
 rebound to a different session. Native history imports retain their original IDs;
 Yardlet's sidebar index and local UI state remain separate from provider storage.
-See [native session storage](docs/NATIVE_SESSION_STORAGE.md) for verification and scope.
+See [native session storage](docs/NATIVE_SESSION_STORAGE.md) for what each task
+stores and what Yardlet reads.
 
 Additional provider accounts can be registered under Connections → Accounts.
 Choose an account for a new task by its available quota; saved tasks retain their selected CLI
