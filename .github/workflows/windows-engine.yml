@@ -47,7 +47,20 @@ jobs:
           }
       - name: Show the toolchain
         run: swift --version
+      # The compiler's errors also go to the run's summary, which anyone can read.
       - name: Build
+        shell: pwsh
         env:
           YARDLET_ENGINE_ONLY: "1"
-        run: swift build --target NativeHarnessClient --force-resolved-versions -Xswiftc -continue-building-after-errors
+        run: |
+          swift build --target NativeHarnessClient --force-resolved-versions -Xswiftc -continue-building-after-errors 2>&1 |
+            Tee-Object -FilePath build.log
+          $code = $LASTEXITCODE
+          $errors = Select-String -Path build.log -Pattern 'error:' | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique
+          if ($errors) {
+            "### Build errors`n" | Add-Content $env:GITHUB_STEP_SUMMARY
+            '```' | Add-Content $env:GITHUB_STEP_SUMMARY
+            $errors | Select-Object -First 200 | Add-Content $env:GITHUB_STEP_SUMMARY
+            '```' | Add-Content $env:GITHUB_STEP_SUMMARY
+          }
+          exit $code
