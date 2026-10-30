@@ -160,15 +160,17 @@ final class WindowStructureQATests: XCTestCase {
 
     // MARK: - Pointer
 
+    /// Sends a mouse event to the window and, unless `settles` is false, lets the window lay out what
+    /// it changed.
     private func mouse<Content: View>(_ type: NSEvent.EventType, at point: NSPoint, clicks: Int = 1,
-                                      in host: WindowlessRender.Host<Content>) {
+                                      in host: WindowlessRender.Host<Content>, settles: Bool = true) {
         // The window's own coordinates: bottom-left origin.
         let location = NSPoint(x: point.x, y: host.window.frame.height - point.y)
         let event = NSEvent.mouseEvent(with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                        windowNumber: host.window.windowNumber, context: nil, eventNumber: 0,
                                        clickCount: clicks, pressure: type == .leftMouseUp ? 0 : 1)
         if let event { host.window.sendEvent(event) }
-        host.settle(passes: 3, interval: 0.02)
+        if settles { host.settle(passes: 3, interval: 0.02) }
     }
 
     /// Drags from the middle of `control` by `offset` (top-left coordinates), in steps.
@@ -184,12 +186,15 @@ final class WindowStructureQATests: XCTestCase {
         host.settle(passes: 10, interval: 0.03)
     }
 
+    /// A double click's four events one after another, as a person's arrive well within the
+    /// double-click interval. Laying the window out between them, as `mouse` does after each event,
+    /// can take longer than that interval on CI, where the second click then starts a new one.
     private func doubleClick<Content: View>(_ control: Control, in host: WindowlessRender.Host<Content>) {
         let point = NSPoint(x: control.frame.midX, y: control.frame.midY)
-        mouse(.leftMouseDown, at: point, clicks: 1, in: host)
-        mouse(.leftMouseUp, at: point, clicks: 1, in: host)
-        mouse(.leftMouseDown, at: point, clicks: 2, in: host)
-        mouse(.leftMouseUp, at: point, clicks: 2, in: host)
+        mouse(.leftMouseDown, at: point, clicks: 1, in: host, settles: false)
+        mouse(.leftMouseUp, at: point, clicks: 1, in: host, settles: false)
+        mouse(.leftMouseDown, at: point, clicks: 2, in: host, settles: false)
+        mouse(.leftMouseUp, at: point, clicks: 2, in: host, settles: false)
         host.settle(passes: 10, interval: 0.03)
     }
 
