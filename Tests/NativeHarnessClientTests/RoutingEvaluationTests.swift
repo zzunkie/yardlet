@@ -338,6 +338,22 @@ import XCTest
         await model.runRoutingEvaluationIfDue(now: start.addingTimeInterval(7_200))
         let sentCount = await adapter.sent.count
         XCTAssertEqual(sentCount, 1, "Once a day")
+
+        // The next day's judge is still at work when the evaluation is turned off, and on again at
+        // once: the judge is stopped then and there, and nothing it would have settled is kept.
+        let nextDay = start.addingTimeInterval(86_400)
+        await evaluation.record(RoutingLedgerEntry(
+            kind: .turn, taskID: UUID(), origin: .person, harness: HarnessKind.antigravityCLI.rawValue, model: "argon",
+            workspacePath: root.path(percentEncoded: false), startedAt: nextDay, endedAt: nextDay, outcome: .completed))
+        await adapter.answerWith(nil)
+        let run = Task { await model.runRoutingEvaluationIfDue(now: nextDay.addingTimeInterval(3_600)) }
+        try await waitUntil { await adapter.sent.count == 2 }
+        evaluation.isEnabled = false
+        evaluation.isEnabled = true
+        await run.value
+        let interrupts = await adapter.interrupts
+        XCTAssertEqual(interrupts, 1, "The judge at work is stopped")
+        XCTAssertEqual(evaluation.state, RoutingEvaluationState(), "The stopped run keeps no report or routing")
     }
 }
 
@@ -346,6 +362,7 @@ private actor LedgerRecordingAdapter: HarnessAdapter, HarnessLaunchOptionConfigu
     nonisolated let kind = HarnessKind.antigravityCLI
     private(set) var sent: [String] = []
     private(set) var launchOptions: [String: String] = [:]
+    private(set) var interrupts = 0
     private var answer: String?
     private var session: HarnessSessionHandle?
     private var continuation: AsyncStream<HarnessEventEnvelope>.Continuation?
@@ -370,7 +387,7 @@ private actor LedgerRecordingAdapter: HarnessAdapter, HarnessLaunchOptionConfigu
                                                             initialPrompt: nil))
     }
 
-    func answerWith(_ text: String) { answer = text }
+    func answerWith(_ text: String?) { answer = text }
 
     func setLaunchOptions(_ options: [String: String], for localSessionID: UUID) async { launchOptions = options }
 
@@ -386,7 +403,7 @@ private actor LedgerRecordingAdapter: HarnessAdapter, HarnessLaunchOptionConfigu
             await self.emit(.sessionStatusChanged(.ready), to: handle)
         }
     }
-    func interrupt(_ session: HarnessSessionHandle) async throws {}
+    func interrupt(_ session: HarnessSessionHandle) async throws { interrupts += 1 }
     func respond(to permissionRequestID: String, decision: PermissionDecision,
                  in session: HarnessSessionHandle) async throws {}
 

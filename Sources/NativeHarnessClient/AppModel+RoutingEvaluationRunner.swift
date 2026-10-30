@@ -35,6 +35,9 @@ extension AppModel {
               !store.sessions.contains(where: Self.isWorking) else { return }
         routingEvaluationIsRunning = true
         defer { routingEvaluationIsRunning = false }
+        // Turning it off ends this run, the judge at work included.
+        let turnedOff = evaluation.timesTurnedOff
+        let wanted = { evaluation.isEnabled && evaluation.timesTurnedOff == turnedOff }
         let all = await evaluation.entries()
         let fresh = all.filter { line in evaluation.state.evaluatedThrough.map { line.endedAt > $0 } ?? true }
         guard !fresh.isEmpty else { return }
@@ -70,14 +73,15 @@ extension AppModel {
                                              noteLanguage: Self.routingNoteLanguage)
         // One at a time, so the evaluation never holds several plans at once.
         for judge in judges {
-            guard evaluation.isEnabled, !Task.isCancelled else { return }
-            let outcome = await runEvaluationJudge(judge, prompt: prompt, folder: evaluation.judgeFolder)
+            guard wanted(), !Task.isCancelled else { return }
+            let outcome = await runEvaluationJudge(judge, prompt: prompt, folder: evaluation.judgeFolder, while: wanted)
             if let answer = outcome.answer, let verdict = RoutingJudgeVerdict.parse(answer) {
                 verdicts.append((judge, verdict))
             } else {
                 notJudged.append((judge, outcome.failure ?? L10n.string("its answer could not be read")))
             }
         }
+        guard wanted() else { return }
         let result = RoutingEvaluationAggregation.evaluate(
             tasks: shown, verdicts: verdicts, skipped: notJudged, current: evaluation.state.routing, at: now)
         // With no verdict the routing stays; the report says why, and the next day tries again.

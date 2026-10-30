@@ -82,6 +82,7 @@ final class RoutingEvaluationStore {
             defaults.set(isEnabled, forKey: Self.enabledKey)
             // Through the writer, so a line already on its way is written before the folder goes.
             if !isEnabled {
+                timesTurnedOff += 1
                 state = RoutingEvaluationState()
                 let writer = writer
                 Task { await writer.removeAll() }
@@ -89,6 +90,9 @@ final class RoutingEvaluationStore {
         }
     }
 
+    /// Counts the times it was turned off: a run that saw it change stops its judge and keeps
+    /// nothing, even when it was turned on again since.
+    @ObservationIgnored private(set) var timesTurnedOff = 0
     @ObservationIgnored let directory: URL
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let writer: RoutingLedgerWriter
