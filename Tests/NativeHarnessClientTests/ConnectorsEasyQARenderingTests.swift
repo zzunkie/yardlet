@@ -122,9 +122,13 @@ final class ConnectorsEasyQARenderingTests: XCTestCase {
         }
         let underwayText = spoken(page(GoogleSetupPage(center: empty, clientID: "GOC" + "SPX-pasted-in-the-wrong-field"),
                                        size: size, appearance: .light, defaults: underway), size: size)
-        expect([L10n.format("%lld of %lld done", Int64(3), Int64(7)), L10n.string("Done"),
+        expect([L10n.format("%lld of %lld done", Int64(3), Int64(7)),
                 L10n.string("That is the client secret; the client ID ends with .apps.googleusercontent.com.")],
                in: underwayText, "underway")
+        // Each opened page's step is done: its mark offers to undo that. (A step's "Done" or "Not done"
+        // reaches VoiceOver as its group's value description, which the listed values leave out.)
+        XCTAssertEqual(underwayText.filter { $0.trimmingCharacters(in: .whitespaces) == L10n.string("Mark as not done") }.count,
+                       3, "underway: \(underwayText)")
     }
 
     func testTheSlackAssistantDrawsFreshAndFilledIn() throws {
