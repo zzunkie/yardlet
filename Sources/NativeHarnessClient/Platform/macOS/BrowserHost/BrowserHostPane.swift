@@ -1616,27 +1616,9 @@ struct BrowserHostPane: View {
     /// Chrome's save bubble, as a bar over the page: the person just signed in with a password the vault
     /// does not have.
     private func vaultOfferBar(_ offer: BrowserVaultSaveOffer) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "key").foregroundStyle(.secondary)
-            // An update names the account, which a site with several tells apart (design §17).
-            let host = VaultSite.host(of: offer.origin)
-            Text(offer.updates == nil ? L10n.format("Save the password for %@?", host)
-                 : offer.addsAccount ? L10n.format("Add %@ to the saved password for %@?", offer.account, host)
-                 : offer.account.isEmpty ? L10n.format("Update the saved password for %@?", host)
-                 : L10n.format("Update the saved password of %@ for %@?", offer.account, host))
-                .font(.callout)
-                .lineLimit(2)
-            Spacer(minLength: 8)
-            Button(L10n.string("Not for This Site")) { controller.neverSaveHere() }
-                .controlSize(.small)
-            Button(offer.updates == nil ? L10n.string("Save") : L10n.string("Update")) { controller.acceptVaultOffer() }
-                .controlSize(.small)
+        BrowserVaultSaveBar(offer: offer, neverSave: controller.neverSaveHere, accept: controller.acceptVaultOffer) {
+            controller.vaultOffer = nil
         }
-        .padding(.horizontal, 10).padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ParityTheme.subtleFill)
-        .background(.background)
-        .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
     }
 
     /// The suggestion at a code field that password managers show, as a bar over the page: the site's
@@ -1910,5 +1892,40 @@ struct BrowserHostViewRepresentable: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: BrowserHostView, coordinator: BrowserHostPaneController) {
         coordinator.detach()
+    }
+}
+
+/// The save bar over the page (design §8.3, §17), as Chrome's save and update bubbles: save the sign-in, update a saved
+/// one (naming its account), or add the username or other fields to one; "Not for This Site", or close it for now.
+struct BrowserVaultSaveBar: View {
+    let offer: BrowserVaultSaveOffer
+    let neverSave: () -> Void
+    let accept: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "key").foregroundStyle(.secondary)
+            // An update names the account, which a site with several tells apart (design §17).
+            let host = VaultSite.host(of: offer.origin)
+            Text(offer.updates == nil ? L10n.format("Save the password for %@?", host)
+                 : offer.addsAccount ? L10n.format("Add %@ to the saved password for %@?", offer.account, host)
+                 : offer.account.isEmpty ? L10n.format("Update the saved password for %@?", host)
+                 : L10n.format("Update the saved password of %@ for %@?", offer.account, host))
+                .font(.callout)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button(L10n.string("Not for This Site"), action: neverSave)
+                .controlSize(.small)
+            Button(offer.updates == nil || offer.addsAccount ? L10n.string("Save") : L10n.string("Update"), action: accept)
+                .controlSize(.small)
+            ParityIconButton(systemName: "xmark", help: L10n.string("Close"), action: close)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ParityTheme.subtleFill)
+        .background(.background)
+        .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
+        .accessibilityElement(children: .contain)
     }
 }

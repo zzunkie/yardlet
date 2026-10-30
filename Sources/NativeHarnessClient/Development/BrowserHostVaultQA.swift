@@ -1152,7 +1152,7 @@ final class BrowserHostVaultQA {
 
     /// Sign-ins in steps and with an account beside the username (design §17): the username typed on a step that asks
     /// for it alone goes with the password the next step takes, a hidden field marked as the username first; an item
-    /// saved without a username is offered it, and takes it only when the person updates; the item filled on the first
+    /// saved without a username is offered it, and takes it only when the person saves; the item filled on the first
     /// step comes first in the key button's list on the next, in that tab and site only, and fills the password there;
     /// an account field beside the username is kept with the item, tells two accounts of one username apart in the list
     /// and the bar, and fills back. Pages are the QA server's, served at https `.test` addresses (`serve`).
@@ -1261,7 +1261,7 @@ final class BrowserHostVaultQA {
               emailFilled && listed.first == saved.id && listed.contains(decoy.id) && elsewhere == nil && passwordFilled,
               "email \(emailFilled), first \(listed.first == saved.id), elsewhere \(String(describing: elsewhere)), password \(passwordFilled)")
 
-        // An item saved without a username is offered the username, and keeps none until the person updates it.
+        // An item saved without a username is offered the username, and keeps none until the person saves it.
         controller.vaultOffer = nil
         let blankOffered = await signInInSteps(blankSite, email: "blank@example.test", password: "qa-blank-not-real")
         let untouched = vault.items.first { $0.id == blank.id }?.username == ""
@@ -1269,7 +1269,7 @@ final class BrowserHostVaultQA {
         capture(controller, named: "vault-panel-add-username.png")
         let addOffer = controller.vaultOffer
         controller.acceptVaultOffer()
-        check("panel: an item saved without a username is offered the one the sign-in used, and takes it on Update",
+        check("panel: an item saved without a username is offered the one the sign-in used, and takes it on Save",
               blankOffered && untouched && addOffer?.updates?.id == blank.id && addOffer?.addsAccount == true
                 && vault.items.first { $0.id == blank.id }?.username == "blank@example.test"
                 && vault.secret(of: blank.id)?.password == "qa-blank-not-real",

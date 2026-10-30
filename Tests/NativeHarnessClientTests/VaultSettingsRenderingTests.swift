@@ -13,6 +13,7 @@ import XCTest
 /// - `settings-vault-unlinked-*`: codes with no site, with the sites suggested for them and one left to type.
 /// - `settings-vault-search-*`: the lists narrowed by a search.
 /// - `settings-vault-accounts-*`, `vault-item-account-*`: two accounts of one username, and one's item sheet.
+/// - `vault-save-bar-*`: the browser panel's save, update and add-username bars.
 /// - `vault-picker-*`, `vault-picker-search-*`, `vault-picker-codes-*`, `vault-picker-empty-*`: the browser panel's
 ///   key button list on a site's page, searched, searched for a code from the code bar, and on a site with nothing.
 @MainActor
@@ -246,6 +247,42 @@ final class VaultSettingsRenderingTests: XCTestCase {
         try WindowlessRender.hostedInBothAppearances("vault-item-account", in: directory, size: sheetSize) { appearance in
             sheet.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
         }
+    }
+
+    /// The browser panel's save bar (design §17): saving a sign-in, updating one of two accounts of one username (the bar
+    /// names it), and adding a username to an item saved without one, which says Save; each closes with its X for now.
+    func testTheSaveBarDraws() throws {
+        let directory = try WindowlessRender.directory("vault-qa")
+        let account = [VaultFormField(id: "account", name: "account", label: "Account ID", value: "444455556666")]
+        let iam = VaultItem(name: "signin.aws", sites: ["signin.aws"], username: "dev", hasPassword: true, fields: account)
+        let blank = VaultItem(name: "example.test", sites: ["example.test"], username: "", hasPassword: true)
+        let offers = [
+            BrowserVaultSaveOffer(origin: "https://github.com", site: "github.com", username: "ada@example.test",
+                                  password: "not-a-real-password", updates: nil),
+            BrowserVaultSaveOffer(origin: "https://ap-southeast-2.signin.aws", site: "signin.aws", username: "dev",
+                                  password: "not-a-real-password", updates: iam, fields: account),
+            BrowserVaultSaveOffer(origin: "https://www.example.test", site: "example.test", username: "ada@example.test",
+                                  password: "not-a-real-password", updates: blank, addsAccount: true)
+        ]
+        let size = NSSize(width: 820, height: 150)
+        let bars = VStack(spacing: 0) {
+            ForEach(offers.indices, id: \.self) { index in
+                BrowserVaultSaveBar(offer: offers[index], neverSave: {}, accept: {}, close: {})
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .top)
+        let captures = try WindowlessRender.hostedInBothAppearances("vault-save-bar", in: directory, size: size) { appearance in
+            bars.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        }
+        for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
+        let host = WindowlessRender.Host(bars, size: size)
+        defer { host.close() }
+        host.settle()
+        let labels = host.accessibilityElements().map(\.label)
+        XCTAssertEqual(labels.filter { $0 == L10n.string("Close") }.count, 3, "\(labels)")
+        XCTAssertEqual(labels.filter { $0 == L10n.string("Save") }.count, 2, "\(labels)")
+        XCTAssertEqual(labels.filter { $0 == L10n.string("Update") }.count, 1, "\(labels)")
+        XCTAssertFalse(labels.contains { $0.contains("not-a-real-password") }, "\(labels)")
     }
 
     /// Chrome's and Bitwarden's exports: columns found by name in any order, a quoted name with a
