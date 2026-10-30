@@ -30,5 +30,34 @@ jobs:
           swift --version
       - name: Build
         run: swift build --build-system native
+      # `-v` keeps every test's XCTest output: its time and, when skipped, why. test-report.py shows
+      # only the failed tests' output here and writes the rest to the run's summary and an artifact.
       - name: Test
-        run: ./scripts/test-fast.sh
+        run: |
+          set -o pipefail
+          mkdir -p .build/ci
+          ./scripts/test-fast.sh -v 2>&1 | python3 -I scripts/test-report.py --log .build/ci/test-output.log \
+            --times .build/ci/test-times.tsv --summary "$GITHUB_STEP_SUMMARY"
+      - name: Keep the test output and times
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results
+          path: |
+            .build/ci/test-output.log
+            .build/ci/test-times.tsv
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Keep the images the tests drew
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-images
+          path: |
+            .build/*/*.png
+            .build/*/*/*.png
+            !.build/checkouts/**
+            !.build/arm64-apple-macosx/**
+            !.build/x86_64-apple-macosx/**
+          retention-days: 14
+          if-no-files-found: ignore

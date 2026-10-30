@@ -34,6 +34,9 @@ changes land on `main` through pull requests.
    Building needs Xcode 27.1 or later. The default build system also compiles SwiftTerm's Metal
    shaders and stops when the Metal toolchain is missing, so use `--build-system native`.
 3. CI runs the same build and tests on every pull request, and they must pass before it is merged.
+   The run's summary lists failed and skipped tests (with the reason given) and the slowest ones; the
+   `test-results` artifact keeps every test's output and time, and a failed run's `test-images`
+   artifact keeps the images the tests drew.
 4. Keep one change per pull request. Say what changed, why, and how you checked it; for a change you
    can see, add a screenshot or a short recording.
 5. Write code comments, documentation, commit messages and the pull request in English.
