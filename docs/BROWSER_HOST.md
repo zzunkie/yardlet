@@ -697,7 +697,9 @@ any process inside the bundle remains. After it finishes, it also checks crash r
 processes (`~/Library/Logs/DiagnosticReports`, picked out by the bundleID in the report's first line,
 `crash-reports.txt`) and leftover host copies (section 8), and records a failure if there are reports other than for
 renderers the fixture ended on purpose (`intentionalRendererCrashes` in `result.json`, `Page.crash` in `input`) or any
-leftover copy (2026-10-24). With `YARDLET_PROVISIONING_PROFILE` set, only the host keeps its original App ID to match
+leftover copy (2026-10-24). It exits 1 when any of these fail, when the app is still running at the deadline, or when
+`verdict.sh` finds a failed check in `result.json`, no checks at all, or no `markers/finished` (a run that stopped
+early); a run that prints `FAIL` never exits 0. With `YARDLET_PROVISIONING_PROFILE` set, only the host keeps its original App ID to match
 the profile, and the app itself and the helpers change to the QA ID. The profile and CEF patch variables are passed
 through to `sign-app.sh` unchanged. Cookies use QA's mock keychain, but Touch ID registration and authentication use the
 real team's keychain group and the user's fingerprint (README "Signing and notarization"). `run-check.sh` measures the
