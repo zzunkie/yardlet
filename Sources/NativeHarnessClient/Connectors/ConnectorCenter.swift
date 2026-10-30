@@ -87,24 +87,30 @@ struct FileConnectorRepository: ConnectorRepository {
             .appending(path: "connectors.json"))
     }
 
-    private func snapshot() -> Snapshot? {
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? JSONDecoder.connectors.decode(Snapshot.self, from: data)
+    /// What the file holds; nil when there is no file yet. Throws when the file is there but
+    /// cannot be read: damaged, kept from this user, or written by a Yardlet that saves something
+    /// this one cannot decode.
+    private func snapshot() throws -> Snapshot? {
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch CocoaError.fileReadNoSuchFile {
+            return nil
+        }
+        return try JSONDecoder.connectors.decode(Snapshot.self, from: data)
     }
 
     func load() -> [ConnectorRecord] {
-        snapshot()?.connectors ?? []
+        (try? snapshot())?.connectors ?? []
     }
 
     func save(_ records: [ConnectorRecord]) {
-        var current = snapshot() ?? Snapshot(connectors: [])
-        current.connectors = records
-        write(current)
+        update { $0.connectors = records }
     }
 
     func loadTaskChoices() -> ConnectorTaskChoices {
         var choices: ConnectorTaskChoices = [:]
-        for (task, connectors) in snapshot()?.offInTasks ?? [:] {
+        for (task, connectors) in (try? snapshot())?.offInTasks ?? [:] {
             guard let taskID = UUID(uuidString: task) else { continue }
             let ids = Set(connectors.compactMap(UUID.init(uuidString:)))
             if !ids.isEmpty { choices[taskID] = ids }
@@ -113,32 +119,38 @@ struct FileConnectorRepository: ConnectorRepository {
     }
 
     func saveTaskChoices(_ choices: ConnectorTaskChoices) {
-        var current = snapshot() ?? Snapshot(connectors: [])
         let kept = choices.filter { !$0.value.isEmpty }
-        current.offInTasks = kept.isEmpty ? nil : Dictionary(uniqueKeysWithValues: kept.map { task, connectors in
-            (task.uuidString, connectors.map(\.uuidString).sorted())
-        })
-        write(current)
+        update {
+            $0.offInTasks = kept.isEmpty ? nil : Dictionary(uniqueKeysWithValues: kept.map { task, connectors in
+                (task.uuidString, connectors.map(\.uuidString).sorted())
+            })
+        }
     }
 
     func loadGoogleAppClientID() -> String? {
-        snapshot()?.googleOAuthClientID
+        (try? snapshot())?.googleOAuthClientID
     }
 
     func saveGoogleAppClientID(_ clientID: String?) {
-        var current = snapshot() ?? Snapshot(connectors: [])
-        current.googleOAuthClientID = clientID
-        write(current)
+        update { $0.googleOAuthClientID = clientID }
     }
 
     func loadMicrosoftApp() -> MicrosoftOAuth.App? {
-        snapshot()?.microsoftOAuthApp
+        (try? snapshot())?.microsoftOAuthApp
     }
 
     func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) {
-        var current = snapshot() ?? Snapshot(connectors: [])
-        current.microsoftOAuthApp = app
-        write(current)
+        update { $0.microsoftOAuthApp = app }
+    }
+
+    /// Changes one part of the file and keeps the rest. A file that is there but cannot be read
+    /// is left as it is rather than replaced by one made from nothing, which would drop every
+    /// connector and choice it holds; the change then lasts until Yardlet quits.
+    private func update(_ change: (inout Snapshot) -> Void) {
+        var next: Snapshot
+        do { next = try snapshot() ?? Snapshot(connectors: []) } catch { return }
+        change(&next)
+        write(next)
     }
 
     private func write(_ snapshot: Snapshot) {
