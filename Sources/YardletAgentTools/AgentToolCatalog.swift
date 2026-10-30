@@ -79,7 +79,8 @@ package enum AgentToolCatalog {
         names. browser_tab_new opens another tab, in the background unless foreground is set. Call \
         browser_snapshot to read the page, find an element or text on it, and get element references \
         such as @e3; an element keeps its reference while it stays on the page, and a navigation ends \
-        them. \
+        them. Tab ids and element references are the tools' own and the user never sees them: when you \
+        tell the user about a tab, name it by its page's title or site, and an element by its label or text. \
         spawn_task flags out-of-scope work for a separate task: the user sees a chip in this \
         conversation and decides whether to start it. The session tools read the person's other \
         Yardlet tasks, message one, start a task, or run a subagent on a harness. The \

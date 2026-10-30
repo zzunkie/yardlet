@@ -38,12 +38,13 @@ protocol BrowserAgentTabDirectory: AnyObject {
     /// A blank tab after the task's others; `foreground` makes it the agent's active tab, which the panel shows unless
     /// the person is using another tab there.
     func newTab(for sessionID: UUID, foreground: Bool) throws -> BrowserAgentTabInfo
-    /// Makes the tab the agent's active tab, which the panel shows unless the person is using another tab there.
-    func select(_ tabID: String, for sessionID: UUID) throws
+    /// Makes the tab the agent's active tab, which the panel shows unless the person is using another tab there, and
+    /// returns it.
+    func select(_ tabID: String, for sessionID: UUID) throws -> BrowserAgentTabInfo
     /// The task's tab the person is using in its panel, if any.
     func personTab(for sessionID: UUID) -> BrowserAgentTabInfo?
-    /// Closes the tab and returns the agent's active tab now, if any.
-    func close(_ tabID: String, for sessionID: UUID) throws -> BrowserAgentTabInfo?
+    /// Closes the tab and returns it as it was, and the agent's active tab now, if any.
+    func close(_ tabID: String, for sessionID: UUID) throws -> (closed: BrowserAgentTabInfo, active: BrowserAgentTabInfo?)
     /// The task was archived or deleted: its tabs close.
     func closeAll(for sessionID: UUID)
     /// A tab whose page does not respond, opened again in its place under the same side-panel tab
@@ -129,11 +130,12 @@ final class BrowserAgentTabs: BrowserAgentTabDirectory {
         return info(tab, active: client.agentTab(forSession: sessionID), in: client)
     }
 
-    func select(_ tabID: String, for sessionID: UUID) throws {
+    func select(_ tabID: String, for sessionID: UUID) throws -> BrowserAgentTabInfo {
         let client = try requireClient(for: sessionID)
         let tab = try existingTab(tabID, for: sessionID, in: client)
         client.selectForAgent(tab)
         tab.noteAgentActivity()
+        return info(tab, active: client.agentTab(forSession: sessionID), in: client)
     }
 
     func personTab(for sessionID: UUID) -> BrowserAgentTabInfo? {
@@ -141,12 +143,13 @@ final class BrowserAgentTabs: BrowserAgentTabDirectory {
         return info(tab, active: client.agentTab(forSession: sessionID), in: client)
     }
 
-    func close(_ tabID: String, for sessionID: UUID) throws -> BrowserAgentTabInfo? {
+    func close(_ tabID: String, for sessionID: UUID) throws -> (closed: BrowserAgentTabInfo, active: BrowserAgentTabInfo?) {
         let client = try requireClient(for: sessionID)
         let tab = try existingTab(tabID, for: sessionID, in: client)
+        let closed = info(tab, active: client.agentTab(forSession: sessionID), in: client)
         forget(tab.id)
         client.closeTab(tab, as: .closedByAgent)
-        return client.agentTab(forSession: sessionID).map { info($0, active: $0, in: client) }
+        return (closed, client.agentTab(forSession: sessionID).map { info($0, active: $0, in: client) })
     }
 
     func replace(_ tabID: String, for sessionID: UUID) throws -> BrowserAgentPage {
