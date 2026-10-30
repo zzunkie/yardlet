@@ -165,8 +165,9 @@ final class GmailSetupRenderingTests: XCTestCase {
         }
         let settingsText = spoken(page(ConnectorSettingsView(center: saved), size: settingsSize, appearance: .light),
                                   size: settingsSize)
+        // A connected account's row counts the tools Yardlet's Gmail server lists.
         for text in ["Gmail · person@example.test", "Gmail · developer@company.test", "Gmail · old.address@example.test",
-                     L10n.format("%lld tools", Int64(8)), L10n.string("Reconnect")] {
+                     L10n.format("%lld tools", Int64(GmailToolCatalog.tools.count)), L10n.string("Reconnect")] {
             XCTAssertTrue(settingsText.contains { $0.contains(text) }, "No \(text): \(settingsText)")
         }
         XCTAssertEqual(ConnectorSettingsState.ordered(saved).filter { $0.localService == .gmail }.map(\.account),
