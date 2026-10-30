@@ -26,10 +26,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: compnerd/gha-setup-swift@57fe462cd3c7b05ae8fcff79b00719312e305257 # main
-        with:
-          swift-version: swift-6.4.1-release
-          swift-build: 6.4.1-RELEASE
+      # swift.org's own installer, signed by its publisher. The repository allows only GitHub's and its
+      # own actions, so no setup action installs it.
+      - name: Install Swift 6.4.1
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'swift.exe'
+          Invoke-WebRequest -Uri 'https://download.swift.org/swift-6.4.1-release/windows10/swift-6.4.1-RELEASE/swift-6.4.1-RELEASE-windows10.exe' -OutFile $installer
+          $signature = Get-AuthenticodeSignature $installer
+          Write-Output "Signed by: $($signature.SignerCertificate.Subject)"
+          if ($signature.Status -ne 'Valid') { throw "The installer's signature is $($signature.Status)" }
+          $process = Start-Process -Wait -PassThru -FilePath $installer -ArgumentList '/quiet', '/norestart'
+          if ($process.ExitCode -ne 0) { throw "The installer ended with $($process.ExitCode)" }
+          # The installer writes Path and SDKROOT for later shells; hand them to the next steps.
+          foreach ($scope in 'Machine', 'User') {
+            $path = [Environment]::GetEnvironmentVariable('Path', $scope)
+            if ($path) { $path -split ';' | Where-Object { $_ -match 'Swift' } | Add-Content $env:GITHUB_PATH }
+            $sdk = [Environment]::GetEnvironmentVariable('SDKROOT', $scope)
+            if ($sdk) { "SDKROOT=$sdk" | Add-Content $env:GITHUB_ENV }
+          }
       - name: Show the toolchain
         run: swift --version
       - name: Build
