@@ -126,27 +126,6 @@ final class FileTasksReviewRenderingTests: XCTestCase {
         return preferences
     }
 
-    /// Presses the element labelled `label` through the accessibility tree, as VoiceOver does: no
-    /// event reaches the screen.
-    private static func press(in root: NSView, _ label: String) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: false),
-                            with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(root)?.accessibilityPerformPress?() ?? false
-    }
-
     private func texts<Content: View>(_ host: WindowlessRender.Host<Content>) -> String {
         host.accessibilityElements().map(\.description).joined(separator: "\n")
     }
@@ -201,17 +180,17 @@ final class FileTasksReviewRenderingTests: XCTestCase {
         // The first task is the review's own: "This task".
         let own = "\(L10n.string("This task")), \(FileTasksLine.day(Self.edited[0].at))"
         let second = "\(Self.edited[1].title), \(FileTasksLine.day(Self.edited[1].at))"
-        XCTAssertTrue(Self.press(in: host.hosting, second), texts(host))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: second), texts(host))
         XCTAssertEqual(opened.items.map(\.callID), ["call_cookies"])
-        XCTAssertTrue(Self.press(in: host.hosting, own), texts(host))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: own), texts(host))
         XCTAssertEqual(opened.items.map(\.callID), ["call_cookies", "toolu_home"])
         // The rest of the tasks are behind the menu, which is never opened here.
         XCTAssertTrue(texts(host).contains(L10n.format("%d more", 2)), texts(host))
 
-        XCTAssertTrue(Self.press(in: host.hosting, L10n.format("%d unchanged blocks", 2)), texts(host))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.format("%d unchanged blocks", 2)), texts(host))
         await host.settle(until: { self.texts(host).contains("Reviewer") })
 
-        XCTAssertTrue(Self.press(in: host.hosting, L10n.string("Rendered preview")), texts(host))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Rendered preview")), texts(host))
         await host.settle(until: { self.texts(host).contains("+The release goes out on **Tuesday**, after the review.") })
         XCTAssertNotNil(opened.preferences)
         XCTAssertNil(opened.preferences?.rendersMarkdown, "the line diff is the review's default again")

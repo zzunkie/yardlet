@@ -166,17 +166,17 @@ final class TaskSuggestionRenderingTests: XCTestCase {
         defer { host.close() }
         host.settle(passes: 10)
 
-        XCTAssertTrue(host.hosting.pressSuggestionElement(labelled: L10n.string("Start")))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Start")))
         host.settle(passes: 2)
         XCTAssertEqual(recorder.started.map(\.id), [chip(1).id], "Start hands the window the first suggestion")
         XCTAssertEqual(recorder.started.first?.startsInNewWorktree, true)
-        XCTAssertTrue(host.hosting.pressSuggestionElement(labelled: L10n.string("Do it here")))
-        XCTAssertTrue(host.hosting.pressSuggestionElement(labelled: L10n.string("Options")))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Do it here")))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Options")))
         host.settle(passes: 2)
         XCTAssertEqual(recorder.here.map(\.id), [chip(1).id])
         XCTAssertEqual(recorder.options.map(\.id), [chip(1).id])
 
-        XCTAssertTrue(host.hosting.pressSuggestionElement(labelled: L10n.format("Dismiss suggestion %@", "Split UploadQueue.swift")))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.format("Dismiss suggestion %@", "Split UploadQueue.swift")))
         host.settle(passes: 6)
         XCTAssertEqual(store.resolution(of: chip(2).id, in: task)?.outcome, .dismissed)
         let texts = host.accessibilityElements().map(\.description).joined(separator: "\n")
@@ -185,7 +185,7 @@ final class TaskSuggestionRenderingTests: XCTestCase {
 
         store.markStarted(chip(1).id, in: task, startedTaskID: Self.started)
         host.settle(passes: 6)
-        XCTAssertTrue(host.hosting.pressSuggestionElement(
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(
             labelled: L10n.format("%@: %@", "Remove the dead retry flag", L10n.string("Started"))))
         host.settle(passes: 2)
         XCTAssertEqual(recorder.opened, [Self.started], "A started suggestion opens its task")
@@ -235,7 +235,7 @@ final class TaskSuggestionRenderingTests: XCTestCase {
                                          size: NSSize(width: 400, height: 340), appearance: .light)
         defer { host.close() }
         host.settle(passes: 6)
-        XCTAssertTrue(host.hosting.pressSuggestionElement(labelled: L10n.string("Start")))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Start")))
         host.settle(passes: 2)
         XCTAssertEqual(started, [choice], "Start starts with what it shows")
 
@@ -365,30 +365,5 @@ final class TaskSuggestionRenderingTests: XCTestCase {
         var here: [ConversationTaskSuggestion] = []
         var options: [ConversationTaskSuggestion] = []
         var opened: [UUID] = []
-    }
-}
-
-private extension NSView {
-    /// Presses the first accessibility element under the view with this label, as an assistive app
-    /// would (`CodexDirectiveRenderingTests` does the same).
-    func pressSuggestionElement(labelled label: String) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(self)?.accessibilityPerformPress?() ?? false
     }
 }

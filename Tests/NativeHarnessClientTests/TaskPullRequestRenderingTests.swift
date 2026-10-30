@@ -78,32 +78,9 @@ final class TaskPullRequestRenderingTests: XCTestCase {
         defer { host.close() }
         host.settle(passes: 2)
         // As an assistive app presses it; a click takes the same action.
-        XCTAssertTrue(Self.press(L10n.format("Pull request #%@", String(123)), in: host.hosting))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.format("Pull request #%@", String(123))))
         host.settle(passes: 2)
         XCTAssertEqual(opened, [Self.url])
-    }
-
-    /// Presses the first accessibility element under the view with this label
-    /// (`CodexDirectiveRenderingTests` does the same).
-    private static func press(_ label: String, in view: NSView) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(view)?.accessibilityPerformPress?() ?? false
     }
 
     /// Rows mark their pull request with the Claude app's state glyph and no number, for every state
@@ -321,26 +298,20 @@ extension TaskPullRequestRenderingTests {
     /// find it (with the app's enhanced interface on, as a screen reader turns it on).
     private func frame(of label: String, in host: WindowlessRender.Host<some View>) -> NSRect? {
         host.hosting.layoutSubtreeIfNeeded()
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: false),
-                            with: attribute)
-        }
-        let window = host.window.frame
-        func visit(_ node: AnyObject) -> NSRect? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label, let screen = child.accessibilityFrame?() {
-                    return NSRect(x: screen.minX - window.minX, y: window.maxY - screen.maxY,
-                                  width: screen.width, height: screen.height)
+        return WindowlessRender.withAccessibilityTree {
+            let window = host.window.frame
+            func visit(_ node: AnyObject) -> NSRect? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if (child.accessibilityLabel?() ?? nil) == label, let screen = child.accessibilityFrame?() {
+                        return NSRect(x: screen.minX - window.minX, y: window.maxY - screen.maxY,
+                                      width: screen.width, height: screen.height)
+                    }
+                    if let found = visit(child) { return found }
                 }
-                if let found = visit(child) { return found }
+                return nil
             }
-            return nil
+            return visit(host.hosting)
         }
-        return visit(host.hosting)
     }
 
     /// A click at the middle of `frame` (in the window, from its top-left), sent to the window.

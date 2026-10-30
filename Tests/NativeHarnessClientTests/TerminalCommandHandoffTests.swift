@@ -411,26 +411,18 @@ private extension NSView {
     /// would, and returns how many it pressed. SwiftUI builds its accessibility tree only while an
     /// assistive app has announced itself (`AXEnhancedUserInterface`), which this sets and puts back.
     func pressAccessibilityElements(labelled label: String) -> Int {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        var found: [AnyObject] = []
-        var visited: Set<ObjectIdentifier> = []
-        func visit(_ node: AnyObject) {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                guard visited.insert(ObjectIdentifier(child)).inserted else { continue }
-                if (child.accessibilityLabel?() ?? nil) == label { found.append(child) }
-                visit(child)
+        WindowlessRender.withAccessibilityTree {
+            var found: [AnyObject] = []
+            var visited: Set<ObjectIdentifier> = []
+            func visit(_ node: AnyObject) {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    guard visited.insert(ObjectIdentifier(child)).inserted else { continue }
+                    if (child.accessibilityLabel?() ?? nil) == label { found.append(child) }
+                    visit(child)
+                }
             }
+            visit(self)
+            return found.filter { $0.accessibilityPerformPress?() ?? false }.count
         }
-        visit(self)
-        return found.filter { $0.accessibilityPerformPress?() ?? false }.count
     }
 }

@@ -100,7 +100,7 @@ final class ConversationCardConvergenceTests: XCTestCase {
             size: size, appearance: .light)
         defer { host.close() }
         host.settle()
-        XCTAssertTrue(host.hosting.pressAccessibilityButton(labelled: summary.label))
+        XCTAssertTrue(host.hosting.pressButton(labeled: summary.label))
         host.settle()
         let opened = host.accessibilityElements()
         XCTAssertTrue(opened.contains(L10n.string("File change"), followedBy: [L10n.string("Edited") + " README.md"]),
@@ -270,38 +270,6 @@ extension [WindowlessRender.AccessibilityElement] {
 
     func contains(text: String) -> Bool {
         contains { $0.label == text || $0.value == text }
-    }
-}
-
-private extension NSView {
-    /// Presses the first accessibility element under the view with this label, as an assistive app
-    /// would. SwiftUI builds its accessibility tree only while an assistive app has announced itself
-    /// (`AXEnhancedUserInterface`), which this sets for the press and then puts back.
-    func pressAccessibilityElement(labelled label: String, buttonsOnly: Bool = false) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label,
-                   !buttonsOnly || (child.accessibilityRole?() ?? nil) == NSAccessibility.Role.button { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(self)?.accessibilityPerformPress?() ?? false
-    }
-
-    /// The same for a button only: a summary's container carries its button's label.
-    func pressAccessibilityButton(labelled label: String) -> Bool {
-        pressAccessibilityElement(labelled: label, buttonsOnly: true)
     }
 }
 

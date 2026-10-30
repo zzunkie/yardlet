@@ -125,25 +125,11 @@ final class SidePanelQATests: XCTestCase {
         let object: AnyObject
     }
 
-    private static func withEnhancedInterface<T>(_ body: () -> T) -> T {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        return body()
-    }
-
     /// Every labelled element right of `minX`, with its frame.
     private func elements<Content: View>(in host: WindowlessRender.Host<Content>, rightOf minX: CGFloat) -> [Element] {
         host.hosting.layoutSubtreeIfNeeded()
         let windowFrame = host.window.frame
-        return Self.withEnhancedInterface {
+        return WindowlessRender.withAccessibilityTree {
             var found: [Element] = []
             var visited = Set<ObjectIdentifier>()
             func visit(_ node: AnyObject) {
@@ -173,7 +159,7 @@ final class SidePanelQATests: XCTestCase {
                                       rightOf minX: CGFloat) -> Bool {
         let buttons = elements(in: host, rightOf: minX).filter { $0.role == NSAccessibility.Role.button.rawValue }
         guard let control = buttons.first(where: { $0.label == label }) else { return false }
-        let pressed = Self.withEnhancedInterface { control.object.accessibilityPerformPress?() ?? false }
+        let pressed = WindowlessRender.withAccessibilityTree { control.object.accessibilityPerformPress?() ?? false }
         host.settle(passes: 20, interval: 0.03)
         return pressed
     }

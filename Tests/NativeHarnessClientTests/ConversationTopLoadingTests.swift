@@ -226,7 +226,7 @@ final class ConversationTopLoadingTests: XCTestCase {
         XCTAssertEqual(asked.count, 0, "scrolled back, not up to the top")
         let before = try XCTUnwrap(topRequest(in: mounted))
 
-        XCTAssertTrue(press(L10n.string("Load more history"), in: mounted.hosting))
+        XCTAssertTrue(mounted.hosting.pressAccessibilityElement(labelled: L10n.string("Load more history")))
         pump(mounted.hosting, passes: 4)
         XCTAssertEqual(asked.count, 1)
         feed.entries = Self.transcript(turns: 60)
@@ -414,31 +414,26 @@ final class ConversationTopLoadingTests: XCTestCase {
     /// The topmost request in view, by number, with its top in screen points.
     private func topRequest(in mounted: Mounted) -> (number: Int, y: CGFloat)? {
         mounted.hosting.layoutSubtreeIfNeeded()
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: false),
-                            with: attribute)
-        }
-        var found: [(Int, NSRect)] = []
-        var visited = Set<ObjectIdentifier>()
-        func visit(_ node: AnyObject) {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                guard visited.insert(ObjectIdentifier(child)).inserted else { continue }
-                let label = (child.accessibilityLabel?() ?? nil) ?? ""
-                let value = ((child.accessibilityValue?() as Any??) ?? nil).map { "\($0)" } ?? ""
-                let text = value.hasPrefix("Request ") ? value : label
-                if text.hasPrefix("Request "), let number = Int(text.dropFirst("Request ".count)),
-                   let frame = child.accessibilityFrame?(), frame.intersects(mounted.window.frame) {
-                    found.append((number, frame))
+        let window = mounted.window.frame
+        return WindowlessRender.withAccessibilityTree {
+            var found: [(Int, NSRect)] = []
+            var visited = Set<ObjectIdentifier>()
+            func visit(_ node: AnyObject) {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    guard visited.insert(ObjectIdentifier(child)).inserted else { continue }
+                    let label = (child.accessibilityLabel?() ?? nil) ?? ""
+                    let value = ((child.accessibilityValue?() as Any??) ?? nil).map { "\($0)" } ?? ""
+                    let text = value.hasPrefix("Request ") ? value : label
+                    if text.hasPrefix("Request "), let number = Int(text.dropFirst("Request ".count)),
+                       let frame = child.accessibilityFrame?(), frame.intersects(window) {
+                        found.append((number, frame))
+                    }
+                    visit(child)
                 }
-                visit(child)
             }
+            visit(mounted.hosting)
+            return found.max { $0.1.maxY < $1.1.maxY }.map { ($0.0, $0.1.maxY) }
         }
-        visit(mounted.hosting)
-        return found.max { $0.1.maxY < $1.1.maxY }.map { ($0.0, $0.1.maxY) }
     }
 
     private func listed(_ hosting: NSView) -> String {
@@ -451,24 +446,5 @@ final class ConversationTopLoadingTests: XCTestCase {
             guard ConversationDrawing.isRailTurn(element.label) else { return nil }
             return element.label.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }.max()
         }.max()
-    }
-
-    private func press(_ label: String, in view: NSView) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: false),
-                            with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(view)?.accessibilityPerformPress?() ?? false
     }
 }

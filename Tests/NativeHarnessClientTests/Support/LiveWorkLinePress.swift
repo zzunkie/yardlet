@@ -23,27 +23,25 @@ extension NSView {
         pressFirstButton { found, _ in found == label }
     }
 
+    /// Presses the first button whose label `matches`, for a label that reads on as it runs.
+    @discardableResult
+    func pressButton(where matches: (String) -> Bool) -> Bool {
+        pressFirstButton { label, _ in matches(label) }
+    }
+
     /// Presses the first button in the accessibility tree that `matches` its label and value.
     private func pressFirstButton(where matches: (String, String?) -> Bool) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                let value: Any? = (child.accessibilityValue?() as Any??) ?? nil
-                if let label = child.accessibilityLabel?() ?? nil, matches(label, value as? String),
-                   (child.accessibilityRole?() ?? nil) == NSAccessibility.Role.button { return child }
-                if let found = visit(child) { return found }
+        WindowlessRender.withAccessibilityTree {
+            func visit(_ node: AnyObject) -> AnyObject? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    let value: Any? = (child.accessibilityValue?() as Any??) ?? nil
+                    if let label = child.accessibilityLabel?() ?? nil, matches(label, value as? String),
+                       (child.accessibilityRole?() ?? nil) == NSAccessibility.Role.button { return child }
+                    if let found = visit(child) { return found }
+                }
+                return nil
             }
-            return nil
+            return visit(self)?.accessibilityPerformPress?() ?? false
         }
-        return visit(self)?.accessibilityPerformPress?() ?? false
     }
 }

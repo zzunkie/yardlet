@@ -91,7 +91,7 @@ final class ScheduleToolRenderingTests: XCTestCase {
         let host = WindowlessRender.Host(view, size: NSSize(width: 760, height: 340), appearance: .light)
         defer { host.close() }
         host.settle(passes: 10)
-        XCTAssertTrue(host.hosting.pressScheduleElement(labelled: L10n.format("Open %@ in Scheduled tasks", "Morning check")))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.format("Open %@ in Scheduled tasks", "Morning check")))
         host.settle(passes: 2)
         XCTAssertEqual(recorder.opened, [morning])
     }
@@ -224,30 +224,5 @@ final class ScheduleToolRenderingTests: XCTestCase {
     /// What Open asked the window to do. Only the main thread touches it.
     private final class Recorder: @unchecked Sendable {
         var opened: [UUID] = []
-    }
-}
-
-private extension NSView {
-    /// Presses the first accessibility element under the view with this label, as an assistive app
-    /// would (`TaskSuggestionRenderingTests` does the same).
-    func pressScheduleElement(labelled label: String) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(self)?.accessibilityPerformPress?() ?? false
     }
 }

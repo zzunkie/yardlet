@@ -65,11 +65,11 @@ final class DiffCommentRenderingTests: XCTestCase {
         }
 
         // The first waiting card is the deleted line's: Delete removes it from the task's comments.
-        XCTAssertTrue(host.hosting.pressCommentElement(labelled: L10n.string("Delete")), texts)
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Delete")), texts)
         host.settle()
         XCTAssertEqual(draft.diffComments, [Fixtures.comments[0], Fixtures.comments[1]])
         // Cancel closes the new comment and leaves the waiting ones.
-        XCTAssertTrue(host.hosting.pressCommentElement(labelled: L10n.string("Cancel")))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Cancel")))
         host.settle()
         let after = host.accessibilityElements().map(\.description).joined(separator: "\n")
         XCTAssertFalse(after.contains(L10n.format("Local comment on line %@", "R43")), after)
@@ -109,7 +109,7 @@ final class DiffCommentRenderingTests: XCTestCase {
         host.settle()
         let texts = host.accessibilityElements().map(\.description).joined(separator: "\n")
         XCTAssertTrue(texts.contains(L10n.format("%lld attached comments", 3)), texts)
-        XCTAssertTrue(host.hosting.pressCommentElement(labelled: L10n.string("Remove comments attachment")), texts)
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Remove comments attachment")), texts)
         host.settle()
         XCTAssertTrue(draft.diffComments.isEmpty)
         XCTAssertEqual(draft.text, "Please address these.")
@@ -141,30 +141,5 @@ final class DiffCommentRenderingTests: XCTestCase {
         for hidden in ["Diff comments", "User Comment", "Diff hunk", "Return an error instead of nil.", "## My request"] {
             XCTAssertFalse(texts.contains(hidden), "\(hidden) is drawn:\n\(texts)")
         }
-    }
-}
-
-private extension NSView {
-    /// Presses the first accessibility element under the view with this label, as an assistive app
-    /// would.
-    func pressCommentElement(labelled label: String) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(self)?.accessibilityPerformPress?() ?? false
     }
 }
