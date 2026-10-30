@@ -99,6 +99,56 @@ final class CodexPersistedTimelineTests: XCTestCase {
         XCTAssertEqual(timeline.supplementEntries(for: state, saved: cards), Self.referenceEntries(state, cards))
     }
 
+    /// A streamed state merges its saved cards as their page would merge, and the turns it did not
+    /// change come back in the storage of the last state's merge: what compares them next (settling
+    /// cards, choosing the cards to save, the views) then finds them equal at once.
+    func testMergingSavedCardsMatchesMergingTheirPageAndKeepsTheTurnsThatDidNotChange() {
+        var state = Self.thread(turns: 6, itemsPerTurn: 6)
+        var cards = CodexPersistedTimeline().itemsForTest(from: state)
+        // The provider's history leaves every card it resumed historical, so every saved card replaces its copy.
+        for turn in state.thread!.turns.indices {
+            for item in state.thread!.turns[turn].items.indices { state.thread!.turns[turn].items[item].lifecycle = .historical }
+        }
+        var timeline = CodexPersistedTimeline()
+        func merged(_ state: CodexTaskState) -> CodexTaskState {
+            var merged = state
+            timeline.merge(cards, into: &merged)
+            var page = state
+            CodexTaskReducer().mergeItemPage(
+                CodexItemPage(entries: Self.referenceEntries(state, cards), nextCursor: nil, backwardsCursor: nil), into: &page)
+            XCTAssertEqual(merged, page)
+            return merged
+        }
+        func sameStorage(_ first: CodexTaskState, _ second: CodexTaskState, turn: Int) -> Bool {
+            first.thread!.turns[turn].items.withUnsafeBufferPointer { first in
+                second.thread!.turns[turn].items.withUnsafeBufferPointer { $0.baseAddress == first.baseAddress }
+            }
+        }
+        let first = merged(state)
+
+        // The latest turn runs and streams; then a card of it is saved, which changes the saved cards.
+        let last = state.thread!.turns.count - 1
+        state.thread!.turns[last].status = .inProgress
+        state.thread!.turns[last].items.append(Self.command("live", output: "Compiling\n", done: false))
+        let streaming = merged(state)
+        XCTAssertTrue(sameStorage(first, streaming, turn: 0), "An unchanged turn was merged again")
+        cards.append(CodexPersistedTimelineItem(turnID: state.thread!.turns[last].id,
+                                                item: Self.command("live", output: "Compiling\n", done: false)))
+        let saved = merged(state)
+        XCTAssertTrue(sameStorage(streaming, saved, turn: 0), "A card saved in another turn merged this one again")
+
+        // A turn the provider changed, and cards of that turn the app saved again, are merged anew.
+        state.thread!.turns[1].items.removeLast()
+        XCTAssertFalse(sameStorage(saved, merged(state), turn: 1))
+        let removed = cards.remove(at: cards.firstIndex { $0.turnID == state.thread!.turns[2].id }!)
+        XCTAssertFalse(merged(state).thread!.turns[2].items.contains { $0.id == removed.pageEntry.item.id
+            && $0.lifecycle == .completed }, "A card no longer saved still replaced its copy")
+        state.thread = nil
+        var none = state
+        timeline.merge(cards, into: &none)
+        XCTAssertNil(none.thread)
+    }
+
     func testRememberedSettledTurnsCloseTheSameCardsAsAFreshWalk() {
         var settledTurns = CodexSettledTurns()
         var state = Self.thread(turns: 5, itemsPerTurn: 3)

@@ -7257,17 +7257,10 @@ final class AppModel {
         into state: inout CodexTaskState,
         for sessionID: UUID
     ) {
-        let entries = codexPersistedTimelines[sessionID, default: CodexPersistedTimeline()].supplementEntries(
-            for: state,
-            saved: codexTimelineItemRepository.load(for: sessionID)
-        )
-        guard !entries.isEmpty else { return }
         // App-local cards supplement provider-loaded turns; they must never manufacture a
         // placeholder turn outside the bounded authoritative resume window.
-        CodexTaskReducer().mergeItemPage(
-            CodexItemPage(entries: entries, nextCursor: nil, backwardsCursor: nil),
-            into: &state
-        )
+        codexPersistedTimelines[sessionID, default: CodexPersistedTimeline()].merge(
+            codexTimelineItemRepository.load(for: sessionID), into: &state)
     }
 
     /// `deferringStreamedContent` is for streamed states: when only the content of cards already
