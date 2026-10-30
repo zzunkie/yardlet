@@ -1,7 +1,6 @@
 import CryptoKit
 import Darwin
 import Foundation
-import Observation
 
 struct CodexEnvironmentPaths: Equatable, Sendable {
     let nativeHomeURL: URL
@@ -449,46 +448,5 @@ actor CodexEnvironmentManager {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(snapshot).write(to: paths.manifestURL, options: .atomic)
-    }
-}
-
-@MainActor
-@Observable
-final class CodexEnvironmentSettingsModel {
-    private(set) var snapshot: CodexEnvironmentSnapshot?
-    private(set) var isRefreshing = false
-    private(set) var errorMessage: String?
-
-    @ObservationIgnored private let manager: CodexEnvironmentManager?
-
-    init(manager: CodexEnvironmentManager?) {
-        self.manager = manager
-    }
-
-    func load() async {
-        guard let manager else {
-            snapshot = nil
-            errorMessage = L10n.string("Codex environment isolation is unavailable in this launch.")
-            return
-        }
-        snapshot = await manager.currentSnapshot()
-    }
-
-    func refresh() async {
-        guard !isRefreshing else { return }
-        guard let manager else {
-            snapshot = nil
-            errorMessage = L10n.string("Codex environment isolation is unavailable in this launch.")
-            return
-        }
-        isRefreshing = true
-        errorMessage = nil
-        do {
-            snapshot = try await manager.prepare()
-        } catch {
-            snapshot = nil
-            errorMessage = error.localizedDescription
-        }
-        isRefreshing = false
     }
 }

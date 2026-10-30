@@ -761,7 +761,6 @@
 "Codex runtime settings" = "Codex runtime settings";
 "Read-only snapshot from the selected Codex App Server." = "Read-only snapshot from the selected Codex App Server.";
 "Config read" = "Config read";
-"Select a Codex runtime to inspect its effective settings." = "Select a Codex runtime to inspect its effective settings.";
 "No value exposed" = "No value exposed";
 "Provider" = "Provider";
 "Approval policy" = "Approval policy";
@@ -783,7 +782,6 @@
 "Feature requirements" = "Feature requirements";
 "%lld features" = "%lld features";
 "Codex history occurrences are unavailable for this runtime" = "Codex history occurrences are unavailable for this runtime";
-"Codex environment isolation is unavailable in this launch." = "Codex environment isolation is unavailable in this launch.";
 "Inherited read-only from native Codex when a task starts." = "Inherited read-only from native Codex when a task starts.";
 "Inherited read-only from native Codex and inspected through Codex features." = "Inherited read-only from native Codex and inspected through Codex features.";
 "Yardlet overlays can extend the inherited snapshot without writing back." = "Yardlet overlays can extend the inherited snapshot without writing back.";
