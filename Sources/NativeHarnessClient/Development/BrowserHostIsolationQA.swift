@@ -47,6 +47,12 @@ final class BrowserHostIsolationQA {
             await followsSignIns()
             return await finish()
         }
+        // `--ui-fixture-isolation-shapes` runs only the check that the cleanup removes the old copy's domain cookies.
+        if CommandLine.arguments.contains("--ui-fixture-isolation-shapes") {
+            record["storage"] = .string(profiles.storage.rawValue)
+            await removesTheOldCopysDomainCookies()
+            return await finish()
+        }
         // `--ui-fixture-isolation-shared` measures the same tabs in the one default profile, for comparison.
         if CommandLine.arguments.contains("--ui-fixture-isolation-shared") {
             profiles.storage = .shared
@@ -146,6 +152,7 @@ final class BrowserHostIsolationQA {
 
         await copiesCookiesAsStored()
         await followsSignIns()
+        await removesTheOldCopysDomainCookies()
 
         // Archived and deleted tasks' profiles go once the host has let them go.
         for task in [a, shared] { client.closeTabs(forSession: task) }
@@ -461,6 +468,97 @@ final class BrowserHostIsolationQA {
                                     "own": .array((profiles.following.own[profiles.key(for: g)] ?? []).sorted().map(JSONValue.string))])
         for task in [p, f, g, h, q, u, k, old] { client.closeTabs(forSession: task) }
         start.close()
+    }
+
+    // MARK: The old copy's domain cookies
+
+    /// A site that sets and deletes a cookie host-only can neither replace nor delete the domain cookie the copy before
+    /// 2026-10-25 made of it, which its host still receives, as porkbun.com could not in Yardlet's profiles until
+    /// 2026-10-31 (docs/BROWSER_SESSION_ISOLATION.md 8). The QA server's `/shapes/login`, opened as qa.localhost (a host
+    /// whose domain cookies Chromium keeps), stays "Passwordless login" while a request carries qa_npw, and its sign-in
+    /// goes back to the sign-in page when the first qa_prb it receives is not the one it set last. A task holds the old
+    /// copy's domain cookies of both, set through DevTools as the copy set them through the cookie manager, before the
+    /// site sets its own qa_prb. The host ends, the one-time cleanup runs again as it does before the host starts, and
+    /// the site's sign-in must then work.
+    private func removesTheOldCopysDomainCookies() async {
+        let site = base.replacingOccurrences(of: "localhost", with: "qa.localhost")
+        let login = site + "shapes/login"
+        let task = UUID()
+        guard let tab = await taskTab(task, site + "isolation") else { return }
+        for name in ["qa_npw", "qa_prb"] {
+            for domain in ["qa.localhost", ".qa.localhost"] {
+                _ = try? await tab.devTools.send("Network.deleteCookies", ["name": .string(name), "domain": .string(domain)])
+            }
+        }
+        _ = try? await tab.devTools.send("Network.setCookies", ["cookies": .array(["qa_npw", "qa_prb"].map { name -> JSONValue in
+            .object(["name": .string(name), "value": .string("OLD"), "url": .string(site), "domain": .string(".qa.localhost"),
+                     "path": .string("/"), "httpOnly": .bool(true), "expires": .number(Date().timeIntervalSince1970 + 3600)])
+        })])
+        let before = await shapesSignIn(tab, login)
+        let sent = try? await tab.devTools.send("Network.getCookies", ["urls": .array([.string(login)])], timeout: .seconds(10))
+        let sentBefore = (sent?["cookies"]?.arrayValue ?? []).compactMap { cookie -> String? in
+            guard let name = cookie["name"]?.stringValue, name.hasPrefix("qa_") else { return nil }
+            return "\(name) \(cookie["domain"]?.stringValue ?? "?") \(cookie["value"]?.stringValue == "OLD" ? "OLD" : "site's")"
+        }
+        var shapes: [String: JSONValue] = ["before": before.json, "sentBefore": .array(sentBefore.map(JSONValue.string))]
+        record["shapes"] = .object(shapes)
+        check("shapes: the old copy's domain cookies keep the site from showing its password field and from signing in",
+              before.passwordless && before.passwordlessAfterShow && !before.signedIn,
+              "\(Self.describe(before.json)), the sign-in page gets \(sentBefore)")
+
+        client.closeTabs(forSession: task)
+        client.terminateHost()
+        _ = await waitUntil(.seconds(20)) { !self.client.isHostRunning }
+        try? await Task.sleep(for: .seconds(1))
+        // This QA home's record of the cleanup keeps it from running again.
+        try? FileManager.default.removeItem(at: MacBrowserHost.shared.paths.root.appending(path: BrowserCookieCopyRepair.recordName))
+        guard let again = await taskTab(task, site + "isolation") else { return }
+        let after = await shapesSignIn(again, login)
+        let all = try? await again.devTools.send("Network.getAllCookies", [:], timeout: .seconds(10))
+        let left = (all?["cookies"]?.arrayValue ?? []).compactMap { cookie -> String? in
+            guard let name = cookie["name"]?.stringValue, ["qa_npw", "qa_prb"].contains(name),
+                  let domain = cookie["domain"]?.stringValue, domain.hasSuffix("qa.localhost") else { return nil }
+            return "\(name) \(domain)"
+        }.sorted()
+        shapes["after"] = after.json
+        record["shapes"] = .object(shapes)
+        check("shapes: once the cleanup removes them, the site shows its password field and signs in",
+              !after.passwordless && after.signedIn && left == ["qa_prb qa.localhost"],
+              "\(Self.describe(after.json)), qa.localhost holds \(left)")
+        client.closeTabs(forSession: task)
+    }
+
+    private struct ShapesSignIn {
+        var passwordless = false, passwordlessAfterShow = false, signedIn = false
+
+        var json: JSONValue {
+            .object(["passwordless": .bool(passwordless), "passwordlessAfterShow": .bool(passwordlessAfterShow),
+                     "signedIn": .bool(signedIn)])
+        }
+    }
+
+    /// Opens the QA server's sign-in page, presses "Show password field" when it is passwordless, and signs in.
+    private func shapesSignIn(_ tab: BrowserTab, _ login: String) async -> ShapesSignIn {
+        var result = ShapesSignIn()
+        _ = await value(tab, "location.href = '\(login)'; 1")
+        guard await loaded(tab, login) else { return result }
+        result.passwordless = await value(tab, "window.qa.shapes.passwordless")?.boolValue == true
+        result.passwordlessAfterShow = result.passwordless
+        if result.passwordless {
+            // The button reloads the page once the site has answered.
+            _ = await value(tab, "window.qaBeforeShow = true; document.querySelector('#show').click(); 1")
+            for _ in 0..<50 {
+                try? await Task.sleep(for: .milliseconds(200))
+                if !tab.isLoading, await value(tab, "window.qaBeforeShow === undefined && !!window.qa")?.boolValue == true { break }
+            }
+            result.passwordlessAfterShow = await value(tab, "window.qa.shapes.passwordless")?.boolValue == true
+        }
+        _ = await value(tab, "document.querySelector('#user').value = 'qa'; document.querySelector('form').submit(); 1")
+        _ = await waitUntil(.seconds(10)) {
+            !tab.isLoading && (tab.currentURL?.contains("/shapes/account") == true || tab.currentURL?.contains("weird") == true)
+        }
+        result.signedIn = tab.currentURL?.contains("/shapes/account") == true
+        return result
     }
 
     /// The person's click on an element of the page, through the host's input as the panel sends it.

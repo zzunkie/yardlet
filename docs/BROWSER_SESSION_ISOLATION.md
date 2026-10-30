@@ -120,7 +120,13 @@ cookie on `accounts.example.com`, Secure and non-Secure cookies on `.example.com
 top-level site) go into a new task with the same domain and Secure flag, and the partitioned cookie does not become a
 top-level cookie; whether, after a sign-in done again in a task is moved to the default profile, the account site
 receives each name once with the new value (both in the default profile and in tasks after it). Adding
-`--ui-fixture-isolation-cookies` runs only this check. The checks of the sign-ins tasks follow (section 11) run too,
+`--ui-fixture-isolation-cookies` runs only this check. Whether the one-time cleanup (section 8) makes a site work again:
+the QA server's `/shapes/login`, opened as `qa.localhost` (Chromium keeps domain cookies of a `*.localhost` host, not of
+`localhost`), stays on a passwordless sign-in while a request carries `qa_npw`, deletes it host-only from its "Show
+password field" button, and sends its sign-in back to the sign-in page when the first `qa_prb` it receives is not the
+one it set last. With the earlier copy's domain cookies of both planted in a task through DevTools, the button and the
+sign-in fail; after the host ends and the cleanup runs again, the page shows its password field and signs in, and only
+the site's host-only `qa_prb` is left. Adding `--ui-fixture-isolation-shapes` runs only this check. The checks of the sign-ins tasks follow (section 11) run too,
 and adding `--ui-fixture-isolation-follow` runs only those. Every check uses a new task and decides first which values it
 will read (the cookie check first deletes cookies of the same name from earlier runs), so state that earlier QA left in
 the same QA home does not matter. Each step measures the process tree's memory (adding `--ui-fixture-isolation-shared`
@@ -166,23 +172,37 @@ keeps its cookies across host restarts.
   partition keys. In the Codex app 26.1016 all threads share one store (`persist:codex-browser-app`), so there is no
   copy between profiles. In neither app was a switch or setting found that changes the third-party cookie policy.
 - **One-time cleanup of earlier copies (`BrowserCookieCopyRepair`):** an earlier copy turned every host-only cookie into
-  a domain cookie, and such copies stay in a profile until removed. So Yardlet cleans up once, just before it first
-  starts the browser host (it cannot while the host has the cookie DB open). In the `Cookies` of the default profile and
-  of the `Task-<UUID>` profiles, it deletes the domain cookies that a copy created (`source_type` 3, set through the
-  cookie manager) when a host-only cookie with the same name, path and partition is there, whatever created the
-  host-only one: the earlier copy never created host-only cookies, so the host-only side of such a pair has the site's
-  shape. The site's own cookies (`source_type` 1 or 2), including pairs the site created itself, and copies with no pair
-  remain. Only for DBs with something to delete, it first copies `Cookies` and `-journal` and `-wal` to
-  `~/.Trash/Yardlet cookie backup <date time>/<profile>/`, and leaves a profile untouched if its backup fails. It deletes
-  in a single transaction. When everything is done, it leaves `CookieCopyRepair.json` (the run time, the number deleted
-  per profile and the round) in the root cache, so it does not run again until a later round (the current round is 3).
-  If the host holds the DB (the PID in `SingletonLock` is alive), the DB cannot be read (a journal that needs a rollback
-  and the like), or the backup or deletion fails, it leaves no record and runs again at the next start. The Trash is the
-  one of `NSHomeDirectory()`, which follows the home a QA run sets (FileManager's Trash would be the person's). Those
-  sites may need a new sign-in.
+  a domain cookie of its host, and such copies stay in a profile until removed. The host still receives such a cookie,
+  but no response of the site's can replace or delete it, since the site sets and deletes that name host-only: a site
+  that sets it again gets two cookies of one name, the copy's first (Google's accounts site answers `/CookieMismatch`),
+  and a site that deletes it keeps getting it (porkbun.com's "Show Password Field" deletes its host-only `npw` cookie
+  and reloads, and stayed on its passwordless sign-in). New tasks' starting cookies and the sign-ins tasks follow
+  carried these copies into other profiles, often without the site's host-only cookie. So Yardlet cleans up once, just
+  before it first starts the browser host (it cannot while the host has the cookie DB open). It first reads the
+  `Cookies` of the default profile and of every `Task-<UUID>` profile, then in each deletes the domain cookies a copy
+  created (`source_type` 3, set through the cookie manager) that are the earlier copy's:
+  - a domain cookie with a host-only cookie of the same host, name, path and partition in any of these profiles,
+    whatever created the host-only one: the earlier copy never created host-only cookies, so the host-only one has the
+    site's shape;
+  - on a host where the first rule finds such cookies, an HttpOnly domain cookie with no host-only cookie anywhere,
+    unless some profile holds it as the site's server set it (`source_type` 1): only a server sets an HttpOnly cookie,
+    and the earlier copy made that host's domain cookies.
+
+  The site's own cookies (`source_type` 1 or 2), including pairs the site created itself, a script's domain cookies
+  that were copied, and copies on hosts where nothing shows the earlier copy remain. Only for DBs with something to
+  delete, it first copies `Cookies` and `-journal` and `-wal` to `~/.Trash/Yardlet cookie backup <date time>/<profile>/`,
+  and leaves a profile untouched if its backup fails. It deletes in a single transaction per DB. When everything is
+  done, it leaves `CookieCopyRepair.json` (the run time, the number deleted per profile and the round) in the root cache,
+  so it does not run again until a later round (the current round is 4; rounds 1 to 3 compared each profile alone). If
+  the host holds the DBs (the PID in `SingletonLock` is alive) or a DB cannot be read (a journal that needs a rollback
+  and the like), it changes nothing; if a backup or deletion fails, it leaves no record. Either way it runs again at the
+  next start. The Trash is the one of `NSHomeDirectory()`, which follows the home a QA run sets (FileManager's Trash
+  would be the person's). A profile whose only cookie of a name was such a copy may need a new sign-in on that site;
+  the person's next sign-in there reaches the tasks that follow it in the site's shape (section 11).
 - **QA:** the cookie checks in section 6. The one-time cleanup is checked by `BrowserCookieCopyRepairTests` (DBs in a
-  temporary folder): which cookies go and which stay, the backups in the Trash, the record, a record of an earlier round
-  letting the current round run once, and running again when a host holds the profiles or the backup fails.
+  temporary folder): which cookies go and which stay, within a profile and across profiles, the backups in the Trash,
+  the record, a record of an earlier round letting the current round run once, and running again when a host holds the
+  profiles or the backup fails.
 
 ## 9. Never two shapes of one cookie
 

@@ -36,7 +36,8 @@ card checkout /checkout (a card form posting to /checkout/done), /checkout/addre
 /checkout/wallet (a wallet button's Payment Request) and the card issuer's check (3-D Secure) on another port
 reached as localhost, another site: /checkout/frame (in frames, posting to the issuer and back), /checkout/redirect
 (the whole page posts to the issuer and back) and /checkout/popup (a new window that answers window.opener), and
-a sign-in's cookie check across two sites, /cookie-check/start (COOKIE_SIGN_IN below), for picking an element
+a sign-in's cookie check across two sites, /cookie-check/start (COOKIE_SIGN_IN below), a sign-in whose cookies the
+site sets and deletes host-only, /shapes/login (SHAPES_LOGIN below), for picking an element
 /pick (PICK below), and for the agent's browser use /viewport (what the page sees of its screen size, device and color
 scheme, and a tap target), /frames (an open and a closed shadow root, a frame from this site and one from another that
 holds a frame from this site again) and /handoff (a check only the person passes), and for video /media (MEDIA below)
@@ -731,6 +732,27 @@ FOLLOW_IDP = """<!doctype html><meta charset="utf-8"><title>QA sign-in</title><h
 # /cookie-check/console (on this server) frames the accounts site's /cookie-check/frame, which sets that
 # partitioned cookie and an unpartitioned SameSite=None one and reports what the frame can read.
 # window.qa.cookieCheck also has the user agent and client hints the accounts site received.
+# A sign-in whose cookies the site sets and deletes host-only, as porkbun.com's did when Yardlet's profiles held the
+# copy before 2026-10-25's domain cookies of them (docs/BROWSER_SESSION_ISOLATION.md 8). /shapes/login sets a new
+# qa_prb host-only and shows "Passwordless login" with a "Show password field" button while the request carries
+# qa_npw; the button posts /shapes/show, which deletes qa_npw host-only, and reloads. Its form posts /shapes/verify,
+# which reads the first qa_prb of the Cookie header, as PHP does, and goes on to /shapes/account when it is the one
+# the server set last, or back to /shapes/login?weird otherwise. window.qa.shapes says what the page received. The
+# QA opens these pages as qa.localhost, a host whose domain cookies Chromium keeps (it keeps localhost's host-only).
+SHAPES_LOGIN = """<!doctype html><meta charset="utf-8"><title>Shapes sign-in</title>
+<form method="post" action="/shapes/verify"><input id="user" name="user" autocomplete="username">FIELD
+<button id="go" type="submit">Sign in</button></form><p id="weird">WEIRD</p>
+<script>
+window.qa = {shapes: STATE};
+function showPasswordField() {
+  fetch('/shapes/show', {method: 'POST'}).then(response => response.json()).then(() => location.reload());
+}
+</script>"""
+SHAPES_PASSWORDLESS = '<h1>Passwordless login</h1><button id="show" type="button" onclick="showPasswordField()">Show password field</button>'
+SHAPES_PASSWORD = '<input id="password" name="password" type="password" autocomplete="current-password">'
+SHAPES_ACCOUNT = '<!doctype html><meta charset="utf-8"><title>Shapes account</title><h1>Account</h1>'
+shapes_prb = {'last': None}
+
 COOKIE_SIGN_IN = ['qa_signin', '__Host-qa_signin']
 COOKIE_CONSOLE = """<!doctype html><meta charset="utf-8"><title>Console</title><h1>Console</h1>
 <iframe id="frame" src="ISSUER/cookie-check/frame"></iframe>
@@ -1311,6 +1333,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.cookie_check()
         if self.path.startswith('/follow/'):
             return self.follow()
+        if self.path.startswith('/shapes/'):
+            return self.shapes()
         if self.path.startswith('/slow-redirect'):
             time.sleep(1.5)
             self.send_response(302)
@@ -1488,6 +1512,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith('/follow/signin'):
             return self.redirect('/follow/home', ['qa_follow=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600' % (
                 ''.join(c for c in fields.get('user', '') if c.isalnum()) or 'none')])
+        if self.path.startswith('/shapes/'):
+            return self.shapes()
         if self.path.startswith('/checkout/done'):
             payload = PAID
         elif self.path.startswith('/checkout/shipped'):
@@ -1528,6 +1554,35 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(FOLLOW_IDP.replace('RETURN', html.escape(back)).encode(), page)
         if route == '/follow/callback':
             return self.redirect('/follow/home', ['qa_follow=SSO; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600'])
+        self.send_response(404)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def shapes(self):
+        """The sign-in whose cookies the site sets and deletes host-only (SHAPES_LOGIN above)."""
+        route, _, query = self.path.partition('?')
+        received = {}
+        for part in (self.headers.get('Cookie') or '').split(';'):
+            name, _, value = part.strip().partition('=')
+            if name.startswith('qa_'):
+                received.setdefault(name, []).append(value)
+        page = {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'}
+        if route == '/shapes/login':
+            shapes_prb['last'] = str(time.time_ns())
+            state = {'passwordless': 'qa_npw' in received, 'weird': 'weird' in query, 'received': received}
+            payload = (SHAPES_LOGIN.replace('FIELD', SHAPES_PASSWORDLESS if state['passwordless'] else SHAPES_PASSWORD)
+                       .replace('WEIRD', 'Your credentials look weird.' if state['weird'] else '')
+                       .replace('STATE', json.dumps(state)))
+            return self.send(payload.encode(), dict(page, **{
+                'Set-Cookie': 'qa_prb=%s; Path=/; HttpOnly; SameSite=Lax' % shapes_prb['last']}))
+        if route == '/shapes/show':
+            return self.send(b'{"error":"0"}', {'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+                                                'Set-Cookie': 'qa_npw=0; Max-Age=0; Path=/; HttpOnly'})
+        if route == '/shapes/verify':
+            first = received.get('qa_prb', [None])[0]
+            return self.redirect('/shapes/account' if first == shapes_prb['last'] else '/shapes/login?weird', [])
+        if route == '/shapes/account':
+            return self.send(SHAPES_ACCOUNT.encode(), page)
         self.send_response(404)
         self.send_header('Content-Length', '0')
         self.end_headers()
