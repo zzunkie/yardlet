@@ -298,6 +298,60 @@ final class AppModelTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// Two accounts on one CLI each keep their own adapter. Archiving one account's last task, or
+    /// its stream ending, lets only that account's adapter go: the other account's next task joins
+    /// the runtime it already has.
+    func testEndingOneAccountsTaskKeepsAnotherAccountsAdapter() async throws {
+        final class Made: @unchecked Sendable {
+            private let lock = NSLock()
+            private var adapters: [FakeHarnessAdapter] = []
+            func add(_ adapter: FakeHarnessAdapter) { lock.withLock { adapters.append(adapter) } }
+            var all: [FakeHarnessAdapter] { lock.withLock { adapters } }
+        }
+        let made = Made()
+        let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-two-accounts-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        func account(_ name: String) throws -> ProviderConnection {
+            let home = root.appending(path: name)
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            return ProviderConnection(id: name, name: name, harness: .codex, providerID: nil,
+                                      homePath: home.path(percentEncoded: false), credentialSelector: nil)
+        }
+        let work = try account("work")
+        let personal = try account("personal")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("NativeHarnessClientTests")))
+        let model = AppModel(
+            store: SessionStore(repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+            registry: HarnessRegistry { _, _ in
+                let adapter = FakeHarnessAdapter(kind: .codex)
+                made.add(adapter)
+                return adapter
+            }
+        )
+        func start(_ connection: ProviderConnection) async throws -> SessionRecord {
+            let created = await model.createSession(harness: .codex, workspaceURL: URL(filePath: "/tmp/two-accounts"),
+                                                    runtimeExecutableURL: URL(filePath: "/tmp/codex"),
+                                                    title: connection.name, connection: connection)
+            return try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Not created")
+        }
+        let first = try await start(work)
+        _ = try await start(personal)
+        XCTAssertEqual(made.all.count, 2)
+
+        await model.archive(first)
+        _ = try await start(personal)
+        XCTAssertEqual(made.all.count, 2, "Archiving the work account's last task leaves the personal account's adapter")
+        let next = try await start(work)
+        XCTAssertEqual(made.all.count, 3, "The work account's next task starts a new one")
+
+        await made.all.last?.finishEvents(for: next.id)
+        try await waitUntil { !model.isAttached(next.id) }
+        _ = try await start(personal)
+        XCTAssertEqual(made.all.count, 3, "The work account's stream ending leaves the personal account's adapter")
+        await model.shutdown()
+    }
+
     func testEndedReadyStreamDetachesWithoutManufacturingFailure() async throws {
         let adapter = FakeHarnessAdapter(kind: .codex)
         let model = try composerRefreshModel(adapter: adapter)
