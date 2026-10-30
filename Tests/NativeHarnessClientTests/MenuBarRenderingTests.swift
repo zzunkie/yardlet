@@ -119,14 +119,27 @@ final class MenuBarRenderingTests: XCTestCase {
                 .defaultAppStorage(defaults)
                 .environment(\.colorScheme, appearance.colorScheme)
         }
-        try WindowlessRender.hostedInBothAppearances("settings-general-lid", in: directory, size: size) { settings($0) }
-        let host = WindowlessRender.Host(settings(.light), size: size)
-        defer { host.close() }
-        host.settle()
-        let visible = host.accessibilityElements(visibleOnly: true).map { "\($0.label) \($0.value)" }
-        for text in ["Keep tasks working with the lid closed", "Allow Yardlet in the background in System Settings",
-                     "Open System Settings"] {
-            XCTAssertTrue(visible.contains { $0.contains(L10n.string(text)) }, "\(text) in \(visible)")
+        // General lists the lid row after its browser and restart settings, below the sheet's first
+        // screen: each drawing is scrolled to the end of the page, as the person scrolls to the row.
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(settings(appearance), size: size, appearance: appearance)
+            defer { host.close() }
+            host.settle()
+            let page = try XCTUnwrap(Self.scrollViews(in: host.hosting).max {
+                ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)
+            })
+            let document = try XCTUnwrap(page.documentView)
+            document.scrollToVisible(NSRect(x: 0, y: document.isFlipped ? document.bounds.maxY - 1 : document.bounds.minY,
+                                            width: 1, height: 1))
+            host.settle()
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                                          to: directory.appending(path: "settings-general-lid-\(appearance.suffix).png"))
+            guard appearance == .light else { continue }
+            let visible = host.accessibilityElements(visibleOnly: true).map { "\($0.label) \($0.value)" }
+            for text in ["Keep tasks working with the lid closed", "Allow Yardlet in the background in System Settings",
+                         "Open System Settings"] {
+                XCTAssertTrue(visible.contains { $0.contains(L10n.string(text)) }, "\(text) in \(visible)")
+            }
         }
 
         var menu = MenuBarMenu.empty
@@ -160,6 +173,10 @@ final class MenuBarRenderingTests: XCTestCase {
                 .background(appearance == .dark ? Color(white: 0.1) : Color(white: 0.85))
                 .environment(\.colorScheme, appearance.colorScheme)
         }
+    }
+
+    private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap { scrollViews(in: $0) }
     }
 
     // MARK: - Fixture
