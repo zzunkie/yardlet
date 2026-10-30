@@ -1,0 +1,62 @@
+name: Full tests
+
+# The tests the pull request check leaves out by name (scripts/test-fast.sh): windowless renders, QA
+# fixtures, frame and redraw checks, menus in windows, and performance bounds. They run every night
+# on main, by hand, and on a pull request that changes how they run. A failed scheduled run emails
+# whoever last changed the schedule (GitHub's default for scheduled workflows); a passing one sends
+# nothing.
+on:
+  schedule:
+    - cron: "0 18 * * *" # 03:00 in Korea
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/full-tests.yml
+      - scripts/test-fast.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  excluded-tests:
+    name: Tests left out of the pull request check
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test
+        run: |
+          set -o pipefail
+          mkdir -p .build/ci
+          ./scripts/test-fast.sh --excluded -v 2>&1 | python3 -I scripts/test-report.py \
+            --log .build/ci/test-output.log --times .build/ci/test-times.tsv --summary "$GITHUB_STEP_SUMMARY"
+      - name: Keep the test output and times
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results
+          path: |
+            .build/ci/test-output.log
+            .build/ci/test-times.tsv
+          retention-days: 14
+          if-no-files-found: ignore
+      # The renders are drawn for people to look at, so they are kept whether the run passed or not.
+      - name: Keep the images the tests drew
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-images
+          path: |
+            .build/*/*.png
+            .build/*/*/*.png
+            !.build/checkouts/**
+            !.build/arm64-apple-macosx/**
+            !.build/x86_64-apple-macosx/**
+          retention-days: 14
+          if-no-files-found: ignore
