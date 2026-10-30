@@ -1348,6 +1348,7 @@
 "Needs sign-in" = "Needs sign-in";
 "Error" = "Error";
 "Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account. Antigravity isn't supported." = "Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account. Antigravity isn't supported.";
+"Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits." = "Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits.";
 "Your connectors" = "Your connectors";
 "No connectors yet" = "No connectors yet";
 "Connect a service such as Linear, Notion, or GitHub, and every task can use its tools." = "Connect a service such as Linear, Notion, or GitHub, and every task can use its tools.";

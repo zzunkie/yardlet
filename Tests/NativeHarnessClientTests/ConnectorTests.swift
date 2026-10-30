@@ -630,15 +630,22 @@ final class ConnectorTests: XCTestCase {
         let saved = Data(#"{"version": 1, "connectors": [{"name": "Linear", "kind": "from-a-newer-yardlet"}], "googleOAuthClientID": "client"}"#.utf8)
         try saved.write(to: file)
         let repository = FileConnectorRepository(fileURL: file)
+        XCTAssertFalse(repository.canRead())
         XCTAssertEqual(repository.load(), [])
         XCTAssertNil(repository.loadGoogleAppClientID())
 
         let record = ConnectorRecord(name: "Notion", slug: "notion", serverURL: URL(string: "https://mcp.notion.com/mcp")!,
                                      authorization: .oauth, status: .connected)
-        repository.save([record])
-        repository.saveTaskChoices([UUID(): [record.id]])
-        repository.saveGoogleAppClientID(nil)
+        XCTAssertFalse(repository.save([record]))
+        XCTAssertFalse(repository.saveTaskChoices([UUID(): [record.id]]))
+        XCTAssertFalse(repository.saveGoogleAppClientID(nil))
         XCTAssertEqual(try Data(contentsOf: file), saved)
+
+        // Gone, it starts again from nothing.
+        try FileManager.default.removeItem(at: file)
+        XCTAssertTrue(repository.canRead())
+        XCTAssertTrue(repository.save([record]))
+        XCTAssertEqual(repository.load(), [record])
     }
 
     // MARK: - Through the Yardlet MCP server

@@ -23,6 +23,18 @@ struct ConnectorSettingsView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if center.cannotReadSavedSettings {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+                    Text(L10n.format("Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits.",
+                                     "~/\(YardletProduct.storageDirectoryName)/connectors.json"))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.callout)
+            }
+
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(L10n.string("Your connectors"))
