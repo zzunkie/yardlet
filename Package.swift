@@ -49,6 +49,16 @@ let remoteMacOnlySources: [String] = []
 let remoteMacOnlySources = ["RemoteSecureListener.swift", "RemoteAddresses.swift"]
 #endif
 
+#if os(Windows)
+let sqliteTarget: Target = .target(
+    name: "CSQLite",
+    path: "Sources/CSQLiteWindows",
+    linkerSettings: [.linkedLibrary("winsqlite3")]
+)
+#else
+let sqliteTarget: Target = .systemLibrary(name: "CSQLite")
+#endif
+
 let appTarget: Target = engineOnly
     ? .target(
         name: "NativeHarnessClient",
@@ -140,7 +150,8 @@ let package = Package(
         // macOS supplies SQLite in the SDK and at /usr/lib/libsqlite3.dylib. pkg-config can
         // instead select a local Homebrew copy, which is absent on other Macs and rejected by
         // Developer ID library validation. Use the SDK header and system library in every build.
-        .systemLibrary(name: "CSQLite"),
+        // Windows supplies its own SQLite (winsqlite3), with the header in the Windows SDK.
+        sqliteTarget,
         // Mach hand-off of IOSurfaces between the browser host and Yardlet (macOS platform layer).
         .target(
             name: "YardletSurfacePort",
