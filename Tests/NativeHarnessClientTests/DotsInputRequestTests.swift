@@ -510,6 +510,9 @@ private actor InputRequestReader: PersonalAgentClient {
         if let nextFailure { throw nextFailure }
         return .applied
     }
+    func upload(_ file: PersonalAgentPreparedFile, to agent: PersonalAgent) async throws -> PersonalAgentUploadedFile {
+        throw PersonalAgentFailure.uploadFailed
+    }
     func download(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> PersonalAgentDownload {
         throw PersonalAgentFailure.attachmentUnavailable
     }
