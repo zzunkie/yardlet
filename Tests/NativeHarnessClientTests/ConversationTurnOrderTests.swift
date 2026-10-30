@@ -13,8 +13,8 @@ import XCTest
 /// - Every message stays where it was written; only the answer that closes the turn is drawn under
 ///   the work.
 /// - The work folds once the provider began to answer, while the turn runs too, unless the person
-///   stopped it. Folded, it keeps in view the answers the turn went on past, the messages no finished
-///   answer followed, and while it runs, what came after its latest answer.
+///   stopped it. Folded, it keeps in view the answers the turn went on past, the messages the person
+///   sent into it, and while it runs, what came after its latest answer.
 /// - Harnesses differ only in how they classify a message: Codex by its phase and delivery, Claude
 ///   Code by where it stands.
 ///
@@ -42,17 +42,19 @@ final class ConversationTurnOrderTests: XCTestCase {
         XCTAssertEqual(kind(of: "q1", in: turn), .answer(text: "Sign in again in the Apple Developer tab, then tell me.", isStreaming: false))
         XCTAssertEqual(kind(of: "a1", in: turn), .answer(text: "The certificate is issued.", isStreaming: false))
         XCTAssertEqual(kind(of: "m2", in: turn), .commentary(text: "Checking the page again.", isStreaming: false))
-        // Folded as the Codex app folds it: the answer the turn went on past stays; the question asked
-        // while it worked and the messages the closing answer followed fold with the work.
+        // Folded as the Codex app folds it, but for the person's messages: the answer the turn went on
+        // past stays, and so do the messages the person sent into it (2026-10-31); the question asked
+        // while it worked folds with the work.
         XCTAssertTrue(turn.foldsWork)
-        XCTAssertEqual(drawnIDs(turn, folded: true), ["u1", "a1", "a2"], ConversationDrawOrder.listing(turn, harness: .codex))
+        XCTAssertEqual(drawnIDs(turn, folded: true), ["u1", "u2", "a1", "u3", "a2"],
+                       ConversationDrawOrder.listing(turn, harness: .codex))
         // read_task reads the turn in the same order.
         XCTAssertEqual((turn.prompt + turn.notices + turn.work + turn.answers).map(\.id),
                        ["u1", "m1", "t1", "q1", "t2", "u2", "m2", "t3", "a1", "u3", "m3", "t4", "a2"])
         // Find reads every message in that order; what the fold hides opens the turn.
         let units = ConversationFindSource.conversation(ConversationPresentation(harness: .codex, turns: [turn])).units
         XCTAssertEqual(units.map(\.id), ["u1", "m1", "q1", "u2", "m2", "a1", "u3", "m3", "a2"])
-        XCTAssertEqual(units.filter { $0.revealID != nil }.map(\.id), ["m1", "q1", "u2", "m2", "u3", "m3"])
+        XCTAssertEqual(units.filter { $0.revealID != nil }.map(\.id), ["m1", "q1", "m2", "m3"])
     }
 
     /// A turn that ends on a question asks it last and has no answer, so nothing folds and its options
@@ -299,7 +301,7 @@ final class ConversationTurnOrderTests: XCTestCase {
         completed(item("t3"))
         started(streaming("a1"))
         delta("a1", "The certificate ")
-        // The answer began: the work folds, and the message no finished answer followed stays in view.
+        // The answer began: the work folds, and the person's message stays in view.
         try snapshot("answer streaming", opened: ["u1", "m1", "t1", "q1", "t2", "u2", "m2", "t3", "a1", "live"],
                      folded: ["u1", "u2", "a1", "live"])
         delta("a1", "is issued.")
@@ -310,7 +312,7 @@ final class ConversationTurnOrderTests: XCTestCase {
         delta("m3", "Making ")
         try snapshot("message read after the answer, note streaming",
                      opened: ["u1", "m1", "t1", "q1", "t2", "u2", "m2", "t3", "a1", "u3", "m3", "live"],
-                     folded: ["u1", "a1", "u3", "m3", "live"])
+                     folded: ["u1", "u2", "a1", "u3", "m3", "live"])
         let streamingState = state
         delta("m3", "the key.")
         completed(item("m3"))
@@ -322,7 +324,7 @@ final class ConversationTurnOrderTests: XCTestCase {
         finishedTurn["durationMs"] = .integer(250_000)
         send("turn/completed", ["turn": .object(finishedTurn)])
         try snapshot("finished", opened: ["u1", "m1", "t1", "q1", "t2", "u2", "m2", "t3", "a1", "u3", "m3", "t4", "a2"],
-                     folded: ["u1", "a1", "a2"])
+                     folded: ["u1", "u2", "a1", "u3", "a2"])
 
         // Nothing drawn moved: every step's items keep their order in the finished turn.
         let finished = drawnAtEachStep.last!.ids
@@ -355,8 +357,10 @@ final class ConversationTurnOrderTests: XCTestCase {
                 } else {
                     XCTAssertFalse(joined.contains("Sign in again in the Apple Developer tab"), "the question folds:\n\(joined)")
                     let closing = try XCTUnwrap(texts.firstIndex { $0.contains("Both are in Downloads.") }, joined)
-                    XCTAssertLessThan(answer, closing, joined)
-                    XCTAssertFalse(joined.contains("Also make the API key."), "the message folds under the answer:\n\(joined)")
+                    let message = try XCTUnwrap(texts.firstIndex { $0.contains("Also make the API key.") },
+                                                "the person's message stays in view:\n\(joined)")
+                    XCTAssertLessThan(answer, message, joined)
+                    XCTAssertLessThan(message, closing, joined)
                 }
             }
         }
@@ -389,7 +393,7 @@ final class ConversationTurnOrderTests: XCTestCase {
             XCTAssertTrue(codex.foldsWork && claude.foldsWork, stage)
             XCTAssertEqual(ConversationDrawOrder.rows(codex, harness: .codex).map { "\($0.shape): \($0.text)" }, finished
                 ? ["message: Issue the certificate, then make the API key.", "answer: The certificate is issued.",
-                   "answer: Both are in Downloads."]
+                   "message: Also make the API key.", "answer: Both are in Downloads."]
                 : ["message: Issue the certificate, then make the API key.", "answer: The certificate is issued.",
                    "message: Also make the API key.", "call: swift run keygen", "reasoning: \(Self.thought)",
                    "call: ls Downloads", "commentary (streaming): Making the key.", "line: \(L10n.string("Working"))"])
@@ -427,7 +431,7 @@ final class ConversationTurnOrderTests: XCTestCase {
                     let texts = folded.elements.map(\.description).joined(separator: "\n")
                     XCTAssertFalse(texts.contains("Checking the certificate page."), "\(harness) \(stage) folds:\n\(texts)")
                     XCTAssertTrue(texts.contains("The certificate is issued."), "\(harness) \(stage):\n\(texts)")
-                    XCTAssertEqual(texts.contains("Also make the API key."), !finished, "\(harness) \(stage):\n\(texts)")
+                    XCTAssertTrue(texts.contains("Also make the API key."), "\(harness) \(stage):\n\(texts)")
                     if !finished {
                         // One summary line for the two calls, folded, not a line for each.
                         let summary = try XCTUnwrap(summaries[harness])
@@ -479,7 +483,7 @@ final class ConversationTurnOrderTests: XCTestCase {
 
     /// Claude Code reads a message into its running turn at its next step, after the answer it was
     /// writing ended: the answer stays above the message, and the turn's end moves nothing. Once the
-    /// closing answer follows the message, the message folds with the work.
+    /// closing answer follows the message, the work folds and the message stays in view.
     func testAClaudeTurnReadsInOrderWhileItStreamsAndWhenItEnds() throws {
         var session = ClaudeLiveTurn()
         session.send("Fix the build")
@@ -509,7 +513,8 @@ final class ConversationTurnOrderTests: XCTestCase {
             "call: swift test", "answer: All tests pass."
         ], ConversationDrawOrder.listing(finished, harness: .claudeCode, folded: false))
         XCTAssertEqual(session.drawn(finished, folded: true), [
-            "message: Fix the build", "answer: Fixed: the import was missing.", "answer: All tests pass."
+            "message: Fix the build", "answer: Fixed: the import was missing.", "message: Also run the tests",
+            "answer: All tests pass."
         ])
     }
 

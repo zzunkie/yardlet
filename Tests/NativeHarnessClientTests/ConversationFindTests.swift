@@ -24,9 +24,9 @@ final class ConversationFindTests: XCTestCase {
         let units = codexFindSource(thread([turn])).units
         XCTAssertEqual(units.map(\.scrollID), ["turn-1", "turn-1", "turn-1", "turn-1"])
         // A message steered in after the turn's work began is in the work where it was taken (D13), and
-        // folds with it once the answer follows, so finding it opens the turn (2026-10-23, the Codex app's fold).
+        // stays in view when the work folds, so finding it opens nothing (2026-10-31).
         XCTAssertEqual(units.map(\.id), ["u1", "m1", "u2", "a1"])
-        XCTAssertEqual(units.map(\.revealID), [nil, "turn-1", "turn-1", nil])
+        XCTAssertEqual(units.map(\.revealID), [nil, "turn-1", nil, nil])
     }
 
     /// The second match is commentary in the first turn's folded work: going there opens it.

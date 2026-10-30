@@ -113,8 +113,8 @@ enum ConversationTurnAction: Hashable, Sendable {
 /// comes after everything the turn wrote, as the Codex app adds its turn error after the turn's items
 /// and the Claude app draws a failed turn's card where the turn ended. A folded turn keeps in view
 /// what the rule every harness shares keeps (`ConversationTurn.workKeptWhenFolded`): the answers it
-/// went on past, the messages no finished answer followed, and while it runs, what came after its
-/// latest answer.
+/// went on past, the messages the person sent into it, the other messages no finished answer
+/// followed, and while it runs, what came after its latest answer.
 struct ConversationTurnView: View, Equatable {
     let turn: ConversationTurn
     let context: ConversationItemContext
@@ -322,10 +322,7 @@ struct ConversationTurnView: View, Equatable {
 
     /// The request the person sent to open the turn, which its edit and restore act on.
     private var requestItemID: String? {
-        turn.prompt.first { item in
-            guard case .userMessage = item.kind else { return false }
-            return item.taskMessage == nil && item.backgroundTaskNotice == nil
-        }?.id
+        turn.prompt.first(where: \.isPersonMessage)?.id
     }
 
     // MARK: - Header

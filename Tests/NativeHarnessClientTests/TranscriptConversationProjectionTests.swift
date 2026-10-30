@@ -42,9 +42,9 @@ final class TranscriptConversationProjectionTests: XCTestCase {
 
     /// A message read into a running turn after Claude answered the one before it: that answer is not
     /// the turn's last words, but it is an answer, and it stays in view when the work folds (2026-10-22:
-    /// a reply was hidden when messages followed one another). The message folds once the turn's answer
-    /// follows it, as the Codex app 26.1016 folds a steered message (2026-10-23, one rule for every
-    /// harness). Words followed by a call are progress and fold as before.
+    /// a reply was hidden when messages followed one another). The message stays in view too: what the
+    /// person wrote is never folded away (2026-10-31, one rule for every harness). Words followed by a
+    /// call are progress and fold as before.
     func testTheAnswerBeforeAMessageReadIntoTheTurnStaysInView() {
         let request = entry(0, .user(text: "Fix the build", images: nil))
         let note = entry(1, .assistant(text: "Looking at the log.", isStreaming: false))
@@ -58,7 +58,8 @@ final class TranscriptConversationProjectionTests: XCTestCase {
 
         XCTAssertEqual(turn.answers.map(\.id), [finalAnswer.id.uuidString])
         XCTAssertTrue(turn.foldsWork)
-        XCTAssertEqual(turn.workKeptWhenFolded.map(\.kind), [.answer(text: "Fixed: the import was missing.", isStreaming: false)])
+        XCTAssertEqual(turn.workKeptWhenFolded.map(\.kind), [.answer(text: "Fixed: the import was missing.", isStreaming: false),
+                                                             .userMessage(text: "Also run the tests", images: [])])
         XCTAssertTrue(turn.work.contains { $0.kind == .commentary(text: "Looking at the log.", isStreaming: false) },
                       "progress before a call still folds")
     }

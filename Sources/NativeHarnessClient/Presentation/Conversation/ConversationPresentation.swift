@@ -244,6 +244,13 @@ struct ConversationItem: Identifiable, Equatable, Sendable {
     /// calls, which the API sent back as thinking (`TranscriptEntry.isProgressUpdate`). The message
     /// says so, as Claude Code's terminal marks it "summarized".
     var isSummary: Bool = false
+
+    /// A message the person wrote, rather than one another task sent (`taskMessage`), a background
+    /// command's notice (`backgroundTaskNotice`) or a schedule's prompt (`scheduledTaskMessage`).
+    var isPersonMessage: Bool {
+        guard case .userMessage = kind else { return false }
+        return taskMessage == nil && backgroundTaskNotice == nil
+    }
 }
 
 enum ConversationItemPhase: Equatable, Sendable {

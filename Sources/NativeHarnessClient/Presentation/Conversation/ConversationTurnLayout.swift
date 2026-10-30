@@ -11,10 +11,10 @@ import Foundation
 ///   turn is drawn under the work (`arrange`), as are proposed plans.
 /// - The work folds once a final answer began, unless the person stopped the turn or an agent still
 ///   runs (`ConversationTurn.foldsWork`), while the turn runs too.
-/// - A folded turn keeps in view the final answers it went on past, the messages sent into it that no
-///   finished final answer followed, the questions it asked, the calls refused for want of an approval,
-///   and while it runs, everything after the latest final answer it finished
-///   (`ConversationTurn.workKeptWhenFolded`).
+/// - A folded turn keeps in view the final answers it went on past, the messages the person sent into
+///   it, the other messages sent into it that no finished final answer followed, the questions it
+///   asked, the calls refused for want of an approval, and while it runs, everything after the latest
+///   final answer it finished (`ConversationTurn.workKeptWhenFolded`).
 ///
 /// What differs between harnesses is only how each projection classifies what its provider wrote:
 /// working notes (`ConversationItemKind.commentary`), what is said to the person
@@ -110,9 +110,13 @@ extension ConversationTurn {
 
     /// What a folded turn keeps in view of its work, in its order (`wj`, `Tj`):
     /// - a final answer it went on past;
-    /// - a message sent into it that no finished final answer followed: once the closing answer has
-    ///   ended, none; before, those after the latest final answer the work finished, or all of them
-    ///   while it has none;
+    /// - a message the person sent into it. The Codex app folds one that a finished final answer
+    ///   followed, so a message that stayed in view while the turn ran went out of sight when it ended;
+    ///   the Claude app, which does not fold a turn, leaves it where it was sent. What the person wrote
+    ///   is never folded away (2026-10-31);
+    /// - a message another task, a background command or a schedule sent into it that no finished final
+    ///   answer followed: once the closing answer has ended, none; before, those after the latest final
+    ///   answer the work finished, or all of them while it has none;
     /// - a question it asked, answered or not (the Codex app keeps one left unanswered; Yardlet keeps
     ///   an answered one too, which reads as its answers);
     /// - a call refused for want of an approval the task's policy never asks for;
@@ -129,6 +133,8 @@ extension ConversationTurn {
             switch item.kind {
             case .answer:
                 return ConversationTurnLayout.isAnswer(item) ? item : nil
+            case .userMessage where item.isPersonMessage:
+                return item
             case .userMessage, .scheduledTaskMessage:
                 return index >= answered ? item : nil
             case .taskSuggestion, .scheduleCreated, .outcome:
