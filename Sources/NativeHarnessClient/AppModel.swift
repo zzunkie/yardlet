@@ -60,6 +60,13 @@ final class AppModel {
     /// what reads that task's line.
     var answerLineBySessionID: TaskStateReader<String> { answerLines.reader }
     private let answerLines = TaskStateTable<String>()
+    /// The message each task's answer line was read from, and the lines read (`refreshAttentionDetail`).
+    @ObservationIgnored private var answerLineReads: [UUID: [AnswerLineSource: String?]] = [:]
+    private struct AnswerLineSource: Hashable {
+        let messageID: String
+        let length: Int
+        let hash: Int
+    }
     /// When each task's latest turn started and the tasks it suggested (`TaskLatestTurn`), which the
     /// home shows. One task at a time, so a turn starting or a saved conversation read for the first
     /// time redraws only what reads that task's turn, not the window.
@@ -1892,8 +1899,19 @@ final class AppModel {
     /// Codex timeline was set. `sessionToolWaits` is `sessionToolWaitsForPerson(in:)` when the caller
     /// just read it.
     func refreshAttentionDetail(for id: UUID, sessionToolWaits: Bool? = nil) {
-        let answerLine = codexPresentations[id].flatMap(TaskAttentionDetail.answerLine)
-            ?? transcripts[id].flatMap(TaskAttentionDetail.answerLine)
+        // Asked on every state and publication, while the message it reads seldom changed: each
+        // message's line is read once and kept while the message is the same.
+        let known = answerLineReads[id] ?? [:]
+        var read: [AnswerLineSource: String?] = [:]
+        func line(_ messageID: String, _ text: String) -> String? {
+            let source = AnswerLineSource(messageID: messageID, length: text.utf8.count, hash: text.hashValue)
+            let line = known[source] ?? TaskAttentionDetail.firstLine(text)
+            read[source] = line
+            return line
+        }
+        let answerLine = codexPresentations[id].flatMap { TaskAttentionDetail.answerLine($0, reading: line) }
+            ?? transcripts[id].flatMap { TaskAttentionDetail.answerLine($0, reading: line) }
+        answerLineReads[id] = read.isEmpty ? nil : read
         if answerLines[id] != answerLine { answerLines[id] = answerLine }
         let transcriptTurn = transcripts[id].map(TaskLatestTurn.reading)
         let latestTurn = codexPresentations[id].map { TaskLatestTurn.reading($0).merged(over: transcriptTurn ?? .init()) }
@@ -2983,6 +3001,7 @@ final class AppModel {
             transcriptPublicationTasks.removeValue(forKey: session.id)?.cancel()
             transcripts.removeValue(forKey: session.id)
             answerLines.removeValue(forKey: session.id)
+            answerLineReads.removeValue(forKey: session.id)
             latestTurns.removeValue(forKey: session.id)
             claudeTranscriptTails.removeValue(forKey: session.id)
             antigravityHistoryShown.removeValue(forKey: session.id)
