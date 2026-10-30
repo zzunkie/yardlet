@@ -620,6 +620,27 @@ final class ConnectorTests: XCTestCase {
         XCTAssertTrue(text.contains("\"version\" : 1"))
     }
 
+    /// A file that is there but cannot be read, such as one holding a connector this Yardlet cannot
+    /// decode, keeps everything in it: saving leaves it alone rather than starting from nothing.
+    func testTheRecordFileIsNotReplacedWhileItCannotBeRead() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "connectors-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appending(path: "connectors.json")
+        let saved = Data(#"{"version": 1, "connectors": [{"name": "Linear", "kind": "from-a-newer-yardlet"}], "googleOAuthClientID": "client"}"#.utf8)
+        try saved.write(to: file)
+        let repository = FileConnectorRepository(fileURL: file)
+        XCTAssertEqual(repository.load(), [])
+        XCTAssertNil(repository.loadGoogleAppClientID())
+
+        let record = ConnectorRecord(name: "Notion", slug: "notion", serverURL: URL(string: "https://mcp.notion.com/mcp")!,
+                                     authorization: .oauth, status: .connected)
+        repository.save([record])
+        repository.saveTaskChoices([UUID(): [record.id]])
+        repository.saveGoogleAppClientID(nil)
+        XCTAssertEqual(try Data(contentsOf: file), saved)
+    }
+
     // MARK: - Through the Yardlet MCP server
 
     func testTheBrokerListsBrowserAndConnectorToolsAndRoutesEachCall() async throws {
