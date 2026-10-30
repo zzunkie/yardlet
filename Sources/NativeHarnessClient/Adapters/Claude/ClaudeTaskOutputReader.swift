@@ -20,6 +20,10 @@ struct ClaudeTaskOutputReader: Sendable {
     /// `/tmp/claude-<uid>` (the CLI's default, `/private/tmp` on macOS) and the same under the
     /// process's temporary folder and `CLAUDE_CODE_TMPDIR`, each once.
     static var defaultRoots: [URL] {
+        #if os(Windows)
+        // Where the CLI keeps a task's output on Windows is not confirmed, so nothing is looked up there.
+        return []
+        #else
         let name = "claude-\(getuid())"
         var bases = ["/private/tmp", NSTemporaryDirectory()]
         if let configured = ProcessInfo.processInfo.environment["CLAUDE_CODE_TMPDIR"], !configured.isEmpty {
@@ -31,6 +35,7 @@ struct ClaudeTaskOutputReader: Sendable {
                 .standardizedFileURL.resolvingSymlinksInPath()
             return seen.insert(url.path(percentEncoded: false)).inserted ? url : nil
         }
+        #endif
     }
 
     /// The task's output file, or nil where none is found. IDs that are not the CLI's shapes find nothing.
