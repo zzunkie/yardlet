@@ -112,10 +112,21 @@ enum ClaudeAccountHome {
         guard case .content = entry(at: path) else { return }
         for name in try fileManager.contentsOfDirectory(atPath: path) {
             let entryPath = home.appending(path: name).path(percentEncoded: false)
-            if case .link = entry(at: entryPath), unlink(entryPath) != 0 {
+            if case .link = entry(at: entryPath), !removeLink(at: entryPath) {
                 throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: entryPath])
             }
         }
+    }
+
+    /// Removes the link itself, never what it points to.
+    private static func removeLink(at path: String) -> Bool {
+        #if os(Windows)
+        // A folder link must go with RemoveDirectoryW, which the Windows layer does not have yet; a
+        // removal that could follow the link into the original is not tried.
+        false
+        #else
+        unlink(path) == 0
+        #endif
     }
 
     private enum Entry: Equatable {

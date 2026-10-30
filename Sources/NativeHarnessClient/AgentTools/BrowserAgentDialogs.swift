@@ -67,6 +67,11 @@ enum BrowserAgentWorkspaceFile {
     /// Chromium reads the copy, which nothing can change before the page takes it. The copy keeps the file's
     /// name, in a folder of its own under `folder`. It reads and writes the disk: run it off the main thread.
     static func privateCopy(of path: String, roots: [URL], in folder: URL) throws -> String {
+        #if os(Windows)
+        // Opening one folder at a time without following a link needs the Windows layer
+        // (FILE_FLAG_OPEN_REPARSE_POINT); until it has that, nothing is copied.
+        throw BrowserAgentToolError("Yardlet cannot hand \(path) to the page on this platform yet.")
+        #else
         guard let real = canonicalPath(path),
               roots.compactMap({ canonicalPath($0.path(percentEncoded: false)) })
                 .contains(where: { contains(URL(filePath: $0), URL(filePath: real)) }) else {
@@ -104,13 +109,12 @@ enum BrowserAgentWorkspaceFile {
             try output.write(contentsOf: chunk)
         }
         return copy.path(percentEncoded: false)
+        #endif
     }
 
     /// The path with every link and `..` resolved by the system, `/private` included; nil when it does not exist.
     static func canonicalPath(_ path: String) -> String? {
-        guard let resolved = realpath(path, nil) else { return nil }
-        defer { free(resolved) }
-        return String(cString: resolved)
+        CanonicalPath.resolve(path)
     }
 
     /// The file a `file:` address opens, as a real path: read as Chromium reads it (tabs and line breaks dropped,
