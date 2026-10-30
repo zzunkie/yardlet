@@ -478,7 +478,7 @@ extension AppModel: SessionToolHandling {
         if let run = sessionTools.run(id) {
             return SessionToolOutcome(
                 id: id.uuidString, kind: "agent", title: run.harness.displayName, state: run.state.word,
-                ended: run.state.isFinished, answer: run.answer.map(Self.answerExcerpt))
+                ended: run.state.isFinished, answer: run.currentAnswer.map(Self.answerExcerpt))
         }
         guard let session = store.sessions.first(where: { $0.id == id }) else {
             return SessionToolOutcome(id: id.uuidString, kind: "task", state: "gone", ended: true)

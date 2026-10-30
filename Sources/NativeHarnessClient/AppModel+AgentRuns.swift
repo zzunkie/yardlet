@@ -141,7 +141,7 @@ extension AppModel {
         } else if !run.state.isFinished {
             text += "\nIt is still running; wait_tasks with this id returns its answer."
         }
-        if let answer = run.answer { text += "\n\n" + Self.answerExcerpt(answer) }
+        if let answer = run.currentAnswer { text += "\n\n" + Self.answerExcerpt(answer) }
         return text
     }
 
@@ -313,7 +313,6 @@ extension AppModel {
         default:
             break
         }
-        if run.harness != .codex { run.answer = run.latestAnswer }
         if appliesConversation { sessionToolApprovalsChanged(in: run.hostTaskID) }
     }
 
@@ -331,7 +330,6 @@ extension AppModel {
             run.state = waits ? .waitingForApproval : .running
         }
         if waits, run.isEvaluationJudge { Task { await stopAgentRun(run) } }
-        run.answer = run.latestAnswer
         if run.sawWork, state.activeTurnID == nil, let last = state.thread?.turns.last {
             switch last.status {
             case .completed: finishAgentRun(run, state: .completed)
