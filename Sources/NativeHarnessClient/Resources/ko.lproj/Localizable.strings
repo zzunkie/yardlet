@@ -1348,6 +1348,7 @@
 "Needs sign-in" = "로그인 필요";
 "Error" = "오류";
 "Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account. Antigravity isn't supported." = "여기서 연결한 서비스의 도구는 Yardlet이 시작하거나 재개하는 모든 작업에서 씁니다. Claude Code·Codex·ACP 하네스와 모든 계정에 같고, Antigravity는 지원하지 않습니다.";
+"Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits." = "%@ 파일을 읽지 못해 저장된 커넥터를 표시하지 못했습니다. 파일은 그대로 두었으며, 여기서 바꾼 내용은 Yardlet을 끄면 사라집니다.";
 "Your connectors" = "내 커넥터";
 "No connectors yet" = "아직 연결한 커넥터가 없습니다";
 "Connect a service such as Linear, Notion, or GitHub, and every task can use its tools." = "Linear·Notion·GitHub 같은 서비스를 연결하면 모든 작업에서 그 도구를 씁니다.";

@@ -22,20 +22,24 @@ protocol OAuthLoopbackReceiving: Sendable {
 /// Which connectors the user turned off in which task: task ID → connector IDs.
 typealias ConnectorTaskChoices = [UUID: Set<UUID>]
 
+/// Each save returns false when it kept nothing: the saved settings are there but cannot be read
+/// (`FileConnectorRepository`).
 @MainActor
 protocol ConnectorRepository {
+    /// False while the saved settings are there but cannot be read.
+    func canRead() -> Bool
     func load() -> [ConnectorRecord]
-    func save(_ records: [ConnectorRecord])
+    @discardableResult func save(_ records: [ConnectorRecord]) -> Bool
     func loadTaskChoices() -> ConnectorTaskChoices
-    func saveTaskChoices(_ choices: ConnectorTaskChoices)
+    @discardableResult func saveTaskChoices(_ choices: ConnectorTaskChoices) -> Bool
     /// The client ID of the Google OAuth app the person saved, which is not a secret (RFC 6749
     /// §2.2): Settings shows it without a keychain read. The app's secret is in the secure store.
     func loadGoogleAppClientID() -> String?
-    func saveGoogleAppClientID(_ clientID: String?)
+    @discardableResult func saveGoogleAppClientID(_ clientID: String?) -> Bool
     /// The Microsoft Entra app the person registered: a public client, so its client ID and
     /// directory are all there is, and none of it is secret.
     func loadMicrosoftApp() -> MicrosoftOAuth.App?
-    func saveMicrosoftApp(_ app: MicrosoftOAuth.App?)
+    @discardableResult func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) -> Bool
 }
 
 @MainActor
@@ -53,14 +57,15 @@ final class InMemoryConnectorRepository: ConnectorRepository {
         self.microsoftApp = microsoftApp
     }
 
+    func canRead() -> Bool { true }
     func load() -> [ConnectorRecord] { records }
-    func save(_ records: [ConnectorRecord]) { self.records = records }
+    func save(_ records: [ConnectorRecord]) -> Bool { self.records = records; return true }
     func loadTaskChoices() -> ConnectorTaskChoices { taskChoices }
-    func saveTaskChoices(_ choices: ConnectorTaskChoices) { taskChoices = choices }
+    func saveTaskChoices(_ choices: ConnectorTaskChoices) -> Bool { taskChoices = choices; return true }
     func loadGoogleAppClientID() -> String? { googleAppClientID }
-    func saveGoogleAppClientID(_ clientID: String?) { googleAppClientID = clientID }
+    func saveGoogleAppClientID(_ clientID: String?) -> Bool { googleAppClientID = clientID; return true }
     func loadMicrosoftApp() -> MicrosoftOAuth.App? { microsoftApp }
-    func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) { microsoftApp = app }
+    func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) -> Bool { microsoftApp = app; return true }
 }
 
 /// `~/.yardlet/connectors.json`: names, addresses, status, each server's tool list, the
@@ -100,11 +105,16 @@ struct FileConnectorRepository: ConnectorRepository {
         return try JSONDecoder.connectors.decode(Snapshot.self, from: data)
     }
 
+    func canRead() -> Bool {
+        do { _ = try snapshot(); return true } catch { return false }
+    }
+
     func load() -> [ConnectorRecord] {
         (try? snapshot())?.connectors ?? []
     }
 
-    func save(_ records: [ConnectorRecord]) {
+    @discardableResult
+    func save(_ records: [ConnectorRecord]) -> Bool {
         update { $0.connectors = records }
     }
 
@@ -118,9 +128,10 @@ struct FileConnectorRepository: ConnectorRepository {
         return choices
     }
 
-    func saveTaskChoices(_ choices: ConnectorTaskChoices) {
+    @discardableResult
+    func saveTaskChoices(_ choices: ConnectorTaskChoices) -> Bool {
         let kept = choices.filter { !$0.value.isEmpty }
-        update {
+        return update {
             $0.offInTasks = kept.isEmpty ? nil : Dictionary(uniqueKeysWithValues: kept.map { task, connectors in
                 (task.uuidString, connectors.map(\.uuidString).sorted())
             })
@@ -131,7 +142,8 @@ struct FileConnectorRepository: ConnectorRepository {
         (try? snapshot())?.googleOAuthClientID
     }
 
-    func saveGoogleAppClientID(_ clientID: String?) {
+    @discardableResult
+    func saveGoogleAppClientID(_ clientID: String?) -> Bool {
         update { $0.googleOAuthClientID = clientID }
     }
 
@@ -139,18 +151,20 @@ struct FileConnectorRepository: ConnectorRepository {
         (try? snapshot())?.microsoftOAuthApp
     }
 
-    func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) {
+    @discardableResult
+    func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) -> Bool {
         update { $0.microsoftOAuthApp = app }
     }
 
     /// Changes one part of the file and keeps the rest. A file that is there but cannot be read
     /// is left as it is rather than replaced by one made from nothing, which would drop every
     /// connector and choice it holds; the change then lasts until Yardlet quits.
-    private func update(_ change: (inout Snapshot) -> Void) {
+    private func update(_ change: (inout Snapshot) -> Void) -> Bool {
         var next: Snapshot
-        do { next = try snapshot() ?? Snapshot(connectors: []) } catch { return }
+        do { next = try snapshot() ?? Snapshot(connectors: []) } catch { return false }
         change(&next)
         write(next)
+        return true
     }
 
     private func write(_ snapshot: Snapshot) {
@@ -272,18 +286,21 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     private(set) var connectors: [ConnectorRecord] {
         didSet {
-            environment.repository.save(connectors)
+            kept(environment.repository.save(connectors))
             ConnectorToolLabels.shared.update(connectors)
             onToolsChanged?()
         }
     }
+    /// The saved settings are there but cannot be read: this page shows none of what they hold, and
+    /// nothing changed here is kept. The file is left as it is.
+    private(set) var cannotReadSavedSettings = false
     private(set) var activity: [UUID: Activity] = [:]
     /// The last failure per connector, until the next attempt.
     private(set) var failures: [UUID: String] = [:]
     /// Connectors the user turned off per task (the composer's connector list).
     private(set) var offInTasks: ConnectorTaskChoices {
         didSet {
-            environment.repository.saveTaskChoices(offInTasks)
+            kept(environment.repository.saveTaskChoices(offInTasks))
             onToolsChanged?()
         }
     }
@@ -297,7 +314,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// The client ID of the Google OAuth app the person saved for Gmail, Calendar, and Drive; nil
     /// until one is saved. Its secret is in the secure store.
     private(set) var googleAppClientID: String? {
-        didSet { environment.repository.saveGoogleAppClientID(googleAppClientID) }
+        didSet { kept(environment.repository.saveGoogleAppClientID(googleAppClientID)) }
     }
 
     /// The Google OAuth app this build carries, used when the person saved none of their own.
@@ -309,7 +326,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// The Microsoft Entra app the person registered for Outlook, OneDrive, and Teams; nil until
     /// one is saved.
     private(set) var microsoftApp: MicrosoftOAuth.App? {
-        didSet { environment.repository.saveMicrosoftApp(microsoftApp) }
+        didSet { kept(environment.repository.saveMicrosoftApp(microsoftApp)) }
     }
 
     /// The Microsoft Entra app this build carries, used when the person saved none of their own.
@@ -360,10 +377,16 @@ final class ConnectorCenter: ConnectorToolProviding {
         offInTasks = environment.repository.loadTaskChoices()
         googleAppClientID = environment.repository.loadGoogleAppClientID()
         microsoftApp = environment.repository.loadMicrosoftApp()
+        cannotReadSavedSettings = !environment.repository.canRead()
         ConnectorToolLabels.shared.update(connectors)
         GmailDraftReader.shared.set { [weak self] tool, arguments in
             await self?.gmailDraftPreview(tool: tool, arguments: arguments)
         }
+    }
+
+    /// Notes whether a save was kept, changing what Settings reads only when that changes.
+    private func kept(_ saved: Bool) {
+        if cannotReadSavedSettings == saved { cannotReadSavedSettings = !saved }
     }
 
     /// Replaces where harness homes come from, once the app knows its saved accounts.

@@ -90,6 +90,44 @@ final class ConnectorsRenderingTests: XCTestCase {
         }
     }
 
+    /// `settings-connectors-unreadable-*`: saved settings Yardlet cannot read show none of their
+    /// connectors and say that changes here are not kept; once a save is kept again, the line goes.
+    func testTheSettingsPageSaysWhenSavedConnectorsCannotBeRead() throws {
+        let directory = try WindowlessRender.directory("connectors-qa")
+        let root = FileManager.default.temporaryDirectory.appending(path: "connectors-unreadable-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        roots.append(root)
+        let file = root.appending(path: "connectors.json")
+        try Data(#"{"version": 1, "connectors": [{"name": "Linear", "kind": "from-a-newer-yardlet"}]}"#.utf8).write(to: file)
+        let center = ConnectorCenter(environment: ConnectorCenter.Environment(
+            repository: FileConnectorRepository(fileURL: file), credentials: InMemoryConnectorCredentialStore(),
+            http: FakeConnectorServer(), userAgent: FakeUserAgent(), sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9"))
+        XCTAssertTrue(center.cannotReadSavedSettings)
+        let size = NSSize(width: 820, height: 640)
+        let captures = try WindowlessRender.hostedInBothAppearances("settings-connectors-unreadable", in: directory, size: size,
+                                                                     passes: 12) { appearance in
+            SettingsCenterView(size: CGSize(width: size.width, height: size.height),
+                               initialSection: SettingsSection.connectors.rawValue,
+                               notificationCenter: SilentNotificationCenter(), connectors: center)
+                .environment(\.colorScheme, appearance.colorScheme)
+                .frame(width: size.width, height: size.height)
+        }
+        for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
+
+        let host = WindowlessRender.Host(ConnectorSettingsView(center: center).padding(20)
+            .frame(width: 640, height: 600, alignment: .top), size: NSSize(width: 640, height: 600))
+        defer { host.close() }
+        host.settle(passes: 12)
+        let notice = L10n.format("Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits.",
+                                 "~/.yardlet/connectors.json")
+        let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+        XCTAssertTrue(spoken.contains { $0.contains(notice) }, "No notice: \(spoken)")
+
+        try FileManager.default.removeItem(at: file)
+        center.setConnector(UUID(), on: false, inTask: UUID())
+        XCTAssertFalse(center.cannotReadSavedSettings, "A kept save takes the line away")
+    }
+
     func testTheAddFormWithARegisteredClientDraws() throws {
         let directory = try WindowlessRender.directory("connectors-qa")
         let center = try center()
