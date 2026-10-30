@@ -14,6 +14,7 @@ import XCTest
 /// - `settings-vault-search-*`: the lists narrowed by a search.
 /// - `settings-vault-accounts-*`, `vault-item-account-*`: two accounts of one username, and one's item sheet.
 /// - `vault-save-bar-*`: the browser panel's save, update and add-username bars.
+/// - `settings-vault-wallet-*`, `vault-card-*`, `vault-address-*`, `vault-wallet-bars-*`: addresses and cards.
 /// - `vault-picker-*`, `vault-picker-search-*`, `vault-picker-codes-*`, `vault-picker-empty-*`: the browser panel's
 ///   key button list on a site's page, searched, searched for a code from the code bar, and on a site with nothing.
 @MainActor
@@ -283,6 +284,64 @@ final class VaultSettingsRenderingTests: XCTestCase {
         XCTAssertEqual(labels.filter { $0 == L10n.string("Save") }.count, 2, "\(labels)")
         XCTAssertEqual(labels.filter { $0 == L10n.string("Update") }.count, 1, "\(labels)")
         XCTAssertFalse(labels.contains { $0.contains("not-a-real-password") }, "\(labels)")
+    }
+
+    /// Addresses and cards (design §18): the section in Settings → Passwords with its switch, an address, and cards by
+    /// their network or nickname and last four digits, never the number; the card and address sheets; and the browser
+    /// panel's bars to save a card or an address and to fill one, or choose among several.
+    func testAddressesAndCardsDraw() throws {
+        let directory = try WindowlessRender.directory("vault-qa")
+        let card = VaultCard(name: "Ada Lovelace", number: "4242424242424242", expiryMonth: 7, expiryYear: 2034)
+        let work = VaultCard(number: "5555555555554444", expiryMonth: 1, expiryYear: 2031, nickname: "Work")
+        let address = VaultAddress(name: "Ada Lovelace", street: "12 Example Street\nFlat 3", city: "Seoul",
+                                   postalCode: "06236", country: "KR", phone: "010-0000-0000")
+        let vault = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore(wallet: VaultWallet(addresses: [address], cards: [card, work])),
+            repository: InMemoryVaultRepository(items: [Self.github]), hmac: MacVault.hmac, isAllowedBuild: true,
+            defaults: .vaultTests()))
+        let size = NSSize(width: 640, height: 340)
+        let section = VaultWalletSection(vault: vault).padding(20).frame(width: size.width, height: size.height, alignment: .top)
+        try WindowlessRender.hostedInBothAppearances("settings-vault-wallet", in: directory, size: size) { appearance in
+            section.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        }
+        let host = WindowlessRender.Host(section, size: size)
+        defer { host.close() }
+        host.settle()
+        let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+        for text in ["Visa •••• 4242", "Work •••• 4444", "Ada Lovelace", L10n.string("Save and fill addresses and cards")] {
+            XCTAssertTrue(spoken.contains { $0.contains(text) }, "No \(text): \(spoken)")
+        }
+        XCTAssertFalse(spoken.contains { $0.contains("4242424242424242") || $0.contains("5555555555554444") },
+                       "A card number showed: \(spoken)")
+
+        let cardSize = NSSize(width: 480, height: 300)
+        let cardSheet = VaultCardSheet(vault: vault, card: card, onDone: {})
+            .frame(width: cardSize.width, height: cardSize.height, alignment: .top)
+        try WindowlessRender.hostedInBothAppearances("vault-card", in: directory, size: cardSize) { appearance in
+            cardSheet.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        }
+        let addressSize = NSSize(width: 480, height: 520)
+        let addressSheet = VaultAddressSheet(vault: vault, address: address, onDone: {})
+            .frame(width: addressSize.width, height: addressSize.height, alignment: .top)
+        try WindowlessRender.hostedInBothAppearances("vault-address", in: directory, size: addressSize) { appearance in
+            addressSheet.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        }
+
+        let barsSize = NSSize(width: 820, height: 250)
+        let bars = VStack(spacing: 0) {
+            BrowserWalletSaveBar(offer: BrowserWalletSaveOffer(card: card), accept: {}, close: {})
+            BrowserWalletSaveBar(offer: BrowserWalletSaveOffer(address: address), accept: {}, close: {})
+            BrowserWalletFillBar(offer: BrowserWalletFillOffer(which: .card, page: ""), wallet: VaultWallet(cards: [card]),
+                                 fillAddress: { _ in }, fillCard: { _ in }, dismiss: {})
+            BrowserWalletFillBar(offer: BrowserWalletFillOffer(which: .address, page: ""), wallet: vault.wallet,
+                                 fillAddress: { _ in }, fillCard: { _ in }, dismiss: {})
+            BrowserWalletFillBar(offer: BrowserWalletFillOffer(which: .card, page: ""), wallet: vault.wallet,
+                                 fillAddress: { _ in }, fillCard: { _ in }, dismiss: {})
+        }
+        .frame(width: barsSize.width, height: barsSize.height, alignment: .top)
+        try WindowlessRender.hostedInBothAppearances("vault-wallet-bars", in: directory, size: barsSize) { appearance in
+            bars.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        }
     }
 
     /// Chrome's and Bitwarden's exports: columns found by name in any order, a quoted name with a

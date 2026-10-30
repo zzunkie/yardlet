@@ -610,6 +610,7 @@ final class BrowserHostVaultQA {
         await exercisePanelPasswords(controller)
         await exercisePanelMadePasswordsKept(controller)
         await exercisePanelSignInSteps(controller)
+        await exercisePanelWallet(controller)
         await exercisePanelPicks(controller)
     }
 
@@ -1315,6 +1316,113 @@ final class BrowserHostVaultQA {
         check("panel: a new password for one of two accounts updates that one, and the bar names it",
               named && controller.vaultOffer?.account == "dev · 444455556666", controller.vaultOffer?.account ?? "none")
         controller.vaultOffer = nil
+    }
+
+    /// Addresses and cards (design §18): an address sent in a form is offered for saving and fills an empty form back;
+    /// a card typed into a form with no autocomplete names is offered for saving without its security code, and closes
+    /// the page to the agent's scripts; filling it back waits for Touch ID, which a no stops, and then fills the
+    /// number, expiry and name but no code, leaving the page closed to the agent's scripts and its snapshot without
+    /// the number. Only a card network's published test number is used.
+    private func exercisePanelWallet(_ controller: BrowserHostPaneController) async {
+        func open(_ path: String) async -> BrowserTab? {
+            controller.addressInput = base + path
+            controller.submitAddress()
+            guard await waitUntilAsync(.seconds(20), {
+                controller.tab?.currentURL?.hasSuffix(path) == true && controller.tab?.isLoading == false
+            }), let tab = controller.tab else {
+                check("panel: \(path) loads", false, controller.tab?.currentURL ?? "no tab")
+                return nil
+            }
+            try? await Task.sleep(for: .seconds(1))
+            return tab
+        }
+        func page(_ tab: BrowserTab, _ expression: String) async -> JSONValue? {
+            let result = try? await tab.devTools.send("Runtime.evaluate", ["expression": .string(expression), "returnByValue": .bool(true)],
+                                                      timeout: .seconds(20))
+            return result?["result"]?["value"]
+        }
+        func type(_ tab: BrowserTab, _ field: String, _ text: String) async {
+            _ = await page(tab, "document.getElementById('\(field)').focus()")
+            _ = try? await tab.devTools.send("Input.insertText", ["text": .string(text)], timeout: .seconds(10))
+        }
+        func agent(_ tool: String, _ arguments: [String: ToolJSON] = [:]) async -> AgentToolResult? {
+            guard let launch = broker.agentToolServer(for: panelSession, workspaceRoots: []),
+                  let token = launch.environment[AgentToolEnvironment.token] else { return nil }
+            return await broker.handle(AgentToolCall(token: token, session: panelSession.uuidString, tool: tool,
+                                                     arguments: .object(arguments)))
+        }
+        controller.walletSaveOffer = nil
+        controller.walletFillOffer = nil
+        let expected = "Ada Lovelace|12 Example Street|Flat 3|Seoul|06236|KR|010-0000-0000"
+
+        // An address sent in a form is offered for saving, and fills an empty one back.
+        guard let shipping = await open("vault/address") else { return }
+        for (field, text) in [("fullname", "Ada Lovelace"), ("line1", "12 Example Street"), ("line2", "Flat 3"),
+                              ("city", "Seoul"), ("zip", "06236"), ("phone", "010-0000-0000")] {
+            await type(shipping, field, text)
+        }
+        _ = await page(shipping, "country.value = 'KR'; country.dispatchEvent(new Event('change', {bubbles: true})); true")
+        _ = await page(shipping, "document.getElementById('go').click()")
+        let addressOffered = await waitUntilAsync(.seconds(5)) { controller.walletSaveOffer?.address != nil }
+        try? await Task.sleep(for: .milliseconds(300))
+        capture(controller, named: "vault-panel-wallet-save-address.png")
+        let offeredAddress = controller.walletSaveOffer?.address
+        controller.acceptWalletOffer()
+        check("panel: an address sent in a form is offered for saving and saved",
+              addressOffered && vault.wallet.addresses.count == 1 && offeredAddress?.street == "12 Example Street\nFlat 3"
+                && offeredAddress?.postalCode == "06236" && offeredAddress?.country == "KR",
+              "offer \(offeredAddress?.summary ?? "none")")
+        guard let again = await open("vault/address"), let address = vault.wallet.addresses.first else { return }
+        _ = await page(again, "document.getElementById('fullname').focus()")
+        let fillOffered = await waitUntilAsync(.seconds(5)) { controller.walletFillOffer?.which == .address }
+        controller.fillWallet(address: address)
+        let addressFilled = await waitUntilAsync(.seconds(5)) { await page(again, "window.qa.values()") == .string(expected) }
+        check("panel: an empty address form offers the saved address, which fills it",
+              fillOffered && addressFilled, "\(String(describing: await page(again, "window.qa.values()")))")
+
+        // A card typed in is offered for saving without its security code, and closes the page to the agent's scripts.
+        guard let checkout = await open("vault/card") else { return }
+        // The person's own use of the panel, as a scroll of no distance: typing a card in counts only then.
+        checkout.send(.wheel(tab: checkout.id, input: BrowserWheelInput(x: 10, y: 10, deltaX: 0, deltaY: 0)))
+        for (field, text) in [("holder", "Ada Lovelace"), ("number", "4242 4242 4242 4242"), ("expiry", "07 / 34"),
+                              ("cvc", "123")] {
+            await type(checkout, field, text)
+        }
+        _ = await page(checkout, "document.getElementById('pay').click()")
+        let cardOffered = await waitUntilAsync(.seconds(5)) { controller.walletSaveOffer?.card != nil }
+        try? await Task.sleep(for: .milliseconds(300))
+        capture(controller, named: "vault-panel-wallet-save-card.png")
+        let offeredCard = controller.walletSaveOffer?.card
+        let typedClosed = await agent(AgentToolCatalog.evaluate, ["function": .string("() => document.title")])
+        controller.acceptWalletOffer()
+        check("panel: a card typed into a form with no autocomplete names is offered without its code, and the page closes to agent scripts",
+              cardOffered && offeredCard?.number == "4242424242424242" && offeredCard?.expiryMonth == 7
+                && offeredCard?.expiryYear == 2034 && offeredCard?.name == "Ada Lovelace" && vault.wallet.cards.count == 1
+                && typedClosed?.isError == true,
+              "offer \(offeredCard?.label ?? "none") \(offeredCard?.expiry ?? ""), evaluate \(typedClosed?.text.prefix(80) ?? "none")")
+
+        // Filling it back waits for Touch ID: a no fills nothing, a yes fills the number, expiry and name, never a code.
+        guard let pay = await open("vault/card"), let card = vault.wallet.cards.first else { return }
+        _ = await page(pay, "document.getElementById('number').focus()")
+        let cardFillOffered = await waitUntilAsync(.seconds(5)) { controller.walletFillOffer?.which == .card }
+        try? await Task.sleep(for: .milliseconds(300))
+        capture(controller, named: "vault-panel-wallet-fill-card.png")
+        MacVault.qaConfirm = { _ in false }
+        controller.fillWallet(card: card)
+        try? await Task.sleep(for: .seconds(2))
+        let refusedEmpty = await page(pay, "window.qa.values()") == .string("|||")
+        MacVault.qaConfirm = { _ in true }
+        controller.fillWallet(card: card)
+        let cardFilled = await waitUntilAsync(.seconds(5)) {
+            await page(pay, "window.qa.values()") == .string("Ada Lovelace|4242424242424242|07/34|")
+        }
+        MacVault.qaConfirm = nil
+        let evaluated = await agent(AgentToolCatalog.evaluate, ["function": .string("() => document.title")])
+        let snapshot = await agent(AgentToolCatalog.snapshot)?.text ?? ""
+        check("panel: a saved card fills only after Touch ID, without a code, and the agent neither runs scripts there nor reads its number",
+              cardFillOffered && refusedEmpty && cardFilled && evaluated?.isError == true
+                && !snapshot.contains("4242") && !snapshot.isEmpty,
+              "offered \(cardFillOffered), no \(refusedEmpty), filled \(cardFilled), evaluate \(evaluated?.isError == true)")
     }
 
     /// What the person picks from the key button's list (design §16), without opening the list itself (a popover

@@ -388,6 +388,49 @@ final class VaultTests: XCTestCase {
                        [two.id, one.id])
     }
 
+    /// Addresses and cards (design §18): a card is told by its number's checksum, named by its network and last four
+    /// digits, read on a page or in a result in its usual spellings, and keeps no security code; an address comes from
+    /// a form's fields and goes back into them; both live in one keychain item beside the vault's, which emptying the
+    /// passwords leaves and their own Delete All removes.
+    func testAddressesAndCardsAreKeptWithoutASecurityCode() throws {
+        XCTAssertTrue(VaultCard.isCardNumber("4242 4242 4242 4242") && VaultCard.isCardNumber("3782-822463-10005"))
+        XCTAssertFalse(VaultCard.isCardNumber("4242 4242 4242 4241") || VaultCard.isCardNumber("1234"))
+        let card = VaultCard(name: "Ada Lovelace", number: "4242 4242 4242 4242", expiryMonth: 7, expiryYear: 34)
+        XCTAssertEqual(card.label, "Visa •••• 4242")
+        XCTAssertEqual(card.values, ["cc-name": "Ada Lovelace", "cc-number": "4242424242424242", "cc-exp": "07/34",
+                                     "cc-exp-month": "07", "cc-exp-year": "2034"])
+        XCTAssertTrue(card.spellings.contains("4242 4242 4242 4242") && card.spellings.contains("4242-4242-4242-4242"))
+        XCTAssertEqual(VaultCard(number: "378282246310005", expiryMonth: 1, expiryYear: 2030).spellings[1], "3782 822463 10005")
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(card), as: UTF8.self).lowercased().contains("csc"))
+
+        let address = try XCTUnwrap(VaultAddress(values: ["given-name": "Ada", "family-name": "Lovelace",
+                                                          "address-line1": "12 Example Street", "address-line2": "Flat 3",
+                                                          "postal-code": "06236", "country": "KR"]))
+        XCTAssertEqual(address.name, "Ada Lovelace")
+        XCTAssertEqual(address.values["address-line2"], "Flat 3")
+        XCTAssertEqual(address.values["street-address"], "12 Example Street\nFlat 3")
+        XCTAssertNil(VaultAddress(values: ["name": "Ada", "postal-code": "06236"]))
+        XCTAssertTrue(address.isSame(as: VaultAddress(name: "ada lovelace", street: "12 Example Street\nFlat 3",
+                                                      postalCode: "06236")))
+
+        let secrets = InMemoryVaultSecretStore()
+        let center = VaultCenter(environment: VaultCenter.Environment(
+            secrets: secrets, repository: InMemoryVaultRepository(), hmac: MacVault.hmac, isAllowedBuild: true,
+            defaults: .vaultTests()))
+        XCTAssertTrue(center.offersWallet)
+        try center.saveCard(card)
+        try center.saveAddress(address)
+        XCTAssertEqual(try secrets.loadWallet()?.cards, [card])
+        try center.clear()
+        XCTAssertEqual(try secrets.loadWallet()?.addresses, [address], "emptying the passwords took the addresses")
+        try center.deleteWallet()
+        XCTAssertTrue(center.wallet.isEmpty)
+        XCTAssertNil(try secrets.loadWallet().flatMap { $0.isEmpty ? nil : $0 })
+        center.isWalletEnabled = false
+        XCTAssertFalse(center.offersWallet)
+        center.isWalletEnabled = true
+    }
+
     func testMadePasswordsMeetTheRulesAndNeverReplaceASavedPassword() async throws {
         let random = VaultPasswordGenerator.systemRandomBytes
         for _ in 0..<200 {

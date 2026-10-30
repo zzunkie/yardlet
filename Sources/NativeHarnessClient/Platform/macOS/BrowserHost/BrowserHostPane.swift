@@ -100,6 +100,11 @@ final class BrowserHostPaneController {
     @ObservationIgnored var madePassword: BrowserVaultMadePassword?
     /// A sign-in's earlier step in a tab (§17): the username typed or the item filled there, for the password step.
     @ObservationIgnored var signInStep: BrowserVaultSignInStep?
+    /// Addresses and cards (§18): the saved ones offered at an empty field of their form, the pages where the person
+    /// said not now, and one the person sent, offered for saving.
+    var walletFillOffer: BrowserWalletFillOffer?
+    @ObservationIgnored var dismissedWalletPages: Set<String> = []
+    var walletSaveOffer: BrowserWalletSaveOffer?
     @ObservationIgnored var isScanningForCodes = false
     /// The key button's list (§16): whether it is open, whether it keeps to two-factor codes (opened from the code
     /// bar), and what its search holds; and an item it filled on a site it is not saved for, offered that site.
@@ -1256,6 +1261,13 @@ struct BrowserHostPane: View {
                     if let offer = controller.vaultCodeOffer { vaultCodeBar(offer) }
                     if let offer = controller.vaultPasswordOffer { vaultPasswordBar(offer) }
                     if let offer = controller.vaultLinkOffer { vaultLinkBar(offer) }
+                    if let offer = controller.walletSaveOffer {
+                        BrowserWalletSaveBar(offer: offer, accept: controller.acceptWalletOffer) { controller.walletSaveOffer = nil }
+                    }
+                    if let offer = controller.walletFillOffer {
+                        BrowserWalletFillBar(offer: offer, wallet: vault.wallet, fillAddress: controller.fillWallet(address:),
+                                             fillCard: controller.fillWallet(card:), dismiss: controller.dismissWalletFillOffer)
+                    }
                     if let notice = controller.notice {
                         Label(notice, systemImage: "hand.raised")
                             .font(.callout).foregroundStyle(.secondary)
@@ -1920,6 +1932,81 @@ struct BrowserVaultSaveBar: View {
             Button(offer.updates == nil || offer.addsAccount ? L10n.string("Save") : L10n.string("Update"), action: accept)
                 .controlSize(.small)
             ParityIconButton(systemName: "xmark", help: L10n.string("Close"), action: close)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ParityTheme.subtleFill)
+        .background(.background)
+        .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// The bar offering to save an address or a card the person sent (design §18), as Chrome's save bubbles: Save (or
+/// Update a saved card), or close it for now.
+struct BrowserWalletSaveBar: View {
+    let offer: BrowserWalletSaveOffer
+    let accept: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: offer.card == nil ? "house" : "creditcard").foregroundStyle(.secondary)
+            Text(offer.card.map { offer.updates ? L10n.format("Update the saved card %@?", $0.label)
+                                                : L10n.format("Save the card %@?", $0.label) }
+                 ?? L10n.format("Save the address %@?", offer.address?.summary ?? ""))
+                .font(.callout)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button(offer.updates ? L10n.string("Update") : L10n.string("Save"), action: accept)
+                .controlSize(.small)
+            ParityIconButton(systemName: "xmark", help: L10n.string("Close"), action: close)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ParityTheme.subtleFill)
+        .background(.background)
+        .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// The bar offering the saved addresses or cards at an empty field of their form (design §18): one is named and fills
+/// with Fill; several are a menu. A card asks for Touch ID before it goes in.
+struct BrowserWalletFillBar: View {
+    let offer: BrowserWalletFillOffer
+    let wallet: VaultWallet
+    let fillAddress: (VaultAddress) -> Void
+    let fillCard: (VaultCard) -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        let entries: [(label: String, fill: () -> Void)] = offer.which == .card
+            ? wallet.cards.map { card in (card.label, { fillCard(card) }) }
+            : wallet.addresses.map { address in (address.summary, { fillAddress(address) }) }
+        HStack(spacing: 10) {
+            Image(systemName: offer.which == .card ? "creditcard" : "house").foregroundStyle(.secondary)
+            Text(entries.count == 1
+                 ? (offer.which == .card ? L10n.format("Fill the card %@?", entries[0].label)
+                                         : L10n.format("Fill the address %@?", entries[0].label))
+                 : (offer.which == .card ? L10n.string("Fill a saved card?") : L10n.string("Fill a saved address?")))
+                .font(.callout)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button(L10n.string("Not Now"), action: dismiss)
+                .controlSize(.small)
+            if entries.count == 1 {
+                Button(L10n.string("Fill"), action: entries[0].fill)
+                    .controlSize(.small)
+            } else {
+                Menu(L10n.string("Fill")) {
+                    ForEach(entries.indices, id: \.self) { index in
+                        Button(entries[index].label, action: entries[index].fill)
+                    }
+                }
+                .controlSize(.small)
+                .fixedSize()
+            }
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
