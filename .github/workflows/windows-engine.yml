@@ -64,30 +64,28 @@ jobs:
             '```' | Add-Content $env:GITHUB_STEP_SUMMARY
           }
           exit $code
-      # Without signing in, a run's logs cannot be read, but its summary can: say there what went wrong.
-      - name: Summarize a failure
+      # Without signing in, a run's logs and summary cannot be read, but its annotations can (the check
+      # run's annotations in the API): say there what went wrong.
+      - name: Report a failure
         if: failure()
         shell: pwsh
         run: |
-          $summary = $env:GITHUB_STEP_SUMMARY
-          "### Toolchain" | Add-Content $summary
-          '```' | Add-Content $summary
-          (Get-Command swift -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source) ?? 'swift: not on PATH' | Add-Content $summary
-          "SDKROOT=$env:SDKROOT" | Add-Content $summary
+          function Report([string] $title, [string[]] $lines) {
+            $text = ($lines -join "`n") -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+            Write-Output "::notice title=$title::$text"
+          }
+          $swift = Get-Command swift -ErrorAction SilentlyContinue
+          $toolchain = @(
+            "swift: " + $(if ($swift) { $swift.Source } else { 'not on PATH' }),
+            "SDKROOT=$env:SDKROOT"
+          )
           foreach ($scope in 'Machine', 'User') {
-            "$scope Path (Swift): " + (([Environment]::GetEnvironmentVariable('Path', $scope) -split ';' | Where-Object { $_ -match 'Swift' }) -join '; ') | Add-Content $summary
+            $toolchain += "$scope Path (Swift): " + (([Environment]::GetEnvironmentVariable('Path', $scope) -split ';' | Where-Object { $_ -match 'Swift' }) -join '; ')
           }
-          '```' | Add-Content $summary
+          Report 'Toolchain' $toolchain
           $install = Join-Path $env:RUNNER_TEMP 'swift-install.log'
-          if (Test-Path $install) {
-            "### Installer log (last 40 lines)" | Add-Content $summary
-            '```' | Add-Content $summary
-            Get-Content $install -Tail 40 | Add-Content $summary
-            '```' | Add-Content $summary
-          }
+          if (Test-Path $install) { Report 'Installer log' (Get-Content $install -Tail 40) }
           if (Test-Path build.log) {
-            "### Build log (last 80 lines)" | Add-Content $summary
-            '```' | Add-Content $summary
-            Get-Content build.log -Tail 80 | Add-Content $summary
-            '```' | Add-Content $summary
+            Report 'Build errors' (Select-String -Path build.log -Pattern 'error:' | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique | Select-Object -First 150)
+            Report 'Build log' (Get-Content build.log -Tail 60)
           }
