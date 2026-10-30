@@ -9,18 +9,24 @@ import XCTest
 /// finds the words' ink and the mark's ink and compares their vertical middles.
 @MainActor
 final class InlineMarkAlignmentRenderingTests: XCTestCase {
-    /// How far a mark's middle may sit from the words' middle, in points: under a pixel at 2×.
-    static let tolerance: CGFloat = 0.6
+    /// How far a mark's middle may sit from the words' middle, in points, in a drawing at `scale`:
+    /// under a pixel at 2× or more. At 1×, as on a CI runner's display, layout puts the mark and its
+    /// words each on a whole pixel, up to half a pixel from where 2× puts them, and a mark and words of
+    /// odd and even heights cannot share a middle row: they can sit a pixel and a half apart where 2×
+    /// draws them on one middle, still well under the points a baseline or a row's top would part them.
+    static func tolerance(atScale scale: CGFloat) -> CGFloat {
+        scale >= 2 ? 0.6 : 1.5 / scale
+    }
 
     func testAStatusLinesCaretSitsOnItsWordsMiddle() throws {
         for isOpen in [false, true] {
-            let offset = try Self.offset(named: "status-line-caret-\(isOpen ? "open" : "closed")") {
+            let (offset, tolerance) = try Self.offset(named: "status-line-caret-\(isOpen ? "open" : "closed")") {
                 ConversationStatusLine(
                     words: [ConversationLineWords(verb: "EHEH")], phase: .completed, hasDetail: true,
                     startsOpen: isOpen, accessibilityLabel: "Command"
                 ) { EmptyView() } actions: { EmptyView() } detail: { EmptyView() }
             }
-            XCTAssertLessThanOrEqual(abs(offset), Self.tolerance, "open \(isOpen): \(offset) pt")
+            XCTAssertLessThanOrEqual(abs(offset), tolerance, "open \(isOpen): \(offset) pt")
         }
     }
 
@@ -30,39 +36,40 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
                                     connector: ConnectorToolLabels.Label(connector: "Linear", presetID: nil, tool: "EHEH"))
         let item = ConversationItem(id: "t", kind: .tool(tool), phase: .completed,
                                     source: .transcript(TranscriptEntry(content: .activity(activity, state: .completed))))
-        let offset = try Self.offset(named: "status-line-connector") {
+        let (offset, tolerance) = try Self.offset(named: "status-line-connector") {
             ConversationWorkLine(item: item, harness: .claudeCode, workspaceURL: nil)
         }
-        XCTAssertLessThanOrEqual(abs(offset), Self.tolerance, "\(offset) pt")
+        XCTAssertLessThanOrEqual(abs(offset), tolerance, "\(offset) pt")
     }
 
     func testADetailsBlocksCaretSitsOnItsSummarysMiddle() throws {
         // The card's left border is the first ink; the caret follows it.
-        let offset = try Self.offset(named: "details-block-caret", markIsFirst: true, skipsBorder: true) {
+        let (offset, tolerance) = try Self.offset(named: "details-block-caret", markIsFirst: true, skipsBorder: true) {
             CodexDetailsBlock(summary: "EHEH", startsOpen: false, path: [0]) { EmptyView() }
         }
-        XCTAssertLessThanOrEqual(abs(offset), Self.tolerance, "\(offset) pt")
+        XCTAssertLessThanOrEqual(abs(offset), tolerance, "\(offset) pt")
     }
 
     func testTheTurnHeadersCaretSitsOnItsWordsMiddle() throws {
-        let offset = try Self.offset(named: "turn-header-caret") {
+        let (offset, tolerance) = try Self.offset(named: "turn-header-caret") {
             // As the turn header lays it out, in a row.
             HStack(spacing: 8) {
                 CodexWorkSummaryLabel(status: .completed, timing: ConversationTurnTiming(durationMilliseconds: 50_000),
                                       isExpanded: false, canExpand: true)
             }
         }
-        XCTAssertLessThanOrEqual(abs(offset), Self.tolerance, "\(offset) pt")
+        XCTAssertLessThanOrEqual(abs(offset), tolerance, "\(offset) pt")
     }
 
     // MARK: - Measuring
 
     /// The mark's vertical middle less the words' (positive: the mark sits low), in points, from the
-    /// light drawing. The mark is the last cluster of ink, or the first when `markIsFirst`.
+    /// light drawing, with the tolerance for the scale it was drawn at. The mark is the last cluster
+    /// of ink, or the first when `markIsFirst`.
     private static func offset<Content: View>(
         named name: String, markIsFirst: Bool = false, skipsBorder: Bool = false,
         @ViewBuilder content: () -> Content
-    ) throws -> CGFloat {
+    ) throws -> (offset: CGFloat, tolerance: CGFloat) {
         let directory = try WindowlessRender.directory("alignment-qa")
         let size = NSSize(width: 360, height: 44)
         let view = content()
@@ -75,13 +82,14 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
         }
         let capture = captures[0]
         let clusters = Array(inkClusters(capture.bitmap).dropFirst(skipsBorder ? 1 : 0))
+        let bound = tolerance(atScale: capture.backingScaleFactor)
         XCTAssertGreaterThanOrEqual(clusters.count, 2, "\(name): \(clusters)")
-        guard clusters.count >= 2 else { return .infinity }
+        guard clusters.count >= 2 else { return (.infinity, bound) }
         let mark = markIsFirst ? clusters[0] : clusters[clusters.count - 1]
         let words = markIsFirst ? clusters[1] : clusters[0]
         let offset = (mark.middle - words.middle) / capture.backingScaleFactor
-        print("alignment \(name): \(offset) pt (mark \(mark), words \(words))")
-        return offset
+        print("alignment \(name): \(offset) pt at \(capture.backingScaleFactor)x (mark \(mark), words \(words))")
+        return (offset, bound)
     }
 
     private struct Cluster: CustomStringConvertible {
