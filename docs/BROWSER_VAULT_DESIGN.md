@@ -1240,7 +1240,7 @@ and its file of websites with shared credential backends was removed in 2024
   form had, so one IAM user name in two accounts saves two items. An agent names one by its name, its username or
   another of its values, such as the account ID.
 - **Items saved without a username:** Yardlet changes none of them by itself. When a sign-in with a username uses the
-  password of an item that has none, the bar asks "Add dev to the saved password for signin.aws?", and Update gives the
+  password of an item that has none, the bar asks "Add dev to the saved password for signin.aws?", and Save gives the
   item the username and the form's other fields; an item that lacks only a field the form had is asked the same way.
 - **AWS's domains (a proposal, not done):** with no public list to follow, sites stay as they are. An item saved on an
   AWS page is for `amazon.com` or `signin.aws`, by registrable domain, so it is offered on Amazon's shopping site too,
@@ -1248,7 +1248,9 @@ and its file of websites with shared credential backends was removed in 2024
   `signin.aws` in an item's sites. Saving AWS items for the sign-in host rather than `amazon.com`, or joining the two
   domains, would need a list of Yardlet's own, which the rest of the vault avoids.
 - **The item sheet:** each kept field shows under the page's own label as a text field, and emptying it removes it.
-  Nothing new in Settings and no new buttons; the bar has two new sentences.
+- **Closing the bar:** the save bar closes with an X at its end, as Chrome's save bubble and the panel's permission bar
+  do; closing remembers nothing, while "Not for This Site" stops offers for the site. Nothing new in Settings; the bar
+  has two new sentences and the X.
 
 ### 17.3 Rules kept
 
@@ -1266,12 +1268,13 @@ and its file of websites with shared credential backends was removed in 2024
   of fields, an agent naming one of two accounts by its account ID, a refusal listing each with its account, and the
   key button's list putting the earlier step's item first) and `VaultSettingsRenderingTests.testAccountsOfOneUsernameDraw`
   (`settings-vault-accounts`, `vault-item-account`, light and dark, checked by eye: the account stays whole beside a
-  long name, and a long field label wraps in the sheet).
+  long name, and a long field label wraps in the sheet), and `testTheSaveBarDraws` (`vault-save-bar`, light and dark:
+  the save, update and add-username bars, each with its X, and Save on the last).
 - Real CEF QA (`com.zzunkie.yardlet.vaultqa` run as in section 15.5; 92 checks passed), on the QA server's
   `/vault/first`, `/vault/second` (with `?hidden`) and `/vault/iam`, served at https `.test` addresses: a password step
   took the username its first step asked for; a hidden field marked as the username came first; the item filled on the
   first step came first on the password step, filled its password there, and was not offered on another site; an item
-  without a username was offered the sign-in's and took it on Update; one IAM user name in two accounts saved two items
+  without a username was offered the sign-in's and took it on Save; one IAM user name in two accounts saved two items
   with their accounts; the key button's fill put an item's account back; and a new password typed over a filled one
   offered to update that account, named in the bar. The PNGs `vault-panel-add-username` and
   `vault-panel-update-account` were checked by eye.
