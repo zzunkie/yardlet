@@ -36,7 +36,7 @@ jobs:
           $signature = Get-AuthenticodeSignature $installer
           Write-Output "Signed by: $($signature.SignerCertificate.Subject)"
           if ($signature.Status -ne 'Valid') { throw "The installer's signature is $($signature.Status)" }
-          $process = Start-Process -Wait -PassThru -FilePath $installer -ArgumentList '/quiet', '/norestart'
+          $process = Start-Process -Wait -PassThru -FilePath $installer -ArgumentList '/quiet', '/norestart', '/log', (Join-Path $env:RUNNER_TEMP 'swift-install.log')
           if ($process.ExitCode -ne 0) { throw "The installer ended with $($process.ExitCode)" }
           # The installer writes Path and SDKROOT for later shells; hand them to the next steps.
           foreach ($scope in 'Machine', 'User') {
@@ -64,3 +64,30 @@ jobs:
             '```' | Add-Content $env:GITHUB_STEP_SUMMARY
           }
           exit $code
+      # Without signing in, a run's logs cannot be read, but its summary can: say there what went wrong.
+      - name: Summarize a failure
+        if: failure()
+        shell: pwsh
+        run: |
+          $summary = $env:GITHUB_STEP_SUMMARY
+          "### Toolchain" | Add-Content $summary
+          '```' | Add-Content $summary
+          (Get-Command swift -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source) ?? 'swift: not on PATH' | Add-Content $summary
+          "SDKROOT=$env:SDKROOT" | Add-Content $summary
+          foreach ($scope in 'Machine', 'User') {
+            "$scope Path (Swift): " + (([Environment]::GetEnvironmentVariable('Path', $scope) -split ';' | Where-Object { $_ -match 'Swift' }) -join '; ') | Add-Content $summary
+          }
+          '```' | Add-Content $summary
+          $install = Join-Path $env:RUNNER_TEMP 'swift-install.log'
+          if (Test-Path $install) {
+            "### Installer log (last 40 lines)" | Add-Content $summary
+            '```' | Add-Content $summary
+            Get-Content $install -Tail 40 | Add-Content $summary
+            '```' | Add-Content $summary
+          }
+          if (Test-Path build.log) {
+            "### Build log (last 80 lines)" | Add-Content $summary
+            '```' | Add-Content $summary
+            Get-Content build.log -Tail 80 | Add-Content $summary
+            '```' | Add-Content $summary
+          }
