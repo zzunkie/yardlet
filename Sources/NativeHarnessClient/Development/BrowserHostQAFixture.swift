@@ -3549,7 +3549,7 @@ private final class BrowserHostQARunner {
         client.terminateHost()
         try? await Task.sleep(for: .seconds(1))
         // The fixture's tasks look active, so NSApp.terminate would stop at the quit warning.
-        _exit(0)
+        endBrowserQA(checks: checks)
     }
 
     private func waitUntil(_ timeout: Duration, poll: Duration = .milliseconds(25),
@@ -3882,5 +3882,12 @@ private final class PreviewFrameCounter: @unchecked Sendable {
             return (sorted.count, onMain, sorted.isEmpty ? 0 : sorted[sorted.count / 2])
         }
     }
+}
+
+/// Ends a browser QA fixture's app once its checks are written: with status 1 when any of them failed, so the app's
+/// own status says what `result.json` does. `run-check.sh` judges a run by that file (`verdict.sh`), since `open`
+/// does not pass the app's status on.
+func endBrowserQA(checks: [JSONValue]) -> Never {
+    _exit(checks.allSatisfy { $0["ok"]?.boolValue == true } ? 0 : 1)
 }
 #endif

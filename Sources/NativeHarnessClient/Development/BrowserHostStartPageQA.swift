@@ -284,7 +284,7 @@ final class BrowserHostStartPageQA {
         try? "done".write(to: output.appending(path: "markers/finished"), atomically: true, encoding: .utf8)
         client.terminateHost()
         try? await Task.sleep(for: .seconds(1))
-        _exit(0)
+        endBrowserQA(checks: checks)
     }
 }
 #endif

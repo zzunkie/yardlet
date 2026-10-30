@@ -7,8 +7,9 @@
 # purpose, that Chromium's code-sign clones of the host were deleted, and that none of the run's
 # processes held secure keyboard entry (the QA records it instead, BrowserSecureInputRecorder). However
 # the run ends (done, past its deadline, interrupted), the QA app, every process inside its bundle and
-# the page server are ended. The output directory must be under a directory named browser-host-qa;
-# the QA home is its sibling qa-home.
+# the page server are ended. It exits 1 when any of these checks or any of the fixture's own fails, or
+# when the fixture did not reach its end (verdict.sh). The output directory must be under a directory
+# named browser-host-qa; the QA home is its sibling qa-home.
 # usage: run-check.sh <qa app> <output dir> [app arguments ...]
 set -uo pipefail
 TOOLS=${0:A:h}
@@ -72,6 +73,7 @@ app_pid=$("$TOOLS/qa-launch.sh" "$app" "${out:h}/qa-home" "$out/app.log" -- \
 echo "$app_pid" > "$out/app.pid"
 echo "app pid $app_pid"
 
+failed=0
 typeset -A sampled
 deadline=$(( SECONDS + 600 ))
 while kill -0 "$app_pid" 2>/dev/null && (( SECONDS < deadline )); do
@@ -90,17 +92,18 @@ while kill -0 "$app_pid" 2>/dev/null && (( SECONDS < deadline )); do
     sleep 0.5
 done
 if kill -0 "$app_pid" 2>/dev/null; then
-    echo "app still running after the deadline; terminating"
+    echo "FAIL app still running after the deadline; terminating" >&2
+    failed=1
     kill "$app_pid"
     sleep 3
 fi
 kill "$server_pid" 2>/dev/null
 wait "$server_pid" 2>/dev/null
 sleep 2
-[[ -s "$out/secure-input.txt" ]] && echo "FAIL secure keyboard entry held by this run's process $(sort -u "$out/secure-input.txt" | tr '\n' ' ')" >&2
+[[ -s "$out/secure-input.txt" ]] && { echo "FAIL secure keyboard entry held by this run's process $(sort -u "$out/secure-input.txt" | tr '\n' ' ')" >&2; failed=1; }
 # What this run left: processes from inside this QA bundle, and its page server.
 { pgrep -fl "^(/private)?$bundle/"; pgrep -fl "form-server.py --output-dir $out/server"; } > "$out/leftover-processes.txt" 2>&1
-[[ -s "$out/leftover-processes.txt" ]] && echo "FAIL leftover processes" >&2
+[[ -s "$out/leftover-processes.txt" ]] && { echo "FAIL leftover processes" >&2; failed=1; }
 echo "leftover processes:"; cat "$out/leftover-processes.txt"
 # Crash reports from this bundle's processes (ReportCrash writes them within seconds), and the host's
 # code-sign clones, which Chromium's cleanup helper deletes once the host has exited; a host the fixture
@@ -114,11 +117,12 @@ done
 renderers=$(grep -c "^Yardlet Helper (Renderer)-" "$out/crash-reports.txt")
 allowed=$(jq '.intentionalRendererCrashes // 0' "$out/result.json" 2>/dev/null || echo 0)
 unexpected=$(( $(wc -l < "$out/crash-reports.txt") - (renderers < allowed ? renderers : allowed) ))
-(( unexpected > 0 )) && echo "FAIL crash reports: $unexpected beyond the $allowed renderer(s) ended on purpose" >&2
+(( unexpected > 0 )) && { echo "FAIL crash reports: $unexpected beyond the $allowed renderer(s) ended on purpose" >&2; failed=1; }
 echo "crash reports:"; cat "$out/crash-reports.txt"
 left_clones=($clones/*(N/e:'[[ $REPLY -nt $out/.started ]]':))
 killed=$(jq '.intentionalHostKills // 0' "$out/result.json" 2>/dev/null || echo 0)
-(( ${#left_clones} > killed )) && echo "FAIL code-sign clones left: ${(j:, :)${(@)left_clones:t}} (hosts killed on purpose: $killed)" >&2
+(( ${#left_clones} > killed )) && { echo "FAIL code-sign clones left: ${(j:, :)${(@)left_clones:t}} (hosts killed on purpose: $killed)" >&2; failed=1; }
 end_run
 trap - INT TERM HUP
-jq -r '.checks[] | "\(if .ok then "ok  " else "FAIL" end) \(.check): \(.detail)"' "$out/result.json" 2>/dev/null
+"$TOOLS/verdict.sh" "$out" || failed=1
+exit $failed
