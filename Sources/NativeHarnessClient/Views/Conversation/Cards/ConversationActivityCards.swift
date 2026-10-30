@@ -115,23 +115,6 @@ enum ConversationActivityStatus {
     }
 }
 
-extension ConversationTool.Kind {
-    /// The badge beside a call's title: the provider's own tool kind, or what Codex calls the item.
-    var label: String {
-        switch self {
-        case let .activity(kind): kind
-        case .mcp: L10n.string("MCP tool")
-        case .dynamic: L10n.string("Tool call")
-        case .webSearch: L10n.string("Web search")
-        case .imageView, .imageGeneration: L10n.string("Image")
-        case .sleep: L10n.string("Sleep")
-        case .review: L10n.string("Review")
-        case .hook: L10n.string("Hook")
-        case let .unknown(type): type ?? L10n.string("Unknown item")
-        }
-    }
-}
-
 /// The shared transcript's card for a call: a status tile, the title and the kind, the status,
 /// and the details folded below. A failed call opens itself.
 private struct ConversationActivityDisclosure<Details: View, Controls: View>: View {

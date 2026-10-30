@@ -263,7 +263,8 @@ struct VisualFixtureScenario: Sendable {
             initialTaskSurface: initialTaskSurface,
             initialCodexCapabilitySection: initialCodexCapabilitySection,
             initialCodexHistoryQuery: initialCodexHistoryQuery,
-            initialSettingsSection: initialSettingsSection
+            initialSettingsSection: initialSettingsSection,
+            browserClient: AppModel.macBrowserClient
         )
         model.visualFixtureCodexHistory = codexHistory
         if ShowcaseFixture.isRequested { ShowcaseFixture.prepare(model, root: ShowcaseFixture.root()) }

@@ -1,13 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// The account store and runtimes a reset of an account's plan limits is used with. An account list
-/// and a limit card provide it; without it the resets are not offered.
-struct UsageResetContext {
-    let store: ProviderConnectionStore
-    let runtimeSelections: RuntimeSelectionStore
-}
-
 private struct UsageResetContextKey: EnvironmentKey {
     static let defaultValue: UsageResetContext? = nil
 }

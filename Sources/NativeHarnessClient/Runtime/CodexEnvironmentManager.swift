@@ -1,5 +1,4 @@
-import CryptoKit
-import Darwin
+import Crypto
 import Foundation
 
 struct CodexEnvironmentPaths: Equatable, Sendable {
@@ -294,12 +293,7 @@ actor CodexEnvironmentManager {
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let copied = source.path().withCString { sourcePath in
-            destination.path().withCString { destinationPath in
-                copyfile(sourcePath, destinationPath, nil, copyfile_flags_t(COPYFILE_ALL | COPYFILE_CLONE))
-            }
-        }
-        if copied != 0 {
+        if !FileCloning.clone(source, to: destination) {
             try? fileManager.removeItem(at: destination)
             try fileManager.copyItem(at: source, to: destination)
         }

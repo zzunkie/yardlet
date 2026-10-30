@@ -31,14 +31,73 @@ let cefTargets: [Target] = cefDirectory == nil ? [] : [
     )
 ]
 
+// The engine is every folder of the app target outside the screen and macOS layers
+// (docs/PLATFORM_PORTABILITY.md). With YARDLET_ENGINE_ONLY=1 the app target compiles the engine alone,
+// as a library without the macOS layers and their dependencies: the build that Windows makes, and the
+// check that the engine still stands on its own.
+let engineOnly = Context.environment["YARDLET_ENGINE_ONLY"] == "1"
+let macOSLayers = ["Views", "Browser", "Development", "Platform/macOS", "NativeHarnessClientApp.swift"]
+// Platform/Portable holds Foundation versions of what each platform layer provides under the same
+// names, for the engine-only build; the Mac app has its own in Platform/macOS.
+let otherPlatformLayers = ["Platform/Portable"]
+
+// The phone remote's listeners and interface addresses use Network.framework and BSD sockets; a
+// build on another platform leaves them out until that platform has its own.
+#if os(macOS)
+let remoteMacOnlySources: [String] = []
+#else
+let remoteMacOnlySources = ["RemoteSecureListener.swift", "RemoteAddresses.swift"]
+#endif
+
+let appTarget: Target = engineOnly
+    ? .target(
+        name: "NativeHarnessClient",
+        dependencies: [
+            "CSQLite",
+            "YardletAgentTools",
+            "YardletRemote",
+            .product(name: "Crypto", package: "swift-crypto"),
+            .product(name: "Markdown", package: "swift-markdown")
+        ],
+        exclude: macOSLayers,
+        resources: [
+            .process("Resources")
+        ]
+    )
+    : .executableTarget(
+        name: "NativeHarnessClient",
+        dependencies: [
+            "CSQLite",
+            "YardletAgentTools",
+            "YardletLidSleep",
+            "YardletRemote",
+            .target(name: "YardletSurfacePort", condition: .when(platforms: [.macOS])),
+            .product(name: "Crypto", package: "swift-crypto"),
+            .product(name: "Markdown", package: "swift-markdown"),
+            .product(name: "SwiftTerm", package: "SwiftTerm"),
+            .product(name: "Sparkle", package: "Sparkle", condition: .when(platforms: [.macOS]))
+        ],
+        exclude: otherPlatformLayers,
+        resources: [
+            .process("Resources")
+        ],
+        // build-app.sh puts the frameworks SwiftPM links beside the executable (Sparkle) in the
+        // bundle's Contents/Frameworks.
+        linkerSettings: [
+            .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"],
+                         .when(platforms: [.macOS]))
+        ]
+    )
+
 let package = Package(
     name: "NativeHarnessClient",
     defaultLocalization: "en",
     platforms: [
         .macOS(.v15)
     ],
-    products: [
-        .executable(name: "NativeHarnessClient", targets: ["NativeHarnessClient"]),
+    products: (engineOnly ? [] : [
+        .executable(name: "NativeHarnessClient", targets: ["NativeHarnessClient"])
+    ]) + [
         // The Yardlet MCP server a harness starts over stdio; build-app.sh places it in
         // Contents/Helpers. It forwards tool calls to the running app (docs/AGENT_BROWSER_TOOLS.md).
         .executable(name: "yardlet-mcp", targets: ["YardletMCP"]),
@@ -55,12 +114,19 @@ let package = Package(
     ]),
     dependencies: [
         .package(
-            url: "https://github.com/migueldeicaza/SwiftTerm.git",
-            exact: "1.18.0"
-        ),
-        .package(
             url: "https://github.com/swiftlang/swift-markdown.git",
             exact: "0.8.0"
+        ),
+        // CryptoKit's API on every platform: on macOS it re-exports CryptoKit, elsewhere it builds
+        // BoringSSL (docs/PLATFORM_PORTABILITY.md).
+        .package(
+            url: "https://github.com/apple/swift-crypto.git",
+            exact: "5.0.3"
+        )
+    ] + (engineOnly ? [] : [
+        .package(
+            url: "https://github.com/migueldeicaza/SwiftTerm.git",
+            exact: "1.18.0"
         ),
         // Updates for public builds (README "Updates"). A binary target whose checksum Sparkle's
         // own manifest pins; build-app.sh places the framework in Contents/Frameworks, and only a
@@ -69,7 +135,7 @@ let package = Package(
             url: "https://github.com/sparkle-project/Sparkle",
             exact: "2.10.1"
         )
-    ],
+    ]),
     targets: [
         // macOS supplies SQLite in the SDK and at /usr/lib/libsqlite3.dylib. pkg-config can
         // instead select a local Homebrew copy, which is absent on other Macs and rejected by
@@ -106,7 +172,9 @@ let package = Package(
         // UI, and the WebSocket listeners (Network.framework). The app adds the bridge to its model.
         .target(
             name: "YardletRemote",
-            linkerSettings: [.linkedFramework("Network")]
+            dependencies: [.product(name: "Crypto", package: "swift-crypto")],
+            exclude: remoteMacOnlySources,
+            linkerSettings: [.linkedFramework("Network", .when(platforms: [.macOS]))]
         ),
         // The fixture Mac behind the remote protocol, for the phone client and the remote tests;
         // the app does not link it.
@@ -116,30 +184,15 @@ let package = Package(
         ),
         .executableTarget(
             name: "YardletRemoteFixture",
-            dependencies: ["YardletRemote", "YardletRemoteFixtureSupport"]
-        ),
-        .executableTarget(
-            name: "NativeHarnessClient",
             dependencies: [
-                "CSQLite",
-                "YardletAgentTools",
-                "YardletLidSleep",
                 "YardletRemote",
-                .target(name: "YardletSurfacePort", condition: .when(platforms: [.macOS])),
-                .product(name: "Markdown", package: "swift-markdown"),
-                .product(name: "SwiftTerm", package: "SwiftTerm"),
-                .product(name: "Sparkle", package: "Sparkle", condition: .when(platforms: [.macOS]))
-            ],
-            resources: [
-                .process("Resources")
-            ],
-            // build-app.sh puts the frameworks SwiftPM links beside the executable (Sparkle) in the
-            // bundle's Contents/Frameworks.
-            linkerSettings: [
-                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"],
-                             .when(platforms: [.macOS]))
+                "YardletRemoteFixtureSupport",
+                .product(name: "Crypto", package: "swift-crypto")
             ]
         ),
+        appTarget
+    ] + (engineOnly ? [] : [
+        // The tests build against the Mac app, SwiftTerm included.
         .testTarget(
             name: "NativeHarnessClientTests",
             dependencies: [
@@ -158,5 +211,5 @@ let package = Package(
             // bundle of its own (tests use the app module's `Bundle.module`).
             exclude: ["Fixtures"]
         )
-    ] + cefTargets
+    ]) + cefTargets
 )

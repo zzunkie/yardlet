@@ -1,5 +1,4 @@
 import Foundation
-import UniformTypeIdentifiers
 
 struct WorkspaceFileLocation: Equatable, Sendable {
     /// Relative to the task's folder; for a file elsewhere that the person opened (`opening`), its
@@ -79,10 +78,8 @@ struct WorkspaceFileMedia: Equatable, Sendable {
     let kind: Kind
 
     init?(_ url: URL) {
-        guard let type = UTType(filenameExtension: url.pathExtension) else { return nil }
-        if type.conforms(to: .pdf) { kind = .pdf }
-        else if type.conforms(to: .image) { kind = .image }
-        else { return nil }
+        guard let kind = FileTypes.mediaKind(forExtension: url.pathExtension) else { return nil }
+        self.kind = kind
         self.url = url
     }
 }
@@ -290,7 +287,9 @@ enum WorkspaceFileService {
         let encoding: WorkspaceFileEncoding = data.starts(with: [0xff, 0xfe]) ? .utf16LittleEndian
             : data.starts(with: [0xfe, 0xff]) ? .utf16BigEndian : .utf8
         // A NUL byte in what was read makes a file binary, before a large one is cut to its beginning.
-        let isBinary = encoding == .utf8 && data.withUnsafeBytes { memchr($0.baseAddress, 0, $0.count) != nil }
+        let isBinary = encoding == .utf8 && data.withUnsafeBytes { bytes in
+            bytes.baseAddress.map { memchr($0, 0, bytes.count) != nil } ?? false
+        }
         if isPartial { data = beginning(of: data.prefix(partialBytes), encoding: encoding) }
         let decoded: String?
         var isLossy = false

@@ -1,12 +1,5 @@
 import SwiftUI
 
-struct HarnessActivityActions: Sendable {
-    let open: @MainActor @Sendable (HarnessActivity) -> Void
-    let stop: (@MainActor @Sendable (HarnessActivity) -> Void)?
-    let isStopping: @MainActor @Sendable (String) -> Bool
-    let error: @MainActor @Sendable (String) -> String?
-}
-
 /// The exact content used by the native link buttons. Kept independently renderable because
 /// ImageRenderer does not render AppKit's link-button backing view.
 struct HarnessSubtaskActionLabel: View {

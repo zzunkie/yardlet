@@ -201,7 +201,7 @@ final class BrowserAddressHistory {
         searches = searches.filter { $0.value.lastVisit >= oldest }
         let saved = Saved(pages: Array(kept), searches: searches.values.sorted { $0.lastVisit > $1.lastVisit })
         guard let data = try? JSONEncoder().encode(saved) else { return }
-        let write = {
+        let write: @Sendable () -> Void = {
             try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: file, options: [.atomic])
         }

@@ -1,0 +1,38 @@
+name: Windows engine
+
+# The engine built on its own on Windows (docs/PLATFORM_PORTABILITY.md, "Building the engine on its
+# own"). It runs for the branches that port it and by hand, apart from the checks a pull request needs,
+# until the engine builds there.
+on:
+  push:
+    branches: ['windows-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-engine-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build the engine
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Allow long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: compnerd/gha-setup-swift@57fe462cd3c7b05ae8fcff79b00719312e305257 # main
+        with:
+          swift-version: swift-6.4.1-release
+          swift-build: 6.4.1-RELEASE
+      - name: Show the toolchain
+        run: swift --version
+      - name: Build
+        env:
+          YARDLET_ENGINE_ONLY: "1"
+        run: swift build --target NativeHarnessClient --force-resolved-versions -Xswiftc -continue-building-after-errors

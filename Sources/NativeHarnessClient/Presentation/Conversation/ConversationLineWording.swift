@@ -549,3 +549,30 @@ struct ClaudeToolArguments {
 
     private static let parsed = ParsedInputs()
 }
+
+extension CodexNoticeItem {
+    /// The notice's line, as the conversation shows it (and the phone remote reads it).
+    var displayMessage: String {
+        switch kind {
+        case .modelRerouted: L10n.format("Your request was routed to %@.", message)
+        case .warning, .configWarning, .deprecationNotice: message
+        }
+    }
+}
+
+extension ConversationTool.Kind {
+    /// The badge beside a call's title: the provider's own tool kind, or what Codex calls the item.
+    var label: String {
+        switch self {
+        case let .activity(kind): kind
+        case .mcp: L10n.string("MCP tool")
+        case .dynamic: L10n.string("Tool call")
+        case .webSearch: L10n.string("Web search")
+        case .imageView, .imageGeneration: L10n.string("Image")
+        case .sleep: L10n.string("Sleep")
+        case .review: L10n.string("Review")
+        case .hook: L10n.string("Hook")
+        case let .unknown(type): type ?? L10n.string("Unknown item")
+        }
+    }
+}

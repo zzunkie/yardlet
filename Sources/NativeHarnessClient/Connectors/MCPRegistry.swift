@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// A server a public MCP registry lists: the GitHub MCP Registry (the list VS Code shows) or the
 /// official MCP Registry (registry.modelcontextprotocol.io), which share the `server.json` format

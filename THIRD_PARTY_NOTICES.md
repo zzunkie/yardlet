@@ -496,6 +496,48 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+## Swift Crypto 5.0.3
+
+Source: https://github.com/apple/swift-crypto
+
+On macOS it adds no code of its own and re-exports Apple's CryptoKit. A build for another platform also
+contains its copies of BoringSSL and XKCP, under the licenses in its `license` folder. Apache License 2.0
+(text above).
+
+### NOTICE.txt
+
+                            The SwiftCrypto Project
+                            =======================
+
+Please visit the SwiftCrypto web site for more information:
+
+  * https://github.com/apple/swift-crypto
+
+Copyright 2019 The SwiftCrypto Project
+
+The SwiftCrypto Project licenses this file to you under the Apache License,
+version 2.0 (the "License"); you may not use this file except in compliance
+with the License. You may obtain a copy of the License at:
+
+  https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+Also, please refer to each LICENSE.<component>.txt file, which is located in
+the 'license' directory of the distribution file, for the license terms of the
+components that this product depends on.
+
+## Swift ASN.1 1.7.3
+
+Source: https://github.com/apple/swift-asn1
+
+Listed in `Package.resolved` because Swift Crypto's `CryptoExtras` depends on it. Yardlet links no part of
+it and the app bundle does not contain it; it is Apache License 2.0 (text above).
+
 ## Sparkle 2.10.1
 
 Source: https://github.com/sparkle-project/Sparkle (release `Sparkle-for-Swift-Package-Manager.zip`)

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The room-live observer's times, as the provider's client keeps them. Tests shorten them.
 struct DotsLiveTiming: Sendable {

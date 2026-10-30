@@ -232,11 +232,7 @@ enum MenuBarMenuProjection {
 
     /// "11 hr. ago", as the account list's "Updated 11 hr. ago" says it.
     static func age(of date: Date, now: Date, locale: Locale) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = locale
-        formatter.dateTimeStyle = .numeric
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: now)
+        RelativeTime.ago(date, relativeTo: now, locale: locale)
     }
 
     /// Each account with a limit and its latest reading, named as a Usage line names it: the account
@@ -317,12 +313,7 @@ enum MenuBarMenuProjection {
     static func resetText(_ date: Date, now: Date = Date(), locale: Locale = .current,
                           timeZone: TimeZone = .current) -> String {
         let seconds = date.timeIntervalSince(now)
-        if seconds <= 0 {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.locale = locale
-            formatter.dateTimeStyle = .named
-            return formatter.localizedString(fromTimeInterval: 0)
-        }
+        if seconds <= 0 { return RelativeTime.now(locale: locale) }
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.timeZone = timeZone
