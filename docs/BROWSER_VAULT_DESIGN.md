@@ -1080,6 +1080,19 @@ address guard before it goes in; submitted only when the form is safe; and the u
   saved password, kept the old one and removed the item beside it; the page menu offered a strong password while a
   password field had the focus. The panel PNGs (`vault-panel-password-bar`, `-password-saved`, `-password-update`) were
   checked by eye.
+- Keeping a made password (2026-10-31). Unit: the same `VaultTests` case also pins that a fill with no answer is not
+  "nothing" and keeps the document recorded as filled, that a fill that says why it put nothing in is, that deleting an
+  item made for a password logs why, that no log entry holds a value, and that "Recent use" keeps to fills and
+  refusals. Real CEF QA (`com.zzunkie.yardlet.vaultqa` run as above; 85 checks passed), on the QA server's `/vault/signup?slow` (the page
+  stays busy longer than the fill waits), `/vault/change-dialog` (a dialog with no form and no username, a close button
+  above the fields, and Cancel and Change password as `[role=button]` after them; `?fail` shows an error and keeps the
+  fields) and `/vault/recover` (one new password field and no username), the last two served at https `.test`
+  addresses: the unanswered fill kept its item; emptying the confirmation alone, then the new password too, left the
+  item and logged it once; the error, the close button and Cancel sent nothing; Change password counted once its fields
+  went, and the bar asked to update the site's one sign-in, which updating did; a typed new password was offered the
+  same way; on the recovery form the bar asked to update the site's one sign-in. The PNG
+  `vault-panel-password-dialog-update` was checked by eye. The same fixture with the earlier behavior put back lost the
+  item in both the unanswered fill and the emptied confirmation, while the page still held the password.
 
 ## 16. Finding and picking an item (2026-10-30)
 
