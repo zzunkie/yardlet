@@ -6,8 +6,9 @@ import XCTest
 /// `acceptAgentRun`: one subagent of four streams while the others hold long finished work, each
 /// latest turn hundreds of MCP cards with large results; the streaming one's latest turn goes on
 /// past its answer with larger MCP results and notes. Per state the app reads whether its
-/// subagents wait on the person and their latest answer, the window reads the requests they hold
-/// (`sessionToolRequests`), and the streaming subagent's card reads its line (`progressLine`).
+/// subagents wait on the person, the window reads the requests they hold (`sessionToolRequests`),
+/// and the streaming subagent's card reads its line (`progressLine`); its latest answer is read when
+/// a tool asks for it (`currentAnswer`).
 /// Building the states is not measured; every result read is kept, so none is optimized away.
 @MainActor
 final class SubagentStatePerformanceTests: XCTestCase {
@@ -74,11 +75,10 @@ final class SubagentStatePerformanceTests: XCTestCase {
             accept.append(clock.measure { model.acceptAgentRun(state, in: runs[0]) })
             held.append(clock.measure { kept += model.sessionToolRequests(in: host.id).count })
             line.append(clock.measure { kept += runs[0].progressLine?.count ?? 0 })
-            kept += runs[0].answer?.count ?? 0
         }
         XCTAssertEqual(runs[0].state, .running)
         XCTAssertEqual(runs[0].progressLine, "Reading part \(streamedStates - 1) of the survey.")
-        XCTAssertEqual(runs[0].answer, "Surveyed run-0.")
+        XCTAssertEqual(runs[0].currentAnswer, "Surveyed run-0.")
         XCTAssertGreaterThan(kept, 0)
 
         func median(_ times: [Duration]) -> Duration { times.sorted()[times.count / 2] }

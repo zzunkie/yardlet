@@ -205,9 +205,25 @@ final class AgentRun: Identifiable {
     var state: State = .starting
     /// The subagent's conversation: the shared transcript, or a Codex thread's.
     var entries: [TranscriptEntry] = []
-    var codexState: CodexTaskState?
-    /// Its last answer.
+    /// Set on every state the thread streams, and each differs from the last: its observers hear of it
+    /// without the two being compared first, which in a long turn cost as much as the state itself.
+    var codexState: CodexTaskState? {
+        get {
+            access(keyPath: \.codexState)
+            return storedCodexState
+        }
+        set {
+            withMutation(keyPath: \.codexState) { storedCodexState = newValue }
+        }
+    }
+    @ObservationIgnored private var storedCodexState: CodexTaskState?
+    /// Its answer once it ended (`AppModel.finishAgentRun`).
     var answer: String?
+    /// Its latest answer: the one it ended on, or while it works what it has said so far, read when
+    /// asked rather than on every state or event it streams.
+    var currentAnswer: String? {
+        state.isFinished ? answer : latestAnswer ?? answer
+    }
 
     /// The line its card shows while it works: its latest call or message, in the Mac's words.
     var progressLine: String? {
