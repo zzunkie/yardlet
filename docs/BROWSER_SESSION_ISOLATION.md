@@ -1,19 +1,21 @@
 # Browser session isolation per task
 
-Status: implemented (2026-10-24; the disk profile path was fixed the same day: section 7. On 2026-10-25 the cookie copy
-that changed the shape of cookies was fixed: section 8. On 2026-10-26, importing sign-ins from another browser: section
-10. On 2026-10-27, tasks follow the person's sign-ins: section 11). The browser host contract is in [BROWSER_HOST](BROWSER_HOST.md) section 3, "Profiles", and the vault is in
-[BROWSER_VAULT_DESIGN](BROWSER_VAULT_DESIGN.md).
+Status: implemented. Sections 1 to 6 describe the rules, the structure and their limits; sections 7 to 11 describe
+how profiles are stored, how cookies are copied, importing sign-ins from another browser, and how tasks follow the
+person's sign-ins. The browser host contract is in [BROWSER_HOST](BROWSER_HOST.md) section 3, "Profiles", and the vault
+is in [BROWSER_VAULT_DESIGN](BROWSER_VAULT_DESIGN.md).
 
 ## 1. Background and goals
 
-The need: an AI browser should share things like credentials, but keep values such as the currently signed-in account,
-which cookies, sessions and local storage carry, separate for each session, so that work goes smoothly.
+An AI browser should share things like credentials across tasks, but keep separate for each task the values that
+cookies, sessions and local storage carry, such as the account currently signed in, so that two tasks signed in to the
+same site with different accounts do not overwrite each other.
 
-Before, the tabs of all tasks shared one profile (`~/Library/Application Support/Yardlet/Browser/Default`). Cookies,
-storage and cache mixed between tasks, and when two tasks signed in to the same site with different accounts, they
-overwrote each other. Now all tasks share the vault's credentials (passwords, TOTP, Yardlet passkeys) and Touch ID
-passkeys, and each task keeps its own "current sign-in state" (cookies, localStorage, sessionStorage, IndexedDB, cache).
+With Settings › General "Keep cookies" set to "Per task" (the default), all tasks share the vault's credentials
+(passwords, TOTP, Yardlet passkeys) and Touch ID passkeys, and each task keeps its own sign-in state (cookies,
+localStorage, sessionStorage, IndexedDB, cache) in its own profile. The person's sign-ins still reach every task that
+follows the site (section 3). With "Shared by all tasks", the tabs of all tasks use the single default profile
+(`~/Library/Application Support/Yardlet/Browser/Default`).
 
 ## 2. How the two apps and other browsers do it
 
@@ -30,18 +32,21 @@ The bundles were read as bytes only (not run). Aside and Ego were read through t
 Yardlet combines the Claude app's "Per session" and ego(lite)'s Space: storage per task, new tasks start signed in, and
 credentials are shared through the vault.
 
-## 3. Decisions (the recommended options, taken while the user was away)
+## 3. Rules
 
-| Question | Decision | Reason |
+These are the rules of "Per task". How sign-ins are found and passed on is in section 11.
+
+| Question | Rule | Reason |
 |---|---|---|
-| Disk folder or memory | A disk folder (`Browser/Task-<key>`, the `cache_path` of `CefRequestContext`). Chromium opens as a disk profile only a folder directly under the root cache | The host ends 60 seconds after it has no tabs. With an in-memory context, sign-ins would be lost every time |
-| Does a new task start empty | It starts with a copy of the default profile's cookies. A child task starts with the parent task's cookies | Signing in again every time would bring new-device alerts and two-step verification in every task. The Claude app also copies the parent's cookies on fork. localStorage and IndexedDB are not copied (on such sites the vault signs in again) |
-| When the person signs in in the panel | (Revised 2026-10-27, section 11) Whether with a password or with a passkey, "Sign in with Google" or single sign-on, that site's (registrable domain's) cookies go to the default profile and to every task that follows the site: at once to tasks with tabs open, to the rest when their tab next opens. A sign-in the person makes on a page the agent handed over goes the same way. A site a task signed in to itself (a sign-in its agent filled from the vault or typed) stays that task's and is not overwritten | As in the Codex app, every task normally uses the same sign-ins, and only a task that went in with another account keeps its own. From 2026-10-24 to 10-26 only password sign-ins went to the default profile, and running tasks stayed as they were |
-| Do child tasks inherit | When first opened, they copy the parent's cookies. After that they are separate | Same as the Claude app's fork |
+| Disk folder or memory | A disk folder per task (`Browser/Task-<key>`, the `cache_path` of `CefRequestContext`), directly under the root cache, because Chromium opens only such a folder as a disk profile (section 7) | The host ends 60 seconds after it has no tabs. With an in-memory context, sign-ins would be lost every time |
+| What a new task starts with | A copy of the default profile's cookies. A child task starts with its parent task's cookies and inherits its parent's own sign-ins. localStorage and IndexedDB are not copied (on such sites the vault signs in again) | Signing in again every time would bring new-device alerts and two-step verification in every task. The Claude app also copies the parent's cookies on fork |
+| The person's sign-ins | Whether with a password, a passkey, "Sign in with Google" or single sign-on, the site's (registrable domain's) cookies go to the default profile and to every task that follows the site: at once to tasks with tabs open, to the rest when their tab next opens. A sign-in the person makes on a page the agent handed over is the person's too, and so is a sign-in imported from another browser (section 10) | As in the Codex app, every task normally uses the same sign-ins |
+| A task's own sign-ins | A site a task signed in to itself (its agent filled the sign-in from the vault, or typed it into a password or code field) stays that task's: the task stops following that site, the person's later sign-ins elsewhere do not overwrite it, and a sign-in the person makes again in that task is not passed to other tasks | Only a task that went in with another account keeps its own sign-in |
+| Task profiles from before following | The first time such a task's tab opens, it fills in from the default profile only the sites it has no cookie of at all; sites that already have cookies stay as they are | Filling never overwrites |
 | Tabs on the new task screen | The new task screen has its own profile key, and the task its tab moves to keeps using that key. The new task screen gets a new key | The moved tab's page stays as it is, so its storage must stay the same too |
 | Archive and delete | Both delete that task's folder. When the host does not have the folders open (when the host ends), folders that belong to no remaining task are deleted, along with the record of that profile that Chromium left in `Local State` | So that nothing is left behind after removal. The Claude app deletes only on delete |
-| Turning it on and off | Settings › General "Keep cookies": "Per task" (default) / "Shared by all tasks" (as before) | A setting in the same place as the Claude app's "Keep cookies". "Until quit" was left out, because it would mean something different in Yardlet, whose host ends often |
-| Sign-ins from another browser (2026-10-26) | The cookies of the sites the person chose from the page menu of the browser panel go into the default profile and that task's profile. The cookies those sites had before are deleted | So that sites whose passkey exists only in another browser can be used in Yardlet (section 10). Since 2026-10-27 it counts as the person's sign-in, so the tasks that follow those sites take it too (section 11) |
+| Turning it on and off | Settings › General "Keep cookies": "Per task" (default) / "Shared by all tasks" | A setting in the same place as the Claude app's "Keep cookies". "Until quit" was left out, because it would mean something different in Yardlet, whose host ends often |
+| Sign-ins from another browser | The cookies of the sites the person chose from the page menu of the browser panel replace that site's cookies in the default profile and in the panel task's profile, and the tasks that follow those sites take them too | So that sites whose passkey exists only in another browser can be used in Yardlet (section 10) |
 | Touch ID passkeys | The default profile's `webauthn.touchid.metadata_secret` is put into each new task profile | Chromium reads Touch ID passkey metadata per profile with this key. Without it, the passkeys would not show in each task |
 
 ## 4. Structure
@@ -71,20 +76,17 @@ credentials are shared through the vault.
   list has been read in full. Chromium writes every profile it opens into `Local State` (`profile.info_cache`,
   `profile.profiles_order`, `variations_google_groups`) and does not remove them when the folder disappears, so cleanup
   also removes `Task-` names without a folder from there.
-- **The person's sign-in (revised 2026-10-27):** `BrowserLoginFollow` finds sign-ins and passes the person's to the
+- **The person's sign-in:** `BrowserLoginFollow` finds sign-ins and passes the person's to the
   default profile and the tasks that follow the site; how it finds them and the rules are in section 11. The vault's
   watcher (submission of a form with a password field the person typed into, a one-time code field) runs with "Per
   task" even when the vault is off, and what it reports is used to find sign-ins too.
 
 ## 5. Costs and limits
 
-- **Memory (2026-10-24 QA, disk profiles after the fix in section 7, 8 windowless tabs, the same QA page):** With a
-  profile per task, the process tree total was 1,162 MiB (browser process 232); with the same tabs opened in the single
-  default profile, 1,113 MiB (browser process 197). The difference is about 49 MiB, around 6 MiB per profile, and most
-  of it is in the browser process (per-profile services). There was one renderer per tab (10) in both cases. The first
-  measurement, before the fix (1,134 MiB), was taken with in-memory profiles. What grows a lot as tabs increase is the
-  frame surfaces the tabs draw (one helper's footprint 86 → 504 MiB, resident memory unchanged), which has nothing to do
-  with isolation.
+- **Memory (measured by the isolation QA with 8 windowless tabs on the same page):** a profile per task costs about
+  6 MiB per profile over the single default profile, most of it in the browser process (per-profile services). There is
+  one renderer per tab either way. What grows a lot as tabs increase is the frame surfaces the tabs draw, which has
+  nothing to do with isolation.
 - **Limits:** At most 16 browsers in total (the host limit, 9 per task) and 32 profile contexts. One browser process
   handles them.
 - New tasks receive only cookies. Sites that keep sign-in tokens in localStorage or IndexedDB need a new sign-in in a
@@ -97,7 +99,7 @@ credentials are shared through the vault.
   `schemeBoundCookies: false`), so sending them makes no difference. The Claude app's copy uses the same addresses.
 - Finding the person's sign-in (section 11) needs a moment that starts one (a password field, a one-time code field, a
   passkey window, a popup, leaving for another site). A sign-in without such a moment (a sign-in link opened outside
-  Yardlet, for example) is not passed on. Until 2026-10-26 only password sign-ins were passed on.
+  Yardlet, for example) is not passed on.
 - When an archived task is restored, that task's browser starts again with the default profile's cookies.
 - Changing the setting leaves already open tabs as they are. Tabs opened after that follow it.
 
@@ -106,7 +108,8 @@ credentials are shared through the vault.
 `run-check.sh … --ui-fixture-browser-check-only=isolation` (`BrowserHostIsolationQA`) checks on a real CEF host: whether
 a new task starts with the default profile's cookies; whether two tasks keep separate cookies and localStorage on the
 same site; whether a task's sign-in does not leak into the default profile; whether a child task starts with the
-parent's cookies; whether copying the person's sign-in reaches only tasks started afterwards; whether the Touch ID key
+parent's cookies; whether the person's sign-in reaches the default profile, the running tasks and the tasks started
+after it; whether the Touch ID key
 goes into a new profile; whether, after the host ends and starts again, a task's cookies (session cookies included) and
 localStorage remain and it does not receive the starting cookies again; whether switching to "Shared by all tasks" uses
 the default profile; whether the folders of tasks that no longer exist and their `Local State` records are deleted.
@@ -117,136 +120,85 @@ cookie on `accounts.example.com`, Secure and non-Secure cookies on `.example.com
 top-level site) go into a new task with the same domain and Secure flag, and the partitioned cookie does not become a
 top-level cookie; whether, after a sign-in done again in a task is moved to the default profile, the account site
 receives each name once with the new value (both in the default profile and in tasks after it). Adding
-`--ui-fixture-isolation-cookies` runs only this check. Since 2026-10-27 the checks of the sign-ins tasks follow
-(section 11) run too, and adding `--ui-fixture-isolation-follow` runs only those. Every check uses a new task and decides first which values it
+`--ui-fixture-isolation-cookies` runs only this check. The checks of the sign-ins tasks follow (section 11) run too,
+and adding `--ui-fixture-isolation-follow` runs only those. Every check uses a new task and decides first which values it
 will read (the cookie check first deletes cookies of the same name from earlier runs), so state that earlier QA left in
 the same QA home does not matter. Each step measures the process tree's memory (adding `--ui-fixture-isolation-shared`
-opens the same tabs in the single default profile and measures that). 2026-10-24 results (after the fix in section 7):
-all 9 passed in a new QA home; all 9 also passed in a QA home where the full check and the isolation check had run
-first; the 30 vault QA checks passed; "profile keeps cookies across host restarts" in the full `run-check.sh` passed.
+opens the same tabs in the single default profile and measures that). The full `run-check.sh` also checks that a profile
+keeps its cookies across host restarts.
 
-## 7. Fix: task profiles were in memory (2026-10-24)
+## 7. Where task profiles are stored
 
-- **Symptom:** After this feature was merged, "profile keeps cookies across host restarts" in the full QA failed with
-  `cookies ""`. The reason is that the panel's tab uses the task's (`…F401`) profile.
-- **Cause:** CEF 154 (Chrome bootstrap) opens a disk profile only when the request context's `cache_path` is the root
-  cache or directly under it; otherwise it logs "Cannot create profile at path" and uses an in-memory (OffTheRecord)
-  profile. The first implementation's `Browser/Tasks/<key>` was one level deeper, so every task profile was in memory.
-  Within one host, isolation and the starting cookie copy still worked, and 8 isolation QA checks passed, but when the
-  host ended, all of a task's sign-ins were gone (the folder held only the `Preferences` that Yardlet wrote). The first
-  memory measurement in section 5 was also taken with in-memory profiles.
-- **Fix:** The folder moved to `Browser/Task-<key>` (host `TaskProfiles`, app `BrowserTaskProfiles`, saved file
-  `Browser/TaskProfiles.json`). Disk profiles are read asynchronously, and `create_browser_sync` cannot create a browser
-  in a context that has not been read yet (it returns NULL), so the bridge creates the browser after it receives
-  `on_request_context_initialized` for each context, and the host treats tabs in between like tabs that copy the
-  starting cookies. The record that Chromium leaves in `Local State` for each disk profile (about 400 bytes per profile,
-  kept even when the folder is deleted) is removed at cleanup. A host restart and a `Local State` check were added to
-  the isolation QA.
-- **The old `Browser/Tasks` folder:** This feature never shipped in an installed build (not on main, and no `Tasks` in
-  `Browser` of this Mac's installed app), so no code to move or delete the folder was added. Homes that used an
-  `integration` development build may have an unused `Browser/Tasks`, which can be deleted.
+- **Folder:** `Browser/Task-<key>` directly under the root cache (host `TaskProfiles`, app `BrowserTaskProfiles`, saved
+  file `Browser/TaskProfiles.json`). CEF 154 (Chrome bootstrap) opens a disk profile only when the request context's
+  `cache_path` is the root cache or directly under it; any deeper path is logged as "Cannot create profile at path" and
+  becomes an in-memory (OffTheRecord) profile, which loses all of a task's sign-ins when the host ends.
+- **Opening:** disk profiles are read asynchronously, and `create_browser_sync` cannot create a browser in a context that
+  has not been read yet (it returns NULL). The bridge therefore creates the browser after it receives
+  `on_request_context_initialized` for that context, and the host treats tabs in between like tabs that copy the
+  starting cookies.
+- **`Local State`:** Chromium keeps a record for each disk profile it opened (about 400 bytes per profile) even after the
+  folder is deleted. Cleanup removes the `Task-` names that have no folder (section 4).
+- The isolation QA restarts the host and checks that a task's cookies and localStorage remain, and checks `Local State`
+  (section 6).
 
-## 8. Fix: copying changed the shape of cookies (2026-10-25)
+## 8. Copying cookies in the shape Chromium stored them
 
-- **Symptom:** In the panel of a task where the user was signed in to a Google account, opening the Google Cloud console
-  (`console.cloud.google.com/auth/…`) and the OAuth consent address
-  (`accounts.google.com/o/oauth2/v2/auth?…prompt=select_account`) went to `accounts.google.com/CookieMismatch` every
-  time ("found a problem with your cookie settings"). Search Console opened in the same tab. That step was done in
-  another browser.
-- **Cause:** When the copy inserted a cookie, it passed the source's domain value as it was. Chromium stores the domain
-  of a host-only cookie without a dot (`accounts.google.com`), but CEF's `set_cookie` makes a host-only cookie only when
-  the domain is empty, and with any value it makes a domain cookie (`.accounts.google.com`, which also goes to
-  subdomains) (the description of `cef_cookie_t.domain` in `cef_types.h`). So every host-only cookie became a domain
-  cookie, and the `__Host-` cookies, which must not have a domain attribute, were rejected by Chromium and went missing.
-  Also, `visit_all_cookies`, which reads all cookies, returns partitioned cookies too, but CEF's cookie struct has no
-  partition key, so the partitioned cookies went in as unpartitioned cookies.
-- **What happened with Google (installed build records; values not looked at):** At 00:37, when that task's profile was
-  created, the copy from the default profile turned 3 host-only sign-in cookies of `accounts.google.com` into
-  `.accounts.google.com` and dropped 3 `__Host-` cookies. At 17:20, when Google set new sign-in cookies in that panel (2
-  host-only, 3 `__Host-`), two copies of each same-name cookie (the 00:37 copy and the 17:20 original) went to
-  `accounts.google.com` from then on. Flows that pass through the Google account site (the console's sign-in check,
-  OAuth consent) sent this back as `CookieMismatch`. Search Console opens with `.google.com` domain cookies (those
-  cookies were copied as they were), which is taken to be why it worked (inferred). At the same 17:20, copying the
-  person's sign-in also made duplicates in the default profile (the default profile's host-only original is from 10-23,
-  the copy from 17:20), so tasks created after that start in the same state. The 16:49 update restart was not the
-  trigger: the folder was not newly created (cookie DB created at 00:37, no alias), no cookies were copied again (every
-  copy is from 00:37), and all the Google cookies are persistent cookies.
-- **Other facts from the installed build:** The cookie DB is Chromium 154's schema 24 (`top_frame_site_key`,
-  `source_scheme`, `source_port`, `source_type` and others). Cookies that a copy created stay as `source_type` 3
-  (cookies set through the API), which tells them apart from originals (1: HTTP response, 2: script). A task copied from
-  the default profile had 0 host-only cookies and 0 `__Host-` cookies, and all 7 partitioned cookies of the default
-  profile were in it without partitions. In the default profile, other sites also have a host-only original and a domain
-  copy with the same name side by side (Google 3, other sites 3), and there are 45 domain copies whose originals appear
-  to be host-only. The cookie settings in `Preferences` (`profile.cookie_controls_mode`, third-party blocking, cookie
-  exceptions) are not written in the default profile or in the task profiles, so they are Chrome's defaults, and
-  `chromium.log` has no cookie lines.
-- **Third-party cookies and the user agent are not the cause (QA):** In a frame of another site, a
-  `SameSite=None; Secure` cookie and a partitioned cookie are both stored and read, and `hasStorageAccess()` is true
-  (the same as the default of a regular Chrome profile). What sites receive is the `Chrome/154.0.0.0` user agent and
-  `Sec-CH-UA: "Not A(Brand";v="99", "Chromium";v="154"` (Chromium instead of Chrome's "Google Chrome" brand; this fits
-  Search Console working in the same tab).
-- **Fix:** The cookie copy in `YardletCEFBridge.c`. Host-only cookies are inserted with an empty domain, by the
-  address's host alone (the same method as the Claude app's copy). After reading all of the source's cookies, it asks
-  the source again with each cookie's address (`visit_url_cookies`; CEF returns only unpartitioned cookies) and inserts
-  only the cookies in that answer. Partitioned cookies are not moved (section 5). With a default profile holding 300
-  cookies (150 hosts; about 186 remain because of Chromium's per-site limit), a new task took 0.21 seconds to open a
-  page (a temporary measurement, not committed).
-- **The two apps (bundle bytes, not run):** The Claude app 3.1623.3 reads with `cookies.get({})` when it forks a session
+- **Why the shape matters:** Chromium stores the domain of a host-only cookie without a dot (`accounts.google.com`), but
+  CEF's `set_cookie` makes a host-only cookie only when the domain is empty, and with any value makes a domain cookie
+  (`.accounts.google.com`, which also goes to subdomains) (the description of `cef_cookie_t.domain` in `cef_types.h`).
+  `__Host-` cookies must not have a domain attribute, so Chromium rejects them when one is given.
+  `visit_all_cookies`, which reads all cookies, returns partitioned cookies too, but CEF's cookie struct has no partition
+  key, so inserting them would make unpartitioned cookies. When a site receives two cookies of one name in different
+  shapes, flows through the Google account site (the Cloud console's sign-in check, OAuth consent) answer with
+  `/CookieMismatch`.
+- **The copy (`YardletCEFBridge.c`):** host-only cookies are inserted with an empty domain, by the address's host alone
+  (the same method as the Claude app's copy). After reading all of the source's cookies, it asks the source again with
+  each cookie's address (`visit_url_cookies`; CEF returns only unpartitioned cookies) and inserts only the cookies in that
+  answer. Partitioned cookies are not moved (section 5). The rules against two shapes of one cookie are in section 9.
+- **What sites see (QA):** in a frame of another site, a `SameSite=None; Secure` cookie and a partitioned cookie are both
+  stored and read, and `hasStorageAccess()` is true (the same as the default of a regular Chrome profile). Sites receive
+  the `Chrome/154.0.0.0` user agent and `Sec-CH-UA: "Not A(Brand";v="99", "Chromium";v="154"` (the Chromium brand
+  instead of Chrome's "Google Chrome").
+- **The two apps (bundle bytes, not run):** the Claude app 3.1623.3 reads with `cookies.get({})` when it forks a session
   and inserts with `cookies.set`, leaving out `domain` for host-only cookies (`bgi`:
   `...e.hostOnly?{}:{domain:e.domain}`; the address is https when `secure`, otherwise http). It does not handle
   partition keys. In the Codex app 26.1016 all threads share one store (`persist:codex-browser-app`), so there is no
   copy between profiles. In neither app was a switch or setting found that changes the third-party cookie policy.
-- **Cookies already changed (one-time cleanup, `BrowserCookieCopyRepair`):** The fixed copy does not repair copies that
-  are already stored, so Yardlet cleans up once, just before it first starts the browser host (it cannot while the host
-  has the cookie DB open). In the `Cookies` of the default profile and of the `Task-<UUID>` profiles, it deletes only
-  the domain cookies that a copy created (`source_type` 3, `.host`) that duplicate a host-only cookie with the same
-  name, path and partition that the site created itself (`source_type` 1 or 2). The copy before the fix never created
-  host-only cookies of a registrable domain, so the host-only side of such a duplicate is always the site's own. The
-  site's own duplicates, copies with no pair, and duplicates of sites that the fixed copy moved (both sides are copies)
+- **One-time cleanup of earlier copies (`BrowserCookieCopyRepair`):** an earlier copy turned every host-only cookie into
+  a domain cookie, and such copies stay in a profile until removed. So Yardlet cleans up once, just before it first
+  starts the browser host (it cannot while the host has the cookie DB open). In the `Cookies` of the default profile and
+  of the `Task-<UUID>` profiles, it deletes the domain cookies that a copy created (`source_type` 3, set through the
+  cookie manager) when a host-only cookie with the same name, path and partition is there, whatever created the
+  host-only one: the earlier copy never created host-only cookies, so the host-only side of such a pair has the site's
+  shape. The site's own cookies (`source_type` 1 or 2), including pairs the site created itself, and copies with no pair
   remain. Only for DBs with something to delete, it first copies `Cookies` and `-journal` and `-wal` to
-  `~/.Trash/Yardlet cookie backup <date time>/<profile>/`, and leaves a profile untouched if its backup fails. It
-  deletes in a single transaction. When everything is done, it leaves `CookieCopyRepair.json` (only the run time and the
-  number deleted per profile) in the root cache, so it does not run again. If the host holds the DB (the PID in
-  `SingletonLock` is alive), the DB cannot be read (a journal that needs a rollback and the like), or the backup or
-  deletion fails, it leaves no record and runs again at the next start. The Trash is the one of `NSHomeDirectory()`
-  (FileManager's Trash does not follow the home that QA sets, so in the first QA the backup went to the person's Trash).
-  Those sites may need a new sign-in.
-- **QA:** The cookie checks in section 6. In a build before the fix (with only the QA added), a new task's two-site
-  check gave `CookieMismatch` (`__Host-qa_signin` missing, the partitioned cookie leaking to the top-level site), the
-  new task's `qa_signin` was on `.accounts.example.com`, and the default profile's `qa_signin` after a new sign-in was
-  moved there had two copies (A, B). In the fixed build all 4 passed, and all 13 isolation QA checks passed. The
-  one-time cleanup was verified with `BrowserCookieCopyRepairTests` (DBs in a temporary folder) and by starting the app
-  five times in a QA home: in an empty home only the record is left; after planting duplicates and deleting the record,
-  it deletes only those duplicates and backs up to the QA home's Trash; with the record present, it does not run again.
+  `~/.Trash/Yardlet cookie backup <date time>/<profile>/`, and leaves a profile untouched if its backup fails. It deletes
+  in a single transaction. When everything is done, it leaves `CookieCopyRepair.json` (the run time, the number deleted
+  per profile and the round) in the root cache, so it does not run again until a later round (the current round is 3).
+  If the host holds the DB (the PID in `SingletonLock` is alive), the DB cannot be read (a journal that needs a rollback
+  and the like), or the backup or deletion fails, it leaves no record and runs again at the next start. The Trash is the
+  one of `NSHomeDirectory()`, which follows the home a QA run sets (FileManager's Trash would be the person's). Those
+  sites may need a new sign-in.
+- **QA:** the cookie checks in section 6. The one-time cleanup is checked by `BrowserCookieCopyRepairTests` (DBs in a
+  temporary folder): which cookies go and which stay, the backups in the Trash, the record, a record of an earlier round
+  letting the current round run once, and running again when a host holds the profiles or the backup fails.
 
-## 9. Fix: duplicate copies spread again after the cleanup (2026-10-26)
+## 9. Never two shapes of one cookie
 
-- **Symptom:** When the user signed in to Sentry with Google in a task, it was `/CookieMismatch` again. This was after
-  the one-time cleanup of section 8 (10-26 03:48 KST, 3 in the default profile and 5 in two tasks).
-- **Cause:** The fixed copy of section 8 kept the shape of cookies but did not do two things. (1) When the sending
-  profile had domain cookies that the old copy made (`LSID`, `ACCOUNT_CHOOSER` and `OTZ` on `.accounts.google.com`,
-  `source_type` 3) next to the site's host-only cookies, it moved both. (2) When the receiving profile had the same
-  cookie in another shape, it did not delete it but added the new one. The one-time cleanup deleted only in profiles
-  that had pairs, so when a sign-in was moved again from a profile left with only the domain cookies and no pair, the
-  default profile got duplicates (10-26 14:17), and tasks created after that started with duplicates. As of 10-26 14:00,
-  the default profile, the ERP task and the open-source task (40F6679B) had duplicates.
-- **Fix:** The copy (`set_copied_cookies`) leaves out, on the sending side, domain cookies that have a host-only cookie
-  with the same host, name and path, and for each cookie first deletes the other shape on the receiving side (a domain
-  cookie for a host-only one, a host-only cookie for a domain one). CEF has no call that deletes exactly one cookie, so
-  it writes a cookie with the same name, domain and path that has already expired. Chromium deletes just that one cookie
-  (`cookie_monster.cc` `DELETE_COOKIE_EXPIRED_OVERWRITE`, 154.0.8037.58 source). The one-time cleanup runs once more as
-  round 2 (`round` 2 in `CookieCopyRepair.json`).
-- **QA:** In the last step of section 6, domain cookies of the old copy (`.accounts.example.com` `qa_signin=OLD`) were
-  planted in both the default profile and task F. The default profile and task G, created after it, sent only one
-  `qa_signin`, `B`, and all 13 isolation QA checks passed. The 22 password QA checks also passed.
-- **Round 3 (same day):** Round 2 deleted 3 each in the ERP task and the Mobi CS task at 22:57 KST, but left 6 pairs in
-  the default profile and pairs in two tasks (5 pairs, 3 pairs). In the remaining pairs the host-only side was a copy
-  too (`source_type` 3). Duplicates from before the cleanup had moved back and forth between profiles until both sides
-  were copies. The old copy never created host-only cookies, so the host-only side of a pair has the site's shape,
-  whatever its source. So round 3 deletes every copied domain cookie that pairs with a host-only cookie. Pairs where the
-  site itself created both (for example `_ga` on `search.google.com`) stay.
+- **On the sending side:** the copy (`set_copied_cookies`) leaves out domain cookies that have a host-only cookie with
+  the same host, name and path. A profile may still hold domain cookies an earlier copy made next to the site's
+  host-only cookie; passing both on would recreate the pair in the receiving profile.
+- **On the receiving side:** for each cookie, the copy first deletes the other shape (a domain cookie for a host-only
+  one, a host-only cookie for a domain one). CEF has no call that deletes exactly one cookie, so it writes a cookie with
+  the same name, domain and path that has already expired. Chromium deletes just that one cookie (`cookie_monster.cc`
+  `DELETE_COOKIE_EXPIRED_OVERWRITE`, 154.0.8037.58 source).
+- Importing sign-ins (section 10) and passing on the person's sign-ins (section 11) insert through the same path.
+- **QA:** the last step of section 6 plants domain cookies of the earlier copy (`.accounts.example.com`
+  `qa_signin=OLD`) in both the default profile and a task, and checks that the default profile and a task created after
+  it send only one `qa_signin`, the new value.
 
-## 10. Importing sign-ins from another browser (2026-10-26; more browsers on 2026-10-27)
+## 10. Importing sign-ins from another browser
 
 - **Background:** Sites that sign in only with passkeys cannot be signed in to in the Yardlet browser when the passkey
   exists only in another browser (iCloud Keychain, Whale, Chrome). Importing that browser's sign-in cookies lets Yardlet
@@ -257,10 +209,10 @@ first; the 30 vault QA checks passed; "profile keeps cookies across host restart
   allow in the macOS keychain prompt ("Yardlet wants to use your confidential information stored in 'Whale Safe Storage'
   in your keychain."). When it is done, the panel shows "Imported the sign-in for … from Whale", and reloads the page if
   it is on that site.
-- **Browsers it looks for (more on 2026-10-27):** In `~/Library/Application Support` it looks, in this order, for the
+- **Browsers it looks for:** In `~/Library/Application Support` it looks, in this order, for the
   Chromium family Whale, Chrome, Edge, Brave, Arc, Comet, Vivaldi, Opera, Opera GX, Yandex, Helium and Chromium, and the
   Firefox family Firefox, Zen, Floorp, LibreWolf and Waterfox. Folder and keychain names and the evidence are in the
-  table below. Only profiles with a cookie DB on this Mac are shown, and the sheet shows the app bundle's icon when that
+  table below. Only profiles with a cookie DB are shown, and the sheet shows the app bundle's icon when that
   browser app is on the Mac, and a globe symbol otherwise (`NSWorkspace.urlForApplication(withBundleIdentifier:)`,
   without running the app).
   - Chromium family: profiles are read from `Local State` (the names in `profile.info_cache`, `profiles_order`,
@@ -271,7 +223,7 @@ first; the 30 vault QA checks passed; "profile keeps cookies across host restart
   - Firefox family: from the `[Profile…]` sections of `profiles.ini` (`Name`, `Path`, under the browser folder when
     `IsRelative=1`), only profiles with `cookies.sqlite` are shown. The profile that the install uses (`Default` in
     `[Install…]`) comes first, then `Default=1`, then the rest in file order. The keychain is not used.
-- **macOS 27's browser folder protection (confirmed 2026-10-27):** A rule set in macOS 27's `/usr/libexec/sandboxd`
+- **macOS 27's browser folder protection (confirmed):** A rule set in macOS 27's `/usr/libexec/sandboxd`
   (`defaultRules-3`) opens the Chrome (`Google/Chrome`), Brave (`BraveSoftware/Brave-Browser`), Edge (`Microsoft Edge`)
   and Firefox (`Firefox`) folders only to that browser's own team ID and signing ID and to Safari's import service
   (`com.apple.Safari.BrowserDataImportingService`, Chrome and Firefox only). When another app reads them, it gets
@@ -297,7 +249,7 @@ first; the 30 vault QA checks passed; "profile keeps cookies across host restart
   spaces, PKCS#7). When the `meta` version is 24 or higher, the first 32 bytes of the decrypted value must be the
   SHA-256 of `host_key` (otherwise that cookie is dropped), and the rest is the value. If none decrypts, the key is
   taken not to belong to that profile and nothing is inserted. An unencrypted `value` is accepted too.
-- **Reading Firefox (2026-10-27):** `cookies.sqlite` (in WAL mode, so recent cookies are in `-wal`) is copied the same
+- **Reading Firefox:** `cookies.sqlite` (in WAL mode, so recent cookies are in `-wal`) is copied the same
   way, and `moz_cookies` is read as plain text. The conversion follows Firefox 158's source
   `netwerk/cookie/CookiePersistentStorage.cpp` (schema 17): a leading dot in `host` means a domain cookie, `isSecure`
   and `isHttpOnly` carry over as they are, and `expiry` is **milliseconds** since 1970 from schema 16 on (seconds before
@@ -332,38 +284,36 @@ first; the 30 vault QA checks passed; "profile keeps cookies across host restart
 - **Limits:** Sites that keep the sign-in in localStorage or IndexedDB do not come along (the Claude app's import moves
   localStorage as well). Chromium shortens the expiry of inserted cookies to at most 400 days from insertion (source
   evidence, not measured with QA). Imported cookies share that browser's session, so on some sites signing out on one
-  side also ends the other. Since 2026-10-27 an import is the person's sign-in, so the tasks that follow those sites take
+  side also ends the other. An import is the person's sign-in, so the tasks that follow those sites take
   it from the default profile too (section 11).
 - **QA:** `run-check.sh … --ui-fixture-browser-check-only=import` (`BrowserHostLoginImportQA`). It creates a fake Whale
   folder in the QA home's Application Support (two profiles, cookies encrypted with a test password: a host-only cookie
   and a `__Host-` cookie on `accounts.example.com`, Secure and non-Secure cookies on `.example.com`, a partitioned
   cookie, an expired cookie, a `localhost` cookie, and a `www.other.test` cookie that will not be chosen) and passes
   that password in place of the keychain. It first plants the old copy's domain cookies and other cookies of the site in
-  the default profile, and that task's sign-in in the panel's task. 2026-10-27 results (ad-hoc debug bundle, new QA
-  home): all 9 passed. The site list is `example.com`, `localhost` and `other.test` (no site with only partitioned or
-  expired cookies); the page menu has the item, and the sheet opens with `localhost` checked (image `import-sheet.png`);
+  the default profile, and that task's sign-in in the panel's task. It checks that the site list is `example.com`,
+  `localhost` and `other.test` (no site with only partitioned or expired cookies); the page menu has the item, and the
+  sheet opens with `localhost` checked (image `import-sheet.png`);
   the default profile, the panel's task and a task created afterwards all send one imported value each of `qa_signin`,
   `__Host-qa_signin` and `qa_session` to `accounts.example.com`, and the earlier `OLD`, `Y` and `T` and `qa_leftover`
   are gone; the stored shapes are `__Host-qa_signin accounts.example.com Secure HttpOnly Lax`,
   `qa_plain .example.com non-Secure Lax session`, `qa_session .example.com Secure HttpOnly None`,
   `qa_signin accounts.example.com Secure HttpOnly None`; `keep.test` stays as it was and `other.test` does not come in;
-  the panel page reloads and sees `qa_local`; no values in the app or host logs. No leftover processes or crash reports.
-  **More browsers on 2026-10-27:** In the same QA home it adds a fake Firefox folder (two profiles in `profiles.ini`,
+  the panel page reloads and sees `qa_local`; no values are in the app or host logs.
+  **Firefox and unreadable browsers:** in the same QA home it adds a fake Firefox folder (two profiles in `profiles.ini`,
   where the one the install uses differs from `Default=1`; a schema 17 `cookies.sqlite` left in WAL: a host-only Strict
   cookie on `accounts.example.net`, SameSite-unspecified, Secure None and non-Secure None cookies on `.example.net`, a
   container cookie with the same name, a partitioned cookie, an expired cookie) and a fake Chrome folder whose
-  `Local State` cannot be read. After Whale, it imports Firefox without the keychain. Results (ad-hoc debug bundle,
-  `$TMPDIR/browser-host-qa/import-more-browsers/`): 13 passed in both the light screen `run-import` and the dark screen
-  `run-import-dark`. The profile order is `Whale · Work`, `Whale · Person 1`, `Firefox · default-release`,
+  `Local State` cannot be read. After Whale, it imports Firefox without the keychain, and checks that the profile order
+  is `Whale · Work`, `Whale · Person 1`, `Firefox · default-release`,
   `Firefox · old`, and the unreadable browser `Chrome`; the Firefox site, read through the WAL, is `example.net`; the
   Firefox cookie shapes stored in the default profile are `qa_ff_signin accounts.example.net Secure HttpOnly Strict`,
   `qa_ff_session .example.net Secure HttpOnly (unspecified)`, `qa_ff_cross .example.net Secure HttpOnly None`,
   `qa_ff_plain .example.net non-Secure (unspecified)` (all with an expiry); the panel's task sends the same four values
-  and no container value; the panel notice is "Imported the sign-in for example.net from Firefox."; no values in the app
-  or host logs; no leftover processes or crash reports. The sheet image (`import-sheet.png`) shows the installed Whale's
-  icon and the Chrome notice line. The globe symbol shows only when the menu is open, so it is not in the image.
+  and no container value; the panel notice is "Imported the sign-in for example.net from Firefox."; and no values are in
+  the app or host logs. The sheet image (`import-sheet.png`) shows the Chrome notice line.
 
-### Supported browsers and evidence (2026-10-27)
+### Supported browsers and evidence
 
 Folders are under `~/Library/Application Support/`, and keychain entries are services (in parentheses, the account seen
 in the same place). "Download" means a dmg, tar.xz or pkg from the vendor's server, attached read-only or unpacked
@@ -400,16 +350,12 @@ bundle is `com.openai.atlas.web`, "ChatGPT Safe Storage"/"ChatGPT"), **Sidekick*
 team moved to Perplexity), **Thorium** (Thorium-MacOS releases ship without macOS files from M144 (2026-06), the last
 M138 was in 2026-02, and the Homebrew cask is disabled too), **Safari** (above).
 
-## 11. Tasks follow the person's sign-ins (2026-10-27)
+## 11. Tasks follow the person's sign-ins
 
-- **Why:** The user: "sign-in state is not shared well". Under the rules in section 3, only the person's password
-  sign-ins went to the default profile, and nothing reached tasks already open. When the user signed in to Cloudflare in
-  one task, the agents of other tasks kept seeing it signed out.
-- **Decision (approved by the user):** Only the sites a task signed in to itself (its agent's vault fill or typed
-  sign-in) stay that task's; on every other site
-  all tasks follow the user's latest sign-in. Normally, as in the Codex app, every task uses the same sign-ins, and only
-  a task that went in with another account keeps its own. The two choices of Settings › General "Keep cookies" stay as
-  they are; this rule lives within "Per task".
+- **Rule (section 3):** only the sites a task signed in to itself (its agent's vault fill or typed sign-in) stay that
+  task's; on every other site all tasks follow the person's latest sign-in. Normally, as in the Codex app, every task
+  uses the same sign-ins, and only a task that went in with another account keeps its own. This rule lives within
+  "Per task" of Settings › General "Keep cookies"; "Shared by all tasks" uses one profile for every task.
 - **Finding sign-ins (`BrowserLoginFollow`):** A cookie change alone cannot tell a sign-in from a site renewing its
   cookies (Google renews them all the time while in use). So only when a moment that starts a sign-in occurs does it
   measure a sum of hashes of that site's cookies (the FNV-1a of name, domain, path and value, added up; the host
@@ -424,8 +370,8 @@ M138 was in 2026-02, and the Homebrew cask is disabled too), **Safari** (above).
     minutes it also catches the cookies set after two-step verification.
   - Whose sign-in: whoever used the tab last when it measures again. The person's when the person used the tab in the
     last three minutes and the agent has not used it since (`BrowserTab.isDrivenByAgent`), on a page the agent handed
-    over (`browser_handoff`) too (the user's decision of 2026-10-27, "sign-ins should spread"). A popup that has closed
-    goes by who used the tab that opened it when the sign-in began. A sign-in the agent made through a password or code
+    over (`browser_handoff`) too. A popup that has closed goes by who used the tab that opened it when the sign-in
+    began. A sign-in the agent made through a password or code
     field and a vault fill (`.vaultFilled`) are the task's own. When the agent's moment is not a password or code field
     (browsing), it is nothing, and so is a tab nobody drives that goes through another site on its own.
 - **Passing it on:** For the person's sign-in it counts the site's sign-in number up by one and copies that task
@@ -450,7 +396,7 @@ M138 was in 2026-02, and the Homebrew cask is disabled too), **Safari** (above).
   profile key the numbers it took (`received`) and its own sign-ins (`own`), the keys that began following
   (`followers`), and whether the vault log was read. No cookie values. The records of archived and deleted tasks go with
   their folders.
-- **Where:** `BrowserLoginFollow.swift` (new), `BrowserTaskProfiles.swift` (`opening`, `personSignedIn`,
+- **Where:** `BrowserLoginFollow.swift`, `BrowserTaskProfiles.swift` (`opening`, `personSignedIn`,
   `signedInItself`), `BrowserHostClient.swift` (`cookieDigest`, `copyCookies(from:to:site:)`, the tab event hook),
   `BrowserHostProtocol.swift`, `BrowserHostPaneVault.swift` and `BrowserHostPaneLoginImport.swift` (moments and
   imports), `VaultCenter.swift` (`agentFills`), the host's `BrowserHost.swift` and `TaskProfiles.swift` (the list of
@@ -465,18 +411,10 @@ M138 was in 2026-02, and the Homebrew cask is disabled too), **Safari** (above).
   the person browses are not passed on; a single sign-on round trip in a tab nobody drives is not passed on; the
   person's sign-in without a password (single sign-on) reaches F and a task made later, and G keeps its own; the person's password sign-in on a page the agent handed over
   reaches F and the default profile and does not become that task's own; a task from
-  before the feature keeps its own cookie on 127.0.0.1 (`OLD`) and takes only the site it had no cookie of
-  (`fill.qa-follow.test`). Following section 3's revision, "the person's sign-in reaches running tasks too" and section
-  8's "running tasks get one of each" changed. 2026-10-27 results (ad-hoc debug bundle,
-  `$TMPDIR/browser-host-qa/login-follow/`): 18 isolation checks passed in a new QA home and again in the same home. With
-  the last bundle, which adds the check of a tab nobody drives and the code field moment, in a new QA home (`final/`):
-  19 isolation, 37 vault and 13 import checks all passed, no processes or crash reports left. After the handoff decision and the window owners
-  (merged with 0.11.1), in a new QA home (`decision/`): 20 isolation (the handoff check added), 37 vault and 13 import
-  checks passed, no processes or crash reports left. The host log has command names only, no cookie values. The moments the QA goes through are the password field and the round trip through
-  another site. The popup, passkey window and code field moments use the same comparison but were not run in QA (the
-  passkey window could take the screen). The `compat` and `passkey` runs, which show Chromium's windows, were not run
-  again for the shared window hook (they can raise system prompts on the screen); `ChromiumWindowPresentationTests` and
-  `BrowserAgentTabToolsTests` passed.
+  before following keeps its own cookie on 127.0.0.1 (`OLD`) and takes only the site it had no cookie of
+  (`fill.qa-follow.test`). The host log has command names only, no cookie values. The moments the QA goes through are
+  the password field and the round trip through another site. The popup, passkey window and code field moments use the
+  same comparison but are not run in QA (the passkey window could take the screen).
 - **Limits:**
   - A sign-in the person makes on a page the agent handed over is the person's even with an account for that task alone
     (someone else's account, for example), so it spreads to other tasks. Such an account stays in its task when the
