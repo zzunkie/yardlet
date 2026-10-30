@@ -366,10 +366,7 @@ actor TaskWorktreeService {
             existing = existing.deletingLastPathComponent()
         }
         var resolved = existing.path(percentEncoded: false)
-        if let real = realpath(resolved, nil) {
-            resolved = String(cString: real)
-            free(real)
-        }
+        if let real = CanonicalPath.resolve(resolved) { resolved = real }
         return ([resolved == "/" ? "" : resolved] + missing).joined(separator: "/")
     }
 

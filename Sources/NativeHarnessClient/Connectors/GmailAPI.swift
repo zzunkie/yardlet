@@ -517,8 +517,6 @@ enum GmailAttachmentFiles {
     /// The path with `..` and every symbolic link resolved, as `realpath(3)` gives it (`/tmp` is
     /// `/private/tmp`); nil when nothing is there.
     private static func canonical(_ path: String) -> URL? {
-        guard let resolved = realpath(path, nil) else { return nil }
-        defer { free(resolved) }
-        return URL(filePath: String(cString: resolved))
+        CanonicalPath.resolve(path).map { URL(filePath: $0) }
     }
 }
