@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import YardletRemote
+@testable import YardletRemoteFixtureSupport
 
 /// The remote end to end on loopback: the Noise listener (`RemoteSecureListener`) bound to 127.0.0.1 on a
 /// free port, the fixture bridge behind it, and `URLSessionWebSocketTask` with a Noise initiator as the

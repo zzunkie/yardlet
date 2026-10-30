@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import YardletRemote
+@testable import YardletRemoteFixtureSupport
 
 /// The fixture server's tasks behave as the Mac's do: a task waiting on a request is running (the
 /// stop button applies) and stopping it expires the request, a waiting task's attention carries a

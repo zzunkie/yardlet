@@ -108,9 +108,15 @@ let package = Package(
             name: "YardletRemote",
             linkerSettings: [.linkedFramework("Network")]
         ),
+        // The fixture Mac behind the remote protocol, for the phone client and the remote tests;
+        // the app does not link it.
+        .target(
+            name: "YardletRemoteFixtureSupport",
+            dependencies: ["YardletRemote"]
+        ),
         .executableTarget(
             name: "YardletRemoteFixture",
-            dependencies: ["YardletRemote"]
+            dependencies: ["YardletRemote", "YardletRemoteFixtureSupport"]
         ),
         .executableTarget(
             name: "NativeHarnessClient",
@@ -143,6 +149,7 @@ let package = Package(
                 "YardletLidSleep",
                 "YardletRemote",
                 "YardletRemoteFixture",
+                "YardletRemoteFixtureSupport",
                 "CSQLite",
                 "YardletCEFAccessibility",
                 .product(name: "SwiftTerm", package: "SwiftTerm")
