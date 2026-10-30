@@ -332,16 +332,20 @@ final class TaskShellProcess: @MainActor TerminalDelegate, @MainActor LocalProce
 
     /// An unmarked shell's command has ended when nothing but the shell has held the terminal and
     /// the output has been quiet. A program that held it counts as activity, as output does: in
-    /// `sleep 1; echo late` the shell holds the terminal again before it prints the rest.
+    /// `sleep 1; echo late` the shell holds the terminal again before it prints the rest. Only time
+    /// this watch saw counts as quiet: when the main thread was held past a look or two, a program
+    /// may have held the terminal and its output may still be on the way, so the quiet starts over.
     private func watchForQuiet(_ command: TaskShellCommand) {
         let quiet = quietPeriod
         command.quietTask = Task { @MainActor [weak self] in
             var heldAt = command.typedAt
+            var lookedAt = command.typedAt
             while !Task.isCancelled {
                 try? await Task.sleep(for: quiet / 4)
                 guard let self, self.current === command, !Task.isCancelled else { return }
                 let now = ContinuousClock.now
-                if self.foregroundProcessGroup != self.processID { heldAt = now }
+                if self.foregroundProcessGroup != self.processID || now - lookedAt > quiet / 2 { heldAt = now }
+                lookedAt = now
                 if now - command.lastDataAt >= quiet, now - heldAt >= quiet {
                     self.finish(command, exitCode: nil)
                     return

@@ -9,20 +9,15 @@ import XCTest
 final class BrowserTaskProfilesTests: XCTestCase {
     private var folder: URL!
     private var defaults: UserDefaults!
-    private var defaultsName = ""
 
     override func setUp() async throws {
         folder = FileManager.default.temporaryDirectory.appending(path: "BrowserTaskProfilesTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let name = "yardlet.browser-profiles.tests." + UUID().uuidString
-        defaultsName = name
-        defaults = UserDefaults(suiteName: name)!
-        defaults.removePersistentDomain(forName: name)
+        defaults = UserDefaults(suiteName: testDefaultsSuite("BrowserTaskProfiles"))!
     }
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: folder)
-        defaults.removePersistentDomain(forName: defaultsName)
     }
 
     private func makeFolder(_ url: URL) throws {
@@ -90,6 +85,9 @@ final class BrowserTaskProfilesTests: XCTestCase {
     /// as someone else without a sign.
     func testATaskTakesThePersonsSignInsItHasNotYetExceptOnItsOwnSites() throws {
         let profiles = BrowserTaskProfiles(root: folder, defaults: defaults)
+        // Following is per-task storage's: said here rather than left to the default, which another domain in the
+        // preferences search list could answer.
+        profiles.storage = .perTask
         let person = UUID(), running = UUID(), agent = UUID(), closed = UUID(), earlier = UUID(), later = UUID(), child = UUID()
         profiles.parentOf = { $0 == child ? agent : nil }
         let key = { (task: UUID) in profiles.key(for: task) }
