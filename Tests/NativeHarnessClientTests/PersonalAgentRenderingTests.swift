@@ -206,9 +206,11 @@ final class PersonalAgentRenderingTests: XCTestCase {
         for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 680)] {
             for appearance in WindowlessRender.Appearance.allCases {
                 let reader = RenderedPersonalAgentReader(agents: agents, messages: messages)
+                // Atlas's pet plays below, which it does only without Reduce Motion, whatever the Mac's own setting.
                 let window = MainWindow(model: model) { reader }
                     .environment(\.personalAgentOriginalOpener, opener)
                     .environment(\.colorScheme, appearance.colorScheme)
+                    .environment(\._accessibilityReduceMotion, false)
                     .frame(width: size.width, height: size.height)
                 let host = WindowlessRender.Host(window, size: size, appearance: appearance)
                 defer { host.close() }
@@ -380,7 +382,10 @@ final class PersonalAgentRenderingTests: XCTestCase {
             .init(id: "m2", author: .agent, text: "I will wait for your review.", createdAt: nil, isDeleted: false, attachments: [])
         ])
         let size = NSSize(width: 1280, height: 800)
-        let host = WindowlessRender.Host(MainWindow(model: model) { reader }.frame(width: size.width, height: size.height), size: size)
+        // Pets play only without Reduce Motion, whatever the Mac's own setting.
+        let host = WindowlessRender.Host(MainWindow(model: model) { reader }
+            .environment(\._accessibilityReduceMotion, false)
+            .frame(width: size.width, height: size.height), size: size)
         defer { host.close() }
         host.settle()
         XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
@@ -449,8 +454,10 @@ final class PersonalAgentRenderingTests: XCTestCase {
         defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
         let size = NSSize(width: 1280, height: 920)
         let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages, live: live)
-        let host = WindowlessRender.Host(MainWindow(model: model) { reader }.frame(width: size.width, height: size.height),
-                                         size: size)
+        // The pictures play, as they do only without Reduce Motion, whatever the Mac's own setting.
+        let host = WindowlessRender.Host(MainWindow(model: model) { reader }
+            .environment(\._accessibilityReduceMotion, false)
+            .frame(width: size.width, height: size.height), size: size)
         defer { host.close() }
         host.settle()
         XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
