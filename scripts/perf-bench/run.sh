@@ -219,7 +219,7 @@ if (( micro )); then
     filter='CodexTimelineMergeCostTests|ConcurrentStreamingPerformanceTests/testBenchmark|LongCodexThreadPerformanceTests'
     filter+='|ConversationStreamingCostTests|ConversationBlankFrameTests/testBenchmark'
     filter+='|ConversationReopenGapWindowTests/testBenchmark|LongTranscriptRenderPerformanceTests'
-    filter+='|WindowStructureQATests/testBenchmark|SubagentStatePerformanceTests'
+    filter+='|WindowStructureQATests/testBenchmark|SubagentStatePerformanceTests|StreamingTurnRenderPerformanceTests'
     (cd "$PROJECT_ROOT" && NHC_PERF_BENCH=1 NHC_PERF_BENCH_SECONDS=20 NHC_PERF_BENCH_OUTPUT="$out/micro.jsonl" \
         nice -n 10 swift test --build-system native --filter "$filter") > "$out/micro.log" 2>&1 \
         || print -u2 "warning: some in-process benchmarks failed; see the log kept beside the result"
