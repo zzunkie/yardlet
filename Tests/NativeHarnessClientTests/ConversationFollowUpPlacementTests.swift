@@ -5,11 +5,12 @@ import XCTest
 
 /// D13: where a message sent while a turn runs appears, as the Codex app shows it: the running turn
 /// takes it (`turn/steer`), so it is part of that turn, drawn in the turn's work where the provider
-/// took it rather than at the turn's top. When the turn ends on its answer, the message folds with the
-/// work the answer followed (ChatGPT.app 26.1016, `kk`/`Ak`; 26.1002 had kept it in view, 2026-10-23
-/// user decision to follow 26.1016). Every harness follows it by the one rule
-/// (`ConversationTurnLayout`): a Codex steered message, and a Claude Code follow-up the CLI read at the
-/// running turn's next step (`TranscriptEntry.joinsRunningTurn`).
+/// took it rather than at the turn's top. When the turn ends on its answer and its work folds, a
+/// message the person wrote stays in view where it was sent, as the Claude app leaves it (2026-10-31;
+/// ChatGPT.app 26.1023 folds it with the work, `Tj`), while a message another task sent folds with the
+/// work the answer followed. Every harness follows it by the one rule (`ConversationTurnLayout`): a
+/// Codex steered message, and a Claude Code follow-up the CLI read at the running turn's next step
+/// (`TranscriptEntry.joinsRunningTurn`).
 @MainActor
 final class ConversationFollowUpPlacementTests: XCTestCase {
     private let decoder = CodexTaskDecoder()
@@ -26,7 +27,16 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
         XCTAssertEqual(turn.prompt.map(\.id), ["u1"])
         XCTAssertEqual(turn.work.map(\.id), ["m1", "c1", "u2"])
         XCTAssertEqual(turn.answers.map(\.id), ["a1"])
-        XCTAssertEqual(turn.workKeptWhenFolded.map(\.id), [], "the answer followed the message, so it folds")
+        XCTAssertEqual(turn.workKeptWhenFolded.map(\.id), ["u2"], "the person's message stays in view after the answer")
+
+        // A message another task sent into the turn folds under the answer that followed it.
+        let fromTask = TaskMessage(senderID: UUID().uuidString, senderName: "Coordinator", body: "Use Python instead")
+        let sentByTask = try XCTUnwrap(CodexConversationProjection.presentation(
+            codexThread(finished: true, followUp: fromTask.text(in: .yardlet)),
+            workspaceURL: Self.workspace, historySelection: nil
+        ).turns.first)
+        XCTAssertNotNil(sentByTask.work.last?.taskMessage)
+        XCTAssertEqual(sentByTask.workKeptWhenFolded.map(\.id), [], "the answer followed the task's message, so it folds")
 
         // Messages sent before any work are the turn's request, however many.
         var opening = codexThread(finished: true)
@@ -57,6 +67,7 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
         XCTAssertEqual(idle.actions.editLatest?.entryID, finished[3].id)
         XCTAssertEqual(idle.actions.restoreFiles?.entryID, finished[3].id)
         XCTAssertEqual(idle.answers.map(\.id), [finished[5].id.uuidString])
+        XCTAssertEqual(idle.workKeptWhenFolded.map(\.id), [finished[3].id.uuidString], "the person's message stays in view")
 
         // A message the provider did not read into a running turn still starts a turn of its own.
         var sequential = finished
@@ -105,55 +116,60 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
     // MARK: - Drawn
 
     /// While the turn runs, the steered message is in the work after what came before it; once the
-    /// turn ends on its answer and folds, the message folds with the work the answer followed. Codex
-    /// and Claude Code draw the folded turn in the same pixels.
-    func testTheMessageIsDrawnWhereItWasTakenAndFoldsUnderTheAnswer() throws {
+    /// turn ends on its answer and folds, the work folds and the message stays where it was, between
+    /// the fold and the answer. Codex and Claude Code draw the folded turn in the same pixels.
+    func testTheMessageIsDrawnWhereItWasTakenAndStaysWhenTheWorkFolds() throws {
         let directory = try WindowlessRender.directory("conversation-m12f-qa")
         let size = NSSize(width: 760, height: 900)
         for (stage, finished) in [("running", false), ("folded", true)] {
-            let codex = try ConversationDrawing.draw(
-                ConversationTimeline(source: .codex(codexThread(finished: finished), workspaceURL: Self.workspace,
-                                                    historySelection: nil),
-                                     actions: ConversationActions(forkCodexTurn: { _ in })),
-                size: size, appearance: .light
-            )
-            let claude = try ConversationDrawing.draw(
-                ConversationTimeline(source: .transcript(
-                    entries: claudeEntries(finished: finished), harness: .claudeCode,
-                    status: finished ? .ready : .running, latestTurnIsComplete: finished
-                ), actions: claudeActions()),
-                size: size, appearance: .light
-            )
-            for (name, drawing) in [("codex", codex), ("claude-code", claude)] {
-                try WindowlessRender.writePNG(drawing.capture.bitmap,
-                                              to: directory.appending(path: "follow-up-\(stage)-\(name)-light.png"))
-                let texts = drawing.elements.map(\.description)
-                let joined = texts.joined(separator: "\n")
-                let request = try XCTUnwrap(texts.firstIndex { $0.contains("Port the script to Swift") }, joined)
-                XCTAssertFalse(drawing.elements.contains { ConversationDrawing.isRailTurn($0.label) },
-                               "one turn, not two:\n\(joined)")
-                if finished {
-                    let header = try XCTUnwrap(drawing.elements.firstIndex {
-                        ConversationDrawing.isWorkTime($0.label) || ConversationDrawing.isWorkTime($0.value)
-                    }, joined)
-                    let answer = try XCTUnwrap(texts.firstIndex { $0.contains("Ported to Python.") }, joined)
-                    XCTAssertLessThan(request, header, joined)
-                    XCTAssertLessThan(header, answer, joined)
-                    XCTAssertFalse(joined.contains("Use Python instead"), "the message folds under the answer:\n\(joined)")
-                    XCTAssertFalse(joined.contains("Reading the script first."), "the work folds:\n\(joined)")
-                } else {
-                    let followUp = try XCTUnwrap(texts.firstIndex { $0.contains("Use Python instead") }, joined)
+            for appearance in WindowlessRender.Appearance.allCases {
+                let codex = try ConversationDrawing.draw(
+                    ConversationTimeline(source: .codex(codexThread(finished: finished), workspaceURL: Self.workspace,
+                                                        historySelection: nil),
+                                         actions: ConversationActions(forkCodexTurn: { _ in })),
+                    size: size, appearance: appearance
+                )
+                let claude = try ConversationDrawing.draw(
+                    ConversationTimeline(source: .transcript(
+                        entries: claudeEntries(finished: finished), harness: .claudeCode,
+                        status: finished ? .ready : .running, latestTurnIsComplete: finished
+                    ), actions: claudeActions()),
+                    size: size, appearance: appearance
+                )
+                for (name, drawing) in [("codex", codex), ("claude-code", claude)] {
+                    try WindowlessRender.writePNG(
+                        drawing.capture.bitmap,
+                        to: directory.appending(path: "follow-up-\(stage)-\(name)-\(appearance.rawValue).png")
+                    )
+                    let texts = drawing.elements.map(\.description)
+                    let joined = texts.joined(separator: "\n")
+                    let request = try XCTUnwrap(texts.firstIndex { $0.contains("Port the script to Swift") }, joined)
+                    XCTAssertFalse(drawing.elements.contains { ConversationDrawing.isRailTurn($0.label) },
+                                   "one turn, not two:\n\(joined)")
                     XCTAssertEqual(texts.filter { $0.contains("Use Python instead") }.count, 1, joined)
-                    let work = try XCTUnwrap(texts.firstIndex { $0.contains("Reading the script first.") }, joined)
-                    let reply = try XCTUnwrap(texts.firstIndex { $0.contains("Switching to Python.") }, joined)
-                    XCTAssertLessThan(request, work, joined)
-                    XCTAssertLessThan(work, followUp, joined)
-                    XCTAssertLessThan(followUp, reply, joined)
+                    let followUp = try XCTUnwrap(texts.firstIndex { $0.contains("Use Python instead") }, joined)
+                    if finished {
+                        let header = try XCTUnwrap(drawing.elements.firstIndex {
+                            ConversationDrawing.isWorkTime($0.label) || ConversationDrawing.isWorkTime($0.value)
+                        }, joined)
+                        let answer = try XCTUnwrap(texts.firstIndex { $0.contains("Ported to Python.") }, joined)
+                        XCTAssertLessThan(request, header, joined)
+                        XCTAssertLessThan(header, followUp, "the person's message stays in view:\n\(joined)")
+                        XCTAssertLessThan(followUp, answer, joined)
+                        XCTAssertFalse(joined.contains("Reading the script first."), "the work folds:\n\(joined)")
+                        XCTAssertFalse(joined.contains("Switching to Python."), "the work folds:\n\(joined)")
+                    } else {
+                        let work = try XCTUnwrap(texts.firstIndex { $0.contains("Reading the script first.") }, joined)
+                        let reply = try XCTUnwrap(texts.firstIndex { $0.contains("Switching to Python.") }, joined)
+                        XCTAssertLessThan(request, work, joined)
+                        XCTAssertLessThan(work, followUp, joined)
+                        XCTAssertLessThan(followUp, reply, joined)
+                    }
                 }
-            }
-            if finished {
-                XCTAssertEqual(ConversationDrawing.differingBytes(codex.capture.bitmap, claude.capture.bitmap), 0,
-                               "Codex and Claude Code draw the folded turn differently")
+                if finished {
+                    XCTAssertEqual(ConversationDrawing.differingBytes(codex.capture.bitmap, claude.capture.bitmap), 0,
+                                   "Codex and Claude Code draw the folded turn differently")
+                }
             }
         }
     }
@@ -161,7 +177,7 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
     // MARK: - Fixtures
 
     /// A request, working notes, a command, a message steered in, and (once finished) the answer.
-    private func codexThread(finished: Bool) -> CodexTaskState {
+    private func codexThread(finished: Bool, followUp: String = "Use Python instead") -> CodexTaskState {
         var items: [JSONValue] = [
             user("u1", "Port the script to Swift"),
             .object(["id": .string("m1"), "type": .string("agentMessage"), "text": .string("Reading the script first."),
@@ -169,7 +185,7 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
             .object(["id": .string("c1"), "type": .string("commandExecution"), "command": .string("cat script.sh"),
                      "cwd": .string(Self.workspace.path), "status": .string("completed"), "commandActions": .array([]),
                      "aggregatedOutput": .string("echo hi\n"), "exitCode": .integer(0)]),
-            user("u2", "Use Python instead")
+            user("u2", followUp)
         ]
         items.append(finished
             ? .object(["id": .string("a1"), "type": .string("agentMessage"), "text": .string("Ported to Python."),
