@@ -1,4 +1,5 @@
 import Foundation
+import YardletRemote
 
 /// Fixture projects, tasks and conversations behind the remote protocol, for building the phone
 /// client without a Mac running real tasks (`yardlet-remote-fixture`, docs/REMOTE_PROTOCOL.md §9).

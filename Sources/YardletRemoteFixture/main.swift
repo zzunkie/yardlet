@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import YardletRemote
+import YardletRemoteFixtureSupport
 
 // yardlet-remote-fixture: the phone remote's protocol on loopback, with fixture tasks instead of the
 // Mac's real ones (docs/REMOTE_PROTOCOL.md §9). It binds 127.0.0.1 only; the Android emulator reaches
