@@ -55,6 +55,15 @@ final class ComposerFileMentionRenderingTests: XCTestCase {
         settle(0.5)
     }
 
+    /// Waits until the `@` list shows `name`. The search answers off the main thread in its own time,
+    /// which on a busy Mac or CI can be later than `type`'s wait.
+    private func waitUntilListed(_ name: String, in harness: Harness, file: StaticString = #filePath, line: UInt = #line) {
+        let listed = { WindowlessRender.accessibilityElements(in: harness.hosting).contains { $0.label == name } }
+        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
+        while !listed(), Date() < deadline { settle(0.05) }
+        XCTAssertTrue(listed(), "The @ list shows \(name)", file: file, line: line)
+    }
+
     private func press(_ characters: String, keyCode: UInt16, in harness: Harness) throws {
         let event = try XCTUnwrap(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -97,6 +106,7 @@ final class ComposerFileMentionRenderingTests: XCTestCase {
             ), appearance: appearance)
 
             type("Fix the bug in @sess", into: harness)
+            waitUntilListed("SessionList.swift", in: harness)
             XCTAssertEqual(draft.text, "Fix the bug in @sess")
             try snapshot(harness, "task-list-\(suffix).png")
 
@@ -114,6 +124,7 @@ final class ComposerFileMentionRenderingTests: XCTestCase {
 
             // Tab chooses as well, and a Hangul query finds a Hangul file name.
             type(" @저장", into: harness)
+            waitUntilListed("세션 저장소.md", in: harness)
             try snapshot(harness, "task-hangul-\(suffix).png")
             try press("\t", keyCode: 48, in: harness)
             XCTAssertEqual(mentionedNames(draft.attachments), ["SessionList.swift", "세션 저장소.md"])
@@ -178,6 +189,7 @@ final class ComposerFileMentionRenderingTests: XCTestCase {
             onCreate: { _ in nil }
         ))
         type("Explain @readme", into: harness)
+        waitUntilListed("README.md", in: harness)
         try snapshot(harness, "home-list.png")
         try press("\r", keyCode: 36, in: harness)
         XCTAssertEqual(draft.text, "Explain")

@@ -109,9 +109,12 @@ enum WindowlessRender {
 
         /// Settles the view until `isDone`, giving the main actor back between passes. An `async`
         /// test holds the main actor while `settle()` turns the run loop, so a view's `.task` can
-        /// start but cannot resume there to set its state; awaiting lets it. Fails after `timeout`.
+        /// start but cannot resume there to set its state; awaiting lets it. Fails after `timeout`,
+        /// by default the limit every test waits for (`testWaitLimitSeconds`): on CI a pass that
+        /// lays out a whole window can take a large part of a second.
         func settle(
-            until isDone: () -> Bool, timeout: TimeInterval = 5, file: StaticString = #filePath, line: UInt = #line
+            until isDone: () -> Bool, timeout: TimeInterval = testWaitLimitSeconds,
+            file: StaticString = #filePath, line: UInt = #line
         ) async {
             let deadline = Date().addingTimeInterval(timeout)
             while true {
