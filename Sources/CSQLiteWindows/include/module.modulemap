@@ -1,0 +1,3 @@
+module CSQLite {
+    header "CSQLite.h"
+}
