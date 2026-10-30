@@ -134,8 +134,8 @@ final class StreamingWindowRedrawTests: XCTestCase {
     /// Each publication lays the whole window out again, in the window's display cycle.
     ///
     /// The cadence is a time, so the publications are counted against the time the fragments took:
-    /// on a Mac 200 fragments take about two seconds, on CI, where each pause lays the window out
-    /// again, several.
+    /// on a Mac 200 fragments take two to four seconds, on CI, where each pause lays the window out
+    /// again, over ten.
     func testALongAnswerIsPublishedOnTheCadenceNotPerFragment() async throws {
         let window = try await makeWindow(tasks: 12)
         defer { window.close() }
@@ -163,12 +163,11 @@ final class StreamingWindowRedrawTests: XCTestCase {
         }
         XCTAssertTrue(answers.contains(text), "The whole answer arrived")
         XCTAssertLessThanOrEqual(streaming[.mainWindow], 2, "Streaming redrew the window")
-        // The count tells the cadence from one publication per fragment only while the fragments came
-        // faster than the cadence.
-        XCTAssertLessThan(cadence(over: streamTime, extra: 0), fragments / 2, "The fragments came too slowly to tell")
-        // Ten publications a second for the fragments, and the finished message's frames.
-        XCTAssertLessThanOrEqual(publications, cadence(over: streamTime, extra: 8),
-                                 "Fragments were published faster than the cadence")
+        // Ten publications a second for the fragments, and the finished message's frames. The bound tells
+        // the cadence from a publication per fragment only while it is under one per fragment.
+        let fragmentBound = cadence(over: streamTime, extra: 8)
+        XCTAssertLessThan(fragmentBound, fragments, "The fragments came too slowly to tell")
+        XCTAssertLessThanOrEqual(publications, fragmentBound, "Fragments were published faster than the cadence")
 
         // A background agent reports its progress as often, and is published at the same cadence.
         let reports = 200
@@ -188,9 +187,9 @@ final class StreamingWindowRedrawTests: XCTestCase {
         let reportTime = clock.now - reportStart
         let reportPublications = model.publicationCounts.transcripts - beforeReports
         print("[redraw] \(reports) progress reports in \(reportTime): \(reportPublications) publications")
-        XCTAssertLessThan(cadence(over: reportTime, extra: 0), reports / 2, "The reports came too slowly to tell")
-        XCTAssertLessThanOrEqual(reportPublications, cadence(over: reportTime, extra: 8),
-                                 "Progress was published faster than the cadence")
+        let reportBound = cadence(over: reportTime, extra: 8)
+        XCTAssertLessThan(reportBound, reports, "The reports came too slowly to tell")
+        XCTAssertLessThanOrEqual(reportPublications, reportBound, "Progress was published faster than the cadence")
     }
 
     // MARK: - Window
