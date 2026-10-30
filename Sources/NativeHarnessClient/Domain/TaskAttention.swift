@@ -84,12 +84,15 @@ struct TaskAttentionDetail: Equatable, Sendable {
     /// its task. A message still streaming is not read. Kept apart from the detail
     /// (`AppModel.answerLineBySessionID`, one task at a time) because it changes as each message of a
     /// running turn ends, which must not redraw the sidebar; so is what else the home alone shows of
-    /// the turn (`TaskLatestTurn`).
-    static func answerLine(_ entries: [TranscriptEntry]) -> String? {
+    /// the turn (`TaskLatestTurn`). `reading` gives a message's first line from its ID and text
+    /// (`firstLine`), so a caller that asks on every state can keep the lines it read.
+    static func answerLine(_ entries: [TranscriptEntry],
+                           reading: (String, String) -> String? = { firstLine($1) }) -> String? {
         for entry in entries.reversed() {
             switch entry.content {
             case .user where entry.joinsRunningTurn != true: return nil
-            case let .assistant(text, isStreaming: false): if let line = firstLine(text) { return line }
+            case let .assistant(text, isStreaming: false):
+                if let line = reading(entry.id.uuidString, text) { return line }
             default: break
             }
         }
@@ -97,28 +100,46 @@ struct TaskAttentionDetail: Equatable, Sendable {
     }
 
     /// A Codex timeline's: its latest turn's last finished message Codex did not send while working on.
-    static func answerLine(_ state: CodexTaskState) -> String? {
+    static func answerLine(_ state: CodexTaskState,
+                           reading: (String, String) -> String? = { firstLine($1) }) -> String? {
         for item in state.thread?.turns.last?.items.reversed() ?? [] where item.lifecycle != .inProgress {
             if case let .agentMessage(message) = item.content, !message.isDeliveredAsync,
-               let line = firstLine(message.text) { return line }
+               let line = reading(item.id, message.text) { return line }
         }
         return nil
     }
 
     /// A message's first line of words, without the Markdown around them: no heading, quote or list
     /// mark, no emphasis or code marks, and a link as its text.
+    /// Every state a task streams asks this of its latest answer, so it reads the message only up to
+    /// its first line of words, and parses Markdown only in a line that has a mark Markdown reads.
     static func firstLine(_ text: String) -> String? {
-        guard let line = text.split(whereSeparator: \.isNewline).lazy
-            .map({ $0.trimmingCharacters(in: .whitespaces) })
-            .first(where: { !$0.isEmpty && !$0.hasPrefix("```") }) else { return nil }
-        let unmarked = line.replacingOccurrences(of: #"^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+"#, with: "",
-                                                 options: .regularExpression)
-        let inline = (try? AttributedString(markdown: unmarked, options: .init(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace))).map { String($0.characters) } ?? unmarked
+        var rest = text[...]
+        var found: String?
+        while found == nil, !rest.isEmpty {
+            let end = rest.firstIndex(where: \.isNewline) ?? rest.endIndex
+            let line = rest[..<end].trimmingCharacters(in: .whitespaces)
+            if !line.isEmpty, !line.hasPrefix("```") { found = line }
+            rest = end < rest.endIndex ? rest[rest.index(after: end)...] : rest[rest.endIndex...]
+        }
+        guard let line = found else { return nil }
+        let unmarked = blockMarks.stringByReplacingMatches(
+            in: line, range: NSRange(line.startIndex..., in: line), withTemplate: "")
+        let inline = unmarked.contains(where: inlineMarks.contains)
+            ? (try? AttributedString(markdown: unmarked, options: .init(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace))).map { String($0.characters) } ?? unmarked
+            : unmarked
         let words = inline.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !words.isEmpty else { return nil }
         return words.count > 240 ? String(words.prefix(240)) + "…" : words
     }
+
+    /// A heading, quote or list mark at the line's start, however many.
+    nonisolated(unsafe) private static let blockMarks = try! NSRegularExpression(
+        pattern: #"^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+"#)
+    /// The characters inline Markdown reads as more than text: emphasis, code, links and images,
+    /// autolinks and HTML, escapes, entities and strikethrough.
+    private static let inlineMarks: Set<Character> = ["*", "_", "`", "[", "]", "<", "\\", "&", "~"]
 
     /// A Codex task has both; its own timeline speaks first.
     func merged(over other: TaskAttentionDetail) -> TaskAttentionDetail {

@@ -104,6 +104,10 @@ final class TaskAttentionTests: XCTestCase {
         XCTAssertEqual(TaskAttentionDetail.reading(entries), .none, "Nothing the window reads changed")
         XCTAssertEqual(TaskAttentionDetail.answerLine(entries), "Done: see the PR")
         XCTAssertNil(TaskAttentionDetail.answerLine(Array(entries.prefix(3))), "An earlier turn's answer is not this turn's")
+        // Every block mark goes; a line with no inline mark is read as it is, one with marks is parsed.
+        XCTAssertEqual(TaskAttentionDetail.firstLine("\n\n> - 2. Fixed  the parser\n## Next"), "Fixed the parser")
+        XCTAssertEqual(TaskAttentionDetail.firstLine("```swift\nlet a = 1\n```"), "let a = 1")
+        XCTAssertEqual(TaskAttentionDetail.firstLine("Tom &amp; Jerry: `a_b`"), "Tom & Jerry: a_b")
         XCTAssertEqual(read.suggestions, [TaskAttentionSuggestion(id: "task_1a2b3c4d", title: "Fix the badge")])
         XCTAssertEqual(TaskAttentionDetail.reading([
             TranscriptEntry(content: .user(text: "Go")),
