@@ -283,6 +283,9 @@ final class ConversationBlankFrameTests: XCTestCase {
                 steps.append(cpu() - start)
             }
             let sorted = steps.sorted()
+            PerfBenchRecord.write("hover-reads-\(name.replacingOccurrences(of: " ", with: "-"))", [
+                "stepMaxMs": sorted.last ?? 0, "stepP95Ms": sorted[sorted.count * 95 / 100], "totalMs": steps.reduce(0, +)
+            ])
             return String(format: "%@: max %.2f ms, p95 %.2f ms, %.0f ms in all; %d read; window bodies %d, "
                           + "conversation bodies %d, sidebar rows %d; list %.0f to %.0f pt", name, sorted.last ?? 0,
                           sorted[sorted.count * 95 / 100], steps.reduce(0, +),
@@ -353,6 +356,10 @@ final class ConversationBlankFrameTests: XCTestCase {
                     steps.append(cpu() - start)
                 }
                 let sorted = steps.sorted()
+                PerfBenchRecord.write("earlier-page-\(reader == .reads ? "read-still" : "wheeling-up")", [
+                    "stepMaxMs": sorted.last ?? 0, "stepP95Ms": sorted[sorted.count * 95 / 100],
+                    "stepsOver50MsCount": Double(steps.filter { $0 > 50 }.count)
+                ])
                 lines.append(String(
                     format: "%@, round %d: max %.2f ms, p95 %.2f ms, %.0f ms in all, %d steps over 50 ms; %d turns; "
                     + "%d turn views made, %d conversation bodies; content %.0f to %.0f pt", reader.rawValue, round + 1,
