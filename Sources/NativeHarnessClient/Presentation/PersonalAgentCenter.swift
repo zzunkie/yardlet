@@ -4,6 +4,10 @@ import Observation
 @MainActor @Observable
 final class PersonalAgentConversation {
     let draft: PersonalAgentDraft
+    /// An option question's answer waiting to be confirmed, kept apart from the draft.
+    let optionReply: PersonalAgentOptionReply
+    /// The input requests the loaded messages carry, by message.
+    var requests: [String: PersonalAgentInputRequest] = [:]
     var messages: [PersonalAgentMessage] = []
     var sentMessages: [PersonalAgentMessage] = []
     var visibleMessages: [PersonalAgentMessage] {
@@ -23,7 +27,10 @@ final class PersonalAgentConversation {
     /// Why the last read of earlier messages failed; the conversation stays as it was.
     var olderFailure: PersonalAgentFailure?
 
-    init(draft: PersonalAgentDraft = PersonalAgentDraft()) { self.draft = draft }
+    init(draft: PersonalAgentDraft = PersonalAgentDraft(), optionReply: PersonalAgentOptionReply = PersonalAgentOptionReply()) {
+        self.draft = draft
+        self.optionReply = optionReply
+    }
 }
 
 /// What the selected dot's details show beside its conversation. Each part loads and fails on its
@@ -62,8 +69,8 @@ final class PersonalAgentCenter {
     private(set) var isReconnecting = false
     private(set) var sourceKey: String?
     @ObservationIgnored private var draftSourceKey = ""
-    @ObservationIgnored private var client: (any PersonalAgentClient)?
-    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private(set) var client: (any PersonalAgentClient)?
+    @ObservationIgnored private(set) var generation = 0
     @ObservationIgnored private var events: Task<Void, Never>?
     @ObservationIgnored private var pendingRefresh = false
     @ObservationIgnored private let drafts: PersonalAgentDrafts
@@ -72,6 +79,8 @@ final class PersonalAgentCenter {
     @ObservationIgnored private var uploads: [UUID: Task<Void, Never>] = [:]
     /// The last upload queued for each draft, which the next one waits for: one at a time, in order.
     @ObservationIgnored private var uploadQueues: [ObjectIdentifier: Task<Void, Never>] = [:]
+    /// The claims and acknowledgements of input-request answers, shared by every window and home.
+    @ObservationIgnored let responses: any DotsResponseJournal
     private var conversations: [PersonalAgentIdentity: PersonalAgentConversation] = [:]
     private var detailsByAgent: [PersonalAgentIdentity: PersonalAgentDetails] = [:]
     /// Profile pictures read in this window, by dot and picture version; memory only.
@@ -130,9 +139,11 @@ final class PersonalAgentCenter {
     func isPaused(_ agent: PersonalAgent) -> Bool { agent.isPaused && !resumedSinceRead.contains(agent.id) }
 
     init(drafts: PersonalAgentDrafts = PersonalAgentDrafts(),
-         preparer: any PersonalAgentFilePreparing = PersonalAgentUnchangedFiles()) {
+         preparer: any PersonalAgentFilePreparing = PersonalAgentUnchangedFiles(),
+         responses: any DotsResponseJournal = DotsMemoryResponseJournal()) {
         self.drafts = drafts
         self.preparer = preparer
+        self.responses = responses
     }
 
     /// The window shows the dots, or no longer does (covered, minimized, hidden), as `reporter` sees
@@ -233,7 +244,8 @@ final class PersonalAgentCenter {
         guard let agent = selected, let client else { return }
         let current = generation
         if conversations[agent.id] == nil {
-            conversations[agent.id] = PersonalAgentConversation(draft: drafts.draft(source: draftSourceKey, identity: agent.id))
+            conversations[agent.id] = PersonalAgentConversation(draft: drafts.draft(source: draftSourceKey, identity: agent.id),
+                optionReply: drafts.optionReply(source: draftSourceKey, identity: agent.id))
         }
         // Each connection reads the details again: an earlier connection's reads were dropped with it.
         refreshDetails()
@@ -258,10 +270,13 @@ final class PersonalAgentCenter {
         observeSelected()
     }
 
-    func refreshConversation(older: Bool = false) async {
-        guard let agent = selected, let reader = client, let state = conversations[agent.id], !state.isLoading else { return }
+    /// Reads the latest page again, back to the oldest message shown, or the next earlier page.
+    /// True only when this read completed and its result is shown.
+    @discardableResult
+    func refreshConversation(older: Bool = false) async -> Bool {
+        guard let agent = selected, let reader = client, let state = conversations[agent.id], !state.isLoading else { return false }
         let before = older ? state.before : nil
-        if older && before == nil { return }
+        if older && before == nil { return false }
         let current = generation
         let loadID = UUID()
         let acceptedBeforeRead = Set(state.sentMessages.map(\.id))
@@ -271,9 +286,10 @@ final class PersonalAgentCenter {
             if state.loadID == loadID { state.isLoading = false; state.loadID = nil }
         }
         if older { state.olderFailure = nil } else { state.failure = nil }
+        var succeeded = false
         do {
             let page = try await reader.messages(for: agent, before: before)
-            guard current == generation, !Task.isCancelled else { return }
+            guard current == generation, !Task.isCancelled else { return false }
             let previousIDs = Set(state.messages.map(\.id))
             var incoming = page.messages
             var cursor = page.before
@@ -290,7 +306,7 @@ final class PersonalAgentCenter {
                 while !incoming.isEmpty, !reachesBoundary(), let next = cursor {
                     guard visited.insert(next).inserted else { throw PersonalAgentFailure.invalidResponse }
                     let preceding = try await reader.messages(for: agent, before: next)
-                    guard current == generation, !Task.isCancelled else { return }
+                    guard current == generation, !Task.isCancelled else { return false }
                     incoming = DotsProjection.merge(preceding.messages, with: incoming, older: false)
                     cursor = preceding.before
                     if preceding.messages.isEmpty { break }
@@ -308,8 +324,10 @@ final class PersonalAgentCenter {
             }
             state.before = older && page.messages.allSatisfy({ previousIDs.contains($0.id) }) ? nil : cursor
             state.loaded = true
+            succeeded = true
+            syncInputRequests(state, agent: agent)
         } catch {
-            guard current == generation, !Task.isCancelled else { return }
+            guard current == generation, !Task.isCancelled else { return false }
             let failure = error as? PersonalAgentFailure ?? .network
             if older { state.olderFailure = failure } else { state.failure = failure }
             if failure == .accountChanged || failure == .signInRequired { accept(failure) }
@@ -319,6 +337,7 @@ final class PersonalAgentCenter {
             pendingRefresh = false
             await refreshConversation()
         }
+        return succeeded
     }
 
     /// Reads the selected dot's Activity, schedules and computers again, each on its own.
@@ -643,7 +662,7 @@ final class PersonalAgentCenter {
         failure = nil
     }
 
-    private func accept(_ error: Error) {
+    func accept(_ error: Error) {
         let value = error as? PersonalAgentFailure ?? .network
         if value == .accountChanged || value == .signInRequired {
             stopObserving()
@@ -669,6 +688,7 @@ final class PersonalAgentCenter {
             state.messages = messages
             state.loaded = true
             conversations[selectedID] = state
+            if let agent = selected { syncInputRequests(state, agent: agent) }
         }
     }
     #endif

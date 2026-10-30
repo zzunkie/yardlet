@@ -118,11 +118,18 @@ actor DotsService: PersonalAgentClient {
         let attachments = submission.attachments.map {
             JSONValue.object(["type": .string("file"), "file_id": .string($0.fileID)])
         }
-        let result = try await requestJSON(path + "/messages", method: "POST", body: .json(.object([
+        var body: [String: JSONValue] = [
             "content": .object(["text": .string(submission.text), "attachments": .array(attachments)]),
             "request_id": .string(submission.requestID), "idempotency_token": .string(submission.requestID),
             "timezone_offset_min": .integer(Int64(submission.timezoneOffsetMinutes))
-        ])))
+        ]
+        // An option question's answer replies to it, naming the option chosen; nothing else is passed through.
+        if let reply = submission.replyToMessageID {
+            guard let selection = submission.optionSelection, selection >= 0 else { throw PersonalAgentFailure.sendRejected }
+            body["reply_to"] = .object(["message_id": .string(reply)])
+            body["message_metadata"] = .object(["option_picker": .object(["selection": .integer(Int64(selection))])])
+        }
+        let result = try await requestJSON(path + "/messages", method: "POST", body: .json(.object(body)))
         guard let message = try? DotsProjection.messages(.object(["items": .array([result])]), room: room, agent: agent).messages.first,
               message.author == .person, message.requestID == submission.requestID else {
             throw PersonalAgentFailure.deliveryUnknown
@@ -243,6 +250,69 @@ actor DotsService: PersonalAgentClient {
         let value = try await read("/tbo/" + component(agent.id.agentID) + "/computers",
                                    query: [.init(name: "expected_thread_id", value: root)])
         return try DotsProjection.computers(value, rootThreadID: root)
+    }
+
+    func inspectRequest(in messageID: String, for agent: PersonalAgent) async throws -> DotsRequestInspection {
+        try await verify(agent)
+        let value = try await read(requestPath(messageID, for: agent), query: [.init(name: "inspect", value: "true")])
+        try await verify(agent)
+        return try DotsRequestInspection(value)
+    }
+
+    /// One POST of an answer, never repeated. Credentials may be renewed and the account is checked
+    /// before it leaves; any failure up to then is `notDispatched`. From the moment the request is
+    /// handed to the network, every outcome but an `applied` status is uncertain: an expired login,
+    /// a rejection, a server error, a lost connection, a cancellation or a changed account.
+    func respond(_ result: DotsInputResult, fingerprint: String, in messageID: String,
+                 for agent: PersonalAgent) async throws -> DotsResponseOutcome {
+        var request: URLRequest
+        do {
+            try Task.checkCancellation()
+            let auth = try await credentials()
+            guard auth.identity.account == agent.id.accountID, auth.identity.user == agent.id.userID else {
+                throw PersonalAgentFailure.accountChanged
+            }
+            request = URLRequest(url: URL(string: "https://chatgpt.com/backend-api" + requestPath(messageID, for: agent) + "/response")!)
+            request.httpMethod = "POST"
+            request.httpBody = try JSONEncoder().encode(JSONValue.object([
+                "request_fingerprint": .string(fingerprint), "result": result.json
+            ]))
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue("Yardlet/PersonalAgents", forHTTPHeaderField: "User-Agent")
+            request.setValue("Bearer " + auth.token, forHTTPHeaderField: "Authorization")
+            request.setValue(auth.identity.account, forHTTPHeaderField: "ChatGPT-Account-Id")
+            try Task.checkCancellation()
+        } catch {
+            throw DotsResponseFailure.notDispatched(error as? PersonalAgentFailure ?? .stopped)
+        }
+        let data: Data, response: URLResponse
+        do { (data, response) = try await session.data(for: request) }
+        catch { throw DotsResponseFailure.uncertain(.deliveryUnknown) }
+        guard let http = response as? HTTPURLResponse else { throw DotsResponseFailure.uncertain(.invalidResponse) }
+        guard (200...299).contains(http.statusCode) else {
+            let failure: PersonalAgentFailure = switch http.statusCode {
+            case 401: .signInRequired
+            case 403: .verificationRequired
+            case 400...499 where http.statusCode != 408: .sendRejected
+            default: .deliveryUnknown
+            }
+            throw DotsResponseFailure.uncertain(failure)
+        }
+        do {
+            let auth = try await credentials()
+            guard auth.identity.account == agent.id.accountID, auth.identity.user == agent.id.userID else {
+                throw PersonalAgentFailure.accountChanged
+            }
+        } catch { throw DotsResponseFailure.uncertain(error as? PersonalAgentFailure ?? .stopped) }
+        guard data.count <= 1024 * 1024, let value = try? JSONDecoder().decode(JSONValue.self, from: data) else {
+            throw DotsResponseFailure.uncertain(.invalidResponse)
+        }
+        return value["status"]?.stringValue == "applied" ? .applied : .unconfirmed
+    }
+
+    private func requestPath(_ messageID: String, for agent: PersonalAgent) -> String {
+        "/messaging/rooms/" + component(agent.id.roomID) + "/messages/" + component(messageID) + "/elicitation"
     }
 
     /// One bounded read of a file or picture. Only the provider API path gets the account credential;

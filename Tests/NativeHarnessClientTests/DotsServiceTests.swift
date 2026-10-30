@@ -45,6 +45,45 @@ final class DotsServiceTests: XCTestCase {
         await service.stop()
     }
 
+    /// An input request's answer is posted once with its fingerprint. An expired login after it left is
+    /// an uncertain outcome, not a reason to renew and post again; a changed account stops it before.
+    func testInputRequestAnswersArePostedOnceAndNeverRetried() async throws {
+        let result = DotsInputResult(action: .cancel, content: .null,
+                                     meta: .object(["codex_approval_cancellation_reason": .string("user")]))
+        let fixture = DotsHTTPRecorder(postStatuses: [401])
+        let broker = DotsTestBroker()
+        let service = makeService(fixture, broker: broker)
+        let inspection = try await service.inspectRequest(in: "message", for: agent)
+        XCTAssertEqual(inspection.fingerprint, "fingerprint")
+        XCTAssertTrue(inspection.isAnswerable)
+        let read = try XCTUnwrap(fixture.requests.last)
+        XCTAssertEqual(read.url?.path, "/backend-api/messaging/rooms/room/messages/message/elicitation")
+        XCTAssertEqual(read.url?.query, "inspect=true")
+        do { _ = try await service.respond(result, fingerprint: "fingerprint", in: "message", for: agent); XCTFail("Expected uncertainty") }
+        catch { XCTAssertEqual(error as? DotsResponseFailure, .uncertain(.signInRequired)) }
+        let posts = fixture.requests.filter { $0.httpMethod == "POST" }
+        XCTAssertEqual(posts.count, 1)
+        XCTAssertEqual(posts.first?.url?.path, "/backend-api/messaging/rooms/room/messages/message/elicitation/response")
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: fixture.body(try XCTUnwrap(posts.first))),
+                       .object(["request_fingerprint": .string("fingerprint"), "result": result.json]))
+        let renewals = await broker.renewalCount()
+        XCTAssertEqual(renewals, 0)
+        await service.stop()
+
+        let applied = DotsHTTPRecorder()
+        let accepting = makeService(applied, broker: DotsTestBroker())
+        let outcome = try await accepting.respond(result, fingerprint: "fingerprint", in: "message", for: agent)
+        XCTAssertEqual(outcome, .applied)
+        await accepting.stop()
+
+        let unsent = DotsHTTPRecorder()
+        let changed = makeService(unsent, broker: DotsTestBroker(changesAccountAt: 1))
+        do { _ = try await changed.respond(result, fingerprint: "fingerprint", in: "message", for: agent); XCTFail("Expected no dispatch") }
+        catch { XCTAssertEqual(error as? DotsResponseFailure, .notDispatched(.accountChanged)) }
+        XCTAssertTrue(unsent.requests.isEmpty)
+        await changed.stop()
+    }
+
     func testLoginLossAfterAcceptanceDoesNotPretendTheMessageWasRejected() async throws {
         let fixture = DotsHTTPRecorder()
         let service = makeService(fixture, broker: DotsTestBroker(signsOutAt: 5))
@@ -473,6 +512,12 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
             }
             if request.httpMethod == "POST", request.url?.path.hasSuffix("/files") == true {
                 return (200, Data(#"{"id":"file_1","status":"ready"}"#.utf8))
+            }
+            if request.url?.path.hasSuffix("/elicitation/response") == true {
+                return (statuses.isEmpty ? 200 : statuses.removeFirst(), Data(#"{"status":"applied"}"#.utf8))
+            }
+            if request.url?.path.hasSuffix("/elicitation") == true {
+                return (200, Data(#"{"elicitation":{"request_id":"request","thread_id":"thread","turn_id":null,"status":"pending","params":{"threadId":"thread","message":"Confirm"}},"can_respond":true,"runtime_status":"pending","request_fingerprint":"fingerprint"}"#.utf8))
             }
             if request.httpMethod == "POST" {
                 let status = statuses.isEmpty ? 200 : statuses.removeFirst()

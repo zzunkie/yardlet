@@ -704,6 +704,275 @@ final class PersonalAgentRenderingTests: XCTestCase {
         // The hosting view may briefly retain the preview; it owns the temporary copy.
     }
 
+    /// A dot's requests where its messages ask them: a tool approval, a form, an option question, one
+    /// whose status could not be read, and one Yardlet cannot answer. Pressing Deny and an option goes
+    /// through the window's own answer paths, which here only record what would be sent.
+    func testInputRequestsAndOptionQuestionsRenderAndAnswerInTheWindow() async throws {
+        let (model, _) = try makeWindowModel()
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        func request(_ id: String, _ params: String) throws -> JSONValue {
+            try JSONDecoder().decode(JSONValue.self, from: Data(
+                #"{"request_id":"\#(id)","thread_id":"thread","turn_id":null,"status":"pending","params":{"threadId":"thread","serverName":"codex_apps","mode":"form",\#(params)}}"#.utf8))
+        }
+        func message(_ id: String, _ text: String, request: JSONValue? = nil, metadata: String? = nil) throws -> PersonalAgentMessage {
+            var value = PersonalAgentMessage(id: id, author: .agent, text: text, createdAt: nil, isDeleted: false, attachments: [])
+            value.inputRequest = request
+            value.metadata = try metadata.map { try JSONDecoder().decode(JSONValue.self, from: Data($0.utf8)) }
+            return value
+        }
+        let messages: [PersonalAgentMessage] = [
+            .init(id: "m1", author: .person, text: "Send the release notes to the team when they are ready.",
+                  createdAt: nil, isDeleted: false, attachments: []),
+            try message("m2", "The notes are ready. I need your approval to send them.", request: request("send",
+                #""message":"Send the release notes to the team","requestedSchema":{"type":"object","properties":{},"required":[]},"_meta":{"codex_approval_kind":"mcp_tool_call","connector_id":"connector_example","connector_name":"Mail","tool_name":"send_email","tool_title":"Send email","tool_params":{"to":"team@example.com","subject":"Release notes"},"tool_params_display":[{"name":"to","display_name":"To","value":"team@example.com"},{"name":"subject","display_name":"Subject","value":"Release notes"}],"persist":["session","always"]}"#)),
+            try message("m3", "", request: request("form",
+                #""message":"When should the notes go out?","requestedSchema":{"type":"object","properties":{"day":{"type":"string","title":"Day","enum":["today","monday"],"enumNames":["Today","Monday"]},"note":{"type":"string","title":"Note for the team","maxLength":80}},"required":["day"]},"_meta":null"#)),
+            try message("m4", "Which version should I publish?", metadata: #"{"option_picker":{"options":["2.1 as drafted","2.1 with the fixes"]}}"#),
+            try message("m5", "", request: request("unknown",
+                #""message":"Confirm the calendar change","requestedSchema":{"type":"object","properties":{},"required":[]},"_meta":null"#)),
+            try message("m6", "", request: request("setup",
+                #""message":"Connect your calendar","requestedSchema":{"type":"object","properties":{},"required":[]},"_meta":{"codex_approval_kind":"tool_suggestion","suggest_type":"install","suggest_reason":"Your dot needs your calendar to plan the launch.","tool_type":"connector","tool_id":"calendar","tool_name":"Calendar","install_url":"https://example.com"}"#))
+        ]
+        let directory = try WindowlessRender.directory("personal-agent-requests-qa")
+        for size in [NSSize(width: 1280, height: 920), NSSize(width: 920, height: 920)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages, unreadable: ["m5"])
+                let window = MainWindow(model: model) { reader }
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .frame(width: size.width, height: size.height)
+                let host = WindowlessRender.Host(window, size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+                let shows = { (label: String) in host.accessibilityElements().contains { $0.label == label } }
+                await host.settle(until: { shows(L10n.string("Allow once")) && shows(L10n.string("Check status")) })
+                host.settle(passes: 12)
+                let name = "\(Int(size.width))-\(appearance.suffix).png"
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "requests-\(name)"))
+                try scrollToTop(host)
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "requests-top-\(name)"))
+                for label in [L10n.string("Deny"), L10n.string("Always allow"), L10n.string("Allow this conversation"),
+                              L10n.string("Submit"), "2.1 with the fixes", L10n.string("Status unknown"),
+                              L10n.string("Can't be answered here")] {
+                    XCTAssertTrue(shows(label), "\(label) at \(size)")
+                }
+                guard size.width == 1280, appearance == .light else { continue }
+                // Deny cancels the tool call as the person's choice; the option replies with its exact text.
+                XCTAssertTrue(Self.press(L10n.string("Deny"), in: host.hosting))
+                try await waitUntil { await reader.answers.count == 1 }
+                let answer = await reader.answers.first
+                XCTAssertEqual(answer?.json, .object(["action": .string("cancel"), "content": .null,
+                    "_meta": .object(["codex_approval_cancellation_reason": .string("user")])]))
+                XCTAssertTrue(Self.press("2.1 with the fixes", in: host.hosting))
+                try await waitUntil { await reader.sends.count == 1 }
+                let reply = await reader.sends.first
+                XCTAssertEqual(reply?.text, "2.1 with the fixes")
+                XCTAssertEqual(reply?.replyToMessageID, "m4")
+                XCTAssertEqual(reply?.optionSelection, 1)
+                await host.settle(until: { shows(L10n.string("Denied")) })
+                host.settle(passes: 12)
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "requests-answered-\(name)"))
+                try scrollToTop(host)
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "requests-answered-top-\(name)"))
+            }
+        }
+    }
+
+    /// An uncertain option answer whose question is then deleted keeps its request and is not sent
+    /// again; the line above the editor asks before it stops waiting, and then another question can be
+    /// answered. The confirmation is received by a prompt the render puts in, never an alert on screen.
+    func testAWaitingAnswerToADeletedQuestionCanStillBeStopped() async throws {
+        let (model, _) = try makeWindowModel()
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        func question(_ id: String, _ text: String, _ options: String) throws -> PersonalAgentMessage {
+            var value = PersonalAgentMessage(id: id, author: .agent, text: text, createdAt: nil, isDeleted: false, attachments: [])
+            value.metadata = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"option_picker":{"options":\#(options)}}"#.utf8))
+            return value
+        }
+        let version = try question("version", "Which version should I publish?", #"["2.1 as drafted","2.1 with the fixes"]"#)
+        let day = try question("day", "Which day should it go out?", #"["Today","Monday"]"#)
+        let waiting = L10n.string("An answer to a question that is no longer shown could not be confirmed. It may already have arrived.")
+        let directory = try WindowlessRender.directory("personal-agent-requests-qa")
+        for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 800)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let reader = RenderedPersonalAgentReader(agents: [agent], messages: [version, day])
+                var asked: [@MainActor () -> Void] = []
+                let prompt = PersonalAgentConfirmationPrompt { confirmation, confirm in
+                    guard case .stopWaiting = confirmation else { return XCTFail("\(confirmation)") }
+                    asked.append(confirm)
+                }
+                let window = MainWindow(model: model) { reader }
+                    .environment(\.personalAgentConfirmationPrompt, prompt)
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .frame(width: size.width, height: size.height)
+                let host = WindowlessRender.Host(window, size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                let shows = { (label: String) in host.accessibilityElements().contains { $0.label == label || $0.value == label } }
+                XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+                await host.settle(until: { shows("2.1 with the fixes") && shows("Monday") })
+                await reader.loseNextSend()
+                XCTAssertTrue(Self.press("2.1 with the fixes", in: host.hosting))
+                await host.settle(until: { shows(L10n.string("Send the same answer again")) })
+                // The question is deleted; the read that shows it is the person's own refresh.
+                await reader.setPage([.init(id: "version", author: .agent, text: "", createdAt: nil, isDeleted: true, attachments: []), day])
+                XCTAssertTrue(Self.press(L10n.string("Refresh conversation"), in: host.hosting))
+                await host.settle(until: { shows(waiting) })
+                XCTAssertFalse(shows("2.1 with the fixes"), "The deleted question is not shown again")
+                host.settle(passes: 12)
+                let name = "\(Int(size.width))-\(appearance.suffix).png"
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "waiting-answer-deleted-question-\(name)"))
+                guard size.width == 1280, appearance == .light else { continue }
+                // Until the person stops waiting, the other question's options are shown but take no press.
+                XCTAssertTrue(shows("Monday"))
+                XCTAssertFalse(Self.press("Monday", in: host.hosting))
+                // Stop waiting asks first; declining leaves the answer waiting.
+                XCTAssertTrue(Self.press(L10n.string("Stop waiting"), in: host.hosting))
+                XCTAssertEqual(asked.count, 1)
+                host.settle(passes: 6)
+                XCTAssertTrue(shows(waiting), "Nothing stops waiting before the person confirms")
+                XCTAssertTrue(Self.press(L10n.string("Stop waiting"), in: host.hosting))
+                XCTAssertEqual(asked.count, 2)
+                asked.last?()
+                await host.settle(until: { !shows(waiting) })
+                XCTAssertTrue(Self.press("Monday", in: host.hosting))
+                try await waitUntil { await reader.sends.count == 2 }
+                let sends = await reader.sends
+                XCTAssertEqual(sends.map(\.replyToMessageID), ["version", "day"])
+                XCTAssertEqual(sends.last?.optionSelection, 1)
+                XCTAssertNotEqual(sends[0].requestID, sends[1].requestID)
+            }
+        }
+
+        // A stop that cannot be saved keeps the answer waiting and says the save failed.
+        let folder = FileManager.default.temporaryDirectory.appending(path: "option-reply-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let writable = { try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path) }
+        let readOnly = { try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path) }
+        defer { try? writable(); try? FileManager.default.removeItem(at: folder) }
+        let reply = PersonalAgentOptionReply(file: folder.appending(path: "stop.option-reply.json"))
+        var submission = PersonalAgentSubmission(text: "2.1 with the fixes")
+        submission.replyToMessageID = "version"
+        submission.optionSelection = 1
+        XCTAssertTrue(reply.prepare(submission))
+        try readOnly()
+        reply.discard(requestID: submission.requestID)
+        XCTAssertEqual(reply.pending, submission)
+        XCTAssertTrue(reply.storageFailed)
+        try writable()
+
+        // A first save that fails locks the options and says so; saving again after the disk recovers,
+        // which sends nothing, lets them take an answer.
+        let picker = try XCTUnwrap(version.metadata.flatMap(DotsOptionPicker.init(metadata:)))
+        let fresh = PersonalAgentOptionReply(file: folder.appending(path: "first.option-reply.json"))
+        try readOnly()
+        XCTAssertFalse(fresh.prepare(submission))
+        XCTAssertNil(fresh.pending)
+        var chosen: [Int] = []
+        let actions = PersonalAgentRequestActions(choose: { _, index in chosen.append(index) })
+        let storage = WindowlessRender.Host(VStack(alignment: .leading, spacing: 12) {
+            PersonalAgentOptionQuestion(messageID: "version", picker: picker, chosen: nil, isAnswered: false,
+                                        reply: fresh, actions: actions)
+            PersonalAgentOptionAnswerStatus(reply: fresh, showsQuestion: true, actions: actions)
+        }.padding().frame(width: 680, alignment: .leading).background(ParityTheme.canvas)
+            .environment(\.colorScheme, .light), size: NSSize(width: 680, height: 220), appearance: .light)
+        defer { storage.close() }
+        storage.settle()
+        let storageText = PersonalAgentFailure.draftStorage.message
+        XCTAssertTrue(storage.accessibilityElements().contains { $0.label == storageText || $0.value == storageText })
+        XCTAssertFalse(Self.press("2.1 with the fixes", in: storage.hosting))
+        try WindowlessRender.writePNG(storage.capture().bitmap, to: directory.appending(path: "option-answer-storage-failed-light.png"))
+        try writable()
+        XCTAssertTrue(Self.press(L10n.string("Try again"), in: storage.hosting))
+        storage.settle()
+        XCTAssertFalse(fresh.storageFailed)
+        XCTAssertTrue(Self.press("2.1 with the fixes", in: storage.hosting))
+        XCTAssertEqual(chosen, [1])
+
+        // An answer file that cannot be read is said, not silently locked, and is kept as a backup only
+        // after the person confirms; until then its bytes stay where they are.
+        let broken = folder.appending(path: "broken.option-reply.json")
+        try Data("not an answer".utf8).write(to: broken)
+        let unreadable = PersonalAgentOptionReply(file: broken)
+        XCTAssertTrue(unreadable.needsRecovery)
+        var confirms: [@MainActor () -> Void] = []
+        let prompt = PersonalAgentConfirmationPrompt { confirmation, confirm in
+            XCTAssertEqual(confirmation, .keepUnreadableAnswer)
+            confirms.append(confirm)
+        }
+        let recovery = WindowlessRender.Host(PersonalAgentOptionAnswerStatus(reply: unreadable, showsQuestion: true, actions: .init())
+            .environment(\.personalAgentConfirmationPrompt, prompt).padding().frame(width: 680)
+            .background(ParityTheme.canvas).environment(\.colorScheme, .dark),
+            size: NSSize(width: 680, height: 90), appearance: .dark)
+        defer { recovery.close() }
+        recovery.settle()
+        let unreadableText = L10n.string("A saved answer to a question could not be read. Keep it as a backup to answer questions again.")
+        XCTAssertTrue(recovery.accessibilityElements().contains { $0.label == unreadableText || $0.value == unreadableText })
+        try WindowlessRender.writePNG(recovery.capture().bitmap, to: directory.appending(path: "option-answer-unreadable-dark.png"))
+        XCTAssertTrue(Self.press(L10n.string("Keep as a backup"), in: recovery.hosting))
+        XCTAssertEqual(confirms.count, 1)
+        XCTAssertEqual(try Data(contentsOf: broken), Data("not an answer".utf8), "Nothing is overwritten before confirming")
+        confirms[0]()
+        XCTAssertFalse(unreadable.needsRecovery)
+        XCTAssertFalse(unreadable.storageFailed)
+        let backup = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+            .first { $0.lastPathComponent.hasPrefix("broken.option-reply.json.backup-") })
+        XCTAssertEqual(try Data(contentsOf: backup), Data("not an answer".utf8))
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: backup.path)[.posixPermissions] as? Int, 0o600)
+
+        // Windows share an answer. A confirmation asked for answer A, still open when a read settles A and
+        // another window starts answer B, lets B go on waiting: from either way to stop waiting.
+        for showsQuestion in [false, true] {
+            let shared = PersonalAgentOptionReply(file: folder.appending(path: "shared-\(showsQuestion).option-reply.json"))
+            var first = PersonalAgentSubmission(text: "2.1 with the fixes")
+            first.replyToMessageID = "version"
+            first.optionSelection = 1
+            XCTAssertTrue(shared.prepare(first))
+            shared.failed(.deliveryUnknown, retry: false)
+            var stale: [@MainActor () -> Void] = []
+            let asks = PersonalAgentConfirmationPrompt { confirmation, confirm in
+                XCTAssertEqual(confirmation, .stopWaiting(first.requestID))
+                stale.append(confirm)
+            }
+            let content: AnyView = showsQuestion
+                ? AnyView(PersonalAgentOptionQuestion(messageID: "version", picker: picker, chosen: nil, isAnswered: true,
+                                                      reply: shared, actions: .init()))
+                : AnyView(PersonalAgentOptionAnswerStatus(reply: shared, showsQuestion: false, actions: .init()))
+            let window = WindowlessRender.Host(content.environment(\.personalAgentConfirmationPrompt, asks).padding()
+                .frame(width: 680).background(ParityTheme.canvas).environment(\.colorScheme, .light),
+                size: NSSize(width: 680, height: 220), appearance: .light)
+            defer { window.close() }
+            window.settle()
+            XCTAssertTrue(Self.press(L10n.string("Stop waiting"), in: window.hosting))
+            XCTAssertEqual(stale.count, 1)
+            shared.accepted(first.requestID)
+            var second = PersonalAgentSubmission(text: "Monday")
+            second.replyToMessageID = "day"
+            second.optionSelection = 1
+            XCTAssertTrue(shared.prepare(second))
+            stale[0]()
+            XCTAssertEqual(shared.pending, second, "The later answer, its request and payload stay")
+            let saved = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: folder.appending(path: "shared-\(showsQuestion).option-reply.json")))
+            XCTAssertEqual(saved["pending"]?["requestID"]?.stringValue, second.requestID)
+        }
+    }
+
+    /// Turns the conversation's wheel up to its first message, as the person scrolls.
+    private func scrollToTop<Content: View>(_ host: WindowlessRender.Host<Content>) throws {
+        let scroll = try XCTUnwrap(Self.scrollViews(in: host.hosting).max {
+            ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)
+        })
+        for _ in 0..<20 {
+            guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 400, wheel2: 0, wheel3: 0),
+                  let event = NSEvent(cgEvent: wheel) else { break }
+            scroll.scrollWheel(with: event)
+            host.settle(passes: 1)
+        }
+        host.settle(passes: 12)
+    }
+
     /// A model with one coding task that shows in a rendered window.
     private func makeWindowModel(more: (URL) throws -> [SessionRecord] = { _ in [] }) throws -> (AppModel, SessionRecord) {
         let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-personal-section-\(UUID().uuidString)")
@@ -768,21 +1037,28 @@ final class PersonalAgentRenderingTests: XCTestCase {
     }
 }
 
-/// Fixed agents, one page of messages and their details; sending and downloading are not part of
-/// these renders. The picture is drawn here, not a provider's.
+/// Fixed agents, one page of messages and their details; a send or an answer is only recorded, and
+/// downloading is not part of these renders. The picture is drawn here, not a provider's.
 private actor RenderedPersonalAgentReader: PersonalAgentClient {
     let values: [PersonalAgent]
-    let page: [PersonalAgentMessage]
+    private(set) var page: [PersonalAgentMessage]
     let older: [PersonalAgentMessage]
     let live: PersonalAgentLiveState?
+    /// Messages whose input request cannot be read, which then shows its status as unknown.
+    let unreadable: Set<String>
     private(set) var olderReads = 0
+    private(set) var answers: [DotsInputResult] = []
+    private(set) var sends: [PersonalAgentSubmission] = []
+    private var losesSend = false
+    func loseNextSend() { losesSend = true }
+    func setPage(_ messages: [PersonalAgentMessage]) { page = messages }
+    init(agents: [PersonalAgent], messages: [PersonalAgentMessage], older: [PersonalAgentMessage] = [],
+         live: PersonalAgentLiveState? = nil, unreadable: Set<String> = []) {
+        values = agents; page = messages; self.older = older; self.live = live; self.unreadable = unreadable
+    }
     private(set) var liveRequests = 0
     private(set) var liveRepeats = 0
     private var liveStream: AsyncStream<PersonalAgentLiveUpdate>.Continuation?
-    init(agents: [PersonalAgent], messages: [PersonalAgentMessage], older: [PersonalAgentMessage] = [],
-         live: PersonalAgentLiveState? = nil) {
-        values = agents; page = messages; self.older = older; self.live = live
-    }
     func liveState(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentLiveUpdate> {
         liveRequests += 1
         let pair = AsyncStream<PersonalAgentLiveUpdate>.makeStream()
@@ -803,6 +1079,18 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
         liveStream?.yield(.state(.init(roomID: live.roomID, subscriptionID: live.subscriptionID,
                                        revision: live.revision + Int64(liveRepeats), threads: threads)))
     }
+    func inspectRequest(in messageID: String, for agent: PersonalAgent) async throws -> DotsRequestInspection {
+        guard !unreadable.contains(messageID), let request = page.first(where: { $0.id == messageID })?.inputRequest else {
+            throw PersonalAgentFailure.network
+        }
+        return try DotsRequestInspection(.object(["elicitation": request, "can_respond": .bool(true),
+            "runtime_status": .string("pending"), "request_fingerprint": .string("fingerprint")]))
+    }
+    func respond(_ result: DotsInputResult, fingerprint: String, in messageID: String,
+                 for agent: PersonalAgent) async throws -> DotsResponseOutcome {
+        answers.append(result)
+        return .applied
+    }
     func agents() async throws -> [PersonalAgent] { values }
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
         guard before != nil else { return .init(messages: page, before: older.isEmpty ? nil : page.first?.id) }
@@ -811,7 +1099,14 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
     }
     func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate> { AsyncStream { $0.finish() } }
     func send(_ submission: PersonalAgentSubmission, to agent: PersonalAgent) async throws -> PersonalAgentMessage {
-        throw PersonalAgentFailure.invalidResponse
+        sends.append(submission)
+        if losesSend { losesSend = false; throw PersonalAgentFailure.deliveryUnknown }
+        var message = PersonalAgentMessage(id: "sent-" + submission.requestID, author: .person, text: submission.text,
+                                           createdAt: nil, isDeleted: false, attachments: [], requestID: submission.requestID)
+        message.replyToMessageID = submission.replyToMessageID
+        message.metadata = submission.optionSelection.map { .object(["option_picker": .object(["selection": .integer(Int64($0))])]) }
+        page.append(message)
+        return message
     }
     func upload(_ file: PersonalAgentPreparedFile, to agent: PersonalAgent) async throws -> PersonalAgentUploadedFile {
         throw PersonalAgentFailure.uploadFailed
