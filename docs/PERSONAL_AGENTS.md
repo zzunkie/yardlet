@@ -38,8 +38,8 @@ next earlier page once, keeping the message you were reading in place; a failure
 waits for **Try again**, and **Load earlier messages** reads another page by hand.
 Yardlet does not download the whole history in advance, and reading sends no read
 receipt. File attachments open in a native preview, with an explicit save action.
-Other attachment types are named but cannot be opened here yet. Uploading
-attachments, reacting, answering approvals, pausing an agent and changing its
+Other attachment types are named but cannot be opened here yet. Reacting,
+replying to a message, answering approvals, pausing an agent and changing its
 settings are not implemented.
 
 ## Opening the dot where the provider shows it
@@ -92,7 +92,7 @@ same input-method handling as the task composer. A confirmed send is displayed
 separately until the conversation query includes it, so it cannot hide missing
 history or move earlier messages out of order.
 
-Drafts and pending request identities are saved under
+Drafts, their file copies and pending request identities are saved under
 `~/.yardlet/personal-agent-drafts/`, separately from coding tasks. The key binds
 the account home, account, user, dot and room. Changing the executable for the
 same account home retains the draft. Files are private to the current OS user.
@@ -123,6 +123,41 @@ approval request marks it unread and posts its notification as for any task in
 the background. Coming back to Tasks marks the selected task read, and a side chat
 on screen is marked read when it shows again.
 
+## Files and photos
+
+The **+** button, a paste or a drop on the composer adds files and photos to the
+dot's draft, up to 8 in a message and each of 1 byte to 20 MiB, as the provider's
+composer allows. A room the provider marks as only shared with the person, or
+waiting on a message request, takes no files; the button and drops are off there.
+Each file is copied into the draft's folder when it is added, and only that copy
+is read afterwards: the original is never moved, changed or deleted. A photo shows
+as a thumbnail and any other file by its name, with a spinner while it uploads and
+a mark when it did not. **Retry upload** tries the failed files again; removing a
+file stops its upload in Yardlet and deletes the copy, and nothing is deleted on
+the provider.
+
+Each file goes to the dot's room as one ordinary upload, and the message names the
+returned file IDs. Before upload, photos are prepared as the provider's composer
+prepares them: HEIC, HEIF, MPO and AVIF become JPEG under the same name, and a
+picture larger than 2048 pixels on a side or 1 MiB is redrawn at most 2048 pixels
+on its long side. The redrawn picture is upright and leaves out the original's
+metadata and any later frames; a type this Mac cannot write is sent as it is.
+
+A message may be files alone. Pressing Send while files upload sends the text and
+files as they were at that moment once the uploads finish; the editor waits
+meanwhile. A file that did not upload stops the send and is never left out
+silently. A message whose delivery is uncertain keeps its words, file IDs and
+request identity, so a retry sends exactly the same message and uploads nothing
+again. Files picked for one dot or account never join another's draft, and a
+changed account stops the uploads in progress.
+
+The draft remembers each file's copy and, once uploaded, its file ID. After a
+restart, files that had not finished uploading come back marked as not uploaded
+and wait for **Retry upload**; nothing uploads by itself. A file whose copy was
+made while the draft could not be saved is kept and comes back the same way. A
+draft without files is saved in the same format as before. The copies are deleted
+when the message that carried them is confirmed or the file is removed.
+
 ## Provider boundary
 
 Dots currently uses private ChatGPT service routes and a legacy authentication
@@ -137,4 +172,6 @@ turn. A person's explicit send can start cloud work on their existing dot. The
 transport does not read authentication files, change the runtime's configuration,
 copy credentials between account homes, or fabricate service-verification data.
 Signed attachment downloads on provider storage hosts receive no account token.
+Uploads go only to the dot's own room, after the room's identity and type are
+checked again, with no upload URL, storage write or reservation.
 Closing a preview removes only its temporary copy; a file the person saved stays.

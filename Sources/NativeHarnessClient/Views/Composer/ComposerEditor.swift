@@ -46,6 +46,9 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
     let metrics: ComposerEditorMetrics
     /// What the harness takes. Nil before a harness is chosen: no `@`, paste or drop.
     let input: HarnessComposerInputPolicy?
+    /// Takes pasted and dropped files and pictures in place of the harness's rules, for a composer
+    /// whose message carries files of its own (a dot's). Nil leaves them to `input`.
+    let onExternalInput: ((ComposerExternalInput) -> Void)?
     /// The folders a typed `@word` searches.
     let mentionRoots: [URL]
     /// Nil where a typed `/` opens nothing.
@@ -89,6 +92,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         accessibilityHint: String? = nil,
         metrics: ComposerEditorMetrics,
         input: HarnessComposerInputPolicy?,
+        onExternalInput: ((ComposerExternalInput) -> Void)? = nil,
         mentionRoots: [URL],
         commands: ComposerEditorCommands?,
         bashModeAvailable: Bool = false,
@@ -112,6 +116,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         self.accessibilityHint = accessibilityHint
         self.metrics = metrics
         self.input = input
+        self.onExternalInput = onExternalInput
         self.mentionRoots = mentionRoots
         self.commands = commands
         self.bashModeAvailable = bashModeAvailable
@@ -145,6 +150,13 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
 
     private var isBashMode: Bool {
         bashModeAvailable && draft.isBashMode
+    }
+
+    /// Where a paste or drop goes: the composer's own handler, or the harness's attachments.
+    private var externalInput: ((ComposerExternalInput) -> Void)? {
+        if let onExternalInput { return onExternalInput }
+        guard let input, input.showsMentionControl else { return nil }
+        return { [draft] in draft.receive($0, policy: input) }
     }
 
     var body: some View {
@@ -217,10 +229,10 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
                     : isFocused.wrappedValue ? ParityTheme.strongSeparator : ParityTheme.separator)
         }
         .overlay {
-            if let input, input.showsMentionControl {
+            if let receive = externalInput {
                 // Backspace in the empty composer returns bash mode to chat.
                 ComposerExternalInputTarget(
-                    isTargeted: $isDropTargeted, onInput: { draft.receive($0, policy: input) },
+                    isTargeted: $isDropTargeted, onInput: receive,
                     onDeleteInEmptyText: bashModeAvailable ? { isBashMode && draft.leaveBashMode() } : nil)
                     .accessibilityHidden(true)
             }

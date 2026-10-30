@@ -1,3 +1,5 @@
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 @testable import NativeHarnessClient
 
@@ -51,6 +53,115 @@ final class DotsServiceTests: XCTestCase {
         XCTAssertEqual(fixture.requests.filter { $0.httpMethod == "POST" }.count, 1)
         // PersonalAgentTests checks that this failure keeps the original pending ID.
         await service.stop()
+    }
+
+    func testUploadSendsOneMultipartFileAndAMessageMayCarryOnlyItsID() async throws {
+        let fixture = DotsHTTPRecorder()
+        let service = makeService(fixture, broker: DotsTestBroker())
+        let bytes = Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF])
+        let uploaded = try await service.upload(.init(data: bytes, name: "보고서 \"최종\".png", mimeType: "image/png"), to: agent)
+        XCTAssertEqual(uploaded, .init(fileID: "file_1", name: "보고서 \"최종\".png", mimeType: "image/png", sizeBytes: bytes.count))
+        let post = try XCTUnwrap(fixture.requests.first { $0.httpMethod == "POST" })
+        XCTAssertEqual(post.url?.path, "/backend-api/messaging/rooms/room/files")
+        XCTAssertNotNil(post.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(post.value(forHTTPHeaderField: "ChatGPT-Account-Id"), "account")
+        XCTAssertNil(post.value(forHTTPHeaderField: "Cookie"))
+        let type = try XCTUnwrap(post.value(forHTTPHeaderField: "Content-Type"))
+        XCTAssertTrue(type.hasPrefix("multipart/form-data; boundary="))
+        let boundary = String(type.dropFirst("multipart/form-data; boundary=".count))
+        var expected = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"보고서 %22최종%22.png\"\r\n".utf8)
+        expected.append(Data("Content-Type: image/png\r\n\r\n".utf8))
+        expected.append(bytes)
+        expected.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        XCTAssertEqual(fixture.body(post), expected, "One field named file; no upload URL, reservation or second request")
+
+        // A file alone is a message: empty words and the room's file ID, under one request identity.
+        let submission = PersonalAgentSubmission(text: "", attachments: [uploaded])
+        _ = try await service.send(submission, to: agent)
+        let send = try XCTUnwrap(fixture.requests.last { $0.httpMethod == "POST" })
+        XCTAssertEqual(send.url?.path, "/backend-api/messaging/rooms/room/messages")
+        let body = try JSONDecoder().decode(JSONValue.self, from: fixture.body(send))
+        XCTAssertEqual(body["content"], .object(["text": .string(""),
+            "attachments": .array([.object(["type": .string("file"), "file_id": .string("file_1")])])]))
+        XCTAssertEqual(body["idempotency_token"]?.stringValue, submission.requestID)
+        XCTAssertEqual(fixture.requests.filter { $0.httpMethod == "POST" }.count, 2)
+
+        // Out of the provider's size range, nothing is requested at all.
+        for size in [0, PersonalAgentFileRules.maximumBytes + 1] {
+            do { _ = try await service.upload(.init(data: Data(count: size), name: "a.bin", mimeType: "application/octet-stream"), to: agent); XCTFail() }
+            catch { XCTAssertEqual(error as? PersonalAgentFailure, .attachmentLimit) }
+        }
+        XCTAssertEqual(fixture.requests.filter { $0.httpMethod == "POST" }.count, 2)
+        await service.stop()
+
+        // The provider's names for the lifecycle, in its order; a value it does not know says nothing.
+        let lifecycle = { (raw: String) in DotsProjection.roomLifecycle(try! JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8))) }
+        XCTAssertEqual(lifecycle(#"{"dmLifecycleState":"","dm_lifecycle_state":"share_only"}"#), "share_only")
+        XCTAssertNil(lifecycle(#"{"dm_lifecycle_state":"archived"}"#))
+        XCTAssertTrue(DotsProjection.allowsAttachments(lifecycle: nil))
+        XCTAssertTrue(DotsProjection.allowsAttachments(lifecycle: "accepted"))
+
+        // Another room's binding, or a room that takes no files, gets no upload and no message with a file.
+        let dm = #""type":"DM","app_source":"chatgpt:messaging","members":[]"#
+        for (room, failure) in [(#"{"id":"other","aeon_id":"dot","# + dm + "}", PersonalAgentFailure.invalidResponse),
+                                (#"{"id":"room","aeon_id":"dot","type":"GROUP","app_source":"chatgpt:messaging","members":[]}"#, .invalidResponse),
+                                (#"{"id":"room","aeon_id":"dot","dm_lifecycle_state":"share_only","# + dm + "}", .attachmentsNotAllowed),
+                                (#"{"id":"room","aeon_id":"dot","dmLifecycleState":"pending_request","dm_lifecycle_state":"connected","#
+                                    + dm + "}", .attachmentsNotAllowed)] {
+            let gated = DotsHTTPRecorder(room: room)
+            let service = makeService(gated, broker: DotsTestBroker())
+            do { _ = try await service.upload(.init(data: bytes, name: "a.png", mimeType: "image/png"), to: agent); XCTFail() }
+            catch { XCTAssertEqual(error as? PersonalAgentFailure, failure) }
+            do { _ = try await service.send(submission, to: agent); XCTFail() }
+            catch { XCTAssertEqual(error as? PersonalAgentFailure, failure) }
+            XCTAssertTrue(gated.requests.allSatisfy { $0.httpMethod == "GET" })
+            await service.stop()
+        }
+    }
+
+    /// The provider composer's preparation: HEIC becomes a JPEG under the same stem, a large picture is
+    /// drawn again at most 2048 pixels on its long side, and a small one goes as it is.
+    func testPicturesArePreparedAsTheProviderComposerPreparesThem() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        func picture(_ width: Int, _ height: Int, _ type: UTType, _ name: String) throws -> URL {
+            let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.setFillColor(CGColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            let url = folder.appending(path: name)
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), nil)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            return url
+        }
+        func size(_ data: Data) -> (Int?, Int?) {
+            let properties = CGImageSourceCreateWithData(data as CFData, nil)
+                .flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [CFString: Any] }
+            return (properties?[kCGImagePropertyPixelWidth] as? Int, properties?[kCGImagePropertyPixelHeight] as? Int)
+        }
+        let wide = try PersonalAgentImagePreparation.prepared(try picture(3000, 1200, .png, "wide.png"), name: "wide.png", mimeType: "image/png")
+        XCTAssertEqual(wide.name, "wide.png")
+        XCTAssertEqual(wide.mimeType, "image/png")
+        XCTAssertEqual(size(wide.data).0, 2048)
+        XCTAssertEqual(size(wide.data).1, 819)
+        let small = try picture(200, 100, .png, "small.png")
+        XCTAssertEqual(try PersonalAgentImagePreparation.prepared(small, name: "small.png", mimeType: "image/png").data,
+                       try Data(contentsOf: small))
+        let heic = try picture(400, 300, .heic, "photo.heic")
+        let converted = try PersonalAgentImagePreparation.prepared(heic, name: "photo.heic", mimeType: "image/heic")
+        XCTAssertEqual(converted.name, "photo.jpg")
+        XCTAssertEqual(converted.mimeType, "image/jpeg")
+        XCTAssertEqual(Array(converted.data.prefix(2)), [0xFF, 0xD8])
+        let broken = folder.appending(path: "broken.heic")
+        try Data("not a picture".utf8).write(to: broken)
+        XCTAssertThrowsError(try PersonalAgentImagePreparation.prepared(broken, name: "broken.heic", mimeType: "image/heic")) {
+            XCTAssertEqual($0 as? PersonalAgentFailure, .filePreparation)
+        }
+        let document = folder.appending(path: "notes.txt")
+        try Data("text".utf8).write(to: document)
+        XCTAssertEqual(try PersonalAgentImagePreparation.prepared(document, name: "notes.txt", mimeType: "text/plain").data, Data("text".utf8))
     }
 
     func testAttachmentRequestsKeepCredentialsAtTheProviderOrigin() async throws {
@@ -123,7 +234,12 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var recorded: [URLRequest] = []
     private var statuses: [Int]
-    init(postStatuses: [Int] = [200]) { statuses = postStatuses }
+    private let room: String
+    init(postStatuses: [Int] = [200],
+         room: String = #"{"id":"room","aeon_id":"dot","type":"DM","app_source":"chatgpt:messaging","members":[{"account_user_id":"person","role":"user"}]}"#) {
+        statuses = postStatuses
+        self.room = room
+    }
     var requests: [URLRequest] { lock.withLock { recorded } }
     func body(_ request: URLRequest) -> Data { request.httpBody ?? Data() }
 
@@ -154,6 +270,9 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
             if request.url?.path.hasSuffix("/files/file") == true {
                 return (200, Data(#"{"name":"report.txt","download_url":"https://files.oaiusercontent.com/file"}"#.utf8))
             }
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/files") == true {
+                return (200, Data(#"{"id":"file_1","status":"ready"}"#.utf8))
+            }
             if request.httpMethod == "POST" {
                 let status = statuses.isEmpty ? 200 : statuses.removeFirst()
                 let body = (try? JSONDecoder().decode(JSONValue.self, from: request.httpBody ?? Data())) ?? .null
@@ -161,7 +280,7 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
                     "request_id": body["request_id"] ?? .null, "content": body["content"] ?? .null])
                 return (status, try! JSONEncoder().encode(result))
             }
-            return (200, Data(#"{"id":"room","aeon_id":"dot","members":[{"account_user_id":"person","role":"user"}]}"#.utf8))
+            return (200, Data(room.utf8))
         }
     }
 }

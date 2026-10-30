@@ -3243,3 +3243,15 @@
 "Usage limit reset" = "리셋권 사용 결과";
 "Limits now:" = "지금 한도:";
 "The harness gave an answer Yardlet doesn't know." = "하네스가 Yardlet이 알지 못하는 답을 보냈습니다.";
+"Add up to 8 files, each up to 20 MB." = "파일은 최대 8개, 각각 20MB까지 첨부할 수 있습니다.";
+"A file could not be uploaded. Retry it or remove it." = "파일을 올리지 못했습니다. 다시 시도하거나 파일을 빼세요.";
+"A file upload stopped before it finished. Retry it or remove it." = "파일 업로드가 끝나기 전에 멈췄습니다. 다시 시도하거나 파일을 빼세요.";
+"This photo could not be prepared for upload. Convert it to JPEG and try again." = "이 사진을 올릴 수 있는 형식으로 바꾸지 못했습니다. JPEG로 바꾼 뒤 다시 시도하세요.";
+"Nothing was sent because a file did not upload. Retry it or remove it." = "올라가지 않은 파일이 있어 메시지를 보내지 않았습니다. 다시 시도하거나 파일을 빼세요.";
+"Retry upload" = "업로드 다시 시도";
+"Sending when the files finish uploading…" = "파일이 다 올라가면 보냅니다…";
+"Uploading" = "올리는 중";
+"Not uploaded" = "올라가지 않음";
+"Upload failed" = "업로드 실패";
+"Attached file" = "첨부 파일";
+"Files cannot be sent in this conversation. Remove them to send the message." = "이 대화에는 파일을 보낼 수 없습니다. 파일을 빼면 메시지를 보낼 수 있습니다.";

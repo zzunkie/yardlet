@@ -396,6 +396,165 @@ final class PersonalAgentTests: XCTestCase {
         await center.disconnect()
     }
 
+    func testSendDuringUploadSendsThePressedDraftAndARetryKeepsItsFileIDs() async throws {
+        let (folder, original) = try chosenFile()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let center = PersonalAgentCenter()
+        let reader = FixturePersonalAgentReader(agents: [fixtureAgent()], losesFirstSend: true)
+        await reader.holdUploads()
+        await center.connect(sourceKey: "account") { reader }
+        let draft = try XCTUnwrap(center.conversation?.draft)
+        await center.attach([.init(url: original, declaredType: nil)], to: try XCTUnwrap(center.fileTarget()))
+        let file = try XCTUnwrap(draft.files.first)
+        XCTAssertNotEqual(file.copy, original, "The draft keeps its own copy")
+        try await waitUntil { await reader.hasPendingUpload() }
+        // A file alone is a message; Send waits for its upload instead of leaving it out.
+        let sending = Task { await center.send() }
+        try await waitUntil { draft.waitsForUploads }
+        draft.editor.text = "Typed after Send was pressed"
+        await reader.releaseUpload()
+        await sending.value
+        var requests = await reader.sentRequests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.text, "", "The words as they were when Send was pressed")
+        XCTAssertEqual(requests.first?.attachments.map(\.fileID), ["file-1"])
+        XCTAssertEqual(draft.failure, .deliveryUnknown)
+        XCTAssertEqual(draft.pending, requests.first)
+        center.removeFile(file.id)
+        XCTAssertEqual(draft.files.map(\.id), [file.id], "A pending message's files stay as they were sent")
+        await center.send()
+        requests = await reader.sentRequests()
+        XCTAssertEqual(requests.map(\.requestID), [requests[0].requestID, requests[0].requestID])
+        XCTAssertEqual(requests[1], requests[0], "The same words, file IDs and request")
+        let uploads = await reader.uploadCount()
+        XCTAssertEqual(uploads, 1, "A retry never uploads the files again")
+        XCTAssertTrue(draft.files.isEmpty)
+        XCTAssertEqual(draft.editor.text, "Typed after Send was pressed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.copy.path(percentEncoded: false)))
+        XCTAssertEqual(try Data(contentsOf: original), Data("original".utf8), "The person's file is untouched")
+        await center.disconnect()
+    }
+
+    func testAFailedOrStoppedUploadNeverLeavesASendWithoutItsFile() async throws {
+        let (folder, original) = try chosenFile()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let center = PersonalAgentCenter()
+        let reader = FixturePersonalAgentReader(agents: [fixtureAgent()])
+        await reader.failUploads(true)
+        await center.connect(sourceKey: "account") { reader }
+        let draft = try XCTUnwrap(center.conversation?.draft)
+        draft.editor.text = "Here is the file"
+        await center.attach([.init(url: original)], to: try XCTUnwrap(center.fileTarget()))
+        try await waitUntil { draft.hasFailedUploads }
+        await center.send()
+        var sent = await reader.sentRequests()
+        XCTAssertTrue(sent.isEmpty)
+        XCTAssertEqual(draft.failure, .attachmentsIncomplete)
+        XCTAssertEqual(draft.editor.text, "Here is the file")
+        await reader.failUploads(false)
+        center.retryUploads()
+        try await waitUntil { draft.files.first?.uploaded != nil }
+        await center.send()
+        sent = await reader.sentRequests()
+        XCTAssertEqual(sent.first?.attachments.count, 1)
+
+        // Files picked for one connection never reach the draft of the next, and an upload the
+        // connection change stopped is left to retry, not counted as sent.
+        await reader.holdUploads()
+        let target = try XCTUnwrap(center.fileTarget())
+        await center.attach([.init(url: original)], to: target)
+        try await waitUntil { await reader.hasPendingUpload() }
+        let stale = try XCTUnwrap(center.fileTarget())
+        await center.connect(sourceKey: "another") { FixturePersonalAgentReader(agents: [self.fixtureAgent(account: "another")]) }
+        await reader.releaseUpload()
+        try await waitUntil { draft.files.first?.state == .failed(.uploadInterrupted) }
+        let next = try XCTUnwrap(center.conversation?.draft)
+        await center.attach([.init(url: original)], to: stale)
+        XCTAssertTrue(next.files.isEmpty)
+        XCTAssertEqual(draft.files.count, 1)
+        await center.disconnect()
+    }
+
+    func testDraftFilesAreSavedCopiesThatOutliveARestart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let (folder, original) = try chosenFile()
+        defer { try? FileManager.default.removeItem(at: directory); try? FileManager.default.removeItem(at: folder) }
+        let store = PersonalAgentDrafts(directory: directory)
+        let draft = store.draft(source: "home-a", identity: fixtureAgent().id)
+        draft.editor.text = "Text only"
+        let record = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .first { $0.pathExtension == "json" })
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: record))["version"], .integer(1),
+                       "A draft without files stays readable by earlier builds")
+        let added = await draft.addFiles([.init(url: original), .init(url: original)])
+        draft.setState(added[0], .uploaded(.init(fileID: "file-1", name: "notes.txt", mimeType: "text/plain", sizeBytes: 8)))
+        draft.setState(added[1], .uploading)
+        let copy = try XCTUnwrap(draft.file(added[1])?.copy)
+        let mode = try FileManager.default.attributesOfItem(atPath: copy.path(percentEncoded: false))[.posixPermissions] as? Int
+        XCTAssertEqual(mode, 0o600)
+        let restored = PersonalAgentDrafts(directory: directory).draft(source: "home-a", identity: fixtureAgent().id)
+        XCTAssertEqual(restored.files.map(\.state), [.uploaded(.init(fileID: "file-1", name: "notes.txt", mimeType: "text/plain", sizeBytes: 8)),
+                                                      .failed(.uploadInterrupted)])
+        XCTAssertEqual(try Data(contentsOf: restored.files[1].copy), Data("original".utf8))
+        XCTAssertTrue(PersonalAgentDrafts(directory: directory).draft(source: "home-a", identity: fixtureAgent(account: "other").id).files.isEmpty)
+        restored.removeFile(added[1])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path(percentEncoded: false)))
+        XCTAssertEqual(try Data(contentsOf: original), Data("original".utf8))
+
+        // A copy made while the draft cannot be saved is not uploaded, and is not lost: the next start
+        // takes it back to retry, since the saved draft never said it was removed.
+        let blocked = directory.appending(path: "blocked.json")
+        let unsaved = PersonalAgentDraft(file: blocked)
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true)
+        let none = await unsaved.addImage(name: "image.png", mimeType: "image/png") { Data("pasted".utf8) }
+        XCTAssertTrue(none.isEmpty, "Nothing uploads before the draft names the file")
+        let kept = try XCTUnwrap(unsaved.files.first)
+        XCTAssertEqual(kept.state, .failed(.draftStorage))
+        try FileManager.default.removeItem(at: blocked)
+        let reopened = PersonalAgentDraft(file: blocked)
+        XCTAssertEqual(reopened.files.map(\.id), [kept.id])
+        XCTAssertEqual(reopened.files.first?.state, .failed(.uploadInterrupted))
+        XCTAssertEqual(try Data(contentsOf: kept.copy), Data("pasted".utf8))
+
+        // A removal whose save failed keeps the copy only until a later save succeeds; after that, a
+        // restart does not bring the removed file back.
+        let removing = PersonalAgentDraft(file: blocked)
+        let gone = try XCTUnwrap(removing.files.first)
+        try FileManager.default.removeItem(at: blocked)
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true)
+        removing.removeFile(gone.id)
+        XCTAssertTrue(removing.files.isEmpty)
+        XCTAssertTrue(removing.storageFailed)
+        try FileManager.default.removeItem(at: blocked)
+        removing.editor.text = "Saved again without the file"
+        XCTAssertFalse(removing.storageFailed)
+        let afterRemoval = PersonalAgentDraft(file: blocked)
+        XCTAssertTrue(afterRemoval.files.isEmpty, "A removed file never returns")
+        XCTAssertEqual(afterRemoval.editor.text, "Saved again without the file")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: gone.copy.deletingLastPathComponent().path(percentEncoded: false)))
+
+        // A damaged record cannot name a copy outside the draft's own folder.
+        var raw = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: record))
+        if case var .object(fields) = raw, case var .array(files)? = fields["files"], case var .object(file) = files[0] {
+            file["copyName"] = .string("../../outside")
+            files[0] = .object(file)
+            fields["files"] = .array(files)
+            raw = .object(fields)
+        }
+        try JSONEncoder().encode(raw).write(to: record)
+        let damaged = PersonalAgentDrafts(directory: directory).draft(source: "home-a", identity: fixtureAgent().id)
+        XCTAssertEqual(damaged.files.first?.copy.lastPathComponent, "file")
+        XCTAssertEqual(damaged.files.first?.copy.deletingLastPathComponent().lastPathComponent, added[0].uuidString)
+    }
+
+    private func chosenFile() throws -> (URL, URL) {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appending(path: "notes.txt")
+        try Data("original".utf8).write(to: file)
+        return (folder, file)
+    }
+
     private func fixtureAgent(account: String = "account") -> PersonalAgent {
         .init(id: .init(accountID: account, userID: "person", agentID: "dot", roomID: "room"),
               name: "Atlas", rootThreadID: "thread", isPaused: false, isPrimary: true)
@@ -460,6 +619,21 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
     func download(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> PersonalAgentDownload {
         throw PersonalAgentFailure.attachmentUnavailable
     }
+    private var uploads = 0
+    private var holdsUploads = false
+    private var failsUploads = false
+    private var pendingUpload: CheckedContinuation<Void, Never>?
+    func upload(_ file: PersonalAgentPreparedFile, to agent: PersonalAgent) async throws -> PersonalAgentUploadedFile {
+        if holdsUploads { await withCheckedContinuation { pendingUpload = $0 } }
+        if failsUploads { throw PersonalAgentFailure.uploadFailed }
+        uploads += 1
+        return .init(fileID: "file-\(uploads)", name: file.name, mimeType: file.mimeType, sizeBytes: file.data.count)
+    }
+    func holdUploads() { holdsUploads = true }
+    func failUploads(_ value: Bool) { failsUploads = value }
+    func hasPendingUpload() -> Bool { pendingUpload != nil }
+    func releaseUpload() { holdsUploads = false; pendingUpload?.resume(); pendingUpload = nil }
+    func uploadCount() -> Int { uploads }
     func avatar(for agent: PersonalAgent) async throws -> Data { throw PersonalAgentFailure.attachmentUnavailable }
     private var pets: [String: PersonalAgentPet] = [:]
     private var sheetFailure: PersonalAgentFailure?

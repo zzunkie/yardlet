@@ -207,6 +207,12 @@ struct PersonalAgentsContent: View {
                         isLoadingAttachment: loadingAttachment,
                         attachmentFailure: attachmentFailure,
                         send: { Task { await center.send() } },
+                        files: PersonalAgentComposerFiles(
+                            target: { center.fileTarget() },
+                            attach: { sources, target in Task { await center.attach(sources, to: target) } },
+                            attachImage: { encode, target in Task { await center.attachImage(to: target, encode: encode) } },
+                            retry: { center.retryUploads() },
+                            remove: { center.removeFile($0) }),
                         open: open,
                         refresh: {
                             if center.failure != nil { onRetry() }
@@ -335,6 +341,7 @@ struct PersonalAgentConversationView: View {
     var isLoadingAttachment = false
     var attachmentFailure: PersonalAgentFailure?
     let send: () -> Void
+    var files = PersonalAgentComposerFiles()
     let open: (PersonalAgentAttachment) -> Void
     let refresh: () -> Void
     let loadOlder: () -> Void
@@ -411,7 +418,8 @@ struct PersonalAgentConversationView: View {
                 }
                 .font(.caption).foregroundStyle(.secondary).padding(.bottom, 4)
             }
-            PersonalAgentComposer(draft: conversation.draft, send: send)
+            PersonalAgentComposer(draft: conversation.draft, send: send, files: files,
+                                  allowsFiles: conversation.allowsAttachments)
                 .frame(maxWidth: ParityTheme.contentWidth)
                 .padding(.horizontal, 24).padding(.top, 6).padding(.bottom, 16)
                 .frame(maxWidth: .infinity)
@@ -794,12 +802,31 @@ struct PersonalAgentDetailsPanel: View {
     }
 }
 
+/// What the dot's composer does with files: each goes to the dot the conversation shows.
+struct PersonalAgentComposerFiles {
+    /// Where the files go, taken before choosing or reading them.
+    var target: () -> PersonalAgentFileTarget? = { nil }
+    var attach: ([PersonalAgentFileSource], PersonalAgentFileTarget) -> Void = { _, _ in }
+    /// A pasted picture, as what makes its PNG bytes.
+    var attachImage: (@escaping @Sendable () -> Data?, PersonalAgentFileTarget) -> Void = { _, _ in }
+    var retry: () -> Void = {}
+    var remove: (UUID) -> Void = { _ in }
+}
+
 private struct PersonalAgentComposer: View {
     @Bindable var draft: PersonalAgentDraft
     let send: () -> Void
+    var files = PersonalAgentComposerFiles()
+    /// The room takes files; otherwise the file button and drops are off, and files already here wait.
+    var allowsFiles = true
     @FocusState private var focused: Bool
     @State private var confirmsEditing = false
     @State private var confirmsRecovery = false
+
+    /// Words or files: a file alone is a message, and Send waits for one still uploading.
+    private var hasMessage: Bool {
+        !draft.editor.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.files.isEmpty
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -824,32 +851,50 @@ private struct PersonalAgentComposer: View {
                             Button(L10n.string("Retry message"), action: submit)
                             Button(L10n.string("Edit message")) { confirmsEditing = true }
                         }
+                    } else if failure == .attachmentsIncomplete, draft.hasFailedUploads, allowsFiles {
+                        Button(L10n.string("Retry upload"), action: files.retry)
                     }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            } else if draft.waitsForUploads {
+                Text(L10n.string("Sending when the files finish uploading…"))
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if let failure = draft.files.lazy.compactMap(\.failure).first, draft.pending == nil {
+                HStack {
+                    Text(failure.message).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    if allowsFiles { Button(L10n.string("Retry upload"), action: files.retry) }
                 }
                 .font(.caption).foregroundStyle(.secondary)
             }
             ComposerEditor(draft: draft.editor, placeholder: L10n.string("Message your dot…"),
                 accessibilityHint: L10n.string("Press Return to send"), metrics: .task(),
-                input: nil, mentionRoots: [], commands: nil, isCommandMenuOpen: false, isMenuOpen: false,
+                input: nil, onExternalInput: externalInput, mentionRoots: [], commands: nil,
+                isCommandMenuOpen: false, isMenuOpen: false, showsChips: !draft.files.isEmpty,
                 isFocused: $focused, onSubmit: submit) {
                     EmptyView()
                 } chips: {
-                    EmptyView()
+                    ForEach(draft.files) { file in
+                        PersonalAgentFileChip(file: file) { files.remove(file.id) }
+                    }
                 } footer: {
                     HStack {
+                        ParityIconButton(systemName: "plus", help: L10n.string("Add files or photos"), action: chooseFiles)
+                            .accessibilityLabel(L10n.string("Add files or photos"))
+                            .disabled(!allowsFiles || draft.files.count >= PersonalAgentFileRules.maximumCount)
                         Spacer()
                         if draft.isSending { ProgressView().controlSize(.small) }
                         if draft.pending == nil {
                             ParityIconButton(systemName: "arrow.up", help: L10n.string("Send"), isProminent: true,
                                              action: submit)
                                 .accessibilityLabel(L10n.string("Send message"))
-                                .disabled(draft.isSending || draft.storageFailed || draft.editor.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                .disabled(draft.isSending || draft.isAddingFiles || draft.storageFailed || !hasMessage)
                         }
                         else { Color.clear.frame(width: 28, height: 28) }
                     }
                     .padding(.leading, 10).padding(.trailing, 9).padding(.bottom, 9)
                 }
-                // A pending result is resolved with the original request and text.
+                // A pending result is resolved with the original request, text and files.
                 .disabled(draft.isSending || draft.pending != nil)
                 .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
         }
@@ -867,8 +912,102 @@ private struct PersonalAgentComposer: View {
         }
     }
 
+    private var externalInput: ((ComposerExternalInput) -> Void)? {
+        guard allowsFiles else { return nil }
+        return { receive($0) }
+    }
+
+    /// A paste or drop on the composer: files as they are, a picture as PNG, made off the main thread.
+    private func receive(_ input: ComposerExternalInput) {
+        guard draft.pending == nil, !draft.isSending, let target = files.target() else { return }
+        switch input {
+        case let .files(urls):
+            files.attach(urls.map(PersonalAgentFileTypes.source), target)
+        case let .image(data, type):
+            files.attachImage({ ComposerExternalInput.pngData(data, type: type) }, target)
+        }
+    }
+
+    private func chooseFiles() {
+        guard let target = files.target() else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = L10n.string("Add")
+        guard panel.runModal() == .OK else { return }
+        files.attach(panel.urls.map(PersonalAgentFileTypes.source), target)
+    }
+
     private func submit() {
-        guard !draft.isSending, !draft.storageFailed else { return }
+        guard !draft.isSending, !draft.isAddingFiles, !draft.storageFailed, hasMessage || draft.pending != nil else { return }
         send()
+    }
+}
+
+/// A file in the dot's composer: a picture as its thumbnail, anything else by name, each with its
+/// upload shown over it (a spinner while it goes up, a warning when it did not) and a remove button.
+private struct PersonalAgentFileChip: View {
+    let file: PersonalAgentDraftFile
+    let onRemove: () -> Void
+
+    var body: some View {
+        Group {
+            if file.isImage {
+                ComposerImageChip(url: file.copy, name: file.shownName, onRemove: onRemove)
+                    .overlay {
+                        if file.isInProgress {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8).fill(.black.opacity(0.35))
+                                ProgressView().controlSize(.small).tint(.white)
+                            }
+                            .allowsHitTesting(false)
+                        }
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        if file.failure != nil {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.white, .red)
+                                .font(.system(size: 13))
+                                .padding(3)
+                                .allowsHitTesting(false)
+                        }
+                    }
+            } else {
+                HStack(spacing: 4) {
+                    if file.isInProgress { ProgressView().controlSize(.mini) }
+                    else if file.failure != nil {
+                        Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                    } else {
+                        Image(systemName: "doc")
+                    }
+                    Text(file.shownName).lineLimit(1).truncationMode(.middle).frame(maxWidth: 180)
+                    Button(action: onRemove) {
+                        Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                    .parityPointer()
+                    .accessibilityLabel(L10n.string("Remove attachment"))
+                    .help(L10n.string("Remove attachment"))
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 7)
+                .frame(height: 24)
+                .background(ParityTheme.subtleFill, in: Capsule())
+            }
+        }
+        .help(status.map { file.shownName + " · " + $0 } ?? file.shownName)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(status.map { file.shownName + ", " + $0 } ?? file.shownName)
+    }
+
+    private var status: String? {
+        switch file.state {
+        case .queued, .uploading: L10n.string("Uploading")
+        case .uploaded: nil
+        case let .failed(failure): failure == .uploadInterrupted ? L10n.string("Not uploaded") : L10n.string("Upload failed")
+        }
     }
 }

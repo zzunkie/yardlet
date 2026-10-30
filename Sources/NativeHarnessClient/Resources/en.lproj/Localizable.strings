@@ -3243,3 +3243,15 @@
 "Usage limit reset" = "Usage limit reset";
 "Limits now:" = "Limits now:";
 "The harness gave an answer Yardlet doesn't know." = "The harness gave an answer Yardlet doesn't know.";
+"Add up to 8 files, each up to 20 MB." = "Add up to 8 files, each up to 20 MB.";
+"A file could not be uploaded. Retry it or remove it." = "A file could not be uploaded. Retry it or remove it.";
+"A file upload stopped before it finished. Retry it or remove it." = "A file upload stopped before it finished. Retry it or remove it.";
+"This photo could not be prepared for upload. Convert it to JPEG and try again." = "This photo could not be prepared for upload. Convert it to JPEG and try again.";
+"Nothing was sent because a file did not upload. Retry it or remove it." = "Nothing was sent because a file did not upload. Retry it or remove it.";
+"Retry upload" = "Retry upload";
+"Sending when the files finish uploading…" = "Sending when the files finish uploading…";
+"Uploading" = "Uploading";
+"Not uploaded" = "Not uploaded";
+"Upload failed" = "Upload failed";
+"Attached file" = "Attached file";
+"Files cannot be sent in this conversation. Remove them to send the message." = "Files cannot be sent in this conversation. Remove them to send the message.";

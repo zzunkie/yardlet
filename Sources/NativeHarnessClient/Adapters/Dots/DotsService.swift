@@ -14,6 +14,8 @@ actor DotsService: PersonalAgentClient {
     private struct Credential { let identity: Identity; let token: String; let expires: TimeInterval? }
     private let transport: any CodexTransport
     private let session: URLSession
+    /// The same policy with room for a 20 MiB file on a slow connection.
+    private let uploadSession: URLSession
     private let redirectPolicy = DotsRedirectPolicy()
     private var initialized = false
     private var initializing: Task<Void, Error>?
@@ -39,6 +41,10 @@ actor DotsService: PersonalAgentClient {
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 30
         session = URLSession(configuration: config, delegate: redirectPolicy, delegateQueue: nil)
+        let uploads = config.copy() as! URLSessionConfiguration
+        uploads.timeoutIntervalForRequest = 60
+        uploads.timeoutIntervalForResource = 600
+        uploadSession = URLSession(configuration: uploads, delegate: redirectPolicy, delegateQueue: nil)
     }
 
     func agents() async throws -> [PersonalAgent] {
@@ -70,29 +76,74 @@ actor DotsService: PersonalAgentClient {
         if let before { query.append(.init(name: "before", value: before)) }
         let page = try await read(path + "/messages", query: query)
         let projected = try DotsProjection.messages(page, room: room, agent: agent)
-        if let before, projected.before == before { return .init(messages: projected.messages, before: nil) }
+        if let before, projected.before == before {
+            return .init(messages: projected.messages, before: nil, roomLifecycle: projected.roomLifecycle)
+        }
         return projected
     }
 
     func send(_ submission: PersonalAgentSubmission, to agent: PersonalAgent) async throws -> PersonalAgentMessage {
-        guard !submission.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw PersonalAgentFailure.sendRejected
-        }
+        guard !submission.isEmpty else { throw PersonalAgentFailure.sendRejected }
         try await verify(agent)
         let path = "/messaging/rooms/" + component(agent.id.roomID)
         let room = try await read(path)
-        // Check the room binding before issuing the only message-writing request.
-        _ = try DotsProjection.messages(.object(["items": .array([])]), room: room, agent: agent)
-        let result = try await requestJSON(path + "/messages", method: "POST", body: .object([
-            "content": .object(["text": .string(submission.text), "attachments": .array([])]),
+        // Check the room binding, and for files that the room takes them, before the only message-writing request.
+        if submission.attachments.isEmpty {
+            _ = try DotsProjection.messages(.object(["items": .array([])]), room: room, agent: agent)
+        } else {
+            try DotsProjection.attachmentRoom(room, agent: agent)
+        }
+        let attachments = submission.attachments.map {
+            JSONValue.object(["type": .string("file"), "file_id": .string($0.fileID)])
+        }
+        let result = try await requestJSON(path + "/messages", method: "POST", body: .json(.object([
+            "content": .object(["text": .string(submission.text), "attachments": .array(attachments)]),
             "request_id": .string(submission.requestID), "idempotency_token": .string(submission.requestID),
             "timezone_offset_min": .integer(Int64(submission.timezoneOffsetMinutes))
-        ]))
+        ])))
         guard let message = try? DotsProjection.messages(.object(["items": .array([result])]), room: room, agent: agent).messages.first,
               message.author == .person, message.requestID == submission.requestID else {
             throw PersonalAgentFailure.deliveryUnknown
         }
         return message
+    }
+
+    /// The provider composer's ordinary upload: one multipart `file` field, answered with the file's
+    /// ID. No upload URL, storage write or reservation; a failure leaves nothing to clean up here,
+    /// and nothing is deleted on the provider when the person removes the file.
+    func upload(_ file: PersonalAgentPreparedFile, to agent: PersonalAgent) async throws -> PersonalAgentUploadedFile {
+        guard PersonalAgentFileRules.accepts(size: file.data.count) else { throw PersonalAgentFailure.attachmentLimit }
+        try await verify(agent)
+        let path = "/messaging/rooms/" + component(agent.id.roomID)
+        // The same room binding and attachment gate the send checks, before the file goes anywhere.
+        try DotsProjection.attachmentRoom(try await read(path), agent: agent)
+        let boundary = "YardletFormBoundary" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let value: JSONValue
+        do {
+            value = try await requestJSON(path + "/files", method: "POST",
+                                          body: .multipart(Self.multipart(file, boundary: boundary), boundary: boundary))
+        } catch let failure as PersonalAgentFailure {
+            switch failure {
+            case .accountChanged, .signInRequired, .stopped, .runtimeUnavailable: throw failure
+            default: throw PersonalAgentFailure.uploadFailed
+            }
+        }
+        try await verify(agent)
+        guard let id = value["id"]?.stringValue, !id.isEmpty else { throw PersonalAgentFailure.uploadFailed }
+        return .init(fileID: id, name: file.name, mimeType: file.mimeType, sizeBytes: file.data.count)
+    }
+
+    /// The form a browser sends for one file: its name with quotes and line breaks percent-escaped,
+    /// UTF-8 otherwise.
+    static func multipart(_ file: PersonalAgentPreparedFile, boundary: String) -> Data {
+        let name = file.name.replacingOccurrences(of: "\"", with: "%22")
+            .replacingOccurrences(of: "\r", with: "%0D").replacingOccurrences(of: "\n", with: "%0A")
+        var body = Data("--\(boundary)\r\n".utf8)
+        body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\n".utf8))
+        body.append(Data("Content-Type: \(file.mimeType)\r\n\r\n".utf8))
+        body.append(file.data)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        return body
     }
 
     func download(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> PersonalAgentDownload {
@@ -234,6 +285,7 @@ actor DotsService: PersonalAgentClient {
         initializing?.cancel()
         stopWatching()
         session.invalidateAndCancel()
+        uploadSession.invalidateAndCancel()
         await transport.stop()
     }
 
@@ -288,7 +340,12 @@ actor DotsService: PersonalAgentClient {
         try await requestJSON(path, query: query)
     }
 
-    private func requestJSON(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: JSONValue? = nil) async throws -> JSONValue {
+    private enum Body {
+        case json(JSONValue)
+        case multipart(Data, boundary: String)
+    }
+
+    private func requestJSON(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: Body? = nil) async throws -> JSONValue {
         let writing = method != "GET"
         for attempt in 0...1 {
             try Task.checkCancellation()
@@ -297,16 +354,22 @@ actor DotsService: PersonalAgentClient {
             if !query.isEmpty { components.queryItems = query }
             var request = URLRequest(url: components.url!)
             request.httpMethod = method
-            if let body {
-                request.httpBody = try JSONEncoder().encode(body)
+            switch body {
+            case let .json(value)?:
+                request.httpBody = try JSONEncoder().encode(value)
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            case let .multipart(data, boundary)?:
+                request.httpBody = data
+                request.setValue("multipart/form-data; boundary=" + boundary, forHTTPHeaderField: "Content-Type")
+            case nil: break
             }
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             request.setValue("Yardlet/PersonalAgents", forHTTPHeaderField: "User-Agent")
             request.setValue("Bearer " + auth.token, forHTTPHeaderField: "Authorization")
             request.setValue(auth.identity.account, forHTTPHeaderField: "ChatGPT-Account-Id")
             let data: Data, response: URLResponse
-            do { (data, response) = try await session.data(for: request) }
+            let transfer = if case .multipart? = body { uploadSession } else { session }
+            do { (data, response) = try await transfer.data(for: request) }
             catch {
                 if writing { throw PersonalAgentFailure.deliveryUnknown }
                 if Task.isCancelled { throw CancellationError() }
