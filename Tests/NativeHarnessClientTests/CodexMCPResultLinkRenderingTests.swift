@@ -53,32 +53,11 @@ final class CodexMCPResultLinkRenderingTests: XCTestCase {
         }
 
         for label in openLabels {
-            XCTAssertTrue(press(label, in: host.hosting), "\(label) is pressable")
+            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: label), "\(label) is pressable")
         }
         host.settle(passes: 2)
         XCTAssertEqual(opened, [URL(string: "https://example.com/report")!,
                                 URL(filePath: "/tmp/work/Sources/App.swift")])
-    }
-
-    /// Presses the accessibility element labelled `label`, as VoiceOver's press does. Reading the
-    /// tree first turns on the tree SwiftUI builds only for an assistive app.
-    private func press(_ label: String, in root: NSView) -> Bool {
-        func find(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label { return child }
-                if let found = find(child) { return found }
-            }
-            return nil
-        }
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let set = { (on: Bool) in
-            _ = NSApplication.shared.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                                             with: NSNumber(value: on), with: attribute)
-        }
-        set(true)
-        defer { set(false) }
-        root.layoutSubtreeIfNeeded()
-        return find(root)?.accessibilityPerformPress?() == true
     }
 
     private func link(

@@ -590,17 +590,16 @@ final class CodexRequestFormRestorationTests: XCTestCase {
     /// The accessibility element under `root` with `role` and `label`. SwiftUI builds its tree only
     /// for an assistive app (`AXEnhancedUserInterface`), which the search announces while it reads.
     static func element(in root: NSView, label: String, role: NSAccessibility.Role) -> AnyObject? {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        _ = NSApplication.shared.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                                         with: NSNumber(value: true), with: attribute)
-        var queue: [AnyObject] = [root]
-        var seen: Set<ObjectIdentifier> = []
-        while !queue.isEmpty {
-            let node = queue.removeFirst()
-            guard seen.insert(ObjectIdentifier(node)).inserted else { continue }
-            if (node.accessibilityRole?() ?? nil) == role, (node.accessibilityLabel?() ?? nil) == label { return node }
-            queue += ((node.accessibilityChildren?() ?? nil) ?? []) as [AnyObject]
+        WindowlessRender.withAccessibilityTree {
+            var queue: [AnyObject] = [root]
+            var seen: Set<ObjectIdentifier> = []
+            while !queue.isEmpty {
+                let node = queue.removeFirst()
+                guard seen.insert(ObjectIdentifier(node)).inserted else { continue }
+                if (node.accessibilityRole?() ?? nil) == role, (node.accessibilityLabel?() ?? nil) == label { return node }
+                queue += ((node.accessibilityChildren?() ?? nil) ?? []) as [AnyObject]
+            }
+            return nil
         }
-        return nil
     }
 }

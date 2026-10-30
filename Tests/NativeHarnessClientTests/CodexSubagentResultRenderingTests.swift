@@ -65,14 +65,9 @@ final class CodexSubagentResultRenderingTests: XCTestCase {
             }
             return nil
         }
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let set = { (on: Bool) in
-            _ = NSApplication.shared.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                                             with: NSNumber(value: on), with: attribute)
+        return WindowlessRender.withAccessibilityTree {
+            root.layoutSubtreeIfNeeded()
+            return find(root)?.accessibilityPerformPress?() == true
         }
-        set(true)
-        defer { set(false) }
-        root.layoutSubtreeIfNeeded()
-        return find(root)?.accessibilityPerformPress?() == true
     }
 }

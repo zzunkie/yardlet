@@ -129,24 +129,10 @@ final class BrowserPanelTabsQATests: XCTestCase {
         let object: AnyObject
     }
 
-    private static func withEnhancedInterface<T>(_ body: () -> T) -> T {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        return body()
-    }
-
     private func controls<Content: View>(in host: WindowlessRender.Host<Content>) -> [Control] {
         host.hosting.layoutSubtreeIfNeeded()
         let windowFrame = host.window.frame
-        return Self.withEnhancedInterface {
+        return WindowlessRender.withAccessibilityTree {
             var found: [Control] = []
             var visited = Set<ObjectIdentifier>()
             func visit(_ node: AnyObject) {
@@ -182,7 +168,7 @@ final class BrowserPanelTabsQATests: XCTestCase {
     private func press<Content: View>(_ label: String, in host: WindowlessRender.Host<Content>,
                                       among pool: [Control]? = nil) -> Bool {
         guard let control = (pool ?? controls(in: host)).first(where: { $0.label == label }) else { return false }
-        let pressed = Self.withEnhancedInterface { control.object.accessibilityPerformPress?() ?? false }
+        let pressed = WindowlessRender.withAccessibilityTree { control.object.accessibilityPerformPress?() ?? false }
         host.settle(passes: 12, interval: 0.03)
         return pressed
     }
@@ -304,7 +290,7 @@ final class BrowserPanelTabsQATests: XCTestCase {
 
             let wait = try XCTUnwrap(barButton(L10n.string("Wait")))
             let sentBefore = standIn.sent.count
-            XCTAssertTrue(Self.withEnhancedInterface { wait.object.accessibilityPerformPress?() ?? false })
+            XCTAssertTrue(WindowlessRender.withAccessibilityTree { wait.object.accessibilityPerformPress?() ?? false })
             host.settle(passes: 10, interval: 0.03)
             XCTAssertEqual(standIn.sent.dropFirst(sentBefore).last, .unresponsive(tab: tab.id, action: .wait))
             XCTAssertNil(barButton(L10n.string("Wait")), "Wait hides it for 15 seconds")
@@ -314,7 +300,7 @@ final class BrowserPanelTabsQATests: XCTestCase {
             standIn.eventHandler?(.responsiveness(tab: tab.id, isResponsive: false))
             host.settle(passes: 10, interval: 0.03)
             let reload = try XCTUnwrap(barButton(L10n.string("Reload")))
-            XCTAssertTrue(Self.withEnhancedInterface { reload.object.accessibilityPerformPress?() ?? false })
+            XCTAssertTrue(WindowlessRender.withAccessibilityTree { reload.object.accessibilityPerformPress?() ?? false })
             host.settle(passes: 12, interval: 0.03)
             let replacement = try XCTUnwrap(client.tab(key: key, forSession: task.id))
             XCTAssertFalse(replacement === tab, "the stuck page's tab was replaced")

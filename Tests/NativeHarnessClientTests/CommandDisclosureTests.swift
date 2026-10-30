@@ -163,12 +163,12 @@ final class CommandDisclosureTests: XCTestCase {
         )
         defer { host.close() }
         host.settle(passes: 10)
-        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Stop task")))
+        XCTAssertTrue(host.hosting.pressButton(labeled: L10n.string("Stop task")))
         XCTAssertEqual(stopped, ["toolu_measure"])
 
         // Opened by the person, the running command and the summary show what they hold.
-        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: ClaudeTurn.words(ClaudeTurn.measuring, .running)))
-        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: ClaudeTurn.summary))
+        XCTAssertTrue(host.hosting.pressButton(labeled: ClaudeTurn.words(ClaudeTurn.measuring, .running)))
+        XCTAssertTrue(host.hosting.pressButton(labeled: ClaudeTurn.summary))
         host.settle()
         let opened = host.accessibilityElements()
         XCTAssertTrue(opened.contains(label: ClaudeTurn.words(ClaudeTurn.measuring, .running),
@@ -261,7 +261,7 @@ final class CommandDisclosureTests: XCTestCase {
         XCTAssertEqual(building.value, collapsed)
         XCTAssertNil(value(of: line("Build the app", .running), in: host), "not also listed above the live line")
         XCTAssertFalse(host.accessibilityElements().contains(text: "Compiling"), "nothing running starts open")
-        XCTAssertTrue(host.hosting.pressAccessibilityElement { $0.hasPrefix(line("Build the app", .running) + ", ") })
+        XCTAssertTrue(host.hosting.pressButton { $0.hasPrefix(line("Build the app", .running) + ", ") })
         host.settle()
         XCTAssertEqual(live(line("Build the app", .running), in: host)?.value, expanded)
         XCTAssertEqual(value(of: line("Build the app", .running), in: host), expanded, "\(host.accessibilityElements())")
@@ -286,7 +286,7 @@ final class CommandDisclosureTests: XCTestCase {
         let running = try XCTUnwrap(live(line("Run the app", .running), in: host), "\(host.accessibilityElements())")
         XCTAssertEqual(running.value, collapsed)
         XCTAssertTrue(running.label.contains(L10n.format("%lld steps", Int64(3))), running.label)
-        XCTAssertTrue(host.hosting.pressAccessibilityElement { $0.hasPrefix(line("Run the app", .running) + ", ") })
+        XCTAssertTrue(host.hosting.pressButton { $0.hasPrefix(line("Run the app", .running) + ", ") })
         host.settle()
         XCTAssertEqual(live(line("Run the app", .running), in: host)?.value, expanded)
         XCTAssertEqual(value(of: line("Run the tests", .running), in: host), collapsed, "each line still folded")
@@ -294,7 +294,7 @@ final class CommandDisclosureTests: XCTestCase {
         host.settle()
         let stillOpen = try XCTUnwrap(live(line("Run the app", .running), in: host))
         XCTAssertEqual(stillOpen.value, expanded, "it stays open as the run goes on")
-        XCTAssertTrue(host.hosting.pressAccessibilityElement { $0.hasPrefix(line("Run the app", .running) + ", ") })
+        XCTAssertTrue(host.hosting.pressButton { $0.hasPrefix(line("Run the app", .running) + ", ") })
         host.settle()
         XCTAssertEqual(live(line("Run the app", .running), in: host)?.value, collapsed)
         let settled = Array(two.dropLast(2)) + [ran, bash(third, "c", "swift run", "Run the app", .completed, output: "ok")]
@@ -309,14 +309,14 @@ final class CommandDisclosureTests: XCTestCase {
 
         // Opened in the listed work, a run reads open under the live line when a call joins it again;
         // folded there, it stays folded until a call fails.
-        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: summary))
+        XCTAssertTrue(host.hosting.pressButton(labeled: summary))
         host.settle()
         XCTAssertEqual(value(of: summary, in: host), expanded)
         host.hosting.rootView = view(settled + [bash(fourth, "d", "swift run -v", "Run the app again", .running)])
         host.settle()
         XCTAssertEqual(live(line("Run the app again", .running), in: host)?.value, expanded,
                        "\(host.accessibilityElements())")
-        XCTAssertTrue(host.hosting.pressAccessibilityElement { $0.hasPrefix(line("Run the app again", .running) + ", ") })
+        XCTAssertTrue(host.hosting.pressButton { $0.hasPrefix(line("Run the app again", .running) + ", ") })
         host.settle()
         XCTAssertEqual(live(line("Run the app again", .running), in: host)?.value, collapsed)
 
@@ -469,37 +469,5 @@ private enum CodexTurn {
             thread.turns[0].items[index].lifecycle = .inProgress
         }
         return CodexTaskState(thread: thread)
-    }
-}
-
-private extension NSView {
-    /// Presses the first button under the view with this label, as an assistive app would
-    /// (`ConversationCardConvergenceTests` presses any element the same way). A summary's container
-    /// carries its button's label, so only a button is pressed.
-    func pressAccessibilityElement(labelled label: String) -> Bool {
-        pressAccessibilityElement { $0 == label }
-    }
-
-    /// The same for the first button whose label matches, for a line whose time reads on as it runs.
-    func pressAccessibilityElement(where matches: (String) -> Bool) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if let label = child.accessibilityLabel?() ?? nil, matches(label),
-                   (child.accessibilityRole?() ?? nil) == NSAccessibility.Role.button { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(self)?.accessibilityPerformPress?() ?? false
     }
 }

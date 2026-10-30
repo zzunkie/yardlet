@@ -492,40 +492,32 @@ private extension NSView {
     /// Presses the first button in the session rail (or, `outsideRail`, outside it) whose label
     /// matches, as VoiceOver or a click would.
     func pressElement(outsideRail: Bool = false, _ matches: (String) -> Bool) -> Bool {
-        let app = NSApplication.shared
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func visit(_ node: AnyObject, _ found: (AnyObject) -> Bool) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if found(child) { return child }
-                if let match = visit(child, found) { return match }
-            }
-            return nil
-        }
-        func isRail(_ node: AnyObject) -> Bool {
-            ((node.accessibilityLabel?() ?? nil) ?? "") == L10n.string("Session details")
-        }
-        func isMatch(_ node: AnyObject) -> Bool {
-            (node.accessibilityRole?() ?? nil) == .button && matches((node.accessibilityLabel?() ?? nil) ?? "")
-        }
-        if outsideRail {
-            func search(_ node: AnyObject) -> AnyObject? {
-                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] where !isRail(child) {
-                    if isMatch(child) { return child }
-                    if let match = search(child) { return match }
+        WindowlessRender.withAccessibilityTree {
+            func visit(_ node: AnyObject, _ found: (AnyObject) -> Bool) -> AnyObject? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if found(child) { return child }
+                    if let match = visit(child, found) { return match }
                 }
                 return nil
             }
-            return search(self)?.accessibilityPerformPress?() ?? false
+            func isRail(_ node: AnyObject) -> Bool {
+                ((node.accessibilityLabel?() ?? nil) ?? "") == L10n.string("Session details")
+            }
+            func isMatch(_ node: AnyObject) -> Bool {
+                (node.accessibilityRole?() ?? nil) == .button && matches((node.accessibilityLabel?() ?? nil) ?? "")
+            }
+            if outsideRail {
+                func search(_ node: AnyObject) -> AnyObject? {
+                    for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] where !isRail(child) {
+                        if isMatch(child) { return child }
+                        if let match = search(child) { return match }
+                    }
+                    return nil
+                }
+                return search(self)?.accessibilityPerformPress?() ?? false
+            }
+            let rail = visit(self, isRail) ?? self
+            return visit(rail, isMatch)?.accessibilityPerformPress?() ?? false
         }
-        let rail = visit(self, isRail) ?? self
-        return visit(rail, isMatch)?.accessibilityPerformPress?() ?? false
     }
 }

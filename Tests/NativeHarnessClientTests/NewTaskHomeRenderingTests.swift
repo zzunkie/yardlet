@@ -633,33 +633,27 @@ final class NewTaskHomeRenderingTests: XCTestCase {
     /// app's enhanced interface on, as a screen reader turns it on).
     private func controls(in host: WindowlessRender.Host<some View>) -> [Control] {
         host.hosting.layoutSubtreeIfNeeded()
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: false),
-                            with: attribute)
-        }
-        let windowFrame = host.window.frame
-        var found: [Control] = []
-        var visited = Set<ObjectIdentifier>()
-        func visit(_ node: AnyObject) {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                guard visited.insert(ObjectIdentifier(child)).inserted else { continue }
-                if (child.accessibilityRole?() ?? nil) == .button {
-                    let screen = child.accessibilityFrame?() ?? .zero
-                    found.append(Control(
-                        label: (child.accessibilityLabel?() ?? nil) ?? "",
-                        value: (((child.accessibilityValue?() as Any??) ?? nil) as? String) ?? "",
-                        frame: NSRect(x: screen.minX - windowFrame.minX, y: windowFrame.maxY - screen.maxY,
-                                      width: screen.width, height: screen.height)))
+        return WindowlessRender.withAccessibilityTree {
+            let windowFrame = host.window.frame
+            var found: [Control] = []
+            var visited = Set<ObjectIdentifier>()
+            func visit(_ node: AnyObject) {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    guard visited.insert(ObjectIdentifier(child)).inserted else { continue }
+                    if (child.accessibilityRole?() ?? nil) == .button {
+                        let screen = child.accessibilityFrame?() ?? .zero
+                        found.append(Control(
+                            label: (child.accessibilityLabel?() ?? nil) ?? "",
+                            value: (((child.accessibilityValue?() as Any??) ?? nil) as? String) ?? "",
+                            frame: NSRect(x: screen.minX - windowFrame.minX, y: windowFrame.maxY - screen.maxY,
+                                          width: screen.width, height: screen.height)))
+                    }
+                    visit(child)
                 }
-                visit(child)
             }
+            visit(host.hosting)
+            return found
         }
-        visit(host.hosting)
-        return found
     }
 
     private static let projectNames = ["yardlet", "example-web", "design-kit", "web-app"]

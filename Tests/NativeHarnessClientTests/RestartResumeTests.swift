@@ -1439,7 +1439,7 @@ final class RestartResumeTests: XCTestCase {
                 .frame(width: 760, height: 640, alignment: .top), size: NSSize(width: 760, height: 640))
         defer { window.close() }
         window.settle()
-        XCTAssertTrue(window.hosting.pressElement(labelled: L10n.string("Submit answers")),
+        XCTAssertTrue(window.hosting.pressAccessibilityElement(labelled: L10n.string("Submit answers")),
                       window.accessibilityElements().map(\.description).joined(separator: "\n"))
         window.settle()
         XCTAssertEqual(answered.map(\.0), [card.id])
@@ -1487,7 +1487,7 @@ final class RestartResumeTests: XCTestCase {
                 .frame(width: 760, height: 640, alignment: .top), size: NSSize(width: 760, height: 640))
         defer { codexWindow.close() }
         codexWindow.settle()
-        XCTAssertTrue(codexWindow.hosting.pressElement(labelled: L10n.string("Send answer")),
+        XCTAssertTrue(codexWindow.hosting.pressAccessibilityElement(labelled: L10n.string("Send answer")),
                       codexWindow.accessibilityElements().map(\.description).joined(separator: "\n"))
         codexWindow.settle()
         XCTAssertEqual(codexAnswers.map(\.0), ["s:input-1"])
@@ -1751,29 +1751,5 @@ final class RestartResumeTests: XCTestCase {
             if let selection { store.selectedSessionID = selection }
             return model(store: store)
         }
-    }
-}
-
-private extension NSView {
-    /// Presses the first accessibility element labelled `label`, as an assistive app would.
-    func pressElement(labelled label: String) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(self)?.accessibilityPerformPress?() ?? false
     }
 }

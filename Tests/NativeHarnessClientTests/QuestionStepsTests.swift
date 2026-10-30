@@ -541,7 +541,7 @@ private extension NSView {
     /// What the accessibility tree under the view is labelled, in order, as an assistive app reads it.
     func accessibilityLabels() -> [String] {
         var labels: [String] = []
-        withEnhancedAccessibility {
+        WindowlessRender.withAccessibilityTree {
             func visit(_ node: AnyObject) {
                 for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
                     if let label = child.accessibilityLabel?() ?? nil, !label.isEmpty { labels.append(label) }
@@ -577,7 +577,7 @@ private extension NSView {
 
     private func find(_ matches: (AnyObject) -> Bool) -> AnyObject? {
         var result: AnyObject?
-        withEnhancedAccessibility {
+        WindowlessRender.withAccessibilityTree {
             func visit(_ node: AnyObject) -> AnyObject? {
                 for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
                     if matches(child) { return child }
@@ -588,20 +588,5 @@ private extension NSView {
             result = visit(self)
         }
         return result
-    }
-
-    /// `AXEnhancedUserInterface` on while looking, as an assistive app turns it on.
-    private func withEnhancedAccessibility(_ body: () -> Void) {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        body()
     }
 }

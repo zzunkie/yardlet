@@ -88,7 +88,7 @@ final class CodexDetachedThreadReadTests: XCTestCase {
         // A finished turn folds its work, as Codex does; unfolded, the first turn shows its command
         // and its file change, which the snapshot never held.
         let worked = L10n.format("Worked for %lld seconds", Int64(12))
-        XCTAssertTrue(Self.press(worked, in: host.hosting), after)
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: worked), after)
         host.settle(passes: 12)
         let unfolded = host.accessibilityElements().map(\.description).joined(separator: "\n")
         XCTAssertTrue(unfolded.contains("swift test --filter FlakyTests"), "the command shows: \(unfolded)")
@@ -236,26 +236,6 @@ final class CodexDetachedThreadReadTests: XCTestCase {
     private static func snapshotPresentation(_ entries: [TranscriptEntry]) -> ConversationPresentation {
         TranscriptConversationProjection.presentation(from: entries, harness: .codex, status: .completed,
                                                  latestTurnIsComplete: true)
-    }
-
-    /// Presses the first accessibility element labelled `label`, as an assistive app would.
-    private static func press(_ label: String, in view: NSView) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: false),
-                            with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(view)?.accessibilityPerformPress?() ?? false
     }
 
     /// The conversation's scroll view: the tallest one.

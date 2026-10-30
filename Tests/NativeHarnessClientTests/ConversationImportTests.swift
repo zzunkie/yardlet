@@ -464,28 +464,3 @@ import XCTest
         try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: file.path)
     }
 }
-
-private extension NSView {
-    /// Presses the first accessibility element under the view whose label matches, as an assistive
-    /// app would (`CodexPromptRenderingTests` does the same).
-    func pressAccessibilityElement(where matches: (String) -> Bool) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if let label = child.accessibilityLabel?() ?? nil, matches(label) { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(self)?.accessibilityPerformPress?() ?? false
-    }
-}

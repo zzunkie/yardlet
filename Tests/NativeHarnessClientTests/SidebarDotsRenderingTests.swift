@@ -347,7 +347,7 @@ final class SidebarDotsRenderingTests: XCTestCase {
             hover(0, atEnd: true)
             XCTAssertEqual(shown(), "Polish the onboarding copy")
             await wait(.milliseconds(50))
-            try Self.withAccessibility {
+            try WindowlessRender.withAccessibilityTree {
                 let line = try XCTUnwrap(pullRequestLine(in: host.hosting), "No pull request line in the card")
                 XCTAssertEqual(line.accessibilityPerformPress?(), true)
             }
@@ -359,26 +359,11 @@ final class SidebarDotsRenderingTests: XCTestCase {
         XCTAssertEqual(opened.count, 2)
     }
 
-    /// Runs `body` with the application's accessibility tree built, as VoiceOver has it built.
-    private static func withAccessibility<T>(_ body: () throws -> T) rethrows -> T {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        return try body()
-    }
-
     /// Each row titled as given, in the window's top-left space the card is placed in.
     private func rowFrames(_ titles: [String], in host: WindowlessRender.Host<some View>) throws -> [CGRect] {
         host.hosting.layoutSubtreeIfNeeded()
         let root = host.hosting, window = host.window, height = host.hosting.bounds.height
-        return try Self.withAccessibility {
+        return try WindowlessRender.withAccessibilityTree {
             var found: [String: CGRect] = [:]
             func visit(_ node: AnyObject) {
                 for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {

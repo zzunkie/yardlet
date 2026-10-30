@@ -87,24 +87,10 @@ final class DraftToolsQATests: XCTestCase {
         let object: AnyObject
     }
 
-    private static func withEnhancedInterface<T>(_ body: () -> T) -> T {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        return body()
-    }
-
     private func elements<Content: View>(in host: WindowlessRender.Host<Content>, buttonsOnly: Bool = true) -> [Control] {
         host.hosting.layoutSubtreeIfNeeded()
         let windowFrame = host.window.frame
-        return Self.withEnhancedInterface {
+        return WindowlessRender.withAccessibilityTree {
             var found: [Control] = []
             var visited = Set<ObjectIdentifier>()
             func visit(_ node: AnyObject) {
@@ -136,7 +122,7 @@ final class DraftToolsQATests: XCTestCase {
                                       titleBar: Bool = false) -> Bool {
         let pool = titleBar ? titleBarControls(in: host) : controls(in: host)
         guard let control = pool.first(where: { $0.label == label }) else { return false }
-        let pressed = Self.withEnhancedInterface { control.object.accessibilityPerformPress?() ?? false }
+        let pressed = WindowlessRender.withAccessibilityTree { control.object.accessibilityPerformPress?() ?? false }
         host.settle(passes: 12, interval: 0.03)
         return pressed
     }

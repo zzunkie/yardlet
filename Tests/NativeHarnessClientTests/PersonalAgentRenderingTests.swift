@@ -24,7 +24,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         let showsTaskRail = { host.accessibilityElements().contains { railTitles.contains($0.label) } }
         XCTAssertTrue(showsTaskRail(), "The shown task's header offers its session rail")
         // The words below Scheduled tasks switch the list to personal agents; Home and Scheduled tasks stay.
-        XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
         let showsPersonalAgents = { host.accessibilityElements().contains { $0.label == "Dots" || $0.value == "Dots" } }
         await host.settle(until: showsPersonalAgents)
         try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "personal-section-window.png"))
@@ -34,12 +34,12 @@ final class PersonalAgentRenderingTests: XCTestCase {
         await model.store.markUnread(id: task.id)
         XCTAssertTrue(host.accessibilityElements().contains { $0.label == L10n.string("Scheduled tasks") })
         XCTAssertFalse(host.accessibilityElements().contains { $0.label == L10n.string("Back to tasks") })
-        XCTAssertTrue(Self.press(L10n.string("Tasks"), in: host.hosting))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Tasks")))
         await host.settle(until: { !showsPersonalAgents() })
         XCTAssertTrue(showsTaskRail())
         try await waitUntil { model.store.sessions.first { $0.id == task.id }?.hasUnreadUpdate == false }
         XCTAssertTrue(model.isSessionVisible(task.id))
-        XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
         await host.settle(until: showsPersonalAgents)
         try await model.store.archiveSession(id: task.id)
         host.settle()
@@ -48,7 +48,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         model.showNewTaskFromMenuBar()
         await host.settle(until: { !showsPersonalAgents() })
         XCTAssertNil(model.store.selectedSessionID)
-        XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
         await host.settle(until: showsPersonalAgents)
         _ = try await model.store.unarchiveSession(id: task.id)
         _ = await model.openTask(from: SystemNotificationTarget(sessionID: task.id))
@@ -90,13 +90,13 @@ final class PersonalAgentRenderingTests: XCTestCase {
             return Self.scrollViews(in: host.hosting).first { $0.convert($0.bounds, to: nil).maxX < 400 }
         }
         func switchAndBack() async {
-            XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
             await host.settle(until: { searchField() == nil })
-            XCTAssertTrue(Self.press(L10n.string("Tasks"), in: host.hosting))
+            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Tasks")))
             await host.settle(until: { list() != nil })
         }
 
-        XCTAssertTrue(Self.press(header, in: host.hosting))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: header))
         await host.settle(until: isFolded)
         let scroll = try XCTUnwrap(list())
         for _ in 0..<8 {
@@ -115,7 +115,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
 
         // A task opened from elsewhere while personal agents show is where the list now is: going back
         // and forth again keeps it there, not where the list was left for the earlier task.
-        XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
         await host.settle(until: { searchField() == nil })
         let other = try XCTUnwrap(model.store.sessions.first { $0.title == "beta task 1" })
         // Pin the new selection so it is already visible at the recreated list's top. This exercises
@@ -131,7 +131,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         XCTAssertEqual(model.store.selectedSessionID, other.id)
 
         // A page another app opens with Yardlet, shown in a panel, brings the tasks back too.
-        XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
         await host.settle(until: { searchField() == nil })
         model.openExternalLinks([try XCTUnwrap(URL(string: "https://example.test/page"))], elsewhere: { _ in
             XCTFail("The shown task's panel has room for the page")
@@ -215,7 +215,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 host.settle()
                 let name = "\(Int(size.width))-\(appearance.suffix).png"
                 try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "tasks-\(name)"))
-                XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
                 await host.settle(until: { host.accessibilityElements().contains { $0.label == "announcement-draft.md" } })
                 // The details and the picture arrive on their own after the conversation.
                 let showsActivity = { host.accessibilityElements().contains { $0.label.contains("Prepare the launch checklist") } }
@@ -237,7 +237,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 XCTAssertTrue(Self.hasMenu(titled: L10n.string("Open in Dots"), in: host.hosting), "Open in Dots at \(size)")
                 XCTAssertGreaterThan(appLookups, 0, "The provider's app is looked up, not opened")
                 XCTAssertTrue(opened.isEmpty)
-                XCTAssertTrue(Self.press(L10n.string("Open This Dot on the Web"), in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Open This Dot on the Web")))
                 XCTAssertEqual(opened, [DotsLinks.web(for: agents[0])!])
                 opened = []
                 let showsDetails = { host.accessibilityElements(visibleOnly: true).contains { $0.label == L10n.string("Dot details") } }
@@ -246,12 +246,12 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 } else {
                     // A compact window keeps the conversation's width; the details come over it on request.
                     XCTAssertFalse(showsDetails())
-                    XCTAssertTrue(Self.press(L10n.string("Show dot details"), in: host.hosting))
+                    XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Show dot details")))
                     await host.settle(until: showsActivity)
                     host.settle(passes: 12)
                     try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "personal-details-\(name)"))
                     // The raised details close from their own button; the conversation and its editor stay.
-                    XCTAssertTrue(Self.press(L10n.string("Hide dot details"), in: host.hosting))
+                    XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Hide dot details")))
                     await host.settle(until: { !showsDetails() })
                     let after = host.accessibilityElements(visibleOnly: true)
                     XCTAssertTrue(after.contains { $0.label == L10n.string("Send message") })
@@ -259,7 +259,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 }
                 // A page that could not be handed on says so under the conversation.
                 webOpens = false
-                XCTAssertTrue(Self.press(L10n.string("Open This Dot on the Web"), in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Open This Dot on the Web")))
                 let failure = L10n.string("Dots could not be opened.")
                 await host.settle(until: { host.accessibilityElements().contains { $0.label == failure || $0.value == failure } })
                 webOpens = true
@@ -279,7 +279,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         let host = WindowlessRender.Host(MainWindow(model: model) { reader }.frame(width: size.width, height: size.height), size: size)
         defer { host.close() }
         host.settle()
-        XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
         await host.settle(until: { host.accessibilityElements().contains { $0.label == "Juniper" } })
         host.settle(passes: 20)
         let readsBeforeScrolling = await reader.olderReads
@@ -383,7 +383,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         let host = WindowlessRender.Host(MainWindow(model: model) { reader }.frame(width: size.width, height: size.height), size: size)
         defer { host.close() }
         host.settle()
-        XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
         try await waitUntil { await reader.sheetReads > 0 }
         await host.settle(until: { Self.views(PersonalAgentSpriteView.self, in: host.hosting).count == 3 })
         let pets = Self.views(PersonalAgentSpriteView.self, in: host.hosting)
@@ -453,7 +453,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
                                          size: size)
         defer { host.close() }
         host.settle()
-        XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
         let shows = { (words: String) in host.accessibilityElements().contains { $0.label == words || $0.value == words } }
         await host.settle(until: { shows("Reading the notes") })
         try await waitUntil { await reader.sheetReads > 0 }
@@ -511,7 +511,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 let host = WindowlessRender.Host(window, size: size, appearance: appearance)
                 defer { host.close() }
                 host.settle()
-                XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
                 // A line of text names itself by its value.
                 let heading = "Checking the launch checklist"
                 let says = { host.accessibilityElements().contains { $0.label == heading || $0.value == heading } }
@@ -639,7 +639,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 let host = WindowlessRender.Host(window, size: size, appearance: appearance)
                 defer { host.close() }
                 host.settle()
-                XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
                 await host.settle(until: { !drafts.opened.isEmpty })
                 let draft = try XCTUnwrap(drafts.opened.first)
                 draft.editor.text = "현장 사진과 서명한 신청서입니다."
@@ -744,7 +744,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 let host = WindowlessRender.Host(window, size: size, appearance: appearance)
                 defer { host.close() }
                 host.settle()
-                XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
                 let shows = { (label: String) in host.accessibilityElements().contains { $0.label == label } }
                 await host.settle(until: { shows(L10n.string("Allow once")) && shows(L10n.string("Check status")) })
                 host.settle(passes: 12)
@@ -759,12 +759,12 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 }
                 guard size.width == 1280, appearance == .light else { continue }
                 // Deny cancels the tool call as the person's choice; the option replies with its exact text.
-                XCTAssertTrue(Self.press(L10n.string("Deny"), in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Deny")))
                 try await waitUntil { await reader.answers.count == 1 }
                 let answer = await reader.answers.first
                 XCTAssertEqual(answer?.json, .object(["action": .string("cancel"), "content": .null,
                     "_meta": .object(["codex_approval_cancellation_reason": .string("user")])]))
-                XCTAssertTrue(Self.press("2.1 with the fixes", in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "2.1 with the fixes"))
                 try await waitUntil { await reader.sends.count == 1 }
                 let reply = await reader.sends.first
                 XCTAssertEqual(reply?.text, "2.1 with the fixes")
@@ -811,14 +811,14 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 defer { host.close() }
                 host.settle()
                 let shows = { (label: String) in host.accessibilityElements().contains { $0.label == label || $0.value == label } }
-                XCTAssertTrue(Self.press(L10n.string("Personal agents"), in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
                 await host.settle(until: { shows("2.1 with the fixes") && shows("Monday") })
                 await reader.loseNextSend()
-                XCTAssertTrue(Self.press("2.1 with the fixes", in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "2.1 with the fixes"))
                 await host.settle(until: { shows(L10n.string("Send the same answer again")) })
                 // The question is deleted; the read that shows it is the person's own refresh.
                 await reader.setPage([.init(id: "version", author: .agent, text: "", createdAt: nil, isDeleted: true, attachments: []), day])
-                XCTAssertTrue(Self.press(L10n.string("Refresh conversation"), in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Refresh conversation")))
                 await host.settle(until: { shows(waiting) })
                 XCTAssertFalse(shows("2.1 with the fixes"), "The deleted question is not shown again")
                 host.settle(passes: 12)
@@ -827,17 +827,17 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 guard size.width == 1280, appearance == .light else { continue }
                 // Until the person stops waiting, the other question's options are shown but take no press.
                 XCTAssertTrue(shows("Monday"))
-                XCTAssertFalse(Self.press("Monday", in: host.hosting))
+                XCTAssertFalse(host.hosting.pressAccessibilityElement(labelled: "Monday"))
                 // Stop waiting asks first; declining leaves the answer waiting.
-                XCTAssertTrue(Self.press(L10n.string("Stop waiting"), in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Stop waiting")))
                 XCTAssertEqual(asked.count, 1)
                 host.settle(passes: 6)
                 XCTAssertTrue(shows(waiting), "Nothing stops waiting before the person confirms")
-                XCTAssertTrue(Self.press(L10n.string("Stop waiting"), in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Stop waiting")))
                 XCTAssertEqual(asked.count, 2)
                 asked.last?()
                 await host.settle(until: { !shows(waiting) })
-                XCTAssertTrue(Self.press("Monday", in: host.hosting))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "Monday"))
                 try await waitUntil { await reader.sends.count == 2 }
                 let sends = await reader.sends
                 XCTAssertEqual(sends.map(\.replyToMessageID), ["version", "day"])
@@ -882,13 +882,13 @@ final class PersonalAgentRenderingTests: XCTestCase {
         storage.settle()
         let storageText = PersonalAgentFailure.draftStorage.message
         XCTAssertTrue(storage.accessibilityElements().contains { $0.label == storageText || $0.value == storageText })
-        XCTAssertFalse(Self.press("2.1 with the fixes", in: storage.hosting))
+        XCTAssertFalse(storage.hosting.pressAccessibilityElement(labelled: "2.1 with the fixes"))
         try WindowlessRender.writePNG(storage.capture().bitmap, to: directory.appending(path: "option-answer-storage-failed-light.png"))
         try writable()
-        XCTAssertTrue(Self.press(L10n.string("Try again"), in: storage.hosting))
+        XCTAssertTrue(storage.hosting.pressAccessibilityElement(labelled: L10n.string("Try again")))
         storage.settle()
         XCTAssertFalse(fresh.storageFailed)
-        XCTAssertTrue(Self.press("2.1 with the fixes", in: storage.hosting))
+        XCTAssertTrue(storage.hosting.pressAccessibilityElement(labelled: "2.1 with the fixes"))
         XCTAssertEqual(chosen, [1])
 
         // An answer file that cannot be read is said, not silently locked, and is kept as a backup only
@@ -911,7 +911,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         let unreadableText = L10n.string("A saved answer to a question could not be read. Keep it as a backup to answer questions again.")
         XCTAssertTrue(recovery.accessibilityElements().contains { $0.label == unreadableText || $0.value == unreadableText })
         try WindowlessRender.writePNG(recovery.capture().bitmap, to: directory.appending(path: "option-answer-unreadable-dark.png"))
-        XCTAssertTrue(Self.press(L10n.string("Keep as a backup"), in: recovery.hosting))
+        XCTAssertTrue(recovery.hosting.pressAccessibilityElement(labelled: L10n.string("Keep as a backup")))
         XCTAssertEqual(confirms.count, 1)
         XCTAssertEqual(try Data(contentsOf: broken), Data("not an answer".utf8), "Nothing is overwritten before confirming")
         confirms[0]()
@@ -945,7 +945,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 size: NSSize(width: 680, height: 220), appearance: .light)
             defer { window.close() }
             window.settle()
-            XCTAssertTrue(Self.press(L10n.string("Stop waiting"), in: window.hosting))
+            XCTAssertTrue(window.hosting.pressAccessibilityElement(labelled: L10n.string("Stop waiting")))
             XCTAssertEqual(stale.count, 1)
             shared.accepted(first.requestID)
             var second = PersonalAgentSubmission(text: "Monday")
@@ -1001,39 +1001,16 @@ final class PersonalAgentRenderingTests: XCTestCase {
     /// Whether a menu button titled `title` is under `view`. A menu names itself by its title, which
     /// `WindowlessRender.accessibilityElements` does not read once the label is empty.
     private static func hasMenu(titled title: String, in view: NSView) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        _ = NSApplication.shared.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                                         with: NSNumber(value: true), with: attribute)
-        defer {
-            _ = NSApplication.shared.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                                             with: NSNumber(value: false), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> Bool {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityRole?() ?? nil) == .menuButton, (child.accessibilityTitle?() ?? nil) == title { return true }
-                if visit(child) { return true }
+        WindowlessRender.withAccessibilityTree {
+            func visit(_ node: AnyObject) -> Bool {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if (child.accessibilityRole?() ?? nil) == .menuButton, (child.accessibilityTitle?() ?? nil) == title { return true }
+                    if visit(child) { return true }
+                }
+                return false
             }
-            return false
+            return visit(view)
         }
-        return visit(view)
-    }
-
-    private static func press(_ label: String, in view: NSView) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        _ = NSApplication.shared.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                                         with: NSNumber(value: true), with: attribute)
-        defer {
-            _ = NSApplication.shared.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                                             with: NSNumber(value: false), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(view)?.accessibilityPerformPress?() ?? false
     }
 }
 

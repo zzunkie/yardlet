@@ -720,28 +720,9 @@ private extension NSView {
     /// Presses the turn header's fold, as an assistive app would: the button labelled with the work
     /// time, or "Work details" where the turn reads none.
     func pressTurnHeader() -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func isHeader(_ label: String) -> Bool {
+        pressButton { label in
             ConversationDrawing.isWorkTime(label) || label.hasPrefix(L10n.string("Work details"))
                 || label.contains(L10n.format("Working for %lld seconds", Int64(0)).prefix(4))
         }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if let label = child.accessibilityLabel?() ?? nil, isHeader(label),
-                   (child.accessibilityRole?() ?? nil) == NSAccessibility.Role.button { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(self)?.accessibilityPerformPress?() ?? false
     }
 }

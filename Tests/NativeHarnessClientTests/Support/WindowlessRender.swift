@@ -14,6 +14,9 @@ import XCTest
 ///   a menu's tracking loop holds the person's keyboard and mouse until the test process ends.
 /// - `accessibilityElements(in:)` lists what the accessibility tree exposes (role, label and
 ///   value, in reading order) so two renderers of the same conversation can be compared.
+/// - `withAccessibilityTree(_:)` builds that tree for a search of a test's own, and
+///   `NSView.pressAccessibilityElement(labelled:)` presses an element in it as an assistive app
+///   would.
 ///
 /// Review images go to `<repository>/.build/<folder>/` (`directory(_:)`). Images drawn in both
 /// appearances are named `<name>-light.png` and `<name>-dark.png`.
@@ -245,14 +248,23 @@ enum WindowlessRender {
     /// - With `visibleFrame` (screen coordinates), elements whose frame lies outside it are left
     ///   out; their children are still visited.
     ///
-    /// SwiftUI builds its accessibility tree only after an assistive app announces itself by
-    /// setting `AXEnhancedUserInterface` on the application, as VoiceOver does. The list sets
-    /// it while reading and then puts the previous value back.
+    /// The list reads with the tree built (`withAccessibilityTree(_:)`).
     static func accessibilityElements(in root: NSView, within visibleFrame: NSRect? = nil) -> [AccessibilityElement] {
+        withAccessibilityTree { listedElements(in: root, within: visibleFrame) }
+    }
+
+    /// Runs `body` with the application's accessibility tree built, then puts the previous setting
+    /// back, also when `body` throws. SwiftUI builds the tree only after an assistive app announces
+    /// itself by setting `AXEnhancedUserInterface` on the application, as VoiceOver does. An
+    /// application no assistive app has touched reads it as off, which is what comes back.
+    static func withAccessibilityTree<T>(_ body: () throws -> T) rethrows -> T {
         let wasEnhanced = enhancedUserInterface
         enhancedUserInterface = true
         defer { enhancedUserInterface = wasEnhanced }
+        return try body()
+    }
 
+    private static func listedElements(in root: NSView, within visibleFrame: NSRect?) -> [AccessibilityElement] {
         var elements: [AccessibilityElement] = []
         var visited: Set<ObjectIdentifier> = [ObjectIdentifier(root)]
         // `clip` is the visible frame narrowed by every scroll area above the node.
@@ -320,6 +332,29 @@ enum WindowlessRender {
         case let url as URL: url.absoluteString
         case nil: ""
         case let other?: String(describing: other)
+        }
+    }
+}
+
+extension NSView {
+    /// Presses the first element under the view labelled `label`, as an assistive app would: through
+    /// the accessibility tree, with no event on the screen.
+    func pressAccessibilityElement(labelled label: String) -> Bool {
+        pressAccessibilityElement { $0 == label }
+    }
+
+    /// The same for the first element whose label `matches`, for a label that reads on as it runs.
+    /// `pressButton(labeled:)` presses only a button, where a container carries its button's label.
+    func pressAccessibilityElement(where matches: (String) -> Bool) -> Bool {
+        WindowlessRender.withAccessibilityTree {
+            func visit(_ node: AnyObject) -> AnyObject? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if let label = child.accessibilityLabel?() ?? nil, matches(label) { return child }
+                    if let found = visit(child) { return found }
+                }
+                return nil
+            }
+            return visit(self)?.accessibilityPerformPress?() ?? false
         }
     }
 }

@@ -133,28 +133,20 @@ final class ClaudeLookRenderingTests: XCTestCase {
 
     /// The names of the custom actions of the first accessibility element labelled `label`.
     private static func customActionNames(in root: NSView, on label: String) -> [String] {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        root.layoutSubtreeIfNeeded()
-        func visit(_ node: AnyObject) -> [String]? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label {
-                    let actions = (child.accessibilityCustomActions?() ?? nil) ?? []
-                    return actions.map(\.name)
+        WindowlessRender.withAccessibilityTree {
+            root.layoutSubtreeIfNeeded()
+            func visit(_ node: AnyObject) -> [String]? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if (child.accessibilityLabel?() ?? nil) == label {
+                        let actions = (child.accessibilityCustomActions?() ?? nil) ?? []
+                        return actions.map(\.name)
+                    }
+                    if let found = visit(child) { return found }
                 }
-                if let found = visit(child) { return found }
+                return nil
             }
-            return nil
+            return visit(root) ?? []
         }
-        return visit(root) ?? []
     }
 }
 

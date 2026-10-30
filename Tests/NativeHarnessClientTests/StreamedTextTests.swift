@@ -115,7 +115,7 @@ final class StreamedTextTests: XCTestCase {
             host.accessibilityElements().first { $0.label == summary && $0.role == NSAccessibility.Role.button.rawValue }?.value
         }
         XCTAssertEqual(summaryValue(), L10n.string("Collapsed"), "\(host.accessibilityElements())")
-        XCTAssertTrue(host.hosting.pressButton(labelled: summary))
+        XCTAssertTrue(host.hosting.pressButton(labeled: summary))
         host.settle()
         XCTAssertEqual(summaryValue(), L10n.string("Expanded"))
 
@@ -231,31 +231,5 @@ final class StreamedTextTests: XCTestCase {
         defer { text.setSelectedRange(NSRange(location: 0, length: 0)) }
         guard text.writeSelection(to: pasteboard, type: .string) else { return nil }
         return pasteboard.string(forType: .string)
-    }
-}
-
-private extension NSView {
-    /// Presses the first button under the view with this label, as an assistive app would
-    /// (`CommandDisclosureTests` presses a summary the same way).
-    func pressButton(labelled label: String) -> Bool {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        func visit(_ node: AnyObject) -> AnyObject? {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if let found = child.accessibilityLabel?() ?? nil, found == label,
-                   (child.accessibilityRole?() ?? nil) == NSAccessibility.Role.button { return child }
-                if let found = visit(child) { return found }
-            }
-            return nil
-        }
-        return visit(self)?.accessibilityPerformPress?() ?? false
     }
 }

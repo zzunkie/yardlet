@@ -537,24 +537,16 @@ private struct ToolWordingShowcase: View {
 private extension NSView {
     /// Presses every accessibility element labelled `label`, as an assistive app would.
     func pressElements(labelled label: String) -> Int {
-        let attribute = "AXEnhancedUserInterface" as NSString
-        let app = NSApplication.shared
-        let previous = (app.perform(NSSelectorFromString("accessibilityAttributeValue:"), with: attribute)?
-            .takeUnretainedValue() as? NSNumber)?.boolValue ?? false
-        _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: NSNumber(value: true),
-                        with: attribute)
-        defer {
-            _ = app.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"),
-                            with: NSNumber(value: previous), with: attribute)
-        }
-        var found: [AnyObject] = []
-        func visit(_ node: AnyObject) {
-            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                if (child.accessibilityLabel?() ?? nil) == label { found.append(child) }
-                visit(child)
+        WindowlessRender.withAccessibilityTree {
+            var found: [AnyObject] = []
+            func visit(_ node: AnyObject) {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if (child.accessibilityLabel?() ?? nil) == label { found.append(child) }
+                    visit(child)
+                }
             }
+            visit(self)
+            return found.filter { $0.accessibilityPerformPress?() ?? false }.count
         }
-        visit(self)
-        return found.filter { $0.accessibilityPerformPress?() ?? false }.count
     }
 }
