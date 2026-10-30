@@ -1,7 +1,7 @@
 # Engine portability
 
 Yardlet runs on macOS. Windows is planned: the engine is kept in cross-platform Swift, and each platform gets its own
-screens. The engine builds on its own on macOS and on Linux; nothing has been built or run on Windows yet. For
+screens. The engine builds on its own on macOS, Linux and Windows; nothing has run on Windows yet. For
 dependencies and Foundation behavior on Windows, what was checked in the official source or a build is marked
 "confirmed"; the rest is "not confirmed".
 
@@ -80,8 +80,10 @@ tar --exclude ./.build --exclude ./.git --exclude ./docs -cf - . | docker run -i
   'mkdir /src && tar -xf - -C /src && cd /src && YARDLET_ENGINE_ONLY=1 swift build --target NativeHarnessClient'
 ```
 
-On Windows, `.github/workflows/windows-engine.yml` makes the same build for `windows-*` branches and by hand, apart
-from the checks a pull request needs.
+On Windows (x64, Swift 6.4.1 from swift.org's installer) in GitHub Actions (confirmed, 2026-10-31):
+`.github/workflows/windows-engine.yml` makes the same build for `windows-*` branches and by hand, apart from the checks
+a pull request needs. A run's logs need a GitHub sign-in, so a failed run also reports its compiler errors in the check
+run's annotations, which the API gives without one.
 
 **Why one target per platform.** A separate engine library would need every declaration the screens and tests use
 opened with the `package` access level, a change to nearly every engine file. Choosing the platform's folder in
@@ -111,6 +113,11 @@ opened with the `package` access level, a change to nearly every engine file. Ch
 | `AccountLoginController` | A `LocalProcessTerminalViewDelegate` driving a PTY through SwiftTerm, `NSWorkspace.open`, URL detection with `NSDataDetector`. The engine keeps the output parsing (`Account/AccountLoginOutput.swift`: `stripANSI`, device codes, input prompts) | A ConPTY (`CreatePseudoConsole`) host with the members the portable one has. Find URLs with a regular expression, because `NSDataDetector` does not exist in Foundation outside Apple platforms (confirmed: [swift-corelibs-foundation #4305](https://github.com/swiftlang/swift-corelibs-foundation/issues/4305)) |
 | `NativeTerminalSession`, `TaskShellProcess` | SwiftTerm `LocalProcess` and a PTY | ConPTY and a Windows terminal view |
 | `ScopedFiles`, `WorkspaceFileReplacement` | No-follow descriptors | Opening without following reparse points (`FILE_FLAG_OPEN_REPARSE_POINT`); the portable versions refuse |
+| `CanonicalPath` (`Files/CanonicalPath.swift`) | `realpath(3)` | An opened file's final path (`GetFinalPathNameByHandleW`); for now Foundation resolves the links |
+| The file chooser's private copy (`BrowserAgentDialogs.privateCopy`) | `openat` one folder at a time without following links | The same with reparse points refused; refused on Windows until then |
+| Removing an account folder's links (`ClaudeAccountHome.unlinkShared`) | `unlink(2)`, which never follows the link | `DeleteFileW` for a file link and `RemoveDirectoryW` for a folder link, never a recursive removal; refused on Windows until then |
+| Claude Code's background task output (`ClaudeTaskOutputReader`) | `claude-<uid>` under the temporary folders | Where the CLI keeps it on Windows is not confirmed; nothing is looked up there |
+| SQLite | The macOS SDK's libsqlite3 | Windows's own `winsqlite3` with the Windows SDK's header (`Sources/CSQLiteWindows`), chosen in `Package.swift` when building on Windows |
 
 Other macOS-specific values that the check does not catch:
 
@@ -156,5 +163,5 @@ location there (AppData, the registry and so on) is not confirmed.
 | swift-crypto 5.0.3 (in place of CryptoKit) | `CodexEnvironmentManager`, `ClaudeSubagentTranscriptReader`, `YardletRemote` | Windows builds in its own CI; its README names ARM64 Windows. Not confirmed with Yardlet's build | Builds on Linux (confirmed) | Keep |
 | SwiftTerm 1.18.0 | None; the macOS layer and screens only | Only the terminal parser builds. No PTY or view (confirmed) | The manifest's `os(Windows)` branch leaves out the `Apple`, `Mac` and `iOS` sources, and `LocalProcess.swift`, `Pty.swift` and `HeadlessTerminal.swift` are under `#if !os(iOS) && !os(Windows)` | The Windows terminal uses ConPTY and a Windows view |
 | Sparkle 2.10.1 | None; only the macOS layer imports it (`Platform/macOS/YardletSparkle.swift`), and it is linked only on macOS (`.when(platforms: [.macOS])`) | Not used | `Package.swift` | Windows needs its own update mechanism |
-| CSQLite (`systemLibrary`, `pkgConfig: "sqlite3"`, `link "sqlite3"`) | `Store/SessionRepository`, `Domain/ProviderSessionTitleResolver` | Relies on the system's libsqlite3 (the macOS SDK; the Linux image has it). Windows has no default header or pkg-config | `Package.swift`, `Sources/CSQLite/module.modulemap` | Replace: the conventional way, adding the SQLite amalgamation as a C target |
+| CSQLite (`systemLibrary`, `link "sqlite3"`; on Windows a C target linking `winsqlite3`) | `Store/SessionRepository`, `Domain/ProviderSessionTitleResolver` | Windows ships SQLite as `winsqlite3.dll` with the header in the Windows SDK. Builds on Linux with the system's libsqlite3 (confirmed) | `Package.swift`, `Sources/CSQLite/module.modulemap`, `Sources/CSQLiteWindows` | Keep the system's SQLite on each platform |
 | Observation | Many `@Observable` models | A Swift toolchain module, imported explicitly outside Apple's platforms. Builds on Linux (confirmed) | The Linux build | Keep as is |

@@ -1,8 +1,7 @@
 name: Windows engine
 
 # The engine built on its own on Windows (docs/PLATFORM_PORTABILITY.md, "Building the engine on its
-# own"). It runs for the branches that port it and by hand, apart from the checks a pull request needs,
-# until the engine builds there.
+# own"). It runs for the branches that port it and by hand, apart from the checks a pull request needs.
 on:
   push:
     branches: ['windows-*']
