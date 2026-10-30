@@ -2,7 +2,6 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
-import UniformTypeIdentifiers
 import YardletAgentTools
 
 /// The Gmail REST API (developers.google.com/workspace/gmail/api/reference/rest) for one account,
@@ -220,11 +219,17 @@ struct GmailMessage {
         while text.count % 4 != 0 { text.append("=") }
         guard let data = Data(base64Encoded: text) else { return nil }
         if let charset {
+            #if canImport(Darwin)
             let cf = CFStringConvertIANACharSetNameToEncoding(charset as CFString)
             if cf != kCFStringEncodingInvalidId,
                let decoded = String(data: data, encoding: String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cf))) {
                 return decoded
             }
+            #else
+            if let encoding = String.Encoding(ianaName: charset), let decoded = String(data: data, encoding: encoding) {
+                return decoded
+            }
+            #endif
         }
         return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
     }
@@ -458,7 +463,7 @@ enum GmailAttachmentFiles {
                 throw GmailOutgoingMessage.Problem.unattachable(path: file.path, reason: "it could not be read.")
             }
             let name = displayName(file.path)
-            var type = UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType
+            var type = FileTypes.mimeType(forExtension: (name as NSString).pathExtension)
                 ?? "application/octet-stream"
             if type.hasPrefix("text/"), String(data: data, encoding: .utf8) != nil { type += "; charset=\"UTF-8\"" }
             return GmailOutgoingMessage.Attachment(filename: name, mimeType: type, data: data)

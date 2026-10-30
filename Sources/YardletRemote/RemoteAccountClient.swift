@@ -1,5 +1,8 @@
-import CryptoKit
+import Crypto
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The relay's optional accounts (docs/REMOTE_PROTOCOL.md §14.4), from an app's side: the sign-in
 /// address with PKCE, exchanging the one-time code for a token, and listing, registering and removing

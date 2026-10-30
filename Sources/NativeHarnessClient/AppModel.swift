@@ -37,10 +37,10 @@ final class AppModel {
     /// Each task's transcript and Codex timeline state. A view reads one task's value at a time,
     /// so a task streaming in the background does not invalidate the view showing another.
     var transcriptBySessionID: TaskStateReader<[TranscriptEntry]> { transcripts.reader }
-    private let transcripts = TaskStateTable<[TranscriptEntry]>()
+    let transcripts = TaskStateTable<[TranscriptEntry]>()
     private(set) var errorBySessionID: [UUID: String] = [:]
     var codexPresentationBySessionID: TaskStateReader<CodexTaskState> { codexPresentations.reader }
-    private let codexPresentations = TaskStateTable<CodexTaskState>()
+    let codexPresentations = TaskStateTable<CodexTaskState>()
     /// How many reads of each task's saved conversation from the provider's own history are under
     /// way (`isReadingSavedConversation`).
     private let savedConversationReads = TaskStateTable<Int>()
@@ -164,7 +164,7 @@ final class AppModel {
     @ObservationIgnored private var memorySaverOnScreen = Set<UUID>()
     @ObservationIgnored private var lastMemoryPressureSweep: Date?
     @ObservationIgnored private var harnessMemorySaverTask: Task<Void, Never>?
-    @ObservationIgnored private var memoryPressureSource: (any DispatchSourceMemoryPressure)?
+    @ObservationIgnored private var memoryPressureSource: AnyObject?
     /// Runtimes the memory saver is closing; a new attach of the task waits for its close to finish.
     @ObservationIgnored private var memorySaverClosings: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored var harnessMemorySaverTiming = HarnessMemorySaver.Timing()
@@ -295,7 +295,7 @@ final class AppModel {
     @ObservationIgnored private var antigravityHistoryReads = Set<UUID>()
     @ObservationIgnored private var antigravityHistoryShown: [UUID: AntigravityHistoryShown] = [:]
     @ObservationIgnored private var codexItemPageLoads = Set<String>()
-    private let isVisualFixture: Bool
+    let isVisualFixture: Bool
     /// A DEBUG fixture whose tasks talk to a fake CLI through the real adapters (`--ui-fixture=lifecycle`, and
     /// the performance bench's `--ui-fixture=perf`), unlike the others, which have no provider at all.
     private static let fixtureRunsProviders = ["--ui-fixture=lifecycle", "--ui-fixture=perf"]
@@ -442,9 +442,8 @@ final class AppModel {
         initialCodexCapabilitySection: String? = nil,
         initialCodexHistoryQuery: String? = nil,
         initialSettingsSection: String? = nil,
-        browserClient: @escaping @MainActor () -> BrowserHostClient? = {
-            MacBrowserHost.isAvailable ? MacBrowserHost.shared.client : nil
-        }
+        /// The browser engine, which the platform's app hands in when its build has one.
+        browserClient: @escaping @MainActor () -> BrowserHostClient? = { nil }
     ) {
         self.store = store
         self.runtimeSelections = runtimeSelections
@@ -538,134 +537,6 @@ final class AppModel {
         trackAttentionBadge()
         wireScheduledTasks()
     }
-
-    static func live() -> AppModel {
-        HostSessionEnvironment.detachFromHostSession()
-        #if DEBUG
-        if let fixture = VisualFixtureScenario.requested() {
-            return fixture.makeModel()
-        }
-        #endif
-        let supportRootURL = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first!
-        let codexEnvironmentManager = CodexEnvironmentManager(
-            paths: CodexEnvironmentPaths.live()
-        )
-        let composerDraftRepository = FileComposerDraftRepository(
-            directoryURL: FileManager.default.homeDirectoryForCurrentUser
-                .appending(path: YardletProduct.storageDirectoryName).appending(path: "drafts")
-        )
-        do {
-            let storageRootURL = try YardletProduct.storageRootURL(
-                applicationSupportBaseURL: supportRootURL
-            )
-            let defaults = UserDefaults.yardlet
-            let repository = try SQLiteSessionRepository(
-                databaseURL: storageRootURL.appending(path: "session-index.sqlite3")
-            )
-            let transcriptRepository = MigratingTranscriptRepository(
-                primary: FileTranscriptRepository(
-                    directoryURL: storageRootURL.appending(path: "transcripts")
-                ),
-                legacy: UserDefaultsTranscriptRepository(defaults: defaults)
-            )
-            let codexTimelineItems = FileCodexTimelineItemRepository(
-                directoryURL: storageRootURL.appending(path: "codex-timeline-items")
-            )
-            codexTimelineItems.moveCards(from: UserDefaultsCodexTimelineItemRepository(defaults: defaults))
-            let model = AppModel(
-                store: SessionStore(repository: repository),
-                runtimeSelections: RuntimeSelectionStore(defaults: defaults),
-                // A harness whose new CLI failed Yardlet's check runs the version before it.
-                registry: HarnessRegistry(codexEnvironmentManager: codexEnvironmentManager,
-                                          runtimeOverrides: .shared),
-                connections: ProviderConnectionStore(fileURL: storageRootURL.appending(path: "provider-connections.json"),
-                    snapshotCacheURL: storageRootURL.appending(path: ProviderConnectionStore.snapshotCacheFileName),
-                    defaults: defaults),
-                modelCatalogs: HarnessModelCatalogStore(fileURL: storageRootURL.appending(path: "model-catalogs.json")),
-                codexEnvironmentManager: codexEnvironmentManager,
-                codexTimelineItemRepository: codexTimelineItems,
-                fileTaskIndex: FileTaskIndex(repository: FileTouchRepository(
-                    directoryURL: storageRootURL.appending(path: "file-activity"))),
-                transcriptRepository: transcriptRepository,
-                composerDraftRepository: composerDraftRepository,
-                taskWorkspaceRepository: UserDefaultsTaskWorkspaceRepository(defaults: defaults),
-                taskSuggestionRepository: UserDefaultsTaskSuggestionRepository(defaults: defaults),
-                splitRepository: FileSplitRepository(
-                    fileURL: storageRootURL.appending(path: "splits.json"),
-                    legacyDeskFileURL: storageRootURL.appending(path: "desks.json")
-                ),
-                projectRepository: FileProjectRepository(
-                    fileURL: storageRootURL.appending(path: "projects.json")
-                ),
-                scheduleRepository: FileScheduledTaskRepository(
-                    fileURL: storageRootURL.appending(path: "schedules.json")
-                ),
-                legacyProjectFolderPreferences: LegacyProjectFolderPreferences.stored(in: defaults),
-                applicationAttention: MacApplicationAttention()
-            )
-            model.accountAssignments = AccountAssignmentLog(
-                fileURL: storageRootURL.appending(path: AccountAssignmentLog.fileName))
-            return model
-        } catch {
-            return AppModel(
-                store: SessionStore(repository: InMemorySessionRepository()),
-                runtimeSelections: RuntimeSelectionStore(),
-                codexEnvironmentManager: codexEnvironmentManager,
-                bootstrapError: L10n.format(
-                    "Session index unavailable: %@",
-                    error.localizedDescription
-                ),
-                codexTimelineItemRepository: FileCodexTimelineItemRepository.live(),
-                composerDraftRepository: composerDraftRepository,
-                taskWorkspaceRepository: UserDefaultsTaskWorkspaceRepository(defaults: .yardlet),
-                taskSuggestionRepository: UserDefaultsTaskSuggestionRepository(defaults: .yardlet),
-                splitRepository: FileSplitRepository.live(),
-                projectRepository: FileProjectRepository.live(),
-                scheduleRepository: FileScheduledTaskRepository.live(),
-                legacyProjectFolderPreferences: LegacyProjectFolderPreferences.stored(in: .yardlet),
-                applicationAttention: MacApplicationAttention(),
-                restoresIndexOnLaunch: false
-            )
-        }
-    }
-
-    #if DEBUG
-    /// A visual fixture's next frame of a Codex task (`ShowcasePlayback`), put in place as the
-    /// task's provider events would leave it.
-    func showVisualFixtureCodexState(_ state: CodexTaskState, for sessionID: UUID) {
-        guard isVisualFixture else { return }
-        codexPresentations[sessionID] = state
-    }
-
-    func updateWorkspaceReadingFixture(addTurn: Bool) {
-        guard isVisualFixture, CommandLine.arguments.contains("--ui-fixture=workspace"),
-              let session = store.selectedSession else { return }
-        if session.harness == .codex {
-            guard var state = codexPresentationBySessionID[session.id],
-                  let turn = state.thread?.turns.indices.last,
-                  let item = state.thread?.turns[turn].items.indices.last else { return }
-            if addTurn {
-                state.thread?.turns.append(CodexReadingFixtureView.turn(turn + 2))
-            } else if case var .agentMessage(message) = state.thread?.turns[turn].items[item].content {
-                message.text += String(repeating: "\n\nA latest-response update. Keep reading earlier content.", count: 10)
-                state.thread?.turns[turn].items[item].content = .agentMessage(message)
-            }
-            codexPresentations[session.id] = state
-        } else {
-            guard var entries = transcriptBySessionID[session.id], let last = entries.indices.last else { return }
-            if addTurn {
-                entries.append(TranscriptEntry(content: .user(text: "A new request")))
-                entries.append(TranscriptEntry(content: .assistant(text: "A new answer", isStreaming: false)))
-            } else if case let .assistant(text, _) = entries[last].content {
-                entries[last].content = .assistant(text: text + String(repeating: "\n\nA latest-response update.", count: 12), isStreaming: true)
-            }
-            transcripts[session.id] = entries
-        }
-    }
-    #endif
 
     /// Converts the folder-path keyed sidebar settings and every existing task's folder into
     /// one-folder projects. The conversion is idempotent and only reads the old settings.
@@ -5610,12 +5481,9 @@ final class AppModel {
                 await self?.checkHarnessMemory()
             }
         }
-        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
-        source.setEventHandler { [weak self] in
-            MainActor.assumeIsolated { _ = Task { await self?.checkHarnessMemory() } }
+        memoryPressureSource = MemoryPressureWatch.start { [weak self] in
+            _ = Task { await self?.checkHarnessMemory() }
         }
-        source.resume()
-        memoryPressureSource = source
     }
 
     /// Ends the runtimes `HarnessMemorySaver` picks, while the setting is on. A Codex thread with a background terminal

@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import Foundation
 
 /// The Mac's two v2 keys (docs/REMOTE_PROTOCOL.md §11.2): the X25519 key phones authenticate it by,

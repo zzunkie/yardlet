@@ -14,9 +14,11 @@ enum L10n {
         return .module
     }()
 
+    #if canImport(Darwin)
     static func string(_ key: String.LocalizationValue) -> String {
         String(localized: key, bundle: activeBundle)
     }
+    #endif
 
     static func string(_ key: String) -> String {
         activeBundle.localizedString(forKey: key, value: key, table: nil)
@@ -30,6 +32,9 @@ enum L10n {
         return localizedBundle.localizedString(forKey: key, value: key, table: nil)
     }
 
+    // Foundation outside Apple's platforms has no `String.LocalizationValue`; there a key is the
+    // English text itself, looked up in the same Localizable.strings.
+    #if canImport(Darwin)
     static func format(_ key: String.LocalizationValue, _ arguments: CVarArg...) -> String {
         String(
             format: string(key),
@@ -37,6 +42,15 @@ enum L10n {
             arguments: arguments
         )
     }
+    #else
+    static func format(_ key: String, _ arguments: CVarArg...) -> String {
+        String(
+            format: string(key),
+            locale: Locale.current,
+            arguments: arguments
+        )
+    }
+    #endif
 }
 
 /// Yardlet's language, kept where macOS keeps each app's own: `AppleLanguages` in the app's

@@ -282,7 +282,7 @@ final class ProviderConnectionStore {
     /// The home folder discovery looks in; tests give their own.
     @ObservationIgnored var homeURL = FileManager.default.homeDirectoryForCurrentUser
     /// Moves a deleted account's folder to the Trash; tests remove it instead.
-    @ObservationIgnored var moveToTrash: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
+    @ObservationIgnored var moveToTrash: (URL) throws -> Void = { try Trash.move($0) }
     /// Folders with a Claude or Codex login or history that are not saved accounts, as last found.
     private(set) var discoveredHomes: [DiscoveredAccountHome] = []
     /// Saved accounts whose tasks are moving to another folder of the same account, by connection ID.

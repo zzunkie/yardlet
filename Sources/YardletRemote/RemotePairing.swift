@@ -1,17 +1,20 @@
-import CryptoKit
+import Crypto
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 
 // Pairing (§12): a one-time secret the Mac shows in a QR code; the phone's key becomes the device.
 
 public enum RemoteRandom {
     public static func bytes(_ count: Int) -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: count)
-        let status = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
-        if status != errSecSuccess {
-            var generator = SystemRandomNumberGenerator()
-            for index in bytes.indices { bytes[index] = UInt8.random(in: .min ... .max, using: &generator) }
-        }
+        #if canImport(Security)
+        if SecRandomCopyBytes(kSecRandomDefault, count, &bytes) == errSecSuccess { return bytes }
+        #endif
+        // The system's cryptographic generator on every platform (getrandom, BCryptGenRandom).
+        var generator = SystemRandomNumberGenerator()
+        for index in bytes.indices { bytes[index] = UInt8.random(in: .min ... .max, using: &generator) }
         return bytes
     }
 }

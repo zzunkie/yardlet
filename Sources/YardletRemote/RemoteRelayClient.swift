@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The Mac's side of the relay (docs/REMOTE_PROTOCOL.md §14.2): one outgoing WebSocket that opens the
 /// Mac's room with a signature, then carries every phone that comes in through the relay as numbered

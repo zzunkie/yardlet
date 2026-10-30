@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Observation
 
 /// Settings › General "Autocomplete searches and URLs", Chrome's `search.suggest_enabled`, on unless turned off as
