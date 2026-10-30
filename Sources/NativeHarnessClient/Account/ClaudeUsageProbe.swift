@@ -18,7 +18,7 @@ enum ClaudeUsageProbe {
             defer { try? FileManager.default.removeItem(at: folder) }
 
             let process = Process()
-            let input = Pipe()
+            let input = Pipe.childInput()
             let output = Pipe()
             process.executableURL = executableURL
             process.arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json",

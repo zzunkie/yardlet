@@ -128,7 +128,7 @@ actor HarnessProtocolProcessHost {
         )
 
         let process = Process()
-        let stdinPipe = Pipe()
+        let stdinPipe = Pipe.childInput()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.executableURL = configuration.executableURL

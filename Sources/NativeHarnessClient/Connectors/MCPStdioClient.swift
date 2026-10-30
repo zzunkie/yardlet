@@ -236,7 +236,7 @@ struct ProcessMCPStdioLauncher: MCPStdioLaunching {
 final class ProcessMCPStdioChannel: MCPStdioChannel, @unchecked Sendable {
     let lines: AsyncStream<String>
     private let process = Process()
-    private let input = Pipe()
+    private let input = Pipe.childInput()
     private let lock = NSLock()
     private var errors = Data()
     /// Output read but not yet ended by a newline. Only the output handler, which runs one call at

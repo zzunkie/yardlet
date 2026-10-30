@@ -72,7 +72,7 @@ enum CLIProcess {
             defer { try? FileManager.default.removeItem(at: folder) }
 
             let process = Process()
-            let input = Pipe()
+            let input = Pipe.childInput()
             let output = Pipe()
             process.executableURL = executable
             process.arguments = arguments
