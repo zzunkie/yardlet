@@ -5,10 +5,11 @@ import XCTest
 @testable import NativeHarnessClient
 
 /// What one streamed Codex presentation costs the main actor in a task with many saved cards: the
-/// app merges the saved cards into every state the provider streams (`supplementEntries`, then
-/// `mergeItemPage`), settles running cards and works out which cards to save, as
+/// app merges the saved cards into every state the provider streams (`CodexPersistedTimeline.merge`),
+/// settles running cards and works out which cards to save, as
 /// `AppModel.startCodexPresentationCollection` does. The provider's resumed history leaves each
-/// card historical, so every saved card replaces the provider's copy on every state.
+/// card historical, so every saved card replaces the provider's copy, and a turn the provider did
+/// not change takes the items it merged to in the last state.
 ///
 /// Run with `NHC_PERF_BENCH=1`; `NHC_CODEX_CARDS=<file>` reads a saved card file instead of the
 /// built-in one. It prints the numbers and a digest of the last merged state, and checks nothing else.
@@ -34,7 +35,6 @@ final class CodexTimelineMergeCostTests: XCTestCase {
         var mergeTimes: [Double] = []
         var stepTimes: [Double] = []
         var mergeCPU = 0.0, stepCPU = 0.0
-        var entryCount = 0
         var last = provider
         let states = 200
         for step in 0..<states {
@@ -48,17 +48,13 @@ final class CodexTimelineMergeCostTests: XCTestCase {
 
             let stepStart = (ContinuousClock.now, Self.threadCPU())
             var merged = provider
-            let entries = timeline.supplementEntries(for: merged, saved: saved)
-            if !entries.isEmpty {
-                reducer.mergeItemPage(CodexItemPage(entries: entries, nextCursor: nil, backwardsCursor: nil), into: &merged)
-            }
+            timeline.merge(saved, into: &merged)
             let mergeEnd = (ContinuousClock.now, Self.threadCPU())
             reducer.reconcileResolvedServerRequestItems(in: &merged)
             reducer.reconcileTerminalActivityItems(in: &merged, settledTurns: &settledTurns)
             _ = persisted.items(from: merged)
             let stepEnd = (ContinuousClock.now, Self.threadCPU())
 
-            entryCount = entries.count
             last = merged
             guard step >= 10 else { continue }
             mergeTimes.append(Self.seconds(mergeEnd.0 - stepStart.0))
@@ -67,6 +63,8 @@ final class CodexTimelineMergeCostTests: XCTestCase {
             stepCPU += stepEnd.1 - stepStart.1
         }
         let measured = Double(mergeTimes.count)
+        var counting = CodexPersistedTimeline()
+        let entryCount = counting.supplementEntries(for: provider, saved: saved).count
         let items = last.thread!.turns.reduce(0) { $0 + $1.items.count }
         print(String(format: "[codex-merge-cost] %d saved cards, %d supplemented a state, %d items in %d turns",
                      saved.count, entryCount, items, last.thread!.turns.count))
