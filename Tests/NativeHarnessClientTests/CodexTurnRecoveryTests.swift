@@ -122,6 +122,70 @@ final class CodexTurnRecoveryTests: XCTestCase {
         }
     }
 
+    /// The retry on 2026-10-31: a turn the busy server ended, its runtime ended to save memory hours later,
+    /// then Retry. Retry attaches the task again, and the new runtime must not replay the old one's
+    /// events: its error came back as the task's error and showed above the composer beside the retry.
+    func testRetryAfterTheRuntimeEndedToSaveMemoryHearsOnlyTheNewRuntime() async throws {
+        for routed in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appending(path: "Yardlet.Retry.\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let executable = root.appending(path: "codex")
+            try Data("#!/bin/sh\nprintf 'codex-cli 0.160.0\\n'\n".utf8).write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+            var fixture = responses()
+            fixture["thread/start"] = [.object(["thread": .object(["id": .string("other"), "status": .object(["type": .string("idle")]),
+                                                                   "historyMode": .string("paginated"), "turns": .array([])])])]
+            fixture["thread/resume"] = [threadResult(status: "idle", turns: [turn(id: "earlier", status: "completed")]),
+                                        threadResult()]
+            fixture["thread/items/list"]?.append(.object(["data": .array([]), "nextCursor": .null]))
+            fixture["thread/backgroundTerminals/list"] = [.object(["data": .array([]), "nextCursor": .null])]
+            let transport = FakeCodexTransport(responses: fixture)
+            let adapter = makeAdapter(transport: transport, routed: routed, executable: executable)
+            // Another task keeps the App Server running, as Yardlet's tasks share one.
+            let other = try await adapter.createSession(.init(localSessionID: UUID(), workspaceURL: root, initialPrompt: nil))
+            let session = SessionRecord(harness: .codex, workspaceURL: root, runtimeExecutableURL: executable,
+                title: "Keep this chat", providerSessionID: "original", environmentScope: .yardlet)
+            let suite = testDefaultsSuite("NativeHarnessClientTests.Retry")
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let model = AppModel(store: SessionStore(sessions: [session], repository: InMemorySessionRepository(sessions: [session])),
+                runtimeSelections: RuntimeSelectionStore(defaults: defaults), registry: HarnessRegistry { _, _ in adapter },
+                codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults),
+                codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
+                codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
+                codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults),
+                transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
+                restoresIndexOnLaunch: false)
+            await model.resume(session)
+            try await waitUntil { model.codexPresentationBySessionID[session.id]?.thread?.turns.last?.id == "earlier" }
+            await transport.emit(method: "turn/started", params: .object(["threadId": .string("original"),
+                                                                          "turn": turn(status: "inProgress")]))
+            await transport.emit(method: "error", params: .object(["threadId": .string("original"), "turnId": .string("failed"),
+                                                                   "willRetry": .bool(false), "error": capacityError]))
+            await transport.emit(method: "turn/completed", params: .object(["threadId": .string("original"), "turn": turn()]))
+            try await waitUntil {
+                model.errorBySessionID[session.id] != nil && model.store.sessions.first?.status == .ready
+            }
+
+            model.store.selectedSessionID = nil
+            await model.endRuntimeToSaveMemory(session.id)
+            XCTAssertFalse(model.isAttached(session.id))
+            await model.retryTurn("failed", in: session)
+            let starts = await transport.requests.filter { $0.method == "turn/start" }
+            XCTAssertEqual(starts.count, 1)
+            // What the new runtime says on attaching and retrying arrives after anything it would replay.
+            try await waitUntil {
+                heard(model, session) { if case .sessionStarted = $0 { true } else { false } } == 2
+                    && model.store.sessions.first?.status == .running
+            }
+            XCTAssertEqual(heard(model, session) { if case .error = $0 { true } else { false } }, 1,
+                           "The failed turn's error is heard once")
+            XCTAssertNil(model.errorBySessionID[session.id])
+            await model.shutdown()
+            await adapter.close(other)
+        }
+    }
+
     func testRetryProjectionOnlyAdmitsLatestIdleCapacityFailure() throws {
         var state = CodexTaskState(thread: try XCTUnwrap(CodexTaskDecoder().thread(from: threadResult()["thread"]!)))
         XCTAssertTrue(CodexTurnRecoveryProjection.canRetry("failed", in: state))
@@ -224,6 +288,11 @@ final class CodexTurnRecoveryTests: XCTestCase {
         }
     }
 
+    /// How many of the events the task heard are of one kind.
+    private func heard(_ model: AppModel, _ session: SessionRecord, _ kind: (HarnessEventPayload) -> Bool) -> Int {
+        (model.eventsBySessionID[session.id] ?? []).filter { kind($0.payload) }.count
+    }
+
     private func makeAdapter(transport: FakeCodexTransport, routed: Bool,
         executable: URL = URL(filePath: "/tmp/codex")) -> any HarnessAdapter {
         let direct = CodexAdapter(executableURL: executable, transport: transport)
@@ -239,10 +308,13 @@ final class CodexTurnRecoveryTests: XCTestCase {
     }
 
     /// The thread as the App Server reports it after a turn failed (Codex 0.163).
-    private func threadResult(status: String = "systemError") -> JSONValue {
+    private func threadResult(status: String = "systemError", turns: [JSONValue]? = nil) -> JSONValue {
         .object(["thread": .object(["id": .string("original"), "status": .object(["type": .string(status)]),
-            "historyMode": .string("paginated"), "turns": .array([turn()])])])
+            "historyMode": .string("paginated"), "turns": .array(turns ?? [turn()])])])
     }
+
+    private let capacityError = JSONValue.object(["message": .string("Capacity failure"),
+                                                  "codexErrorInfo": .string("serverOverloaded")])
 
     private func page(_ turns: [JSONValue]) -> JSONValue { .object(["data": .array(turns), "nextCursor": .null]) }
 

@@ -1575,7 +1575,9 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         serverRequestContexts = serverRequestContexts.filter {
             $0.value.localSessionID != session.localSessionID
         }
-        eventChannel.finish(session.localSessionID)
+        // The task attached again hears only its new runtime: this one's events, such as a failed turn's
+        // error, were handled once and are not replayed to it.
+        eventChannel.close(session.localSessionID)
         presentationStateByLocalSessionID.removeValue(forKey: session.localSessionID)
         presentationSequenceByLocalSessionID.removeValue(forKey: session.localSessionID)
         pendingPresentationPublicationByLocalSessionID.removeValue(forKey: session.localSessionID)
