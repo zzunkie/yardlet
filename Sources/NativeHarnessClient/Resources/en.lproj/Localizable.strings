@@ -2147,7 +2147,7 @@
 "Restart to update" = "Restart to update";
 "Yardlet Instructions" = "Yardlet Instructions";
 "Use Yardlet instructions" = "Use Yardlet instructions";
-"Added to every task Yardlet starts or resumes, from the next turn or resume. Never written to a harness's own files." = "Added to every task Yardlet starts or resumes, from the next turn or resume. Never written to a harness's own files.";
+"Added when Yardlet starts or resumes a task; a task whose harness is already running keeps the instructions it started with until it resumes, for example after Yardlet reopens. Never written to a harness's own files." = "Added when Yardlet starts or resumes a task; a task whose harness is already running keeps the instructions it started with until it resumes, for example after Yardlet reopens. Never written to a harness's own files.";
 "Global instruction files such as AGENTS.md and CLAUDE.md also apply outside Yardlet; Yardlet instructions apply only to tasks Yardlet launches." = "Global instruction files such as AGENTS.md and CLAUDE.md also apply outside Yardlet; Yardlet instructions apply only to tasks Yardlet launches.";
 "Not supported: %@" = "Not supported: %@";
 "Turn off in this project" = "Turn off in this project";
