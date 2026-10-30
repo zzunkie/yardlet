@@ -1,5 +1,4 @@
 import Foundation
-import Observation
 
 struct CodexRuntimeRequirementsSnapshot: Equatable, Sendable {
     let hasRequirements: Bool
@@ -175,44 +174,5 @@ actor CodexRuntimeSettingsBroker {
             await transport.stop()
             throw error
         }
-    }
-}
-
-@MainActor
-@Observable
-final class CodexRuntimeSettingsModel {
-    private(set) var snapshot: CodexRuntimeSettingsSnapshot?
-    private(set) var isLoading = false
-    private(set) var errorMessage: String?
-
-    @ObservationIgnored private let broker: CodexRuntimeSettingsBroker
-
-    init(environmentManager: CodexEnvironmentManager? = nil) {
-        broker = CodexRuntimeSettingsBroker(environmentManager: environmentManager)
-    }
-
-    func refresh(
-        runtimeSelections: RuntimeSelectionStore,
-        workspaceURL: URL?
-    ) async {
-        guard !isLoading else { return }
-        isLoading = true
-        errorMessage = nil
-        guard let executableURL = runtimeSelections.selectedURL(for: .codex) else {
-            snapshot = nil
-            errorMessage = L10n.string("Select a Codex runtime to inspect its effective settings.")
-            isLoading = false
-            return
-        }
-        do {
-            snapshot = try await broker.snapshot(
-                executableURL: executableURL,
-                workspaceURL: workspaceURL
-            )
-        } catch {
-            snapshot = nil
-            errorMessage = error.localizedDescription
-        }
-        isLoading = false
     }
 }

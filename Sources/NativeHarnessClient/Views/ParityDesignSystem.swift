@@ -179,18 +179,6 @@ enum ParityAccessibility {
     static let secondary = 40.0
 }
 
-struct YardletBrandMark: View {
-    var size: CGFloat = 30
-
-    var body: some View {
-        Image(nsImage: NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath))
-            .resizable()
-            .interpolation(.high)
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
-    }
-}
-
 struct ParityComposerControl: View {
     let title: String
     /// Dimmer words after the title ("High" after "Opus 5.5"), after a middle dot.
@@ -280,29 +268,6 @@ struct ParityIconButton: View {
         .help(ShortcutHelp.text(help, shortcut))
         .onHover { isHovering = $0 }
         .animation(ParityMotion.easeOut(reduceMotion: reduceMotion, duration: 0.1), value: isHovering)
-    }
-}
-
-struct ParityPillLabel: View {
-    let title: String
-    let systemName: String
-    var tint: Color = .secondary
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: systemName)
-                .font(.system(size: 11, weight: .semibold))
-            Text(title)
-                .font(.caption)
-                .lineLimit(1)
-        }
-        .foregroundStyle(tint)
-        .padding(.horizontal, 9)
-        .frame(height: 28)
-        .background(ParityTheme.subtleFill, in: Capsule())
-        .overlay {
-            Capsule().stroke(ParityTheme.separator)
-        }
     }
 }
 
