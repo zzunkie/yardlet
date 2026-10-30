@@ -289,13 +289,15 @@ final class BrowserAgentTools {
                     + "\nOpened a blank tab. \(where_) Load a page with browser_navigate and tabId \"\(tab.id)\".")
             case AgentToolCatalog.tabSelect:
                 guard let id = arguments["tabId"]?.stringValue else { throw BrowserAgentToolError("browser_tab_select needs a tabId.") }
-                try directory.select(id, for: sessionID)
-                return .text("Tab \(id) " + Self.activeTabText(directory.personTab(for: sessionID), besides: id, opened: false))
+                let tab = try directory.select(id, for: sessionID)
+                return .text("Tab \(tab.id) (\(tab.origin)) "
+                    + Self.activeTabText(directory.personTab(for: sessionID), besides: tab.id, opened: false))
             case AgentToolCatalog.tabClose:
                 guard let id = arguments["tabId"]?.stringValue else { throw BrowserAgentToolError("browser_tab_close needs a tabId.") }
-                let active = try directory.close(id, for: sessionID)
-                return .text(active.map { "Closed tab \(id). Tab \($0.id) is now the active tab." }
-                    ?? "Closed tab \(id), the task's last tab.")
+                let (closed, active) = try directory.close(id, for: sessionID)
+                let tab = "tab \(closed.id) (\(closed.origin))"
+                return .text(active.map { "Closed \(tab). Tab \($0.id) (\($0.origin)) is now the active tab." }
+                    ?? "Closed \(tab), the task's last tab.")
             default:
                 throw BrowserAgentToolError("Unknown Yardlet tool: \(tool)")
             }
@@ -310,8 +312,8 @@ final class BrowserAgentTools {
     private static func activeTabText(_ person: BrowserAgentTabInfo?, besides id: String, opened: Bool) -> String {
         let subject = opened ? "It is" : "is now"
         guard let person, person.id != id, let use = person.personUse else { return "\(subject) the active tab." }
-        return "\(subject) your active tab: tools without a tabId act on it. The browser panel stays on tab \(person.id), "
-            + "which the person is using (\(describe(use)))."
+        return "\(subject) your active tab: tools without a tabId act on it. The browser panel stays on tab \(person.id) "
+            + "(\(person.origin)), which the person is using (\(describe(use)))."
     }
 
     /// How the person is using a tab, as a fact.

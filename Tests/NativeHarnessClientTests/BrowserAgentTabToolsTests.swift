@@ -88,8 +88,9 @@ final class BrowserAgentTabToolsTests: XCTestCase {
         XCTAssertTrue(closedPanel.contains("panel is closed"))
 
         let second = String(tabs[1].id)
+        // A result that names a tab gives its origin too: the person sees the page's title and site, never a tab id.
         let selected = await run(AgentToolCatalog.tabSelect, ["tabId": .string(second)])
-        XCTAssertFalse(selected.isError)
+        XCTAssertEqual(text(selected), "Tab \(second) (about:blank) is now the active tab.")
         XCTAssertTrue(client.tab(forSession: task) === tabs[1])
 
         let foreground = await run(AgentToolCatalog.tabNew, ["foreground": .bool(true)])
@@ -98,7 +99,7 @@ final class BrowserAgentTabToolsTests: XCTestCase {
 
         let closedID = String(client.tabs(forSession: task)[2].id)
         let closed = await run(AgentToolCatalog.tabClose, ["tabId": .string(closedID)])
-        XCTAssertTrue(text(closed).contains("Tab \(second) is now the active tab"), text(closed))
+        XCTAssertEqual(text(closed), "Closed tab \(closedID) (about:blank). Tab \(second) (about:blank) is now the active tab.")
 
         // A tab that is gone says how it went and lists the task's tabs; no other tab is picked for it.
         let firstID = String(client.tabs(forSession: task)[0].id)
@@ -128,7 +129,7 @@ final class BrowserAgentTabToolsTests: XCTestCase {
         XCTAssertNotEqual(String(now.id), firstID)
         XCTAssertTrue(text(reopened).hasPrefix("Tab \(firstID) is now tab \(now.id): the browser host ended, and it was opened "
                                                + "again in its place as the same tab of the task's browser panel."), text(reopened))
-        XCTAssertTrue(text(reopened).contains("Tab \(now.id) is now the active tab"), text(reopened))
+        XCTAssertTrue(text(reopened).contains("Tab \(now.id) (about:blank) is now the active tab"), text(reopened))
     }
 
     func testAPageToolActsOnTheTabItNames() async throws {
@@ -273,6 +274,7 @@ final class BrowserAgentTabToolsTests: XCTestCase {
             text(await tools.run(tool: tool, arguments: .object(arguments), sessionID: task))
         }
         let person = try client.openTab(forSession: task, url: "https://example.com", viewport: .offscreenDefault)
+        connection.eventHandler?(.address(tab: person.id, url: "https://example.com/inbox"))
         client.attachPanel(to: person)
         person.send(.mouse(tab: person.id, input: BrowserMouseInput(kind: .down, x: 10, y: 10, button: .left)))
 
@@ -280,7 +282,7 @@ final class BrowserAgentTabToolsTests: XCTestCase {
         let own = try XCTUnwrap(client.tabs(forSession: task).last)
         XCTAssertTrue(client.tab(forSession: task) === person, "the panel keeps the person's tab")
         XCTAssertTrue(client.agentTab(forSession: task) === own)
-        XCTAssertTrue(opened.contains("stays on tab \(person.id), which the person is using"), opened)
+        XCTAssertTrue(opened.contains("stays on tab \(person.id) (https://example.com), which the person is using"), opened)
         connection.sent = []
         let read = await run(AgentToolCatalog.consoleMessages)
         let calls = connection.sent.compactMap { if case .devTools(let tab, _) = $0 { tab } else { nil } }
