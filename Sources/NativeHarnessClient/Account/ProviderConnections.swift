@@ -168,6 +168,12 @@ struct AccountTaskMove: Equatable {
     let target: ProviderConnection
     var waiting = 0
     var failure: String?
+    /// The target's own CLI reported the same account.
+    var isConfirmed = false
+
+    /// Confirmed and not failed: until the account leaves the list, new tasks start on the target
+    /// instead (`ProviderConnectionStore.startConnection`), and a quit leaves the move to the next launch.
+    var isUnderway: Bool { isConfirmed && failure == nil }
 }
 
 /// The tasks on a saved account, for confirming its removal: archived ones count too, and the working
@@ -267,8 +273,8 @@ final class ProviderConnectionStore {
     @ObservationIgnored var defaultLoader: AccountSnapshotLoader?
     @ObservationIgnored var connectionLoader: ConnectionSnapshotLoader?
     @ObservationIgnored private let fileURL: URL?
-    /// Where `automaticAssignment` is kept; nil keeps it in memory.
-    @ObservationIgnored private let assignmentDefaults: UserDefaults?
+    /// Where `automaticAssignment` and the accounts in `taskMoves` are kept; nil keeps them in memory.
+    @ObservationIgnored private let defaults: UserDefaults?
     /// The environment default logins are found in (`CLAUDE_CONFIG_DIR`); tests give their own.
     @ObservationIgnored var defaultLoginEnvironment = ProcessInfo.processInfo.environment
     /// Where Yardlet makes the folders of accounts added with a new sign-in; tests give their own.
@@ -280,6 +286,7 @@ final class ProviderConnectionStore {
     /// Folders with a Claude or Codex login or history that are not saved accounts, as last found.
     private(set) var discoveredHomes: [DiscoveredAccountHome] = []
     /// Saved accounts whose tasks are moving to another folder of the same account, by connection ID.
+    /// One underway is kept between launches.
     private(set) var taskMoves: [String: AccountTaskMove] = [:]
     @ObservationIgnored private var readFailed = false
     @ObservationIgnored private var cache: AccountSnapshotCache
@@ -312,11 +319,11 @@ final class ProviderConnectionStore {
 
     /// `snapshotCacheURL` remembers each account's last completed reading between launches, so
     /// the list shows it at once while the next check runs. Nil keeps readings in memory only.
-    init(fileURL: URL? = nil, snapshotCacheURL: URL? = nil, assignmentDefaults: UserDefaults? = nil,
+    init(fileURL: URL? = nil, snapshotCacheURL: URL? = nil, defaults: UserDefaults? = nil,
          defaultLoader: AccountSnapshotLoader? = nil, connectionLoader: ConnectionSnapshotLoader? = nil) {
         self.fileURL = fileURL
-        self.assignmentDefaults = assignmentDefaults
-        automaticAssignment = assignmentDefaults?.dictionary(forKey: Self.automaticAssignmentKey) as? [String: Bool] ?? [:]
+        self.defaults = defaults
+        automaticAssignment = defaults?.dictionary(forKey: Self.automaticAssignmentKey) as? [String: Bool] ?? [:]
         self.defaultLoader = defaultLoader
         self.connectionLoader = connectionLoader
         cache = AccountSnapshotCache(fileURL: snapshotCacheURL)
@@ -337,15 +344,18 @@ final class ProviderConnectionStore {
             }
         }
         restoreRememberedReadings()
+        restoreTaskMoves()
     }
 
     static func live() -> ProviderConnectionStore {
         let root = CodexEnvironmentPaths.live().yardletRootURL
         return Self(fileURL: root.appending(path: "provider-connections.json"),
-            snapshotCacheURL: root.appending(path: snapshotCacheFileName), assignmentDefaults: .yardlet)
+            snapshotCacheURL: root.appending(path: snapshotCacheFileName), defaults: .yardlet)
     }
 
     static let automaticAssignmentKey = "Yardlet.automaticAccountAssignment"
+    /// The accounts whose tasks are moving, each with the account they move to (connection IDs).
+    static let taskMovesKey = "Yardlet.accountTaskMoves"
 
     static let snapshotCacheFileName = "account-snapshots.json"
 
@@ -557,13 +567,16 @@ final class ProviderConnectionStore {
         snapshots[connection.id] = nil
         readingStatus[connection.id] = nil
         confirmedAt[connection.id] = nil
-        taskMoves[connection.id] = nil
         cache.forget(connection.id)
         if selection[connection.harness] == connection.id { selection[connection.harness] = nil }
         if automaticAssignment.removeValue(forKey: connection.id) != nil {
-            if automaticAssignment.isEmpty { assignmentDefaults?.removeObject(forKey: Self.automaticAssignmentKey) }
-            else { assignmentDefaults?.set(automaticAssignment, forKey: Self.automaticAssignmentKey) }
+            if automaticAssignment.isEmpty { defaults?.removeObject(forKey: Self.automaticAssignmentKey) }
+            else { defaults?.set(automaticAssignment, forKey: Self.automaticAssignmentKey) }
         }
+        // A move to this account is over too; the account it came from takes new tasks again.
+        let underway = movesUnderway
+        taskMoves = taskMoves.filter { $0.key != connection.id && $0.value.target.id != connection.id }
+        if movesUnderway != underway { saveTaskMoves() }
     }
 
     // MARK: - Moving an account's tasks
@@ -593,17 +606,55 @@ final class ProviderConnectionStore {
                                                     organization: reported.groupingOrganization) == account
     }
 
-    /// Shows how moving an account's tasks goes on its row; nil once it is over.
-    func noteTaskMove(_ move: AccountTaskMove?, for connectionID: String) {
-        if taskMoves[connectionID] != move { taskMoves[connectionID] = move }
+    /// Moves an account's tasks to `target` once its CLI confirmed the same account. From now on new
+    /// tasks start there instead: the account is no choice for one (`choices(for:)`), and the new-task
+    /// choice moves to `target`.
+    func beginTaskMove(from source: ProviderConnection, to target: ProviderConnection) {
+        noteTaskMove(AccountTaskMove(target: target, isConfirmed: true), for: source.id)
+        if selection[source.harness] == source.id { selection[source.harness] = target.id }
     }
 
-    /// Takes an account whose tasks all moved to `target` off the list. New tasks that started on it
-    /// start on `target` instead.
-    func remove(_ connection: ProviderConnection, movedTo target: ProviderConnection) throws {
-        let chosen = selection[connection.harness] == connection.id
-        try remove(connection)
-        if chosen { selection[connection.harness] = target.id }
+    /// Shows how moving an account's tasks goes on its row, until it leaves the list.
+    func noteTaskMove(_ move: AccountTaskMove, for connectionID: String) {
+        guard taskMoves[connectionID] != move, connections.contains(where: { $0.id == connectionID }) else { return }
+        let underway = movesUnderway
+        taskMoves[connectionID] = move
+        if movesUnderway != underway { saveTaskMoves() }
+    }
+
+    /// Whether new tasks start elsewhere because the account's tasks are moving away.
+    func isMovingAway(_ connection: ProviderConnection) -> Bool { taskMoves[connection.id]?.isUnderway == true }
+
+    /// The account a new task chosen to start on `connection` starts on: the folder its tasks are
+    /// moving to, which is signed in to the same account and keeps the same conversations.
+    func startConnection(_ connection: ProviderConnection?) -> ProviderConnection? {
+        guard let connection, let move = taskMoves[connection.id], move.isUnderway else { return connection }
+        return move.target
+    }
+
+    /// Each move underway: its account and target, by connection ID.
+    private var movesUnderway: [String: String] {
+        taskMoves.filter(\.value.isUnderway).mapValues(\.target.id)
+    }
+
+    /// Keeps the moves underway, so one a quit cut off goes on at the next launch
+    /// (`AppModel.continueAccountTaskMoves`). Nothing is kept once none is.
+    private func saveTaskMoves() {
+        guard !readFailed else { return }
+        let underway = movesUnderway
+        if underway.isEmpty { defaults?.removeObject(forKey: Self.taskMovesKey) }
+        else { defaults?.set(underway, forKey: Self.taskMovesKey) }
+    }
+
+    /// The moves the last launch left underway. One whose account or target left the list meanwhile
+    /// is over.
+    private func restoreTaskMoves() {
+        guard !readFailed, let saved = defaults?.dictionary(forKey: Self.taskMovesKey) as? [String: String] else { return }
+        for (source, target) in saved where connections.contains(where: { $0.id == source }) {
+            guard let target = connections.first(where: { $0.id == target }) else { continue }
+            taskMoves[source] = AccountTaskMove(target: target, isConfirmed: true)
+        }
+        if taskMoves.count != saved.count { saveTaskMoves() }
     }
 
     /// Whether deleting the account's folder leaves its conversations where they are: a Claude
@@ -700,9 +751,9 @@ final class ProviderConnectionStore {
     func setInAutomaticAssignment(_ included: Bool, for choice: AccountChoice) {
         automaticAssignment[choice.id] = included == isInAutomaticAssignmentByDefault(choice) ? nil : included
         if automaticAssignment.isEmpty {
-            assignmentDefaults?.removeObject(forKey: Self.automaticAssignmentKey)
+            defaults?.removeObject(forKey: Self.automaticAssignmentKey)
         } else {
-            assignmentDefaults?.set(automaticAssignment, forKey: Self.automaticAssignmentKey)
+            defaults?.set(automaticAssignment, forKey: Self.automaticAssignmentKey)
         }
     }
 
@@ -758,8 +809,11 @@ final class ProviderConnectionStore {
         return generation
     }
 
-    func choices(for harnesses: [HarnessKind]) -> [AccountChoice] {
-        AccountChoiceProjection.choices(harnesses: harnesses, connections: connections,
+    /// The accounts of `harnesses` a task can start on, in the list's order. An account whose tasks
+    /// are moving away (`isMovingAway`) is none; `includingMoving` keeps it for the lists that show it.
+    func choices(for harnesses: [HarnessKind], includingMoving: Bool = false) -> [AccountChoice] {
+        AccountChoiceProjection.choices(harnesses: harnesses,
+            connections: includingMoving ? connections : connections.filter { !isMovingAway($0) },
             defaults: defaultSnapshots, snapshots: snapshots, knownLabels: knownAccountLabels)
     }
 
@@ -772,7 +826,7 @@ final class ProviderConnectionStore {
     }
 
     func choose(_ choice: AccountChoice) {
-        guard choice.canSelect else { return }
+        guard choice.canSelect, !(choice.connection.map(isMovingAway) ?? false) else { return }
         selection[choice.harness] = choice.connection?.id
     }
 
@@ -995,7 +1049,7 @@ final class ProviderConnectionStore {
         var best: (connection: ProviderConnection, left: Double)?
         // Only a sign-in a check confirmed in this run counts; a remembered one may have ended since.
         for connection in connections(for: harness) where snapshots[connection.id]?.state == .signedIn
-            && readingStatus[connection.id] == .current {
+            && readingStatus[connection.id] == .current && !isMovingAway(connection) {
             let left = snapshots[connection.id]?.usage.filter { $0.evidence == .exactQuota }
                 .compactMap { $0.usedFraction.map { 1 - $0 } }.min() ?? 1
             if best == nil || left > best!.left { best = (connection, left) }

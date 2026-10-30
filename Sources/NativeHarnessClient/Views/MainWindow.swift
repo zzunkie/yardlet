@@ -2071,7 +2071,7 @@ struct MainWindow: View {
             projectName: model.project(for: session)?.name ?? projects.displayName(for: session.workspaceURL),
             instructionSources: { model.instructionSources(for: session) },
             account: { [connections = model.connections] in
-                connections.choices(for: [session.harness])
+                connections.choices(for: [session.harness], includingMoving: true)
                     .first { $0.connection?.id == session.connection?.id }
                     .map(SessionRailAccount.init(choice:))
             },

@@ -289,11 +289,16 @@ keeps only the harness page's sign-out, as before. That sign-out applies only to
   saver would keep its runtime, except for being on screen and for session jobs, which the resumed runtime brings back:
   a turn or a question, messages or a shell command on their way, the harness's background commands (closing the
   runtime would end them), subagents it hosts, an edit, or another change or continuation. It moves once that is over,
-  and the account's row shows how many still wait. Only when every task has moved does the account leave the list; the new-task account
-  choice, if it was this account, moves to the target. A task that cannot move stays on the account, and the account
-  then stays on the list with the reason on its row; choosing Remove from List again moves the rest. The wait lives only
-  while Yardlet runs: after a quit, the account and the tasks not yet moved stay as they were. Nothing in either folder
-  is copied, moved or deleted.
+  as soon as its turn ends rather than at the move's next look, and the account's row shows how many still wait. From
+  the target's confirmation on, nothing new starts on the account: automatic assignment and the account lists that
+  start or move a task leave it out, the new-task account choice and the schedules that named it move to the target,
+  and a task started on it any other way (an agent naming it, a schedule made meanwhile) starts on the target
+  (`ProviderConnectionStore.startConnection`). Only when every task has moved does the account leave the list. A task
+  that cannot move stays on the account, and the account then stays on the list with the reason on its row and takes
+  new tasks again; choosing Remove from List again moves the rest. A confirmed move is kept in Yardlet's preferences
+  (`Yardlet.accountTaskMoves`, account → target) until it ends, so after a quit the next launch goes on with it
+  (`AppModel.continueAccountTaskMoves`) and asks the target's CLI again. Nothing in either folder is copied, moved or
+  deleted.
 - **Sign Out and Delete…:** offered only for a Claude or Codex folder Yardlet made (`<connections>/<UUID>/<harness>`,
   `signOutAndDelete`). Yardlet runs that CLI's `auth logout` (Codex: `logout`) in the folder's environment; only when it
   succeeds does it take the account off the list, remove every link in the folder first (only `unlink`), and move the
@@ -349,9 +354,13 @@ and dark, `.build/account-list-qa/manage-found-*` and `share-sheet-*`). The conf
 windowless render cannot draw, so only their text is given above.
 
 Moving the tasks first: `ClaudeAccountFolderTests.testMovingAnAccountsTasksKeepsTheirSessionsAndRemovesItOnceAllMoved`
-(fake account folders and CLI: which folders qualify, a target whose CLI reports another address takes nothing, a task in
-a turn waits for its end, the archived task stays archived with the new binding saved, only the task that had a runtime
-resumes, and the account and new-task choice change only at the end) and
+(fake account folders and CLI: which folders qualify, a target whose CLI reports another address takes nothing, not even
+new tasks, a task in a turn moves when its turn ends without waiting for the next look, the archived task stays archived
+with the new binding saved, only the task that had a runtime resumes, and once the target is confirmed automatic
+assignment leaves the account out while the new-task choice, a schedule, an agent naming the account and a task started
+on it go to the target), `ClaudeAccountFolderTests.testAMoveAQuitCutOffGoesOnAtTheNextLaunch` (a move cancelled
+mid-wait is kept, the relaunched store keeps the account out of new tasks, the move finishes and leaves no preference
+behind) and
 `AccountListRenderingTests.testRemovingAnAccountOffersToMoveItsTasks` (the sheet and the waiting row, light and dark,
 `.build/account-list-qa/move-sheet-*` and `move-waiting-*`). With the Claude Code 2.1.308 CLI and two empty account
 folders linking `projects` to one folder, starting the CLI as Yardlet resumes a task (`--resume=<id>`, stream JSON, only

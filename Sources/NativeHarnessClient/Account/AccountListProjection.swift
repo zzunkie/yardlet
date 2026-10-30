@@ -44,8 +44,9 @@ enum AccountListProjection {
             return store.choices(for: [harness])
         case let .switchTask(session), let .continueAfterLimit(session):
             let labels = store.knownAccountLabels
+            // An account whose tasks are moving away takes none; the task's own still shows.
             let accounts = store.connections(for: session.harness).filter {
-                $0 == session.connection || TaskAccountSwitch.allows($0, for: session)
+                $0 == session.connection || (!store.isMovingAway($0) && TaskAccountSwitch.allows($0, for: session))
             }
             return sortedByRemainingLimit(accounts.map {
                 AccountChoice(harness: $0.harness, connection: $0, snapshot: store.snapshots[$0.id],
@@ -53,7 +54,7 @@ enum AccountListProjection {
             })
         case .manage:
             let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-            return store.choices(for: manageHarnesses).filter {
+            return store.choices(for: manageHarnesses, includingMoving: true).filter {
                 query.isEmpty || ($0.title + " " + $0.subtitle).localizedCaseInsensitiveContains(query)
             }
         }

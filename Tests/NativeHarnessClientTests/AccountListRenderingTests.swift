@@ -177,7 +177,7 @@ import XCTest
             XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 4, from: 4, background: (1, 1)))
         }
 
-        store.noteTaskMove(AccountTaskMove(target: new, waiting: 2), for: old.id)
+        store.noteTaskMove(AccountTaskMove(target: new, waiting: 2, isConfirmed: true), for: old.id)
         let runtime = RuntimeSelectionStore(discoversRuntimes: false)
         let size = NSSize(width: 629, height: 420)
         for capture in try WindowlessRender.hostedInBothAppearances("move-waiting", in: directory, size: size, content: { appearance in

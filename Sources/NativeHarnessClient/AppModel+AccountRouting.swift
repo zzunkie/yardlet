@@ -87,12 +87,16 @@ extension AppModel {
             return .failure(SessionToolError(message: "several \(harness.displayName) accounts are named \(reference); "
                 + "pass the account id list_accounts gives."))
         }
-        guard let choice = onHarness.first else {
+        guard var choice = onHarness.first else {
             if let other = matches.first {
                 return .failure(SessionToolError(message: "\(other.title) is a \(other.harness.displayName) account; a "
                     + "\(harness.displayName) task runs on one of \(harness.displayName)'s accounts (list_accounts)."))
             }
             return .failure(SessionToolError(message: "no account \(reference). list_accounts lists them."))
+        }
+        // An account whose tasks are moving away takes no new one; the folder they move to is the same login.
+        if let connection = choice.connection, let target = connections.startConnection(connection), target != connection {
+            choice = accountChoice(harness: harness, connection: target)
         }
         guard connections.isInAutomaticAssignment(choice) else {
             return .failure(SessionToolError(message: "\(choice.title) is not one of the accounts tasks are started on "

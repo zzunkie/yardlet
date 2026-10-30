@@ -189,6 +189,10 @@ final class AppModel {
     /// Waits before moving an account's tasks looks again at the ones still working (`moveTasks`); tests
     /// hand it a clock of their own.
     @ObservationIgnored var accountMoveSleep: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(1)) }
+    /// Accounts whose tasks are being moved now, by connection ID.
+    @ObservationIgnored private var movingAccounts = Set<String>()
+    /// Each account move's wait for its tasks still working; one of them ending its turn cuts it short.
+    @ObservationIgnored private var accountMoveWaits: [String: Task<Void, Never>] = [:]
     /// Tasks whose running turn Yardlet continued after a restart while nobody had them open, with
     /// how many times in a row it has. A quit writes one down again until
     /// `RestartResumePolicy.unseenContinuationLimit`.
@@ -579,7 +583,7 @@ final class AppModel {
                                           runtimeOverrides: .shared),
                 connections: ProviderConnectionStore(fileURL: storageRootURL.appending(path: "provider-connections.json"),
                     snapshotCacheURL: storageRootURL.appending(path: ProviderConnectionStore.snapshotCacheFileName),
-                    assignmentDefaults: defaults),
+                    defaults: defaults),
                 modelCatalogs: HarnessModelCatalogStore(fileURL: storageRootURL.appending(path: "model-catalogs.json")),
                 codexEnvironmentManager: codexEnvironmentManager,
                 codexTimelineItemRepository: codexTimelineItems,
@@ -860,6 +864,8 @@ final class AppModel {
                 : []
         } ?? []
         var createdSessionID: UUID?
+        // An account whose tasks are moving away takes no new one; it starts on the folder they move to.
+        let connection = connections.startConnection(connection)
         do {
             try connection?.validate(for: harness)
             let session = try await store.createSession(
@@ -5169,12 +5175,30 @@ final class AppModel {
     /// runtime gets it back under the target's login, one without starts there at its next turn. A task
     /// in a turn, waiting for an answer, or with messages on their way moves once that is over. A task
     /// that cannot move stays on the account, and then the account stays on the list with the reason.
-    /// Nothing is moved unless the target's own CLI reports it signed in to the same account.
+    /// Nothing is moved unless the target's own CLI reports it signed in to the same account. From
+    /// then on new tasks and the schedules that named the account start on the target, and a quit
+    /// leaves the move to the next launch (`continueAccountTaskMoves`).
     func moveTasks(from source: ProviderConnection, to target: ProviderConnection) async {
-        guard connections.connections.contains(where: { $0.id == source.id }),
-              connections.taskMoves[source.id].map({ $0.failure != nil }) ?? true,
+        guard connections.connections.contains(where: { $0.id == source.id }), !movingAccounts.contains(source.id),
               connections.taskMoveTargets(for: source).contains(target) else { return }
-        connections.noteTaskMove(AccountTaskMove(target: target), for: source.id)
+        await continueTaskMove(from: source, to: target)
+    }
+
+    /// Goes on with each move of an account's tasks that the last quit cut off.
+    func continueAccountTaskMoves() {
+        for (id, move) in connections.taskMoves where !movingAccounts.contains(id) {
+            guard let source = connections.connections.first(where: { $0.id == id }) else { continue }
+            Task { await continueTaskMove(from: source, to: move.target) }
+        }
+    }
+
+    private func continueTaskMove(from source: ProviderConnection, to target: ProviderConnection) async {
+        guard movingAccounts.insert(source.id).inserted else { return }
+        defer { movingAccounts.remove(source.id) }
+        // A move the last launch left underway keeps new tasks off the account while its target is
+        // checked again.
+        let underway = connections.taskMoves[source.id].map { $0.isUnderway && $0.target == target } ?? false
+        connections.noteTaskMove(AccountTaskMove(target: target, isConfirmed: underway), for: source.id)
         do {
             try target.validate(for: target.harness)
             guard let runtime = runtimeSelections.selectedURL(for: target.harness) else {
@@ -5191,8 +5215,13 @@ final class AppModel {
             connections.noteTaskMove(AccountTaskMove(target: target, failure: error.localizedDescription), for: source.id)
             return
         }
+        connections.beginTaskMove(from: source, to: target)
+        scheduledTasks.moveAccount(source.id, to: target.id)
         var failures: [UUID: String] = [:]
         while true {
+            // Taken off the list by hand meanwhile, or its target was: the tasks left keep their own
+            // copy of the binding. A cancelled move goes on at the next launch.
+            guard connections.taskMoves[source.id]?.target == target, !Task.isCancelled else { return }
             var waiting = 0
             for record in store.archivedSessions ?? [] where record.session.connection?.id == source.id
                 && failures[record.id] == nil {
@@ -5206,10 +5235,11 @@ final class AppModel {
                 catch { failures[task.id] = error.localizedDescription }
             }
             guard waiting > 0 else { break }
-            connections.noteTaskMove(AccountTaskMove(target: target, waiting: waiting), for: source.id)
-            try? await accountMoveSleep()
-            // Taken off the list by hand meanwhile: the tasks left keep their own copy of the binding.
-            guard connections.connections.contains(where: { $0.id == source.id }) else { return }
+            connections.noteTaskMove(AccountTaskMove(target: target, waiting: waiting, isConfirmed: true), for: source.id)
+            let wait = Task { [accountMoveSleep] in _ = try? await accountMoveSleep() }
+            accountMoveWaits[source.id] = wait
+            await wait.value
+            accountMoveWaits[source.id] = nil
         }
         if let reason = failures.values.first {
             connections.noteTaskMove(AccountTaskMove(target: target, failure: L10n.format(
@@ -5218,7 +5248,9 @@ final class AppModel {
             return
         }
         do {
-            try connections.remove(source, movedTo: target)
+            // A schedule made meanwhile by a task still on the account named it too.
+            scheduledTasks.moveAccount(source.id, to: target.id)
+            try connections.remove(source)
         } catch {
             connections.noteTaskMove(AccountTaskMove(target: target, failure: error.localizedDescription), for: source.id)
         }
@@ -5230,6 +5262,13 @@ final class AppModel {
         return AccountTaskCount(listed: listed.count,
             archived: (store.archivedSessions ?? []).count(where: { $0.session.connection?.id == connection.id }),
             working: listed.count(where: Self.isWorking))
+    }
+
+    /// A task on an account whose tasks are moving goes as soon as its turn ends, rather than at the
+    /// move's next look, which another message could beat.
+    private func wakeAccountMove(for id: UUID) {
+        guard let account = store.sessions.first(where: { $0.id == id })?.connection?.id else { return }
+        accountMoveWaits[account]?.cancel()
     }
 
     /// Whether a task's account can change now, closing its runtime if it has one. It waits for what the
@@ -5425,6 +5464,8 @@ final class AppModel {
     /// Then the idle Claude Code tasks whose CLI brings session jobs back start again, after them.
     func continueWorkInterruptedByRestart(now: Date = Date()) async {
         guard !isVisualFixture else { return }
+        // These start once the cut-off turns below are planned, and their tasks wait for them.
+        continueAccountTaskMoves()
         await continueTurnsCutOffByRestart(now: now)
         await relaunchForSessionJobs()
     }
@@ -6566,6 +6607,7 @@ final class AppModel {
             if status != .running, status != .waitingForApproval {
                 pullRequestDetails.taskBecameIdle(event.localSessionID)
                 agentTools?.taskTurnEnded(event.localSessionID)
+                wakeAccountMove(for: event.localSessionID)
             }
             // A shell command's output waits for the turn to end, however it ended.
             if status != .running, status != .waitingForApproval {

@@ -94,6 +94,16 @@ final class ScheduledTaskCenter {
         persist()
     }
 
+    /// Points the schedules whose runs start on one account at another, as the account's tasks move
+    /// there before it leaves the list. Nothing else about them changes.
+    func moveAccount(_ accountID: String, to targetID: String) {
+        guard schedules.contains(where: { $0.destination.accountID == accountID }) else { return }
+        for index in schedules.indices where schedules[index].destination.accountID == accountID {
+            schedules[index].destination.accountID = targetID
+        }
+        persist()
+    }
+
     func setEnabled(_ enabled: Bool, for id: UUID) {
         guard let index = schedules.firstIndex(where: { $0.id == id }) else { return }
         schedules[index] = ScheduleRunPolicy.setEnabled(enabled, schedules[index], now: now())

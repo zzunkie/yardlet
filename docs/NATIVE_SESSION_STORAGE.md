@@ -61,7 +61,8 @@ their conversation history in the same place (`ProviderConnectionStore.isInAutom
 started under a Claude account folder whose `projects` links to the default `~/.claude/projects`, as Session Switch's
 account folders do, therefore stays in the same history whichever account it uses, and the account switch above still
 works for it. A Codex sign-in with a separate `CODEX_HOME` has its own history, so it is not used until the person
-includes it. No authentication or history files are copied and no account folder changes. The reason for each
+includes it. An account whose tasks are moving to another of its folders before it leaves the list is not used either.
+No authentication or history files are copied and no account folder changes. The reason for each
 assignment is kept in the Yardlet file `~/.yardlet/account-assignments.json` (task ID → account ID, window and time).
 
 **Account folders, found sign-ins and removal** (see [PROVIDER_CONNECTIONS.md](PROVIDER_CONNECTIONS.md), "Account

@@ -135,8 +135,9 @@ import XCTest
 
     /// An account's tasks, archived ones too, move to another folder signed in to the same account (the
     /// same address and organization) that keeps the same conversations, each with its own provider
-    /// session; a task in a turn moves once the turn ends, and only then does the account leave the list.
-    /// A folder whose CLI reports another account takes nothing.
+    /// session; a task in a turn moves as soon as the turn ends, and only then does the account leave the
+    /// list. Meanwhile new tasks, the agent that names the account and its schedules start on the target.
+    /// A folder whose CLI reports another account takes nothing, not even new tasks.
     func testMovingAnAccountsTasksKeepsTheirSessionsAndRemovesItOnceAllMoved() async throws {
         let shared = try directory()
         let projects = shared.appending(path: "projects")
@@ -153,6 +154,8 @@ import XCTest
         if [ "$1" = "auth" ] && [ -f "$CLAUDE_CONFIG_DIR/.signed-in" ]; then cat "$CLAUDE_CONFIG_DIR/.signed-in"; else echo '{"loggedIn":false}'; fi
         """)
         let connections = ProviderConnectionStore()
+        // Every folder keeps the default login's conversations, so automatic assignment uses it.
+        connections.defaultLoginEnvironment = ["CLAUDE_CONFIG_DIR": shared.path]
         // The impostor's folder was last read as the owner's; its CLI now reports another address.
         for (home, organization) in [(old, "owner@example.test's Organization"), (new, "owner@example.test's Organization"),
                                      (team, "Example Team"), (impostor, "owner@example.test's Organization"),
@@ -191,22 +194,49 @@ import XCTest
         XCTAssertEqual(model.accountTasks(on: connection(old)), AccountTaskCount(listed: 3, archived: 1, working: 0))
         // The launch restores the new-task choice; the account being moved is the one chosen.
         connections.selection[.claudeCode] = connection(old).id
+        var destination = ScheduleDestination(harness: .claudeCode)
+        destination.accountID = connection(old).id
+        model.scheduledTasks.create(ScheduledTask(name: "Nightly", prompt: "Check.",
+            trigger: .daily(ScheduleTime(hour: 2, minute: 0)), destination: destination))
+        func automaticChoices() -> [String] { model.automaticAssignmentCandidates(harness: .claudeCode).map(\.choice.id) }
 
         await model.moveTasks(from: connection(old), to: connection(impostor))
         XCTAssertNotNil(connections.taskMoves[connection(old).id]?.failure)
         XCTAssertEqual(model.accountTasks(on: connection(old)).total, 4, "Nothing moves to another account's login")
+        XCTAssertEqual(connections.selection[.claudeCode], connection(old).id, "Nor do new tasks")
+        XCTAssertTrue(automaticChoices().contains(connection(old).id))
+        XCTAssertEqual(model.scheduledTasks.schedules.first?.destination.accountID, connection(old).id)
 
+        // The move looks again later than this test waits, so only the end of a turn can move a task in time.
+        model.accountMoveSleep = { try await Task.sleep(for: testWaitLimit * 2) }
         try await store.updateSession(id: working.id, status: .running)
+        await adapters.emit(.sessionStatusChanged(.running), in: attached.id)
+        try await waitUntil { store.sessions.first { $0.id == attached.id }?.status == .running }
         let move = Task { await model.moveTasks(from: connection(old), to: connection(new)) }
-        try await waitUntil { connections.taskMoves[connection(old).id]?.waiting == 1 }
+        try await waitUntil { connections.taskMoves[connection(old).id]?.waiting == 2 }
         XCTAssertEqual(store.sessions.first { $0.id == working.id }?.connection, connection(old), "A turn is not cut off")
+        XCTAssertEqual(connections.selection[.claudeCode], connection(new).id, "New tasks start on the folder they move to")
+        XCTAssertFalse(automaticChoices().contains(connection(old).id), "Automatic assignment leaves the account out")
+        XCTAssertTrue(automaticChoices().contains(connection(new).id))
+        XCTAssertFalse(connections.choices(for: [.claudeCode]).contains { $0.connection == connection(old) })
+        guard case let .success(named) = model.requestedAccount(connection(old).id, harness: .claudeCode) else {
+            return XCTFail("An agent that names the account gets the folder its tasks move to")
+        }
+        XCTAssertEqual(named.connection, connection(new))
+        let started = await model.createSession(harness: .claudeCode, workspaceURL: shared, runtimeExecutableURL: cli,
+            title: "Started", connection: connection(old))
+        XCTAssertEqual(started?.connection, connection(new), "A task started on the account starts on the target")
+        XCTAssertEqual(model.scheduledTasks.schedules.first?.destination.accountID, connection(new).id)
         XCTAssertEqual(store.archivedSessions?.first { $0.id == archived.id }?.session.connection, connection(new))
         let archivedNow = try await repository.loadArchivedSessions()
         XCTAssertEqual(archivedNow.map(\.session.connection), [connection(new)],
             "The archived task stays archived, with its new binding saved")
         XCTAssertTrue(connections.connections.contains(connection(old)), "The account stays until every task moved")
 
+        // The detached task's turn ends quietly; the attached task's end looks at once and moves both.
         try await store.updateSession(id: working.id, status: .ready)
+        await adapters.emit(.sessionStatusChanged(.ready), in: attached.id)
+        try await waitUntil { !connections.connections.contains(connection(old)) }
         await move.value
         XCTAssertFalse(connections.connections.contains(connection(old)))
         XCTAssertNil(connections.taskMoves[connection(old).id])
@@ -223,6 +253,73 @@ import XCTest
         XCTAssertEqual(resumed, [try XCTUnwrap(attached.providerSessionID)], "Only the task that had a runtime starts one again")
         XCTAssertTrue(model.isAttached(attached.id))
         XCTAssertFalse(model.isAttached(detached.id))
+    }
+
+    /// A move a quit cut off is kept with the account it goes to: at the next launch the account still
+    /// takes no new task, and the move goes on until every task moved and the account left the list.
+    func testAMoveAQuitCutOffGoesOnAtTheNextLaunch() async throws {
+        let shared = try directory()
+        let projects = shared.appending(path: "projects")
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+        let owner = #"{"loggedIn":true,"email":"owner@example.test","orgName":"owner@example.test's Organization"}"#
+        let old = try account(linkingTo: projects, login: owner), new = try account(linkingTo: projects, login: owner)
+        let cli = try script(shared, """
+        if [ "$1" = "auth" ] && [ -f "$CLAUDE_CONFIG_DIR/.signed-in" ]; then cat "$CLAUDE_CONFIG_DIR/.signed-in"; else echo '{"loggedIn":false}'; fi
+        """)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("account-task-moves")))
+        func launchConnections() -> ProviderConnectionStore {
+            ProviderConnectionStore(fileURL: shared.appending(path: "provider-connections.json"),
+                snapshotCacheURL: shared.appending(path: "account-snapshots.json"), defaults: defaults)
+        }
+        let connections = launchConnections()
+        for home in [old, new] {
+            try connections.save(connection(home))
+            connections.publish(HarnessAccountSnapshot(id: home.lastPathComponent, harness: .claudeCode, providerID: nil,
+                state: .signedIn, accountLabel: "owner@example.test", accountOrganization: "owner@example.test's Organization",
+                detail: "", credentialOwner: "", checkedAt: Date(), usage: [], canLogin: false, canLogout: true),
+                for: connection(home))
+        }
+        let working = SessionRecord(harness: .claudeCode, workspaceURL: shared, runtimeExecutableURL: cli, title: "Working",
+            providerSessionID: UUID().uuidString.lowercased(), connection: connection(old))
+        let repository = InMemorySessionRepository(sessions: [working])
+        let runtime = RuntimeSelectionStore(discoversRuntimes: false)
+        runtime.select(cli, for: .claudeCode)
+        func launch(_ connections: ProviderConnectionStore) async throws -> AppModel {
+            let store = SessionStore(repository: repository)
+            try await store.restore()
+            let model = AppModel(store: store, runtimeSelections: runtime,
+                registry: HarnessRegistry { kind, _ in AdapterLog().make(kind) }, connections: connections,
+                restoresIndexOnLaunch: false)
+            model.accountMoveSleep = { try await Task.sleep(for: .milliseconds(10)) }
+            addTeardownBlock { await model.shutdown() }
+            return model
+        }
+
+        let first = try await launch(connections)
+        try await first.store.updateSession(id: working.id, status: .running)
+        let move = Task { await first.moveTasks(from: connection(old), to: connection(new)) }
+        try await waitUntil { connections.taskMoves[connection(old).id]?.waiting == 1 }
+        move.cancel()
+        await move.value
+        await first.shutdown()
+
+        // The turn ended with the quit.
+        let saved = try await repository.loadSessions()
+        var ended = try XCTUnwrap(saved.first { $0.id == working.id })
+        ended.status = .ready
+        try await repository.upsert(ended)
+        let relaunched = launchConnections()
+        XCTAssertTrue(relaunched.isMovingAway(connection(old)))
+        XCTAssertEqual(relaunched.startConnection(connection(old)), connection(new))
+        XCTAssertFalse(relaunched.choices(for: [.claudeCode]).contains { $0.connection == connection(old) },
+            "The account takes no new task before the move goes on")
+        let second = try await launch(relaunched)
+        second.continueAccountTaskMoves()
+        try await waitUntil { !relaunched.connections.contains(connection(old)) }
+        let moved = try XCTUnwrap(second.store.sessions.first { $0.id == working.id })
+        XCTAssertEqual(moved.connection, connection(new))
+        XCTAssertEqual(moved.providerSessionID, working.providerSessionID)
+        XCTAssertNil(defaults.object(forKey: ProviderConnectionStore.taskMovesKey), "A finished move leaves nothing behind")
     }
 
     /// Opt-in: `NHC_CLAUDE_ACCOUNT_LIVE=<config folder>` checks a real login's plan limits through the
@@ -266,6 +363,9 @@ import XCTest
             for adapter in lock.withLock({ adapters }) { result += await adapter.resumed }
             return result
         }
+        func emit(_ payload: HarnessEventPayload, in id: UUID) async {
+            for adapter in lock.withLock({ adapters }) { await adapter.emit(payload, in: id) }
+        }
     }
 
     /// Keeps each session's event stream open until it is closed, as a running CLI does.
@@ -297,6 +397,12 @@ import XCTest
             return stream
         }
         func close(_ session: HarnessSessionHandle) async { streams.removeValue(forKey: session.localSessionID)?.finish() }
+        private var sequence: UInt64 = 0
+        func emit(_ payload: HarnessEventPayload, in id: UUID) {
+            guard let stream = streams[id] else { return }
+            sequence += 1
+            stream.yield(HarnessEventEnvelope(localSessionID: id, sequence: sequence, payload: payload))
+        }
     }
 
     private func directory() throws -> URL {

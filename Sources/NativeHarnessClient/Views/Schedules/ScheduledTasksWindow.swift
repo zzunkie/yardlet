@@ -132,7 +132,7 @@ struct ScheduledTasksMain: View {
             },
             accountName: { schedule in
                 let harness = schedule.destination.harness
-                let choices = model.connections.choices(for: [harness])
+                let choices = model.connections.choices(for: [harness], includingMoving: true)
                 let id = schedule.destination.accountID ?? model.connections.selection[harness]
                     ?? AccountChoice.nativeID(for: harness)
                 return choices.first { $0.id == id }?.title

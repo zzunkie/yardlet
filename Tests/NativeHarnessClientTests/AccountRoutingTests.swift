@@ -74,7 +74,7 @@ import XCTest
         let native = root.appending(path: "native")
         try FileManager.default.createDirectory(at: native.appending(path: "projects"), withIntermediateDirectories: true)
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("account-routing")))
-        let store = ProviderConnectionStore(assignmentDefaults: defaults)
+        let store = ProviderConnectionStore(defaults: defaults)
         store.defaultLoginEnvironment = ["CLAUDE_CONFIG_DIR": native.path]
         func account(_ name: String, harness: HarnessKind = .claudeCode, linked: Bool) throws -> AccountChoice {
             let home = root.appending(path: name)
@@ -104,7 +104,7 @@ import XCTest
         store.setInAutomaticAssignment(false, for: shared)
         XCTAssertTrue(store.isInAutomaticAssignment(codex))
         XCTAssertFalse(store.isInAutomaticAssignment(shared))
-        let reopened = ProviderConnectionStore(assignmentDefaults: defaults)
+        let reopened = ProviderConnectionStore(defaults: defaults)
         XCTAssertEqual(reopened.automaticAssignment, ["codex-other": true, "shared": false])
 
         store.setInAutomaticAssignment(true, for: shared)

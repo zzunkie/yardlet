@@ -355,7 +355,7 @@ struct ConnectionCenterContent: View {
             pendingRemoval = (connection, kind)
             return
         }
-        let choices = connections.choices(for: [connection.harness])
+        let choices = connections.choices(for: [connection.harness], includingMoving: true)
         movingRemoval = AccountRemovalSheet.Request(connection: connection, targets: targets.map { target in
             AccountRemovalSheet.Target(connection: target, title: choices.first { $0.connection?.id == target.id }
                 .map { AccountGroupProjection.memberTitle($0, among: choices) } ?? target.name)
