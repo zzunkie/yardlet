@@ -1358,12 +1358,15 @@ final class CodexAdapterTests: XCTestCase {
     }
 
     /// Every thread frame takes a number, so one that projects to no event leaves a gap. A late
-    /// subscriber reads the newest 500 events. Closing finishes the session's stream but, unlike
-    /// the other adapters, keeps its events and numbering; the shared channel kept both.
-    func testEventNumbersCountFramesWithoutAnEventAndAClosedSessionKeepsItsReplay() async throws {
+    /// subscriber reads the newest 500 events. Closing forgets them and the numbering, as in the
+    /// other adapters: the task attached again hears only its new runtime, which a replay of the
+    /// old one's error once contradicted.
+    func testEventNumbersCountFramesWithoutAnEventAndAClosedSessionStartsOver() async throws {
         let transport = FakeCodexTransport(responses: [
             "initialize": [.object(["platformOs": .string("macos")])],
-            "thread/start": [threadResult("thread-replay"), threadResult("thread-open")]
+            "thread/start": [threadResult("thread-replay"), threadResult("thread-open")],
+            "thread/resume": [threadResult("thread-replay")],
+            "thread/items/list": [.object(["data": .array([]), "nextCursor": .null])]
         ])
         let adapter = CodexAdapter(executableURL: URL(filePath: "/tmp/codex"), transport: transport)
         let handle = try await adapter.createSession(CreateHarnessSessionRequest(
@@ -1408,10 +1411,13 @@ final class CodexAdapterTests: XCTestCase {
         await adapter.close(handle)
         let closedEnd = await late.next()
         XCTAssertNil(closedEnd)
-        var reopened = await adapter.events(for: handle).makeAsyncIterator()
-        var replayed: [HarnessEventEnvelope] = []
-        for _ in 0..<500 { if let event = await reopened.next() { replayed.append(event) } }
-        XCTAssertEqual(replayed, lateEvents)
+        let reopenedHandle = try await adapter.resumeSession(providerSessionID: "thread-replay",
+            localSessionID: handle.localSessionID, workspaceURL: URL(filePath: "/tmp/replay"))
+        var reopened = await adapter.events(for: reopenedHandle).makeAsyncIterator()
+        let first = await reopened.next()
+        XCTAssertEqual(first?.payload, .sessionStarted(reopenedHandle))
+        XCTAssertEqual(first?.sequence, 0)
+        await adapter.close(reopenedHandle)
         await adapter.close(open)
     }
 

@@ -28,11 +28,13 @@ struct TranscriptErrorCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            // Buttons, as the Codex app draws its Retry: a bare label here read as a heading.
             if onRetry != nil || onEditRequest != nil || onShowHarnessSettings != nil {
-                ControlRowLayout(spacing: 12, rowSpacing: 8) {
+                ControlRowLayout(spacing: 8, rowSpacing: 8) {
                     recoveryActions
                 }
-                .font(.callout.weight(.medium))
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
             DisclosureGroup(L10n.string("Error details"), isExpanded: $showsDetails) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -62,18 +64,15 @@ struct TranscriptErrorCard: View {
     private var recoveryActions: some View {
         if let onRetry {
             Button(L10n.string("Retry"), action: onRetry)
-                .buttonStyle(.plain)
                 .parityPointer()
         }
         if let onEditRequest {
             Button(L10n.string("Edit request"), action: onEditRequest)
-                .buttonStyle(.borderless)
                 .parityPointer()
                 .help(L10n.string("Restore this request to the composer without sending"))
         }
         if let onShowHarnessSettings {
             Button(L10n.string("Harness settings"), action: onShowHarnessSettings)
-                .buttonStyle(.borderless)
                 .parityPointer()
         }
     }

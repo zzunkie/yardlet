@@ -19,7 +19,7 @@ final class TaskErrorNoticeTests: XCTestCase {
                                                codexTaskState: state), heldElsewhere)
     }
 
-    func testTheLatestTurnsOwnProviderErrorIsNotRepeated() throws {
+    func testATurnsOwnProviderErrorIsNotRepeated() throws {
         let error = JSONValue.object(["message": .string("Stream disconnected before completion")])
         let state = try codexState(latest: failedTurn(error))
         let shown = try XCTUnwrap(CodexTurnErrorPresentation(error)).text
@@ -27,6 +27,11 @@ final class TaskErrorNoticeTests: XCTestCase {
         // A later send that fails for Yardlet's own reason still shows, under that failed turn.
         XCTAssertEqual(TaskErrorNotice.message(heldElsewhere, harness: .codex, entries: localEntries,
                                                codexTaskState: state), heldElsewhere)
+        // Nor while a later turn runs: the error stays on the turn it ended.
+        let retried = CodexTaskState(thread: try thread([try failedTurn(error), try retryTurn()]))
+        XCTAssertNil(TaskErrorNotice.message(shown, harness: .codex, entries: localEntries, codexTaskState: retried))
+        XCTAssertEqual(TaskErrorNotice.message(heldElsewhere, harness: .codex, entries: localEntries,
+                                               codexTaskState: retried), heldElsewhere)
     }
 
     func testATranscriptConversationShowsItsErrorsInlineAndAnEmptyOneShowsTheCard() throws {
@@ -50,7 +55,7 @@ final class TaskErrorNoticeTests: XCTestCase {
                                            state: .failed, failureMessage: heldElsewhere)]
         for appearance in WindowlessRender.Appearance.allCases {
             let host = WindowlessRender.Host(
-                FailedSendTaskHost(session: session, entries: localEntries, errorMessage: heldElsewhere,
+                FailedSendTaskHost(session: session(), entries: localEntries, errorMessage: heldElsewhere,
                                    codexTaskState: state, queue: queue)
                     .frame(width: 900, height: 620)
                     .background(ParityTheme.canvas)
@@ -69,13 +74,42 @@ final class TaskErrorNoticeTests: XCTestCase {
         }
     }
 
+    /// The retry of a turn the busy server ended, as the window drew it on 2026-10-31: the failed turn
+    /// keeps its card and the retry runs under it. The task's error left from that turn is already
+    /// on its card, so nothing above the composer repeats it.
+    func testARetriedTurnLeavesTheEarlierErrorOnItsOwnCard() throws {
+        let error = JSONValue.object(["message": .string("Selected model is at capacity. Please try a different model."),
+                                      "codexErrorInfo": .string("serverOverloaded")])
+        let left = try XCTUnwrap(CodexTurnErrorPresentation(error)).text
+        let state = CodexTaskState(thread: try thread([try failedTurn(error), try retryTurn()]))
+        let directory = try WindowlessRender.directory("codex-retry-error-qa")
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(
+                FailedSendTaskHost(session: session(status: .running), entries: localEntries, errorMessage: left,
+                                   codexTaskState: state, queue: [])
+                    .frame(width: 900, height: 620)
+                    .background(ParityTheme.canvas)
+                    .environment(\.colorScheme, appearance.colorScheme),
+                size: NSSize(width: 900, height: 620), appearance: appearance
+            )
+            defer { host.close() }
+            host.settle()
+            try WindowlessRender.writePNG(try host.capture().bitmap,
+                                          to: directory.appending(path: "retried-\(appearance.rawValue).png"))
+            let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }.joined(separator: "\n")
+            XCTAssertTrue(spoken.contains(L10n.string("Server is busy.")), spoken)
+            XCTAssertFalse(spoken.contains(L10n.format("%@ could not complete the request", "Codex")), spoken)
+        }
+    }
+
     // MARK: - Fixtures
 
-    private var session: SessionRecord {
+    private func session(status: SessionStatus = .failed) -> SessionRecord {
         SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/qa-project"),
                       runtimeExecutableURL: URL(filePath: "/usr/bin/false"), title: "Store pricing",
-                      titleOrigin: .provider, status: .failed,
-                      providerSessionID: "0000aaaa-0000-0000-0000-000000000001", completionState: .completed)
+                      titleOrigin: .provider, status: status,
+                      providerSessionID: "0000aaaa-0000-0000-0000-000000000001",
+                      completionState: status == .running ? SessionCompletionState.none : .completed)
     }
 
     /// What Yardlet's own transcript holds after the refused send: the request and the error.
@@ -104,6 +138,15 @@ final class TaskErrorNoticeTests: XCTestCase {
                          "text": .string("The approved prices are applied for launch.")])
             ])
         ]), fallbackID: "turn-done"))
+    }
+
+    /// The retry Codex runs for the failed turn: an empty request, still thinking.
+    private func retryTurn() throws -> CodexTurnState {
+        var turn = try XCTUnwrap(CodexTaskDecoder().turn(from: .object([
+            "id": .string("turn-retry"), "status": .string("inProgress"), "items": .array([])
+        ]), fallbackID: "turn-retry"))
+        turn.status = .inProgress
+        return turn
     }
 
     private func failedTurn(_ error: JSONValue) throws -> CodexTurnState {
