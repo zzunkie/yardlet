@@ -160,10 +160,7 @@ enum AccountFreshnessProjection {
         // Without a reading the usage column already says the account is being checked.
         guard let checkedAt else { return nil }
         let age = now.timeIntervalSince(checkedAt)
-        let formatter = RelativeDateTimeFormatter()
-        formatter.dateTimeStyle = .numeric
-        formatter.unitsStyle = .abbreviated
-        let relative = age < 60 ? nil : formatter.localizedString(for: checkedAt, relativeTo: now)
+        let relative = age < 60 ? nil : RelativeTime.ago(checkedAt, relativeTo: now)
         if status == .checkFailed, !isChecking {
             return relative.map { L10n.format("Couldn't refresh · updated %@", $0) }
                 ?? L10n.string("Couldn't refresh · updated just now")

@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import Foundation
 
 // Noise_IK_25519_ChaChaPoly_SHA256 (the Noise Protocol Framework, revision 34) for protocol v2
@@ -49,8 +49,9 @@ public struct RemoteKeyPair: Equatable, Sendable {
     }
 }
 
-/// One direction's key and counter.
-public struct RemoteNoiseCipher: Sendable {
+/// One direction's key and counter. A `SymmetricKey` never changes once made, but swift-crypto outside
+/// Apple's platforms does not mark it `Sendable`.
+public struct RemoteNoiseCipher: @unchecked Sendable {
     var key: SymmetricKey?
     private(set) var nonce: UInt64 = 0
 

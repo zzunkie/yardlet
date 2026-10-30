@@ -125,7 +125,7 @@ final class CLIUpdateCenter {
             if dependencies.overrides.entry(for: harness) != nil { dependencies.overrides.set(nil, for: harness) }
             let copies = dependencies.previousVersionsDirectory.appending(path: harness.rawValue, directoryHint: .isDirectory)
             if FileManager.default.fileExists(atPath: copies.path(percentEncoded: false)) {
-                try? FileManager.default.trashItem(at: copies, resultingItemURL: nil)
+                try? Trash.move(copies)
             }
         }
         let kept = records.filter { !HarnessCatalog.retired.contains(HarnessKind(rawValue: $0.key)) }

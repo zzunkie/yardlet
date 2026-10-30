@@ -229,12 +229,7 @@ struct CodexStatusProjection: Equatable {
     /// When a window resets, as the Codex app says it: `now`, a time within a day, else a date.
     static func resetTime(_ date: Date, now: Date, locale: Locale) -> String {
         let seconds = date.timeIntervalSince(now).rounded(.down)
-        if seconds <= 0 {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.dateTimeStyle = .named
-            formatter.locale = locale
-            return formatter.localizedString(fromTimeInterval: 0)
-        }
+        if seconds <= 0 { return RelativeTime.now(locale: locale) }
         if seconds < 86_400 { return date.formatted(Date.FormatStyle(date: .omitted, time: .shortened).locale(locale)) }
         return date.formatted(Date.FormatStyle().month(.abbreviated).day().locale(locale))
     }

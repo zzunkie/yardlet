@@ -29,7 +29,6 @@ struct CodexNoticeRow: View {
 
     private var message: String { notice.displayMessage }
 
-
     private var details: String? {
         switch notice.kind {
         case .modelRerouted:
@@ -55,12 +54,3 @@ struct CodexNoticeRow: View {
     }
 }
 
-extension CodexNoticeItem {
-    /// The notice's line, as the conversation shows it (and the phone remote reads it).
-    var displayMessage: String {
-        switch kind {
-        case .modelRerouted: L10n.format("Your request was routed to %@.", message)
-        case .warning, .configWarning, .deprecationNotice: message
-        }
-    }
-}

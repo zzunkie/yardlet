@@ -30,8 +30,12 @@ struct RemoteUploadStore {
     private(set) var uploads: [String: Upload] = [:]
     /// The free space on the directory's volume; tests set their own.
     var freeSpace: (URL) -> Int64? = { url in
+        #if canImport(Darwin)
         (try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
             .volumeAvailableCapacityForImportantUsage
+        #else
+        ((try? FileManager.default.attributesOfFileSystem(forPath: url.path))?[.systemFreeSize] as? NSNumber)?.int64Value
+        #endif
     }
 
     /// What an earlier run left that no message took is removed; files a message took stay for their tasks.

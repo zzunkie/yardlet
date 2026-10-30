@@ -12,22 +12,10 @@ final class EnginePortabilityTests: XCTestCase {
 
     /// Existing engine violations, by file. Remove an entry when its file stops matching,
     /// and never add one: move the macOS code to `Platform/macOS/` behind a small protocol.
-    private static let allowedViolations: [String: Set<String>] = [
-        "Account/AccountLoginController.swift": [
-            "import AppKit", "import Darwin", "import SwiftTerm",
-            "POSIX process control", "AppKit type", "Apple-only Foundation API"
-        ],
-        "Runtime/CodexEnvironmentManager.swift": [
-            "import CryptoKit", "import Darwin", "Darwin file cloning"
-        ],
-        "Runtime/NativeProcessTree.swift": [
-            "import Darwin", "Darwin-qualified symbol", "POSIX process control",
-            "Darwin process inspection"
-        ]
-    ]
+    private static let allowedViolations: [String: Set<String>] = [:]
 
     /// Lower this when an entry leaves the list; never raise it.
-    private static let allowedViolationCeiling = 13
+    private static let allowedViolationCeiling = 0
 
     private static let forbiddenModules = [
         "SwiftUI", "AppKit", "UIKit", "Cocoa", "WebKit", "SwiftTerm", "Darwin", "Security",

@@ -1,8 +1,9 @@
 # Engine portability
 
 Yardlet runs on macOS. Windows is planned: the engine is kept in cross-platform Swift, and each platform gets its own
-screens. Nothing has been built or run on Windows. For dependencies and Foundation behavior on Windows, what was checked
-in the official source is marked "confirmed"; the rest is "not confirmed".
+screens. The engine builds on its own on macOS and on Linux; nothing has been built or run on Windows yet. For
+dependencies and Foundation behavior on Windows, what was checked in the official source or a build is marked
+"confirmed"; the rest is "not confirmed".
 
 ## Engine and platform layers
 
@@ -11,11 +12,80 @@ in the official source is marked "confirmed"; the rest is "not confirmed".
   engine by default.
 - **Screen and platform layers (outside the check):** `Views/`, `Browser/` (the WebKit preview), `Development/` (visual
   fixtures and QA), `Platform/` and `NativeHarnessClientApp.swift`.
-- `Platform/macOS/` holds the macOS implementations the engine reaches through a small protocol, an injected value or
-  an extension with the same name. For example, `LocalSystemNotificationCenter` (UserNotifications) implements the
-  engine's `SystemNotificationCenter`; `HarnessLogoCatalog` loads the logos, while the engine keeps only the asset names
-  (`Domain/HarnessLogoAsset.swift`); and `AntigravityKeychainProbe` gives `HarnessAccountBroker` its
-  `antigravityCredentialState()`. A Windows layer has to provide the same pieces.
+- Engine code names the platform's parts directly, and each platform defines them under the same names in its own
+  folder: `Platform/macOS/` for the Mac app, and `Platform/Portable/` for a build of the engine on its own. Some parts
+  are protocols the engine owns with a platform's implementation (`LocalSystemNotificationCenter` implements
+  `SystemNotificationCenter`, `LiveProcessTable` implements `ProcessTableReading`); others are types or extensions the
+  engine calls by name. The app's model is put together in `Platform/macOS/AppModel+Live.swift`, which hands the engine
+  the Mac's browser host.
+
+## Building the engine on its own
+
+```sh
+YARDLET_ENGINE_ONLY=1 swift build --build-system native --target NativeHarnessClient --force-resolved-versions
+```
+
+With `YARDLET_ENGINE_ONLY=1`, `Package.swift` turns the app target into a library that leaves out `Views/`, `Browser/`,
+`Development/`, `Platform/macOS/` and `NativeHarnessClientApp.swift`, and drops the SwiftTerm and Sparkle packages and
+the test target. This is the build a platform other than macOS makes, and on a Mac it checks that the engine still
+stands without the screens. `--force-resolved-versions` keeps `Package.resolved` as the full build pins it; without
+it, the build rewrites the file without the packages it leaves out.
+
+`Platform/Portable/` is written in Foundation alone. Where Foundation offers nothing, its parts do nothing and report
+nothing: no notifications, an empty process table, no shell, file access that refuses. It is the list of what a new
+platform's layer has to provide:
+
+| Name | What it is | In `Platform/macOS/` |
+| --- | --- | --- |
+| `LocalSystemNotificationCenter` | System notifications | UserNotifications |
+| `LiveProcessTable` | The process table for Task Resource Usage | libproc |
+| `MacConditionReader` | Disk, memory pressure and heat for the new-task notice and the session tools | `sysctlbyname`, `getloadavg` |
+| `MemoryPressureWatch` | The memory saver's pressure warnings | Dispatch memory pressure source |
+| `NativeProcessTree` | Ending a process Yardlet started, with what it started | `proc_listchildpids`, signals |
+| `ScopedFiles`, `OpenFile` | Reading Claude's transcripts without following links | `openat` with `O_NOFOLLOW` |
+| `WorkspaceFileReplacement` | Saving a reviewed workspace file | no-follow descriptors, `renameat` |
+| `FileCloning`, `Trash`, `FileTypes` | Block-sharing copies, the Trash, file types | `copyfile`, `trashItem`, UTType |
+| `ShellLaunchEnvironment.userLoginShell` | The person's login shell | the user database |
+| `ClaudeConversationCatalog.runningSessionIDs` | Which Claude Code sessions run elsewhere | `kill(pid, 0)`, `sysctl` |
+| `HarnessAccountBroker.antigravityCredentialState` | Whether Antigravity is signed in | Keychain |
+| `AccountLoginController`, `NativeTerminalSession`, `TaskShellProcess` | The sign-in terminal, the terminal panel's shell, bash mode's shell | SwiftTerm and a PTY |
+| `BrowserPreviewModel`, `ConversationRenderState` | A tab's preview page, the conversation's cached turn views | WebKit, AppKit |
+| `RemoteControlService`, `LidSleepHelper` | The phone remote, the lid helper | Network.framework, XPC |
+
+`Platform/Portable/PortableFoundation.swift` also holds the few names Foundation outside Apple's platforms lacks
+(`InlinePresentationIntent`, Combine's `ObservableObject` and `Published`, `autoreleasepool`), and
+`URLSession.bytes(for:)`, which there streams a response's body through a delegate and refuses redirects, as the app's
+own sessions do.
+
+**Foundation outside Apple's platforms.** Where the engine uses something only Apple's Foundation has, it keeps that
+under `#if canImport(Darwin)` and says the same thing another way elsewhere: `L10n` takes plain string keys,
+`RelativeTime` uses `Date.RelativeFormatStyle`, `TaskAttention` reads Markdown with swift-markdown, `NSNumber` tells
+JSON booleans and fractions apart by `objCType` (`JSONNumberKind`), Gmail's charsets go through
+`String.Encoding(ianaName:)`. Files that use `URLSession` import `FoundationNetworking` when it exists, and files that
+use `@Observable` import `Observation`.
+
+**Cryptography.** The engine and the phone remote import `Crypto` from swift-crypto, which has CryptoKit's API: on
+macOS it re-exports CryptoKit and adds nothing to the app; elsewhere it builds BoringSSL.
+
+**The phone remote off macOS.** Its listeners and interface addresses (`RemoteSecureListener` on Network.framework,
+`RemoteAddresses` on BSD sockets) are left out of a build on another platform until that platform has its own. The
+rest of `YardletRemote` builds: its random bytes fall back to `SystemRandomNumberGenerator`, its free-space check to
+`attributesOfFileSystem`, and `RemoteLimits.host(of:)` exists only with Network.framework.
+
+**Where it has been built.** On Linux in the `swift:6.4-bookworm` image (confirmed, 2026-10-31). A folder on the Mac's
+desktop cannot be mounted into Docker, so the sources go in as an archive:
+
+```sh
+tar --exclude ./.build --exclude ./.git --exclude ./docs -cf - . | docker run -i --rm swift:6.4-bookworm bash -c \
+  'mkdir /src && tar -xf - -C /src && cd /src && YARDLET_ENGINE_ONLY=1 swift build --target NativeHarnessClient'
+```
+
+On Windows, `.github/workflows/windows-engine.yml` makes the same build for `windows-*` branches and by hand, apart
+from the checks a pull request needs.
+
+**Why one target per platform.** A separate engine library would need every declaration the screens and tests use
+opened with the `package` access level, a change to nearly every engine file. Choosing the platform's folder in
+`Package.swift` keeps one module on each platform, so engine code and `@testable import` stay as they are.
 
 ## The check that blocks new violations
 
@@ -27,22 +97,20 @@ in the official source is marked "confirmed"; the rest is "not confirmed".
   `pid_t` and the like), `proc_*` and `sysctl`, PTY functions, `posix_spawn`, `copyfile` and cloning, Keychain, `UN*`
   notification types, AppKit types, FSEvents and kqueue, Foundation APIs missing outside Apple platforms
   (`NSDataDetector` and others) and `x-apple.` URLs. Line comments are skipped.
-- The allow list is a set of rule names per file. It has 3 files and 13 entries: `Account/AccountLoginController.swift`
-  (6), `Runtime/CodexEnvironmentManager.swift` (3) and `Runtime/NativeProcessTree.swift` (4).
-- A violation in a file that is not on the allow list, or a new kind of violation in an allowed file, fails. When an
-  allowed entry no longer applies, the test fails and asks for it to be removed. The ceiling of 13 entries can only go
-  down.
+- The allow list is a set of rule names per file, and it is empty. The ceiling is 0.
+- A violation in a file that is not on the allow list, or a new kind of violation in an allowed file, fails.
 - Path assumptions and `Process` semantics (below) are string and behavior problems, so they are not in the check.
+- The engine-only build is the stronger check: it fails on any engine reference to a screen or macOS-layer name, which
+  the scan cannot see. It is not in the pull request checks yet.
 
-## macOS-only code left in the engine
+## What a Windows layer needs
 
-These are the three allow-listed files. Each is a blocker for Windows.
-
-| File | macOS-only part | What Windows needs |
+| Part | macOS today | What Windows needs |
 | --- | --- | --- |
-| `Runtime/NativeProcessTree.swift` | Collects descendants with `proc_listchildpids` and ends the tree with `kill` (also on the process group), `waitpid` and `usleep`. Every harness transport, Git, the account commands and the protocol process host leave termination to it (`terminate(process:)`, `terminate(rootPID:)`) | Abstract: keep a protocol with these two functions in the engine and move the current code unchanged into the macOS implementation. Replace: on Windows, put the process in a job object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) right after it starts and end it with `TerminateJobObject`. Adding it after Foundation `Process` has started leaves a short gap, so also consider creating the process with `CREATE_SUSPENDED`. Foundation's `Process` creates no job object on Windows, and `terminate()` ends only the root with `TerminateProcess`, so grandchildren such as node and MCP servers would stay behind (confirmed: [swift-corelibs-foundation `Process.swift`](https://github.com/swiftlang/swift-corelibs-foundation/blob/main/Sources/Foundation/Process.swift)) |
-| `Account/AccountLoginController.swift` | `import AppKit`, `Darwin` and `SwiftTerm`; a `LocalProcessTerminalViewDelegate` driving a PTY; `pid_t`; `NSWorkspace.open`; URL detection with `NSDataDetector` (`firstHTTPSURL`). `AccountCenterModel` owns it, and `HarnessAccountBroker` parses output with its `stripANSI` | Abstract: an engine sign-in session protocol (state, phase, sending input) and pure text parsing (`stripANSI`, device codes, input prompts, finding URLs) in the engine; find URLs with a regular expression, because `NSDataDetector` does not exist in Foundation outside Apple platforms (confirmed: [swift-corelibs-foundation #4305](https://github.com/swiftlang/swift-corelibs-foundation/issues/4305)). Move the SwiftTerm host to the macOS layer. Replace: a ConPTY (`CreatePseudoConsole`) host on Windows |
-| `Runtime/CodexEnvironmentManager.swift` | `import CryptoKit` (a `SHA256` fingerprint); `import Darwin` and `copyfile(COPYFILE_ALL \| COPYFILE_CLONE)`, with a `FileManager.copyItem` fallback | Replace CryptoKit with `Crypto` from swift-crypto, which has the same API (adding a package needs approval). Put the clone behind the platform layer or `#if canImport(Darwin)`; the fallback already works without it. `Transcript/NameBasedUUID.swift` computes its SHA-1 itself so as not to add another CryptoKit use |
+| `NativeProcessTree` | Collects descendants with `proc_listchildpids` and ends the tree with `kill` (also on the process group), `waitpid` and `usleep`. Every harness transport, Git, the account commands and the protocol process host end processes through `terminate(process:)` | Put the process in a job object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) right after it starts and end it with `TerminateJobObject`. Adding it after Foundation `Process` has started leaves a short gap, so also consider creating the process with `CREATE_SUSPENDED`. Foundation's `Process` creates no job object on Windows, and `terminate()` ends only the root with `TerminateProcess`, so grandchildren such as node and MCP servers would stay behind (confirmed: [swift-corelibs-foundation `Process.swift`](https://github.com/swiftlang/swift-corelibs-foundation/blob/main/Sources/Foundation/Process.swift)) |
+| `AccountLoginController` | A `LocalProcessTerminalViewDelegate` driving a PTY through SwiftTerm, `NSWorkspace.open`, URL detection with `NSDataDetector`. The engine keeps the output parsing (`Account/AccountLoginOutput.swift`: `stripANSI`, device codes, input prompts) | A ConPTY (`CreatePseudoConsole`) host with the members the portable one has. Find URLs with a regular expression, because `NSDataDetector` does not exist in Foundation outside Apple platforms (confirmed: [swift-corelibs-foundation #4305](https://github.com/swiftlang/swift-corelibs-foundation/issues/4305)) |
+| `NativeTerminalSession`, `TaskShellProcess` | SwiftTerm `LocalProcess` and a PTY | ConPTY and a Windows terminal view |
+| `ScopedFiles`, `WorkspaceFileReplacement` | No-follow descriptors | Opening without following reparse points (`FILE_FLAG_OPEN_REPARSE_POINT`); the portable versions refuse |
 
 Other macOS-specific values that the check does not catch:
 
@@ -50,10 +118,6 @@ Other macOS-specific values that the check does not catch:
   Windows uses the logo assets.
 - `Account/HarnessAccountBroker.swift`: the user-facing text names macOS Keychain as the Antigravity CLI credential
   location. Where Antigravity CLI keeps credentials on Windows is not confirmed.
-- `AppModel.swift`: the default argument `LocalSystemNotificationCenter()` names the macOS implementation. The app
-  should inject it once the targets split.
-- PTY: besides `AccountLoginController`, the screen layer's `Views/TerminalPane.swift` and the macOS layer's task shell
-  (`Platform/macOS/ShellCommandProcess.swift`, SwiftTerm `LocalProcess`) use a PTY. Windows needs ConPTY.
 
 ## Paths and executable lookup
 
@@ -86,42 +150,11 @@ location there (AppData, the registry and so on) is not confirmed.
 
 ## External dependencies
 
-CryptoKit, Observation and `NSDataDetector` are not package dependencies, but they need the same judgment, so they are
-listed here too.
-
 | Dependency | Engine use | Windows | Evidence | Recommended handling |
 | --- | --- | --- | --- | --- |
-| swift-markdown 0.8.0 (swift-cmark 0.8.0) | `Transcript/TranscriptInlineContent`, `Transcript/TranscriptMarkdownDocument`, `Diff/MarkdownReviewDiff` | The manifest has Windows-specific settings. An actual build is not confirmed | `CMARK_GFM_STATIC_DEFINE` `.when(platforms: [.windows])` in swift-markdown's `Package.swift`, `#if os(Windows)` in swift-cmark's `Package.swift` | Keep it in the engine. Confirm with a Windows build |
-| SwiftTerm 1.18.0 | `AccountLoginController` | Only the terminal parser builds. No PTY or view (confirmed) | The manifest's `os(Windows)` branch leaves out the `Apple`, `Mac` and `iOS` sources, and `LocalProcess.swift`, `Pty.swift` and `HeadlessTerminal.swift` are under `#if !os(iOS) && !os(Windows)` | Take it out of the engine. The Windows terminal uses ConPTY and a Windows view |
+| swift-markdown 0.8.0 (swift-cmark 0.8.0) | `Transcript/TranscriptInlineContent`, `Transcript/TranscriptMarkdownDocument`, `Diff/MarkdownReviewDiff`, `Domain/TaskAttention` off Apple's platforms | The manifest has Windows-specific settings. Builds on Linux (confirmed); Windows not confirmed | `CMARK_GFM_STATIC_DEFINE` `.when(platforms: [.windows])` in swift-markdown's `Package.swift`, `#if os(Windows)` in swift-cmark's `Package.swift` | Keep it in the engine |
+| swift-crypto 5.0.3 (in place of CryptoKit) | `CodexEnvironmentManager`, `ClaudeSubagentTranscriptReader`, `YardletRemote` | Windows builds in its own CI; its README names ARM64 Windows. Not confirmed with Yardlet's build | Builds on Linux (confirmed) | Keep |
+| SwiftTerm 1.18.0 | None; the macOS layer and screens only | Only the terminal parser builds. No PTY or view (confirmed) | The manifest's `os(Windows)` branch leaves out the `Apple`, `Mac` and `iOS` sources, and `LocalProcess.swift`, `Pty.swift` and `HeadlessTerminal.swift` are under `#if !os(iOS) && !os(Windows)` | The Windows terminal uses ConPTY and a Windows view |
 | Sparkle 2.10.1 | None; only the macOS layer imports it (`Platform/macOS/YardletSparkle.swift`), and it is linked only on macOS (`.when(platforms: [.macOS])`) | Not used | `Package.swift` | Windows needs its own update mechanism |
-| CSQLite (`systemLibrary`, `pkgConfig: "sqlite3"`, `link "sqlite3"`) | `Store/SessionRepository`, `Domain/ProviderSessionTitleResolver` | Relies on the macOS SDK's libsqlite3. Windows has no default header or pkg-config | `Package.swift`, `Sources/CSQLite/module.modulemap` | Replace: the conventional way, adding the SQLite amalgamation as a C target |
-| CryptoKit | `CodexEnvironmentManager` | Apple only | None | `Crypto` from swift-crypto (adding the package needs approval) |
-| Observation | Many `@Observable` models | A Swift toolchain module. Not confirmed with a Windows build | None | Keep as is |
-| Foundation `NSDataDetector` | `AccountLoginController` | Missing (confirmed) | [swift-corelibs-foundation #4305](https://github.com/swiftlang/swift-corelibs-foundation/issues/4305), closed with no plans | Replace with a regular expression |
-
-## Splitting SwiftPM targets
-
-`NativeHarnessClient` is one executable target holding the engine and the macOS screens, so its declarations are
-`internal` and tests reach them with `@testable import`. Splitting it into an engine library and a macOS app target
-needs the following.
-
-- **Visibility:** the engine types and members the screens use (`AppModel`, stores, projections and so on) must be
-  visible outside the target. The `package` access level, visible only inside the same package, allows the split
-  without creating an external API. There are many, so change them mechanically by following the compile errors.
-- **Removing circular dependencies:** turn the places where the engine calls platform code into injection. The engine
-  cannot call an extension in another module, so calls that rely on macOS-layer extensions belong here too.
-  - `AppModel`'s default argument `LocalSystemNotificationCenter()` → the app injects it.
-  - `AccountLoginController`, owned by `AccountCenterModel` → injected through an engine protocol.
-  - `HarnessAccountBroker` → `AccountLoginController.stripANSI` → an engine text utility.
-  - `HarnessAccountBroker` → `antigravityCredentialState()` (a macOS-layer extension) → an injected credential
-    detection protocol.
-  - The transports → `NativeProcessTree` → a protocol, or per-platform implementations inside the engine.
-  - The opposite direction (`Platform/macOS` → `HarnessLogoAsset`, `SystemNotificationCenter`) is not a problem.
-- **Resources:** both the engine and the screens use `Localizable.strings` through `L10n`, so the engine target owns
-  it; check that `L10n`'s rule of trying `Bundle.main` first still works in the app bundle. The `HarnessLogos` images
-  go to the macOS target.
-- **Dependency placement:** `CSQLite` and `Markdown` go to the engine. `SwiftTerm` goes only to the macOS target, after
-  `AccountLoginController` is split. The code in `Development/` goes to the macOS target or a separate fixture target.
-- **Test targets:** split the tests into engine tests (`@testable import` of the engine, also run on Windows) and macOS
-  tests (the ones that import AppKit, SwiftUI, SwiftTerm, WebKit, Darwin or Security). Once the engine target builds on
-  Windows, that build is the strongest check, and `EnginePortabilityTests` can be reduced or removed.
+| CSQLite (`systemLibrary`, `pkgConfig: "sqlite3"`, `link "sqlite3"`) | `Store/SessionRepository`, `Domain/ProviderSessionTitleResolver` | Relies on the system's libsqlite3 (the macOS SDK; the Linux image has it). Windows has no default header or pkg-config | `Package.swift`, `Sources/CSQLite/module.modulemap` | Replace: the conventional way, adding the SQLite amalgamation as a C target |
+| Observation | Many `@Observable` models | A Swift toolchain module, imported explicitly outside Apple's platforms. Builds on Linux (confirmed) | The Linux build | Keep as is |

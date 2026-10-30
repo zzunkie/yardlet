@@ -78,7 +78,7 @@ struct BrowserViewportEmulation: Equatable, Sendable {
     /// Where the panel draws a page of `size` in a view of `bounds`: scaled down to fit when larger, never
     /// up, across the middle and from the top, as the Claude app places its emulated view.
     static func pageFrame(for size: CGSize, in bounds: CGSize) -> (origin: CGPoint, scale: CGFloat) {
-        guard size.width > 0, size.height > 0, bounds.width > 0, bounds.height > 0 else { return (.zero, 1) }
+        guard size.width > 0, size.height > 0, bounds.width > 0, bounds.height > 0 else { return (CGPoint(x: 0, y: 0), 1) }
         let scale = min(1, bounds.width / size.width, bounds.height / size.height)
         return (CGPoint(x: ((bounds.width - size.width * scale) / 2).rounded(), y: 0), scale)
     }

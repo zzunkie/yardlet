@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// What Add connector shows from the MCP registries: the GitHub registry's list a page at a time,
 /// and both registries' matches for a search. Kept in memory for the app's run, read again after

@@ -59,7 +59,7 @@ enum ClaudeDesktopSessionCatalog {
         }
         let activity = (value["lastActivityAt"] as? NSNumber).flatMap { number -> Date? in
             // A JSON boolean is an NSNumber too; it is not a time.
-            guard CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue > 0 else { return nil }
+            guard !number.isJSONBoolean, number.doubleValue > 0 else { return nil }
             return Date(timeIntervalSince1970: number.doubleValue / 1_000)
         }
         return Session(

@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Network)
 import Network
+#endif
 
 /// A token bucket: `capacity` at once, refilled at `perSecond`.
 public struct RemoteRateBucket: Sendable {
@@ -68,6 +70,7 @@ public enum RemoteHandshakeAdmission {
         return closing
     }
 
+    #if canImport(Network)
     /// The address part of a connection's remote endpoint.
     public static func host(of endpoint: NWEndpoint) -> String {
         guard case let .hostPort(host, _) = endpoint else { return "\(endpoint)" }
@@ -78,6 +81,7 @@ public enum RemoteHandshakeAdmission {
         @unknown default: return "\(host)"
         }
     }
+    #endif
 }
 
 /// A local record of what remote devices did: when, which device, the request's type, its task and
