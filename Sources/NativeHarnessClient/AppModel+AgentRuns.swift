@@ -402,8 +402,9 @@ extension AppModel {
 
     /// Runs one judge of the routing evaluation: the harness read only in an empty folder, the prompt
     /// once, its final answer back. Nil answer with the reason when it fails, stops or runs out of time.
-    func runEvaluationJudge(_ judge: RoutingJudge, prompt: String, folder: URL,
-                            timeout: Duration = .seconds(900)) async -> (answer: String?, failure: String?) {
+    /// The judge is stopped as soon as `wanted` no longer holds (the evaluation was turned off).
+    func runEvaluationJudge(_ judge: RoutingJudge, prompt: String, folder: URL, timeout: Duration = .seconds(900),
+                            while wanted: () -> Bool = { true }) async -> (answer: String?, failure: String?) {
         guard let readOnly = Self.readOnlyOptions(for: judge.harness) else {
             return (nil, L10n.string("it cannot run read only"))
         }
@@ -421,7 +422,7 @@ extension AppModel {
             return (nil, error.localizedDescription)
         }
         let deadline = ContinuousClock.now + timeout
-        while !run.state.isFinished, ContinuousClock.now < deadline, !Task.isCancelled {
+        while !run.state.isFinished, ContinuousClock.now < deadline, !Task.isCancelled, wanted() {
             try? await Task.sleep(for: .milliseconds(500))
         }
         if !run.state.isFinished {
