@@ -354,6 +354,40 @@ final class VaultTests: XCTestCase {
     /// drawn again (no modulo bias), and no password comes from a failed random source. A made password is
     /// kept beside, never over, a saved one of the same username, an agent makes one only for a new account,
     /// and a replaced password stays in the item.
+    /// An account beside the username (design §17): one IAM username in two AWS accounts is two items, told apart by
+    /// the account, which an agent can name and a refusal lists; a sign-in admits an item whose fields it does not
+    /// contradict; and the key button's list puts the item filled on a sign-in's earlier step first.
+    func testOtherFieldsTellAccountsOfOneUsernameApart() async throws {
+        let account = { (value: String) in VaultFormField(id: "account", name: "account", label: "Account ID", value: value) }
+        let one = VaultItem(name: "AWS", sites: ["signin.aws"], username: "dev", fields: [account("111122223333")])
+        let two = VaultItem(name: "AWS", sites: ["signin.aws"], username: "dev", fields: [account("444455556666")])
+        let old = VaultItem(name: "AWS", sites: ["signin.aws"], username: "dev")
+        XCTAssertEqual(two.identity, "dev · 444455556666")
+        XCTAssertTrue(two.matches("4444") && !one.matches("4444"))
+        XCTAssertFalse(one.admits([account("444455556666")]))
+        XCTAssertTrue(old.admits([account("444455556666")]) && one.admits([]))
+        XCTAssertEqual(old.merging([account("1")]), [account("1")])
+        XCTAssertEqual(one.merging([VaultFormField(id: "", name: "ACCOUNT", label: "", value: "2")])?.map(\.value), ["2"])
+
+        let center = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([one.id: VaultSecret(password: "one"), two.id: VaultSecret(password: "two")]),
+            repository: InMemoryVaultRepository(items: [one, two]), hmac: MacVault.hmac, isAllowedBuild: true,
+            defaults: .vaultTests()))
+        let request = { (name: String?) in
+            VaultFillRequest(sessionID: UUID(), itemName: name, kind: .login, origin: "https://ap-southeast-2.signin.aws")
+        }
+        guard case .success(let grant) = await center.authorize(request("444455556666")) else {
+            return XCTFail("an agent could not name an account by its value")
+        }
+        XCTAssertEqual(grant.item.id, two.id)
+        guard case .failure(let refusal) = await center.authorize(request("dev")) else {
+            return XCTFail("one username in two accounts filled without its account")
+        }
+        XCTAssertTrue(refusal.message.contains("(dev · 111122223333)"), refusal.message)
+        XCTAssertEqual(center.pickerItems(for: "https://ap-southeast-2.signin.aws", matching: "", first: two.id).here.map(\.id),
+                       [two.id, one.id])
+    }
+
     func testMadePasswordsMeetTheRulesAndNeverReplaceASavedPassword() async throws {
         let random = VaultPasswordGenerator.systemRandomBytes
         for _ in 0..<200 {

@@ -1184,3 +1184,94 @@ relayed code works for the attacker only within its 30 seconds, and the agents' 
   sign-in page, which has no code field, a code was copied to the run's own pasteboard, marked concealed, and the panel
   said so; and the code bar of the code page left did not stay over the sign-in page (it did before the fix in section
   8.3). The panel PNGs (`vault-panel-link-bar`, `-code-copied`, `-code-bar`) were checked by eye.
+
+## 17. Sign-ins in steps and fields beside the username (2026-10-31)
+
+The request: a sign-in that asks for the username on one page and the password on the next (AWS's root user, Google,
+Microsoft, Apple) saved the password without a username, and a form with an account beside the username (AWS's IAM
+user sign-in: account ID or alias, IAM user name, password) kept no account, so one IAM user name in two accounts could
+not be told apart in the list or filled for the right account. A vault read without its values showed both: AWS items
+without a username, their sites split between `amazon.com` and `signin.aws`, and no account ID anywhere.
+
+### 17.1 Other browsers and managers compared
+
+Read from public sources on 2026-10-31 (a subagent read Chromium's and Bitwarden's source on their `main` branches,
+Apple's password-manager-resources and the vendors' help pages; these may differ from released builds).
+
+| | Chrome | Safari, Passwords | 1Password | Bitwarden |
+|---|---|---|---|---|
+| A username typed on an earlier step | Each non-password field the person edits is kept per tab, at most 10, for 5 minutes after its last edit, and offered with a password form whose sign-on realm is the same or matches by registrable domain; cleared by a navigation that cannot be a submission and after a sign-in ([possible_username_data.h](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/possible_username_data.h), [password_manager.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_manager.cc), [password_form_manager.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_form_manager.cc)) | Unconfirmed | The person saves on the first page and chooses "Update Existing" on the next ([help](https://support.1password.com/create-multi-page-login/)) | Kept per tab and merged into the next submission (`formData.username || existingModifyLoginData.username`), cleared after one minute ([overlay-notifications.background.ts](https://github.com/bitwarden/clients/blob/main/apps/browser/src/autofill/background/overlay-notifications.background.ts)) |
+| A hidden username on the password step | `type="hidden"` inputs are not read; a text field hidden by CSS and marked `autocomplete="username"` is ([form_autofill_util.cc](https://github.com/chromium/chromium/blob/main/components/autofill/content/renderer/form_autofill_util.cc), [form_data_parser.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/form_parsing/form_data_parser.cc)) | Unconfirmed | Unconfirmed | Unconfirmed |
+| Filling the next step | Fills the password page's match on load; a username-only page waits for the person ([password_form_filling.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_form_filling.cc)) | Unconfirmed | Fills "across multiple pages" ([help](https://support.1password.com/create-multi-page-login/)) | Its shortcut fills sign-ins split over pages ([help](https://bitwarden.com/help/auto-fill-browser/)) |
+| Fields beside the username | None; a password has notes ([password_form.h](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_form.h)) | Notes only ([guide](https://support.apple.com/guide/passwords/mchl37e45d7c/mac)) | Saved with the login, "along with the information entered in other fields", each with its value, `name`, `id` and type ([help](https://support.1password.com/save-fill-passwords/), [1PUX](https://support.1password.com/1pux-format/)) | Custom fields the person adds; matched by id, name, label, `aria-label` or placeholder, apart from case ([help](https://bitwarden.com/help/custom-fields/), [autofill.service.ts](https://github.com/bitwarden/clients/blob/main/apps/browser/src/autofill/services/autofill.service.ts)) |
+| A list row's second line | — | — | Made from the item's type and contents ([1PUX](https://support.1password.com/1pux-format/)) | The username ([login.view.ts](https://github.com/bitwarden/clients/blob/main/libs/common/src/vault/models/view/login.view.ts)) |
+
+AWS's sign-in domains: the Public Suffix List has `aws` as a top-level domain, so `ap-northeast-1.signin.aws` belongs
+to `signin.aws`, while `signin.aws.amazon.com`, its regional hosts and `console.aws.amazon.com` belong to `amazon.com`,
+as Amazon's shopping site does ([list](https://publicsuffix.org/list/public_suffix_list.dat)). Apple's
+password-manager-resources has no entry joining AWS's domains; it groups `amazon.com` with Amazon's country domains
+only in its historical file, for password reuse warnings
+([shared-credentials-historical.json](https://github.com/apple/password-manager-resources/blob/main/quirks/shared-credentials-historical.json)),
+and its file of websites with shared credential backends was removed in 2024
+([commit](https://github.com/apple/password-manager-resources/commit/73f22d6661f2561964f25c08cebcc9ef8eae5ea6)).
+
+### 17.2 Decisions
+
+- **A username-first sign-in:** the watch tells Yardlet when the person sends a step that asks for the username alone
+  (one field they typed, marked or named as a username or email, and no password field shown). The panel keeps it for
+  that tab and site (the registrable domain) for five minutes, as Chrome does (Bitwarden keeps one minute; a two-factor
+  step can come between). A password step whose form gives no username takes it for the save bar; a field marked
+  `autocomplete="username"` on the password step, also a hidden one, comes first. It stays in memory, in that tab.
+- **Filling in steps:** the item the person fills from the key button on the first step is kept the same way, and the
+  key button's list on the next step of that site in that tab lists it first, so Return fills its password. Yardlet
+  does not fill the next step by itself: the person's fills go through the key button (section 8.3), and Chrome also
+  waits on the username page.
+- **Fields beside the username:** when a sign-in is sent, the form's other text fields that hold a value (typed by the
+  person, or filled in by the page or the vault) go with it, as 1Password keeps a login's other fields: each with its
+  `id`, `name` and label and its value. Never a password, a code, a captcha, a card's field or one marked otherwise
+  (`cc-*`, `one-time-code`, `username`, `email`); at most three, each up to 200 characters. The item keeps them when the
+  person saves or updates, in `items.json` with the username, since they are no secrets and the list shows them. A fill
+  puts each into the page's empty field of the same id, name or label (Bitwarden's matching), for the person and the
+  agent alike, and leaves a field the page filled already (an AWS sign-in address names its account).
+- **Telling accounts apart:** an item's account is its username and then its other fields' values (`dev ·
+  111122223333`). The settings list shows it beside the name, the key button's list in its second line, the update bar
+  names it ("Update the saved password of dev · 111122223333 for signin.aws?"), and an agent's refusal lists it. A
+  sign-in is an item's when the username is the same and none of the item's fields holds another value for a field the
+  form had, so one IAM user name in two accounts saves two items. An agent names one by its name, its username or
+  another of its values, such as the account ID.
+- **Items saved without a username:** Yardlet changes none of them by itself. When a sign-in with a username uses the
+  password of an item that has none, the bar asks "Add dev to the saved password for signin.aws?", and Update gives the
+  item the username and the form's other fields; an item that lacks only a field the form had is asked the same way.
+- **AWS's domains (a proposal, not done):** with no public list to follow, sites stay as they are. An item saved on an
+  AWS page is for `amazon.com` or `signin.aws`, by registrable domain, so it is offered on Amazon's shopping site too,
+  and an AWS item saved for one is not offered on the other. The person can already list `signin.aws.amazon.com` and
+  `signin.aws` in an item's sites. Saving AWS items for the sign-in host rather than `amazon.com`, or joining the two
+  domains, would need a list of Yardlet's own, which the rest of the vault avoids.
+- **The item sheet:** each kept field shows under the page's own label as a text field, and emptying it removes it.
+  Nothing new in Settings and no new buttons; the bar has two new sentences.
+
+### 17.3 Rules kept
+
+- What the watch sends Yardlet is what a submission sent already: now also the other fields' values, which are no
+  secrets. A step's username is kept in memory, for one tab and site, five minutes.
+- The site and the agent rules stay those of section 5: other fields go only into the page's own fields, with the
+  username and password they belong to, and only into an empty one.
+- Turning the vault off stops all of it; the fields live in the item and go with it.
+- A field the vault filled counts as the person's once they type another password into it, so correcting a filled
+  password that a site no longer takes offers to update the item, as typing one in any other field does.
+
+### 17.4 Verification
+
+- Unit and render: `VaultTests.testOtherFieldsTellAccountsOfOneUsernameApart` (an item's account, matching and merging
+  of fields, an agent naming one of two accounts by its account ID, a refusal listing each with its account, and the
+  key button's list putting the earlier step's item first) and `VaultSettingsRenderingTests.testAccountsOfOneUsernameDraw`
+  (`settings-vault-accounts`, `vault-item-account`, light and dark, checked by eye: the account stays whole beside a
+  long name, and a long field label wraps in the sheet).
+- Real CEF QA (`com.zzunkie.yardlet.vaultqa` run as in section 15.5; 92 checks passed), on the QA server's
+  `/vault/first`, `/vault/second` (with `?hidden`) and `/vault/iam`, served at https `.test` addresses: a password step
+  took the username its first step asked for; a hidden field marked as the username came first; the item filled on the
+  first step came first on the password step, filled its password there, and was not offered on another site; an item
+  without a username was offered the sign-in's and took it on Update; one IAM user name in two accounts saved two items
+  with their accounts; the key button's fill put an item's account back; and a new password typed over a filled one
+  offered to update that account, named in the bar. The PNGs `vault-panel-add-username` and
+  `vault-panel-update-account` were checked by eye.

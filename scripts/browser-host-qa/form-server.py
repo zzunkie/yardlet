@@ -24,7 +24,8 @@ it), /isolation (a blank page whose cookies and localStorage the QA reads and se
 sign-up form whose new password and confirmation fields carry passwordrules; ?slow keeps the page busy as the password
 goes in), /vault/change (a password change form for person@example.test: current, new and confirmation fields, none
 marked, the current one told apart by its label), /vault/change-dialog (VAULT_CHANGE_DIALOG below), /vault/recover (a
-recovery's new password form with no username) and /vault/webauthn (a blank
+recovery's new password form with no username), /vault/first and /vault/second (a sign-in in two steps, VAULT_FIRST
+below), /vault/iam (an account, username and password, VAULT_IAM below) and /vault/webauthn (a blank
 page for WebAuthn on localhost), /passkey (a sign-in form with passkey autofill and the passkey requests sites
 make, started by window.passkey(kind)), for what ordinary sites ask of a browser /compat (window.compat(kind)
 starts each request and window.qa.compat says how it ended; links to other apps' addresses, mailto:, tel: and one
@@ -700,6 +701,31 @@ window.qa = {submitted: null};
 document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = pass.value !== ''; });
 </script>'''
 
+# A sign-in in two steps: /vault/first asks for the email alone and goes on to /vault/second, which asks for the
+# password alone (?hidden adds a hidden field marked as the username, as some password steps carry).
+VAULT_FIRST = '''<!doctype html><meta charset="utf-8"><title>Vault first step</title>
+<form id="form" action="/vault/second" method="get"><label>Email <input id="user" name="email" type="email"></label>
+<button id="next">Next</button></form>'''
+VAULT_SECOND = '''<!doctype html><meta charset="utf-8"><title>Vault second step</title>
+<form id="form" method="post"><input id="hidden" type="hidden" autocomplete="username" value="hidden@example.test" disabled>
+<label>Password <input id="pass" type="password" autocomplete="current-password"></label><button id="go">Sign in</button></form>
+<script>
+if (location.search.includes('hidden')) document.getElementById('hidden').disabled = false; else document.getElementById('hidden').remove();
+window.qa = {submitted: null};
+document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = pass.value !== ''; });
+</script>'''
+
+# A sign-in with an account beside the username, shaped like AWS's IAM user sign-in. window.qa.values() gives the
+# account and username fields' values (not the password's).
+VAULT_IAM = '''<!doctype html><meta charset="utf-8"><title>Vault IAM sign-in</title>
+<form id="form" method="post"><label>Account ID (12 digits) or account alias <input id="account" name="account"></label>
+<label>IAM username <input id="username" name="username"></label>
+<label>Password <input id="password" name="password" type="password"></label><button id="go">Sign in</button></form>
+<script>
+window.qa = {submitted: null, values: () => [account.value, username.value]};
+document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = password.value !== ''; });
+</script>'''
+
 ISOLATION = '''<!doctype html><meta charset="utf-8"><title>Isolation</title><h1>Isolation</h1>'''
 
 # The sign-ins tasks follow (BrowserHostIsolationQA, docs/BROWSER_SESSION_ISOLATION.md 11). /follow/signin has a
@@ -1365,6 +1391,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = VAULT_CHANGE.encode()
         elif self.path.startswith('/vault/recover'):
             payload = VAULT_RECOVER.encode()
+        elif self.path.startswith('/vault/first'):
+            payload = VAULT_FIRST.encode()
+        elif self.path.startswith('/vault/second'):
+            payload = VAULT_SECOND.encode()
+        elif self.path.startswith('/vault/iam'):
+            payload = VAULT_IAM.encode()
         elif self.path.startswith('/vault/webauthn'):
             payload = VAULT_WEBAUTHN.encode()
         elif self.path.startswith('/passkey'):

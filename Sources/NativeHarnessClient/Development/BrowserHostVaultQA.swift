@@ -609,6 +609,7 @@ final class BrowserHostVaultQA {
         await exercisePanelCodes(controller)
         await exercisePanelPasswords(controller)
         await exercisePanelMadePasswordsKept(controller)
+        await exercisePanelSignInSteps(controller)
         await exercisePanelPicks(controller)
     }
 
@@ -1147,6 +1148,173 @@ final class BrowserHostVaultQA {
               recoverOffered && presaved != nil && !vault.items.contains { $0.id == presaved?.id } && recoverSent && recoverAsked
                 && password(recovering.id) == recoverValue && !recoverValue.isEmpty,
               "offered \(recoverOffered), presaved \(presaved != nil), sent \(recoverSent), asked \(recoverAsked)")
+    }
+
+    /// Sign-ins in steps and with an account beside the username (design §17): the username typed on a step that asks
+    /// for it alone goes with the password the next step takes, a hidden field marked as the username first; an item
+    /// saved without a username is offered it, and takes it only when the person updates; the item filled on the first
+    /// step comes first in the key button's list on the next, in that tab and site only, and fills the password there;
+    /// an account field beside the username is kept with the item, tells two accounts of one username apart in the list
+    /// and the bar, and fills back. Pages are the QA server's, served at https `.test` addresses (`serve`).
+    private func exercisePanelSignInSteps(_ controller: BrowserHostPaneController) async {
+        guard let first = controller.tab else { return check("panel: a tab for the sign-in step checks", false, "no tab") }
+        let steps = "https://signin.qa-steps.test/"
+        let blankSite = "https://signin.qa-blank.test/"
+        let iam = "https://signin.qa-iam.test/"
+        // Saved first, so that only the earlier step puts the person's item before it.
+        let decoy = VaultItem(name: "QA steps decoy", sites: ["qa-steps.test"], username: "decoy@example.test")
+        let blank = VaultItem(name: "QA blank", sites: ["qa-blank.test"], username: "")
+        try? vault.save(decoy, secret: VaultSecret(password: "qa-decoy-not-real"))
+        try? vault.save(blank, secret: VaultSecret(password: "qa-blank-not-real"))
+        let stopServing = await serve([steps, blankSite, iam], on: first)
+        defer { stopServing() }
+        func open(_ address: String, until: String? = nil) async -> BrowserTab? {
+            if until == nil {
+                controller.addressInput = address
+                controller.submitAddress()
+            }
+            guard await waitUntilAsync(.seconds(20), {
+                controller.tab?.currentURL?.hasPrefix(until ?? address) == true && controller.tab?.isLoading == false
+            }), let tab = controller.tab else {
+                check("panel: \(until ?? address) loads", false, controller.tab?.currentURL ?? "no tab")
+                return nil
+            }
+            try? await Task.sleep(for: .seconds(1))
+            return tab
+        }
+        func page(_ tab: BrowserTab, _ expression: String) async -> JSONValue? {
+            let result = try? await tab.devTools.send("Runtime.evaluate", ["expression": .string(expression), "returnByValue": .bool(true)],
+                                                      timeout: .seconds(20))
+            return result?["result"]?["value"]
+        }
+        func type(_ tab: BrowserTab, _ field: String, _ text: String) async {
+            _ = await page(tab, "document.getElementById('\(field)').focus()")
+            _ = try? await tab.devTools.send("Input.insertText", ["text": .string(text)], timeout: .seconds(10))
+        }
+        func press(_ tab: BrowserTab, _ id: String) async {
+            let point = await page(tab, "(() => { const r = document.getElementById('\(id)').getBoundingClientRect(); "
+                + "return [r.left + r.width / 2, r.top + r.height / 2]; })()")?.arrayValue
+            guard let x = point?.first?.doubleValue, let y = point?.last?.doubleValue else { return }
+            for (kind, buttons) in [("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 0)] {
+                var event: [String: JSONValue] = ["type": .string(kind), "x": .number(x), "y": .number(y), "buttons": .integer(Int64(buttons))]
+                if kind != "mouseMoved" { event["button"] = .string("left"); event["clickCount"] = .integer(1) }
+                _ = try? await tab.devTools.send("Input.dispatchMouseEvent", event, timeout: .seconds(10))
+            }
+        }
+        /// The first step typed and sent, then the password typed and sent on the second.
+        func signInInSteps(_ site: String, email: String, password: String, second: String = "vault/second") async -> Bool {
+            guard let firstStep = await open(site + "vault/first") else { return false }
+            await type(firstStep, "user", email)
+            await press(firstStep, "next")
+            guard let secondStep = await open(site + "vault/second", until: site + "vault/second") else { return false }
+            if second != "vault/second" {
+                guard await open(site + second) != nil else { return false }
+            }
+            guard let shown = controller.tab else { return false }
+            await type(shown, "pass", password)
+            controller.vaultPasswordOffer = nil
+            await press(shown, "go")
+            _ = secondStep
+            return await waitUntilAsync(.seconds(5)) { controller.vaultOffer != nil }
+        }
+
+        // The username typed on the first step goes with the password the second takes.
+        controller.vaultOffer = nil
+        let offered = await signInInSteps(steps, email: "steps@example.test", password: "qa-steps-not-real")
+        let offer = controller.vaultOffer
+        check("panel: a password step takes the username its first step asked for",
+              offered && offer?.username == "steps@example.test" && offer?.updates == nil,
+              "offer \(offer.map { "\($0.username) updates \($0.updates?.name ?? "none")" } ?? "none")")
+        controller.acceptVaultOffer()
+        let saved = vault.items.first { $0.username == "steps@example.test" }
+
+        // A hidden field marked as the username on the password step comes first.
+        controller.vaultOffer = nil
+        let hiddenOffered = await signInInSteps(steps, email: "steps@example.test", password: "qa-hidden-not-real",
+                                                second: "vault/second?hidden")
+        check("panel: a hidden field marked as the username on the password step comes before the earlier step's",
+              hiddenOffered && controller.vaultOffer?.username == "hidden@example.test",
+              "offer \(controller.vaultOffer?.username ?? "none")")
+        controller.vaultOffer = nil
+
+        // The item filled on the first step comes first in the key button's list on the second, and fills its password.
+        guard let saved, let firstStep = await open(steps + "vault/first") else {
+            return check("panel: the two-step sign-in was saved", false, "none")
+        }
+        _ = await page(firstStep, "document.getElementById('user').focus()")
+        controller.fillForPerson(saved)
+        let emailFilled = await waitUntilAsync(.seconds(5)) {
+            await page(firstStep, "document.getElementById('user').value") == .string("steps@example.test")
+        }
+        await press(firstStep, "next")
+        guard let secondStep = await open(steps + "vault/second", until: steps + "vault/second") else { return }
+        let address = secondStep.currentURL
+        let listed = vault.pickerItems(for: address.flatMap(VaultSite.origin(of:)), matching: "",
+                                       first: controller.vaultItemFromEarlierStep(on: address)).here.map(\.id)
+        let elsewhere = controller.vaultItemFromEarlierStep(on: blankSite + "vault/first")
+        _ = await page(secondStep, "document.getElementById('pass').focus()")
+        if let firstListed = listed.first, let item = vault.items.first(where: { $0.id == firstListed }) { controller.fillForPerson(item) }
+        let passwordFilled = await waitUntilAsync(.seconds(5)) {
+            await page(secondStep, "document.getElementById('pass').value") == .string("qa-steps-not-real")
+        }
+        check("panel: the item filled on the first step comes first on the password step, fills it, and stays with that site",
+              emailFilled && listed.first == saved.id && listed.contains(decoy.id) && elsewhere == nil && passwordFilled,
+              "email \(emailFilled), first \(listed.first == saved.id), elsewhere \(String(describing: elsewhere)), password \(passwordFilled)")
+
+        // An item saved without a username is offered the username, and keeps none until the person updates it.
+        controller.vaultOffer = nil
+        let blankOffered = await signInInSteps(blankSite, email: "blank@example.test", password: "qa-blank-not-real")
+        let untouched = vault.items.first { $0.id == blank.id }?.username == ""
+        try? await Task.sleep(for: .milliseconds(300))
+        capture(controller, named: "vault-panel-add-username.png")
+        let addOffer = controller.vaultOffer
+        controller.acceptVaultOffer()
+        check("panel: an item saved without a username is offered the one the sign-in used, and takes it on Update",
+              blankOffered && untouched && addOffer?.updates?.id == blank.id && addOffer?.addsAccount == true
+                && vault.items.first { $0.id == blank.id }?.username == "blank@example.test"
+                && vault.secret(of: blank.id)?.password == "qa-blank-not-real",
+              "offer \(addOffer.map { "\($0.account) adds \($0.addsAccount)" } ?? "none")")
+
+        // An account beside the username: two accounts of one username are two items, told apart and filled back.
+        let accounts = [("111122223333", "qa-iam-one-not-real"), ("444455556666", "qa-iam-two-not-real")]
+        var offers: [BrowserVaultSaveOffer] = []
+        for (account, password) in accounts {
+            controller.vaultOffer = nil
+            guard let form = await open(iam + "vault/iam?" + account) else { return }
+            await type(form, "account", account)
+            await type(form, "username", "dev")
+            await type(form, "password", password)
+            await press(form, "go")
+            if await waitUntilAsync(.seconds(5), { controller.vaultOffer != nil }), let offer = controller.vaultOffer { offers.append(offer) }
+            controller.acceptVaultOffer()
+        }
+        let iamItems = vault.items.filter { $0.sites == ["qa-iam.test"] }
+        check("panel: an account field beside the username is kept with the item, and one username in two accounts is two items",
+              offers.count == 2 && offers.allSatisfy { $0.updates == nil && $0.username == "dev" }
+                && Set(iamItems.map(\.identity)) == ["dev · 111122223333", "dev · 444455556666"]
+                && iamItems.allSatisfy { $0.fields?.first?.label == "Account ID (12 digits) or account alias" },
+              iamItems.map(\.identity).joined(separator: ", "))
+        guard let second = iamItems.first(where: { $0.identity.hasSuffix("444455556666") }),
+              let form = await open(iam + "vault/iam?fill") else { return }
+        _ = await page(form, "document.getElementById('username').focus()")
+        controller.fillForPerson(second)
+        let filled = await waitUntilAsync(.seconds(5)) {
+            await page(form, "window.qa.values().join(' ')") == .string("444455556666 dev")
+        }
+        let passwordBack = await page(form, "password.value") == .string("qa-iam-two-not-real")
+        check("panel: the key button's fill puts the item's account back beside the username and password",
+              filled && passwordBack, "\(String(describing: await page(form, "window.qa.values().join(' ')")))")
+        // The same account signs in with a new password: the bar names the account it updates.
+        controller.vaultOffer = nil
+        _ = await page(form, "password.value = ''")
+        await type(form, "password", "qa-iam-two-changed-not-real")
+        await press(form, "go")
+        let named = await waitUntilAsync(.seconds(5)) { controller.vaultOffer?.updates?.id == second.id }
+        try? await Task.sleep(for: .milliseconds(300))
+        capture(controller, named: "vault-panel-update-account.png")
+        check("panel: a new password for one of two accounts updates that one, and the bar names it",
+              named && controller.vaultOffer?.account == "dev · 444455556666", controller.vaultOffer?.account ?? "none")
+        controller.vaultOffer = nil
     }
 
     /// What the person picks from the key button's list (design §16), without opening the list itself (a popover

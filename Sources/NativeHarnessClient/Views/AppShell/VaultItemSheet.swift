@@ -17,6 +17,8 @@ struct VaultItemSheet: View {
     @State private var name: String
     @State private var sitesText: String
     @State private var username: String
+    /// The sign-in form's other fields the item keeps (design §17), each under the page's own label; one emptied goes.
+    @State private var formFields: [VaultFormField]
     @State private var password = ""
     @State private var setupKey = ""
     @State private var policy: VaultItem.Policy
@@ -45,6 +47,7 @@ struct VaultItemSheet: View {
         _name = State(initialValue: item?.name ?? draftSites.first ?? "")
         _sitesText = State(initialValue: (item?.sites ?? draftSites).joined(separator: ", "))
         _username = State(initialValue: item?.username ?? draftUsername)
+        _formFields = State(initialValue: item?.fields ?? [])
         _policy = State(initialValue: item?.policy ?? .always)
     }
 
@@ -117,6 +120,16 @@ struct VaultItemSheet: View {
             GridRow {
                 label(L10n.string("Username"))
                 TextField(L10n.string("Username"), text: $username)
+            }
+            ForEach(formFields.indices, id: \.self) { index in
+                GridRow {
+                    // The page's own label, which can be long.
+                    label(formFields[index].title)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                        .frame(maxWidth: 150, alignment: .trailing)
+                    TextField(formFields[index].title, text: $formFields[index].value)
+                }
             }
             GridRow {
                 label(L10n.string("Password"))
@@ -350,6 +363,12 @@ struct VaultItemSheet: View {
         item.name = trimmedName
         item.sites = sites
         item.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let kept = formFields.map { field in
+            var field = field
+            field.value = field.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return field
+        }.filter { !$0.value.isEmpty }
+        item.fields = kept.isEmpty ? nil : kept
         item.policy = policy
         do {
             try vault.save(item, secret: secret)

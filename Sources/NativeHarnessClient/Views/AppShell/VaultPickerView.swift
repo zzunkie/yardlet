@@ -9,6 +9,8 @@ struct VaultPickerView: View {
     let origin: String?
     /// Only items with a two-factor code (opened from the code bar).
     var codes = false
+    /// The item the person filled on the sign-in's earlier step, listed first (design §17).
+    var first: UUID? = nil
     @Binding var query: String
     let onPick: (VaultItem) -> Void
     @State private var selected: UUID?
@@ -18,7 +20,7 @@ struct VaultPickerView: View {
     @FocusState private var isSearchFocused: Bool
 
     var body: some View {
-        let found = vault.pickerItems(for: origin, matching: query, codes: codes)
+        let found = vault.pickerItems(for: origin, matching: query, codes: codes, first: first)
         let rows = found.here + found.elsewhere
         let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         VStack(alignment: .leading, spacing: 8) {
@@ -117,7 +119,7 @@ struct VaultPickerView: View {
     /// A row: the page's own items say what they hold, the others where they are saved.
     private func row(_ item: VaultItem, here: Bool) -> some View {
         let place = item.sites.isEmpty ? L10n.string("No site") : item.sites.joined(separator: ", ")
-        let detail = [item.username, here ? item.kindsTitle : place].filter { !$0.isEmpty }.joined(separator: " · ")
+        let detail = [item.identity, here ? item.kindsTitle : place].filter { !$0.isEmpty }.joined(separator: " · ")
         return Button { onPick(item) } label: {
             HStack(spacing: 10) {
                 Image(systemName: item.hasPassword || item.hasPasskey ? "key.horizontal" : "number")

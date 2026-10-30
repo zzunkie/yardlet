@@ -285,14 +285,16 @@ final class VaultCenter: ObservableObject {
         if let name = request.itemName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
             // Several accounts on one site often share its name (an import names items by site), so an item
             // is named by its name or its username.
+            // An item's other fields tell apart accounts of one username (an AWS account ID, design §17).
             func isNamed(_ item: VaultItem) -> Bool {
-                item.name.compare(name, options: [.caseInsensitive]) == .orderedSame
-                    || !item.username.isEmpty && item.username.compare(name, options: [.caseInsensitive]) == .orderedSame
+                ([item.name, item.username] + (item.fields ?? []).map(\.value)).contains {
+                    !$0.isEmpty && $0.compare(name, options: [.caseInsensitive]) == .orderedSame
+                }
             }
             let here = matching.filter(isNamed)
             guard here.count < 2 else {
                 return refuse(request, item: nil, "Several items for \(host) are named “\(name)”: "
-                    + here.map(Self.label).joined(separator: ", ") + ". Name one by its username.", retry: .withChanges)
+                    + here.map(Self.label).joined(separator: ", ") + ". Name one by its username or another value in its parentheses.", retry: .withChanges)
             }
             guard var named = here.first ?? onSite.first(where: isNamed) ?? items.first(where: isNamed) else {
                 return refuse(request, item: nil, "No saved item is named “\(name)”."
@@ -331,7 +333,7 @@ final class VaultCenter: ObservableObject {
             }
             guard matching.count == 1 else {
                 return refuse(request, item: nil, "Several items are saved for \(host): "
-                    + matching.map(Self.label).joined(separator: ", ") + ". Name one with item, by its name or username.",
+                    + matching.map(Self.label).joined(separator: ", ") + ". Name one with item, by its name, its username or another value in its parentheses.",
                     retry: .withChanges)
             }
             item = only
@@ -534,7 +536,7 @@ final class VaultCenter: ObservableObject {
 
     /// An item as a refusal lists it: its name, and the username that tells apart items of one name.
     private static func label(_ item: VaultItem) -> String {
-        item.username.isEmpty ? "“\(item.name)”" : "“\(item.name)” (\(item.username))"
+        item.identity.isEmpty ? "“\(item.name)”" : "“\(item.name)” (\(item.identity))"
     }
 
     /// A refused code, naming the codes with no site the code bar offers on this page, if any.
@@ -689,12 +691,14 @@ final class VaultCenter: ObservableObject {
     /// The key button's list for a page (design §16): the page's own items and, for a search, every other item it
     /// finds by name, username or site. `codes` keeps to the items with a two-factor code (the code bar's list).
     /// The list is the person's: no tool gives it to an agent.
-    func pickerItems(for origin: String?, matching query: String, codes: Bool = false)
+    func pickerItems(for origin: String?, matching query: String, codes: Bool = false, first: UUID? = nil)
         -> (here: [VaultItem], elsewhere: [VaultItem]) {
         guard environment.isAllowedBuild, isEnabled else { return ([], []) }
         let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let found = items.filter { (!codes || $0.hasOneTimeCode) && $0.matches(query) }
-        let here = origin.map { origin in found.filter { $0.sites.contains { VaultSite.matches($0, origin: origin) } } } ?? []
+        let site = origin.map { origin in found.filter { $0.sites.contains { VaultSite.matches($0, origin: origin) } } } ?? []
+        // The item filled on the sign-in's earlier step comes first (design §17).
+        let here = site.filter { $0.id == first } + site.filter { $0.id != first }
         guard searching else { return (here, []) }
         let elsewhere = found.filter { item in !here.contains { $0.id == item.id } }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
