@@ -49,11 +49,35 @@ package enum TaskSuggestionToolCatalog {
     /// `spawn_task` answers much the same, does not draw Yardlet chips.
     package static let resultSignature = "A chip is showing for the user in Yardlet"
 
-    /// The task ID a `spawn_task` result names, when the text is Yardlet's result.
+    /// The task ID a `spawn_task` result names, when the text is Yardlet's result. The session rail
+    /// asks this of every finished call each time it updates, so the text is searched as UTF-8 bytes,
+    /// which both markers are, with the C library's byte search rather than character by character.
     package static func taskID(inResult text: String?) -> String? {
-        guard let text, text.contains(resultSignature), let label = text.range(of: taskIDLabel) else { return nil }
-        let candidate = String(text[label.upperBound...].prefix(13))
+        guard let text, byteOffset(of: resultSignature, in: text) != nil,
+              let label = byteOffset(of: taskIDLabel, in: text) else { return nil }
+        let start = text.utf8.index(text.utf8.startIndex, offsetBy: label + taskIDLabel.utf8.count)
+        let candidate = String(text[start...].prefix(13))
         return isTaskID(candidate) ? candidate : nil
+    }
+
+    /// Where `needle` first occurs in `text`, in UTF-8 bytes from its start.
+    private static func byteOffset(of needle: String, in text: String) -> Int? {
+        var text = text, needle = needle
+        return text.withUTF8 { haystack in
+            needle.withUTF8 { needle in
+                guard let first = needle.first, let base = haystack.baseAddress, let wanted = needle.baseAddress,
+                      needle.count <= haystack.count else { return nil }
+                let last = haystack.count - needle.count
+                var start = 0
+                while start <= last {
+                    guard let found = memchr(base + start, Int32(first), last - start + 1) else { return nil }
+                    let offset = base.distance(to: found.assumingMemoryBound(to: UInt8.self))
+                    if memcmp(found, wanted, needle.count) == 0 { return offset }
+                    start = offset + 1
+                }
+                return nil
+            }
+        }
     }
 
     /// `place` words where Start starts the task when the agent named a place ("in /path, nested under
