@@ -289,8 +289,9 @@ final class TaskContextUsageRestoreTests: XCTestCase {
     /// A detached Codex task: opening it reads its thread as before and, from the rollout that read
     /// names, the latest token usage, which shows until the thread reports its own. Nothing is
     /// resumed and no turn starts; after a restart the index has it before the thread is read.
-    /// Restoring selects the task, and choosing a task starts reading it (NATIVE_SESSION_STORAGE,
-    /// 2026-10-18), so the restarted App Server holds that read until the index's value is seen.
+    /// Restoring selects the task, and choosing a task starts reading it (docs/NATIVE_SESSION_STORAGE.md,
+    /// "Reading long histories in parts"), so the restarted App Server holds that read until the index's
+    /// value is seen.
     func testOpeningADetachedCodexTaskReadsItsRollout() async throws {
         let rollout = root.appending(path: "rollout-2026-10-17T03-00-00-thread-saved.jsonl")
         try Self.rollout([Self.sessionMeta, Self.tokenCount(lastTotal: 64_600, window: 258_400),

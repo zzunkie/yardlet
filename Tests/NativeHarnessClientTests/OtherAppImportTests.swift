@@ -426,8 +426,8 @@ final class OtherAppImportTests: XCTestCase {
 
     /// An imported task starts nothing; opening it reads the provider's own history the way a task
     /// restored after relaunch does: Claude's transcript, Codex's thread with `thread/read`. Importing
-    /// one conversation opens its task, and choosing a task starts that read (NATIVE_SESSION_STORAGE,
-    /// 2026-10-18), so the checks wait for the read rather than for the import alone.
+    /// one conversation opens its task, and choosing a task starts that read (docs/NATIVE_SESSION_STORAGE.md,
+    /// "Reading long histories in parts"), so the checks wait for the read rather than for the import alone.
     func testImportStartsNoRuntimeAndOpeningShowsTheHistory() async throws {
         let fixture = try makeFixture()
         try transcript(fixture.config, fixture.project, Self.ids[0], lines: [
