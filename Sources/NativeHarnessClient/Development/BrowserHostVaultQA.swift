@@ -20,6 +20,8 @@ final class BrowserHostVaultQA {
     private var broker: AgentToolBroker { MacAgentToolService.shared.broker }
     private var vault: VaultCenter { MacAgentToolService.shared.vault }
     private var token = ""
+    /// The last `serve`'s interception being turned off.
+    private var servingStopped: Task<Void, Never>?
 
     /// Made-up values for the QA server; nothing here signs in anywhere.
     private static let username = "ada@example.test"
@@ -606,6 +608,7 @@ final class BrowserHostVaultQA {
         await exercisePanelAddress(controller, item: saved)
         await exercisePanelCodes(controller)
         await exercisePanelPasswords(controller)
+        await exercisePanelMadePasswordsKept(controller)
         await exercisePanelPicks(controller)
     }
 
@@ -840,8 +843,10 @@ final class BrowserHostVaultQA {
     }
 
     /// Serves the QA server's pages at the given https addresses in one tab through CDP request interception
-    /// (`Fetch.fulfillRequest`), so a page has a registrable domain and nothing leaves the Mac. Returns how to stop.
+    /// (`Fetch.fulfillRequest`), so a page has a registrable domain and nothing leaves the Mac. Returns how to stop;
+    /// the next stage's serving waits for the stop, so that it does not turn off the interception that one turns on.
     private func serve(_ hosts: [String], on tab: BrowserTab) async -> () -> Void {
+        await servingStopped?.value
         let base = base
         let served = tab.devTools.observeEvents { method, params in
             guard method == "Fetch.requestPaused", let id = params["requestId"]?.stringValue,
@@ -859,9 +864,9 @@ final class BrowserHostVaultQA {
             }
         }
         _ = try? await tab.devTools.send("Fetch.enable", ["patterns": .array(hosts.map { .object(["urlPattern": .string($0 + "*")]) })])
-        return {
+        return { [weak self] in
             tab.devTools.stopObservingEvents(served)
-            Task { _ = try? await tab.devTools.send("Fetch.disable") }
+            self?.servingStopped = Task { _ = try? await tab.devTools.send("Fetch.disable") }
         }
     }
 
@@ -950,6 +955,198 @@ final class BrowserHostVaultQA {
         let menu = controller.view?.extraContextMenuItems?() ?? []
         check("panel: the page's menu offers a strong password while a password field has the focus",
               focused && menu.first?.title == L10n.string("Use Strong Password"), menu.map(\.title).joined(separator: ", "))
+    }
+
+    /// What keeps a made password in the vault (design §15): a fill the page does not answer in time keeps its item, and
+    /// so does emptying the fields that hold it;
+    /// a dialog that changes the password from a [role=button] with the page's own request counts as sent once its
+    /// fields go, and not on an error, its close button or Cancel, for a made password and a typed one alike; there and
+    /// on a recovery's form with no username the bar asks to update the site's one sign-in; and each step is in the
+    /// usage log without the value. Clicks and keys are trusted input, as the panel gives the page. Pages of other
+    /// sites are the QA server's, served at https `.test` addresses (`serve`).
+    private func exercisePanelMadePasswordsKept(_ controller: BrowserHostPaneController) async {
+        guard let first = controller.tab else { return check("panel: a tab for the made password checks", false, "no tab") }
+        let dialogSite = "https://www.qa-change.test/"
+        let recoverSite = "https://www.qa-recover.test/"
+        let member = VaultItem(name: "QA change", sites: ["qa-change.test"], username: "member@example.test")
+        let recovering = VaultItem(name: "QA recover", sites: ["qa-recover.test"], username: "recover@example.test")
+        let memberOld = "qa-change-old-not-real"
+        try? vault.save(member, secret: VaultSecret(password: memberOld))
+        try? vault.save(recovering, secret: VaultSecret(password: "qa-recover-old-not-real"))
+        let stopServing = await serve([dialogSite, recoverSite], on: first)
+        defer { stopServing() }
+        func open(_ address: String) async -> BrowserTab? {
+            controller.addressInput = address
+            controller.submitAddress()
+            guard await waitUntilAsync(.seconds(20), {
+                controller.tab?.currentURL == address && controller.tab?.isLoading == false
+            }), let tab = controller.tab else {
+                check("panel: \(address) loads", false, controller.tab?.currentURL ?? "no tab")
+                return nil
+            }
+            try? await Task.sleep(for: .seconds(1))
+            return tab
+        }
+        func page(_ tab: BrowserTab, _ expression: String) async -> JSONValue? {
+            let result = try? await tab.devTools.send("Runtime.evaluate", ["expression": .string(expression), "returnByValue": .bool(true)],
+                                                      timeout: .seconds(20))
+            return result?["result"]?["value"]
+        }
+        func type(_ tab: BrowserTab, _ field: String, _ text: String) async {
+            _ = await page(tab, "document.getElementById('\(field)').focus()")
+            _ = try? await tab.devTools.send("Input.insertText", ["text": .string(text)], timeout: .seconds(10))
+        }
+        func press(_ tab: BrowserTab, _ id: String) async {
+            let point = await page(tab, "(() => { const r = document.getElementById('\(id)').getBoundingClientRect(); "
+                + "return [r.left + r.width / 2, r.top + r.height / 2]; })()")?.arrayValue
+            guard let x = point?.first?.doubleValue, let y = point?.last?.doubleValue else {
+                return check("panel: \(id) is on the page to click", false, "\(String(describing: point))")
+            }
+            for (kind, buttons) in [("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 0)] {
+                var event: [String: JSONValue] = ["type": .string(kind), "x": .number(x), "y": .number(y), "buttons": .integer(Int64(buttons))]
+                if kind != "mouseMoved" { event["button"] = .string("left"); event["clickCount"] = .integer(1) }
+                _ = try? await tab.devTools.send("Input.dispatchMouseEvent", event, timeout: .seconds(10))
+            }
+        }
+        // The person empties a field: its text selected, then Backspace.
+        func empty(_ tab: BrowserTab, _ id: String) async {
+            _ = await page(tab, "(() => { const f = document.getElementById('\(id)'); f.focus(); f.select(); return true })()")
+            for kind in ["rawKeyDown", "keyUp"] {
+                var event: [String: JSONValue] = ["type": .string(kind), "key": .string("Backspace"), "code": .string("Backspace"),
+                                                  "windowsVirtualKeyCode": .integer(8)]
+                if kind == "rawKeyDown" { event["commands"] = .array([.string("deleteBackward")]) }
+                _ = try? await tab.devTools.send("Input.dispatchKeyEvent", event, timeout: .seconds(10))
+            }
+        }
+        func password(_ id: UUID?) -> String? { id.flatMap { vault.secret(of: $0)?.password } }
+        func logged(_ id: UUID?) -> [VaultUse] { vault.allUses().filter { $0.itemID == id && $0.kinds == ["new_password"] } }
+
+        // A fill the page does not answer within the fill's 10 seconds keeps its item.
+        guard let slow = await open(base + "vault/signup?slow") else { return }
+        await type(slow, "user", "slow@example.test")
+        _ = await page(slow, "document.getElementById('pass').focus()")
+        _ = await waitUntilAsync(.seconds(5)) { controller.vaultPasswordOffer != nil }
+        let before = controller.madePassword?.item
+        controller.useStrongPassword()
+        let tied = await waitUntilAsync(.seconds(25)) { controller.madePassword != nil && controller.madePassword?.item != before }
+        let slowItem = vault.items.first { $0.username == "slow@example.test" }
+        let slowValue = await page(slow, "pass.value")?.stringValue
+        check("panel: a made password whose fill the page did not answer stays in its item",
+              tied && slowItem != nil && slowValue?.isEmpty == false && password(slowItem?.id) == slowValue
+                && logged(slowItem?.id).contains { $0.reason?.contains("no answer") == true },
+              "tied \(tied), item \(slowItem?.name ?? "none"), log \(logged(slowItem?.id).compactMap(\.reason))")
+
+        // A change dialog: an error that keeps its fields, and its close button, are no submission.
+        guard let failing = await open(dialogSite + "vault/change-dialog?fail") else { return }
+        await type(failing, "current", memberOld)
+        _ = await page(failing, "document.getElementById('fresh').focus()")
+        let dialogOffered = await waitUntilAsync(.seconds(5)) { controller.vaultPasswordOffer != nil }
+        controller.useStrongPassword()
+        let dialogFilled = await waitUntilAsync(.seconds(5)) {
+            await page(failing, "fresh.value !== '' && fresh.value === again.value") == .bool(true)
+        }
+        let firstValue = await page(failing, "fresh.value")?.stringValue ?? ""
+        let made = vault.items.first { $0.sites == ["qa-change.test"] && $0.username.isEmpty }
+        check("panel: in a change dialog with no form and no username the made password goes in beside the site's sign-in",
+              dialogOffered && dialogFilled && password(made?.id) == firstValue && password(member.id) == memberOld,
+              "offered \(dialogOffered), filled \(dialogFilled), beside \(made?.name ?? "none")")
+        await press(failing, "go")
+        let refused = await waitUntilAsync(.seconds(5)) { await page(failing, "error.textContent !== ''") == .bool(true) }
+        try? await Task.sleep(for: .milliseconds(1500))
+        let afterError = controller.vaultOffer == nil && controller.madePassword?.submitted == false
+        await press(failing, "close")
+        let closed = await waitUntilAsync(.seconds(3)) { await page(failing, "!document.getElementById('dialog')") == .bool(true) }
+        try? await Task.sleep(for: .milliseconds(1500))
+        check("panel: a change dialog's error that keeps its fields, or its close button, sends nothing",
+              refused && afterError && closed && controller.vaultOffer == nil && controller.madePassword?.submitted == false
+                && password(made?.id) == firstValue,
+              "error \(refused), kept \(afterError), closed \(closed), offer \(controller.vaultOffer != nil)")
+
+        // Emptying the fields that hold the made password leaves its item as it is: the log says so once both are empty,
+        // not after the confirmation alone.
+        guard let dialog = await open(dialogSite + "vault/change-dialog") else { return }
+        await type(dialog, "current", memberOld)
+        _ = await page(dialog, "document.getElementById('fresh').focus()")
+        _ = await waitUntilAsync(.seconds(5)) { controller.vaultPasswordOffer != nil }
+        controller.useStrongPassword()
+        _ = await waitUntilAsync(.seconds(5)) { await page(dialog, "fresh.value !== '' && fresh.value === again.value") == .bool(true) }
+        let secondValue = await page(dialog, "fresh.value")?.stringValue ?? ""
+        let emptiedLog = { logged(made?.id).contains { $0.reason?.contains("emptied") == true } }
+        await empty(dialog, "again")
+        try? await Task.sleep(for: .seconds(1))
+        let keptAfterConfirmation = password(made?.id) == secondValue && !emptiedLog()
+        await empty(dialog, "fresh")
+        let emptied = await waitUntilAsync(.seconds(5)) { emptiedLog() }
+        let previous = vault.secret(of: made?.id ?? UUID())?.previousPasswords?.map(\.password) ?? []
+        check("panel: emptying the fields that hold the made password leaves it in its item, and the log says so",
+              keptAfterConfirmation && emptied && password(made?.id) == secondValue && previous.first == firstValue,
+              "kept after the confirmation \(keptAfterConfirmation), logged \(emptied), previous \(previous.count)")
+
+        // Sending the dialog from its [role=button] counts once its fields go, and the bar asks to update the site's
+        // one sign-in, as the form has no username.
+        controller.useStrongPassword()
+        _ = await waitUntilAsync(.seconds(5)) { await page(dialog, "fresh.value !== '' && fresh.value === again.value") == .bool(true) }
+        let thirdValue = await page(dialog, "fresh.value")?.stringValue ?? ""
+        let reused = password(made?.id) == thirdValue && vault.items.filter { $0.sites == ["qa-change.test"] }.count == 2
+        await press(dialog, "go")
+        let changed = await waitUntilAsync(.seconds(5)) { await page(dialog, "window.qa.changed") == .bool(true) }
+        let asked = await waitUntilAsync(.seconds(5)) { controller.vaultOffer?.updates?.id == member.id }
+        try? await Task.sleep(for: .milliseconds(300))
+        capture(controller, named: "vault-panel-password-dialog-update.png")
+        check("panel: a dialog sent from a [role=button] whose fields then go counts as sent, and the bar asks to update the site's one sign-in",
+              reused && changed && asked && controller.vaultOffer?.presaved == made?.id && controller.madePassword?.submitted == true,
+              "reused \(reused), changed \(changed), offer \(controller.vaultOffer.map { "\($0.updates?.name ?? "new") beside \(String(describing: $0.presaved))" } ?? "none")")
+        controller.acceptVaultOffer()
+        let madeLog = logged(made?.id)
+        let values = [firstValue, secondValue, thirdValue]
+        check("panel: updating gives the sign-in the made password, and the log says what became of it without the value",
+              password(member.id) == thirdValue && vault.secret(of: member.id)?.previousPasswords?.first?.password == memberOld
+                && !vault.items.contains { $0.id == made?.id }
+                && madeLog.contains { $0.outcome == .saved && $0.reason?.contains("emptied") == true }
+                && madeLog.contains { $0.outcome == .saved && $0.reason?.contains("asks to update") == true }
+                && madeLog.contains { $0.outcome == .deleted && $0.reason?.contains("QA change") == true }
+                && !vault.allUses().contains { use in values.contains { !$0.isEmpty && (use.reason ?? "").contains($0) } },
+              madeLog.map { "\($0.outcome.rawValue): \($0.reason ?? "")" }.joined(separator: " | "))
+
+        // A typed new password in the same dialog: Cancel sends nothing, Change password offers it.
+        let typedPassword = "qa-typed-new-not-real"
+        guard let cancelled = await open(dialogSite + "vault/change-dialog?typed") else { return }
+        for (field, text) in [("current", thirdValue), ("fresh", typedPassword), ("again", typedPassword)] {
+            await type(cancelled, field, text)
+        }
+        controller.vaultPasswordOffer = nil
+        await press(cancelled, "cancel")
+        let cancelledClosed = await waitUntilAsync(.seconds(3)) { await page(cancelled, "!document.getElementById('dialog')") == .bool(true) }
+        try? await Task.sleep(for: .milliseconds(1500))
+        let noOffer = controller.vaultOffer == nil
+        guard let typed = await open(dialogSite + "vault/change-dialog?typed=2") else { return }
+        for (field, text) in [("current", thirdValue), ("fresh", typedPassword), ("again", typedPassword)] {
+            await type(typed, field, text)
+        }
+        controller.vaultPasswordOffer = nil
+        await press(typed, "go")
+        let typedOffered = await waitUntilAsync(.seconds(5)) { controller.vaultOffer?.password == typedPassword }
+        check("panel: a typed new password in the dialog is offered once the dialog sends it, and not after Cancel",
+              cancelledClosed && noOffer && typedOffered,
+              "cancelled \(cancelledClosed), no offer then \(noOffer), offered \(typedOffered)")
+        controller.vaultOffer = nil
+
+        // A recovery's new password form with no username: the bar asks to update the site's one sign-in.
+        guard let recover = await open(recoverSite + "vault/recover") else { return }
+        _ = await page(recover, "document.getElementById('pass').focus()")
+        let recoverOffered = await waitUntilAsync(.seconds(5)) { controller.vaultPasswordOffer != nil }
+        controller.useStrongPassword()
+        _ = await waitUntilAsync(.seconds(5)) { await page(recover, "pass.value !== ''") == .bool(true) }
+        let recoverValue = await page(recover, "pass.value")?.stringValue ?? ""
+        let presaved = vault.items.first { $0.sites == ["qa-recover.test"] && $0.username.isEmpty }
+        await press(recover, "go")
+        let recoverAsked = await waitUntilAsync(.seconds(5)) { controller.vaultOffer?.updates?.id == recovering.id }
+        let recoverSent = await page(recover, "window.qa.submitted") == .bool(true)
+        controller.acceptVaultOffer()
+        check("panel: on a recovery's form with no username the made password is kept, and the bar asks to update the site's one sign-in",
+              recoverOffered && presaved != nil && !vault.items.contains { $0.id == presaved?.id } && recoverSent && recoverAsked
+                && password(recovering.id) == recoverValue && !recoverValue.isEmpty,
+              "offered \(recoverOffered), presaved \(presaved != nil), sent \(recoverSent), asked \(recoverAsked)")
     }
 
     /// What the person picks from the key button's list (design §16), without opening the list itself (a popover

@@ -8,7 +8,8 @@ import YardletAgentTools
 /// The vault's contracts that would break without a visible sign (docs/BROWSER_VAULT_DESIGN.md):
 /// which pages an item's sites cover, the RFC 6238 codes, the refusal of an item asked for on
 /// another site, the codes an authenticator app's export brings over, how such a code with no site
-/// comes to fill on its site, by the person or by its account's sign-in, and the passwords it makes.
+/// comes to fill on its site, by the person or by its account's sign-in, and the passwords it makes, which stay in the
+/// vault unless the page certainly took nothing.
 @MainActor
 final class VaultTests: XCTestCase {
     func testSitesCoverTheirSubdomainsOverHTTPSAndNothingThatOnlyLooksAlike() {
@@ -382,10 +383,10 @@ final class VaultTests: XCTestCase {
         XCTAssertEqual(draw.index(below: 3), 2)
 
         let saved = VaultItem(name: "GitHub", sites: ["github.com"], username: "ada")
+        let repository = InMemoryVaultRepository(items: [saved])
         let center = VaultCenter(environment: VaultCenter.Environment(
             secrets: InMemoryVaultSecretStore([saved.id: VaultSecret(password: "correct horse")]),
-            repository: InMemoryVaultRepository(items: [saved]), hmac: MacVault.hmac, isAllowedBuild: true,
-            defaults: .vaultTests()))
+            repository: repository, hmac: MacVault.hmac, isAllowedBuild: true, defaults: .vaultTests()))
         let beside = try center.presaveMadePassword("made-1", origin: "https://github.com", username: "ada")
         XCTAssertEqual(beside.username, "")
         XCTAssertEqual(center.secret(of: saved.id)?.password, "correct horse")
@@ -407,6 +408,37 @@ final class VaultTests: XCTestCase {
         let newAccount = await center.authorizeNewPassword(request(nil), username: "grace")
         guard case .failure = sameUser, case .failure = sameName, case .success(.always) = newAccount else {
             return XCTFail("an agent's new password went over a saved one, or not into a new account")
+        }
+
+        // An item made for a password the page certainly did not take is deleted with a reason; the log says what
+        // became of a made password without the value, and the item sheet's recent use keeps to fills and refusals.
+        try center.deleteMadePassword(beside.id, origin: "https://github.com", "The page took nothing.")
+        XCTAssertEqual(repository.uses.filter { $0.itemID == beside.id }.map(\.outcome), [.saved, .saved, .deleted])
+        XCTAssertFalse(repository.uses.contains { use in ["made-1", "made-2"].contains { (use.reason ?? "").contains($0) } })
+        XCTAssertTrue(center.uses(of: beside.id).isEmpty)
+
+        // Only a fill that certainly put nothing in counts as nothing: a page that gives no answer may hold the value,
+        // so its document stays recorded as filled.
+        let cdp = ScriptedCDP()
+        cdp.responders["Page.getFrameTree"] = { _ in
+            .object(["frameTree": .object(["frame": .object(["id": .string("F"), "loaderId": .string("L"),
+                                                             "securityOrigin": .string("https://github.com")])])])
+        }
+        let frame = (id: "F", loaderID: "L", origin: "https://github.com")
+        let answers: [(JSONValue?, VaultPageScripts.NewPasswordFill, Int)] = [
+            (ScriptedCDP.value(.object(["kinds": .array([.string("new_password")])])), .filled, 1),
+            (ScriptedCDP.value(.object(["error": .string("moved")])), .nothing, 0),
+            (nil, .unanswered, 1)
+        ]
+        for (answer, expected, recorded) in answers {
+            cdp.responders["Runtime.callFunctionOn"] = { _ in
+                guard let answer else { throw BrowserDevToolsError.timedOut("Runtime.callFunctionOn") }
+                return answer
+            }
+            let fills = BrowserVaultFills()
+            let result = await VaultPageScripts.fillNewPassword(cdp, frame: frame, fills: fills, into: "field", password: "made-3")
+            XCTAssertEqual(result, expected)
+            XCTAssertEqual(fills.fills.count, recorded, "\(expected)")
         }
     }
 }

@@ -21,8 +21,10 @@ two-step dialog shaped like Instagram's, whose code field only a label after it 
 key), /vault/otp/decoys (fields that are not code fields: search, phone, a card's, postal code, promo code, birth year
 and password), /vault/otp/cases (fields of other sites and languages, each with what the code field rule should say of
 it), /isolation (a blank page whose cookies and localStorage the QA reads and sets), /vault/reveal (a password field with a show button), /vault/step (a first step with the email only), /vault/signup (a
-sign-up form whose new password and confirmation fields carry passwordrules), /vault/change (a password change form for
-person@example.test: current, new and confirmation fields, none marked, the current one told apart by its label) and /vault/webauthn (a blank
+sign-up form whose new password and confirmation fields carry passwordrules; ?slow keeps the page busy as the password
+goes in), /vault/change (a password change form for person@example.test: current, new and confirmation fields, none
+marked, the current one told apart by its label), /vault/change-dialog (VAULT_CHANGE_DIALOG below), /vault/recover (a
+recovery's new password form with no username) and /vault/webauthn (a blank
 page for WebAuthn on localhost), /passkey (a sign-in form with passkey autofill and the passkey requests sites
 make, started by window.passkey(kind)), for what ordinary sites ask of a browser /compat (window.compat(kind)
 starts each request and window.qa.compat says how it ended; links to other apps' addresses, mailto:, tel: and one
@@ -645,6 +647,10 @@ window.qa = {submitted: null, ok: () => /^[a-zA-Z0-9!-]{12,18}$/.test(pass.value
   && /[A-Z]/.test(pass.value) && /[0-9]/.test(pass.value) && /[-!]/.test(pass.value) && pass.value === again.value};
 document.getElementById('form').addEventListener('submit', e => { e.preventDefault();
   window.qa.submitted = {user: user.value, ok: window.qa.ok()}; });
+// ?slow: the page's own handler of the first input into the password field keeps the page busy for 12 seconds,
+// longer than the fill waits for an answer.
+if (location.search.includes('slow')) pass.addEventListener('input', () => { const end = Date.now() + 12000;
+  while (Date.now() < end); }, {once: true});
 </script>'''
 
 VAULT_CHANGE = '''<!doctype html><meta charset="utf-8"><title>Vault password change</title>
@@ -657,6 +663,41 @@ window.qa = {submitted: null};
 document.getElementById('form').addEventListener('submit', e => { e.preventDefault();
   window.qa.submitted = {current: current.value, match: fresh.value !== '' && fresh.value === again.value,
     changed: fresh.value !== current.value}; });
+</script>'''
+
+# A password change dialog shaped like one that changes it in place: no form and no username field, a close button
+# above the fields, and Cancel and Change password as [role=button] elements after them. Change password sends a
+# request from the page's script, then empties the fields and shows the dialog's next step without them; with ?fail
+# it shows an error and keeps the fields. window.qa.changed says whether the new password and its confirmation
+# matched when it was sent.
+VAULT_CHANGE_DIALOG = '''<!doctype html><meta charset="utf-8"><title>Vault change dialog</title>
+<div role="dialog" id="dialog"><div><div role="button" tabindex="0" id="close" aria-label="Close">&times;</div>
+<h2>Change password</h2></div>
+<div id="fields"><label>Current password <input id="current" type="password"></label>
+<label>New password <input id="fresh" type="password"></label>
+<label>Re-type new password <input id="again" type="password"></label><p id="error"></p>
+<div role="button" tabindex="0" id="cancel">Cancel</div> <div role="button" tabindex="0" id="go">Change password</div></div></div>
+<script>
+window.qa = {sent: 0, changed: null};
+document.getElementById('go').addEventListener('click', async () => {
+  window.qa.sent += 1;
+  await fetch(location.pathname + '?sent=' + Date.now(), {cache: 'no-store'});
+  if (location.search.includes('fail')) { error.textContent = 'The current password is incorrect.'; return; }
+  window.qa.changed = fresh.value !== '' && fresh.value === again.value;
+  for (const f of [current, fresh, again]) f.value = '';
+  document.getElementById('fields').replaceWith(Object.assign(document.createElement('p'),
+    {id: 'done', textContent: 'Your password was changed.'}));
+});
+for (const id of ['close', 'cancel']) document.getElementById(id).addEventListener('click', () => dialog.remove());
+</script>'''
+
+# The last step of an account recovery: one new password field named so, in a form with no username field.
+VAULT_RECOVER = '''<!doctype html><meta charset="utf-8"><title>Vault recovery</title>
+<form id="form" method="post"><label>New password <input id="pass" name="password_new" type="password"></label>
+<button id="go">Continue</button></form>
+<script>
+window.qa = {submitted: null};
+document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = pass.value !== ''; });
 </script>'''
 
 ISOLATION = '''<!doctype html><meta charset="utf-8"><title>Isolation</title><h1>Isolation</h1>'''
@@ -1318,8 +1359,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = VAULT_STEP.encode()
         elif self.path.startswith('/vault/signup'):
             payload = VAULT_SIGNUP.encode()
+        elif self.path.startswith('/vault/change-dialog'):
+            payload = VAULT_CHANGE_DIALOG.encode()
         elif self.path.startswith('/vault/change'):
             payload = VAULT_CHANGE.encode()
+        elif self.path.startswith('/vault/recover'):
+            payload = VAULT_RECOVER.encode()
         elif self.path.startswith('/vault/webauthn'):
             payload = VAULT_WEBAUTHN.encode()
         elif self.path.startswith('/passkey'):
