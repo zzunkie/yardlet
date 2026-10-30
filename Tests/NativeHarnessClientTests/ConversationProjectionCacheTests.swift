@@ -4,9 +4,10 @@ import XCTest
 
 /// A long Codex thread projected through `ConversationProjectionCache`, as the renderer projects
 /// each update: an update projects again only the turns whose input it changed
-/// (plan A3.4). The counts are exact; the time bound is generous so a loaded machine passes. The
-/// streaming benchmark is `LongCodexThreadPerformanceTests` (route `projection`).
-final class ConversationProjectionPerformanceTests: XCTestCase {
+/// (plan A3.4). The counts are exact and every kept projection equals a fresh one, so these run with
+/// the quick tests; the time bound is generous so a loaded machine passes. The streaming benchmark is
+/// `LongCodexThreadPerformanceTests` (route `projection`).
+final class ConversationProjectionCacheTests: XCTestCase {
     private let decoder = CodexTaskDecoder()
     private let workspace = URL(filePath: "/tmp/yardlet-projection-performance", directoryHint: .isDirectory)
 
