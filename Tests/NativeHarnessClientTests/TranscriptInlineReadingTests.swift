@@ -88,4 +88,27 @@ final class TranscriptInlineReadingTests: XCTestCase {
         XCTAssertTrue(value.attributed.runs.compactMap(\.link).isEmpty)
     }
 
+    /// Only two tildes strike; one stays a tilde, as a range ("240~400ms") or "about" ("~5") writes it.
+    func testOnlyDoubleTildesStrike() throws {
+        func struck(_ value: TranscriptInlineContent) -> [String] {
+            value.attributed.runs.filter { $0.inlinePresentationIntent?.contains(.strikethrough) == true }
+                .map { String(value.attributed[$0.range].characters) }
+        }
+        let range = try content("240~400ms에서 110~150ms로, ~*about*~ ~`5`~ ~[five](https://example.com)~ and ~~gone~~")
+        XCTAssertEqual(range.plainText, "240~400ms에서 110~150ms로, ~about~ ~5~ ~five~ and gone")
+        XCTAssertEqual(struck(range), ["gone"])
+        XCTAssertEqual(range.attributed.runs.first { $0.inlinePresentationIntent == .emphasized }
+            .map { String(range.attributed[$0.range].characters) }, "about")
+        // The same in a list, a quote and a table, and around and inside a double pair.
+        let nested = try XCTUnwrap(TranscriptMarkdownDocument("- > ~~a ~b~ c~~ 1~2").blocks.first)
+        guard case let .unorderedList(items, _) = nested, case let .blockQuote(quoted) = items.first?.blocks.first,
+              case let .paragraph(quote) = quoted.first else { return XCTFail("\(nested)") }
+        XCTAssertEqual(quote.plainText, "a ~b~ c 1~2")
+        XCTAssertEqual(struck(quote).joined(), "a ~b~ c")
+        guard case let .table(_, rows, _) = try XCTUnwrap(TranscriptMarkdownDocument("| a |\n| - |\n| 1~2 ~~x~~ 3~4 |").blocks.first)
+        else { return XCTFail() }
+        XCTAssertEqual(rows.first?.first?.plainText, "1~2 x 3~4")
+        XCTAssertEqual(rows.first.flatMap(\.first).map(struck), ["x"])
+    }
+
 }

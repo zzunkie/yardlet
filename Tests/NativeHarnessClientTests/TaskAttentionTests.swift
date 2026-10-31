@@ -108,6 +108,8 @@ final class TaskAttentionTests: XCTestCase {
         XCTAssertEqual(TaskAttentionDetail.firstLine("\n\n> - 2. Fixed  the parser\n## Next"), "Fixed the parser")
         XCTAssertEqual(TaskAttentionDetail.firstLine("```swift\nlet a = 1\n```"), "let a = 1")
         XCTAssertEqual(TaskAttentionDetail.firstLine("Tom &amp; Jerry: `a_b`"), "Tom & Jerry: a_b")
+        XCTAssertEqual(TaskAttentionDetail.firstLine("From 240~400ms to 110~150ms, ~~not~~ now"),
+                       "From 240~400ms to 110~150ms, not now")
         XCTAssertEqual(read.suggestions, [TaskAttentionSuggestion(id: "task_1a2b3c4d", title: "Fix the badge")])
         XCTAssertEqual(TaskAttentionDetail.reading([
             TranscriptEntry(content: .user(text: "Go")),
