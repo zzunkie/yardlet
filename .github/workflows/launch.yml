@@ -67,7 +67,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/image"
           ditto .build/Yardlet.app "$RUNNER_TEMP/image/Yardlet.app"
           ln -s /Applications "$RUNNER_TEMP/image/Applications"
-          hdiutil create -volname Yardlet -srcfolder "$RUNNER_TEMP/image" -format UDZO "Yardlet-$YARDLET_ARCHS.dmg"
+          # hdiutil on GitHub's runners sometimes fails with "Resource busy" and works when tried again.
+          for attempt in 1 2 3 4 5; do
+            hdiutil create -volname Yardlet -srcfolder "$RUNNER_TEMP/image" -format UDZO -ov "Yardlet-$YARDLET_ARCHS.dmg" && break
+            [[ $attempt == 5 ]] && exit 1
+            sleep 10
+          done
       # The browser panel's QA fixture is compiled into debug builds only.
       - name: Build the debug bundle for the browser check
         if: matrix.arch == 'x86_64'
