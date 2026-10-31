@@ -728,7 +728,7 @@ extension AppModel: SessionToolHandling {
             switch await sessionToolTask(reference, caller: caller) {
             case let .success(session):
                 results.append(ArchivedTaskResult(taskId: session.id.uuidString, title: session.title,
-                                                  reason: sessionToolArchiveRefusal(session, caller: caller)))
+                                                  reason: await sessionToolArchiveCheck(session, caller: caller)))
             case let .failure(error) where error.failure?.kind == .archived:
                 results.append(ArchivedTaskResult(taskId: reference, reason: "it is already archived.", retry: .no))
             case let .failure(error):
@@ -788,7 +788,7 @@ extension AppModel: SessionToolHandling {
                             with: now.with.filter { named.contains($0.id) },
                             kept: now.kept + now.with.filter { !named.contains($0.id) }.map { (task: $0, reason: nil) })
                         archivingSelf = true
-                    } else if let refusal = sessionToolArchiveRefusal(task, caller: caller) {
+                    } else if let refusal = await sessionToolArchiveCheck(task, caller: caller) {
                         results[index].reason = refusal
                     } else {
                         approved.append(task)
@@ -877,9 +877,12 @@ extension AppModel: SessionToolHandling {
         var reason: String?
     }
 
-    /// Why `archive_task` leaves a task as it is, or nil: it works or waits for the person, it is
-    /// changing, or it holds the person's unsent draft, which archiving would drop. The caller's own
-    /// task answers `sessionToolSelfArchiveRefusal` instead.
+    /// Why `archive_task` leaves a task as it is, or nil: it works or waits for the person, work it
+    /// started runs on after its turn (closing the session would end it; the Claude app holds
+    /// `archive_session` for another session's background task too, 4.29.0 `agentArchiveHoldFor`), it
+    /// is changing, or it holds the person's unsent draft, which archiving would drop. The caller's own
+    /// task answers `sessionToolSelfArchiveRefusal` instead. `sessionToolArchiveCheck` adds what only
+    /// the provider can list.
     func sessionToolArchiveRefusal(_ session: SessionRecord, caller: SessionToolCaller) -> String? {
         if session.id == caller.hostTaskID { return sessionToolSelfArchiveRefusal(session, caller: caller) }
         if let request = TaskAttentionProjection.waitingRequest(of: session, detail: taskAttentionDetails[session.id]) {
@@ -893,6 +896,7 @@ extension AppModel: SessionToolHandling {
         if sessionTools.runs(hostedBy: session.id).contains(where: { !$0.state.isFinished }) {
             return "a subagent it started is still running."
         }
+        if sessionToolHasBackgroundTasks(session.id) { return "a background command or agent it started is still running." }
         if switchingAccounts.contains(session.id) || sessionMutations.contains(session.id)
             || unarchivingSessionIDs.contains(session.id) {
             return "that task is changing (an account switch or an edit); try again shortly."
@@ -938,18 +942,25 @@ extension AppModel: SessionToolHandling {
         !BackgroundTasksProjection(entries: transcriptBySessionID[taskID] ?? []).rows.isEmpty
     }
 
-    /// Whether the caller's own task may be archived now, and with which child tasks: its refusal,
-    /// a Codex thread's background terminals (which `thread/archive` ends), or a child that holds
-    /// the archive back.
+    /// Why `archive_task` leaves a task as it is, or nil: its refusal (`sessionToolArchiveRefusal`),
+    /// or a Codex thread's background terminals, which `thread/archive` ends and only the thread's
+    /// App Server lists.
+    func sessionToolArchiveCheck(_ session: SessionRecord, caller: SessionToolCaller) async -> String? {
+        if let refusal = sessionToolArchiveRefusal(session, caller: caller) { return refusal }
+        if await codexBackgroundTerminals(of: session)?.isEmpty == false {
+            return "a background terminal it started is still running."
+        }
+        return nil
+    }
+
+    /// Whether the caller's own task may be archived now, and with which child tasks: its refusal
+    /// (`sessionToolArchiveCheck`), or a child that holds the archive back.
     func sessionToolSelfArchiveCheck(caller: SessionToolCaller) async -> (String?, SelfArchiveCascade) {
         guard let task = store.sessions.first(where: { $0.id == caller.hostTaskID }) else {
             return ("that task is no longer listed.", SelfArchiveCascade())
         }
-        if let refusal = sessionToolSelfArchiveRefusal(task, caller: caller) { return (refusal, SelfArchiveCascade()) }
-        if await codexBackgroundTerminals(of: task)?.isEmpty == false {
-            return ("a background terminal it started is still running.", SelfArchiveCascade())
-        }
-        let cascade = sessionToolSelfArchiveCascade(of: task, caller: caller)
+        if let refusal = await sessionToolArchiveCheck(task, caller: caller) { return (refusal, SelfArchiveCascade()) }
+        let cascade = await sessionToolSelfArchiveCascade(of: task, caller: caller)
         return (cascade.hold, cascade)
     }
 
@@ -964,27 +975,29 @@ extension AppModel: SessionToolHandling {
     /// The task's child tasks (`create_task`'s) as the Claude app's side sessions go with an archived
     /// session (3.1623.3 `archiveCascadeOf` → `sideSessionGoesWithParent`): a child goes with its
     /// parent when it works in the parent's folder or worktree, or when it has settled (nothing holds
-    /// it back from `archive_task`, it runs no background work, it is not pinned, and its own
-    /// children in its folder have settled too); its children follow it the same way. One that would
-    /// go with it but still works, or is pinned, holds the archive back, as the Claude app holds it
-    /// for a side session that shares the worktree; any other stays in the sidebar, at the top level
-    /// once its parent is archived. The Claude app also keeps a side session with an open pull
-    /// request of its own, which Yardlet does not know for a task nobody opened.
-    func sessionToolSelfArchiveCascade(of task: SessionRecord, caller: SessionToolCaller) -> SelfArchiveCascade {
+    /// it back from `archive_task`, it is not pinned, and its own children in its folder have
+    /// settled too); its children follow it the same way. One that would go with it but still
+    /// works, or is pinned, holds the archive back, as the Claude app holds it for a side session
+    /// that shares the worktree; any other stays in the sidebar, at the top level once its parent is
+    /// archived. The Claude app also keeps a side session with an open pull request of its own,
+    /// which Yardlet does not know for a task nobody opened.
+    func sessionToolSelfArchiveCascade(of task: SessionRecord, caller: SessionToolCaller) async -> SelfArchiveCascade {
         var cascade = SelfArchiveCascade()
         var visited: Set<UUID> = [task.id]
         var parents = [task]
         while !parents.isEmpty {
             let parent = parents.removeFirst()
             for child in sessionToolChildTasks(of: parent.id) where visited.insert(child.id).inserted {
-                let sharesPlace = sessionToolSharesPlace(child, with: parent)
-                guard sharesPlace || sessionToolChildHasSettled(child, caller: caller, visited: visited) else {
-                    cascade.kept.append((task: child, reason: sessionToolArchiveRefusal(child, caller: caller)))
+                let refusal = await sessionToolArchiveCheck(child, caller: caller)
+                var goesWithIt = sessionToolSharesPlace(child, with: parent)
+                if !goesWithIt, refusal == nil {
+                    goesWithIt = await sessionToolChildHasSettled(child, caller: caller, visited: visited)
+                }
+                guard goesWithIt else {
+                    cascade.kept.append((task: child, reason: refusal))
                     continue
                 }
-                if cascade.hold == nil, let reason = sessionToolArchiveRefusal(child, caller: caller)
-                    ?? (sessionToolHasBackgroundTasks(child.id) ? "a background command or agent it started is still running." : nil)
-                    ?? (child.isPinned ? "it is pinned." : nil) {
+                if cascade.hold == nil, let reason = refusal ?? (child.isPinned ? "it is pinned." : nil) {
                     cascade.hold = "its child task \(child.id.uuidString) (\(child.title)) works in its folder and would be "
                         + "archived with it, but \(reason)"
                 }
@@ -999,13 +1012,17 @@ extension AppModel: SessionToolHandling {
         store.sessions.filter { $0.parentTaskID == taskID && sessionTools.madeTask($0.id) }
     }
 
-    private func sessionToolChildHasSettled(_ child: SessionRecord, caller: SessionToolCaller, visited: Set<UUID>) -> Bool {
-        guard !child.isPinned, sessionToolArchiveRefusal(child, caller: caller) == nil,
-              !sessionToolHasBackgroundTasks(child.id) else { return false }
-        return sessionToolChildTasks(of: child.id).allSatisfy { grandchild in
-            visited.contains(grandchild.id) || !sessionToolSharesPlace(grandchild, with: child)
-                || sessionToolChildHasSettled(grandchild, caller: caller, visited: visited.union([child.id]))
+    /// Whether a child task nothing holds back from `archive_task` has settled: it is not pinned, and
+    /// its own children in its folder have settled too.
+    private func sessionToolChildHasSettled(_ child: SessionRecord, caller: SessionToolCaller, visited: Set<UUID>) async -> Bool {
+        guard !child.isPinned else { return false }
+        for grandchild in sessionToolChildTasks(of: child.id)
+        where !visited.contains(grandchild.id) && sessionToolSharesPlace(grandchild, with: child) {
+            guard await sessionToolArchiveCheck(grandchild, caller: caller) == nil,
+                  await sessionToolChildHasSettled(grandchild, caller: caller, visited: visited.union([child.id]))
+            else { return false }
         }
+        return true
     }
 
     /// The same folder, or the same Yardlet worktree.
@@ -1078,7 +1095,7 @@ extension AppModel: SessionToolHandling {
             await self.waitForSessionToolResult(named: SessionToolCatalog.archiveTask, in: taskID, after: callsBefore,
                                                 timeout: resultWait, unseenTimeout: unseenWait)
             guard let task = self.store.sessions.first(where: { $0.id == taskID }) else { return }
-            guard self.sessionToolSelfArchiveRefusal(task, caller: caller) == nil else {
+            guard await self.sessionToolArchiveCheck(task, caller: caller) == nil else {
                 return self.keepAfterSelfArchive(taskID)
             }
             if Self.isWorking(task) {
@@ -1089,12 +1106,14 @@ extension AppModel: SessionToolHandling {
                 if ended, Self.isWorking(current) { return self.keepAfterSelfArchive(taskID) }
             }
             guard let task = self.store.sessions.first(where: { $0.id == taskID }) else { return }
-            guard self.sessionToolSelfArchiveRefusal(task, caller: caller) == nil else {
+            guard await self.sessionToolArchiveCheck(task, caller: caller) == nil else {
                 return self.keepAfterSelfArchive(taskID)
             }
             // A child that started working or got a draft meanwhile stays.
-            let joining = children.compactMap { id in self.store.sessions.first { $0.id == id } }
-                .filter { self.sessionToolArchiveRefusal($0, caller: caller) == nil }
+            var joining: [SessionRecord] = []
+            for child in children.compactMap({ id in self.store.sessions.first { $0.id == id } }) {
+                if await self.sessionToolArchiveCheck(child, caller: caller) == nil { joining.append(child) }
+            }
             await self.archive([task] + joining)
         }
     }
