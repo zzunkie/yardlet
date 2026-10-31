@@ -1488,6 +1488,31 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(model.composerDrafts.tasks.existingDraft(for: fixture.neighbor.id)?.text, "Half a thought")
         XCTAssertTrue(Set(model.store.sessions.map(\.id)).isSuperset(of: [fixture.other.id, fixture.neighbor.id]))
 
+        // Work a task started that runs on after its turn, which closing its session would end: Claude
+        // Code's background command, and a Codex thread's background terminal.
+        await model.resume(fixture.sibling)
+        await model.resume(fixture.codex)
+        let shell = HarnessActivity(id: "bg-1", kind: "Bash", title: "npm run dev", isBackground: true,
+                                    subtask: HarnessSubtaskReference(taskID: "task-1", taskType: "local_bash"))
+        await fixture.adapter.emit(.activityStarted(shell), for: fixture.sibling.id)
+        try await waitUntil { model.sessionToolHasBackgroundTasks(fixture.sibling.id) }
+        await fixture.codexAdapter.setBackgroundTerminals([
+            CodexBackgroundTerminal(processID: "7", itemID: "item", command: "npm run dev", workspacePath: "")
+        ])
+        let background = await call(model, "archive_task",
+                                    ["task_ids": [fixture.sibling.id.uuidString, fixture.codex.id.uuidString]], from: fixture.caller)
+        XCTAssertTrue(background.isError, background.text)
+        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id))
+        XCTAssertEqual(try decode(ArchiveReport.self, background.text).tasks.map(\.reason),
+                       ["a background command or agent it started is still running.",
+                        "a background terminal it started is still running."])
+        let closed = await fixture.adapter.closed
+        let archivedThreads = await fixture.codexAdapter.archivedSessionIDs
+        XCTAssertFalse(closed.contains(fixture.sibling.id))
+        XCTAssertTrue(archivedThreads.isEmpty)
+        await fixture.adapter.emit(.activityCompleted(shell), for: fixture.sibling.id)
+        try await waitUntil { !model.sessionToolHasBackgroundTasks(fixture.sibling.id) }
+
         // The person says no: nothing is archived.
         let denied = Task { await self.call(model, "archive_task", ["task_ids": [fixture.sibling.id.uuidString]],
                                             from: fixture.caller) }
