@@ -1,0 +1,68 @@
+diff --git a/tests/test_app/ValueBoxingTests.swift b/tests/test_app/ValueBoxingTests.swift
+index 2246c28..98698bc 100644
+--- a/tests/test_app/ValueBoxingTests.swift
++++ b/tests/test_app/ValueBoxingTests.swift
+@@ -45,6 +45,16 @@ class ValueBoxingTests : XCTestCase {
+     XCTAssertEqual(NSStringFromClass(Derived.self), result)
+   }
+ 
++  public func testInWinRTClassKeepsIdentity() throws {
++    // A projected object passed as an Object reaches WinRT as the same COM object each time
++    let classy = Class()
++    XCTAssertTrue(try StaticClass.isSameObject(classy, classy))
++
++    // as does a Swift class derived from a projected one
++    let appDerived = AppDerived()
++    XCTAssertTrue(try StaticClass.isSameObject(appDerived, appDerived))
++  }
++
+   public func testInSwiftStruct() {
+     // Swift structs are wrapped and boxed by the runtime in a __SwiftValue class:
+     // https://github.com/apple/swift-corelibs-foundation/blob/4eacf8848d0a5a6bfb7a6fd52ad4ba0405dea5b2/Sources/Foundation/Bridging.swift#L73
+@@ -101,6 +111,7 @@ var valueBoxingTests: [XCTestCaseEntry] = [
+     ("InInt", ValueBoxingTests.testInInt),
+     ("InString", ValueBoxingTests.testInString),
+     ("InWinRTClass", ValueBoxingTests.testInWinRTClass),
++    ("InWinRTClassKeepsIdentity", ValueBoxingTests.testInWinRTClassKeepsIdentity),
+     ("InSwiftStruct", ValueBoxingTests.testInSwiftStruct),
+     ("OutInterface", ValueBoxingTests.testOutInterface),
+     ("testInAppImplemented", ValueBoxingTests.testInAppImplemented),
+diff --git a/tests/test_component/cpp/StaticClass.cpp b/tests/test_component/cpp/StaticClass.cpp
+index 8baf2ba..81df9ec 100644
+--- a/tests/test_component/cpp/StaticClass.cpp
++++ b/tests/test_component/cpp/StaticClass.cpp
+@@ -42,4 +42,10 @@ namespace winrt::test_component::implementation
+     {
+         base.DoTheThing();
+     }
++
++    bool StaticClass::IsSameObject(Windows::Foundation::IInspectable const& first, Windows::Foundation::IInspectable const& second)
++    {
++        // C++/WinRT compares the objects' IUnknown, as COM identity is defined.
++        return first == second;
++    }
+ }
+diff --git a/tests/test_component/cpp/StaticClass.h b/tests/test_component/cpp/StaticClass.h
+index 376e338..0b968bf 100644
+--- a/tests/test_component/cpp/StaticClass.h
++++ b/tests/test_component/cpp/StaticClass.h
+@@ -12,6 +12,7 @@ namespace winrt::test_component::implementation
+         static hstring InEnum(test_component::Signed const& value);
+         static hstring InNonBlittableStruct(test_component::NonBlittableStruct const& value);
+         static void TakeBase(test_component::Base const& base);
++        static bool IsSameObject(Windows::Foundation::IInspectable const& first, Windows::Foundation::IInspectable const& second);
+ 
+         private:
+         static test_component::Fruit s_fruit;
+diff --git a/tests/test_component/cpp/test_component.idl b/tests/test_component/cpp/test_component.idl
+index df3d50b..42f764c 100644
+--- a/tests/test_component/cpp/test_component.idl
++++ b/tests/test_component/cpp/test_component.idl
+@@ -273,6 +273,7 @@ namespace test_component
+             static String InNonBlittableStruct(NonBlittableStruct value);
+ 
+             static void TakeBase(Base base);
++            static Boolean IsSameObject(Object first, Object second);
+         }
+         //namespace Structs
+         //

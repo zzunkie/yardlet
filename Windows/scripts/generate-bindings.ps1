@@ -43,6 +43,8 @@ if (-not (Test-Path $tool)) {
     $source = Join-Path $work 'generator-source'
     if (Test-Path $source) { Remove-Item -Recurse -Force $source }
     git init -q $source
+    # The files as swift-winrt keeps them, CRLF and LF alike, so its patches apply.
+    git -C $source config core.autocrlf false
     git -C $source remote add origin $generator.repository
     git -C $source fetch -q --depth 1 origin $commit
     git -C $source checkout -q --detach FETCH_HEAD
