@@ -73,7 +73,9 @@ These are the rules of "Per task". How sign-ins are found and passed on is in se
   that screen's key), the source of the starting cookies (the folder of the task it was started from if there is one,
   `SessionRecord.startedFromTaskID`, otherwise the default profile), the setting and cleanup. `BrowserHostClient` attaches the profile every time it opens a task's tab,
   reports when a tab moves to another task, and calls cleanup when the host ends. Cleanup runs only after the saved task
-  list has been read in full. Chromium writes every profile it opens into `Local State` (`profile.info_cache`,
+  list has been read in full. It moves each folder it removes into `Browser/Removed task profiles` and deletes it there
+  off the main thread, so a profile with a large cache does not hold up the app as it quits; a deletion that a quit cut
+  short is finished at the next cleanup. Chromium writes every profile it opens into `Local State` (`profile.info_cache`,
   `profile.profiles_order`, `variations_google_groups`) and does not remove them when the folder disappears, so cleanup
   also removes `Task-` names without a folder from there.
 - **The person's sign-in:** `BrowserLoginFollow` finds sign-ins and passes the person's to the
