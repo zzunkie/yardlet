@@ -523,9 +523,10 @@ struct NativeHarnessClientApp: App {
                     // A visual fixture may have put its own in place already.
                     if model.connectorCenter == nil { model.connectorCenter = MacAgentToolService.shared.connectors }
                     if !model.usesVisualFixture {
-                        // A new task's browser profile starts from its parent's; a task's profile goes with it.
+                        // A new task's browser profile starts from the task that started it; a task's
+                        // profile goes with it. One the person moved under another task starts its own.
                         MacBrowserHost.shared.profiles.parentOf = { [weak model] id in
-                            model?.store.sessions.first(where: { $0.id == id })?.parentTaskID
+                            model?.store.sessions.first(where: { $0.id == id })?.startedFromTaskID
                         }
                         MacBrowserHost.shared.keptTasks = { [weak model] in
                             guard let model, model.hasRestoredIndex else { return nil }

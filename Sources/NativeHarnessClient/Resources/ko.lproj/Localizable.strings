@@ -2028,6 +2028,8 @@
 "Resize sidebar" = "사이드바 크기 조절";
 "Account menu, %@" = "계정 메뉴, %@";
 "Detach to top level" = "최상위 레벨로 분리";
+"Move up one level" = "한 단계 위로 이동";
+"Move under task" = "작업 아래로 이동";
 "Open pull request #%@" = "풀 리퀘스트 #%@ 열기";
 
 /* Continuing work a quit or an update cut off (Settings › General, the line above the composer). */

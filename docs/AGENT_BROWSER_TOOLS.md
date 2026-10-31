@@ -281,8 +281,8 @@ Where `create_task` puts the task (2026-10-27): left empty, the task is nested u
 makes a top-level task with no parent, as if it were created in the new task window, and `parent_task_id` makes it under
 that open task (a child task that gives its own parent makes it beside itself). Giving both, or a missing or archived
 task, is refused. The approval card for another project, the depth (the calling task + 1) and the envelope of the first
-message stay the same. The parent sentence of later messages follows the lineage (`parentTaskID`), so a top-level task
-gets them as another task's messages. The name is the same as `topLevel` of the scheduled-task tools (2026-10-26) and as
+message stay the same. The parent sentence of later messages follows the lineage (`startedFromTaskID`), so a top-level
+task, or one the person moved in the sidebar, gets them as another task's messages. The name is the same as `topLevel` of the scheduled-task tools (2026-10-26) and as
 `parent_task_id` of `spawn_task`. It matches the Codex app's `create_thread`, which adds a thread to a flat list.
 
 - **Self-archive (`archive_task` `self`, 2026-10-23):** The same as the Claude app's `archive_session` with `session_id: "self"`
@@ -297,7 +297,8 @@ gets them as another task's messages. The name is the same as `topLevel` of the 
   task it runs in."), already archiving, waiting for the person's approval or answer, a running `run_agent`, a Yardlet
   bash mode command, a provider background task the conversation shows as running (Claude Code's background shells and
   agents), a Codex background terminal, a queued message after the turn, switching accounts, editing or unarchiving, and
-  an unsent draft. Child tasks (made with `create_task`, by the same rule as the Agents card) follow the Claude app's
+  an unsent draft. Child tasks (made with `create_task`, and not since moved by the person in the sidebar, as a session
+  the person detached in the Claude app does not go with its parent) follow the Claude app's
   side session rule: those in the same folder or the same Yardlet worktree, or those that have ended (none of the
   refusal reasons above, no background task, not pinned, and the child tasks under them in the same place have ended
   too), are archived with it (`alsoArchived`, "(started by this task)" on the card). When one that would go with it is
@@ -319,8 +320,9 @@ gets them as another task's messages. The name is the same as `topLevel` of the 
   fallback title from `firstUserMessage`, `CodexThreadTitle.request`), message editing, editing a failed request and the
   file restore list read the body, not the envelope.
   - **The sentence states facts only, and only its start differs by who the sending task is (2026-10-24,
-    `TaskMessage.notice(_:senderID:)`):** When the receiving task's `parentTaskID` is the sending task (the lineage at
-    the moment of delivery, `Relation.parent`): "Sent by the Yardlet task that started this one (task id …); the person
+    `TaskMessage.notice(_:senderID:)`):** When the task the receiving task was started from (`startedFromTaskID`, its
+    parent unless the person moved it in the sidebar; the lineage at the moment of delivery, `Relation.parent`) is the
+    sending task: "Sent by the Yardlet task that started this one (task id …); the person
     did not type it." Otherwise (a sibling, a child task reporting to the task that started it, a task with no lineage):
     "Sent by another Yardlet task (task id …); the person did not type it." Nothing about what to do, and nothing about
     approval. Reading accepts the current sentence and the earlier ones (`earlierNotices`: "…It is not the person's

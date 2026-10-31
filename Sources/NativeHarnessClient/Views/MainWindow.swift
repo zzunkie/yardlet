@@ -1774,7 +1774,7 @@ struct MainWindow: View {
                         onMarkRead: { session in Task { await model.store.markRead(id: session.id) } },
                         onMarkUnread: { session in Task { await model.store.markUnread(id: session.id) } },
                         onMoveToProject: moveTask,
-                        onDetachFromParent: { session in Task { await model.detachFromParent(session) } },
+                        onNest: { task, parent in Task { await model.nest(task, under: parent) } },
                         splitActions: SidebarSplitActions(
                             togglePinned: { model.splits.togglePinned($0.id) },
                             rename: presentSplitRename,

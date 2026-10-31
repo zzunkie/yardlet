@@ -16,10 +16,10 @@ extension AppModel {
             outcome = status == .failed ? .failed : .completed
         }
         let origin: RoutingLedgerEntry.Origin = scheduledTasks.schedule(startedTask: sessionID) != nil ? .schedule
-            : session.parentTaskID != nil ? .childTask : .person
+            : session.startedFromTaskID != nil ? .childTask : .person
         let selection = routingModelSelection(for: session)
         let entry = RoutingLedgerEntry(
-            kind: .turn, taskID: sessionID, parentTaskID: session.parentTaskID, origin: origin,
+            kind: .turn, taskID: sessionID, parentTaskID: session.startedFromTaskID, origin: origin,
             harness: session.harness.rawValue, model: selection.model, effort: selection.effort,
             account: session.connection?.id, projectID: session.projectID,
             workspacePath: session.workspaceURL.path(percentEncoded: false),

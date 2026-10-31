@@ -995,8 +995,11 @@ extension AppModel: SessionToolHandling {
         return cascade
     }
 
+    /// The tasks `create_task` started from the task, as long as the person has not placed them
+    /// elsewhere (`SessionRecord.startedFromTaskID`), as a session the person detached in the Claude
+    /// app does not go with its parent either.
     func sessionToolChildTasks(of taskID: UUID) -> [SessionRecord] {
-        store.sessions.filter { $0.parentTaskID == taskID && sessionTools.madeTask($0.id) }
+        store.sessions.filter { $0.startedFromTaskID == taskID && sessionTools.madeTask($0.id) }
     }
 
     private func sessionToolChildHasSettled(_ child: SessionRecord, caller: SessionToolCaller, visited: Set<UUID>) -> Bool {

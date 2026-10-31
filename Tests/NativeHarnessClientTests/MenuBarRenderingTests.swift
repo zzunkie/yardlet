@@ -269,7 +269,7 @@ final class MenuBarRenderingTests: XCTestCase {
 // MARK: - Drawing the menu's items
 
 /// One menu item as the system menu lays it out.
-private struct MenuLine: Identifiable {
+struct MenuLine: Identifiable {
     enum Kind { case separator, header, item }
     let id: Int
     let kind: Kind
@@ -301,7 +301,7 @@ private struct MenuLine: Identifiable {
 
 /// A menu panel: rounded, with the system menu's 13 pt titles, 11 pt subtitles and headers, and
 /// dimmed read-only lines.
-private struct MenuPanel: View {
+struct MenuPanel: View {
     let lines: [MenuLine]
     var width: CGFloat = 300
     var highlighted: Int?

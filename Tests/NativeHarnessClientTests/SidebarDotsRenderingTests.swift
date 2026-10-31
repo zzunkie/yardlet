@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 @testable import NativeHarnessClient
 
@@ -35,21 +36,22 @@ final class SidebarDotsRenderingTests: XCTestCase {
     private func sidebar(projects: ProjectStore, sessions: [SessionRecord], chats: [SessionRecord] = [],
                          details: [UUID: TaskAttentionDetail], splits: [SplitGroup] = [], collapsed: Set<String> = [],
                          selected: SessionRecord?, waiting: Set<UUID> = [],
-                         archivedParents: [UUID: UUID] = [:]) -> some View {
+                         archivedParents: [UUID: UUID] = [:], rowLimit: Int? = nil,
+                         onNest: @escaping (UUID, UUID?) -> Void = { _, _ in }) -> some View {
         let groups = projects.visibleGroups(sessions: sessions)
         let selection = selected.map { WindowItem.session($0.id) } ?? .home
         let disclosure = SidebarDisclosureStore(defaults: UserDefaults(suiteName: testDefaultsSuite("SidebarDots"))!)
         for key in collapsed { disclosure.collapse(key) }
         let layout = SidebarProjection.layout(
             visibleGroups: groups, allGroups: groups, chats: chats, splits: splits, isFiltering: false,
-            disclosure: SidebarDisclosure(collapsedKeys: collapsed), selection: selection, waiting: waiting,
-            archivedParents: archivedParents)
+            disclosure: SidebarDisclosure(collapsedKeys: collapsed, rowLimit: rowLimit), selection: selection,
+            waiting: waiting, archivedParents: archivedParents)
         return TaskSidebar(layout: layout, allGroups: groups, isRestoring: false, selection: selection,
             searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
             projects: projects, onEditProject: { _ in },
             onArchiveProjectChats: { _ in }, onRemoveProject: { _ in }, onTogglePinned: { _ in },
             onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
-            disclosure: disclosure)
+            onNest: onNest, disclosure: disclosure)
             .environment(monitor)
             .environment(pullRequests)
             .environment(\.taskAttentionDetails, details)
@@ -222,6 +224,186 @@ final class SidebarDotsRenderingTests: XCTestCase {
         XCTAssertTrue(spoken.contains { $0.contains(more) }, spoken.description)
         XCTAssertTrue(spoken.contains { $0.contains(L10n.format("Show %@", L10n.format("%lld nested sessions", 3))) },
                       spoken.description)
+    }
+
+    // MARK: - Moving a task among the families
+
+    /// A task dragged over a row shows where it would go, through SwiftUI's own drop path in an unshown
+    /// window: the row outlined while it would go under it, a line at the row's level along its edge
+    /// while it would go beside it, nothing over a task under it. A drop moves it there, and the row's
+    /// menu offers the same moves. On a long list a drag draws again only the row it is over. Drawn into
+    /// `.build/sidebar-dots-qa`, light and dark:
+    ///
+    /// - `nest-drag-under-*.png`: "Write the notes" dragged onto "Tag the build".
+    /// - `nest-drag-beside-*.png`: "Check the tag" dragged to the bottom edge of "Tag the build", to go
+    ///   up a level beside it.
+    /// - `nest-menu-*.png`: the menu of "Check the tag", with its "Move under task" submenu.
+    /// - `nest-moved-*.png`: once "Write the notes" was dropped on "Tag the build" and "Check the tag"
+    ///   moved up a level from its menu.
+    func testADraggedTaskShowsWhereItGoesAndADropOrTheMenuMovesItThere() async throws {
+        let yardlet = URL(filePath: "/tmp/sidebar-dots-qa/yardlet", directoryHint: .isDirectory)
+        let projects = ProjectStore()
+        _ = projects.ensureProject(forRoot: yardlet, name: "Yardlet")
+        let plan = task("Plan the release", .claudeCode, in: yardlet, status: .running)
+        let tag = task("Tag the build", .codex, in: yardlet, parent: plan)
+        let check = task("Check the tag", .claudeCode, in: yardlet, parent: tag)
+        let notes = task("Write the notes", .claudeCode, in: yardlet, status: .completed, completion: .completed)
+        let docs = task("Update the docs", .codex, in: yardlet)
+        let store = SessionStore(sessions: [plan, tag, check, notes, docs])
+        var moves: [String] = []
+        let names = Dictionary(store.sessions.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        func view(_ scheme: ColorScheme) -> some View {
+            sidebar(projects: projects, sessions: store.sessions, details: [:], selected: plan) { task, parent in
+                moves.append("\(names[task] ?? "") → \(parent.flatMap { names[$0] } ?? "top level")")
+                Task { try? await store.nest(id: task, under: parent) }
+            }
+            .environment(\.colorScheme, scheme)
+            .frame(width: ParityTheme.sidebarWidth, height: 360, alignment: .top)
+            .background(ParityTheme.sidebar)
+        }
+        let size = NSSize(width: ParityTheme.sidebarWidth, height: 360)
+        let directory = try WindowlessRender.directory("sidebar-dots-qa")
+        let titles = [plan, tag, check, notes, docs].map(\.title)
+
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(view(appearance.colorScheme), size: size, appearance: appearance)
+            defer { host.close() }
+            host.settle()
+            let rows = Dictionary(uniqueKeysWithValues: zip(titles, try rowFrames(titles, in: host)))
+            /// A point `fromTop` down a row, unflipped as a drag gives it.
+            func point(_ title: String, _ fromTop: CGFloat) -> NSPoint {
+                let row = rows[title]!
+                return NSPoint(x: row.midX, y: size.height - row.minY - fromTop)
+            }
+            func over(_ task: SessionRecord, _ location: NSPoint, capture name: String? = nil) throws -> NSDragOperation {
+                _ = SidebarNesting.dragging(task.id)
+                let drag = try TaskRowDrag(task.id, at: location, in: host.window)
+                defer { drag.close() }
+                let destination = try XCTUnwrap(drag.destination(in: host.hosting))
+                _ = destination.draggingEntered(drag)
+                let operation = destination.draggingUpdated(drag)
+                host.settle(passes: 3)
+                if let name {
+                    try WindowlessRender.writePNG(try host.capture().bitmap,
+                                                  to: directory.appending(path: "\(name)-\(appearance.suffix).png"))
+                }
+                destination.draggingExited(drag)
+                host.settle(passes: 2)
+                return operation
+            }
+            XCTAssertEqual(try over(notes, point(tag.title, 15), capture: "nest-drag-under"), .move)
+            XCTAssertEqual(try over(check, point(tag.title, 28), capture: "nest-drag-beside"), .move)
+            XCTAssertEqual(try over(plan, point(check.title, 15)), [], "Not under a task under it")
+            XCTAssertEqual(try over(check, point(tag.title, 15)), [], "Already under it")
+            XCTAssertTrue(moves.isEmpty, "Passing over a row moves nothing")
+        }
+
+        // A drop moves the task where the row showed.
+        let host = WindowlessRender.Host(view(.light), size: size, appearance: .light)
+        defer { host.close() }
+        host.settle()
+        let rows = Dictionary(uniqueKeysWithValues: zip(titles, try rowFrames(titles, in: host)))
+        let onTag = NSPoint(x: rows[tag.title]!.midX, y: size.height - rows[tag.title]!.minY - 15)
+        _ = SidebarNesting.dragging(notes.id)
+        let drag = try TaskRowDrag(notes.id, at: onTag, in: host.window)
+        defer { drag.close() }
+        let destination = try XCTUnwrap(drag.destination(in: host.hosting))
+        _ = destination.draggingEntered(drag)
+        _ = destination.draggingUpdated(drag)
+        XCTAssertTrue(destination.performDragOperation(drag))
+        try await waitUntil { store.sessions.first { $0.id == notes.id }?.parentTaskID == tag.id }
+        XCTAssertEqual(moves, ["Write the notes → Tag the build"])
+
+        // The row's menu, built as a right click builds it, without opening it.
+        host.hosting.rootView = view(.light)
+        host.settle()
+        let checkRow = try rowFrames([check.title], in: host)[0]
+        let click = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: NSPoint(x: checkRow.midX, y: size.height - checkRow.midY),
+            modifierFlags: [], timestamp: 0, windowNumber: host.window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1))
+        var target = host.hosting.hitTest(click.locationInWindow)
+        var menu: NSMenu?
+        while let view = target, menu == nil { menu = view.menu(for: click); target = view.superview }
+        let items = try XCTUnwrap(menu).items
+        let under = try XCTUnwrap(items.first { $0.title == L10n.string("Move under task") }?.submenu)
+        XCTAssertNotNil(items.first { $0.title == L10n.string("Detach to top level") })
+        XCTAssertEqual(under.items.map(\.title), ["Plan the release", "Write the notes", "Update the docs"],
+                       "Not itself, the task it is under, or a task under it")
+        let lines = MenuLine.lines(items), underLines = MenuLine.lines(under.items)
+        let menuSize = NSSize(width: ParityTheme.sidebarWidth + 470, height: 400)
+        try WindowlessRender.hostedInBothAppearances("nest-menu", in: directory, size: menuSize) { appearance in
+            HStack(alignment: .top, spacing: 0) {
+                view(appearance.colorScheme)
+                MenuPanel(lines: lines, width: 230,
+                          highlighted: lines.firstIndex { $0.title == L10n.string("Move under task") })
+                    .padding(.top, checkRow.midY - 4)
+                    .padding(.leading, -40)
+                MenuPanel(lines: underLines, width: 180)
+                    .padding(.top, checkRow.midY - 4 + CGFloat(lines.prefix { $0.title != L10n.string("Move under task") }
+                        .reduce(0) { $0 + $1.height }))
+                Spacer(minLength: 0)
+            }
+            .frame(width: menuSize.width, height: menuSize.height, alignment: .topLeading)
+            .background(appearance == .dark ? Color(white: 0.1) : Color(white: 0.85))
+            .environment(\.colorScheme, appearance.colorScheme)
+        }
+
+        // "Move up one level": beside the task it was under.
+        let up = try XCTUnwrap(items.firstIndex { $0.title == L10n.string("Move up one level") })
+        try XCTUnwrap(menu).performActionForItem(at: up)
+        try await waitUntil { store.sessions.first { $0.id == check.id }?.parentTaskID == plan.id }
+        try WindowlessRender.hostedInBothAppearances("nest-moved", in: directory, size: size) { appearance in
+            view(appearance.colorScheme)
+        }
+        let placed = SidebarProjection.layout(
+            visibleGroups: projects.visibleGroups(sessions: store.sessions),
+            allGroups: projects.visibleGroups(sessions: store.sessions), splits: [], isFiltering: false)
+            .sections[0].rows.flatMap(\.rowsWithChildren).map { "\($0.title)@\($0.familyPlace?.depth ?? 0)" }
+        XCTAssertEqual(placed, ["Plan the release@0", "Tag the build@1", "Write the notes@2", "Check the tag@1",
+                                "Update the docs@0"])
+    }
+
+    /// On a long list, a task dragged across rows draws again only the row it shows a place on: as the
+    /// place shows and as it goes. Between two top-level rows a top-level task has nowhere new to go.
+    func testADragOverALongListDrawsOnlyTheRowItIsOver() throws {
+        let yardlet = URL(filePath: "/tmp/sidebar-dots-qa/long", directoryHint: .isDirectory)
+        let projects = ProjectStore()
+        _ = projects.ensureProject(forRoot: yardlet, name: "Yardlet")
+        let tasks = (1...80).map { task("Task \($0)", $0.isMultiple(of: 2) ? .codex : .claudeCode, in: yardlet) }
+        let size = NSSize(width: ParityTheme.sidebarWidth, height: 2_600)
+        let host = WindowlessRender.Host(sidebar(projects: projects, sessions: tasks, details: [:], selected: tasks[0])
+            .frame(width: size.width, height: size.height, alignment: .top), size: size)
+        defer { host.close() }
+        host.settle()
+        let titles = ["Task 10", "Task 11", "Task 12"]
+        let rows = try rowFrames(titles, in: host)
+        ViewBodyCensus.isEnabled = true
+        defer {
+            ViewBodyCensus.isEnabled = false
+            ViewBodyCensus.reset()
+        }
+        ViewBodyCensus.reset()
+        _ = SidebarNesting.dragging(tasks[40].id)
+        var shown = 0
+        for row in rows {
+            for fromTop in stride(from: CGFloat(2), through: 28, by: 6) {
+                let drag = try TaskRowDrag(tasks[40].id, at: NSPoint(x: row.midX, y: size.height - row.minY - fromTop),
+                                           in: host.window)
+                let destination = try XCTUnwrap(drag.destination(in: host.hosting))
+                _ = destination.draggingEntered(drag)
+                let under = TaskNesting.drop(at: fromTop, height: SidebarMetrics.rowHeight) == .under
+                XCTAssertEqual(destination.draggingUpdated(drag), under ? .move : [])
+                if under { shown += 1 }
+                host.settle(passes: 1, interval: 0.01)
+                destination.draggingExited(drag)
+                host.settle(passes: 1, interval: 0.01)
+                drag.close()
+            }
+        }
+        // The row under the pointer as its place shows and goes; the other 79 rows stay as drawn.
+        XCTAssertEqual(shown, 9)
+        XCTAssertLessThanOrEqual(ViewBodyCensus.counts[.sidebarRow] ?? 0, shown * 2)
     }
 
     // MARK: - Hover card
@@ -408,4 +590,56 @@ final class SidebarDotsRenderingTests: XCTestCase {
         visit(root)
         return found
     }
+}
+
+/// A task row's drag as AppKit hands it to the view under the pointer, made here rather than by
+/// posting a mouse drag, which would come onto the real screen. Its pasteboard holds the task as the
+/// row's drag item writes it.
+@MainActor
+private final class TaskRowDrag: NSObject, @MainActor NSDraggingInfo {
+    let draggingDestinationWindow: NSWindow?
+    let draggingLocation: NSPoint
+    let draggingPasteboard: NSPasteboard
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+
+    init(_ taskID: UUID, at location: NSPoint, in window: NSWindow) throws {
+        draggingDestinationWindow = window
+        draggingLocation = location
+        draggingPasteboard = NSPasteboard(name: NSPasteboard.Name("yardlet-test-drag-\(UUID().uuidString)"))
+        draggingPasteboard.clearContents()
+        draggingPasteboard.setData(try JSONEncoder().encode(TaskDragItem(sessionID: taskID)),
+                                   forType: NSPasteboard.PasteboardType(UTType.yardletTaskReference.identifier))
+    }
+
+    func close() { draggingPasteboard.releaseGlobally() }
+
+    /// The view the window hands the drag to: the deepest one under the pointer registered for drags,
+    /// which SwiftUI puts under each view with a drop destination.
+    func destination(in root: NSView) -> NSView? {
+        for view in root.subviews.reversed() {
+            if let found = destination(in: view) { return found }
+        }
+        return !root.registeredDraggedTypes.isEmpty && root.bounds.contains(root.convert(draggingLocation, from: nil))
+            ? root : nil
+    }
+
+    /// The operation the destination last answered, which AppKit keeps on the drag it hands around.
+    @objc(_lastDragDestinationOperation) var lastDragDestinationOperation: NSDragOperation = []
+    @objc(_setLastDragDestinationOperation:) func setLastDragDestinationOperation(_ operation: NSDragOperation) {
+        lastDragDestinationOperation = operation
+    }
+
+    var draggingSourceOperationMask: NSDragOperation { .every }
+    var draggedImageLocation: NSPoint { draggingLocation }
+    var draggedImage: NSImage? { nil }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    func resetSpringLoading() {}
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?,
+                                classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+                                using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
 }

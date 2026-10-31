@@ -7,21 +7,24 @@ import Foundation
 /// - Claude: the Claude app's session file, `spawnedFrom.sessionId` (a session another session
 ///   started, unless the person moved it to top level, `lineageDetached`), read through
 ///   `ClaudeDesktopSessionCatalog`; the CLI's own transcript does not record it.
-/// - A task the person detached in Yardlet ("Detach to top level", `SessionRecord.isLineageDetached`)
-///   keeps no link, whatever a harness or another app says later.
+/// - A task the person placed in Yardlet ("Detach to top level", or moved under another task in the
+///   sidebar, `SessionRecord.isLineageDetached`) keeps the place the person gave it, whatever a
+///   harness or another app says later.
 /// - Codex: the App Server thread's `forkedFromId` (a fork) or `parentThreadId` (a subagent).
 /// - Yardlet itself, for any harness: a fork, an opened Codex subagent, and the original opened
 ///   from an edited conversation record the task they came from when they are made. A side chat,
 ///   which lives in its parent's side panel, and a blank new chat are not children.
 enum TaskLineage {
-    /// Whether `ancestor` is `task` itself or a task it descends from.
-    static func isAncestor(_ ancestor: UUID, of task: UUID, in sessions: [SessionRecord]) -> Bool {
+    /// Whether `ancestor` is `task` itself or a task it descends from, through archived tasks too
+    /// when `archivedParents` (`SessionStore.archivedParentIDs`) is given.
+    static func isAncestor(_ ancestor: UUID, of task: UUID, in sessions: [SessionRecord],
+                           archivedParents: [UUID: UUID] = [:]) -> Bool {
         let parents = Dictionary(sessions.map { ($0.id, $0.parentTaskID) }, uniquingKeysWith: { first, _ in first })
         var current: UUID? = task
         var seen = Set<UUID>()
         while let id = current, seen.insert(id).inserted {
             if id == ancestor { return true }
-            current = parents[id] ?? nil
+            current = parents[id] ?? archivedParents[id]
         }
         return false
     }

@@ -39,7 +39,7 @@ These are the rules of "Per task". How sign-ins are found and passed on is in se
 | Question | Rule | Reason |
 |---|---|---|
 | Disk folder or memory | A disk folder per task (`Browser/Task-<key>`, the `cache_path` of `CefRequestContext`), directly under the root cache, because Chromium opens only such a folder as a disk profile (section 7) | The host ends 60 seconds after it has no tabs. With an in-memory context, sign-ins would be lost every time |
-| What a new task starts with | A copy of the default profile's cookies. A child task starts with its parent task's cookies and inherits its parent's own sign-ins. localStorage and IndexedDB are not copied (on such sites the vault signs in again) | Signing in again every time would bring new-device alerts and two-step verification in every task. The Claude app also copies the parent's cookies on fork |
+| What a new task starts with | A copy of the default profile's cookies. A child task starts with the cookies of the task that started it and inherits that task's own sign-ins (a task the person moved under another in the sidebar starts as a new task does). localStorage and IndexedDB are not copied (on such sites the vault signs in again) | Signing in again every time would bring new-device alerts and two-step verification in every task. The Claude app also copies the parent's cookies on fork |
 | The person's sign-ins | Whether with a password, a passkey, "Sign in with Google" or single sign-on, the site's (registrable domain's) cookies go to the default profile and to every task that follows the site: at once to tasks with tabs open, to the rest when their tab next opens. A sign-in the person makes on a page the agent handed over is the person's too, and so is a sign-in imported from another browser (section 10) | As in the Codex app, every task normally uses the same sign-ins |
 | A task's own sign-ins | A site a task signed in to itself (its agent filled the sign-in from the vault, or typed it into a password or code field) stays that task's: the task stops following that site, the person's later sign-ins elsewhere do not overwrite it, and a sign-in the person makes again in that task is not passed to other tasks | Only a task that went in with another account keeps its own sign-in |
 | Task profiles from before following | The first time such a task's tab opens, it fills in from the default profile only the sites it has no cookie of at all; sites that already have cookies stay as they are | Filling never overwrites |
@@ -70,8 +70,8 @@ These are the rules of "Per task". How sign-ins are found and passed on is in se
   from the default profile in place of its own, fills in the sites it has no cookie of, and then opens the address. The
   `cookieDigest` command answers a sum of hashes of one profile's cookies of one site (section 11).
 - **Yardlet:** `BrowserTaskProfiles` handles the task's key (the task ID; for a task that came from the new task screen,
-  that screen's key), the source of the starting cookies (the parent task's folder if there is one, otherwise the
-  default profile), the setting and cleanup. `BrowserHostClient` attaches the profile every time it opens a task's tab,
+  that screen's key), the source of the starting cookies (the folder of the task it was started from if there is one,
+  `SessionRecord.startedFromTaskID`, otherwise the default profile), the setting and cleanup. `BrowserHostClient` attaches the profile every time it opens a task's tab,
   reports when a tab moves to another task, and calls cleanup when the host ends. Cleanup runs only after the saved task
   list has been read in full. Chromium writes every profile it opens into `Local State` (`profile.info_cache`,
   `profile.profiles_order`, `variations_google_groups`) and does not remove them when the folder disappears, so cleanup

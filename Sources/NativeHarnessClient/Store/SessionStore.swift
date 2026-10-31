@@ -277,8 +277,24 @@ final class SessionStore {
     /// from it stay with it.
     @discardableResult
     func detachFromParent(id: UUID) async throws -> SessionRecord? {
-        try await modify(id) {
-            $0.parentTaskID = nil
+        try await nest(id: id, under: nil)
+    }
+
+    /// Puts a task where the person moved it in the sidebar's families (`TaskNesting`): under
+    /// `parent`, or at the top level (nil, "Detach to top level"). The person placed it, so it keeps
+    /// that place: links read later are not recorded for it (`linkParents`), and the task it was
+    /// started from is no longer known (`SessionRecord.startedFromTaskID`). The tasks under it go
+    /// with it, and a move is not activity, so it keeps its place in recency order. A parent that is
+    /// not listed, or is the task itself or a task under it, archived ones included, is refused (nil).
+    @discardableResult
+    func nest(id: UUID, under parent: UUID?) async throws -> SessionRecord? {
+        if let parent {
+            guard sessions.contains(where: { $0.id == parent }),
+                  !TaskLineage.isAncestor(id, of: parent, in: sessions, archivedParents: archivedParentIDs)
+            else { return nil }
+        }
+        return try await modify(id) {
+            $0.parentTaskID = parent
             $0.isLineageDetached = true
         }
     }

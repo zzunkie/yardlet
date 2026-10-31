@@ -235,8 +235,9 @@ struct TaskSidebar: View {
     var onMarkUnread: (SessionRecord) -> Void = { _ in }
     /// Moves a task to a project, or back to Chats (nil), from its row's context menu.
     var onMoveToProject: (SessionRecord, Project?) -> Void = { _, _ in }
-    /// Takes a task out of the family it is listed in, to the top level, from its row's menu.
-    var onDetachFromParent: (SessionRecord) -> Void = { _ in }
+    /// Moves a task in the sidebar's families, under another task or to the top level (nil), from
+    /// its row's menu or a drop on a row (`TaskNesting`).
+    var onNest: (UUID, UUID?) -> Void = { _, _ in }
     var splitActions = SidebarSplitActions()
     /// The account button at the bottom and the app-wide places its menu opens.
     var accountMenu = SidebarAccountMenuContext()
@@ -253,6 +254,8 @@ struct TaskSidebar: View {
     @State private var position = ScrollPosition()
     /// The row last picked in the list, which is in view: the list does not scroll to it.
     @State private var pickedInList: WindowItem?
+    /// The families as drawn, for the rows' menus and drops.
+    @State private var nesting = SidebarNesting()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sidebarHoverCard) private var hoverCard
 
@@ -403,6 +406,11 @@ struct TaskSidebar: View {
                     let target = ids.contains(navigationSelection) ? navigationSelection : ids.first
                     if let target { proxy.scrollTo(target) }
                 }
+                // The rows' menus and drops read the families as drawn when the person acts on a row.
+                .onChange(of: layout, initial: true) { _, layout in
+                    nesting.layout = layout
+                    nesting.nest = onNest
+                }
             }
 
             Rectangle().fill(ParityTheme.separator).frame(height: 1)
@@ -547,7 +555,7 @@ struct TaskSidebar: View {
                         projects: projects.projects, home: projects.chatWorkspaceHome),
                     onMoveToProject: { onMoveToProject(session, $0) },
                     onDropTask: { dropped in splitActions.combine(dropped, session.id) },
-                    onDetach: onDetachFromParent
+                    nesting: nesting
                 )
                 .equatable()
             case let .split(split, members):
@@ -1057,9 +1065,14 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
     let projectMove: TaskProjectMove.Options
     let onMoveToProject: (Project?) -> Void
     let onDropTask: (UUID) -> Void
-    /// "Detach to top level", for a task listed under the task it was started from.
-    var onDetach: ((SessionRecord) -> Void)? = nil
+    /// The sidebar's families, for a row listed in them: its menu's moves, and a task dropped on it
+    /// going under or beside it (`TaskNesting`). Without it (the activity view) a task dropped on the
+    /// row joins it in a split view.
+    var nesting: SidebarNesting? = nil
     @State private var isDropTargeted = false
+    /// Where a task dragged over the row would go.
+    @State private var nestDrop: TaskNesting.Drop?
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(TaskPullRequestMonitor.self) private var pullRequests: TaskPullRequestMonitor?
     @Environment(\.openWindowItemInNewTab) private var openInNewTab
     @Environment(\.openTaskInSplitView) private var openInSplitView
@@ -1074,7 +1087,7 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
         lhs.session == rhs.session && lhs.title == rhs.title && lhs.subtitle == rhs.subtitle
             && lhs.projectName == rhs.projectName && lhs.familyPlace == rhs.familyPlace && lhs.familyToggle?.isCollapsed == rhs.familyToggle?.isCollapsed
             && lhs.isSelected == rhs.isSelected && lhs.projectMove == rhs.projectMove
-            && (lhs.onDetach == nil) == (rhs.onDetach == nil)
+            && lhs.nesting === rhs.nesting
     }
 
     var body: some View {
@@ -1114,9 +1127,8 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
             if let familyToggle {
                 Button(familyToggle.title, action: familyToggle.action)
             }
-            // The Claude app's row menu item for a session another started (`XP5vxiZixk`).
-            if familyPlace != nil, let onDetach {
-                Button(L10n.string("Detach to top level")) { onDetach(session) }
+            if let nesting {
+                SidebarNestMenuItems(taskID: session.id, nesting: nesting)
             }
             if let pullRequestMark {
                 Button(pullRequestMark.openTitle) { NSWorkspace.shared.open(pullRequestMark.url) }
@@ -1125,16 +1137,25 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
             Button(L10n.string("Archive"), role: .destructive) { onArchive(session) }
             Button(L10n.string("Delete task"), role: .destructive) { onDelete(session) }
         }
-        // Dragging a task onto another task's row, or onto a pane, puts both in a split view.
-        .draggable(TaskDragItem(sessionID: session.id)) {
-            Label(title, systemImage: "rectangle.split.2x1")
-                .padding(6)
+        // Dragged onto a task's row in the sidebar's families, a task goes under it or beside it;
+        // onto a split view's row or a pane, it joins the split view.
+        .draggable(SidebarNesting.dragging(session.id)) {
+            Label {
+                Text(title)
+            } icon: {
+                HarnessIdentityIcon(harness: session.harness, size: SidebarMetrics.nestedIconSize)
+            }
+            .padding(6)
         }
-        .dropDestination(for: TaskDragItem.self) { items, _ in
-            guard let dropped = items.first?.sessionID, dropped != session.id else { return false }
-            onDropTask(dropped)
-            return true
-        } isTargeted: { isDropTargeted = $0 }
+        .overlay {
+            if let nestDrop {
+                SidebarNestDropMark(place: nestDrop, depth: familyPlace?.depth ?? 0)
+            }
+        }
+        .zIndex(nestDrop == nil ? 0 : 1)
+        .modifier(SidebarTaskDropModifier(
+            sessionID: session.id, rowHeight: SidebarMetrics.rowHeight * interfaceScale, nesting: nesting,
+            nestDrop: $nestDrop, isDropTargeted: $isDropTargeted, onDropTask: onDropTask))
         // AppKit can retain the previous context menu when a row moves between sections (pinning,
         // or moving to another project) or its family is hidden or shown. Refresh its host while the
         // outer scroll target keeps the task's stable identity.
@@ -1814,5 +1835,29 @@ private struct TaskRowActionButton: View {
         .onHover { isHovering = $0 }
         .help(label)
         .accessibilityLabel(label)
+    }
+}
+
+/// What a task dropped on a task row does: in the sidebar's families it goes under the row's task or
+/// beside it (`SidebarRowDrop`); elsewhere (the activity view) it joins the row's task in a split view.
+private struct SidebarTaskDropModifier: ViewModifier {
+    let sessionID: UUID
+    let rowHeight: CGFloat
+    let nesting: SidebarNesting?
+    @Binding var nestDrop: TaskNesting.Drop?
+    @Binding var isDropTargeted: Bool
+    let onDropTask: (UUID) -> Void
+
+    func body(content: Content) -> some View {
+        if let nesting {
+            content.onDrop(of: [.yardletTaskReference], delegate: SidebarRowDrop(
+                target: sessionID, rowHeight: rowHeight, nesting: nesting, place: $nestDrop))
+        } else {
+            content.dropDestination(for: TaskDragItem.self) { items, _ in
+                guard let dropped = items.first?.sessionID, dropped != sessionID else { return false }
+                onDropTask(dropped)
+                return true
+            } isTargeted: { isDropTargeted = $0 }
+        }
     }
 }

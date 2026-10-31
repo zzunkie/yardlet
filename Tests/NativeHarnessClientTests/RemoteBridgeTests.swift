@@ -364,6 +364,18 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(model.store.sessions.first { $0.id == unread.id }?.hasUnreadUpdate, false)
         try await waitUntil { signals.changes.contains(.tasks) }
         XCTAssertEqual(bridge.snapshot().tasks.first { $0.id == unread.id.uuidString }?.attention, .idle)
+
+        // A task moved in the Mac's sidebar is nested where it was moved to on the phone too.
+        func parent(of task: SessionRecord) -> String? {
+            bridge.snapshot().tasks.first { $0.id == task.id.uuidString }?.parentTaskId
+        }
+        await model.nest(child.id, under: waiting.id)
+        try await waitUntil { parent(of: child) == waiting.id.uuidString }
+        await model.nest(waiting.id, under: unread.id)
+        try await waitUntil { parent(of: waiting) == unread.id.uuidString }
+        XCTAssertEqual(parent(of: child), waiting.id.uuidString, "The tasks under it go with it")
+        await model.detachFromParent(try XCTUnwrap(model.store.sessions.first { $0.id == waiting.id }))
+        try await waitUntil { parent(of: waiting) == nil }
         await model.shutdown()
     }
 
