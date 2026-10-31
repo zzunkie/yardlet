@@ -1,0 +1,16 @@
+diff --git a/swiftwinrt/Resources/Support/IInspectable.swift b/swiftwinrt/Resources/Support/IInspectable.swift
+index f026059..71246b1 100644
+--- a/swiftwinrt/Resources/Support/IInspectable.swift
++++ b/swiftwinrt/Resources/Support/IInspectable.swift
+@@ -62,6 +62,11 @@ public enum __ABI_ {
+         if let swiftAbi = swiftObj as? IInspectable {
+            let abi: UnsafeMutablePointer<C_IInspectable> = RawPointer(swiftAbi)
+            return try body(abi)
++        } else if let winrtClass = swiftObj as? WinRTClass,
++                  let abi: UnsafeMutablePointer<C_IInspectable> = winrtClass._getABI() {
++            // Pass a projected object as itself, as a parameter of its own type does, so the callee
++            // sees its COM identity rather than that of a wrapper made for this call.
++            return try body(abi)
+         } else {
+             return try super.toABI(body)
+         }

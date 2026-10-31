@@ -41,6 +41,12 @@ jobs:
             expect: pass
             swift: '6.2'
             configuration: debug
+          # The first version of the fix, without the runtime class name change, on the new tests.
+          - variant: toABI fix only and tests, Swift 6.2 debug
+            patches: ..\swift-winrt-check-patches\0001-to-abi-only.patch,0002-test-projected-object-identity.patch
+            expect: fail
+            swift: '6.2'
+            configuration: debug
           # As the Windows app builds: Swift 6.4.1.
           - variant: tests only, Swift 6.4.1 release
             patches: 0002-test-projected-object-identity.patch
