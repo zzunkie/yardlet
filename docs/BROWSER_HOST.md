@@ -431,7 +431,15 @@ the sheet stayed when the agent answered first, and the agent kept taking a dial
   repository's `cef-154.0.28-codecs` release, SHA-256 `a44771fb3c5fbc3658320c3258f03e0b4d0ee7085d70c36d48c03ef08e44d0ad`; the framework executable's SHA-256 is
   `02b51a9be1f8e4a4b97410bd4144a4d8063e8aa6f3fcd0a87f16c9b111a708eb`. The script verifies and uses the unpacked distribution in `~/Library/Caches/Yardlet/CEF/`, and if
   only the archive is there, it checks the archive's SHA-256 and unpacks it. If neither is there, it shows the download
-  command and stops. The `_codecs` in the name keeps it apart from CEF's own download of the same version in that folder.
+  command and stops; `YARDLET_DOWNLOAD_CEF=1` downloads the pinned archive instead. The `_codecs` in the name keeps it
+  apart from CEF's own download of the same version in that folder.
+- An Intel bundle (`YARDLET_ARCHS=x86_64`) uses CEF's own macOS x64 minimal distribution of the same version, downloaded
+  from CEF's site: `https://cef-builds.spotifycdn.com/cef_binary_154.0.28%2Bg564dd6c%2Bchromium-154.0.8037.58_macosx64_minimal.tar.bz2`,
+  138,668,823 bytes, SHA-256 `0a4269342ed049ad571133eae93f90466cae6fea881872a3383c991c2945da11` (its SHA-1 matches the one
+  CEF's index publishes); the framework executable's SHA-256 is `94026293641d1dfabccfb33d9cb35cf3bb263f73c7dd8620f8548a2c17843bad`.
+  It has no H.264 or AAC decoders, so the browser on Intel Macs plays neither. An x64 build with them would be made as the
+  arm64 one is (CEF builds x64 on an Apple silicon Mac with `CEF_ENABLE_AMD64=1` and `--x64-build`); `build-cef.sh` makes
+  only the arm64 one so far.
 - `scripts/build-cef.sh <work directory> [parallel compiles]` makes that archive. It checks out CEF at the pinned commit
   and Chromium at the version CEF names, with CEF's `automate-git.py` and the options CEF's "Automated Build Setup" gives
   for macOS ARM64 (`--no-chromium-history --with-pgo-profiles`, `GN_DEFINES=is_official_build=true`), then runs the steps

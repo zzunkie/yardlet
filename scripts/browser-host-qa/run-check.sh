@@ -63,7 +63,9 @@ end_run() {
     return 0
 }
 trap 'end_run; exit 130' INT TERM HUP
-for _ in {1..50}; do [[ -s "$out/server/port" ]] && break; sleep 0.1; done
+# The page server can take seconds to start on a slow Mac, such as CI's.
+for _ in {1..300}; do [[ -s "$out/server/port" ]] && break; sleep 0.1; done
+[[ -s "$out/server/port" ]] || { echo "FAIL the QA page server did not start" >&2; end_run; exit 1; }
 port=$(<"$out/server/port")
 echo "QA pages on http://127.0.0.1:$port/ (pid $server_pid)"
 

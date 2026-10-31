@@ -55,14 +55,17 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
 
 ## Requirements
 
-- macOS 15 or later on Apple silicon.
+- macOS 15 or later, on Apple silicon or Intel. The Intel version is new and has limits of its own
+  (see [Known limitations](#known-limitations)).
 - At least one agent CLI installed and signed in, for example `codex` or `claude`. Yardlet uses the
   CLI's own sign-in and never copies it from other apps.
 
 ## Install
 
-Download the notarized `Yardlet-<version>.dmg` from [Releases](../../releases), open it and drag
-Yardlet to Applications. Or install it with [Homebrew](https://github.com/zzunkie/homebrew-tap):
+Download the notarized disk image from [Releases](../../releases): `Yardlet-<version>.dmg` for a Mac
+with Apple silicon (M1 or later), `Yardlet-<version>-x86_64.dmg` for an Intel Mac. Open it and drag
+Yardlet to Applications. Or install it with [Homebrew](https://github.com/zzunkie/homebrew-tap),
+which picks the one for your Mac:
 
 ```sh
 brew install --cask zzunkie/tap/yardlet
@@ -79,7 +82,8 @@ To build from source, see [Development](#development).
 ### Updates
 
 Yardlet updates itself with [Sparkle](https://sparkle-project.org). Once a day it reads
-`https://yardlet.app/appcast.xml`; a newer version downloads in the background and is installed when
+`https://yardlet.app/appcast.xml` (`appcast-x86_64.xml` in the Intel version, which updates to the Intel
+version); a newer version downloads in the background and is installed when
 Yardlet quits. **Yardlet > Check for Updates…** checks now and offers **Install and Relaunch**. With
 tasks running, Yardlet waits for them to finish before it quits to update; meanwhile the Yardlet menu
 shows **Waiting to Update**, and **Cancel Update** leaves the update for the next quit.
@@ -154,7 +158,16 @@ Three helpers in the app bundle do work outside the main process:
 
 ## Known limitations
 
-- Yardlet runs on macOS 15 or later on Apple silicon only.
+- The Intel version is new and has not been tried on an Intel Mac by hand. CI starts it on Intel
+  macOS 15 and 26 with every change to `main`, and there the built-in browser starts and loads pages.
+  Those Macs have only a virtual GPU, on which the browser often stops before it draws, so how it
+  draws with an Intel Mac's own graphics is not known yet. If you use Yardlet on an Intel Mac, please
+  tell us how it goes, especially if the built-in browser closes or stays blank: a
+  [bug report](../../issues/new?template=bug_report.yml) with "Intel" chosen, or a note in
+  [Discussions](../../discussions).
+- On Intel Macs the built-in browser plays no H.264 video or AAC audio, such as many sites' MP4
+  videos; WebM video (VP9, AV1) plays. The Intel version uses CEF's own Chromium build, which leaves
+  those codecs out; the Apple silicon version has them.
 - Connectors, browser tools and session tools reach Codex, Claude Code and the agents that use ACP
   (OpenCode, Kimi Code, Grok Build, Hermes). Cursor Agent, Antigravity CLI, Pi and Muse Code have
   no way to add an MCP server to one session, so their tasks run without them.
@@ -241,17 +254,20 @@ test suite's benchmarks, compared with the previous run on the same Mac. See
 [docs/PERFORMANCE_BENCH.md](docs/PERFORMANCE_BENCH.md).
 
 Bundles include the in-window browser (Chromium Embedded Framework in a separate browser host
-process). The script uses the pinned CEF distribution in `~/Library/Caches/Yardlet/CEF/`, verifies
-its hash, and stops with the download command when it is missing. A debug bundle can be built without
-it with `YARDLET_WITHOUT_CEF=1`; `swift build`, `swift run`, and `swift test` never need CEF and fall
-back to the WebKit preview. See [docs/BROWSER_HOST.md](docs/BROWSER_HOST.md).
+process). The script uses the CEF distribution pinned for the bundle's architecture in
+`~/Library/Caches/Yardlet/CEF/`, verifies its hash, and stops with the download command when it is
+missing; `YARDLET_DOWNLOAD_CEF=1` downloads it instead. A debug bundle can be built without it with
+`YARDLET_WITHOUT_CEF=1`; `swift build`, `swift run`, and `swift test` never need CEF and fall back to
+the WebKit preview. See [docs/BROWSER_HOST.md](docs/BROWSER_HOST.md).
 
-The bundle is built for the Mac that builds it. `YARDLET_ARCHS` names other architectures:
-`YARDLET_ARCHS=x86_64` for Intel Macs, or `YARDLET_ARCHS="arm64 x86_64"` for a universal bundle, each
-executable joined with `lipo`. The pinned CEF build is arm64 only, so such a bundle is a debug bundle
-built with `YARDLET_WITHOUT_CEF=1`. CI builds the universal one and starts it on macOS 15 on Apple
-silicon and on Intel (`.github/workflows/launch.yml`): on `main`, by hand, and on pull requests that
-change how the bundle is built.
+The bundle is built for the Mac that builds it. `YARDLET_ARCHS=x86_64` builds it for Intel Macs, with
+the Intel CEF build. `YARDLET_ARCHS="arm64 x86_64"` builds a universal bundle, each executable joined
+with `lipo`; it is a debug bundle built with `YARDLET_WITHOUT_CEF=1`, since each CEF build has one
+architecture. CI builds the release bundle of each architecture in a disk image, starts it on macOS 15
+on Apple silicon and on Intel and on macOS 26 on Intel, and opens the browser panel there with a debug
+bundle of the same architecture (`.github/workflows/launch.yml`): on `main`, by hand, and on pull
+requests that change how the bundle is built. On Intel the browser check only reports: GitHub's Intel
+Macs have a virtual GPU on which Chromium often cannot start drawing.
 
 An API that a newer SDK adds without marking it newer than macOS 15 links strongly, and the app stops
 before `main` on a macOS 15 release that lacks it. `./scripts/check-macos-symbols.sh <app> <SDK>`
@@ -326,15 +342,20 @@ YARDLET_SIGNING_IDENTITY="Developer ID Application: <name> (<team>)" ./scripts/b
 
 ```bash
 YARDLET_SIGNING_IDENTITY="Developer ID Application: <name> (<team>)" ./scripts/release.sh \
-  --appcast <yardlet-site checkout>/appcast.xml --notes notes.md
+  --appcast <yardlet-site checkout>/appcast.xml \
+  --appcast-x86_64 <yardlet-site checkout>/appcast-x86_64.xml --notes notes.md
 ```
 
-It builds the release bundle with Sparkle's feed (`YARDLET_SPARKLE_FEED_URL`, default
-`https://yardlet.app/appcast.xml`) and public key, notarizes the app and `Yardlet-<version>.dmg` with
-`notarize.sh`, and runs Sparkle's `generate_appcast`, which signs the image with the EdDSA key and
-writes `appcast.xml` with the download under the GitHub release `v<version>`. It checks that the key
-built into the app accepts that signature, then prints the publishing steps: the GitHub release
-first, then the appcast on the site. Everything lands in `.build/release-<version>/`.
+It makes the release twice, for Apple silicon and for Intel Macs. Each time it builds the release
+bundle of that one architecture with its CEF build, Sparkle's feed for it (`YARDLET_SPARKLE_FEED_URL`,
+default `https://yardlet.app/appcast.xml`, and the same address with `-x86_64` before `.xml` for Intel)
+and the public key, notarizes the app and its disk image with `notarize.sh` (`Yardlet-<version>.dmg`,
+and `Yardlet-<version>-x86_64.dmg` for Intel), and runs Sparkle's `generate_appcast`, which signs the
+image with the EdDSA key and writes that architecture's appcast with the download under the GitHub
+release `v<version>`. It checks that every executable in each image is of its architecture and that
+the key built into the app accepts the signature, then prints the publishing steps: the GitHub release
+with both images first, then both appcasts on the site, and the Homebrew cask's two hashes. Everything
+lands in `.build/release-<version>/arm64/` and `.build/release-<version>/x86_64/`.
 
 - Raise `CFBundleShortVersionString` and `CFBundleVersion` in `Packaging/Info.plist` and commit
   first: Sparkle orders updates by `CFBundleVersion`.
