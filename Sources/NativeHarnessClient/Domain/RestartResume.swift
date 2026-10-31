@@ -108,6 +108,9 @@ struct RestartResumeRecord: Codable, Equatable, Sendable {
 ///   sharing the line with Claude Code tasks; subagent threads, which their parent's turn drives,
 ///   never.
 /// - Other harnesses: their apps continue nothing, so neither does Yardlet.
+/// - `run_agent` subagents keep no history with their harness, so none continues: the quit ends each
+///   as interrupted, and the next launch tells the caller that waited for it, under this setting and
+///   within `maxAge` (`AppModel.interruptAgentRunsForQuit`).
 enum RestartResumePolicy {
     /// The Claude app's `864e5` ms, counted from when the turn was cut off.
     static let maxAge: TimeInterval = 24 * 60 * 60

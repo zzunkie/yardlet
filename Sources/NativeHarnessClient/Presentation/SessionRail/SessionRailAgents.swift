@@ -441,7 +441,7 @@ struct SessionRailAgents: Equatable {
             case .waitingForApproval: .waiting
             case .completed: .completed
             case .failed: .failed
-            case .stopped: .stopped
+            case .stopped, .interrupted: .stopped
             }
         } else {
             call?.phase ?? .completed

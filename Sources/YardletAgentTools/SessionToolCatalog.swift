@@ -193,11 +193,11 @@ package enum SessionToolCatalog {
         AgentToolDefinition(
             name: runAgent,
             title: "Run agent",
-            description: "Run a prompt as a subagent on a harness and return its final answer. It works in this "
-                + "task's folder, with this task's model, effort and permission mode on this task's harness, and "
-                + "on another its defaults with this task's permission level in that harness's terms, on the "
-                + "account create_task would take; its approvals come to the person, and it is not a sidebar task. "
-                + "With background it returns an agent id at once.",
+            description: "Run a prompt as a subagent on a harness and return its final answer: for another harness or "
+                + "account, a chosen model or effort, or work that goes on past this turn. On this task's harness its "
+                + "own subagent tool, if it has one (Claude Code's Agent, Codex's spawn_agent), keeps the subagent "
+                + "in this task's history. Folder, model, effort, permissions and account default as for create_task; "
+                + "approvals come to the person.",
             inputSchema: object([
                 "harness": harness,
                 "prompt": property("string", "The subagent's task."),

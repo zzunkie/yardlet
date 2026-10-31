@@ -178,7 +178,18 @@ final class QuitAndUpdateWaitTests: XCTestCase {
         XCTAssertEqual(delegate.quitForWaitedUpdate(.staged(candidate(digest: "a"))), .keepWaiting)
         XCTAssertEqual(box.terminationRequests, 0, "No quit while the task runs")
 
+        // Its turn ended while a subagent it started works on, which the quit would cut off as well
+        // (2026-10-31: an update installed under a working Codex subagent).
         try await model.store.updateSession(id: task.id, status: .ready)
+        let subagent = AgentRun(callerID: task.id, hostTaskID: task.id, harness: .codex, prompt: "Rate the app",
+                                workspaceURL: task.workspaceURL, depth: 1)
+        subagent.state = .running
+        model.sessionTools.add(subagent)
+        XCTAssertEqual(model.activeLocalSessions.map(\.id), [task.id])
+        XCTAssertEqual(delegate.quitForWaitedUpdate(.staged(candidate(digest: "a"))), .keepWaiting)
+        XCTAssertEqual(box.terminationRequests, 0, "No quit while its subagent works")
+
+        subagent.state = .completed
         XCTAssertEqual(delegate.quitForWaitedUpdate(.staged(candidate(digest: "a"))), .quitting)
         XCTAssertEqual(box.terminationRequests, 1)
 

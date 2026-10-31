@@ -2967,20 +2967,22 @@ final class AppModel {
         handlesBySessionID[sessionID] != nil
     }
 
-    /// Sessions with provider work, or a running bash-mode command, that would be interrupted by
-    /// application termination. Ready/attached sessions are intentionally excluded: merely
-    /// opening or resuming a task does not make it an active local turn.
     /// A harness's CLI changed under Yardlet (updated, or back to an earlier version): tasks that
     /// attach from now on start it again, and attached ones keep the process they have.
     func harnessRuntimeChanged(_ harness: HarnessKind) async {
         await registry.invalidate(harness: harness)
     }
 
+    /// Sessions with provider work, or a running bash-mode command, that would be interrupted by
+    /// application termination: a turn, or a `run_agent` subagent the task hosts that works or waits
+    /// for room, after the task's own turn ended. Ready/attached sessions are intentionally excluded:
+    /// merely opening or resuming a task does not make it an active local turn.
     var activeLocalSessions: [SessionRecord] {
-        store.sessions
+        let hostingSubagents = Set(sessionTools.runs.values.filter { !$0.state.isFinished }.map(\.hostTaskID))
+        return store.sessions
             .filter {
                 $0.status == .running || $0.status == .waitingForApproval
-                    || runningShellCommandBySessionID[$0.id] != nil
+                    || runningShellCommandBySessionID[$0.id] != nil || hostingSubagents.contains($0.id)
             }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
@@ -4925,6 +4927,8 @@ final class AppModel {
 
     func shutdown() async {
         scheduledTasks.stop()
+        // Before their runtimes close: the subagents the quit cuts off, kept for their callers.
+        interruptAgentRunsForQuit()
         // The quit has written down what was still in line; nothing more begins.
         restartResumeLine = RestartResumeLine()
         sessionJobScan?.cancel()
@@ -5338,13 +5342,17 @@ final class AppModel {
 
     /// Reads the record the last quit wrote, once, after the task index is back, and continues
     /// what it allows: the most recent first, a few starting at a time, and those that waited on
-    /// the person once they are opened.
+    /// the person once they are opened. The subagents it cut off cannot continue; the callers that
+    /// waited for them are told.
     /// Then the idle Claude Code tasks whose CLI brings session jobs back start again, after them.
     func continueWorkInterruptedByRestart(now: Date = Date()) async {
         guard !isVisualFixture else { return }
         // These start once the cut-off turns below are planned, and their tasks wait for them.
         continueAccountTaskMoves()
+        // Before any turn continues, so that a caller asking after its subagents finds them.
+        let waitedFor = restoreAgentRunsCutOffByQuit()
         await continueTurnsCutOffByRestart(now: now)
+        await tellCallersOfAgentRunsCutOffByQuit(waitedFor, now: now)
         await relaunchForSessionJobs()
     }
 
@@ -5370,6 +5378,17 @@ final class AppModel {
         await continueRestartResumeLine()
         // A task already open counts as opened.
         taskOpened(store.selectedSessionID, now: now)
+    }
+
+    /// Tells each caller that waited for a subagent the last quit cut off, as `notify` tells it of one
+    /// that ended, with its answer so far: a foreground call's caller holds no ID to ask with. Only
+    /// under the restart setting and within its day, as a cut-off turn continues; the message starts
+    /// a turn in an idle caller.
+    private func tellCallersOfAgentRunsCutOffByQuit(_ interrupted: [SessionToolCenter.InterruptedRun], now: Date) async {
+        guard RestartResumePreference.isOn(in: preferences) else { return }
+        for run in interrupted where now < run.interruptedAt.addingTimeInterval(RestartResumePolicy.maxAge) {
+            await notifyCaller(of: run.id, hostTaskID: run.hostTaskID)
+        }
     }
 
     /// Whether a cut-off turn waits for its task to be opened before it continues.

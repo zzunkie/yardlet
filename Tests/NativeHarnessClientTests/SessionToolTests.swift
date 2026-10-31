@@ -1212,6 +1212,81 @@ final class SessionToolTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// A subagent keeps no history with its harness, so a quit leaves nothing of it to continue
+    /// (2026-10-31: an update cut off a Codex subagent, and its caller's `wait_tasks` no longer knew
+    /// its ID). The quit ends each one at work as interrupted, kept with its answer so far; the next
+    /// launch holds it again under the same ID, and tells once each caller that waited for it, inside
+    /// the call or by `notify`, under the restart setting.
+    func testAQuitInterruptsSubagentsAndTheNextLaunchTellsTheCallersThatWaited() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        // The foreground call waits until the quit.
+        model.sessionTools.waitCeilingOverride = .seconds(600)
+        _ = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Rate the app", "background": true,
+                                            "notify": true], from: fixture.caller)
+        _ = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Count the TODOs", "background": true],
+                       from: fixture.caller)
+        let foreground = Task { await self.call(model, "run_agent", ["harness": "claude-code", "prompt": "Profile the build"],
+                                                from: fixture.caller) }
+        try await waitUntil { model.sessionTools.runs(hostedBy: fixture.caller.id).count == 3 }
+        let runs = model.sessionTools.runs(hostedBy: fixture.caller.id)
+        let notified = try XCTUnwrap(runs.first { $0.prompt == "Rate the app" })
+        let polled = try XCTUnwrap(runs.first { $0.prompt == "Count the TODOs" })
+        let waited = try XCTUnwrap(runs.first { $0.prompt == "Profile the build" })
+        for run in runs { try await waitUntil { await fixture.adapter.prompts(for: run.id).count == 1 } }
+        await fixture.adapter.emit(.sessionStatusChanged(.running), for: notified.id)
+        await fixture.adapter.emit(.assistantMessageCompleted("Onboarding is clear; pricing is not."), for: notified.id)
+        try await waitUntil { notified.lastWords != nil }
+        XCTAssertTrue(model.activeLocalSessions.contains { $0.id == fixture.caller.id },
+                      "Its own turn is over, but quitting would cut off its subagents")
+
+        await model.shutdown()
+        XCTAssertEqual(runs.map(\.state), [.interrupted, .interrupted, .interrupted])
+        let closed = await fixture.adapter.closed
+        XCTAssertEqual(Set(closed), Set(runs.map(\.id)))
+        let cutCall = await foreground.value
+        XCTAssertTrue(cutCall.text.contains("state: interrupted when Yardlet quit; it cannot continue"), cutCall.text)
+        let kept = try XCTUnwrap(model.sessionTools.keptRun(notified.id, hostTaskID: fixture.caller.id))
+        XCTAssertEqual(kept.state, AgentRun.State.interrupted.word)
+        XCTAssertEqual(kept.answer, "Onboarding is clear; pricing is not.")
+        // The quit tells no one; the next launch does.
+        try await Task.sleep(for: .milliseconds(1_500))
+        let toldAtQuit = await fixture.adapter.prompts(for: fixture.caller.id).compactMap(TaskMessage.parse)
+        XCTAssertTrue(toldAtQuit.isEmpty)
+
+        let after = fixture.relaunch()
+        await after.continueWorkInterruptedByRestart()
+        let outcomes = try decode([Outcome].self, await call(after, "wait_tasks",
+            ["ids": [polled.id.uuidString, notified.id.uuidString], "timeout_seconds": 0], from: fixture.caller).text)
+        XCTAssertEqual(outcomes.map(\.state), [AgentRun.State.interrupted.word, AgentRun.State.interrupted.word])
+        XCTAssertEqual(outcomes.map(\.ended), [true, true])
+        XCTAssertEqual(outcomes.last?.answer, "Onboarding is clear; pricing is not.")
+        XCTAssertEqual(after.railAgentRuns(hostedBy: fixture.caller.id).map(\.state), [.interrupted, .interrupted, .interrupted],
+                       "The Agents card shows them as they ended")
+        // Only the callers that waited are told: by `notify`, and inside the call.
+        let told = await fixture.adapter.prompts(for: fixture.caller.id).compactMap(TaskMessage.parse)
+        XCTAssertEqual(Set(told.map(\.senderID)), [notified.id.uuidString, waited.id.uuidString])
+        let note = try XCTUnwrap(told.first { $0.senderID == notified.id.uuidString })
+        XCTAssertTrue(note.body.hasPrefix("Ended (interrupted when Yardlet quit; it cannot continue)."), note.body)
+        XCTAssertTrue(note.body.hasSuffix("Onboarding is clear; pricing is not."), note.body)
+
+        // Read once; with the setting off, the next quit's subagent is still known but no one is told.
+        _ = await call(after, "run_agent", ["harness": "claude-code", "prompt": "Check the links", "background": true,
+                                            "notify": true], from: fixture.caller)
+        fixture.defaults.set(false, forKey: RestartResumePreference.key)
+        let late = try XCTUnwrap(after.sessionTools.runs(hostedBy: fixture.caller.id).first { $0.prompt == "Check the links" })
+        try await waitUntil { await fixture.adapter.prompts(for: late.id).count == 1 }
+        await after.shutdown()
+        let third = fixture.relaunch()
+        await third.continueWorkInterruptedByRestart()
+        XCTAssertEqual(third.sessionTools.runs(hostedBy: fixture.caller.id).map(\.id), [late.id])
+        XCTAssertEqual(third.sessionTools.run(late.id)?.state, .interrupted)
+        let toldAfterOff = await fixture.adapter.prompts(for: fixture.caller.id).compactMap(TaskMessage.parse)
+        XCTAssertEqual(toldAfterOff.count, told.count)
+        await third.shutdown()
+    }
+
     /// On a busy Mac a caller's starts go up to the floor; the next waits, says only that it is
     /// queued, and starts on its own in request order once one ends. A queued child task is a
     /// sidebar task under its caller, pending on the Agents card, its first message held until it
@@ -2119,7 +2194,11 @@ final class SessionToolTests: XCTestCase {
         let neighbor: SessionRecord
         let adapter = SessionToolAdapter(kind: .claudeCode)
         let codexAdapter = FakeHarnessAdapter(kind: .codex)
+        let defaults = SuggestionVolatileDefaults()
         let model: AppModel
+        /// Yardlet opening again after a quit: a new app model over the same tasks, preferences and
+        /// kept subagents, with the same harnesses.
+        let relaunch: @MainActor () -> AppModel
 
         init(callerOptions: [String: String] = [:], siblingOptions: [String: String] = [:],
              codexOptions: [String: String] = [:], codexState: CodexTaskState? = nil,
@@ -2161,39 +2240,46 @@ final class SessionToolTests: XCTestCase {
             let sessions = [caller, sibling, busy, codex, other, neighbor]
             var transcripts = [sibling.id: builder.entries]
             if !callerTranscript.isEmpty { transcripts[caller.id] = callerTranscript }
-            let defaults = SuggestionVolatileDefaults()
+            let defaults = defaults
             let selections = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
             for harness in [HarnessKind.claudeCode, .codex, .openCode] { selections.select(runtime, for: harness) }
             let adapter = adapter
             let codexAdapter = codexAdapter
             let codexID = codex.id
             let codexPresentation = codexState.map { [codexID: $0] } ?? [:]
-            model = AppModel(
-                store: SessionStore(sessions: sessions,
-                                    repository: repository?(sessions) ?? InMemorySessionRepository(sessions: sessions)),
-                runtimeSelections: selections,
-                registry: HarnessRegistry { kind, _ in kind == .codex ? codexAdapter as any HarnessAdapter : adapter },
-                connections: connections,
-                initialTranscripts: transcripts,
-                initialCodexPresentation: codexPresentation,
-                codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults),
-                preferences: defaults,
-                codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
-                codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
-                codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults),
-                transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
-                projectRepository: InMemoryProjectRepository(snapshot: ProjectSnapshot(projects: [app, site])),
-                chatWorkspaceHome: root,
-                sessionTitleResolver: { _ in nil },
-                sessionTitleRetryCount: 0,
-                systemNotificationCenter: SessionToolQuietNotifications(),
-                restoresIndexOnLaunch: false
-            )
-            model.sessionTools = SessionToolCenter(defaults: defaults)
-            model.sessionTools.runDirectory = runs
-            model.sessionTools.waitCeilingOverride = .seconds(5)
-            model.splits.activate(.session(caller.id))
-            model.splits.split(.right, placing: neighbor.id)
+            let (root, runs, projects) = (root, runs, [app, site])
+            let (callerID, neighborID) = (caller.id, neighbor.id)
+            let make: @MainActor () -> AppModel = {
+                let model = AppModel(
+                    store: SessionStore(sessions: sessions,
+                                        repository: repository?(sessions) ?? InMemorySessionRepository(sessions: sessions)),
+                    runtimeSelections: selections,
+                    registry: HarnessRegistry { kind, _ in kind == .codex ? codexAdapter as any HarnessAdapter : adapter },
+                    connections: connections,
+                    initialTranscripts: transcripts,
+                    initialCodexPresentation: codexPresentation,
+                    codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults),
+                    preferences: defaults,
+                    codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
+                    codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
+                    codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults),
+                    transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
+                    projectRepository: InMemoryProjectRepository(snapshot: ProjectSnapshot(projects: projects)),
+                    chatWorkspaceHome: root,
+                    sessionTitleResolver: { _ in nil },
+                    sessionTitleRetryCount: 0,
+                    systemNotificationCenter: SessionToolQuietNotifications(),
+                    restoresIndexOnLaunch: false
+                )
+                model.sessionTools = SessionToolCenter(defaults: defaults)
+                model.sessionTools.runDirectory = runs
+                model.sessionTools.waitCeilingOverride = .seconds(5)
+                model.splits.activate(.session(callerID))
+                model.splits.split(.right, placing: neighborID)
+                return model
+            }
+            relaunch = make
+            model = make()
         }
 
         func tearDown() {
