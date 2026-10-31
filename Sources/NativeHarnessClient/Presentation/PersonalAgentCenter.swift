@@ -55,6 +55,8 @@ final class PersonalAgentDetails {
     @ObservationIgnored var refreshEpoch = 0
     var schedules: Part<[PersonalAgentSchedule]> = .loading
     var computers: Part<[PersonalAgentComputer]> = .loading
+    /// What the dot produced, as far as read; a new one with each refresh of the details.
+    var outputs: PersonalAgentOutputs?
 }
 
 /// The draft files go to, fixed when the person starts choosing them.
@@ -266,6 +268,7 @@ final class PersonalAgentCenter {
     func select(_ id: PersonalAgentIdentity) async {
         guard agents.contains(where: { $0.id == id }), selectedID != id else { return }
         closeActivity()
+        cancelOutputs()
         events?.cancel()
         selectedID = id
         stopObserving()
@@ -349,6 +352,9 @@ final class PersonalAgentCenter {
             }
             state.messages = older ? DotsProjection.merge(state.messages, with: incoming, older: true) : incoming
             state.replies.noteRoom(incoming, epoch: epoch)
+            // The Outputs look only at the messages this read returned.
+            let outputs = detailsByAgent[agent.id]?.outputs
+            outputs?.noteRoom(incoming)
             if !older, let lifecycle = page.roomLifecycle { state.roomLifecycle = lifecycle }
             let confirmed = Set(state.messages.map(\.id))
             // A successful latest read is authoritative even if an accepted
@@ -360,6 +366,7 @@ final class PersonalAgentCenter {
             }
             state.before = older && page.messages.allSatisfy({ previousIDs.contains($0.id) }) ? nil : cursor
             state.loaded = true
+            outputs?.noteConversation(before: state.before, loaded: true)
             if !older { state.hasCompleteTail = true }
             succeeded = true
             reconcileReplies(state)
@@ -387,6 +394,15 @@ final class PersonalAgentCenter {
         let details = detailsByAgent[agent.id] ?? PersonalAgentDetails()
         detailsByAgent[agent.id] = details
         details.refreshEpoch += 1
+        // The Outputs read again from the first of the tasks' work when they are next shown; the
+        // conversation's loaded messages are looked at once to begin it.
+        details.outputs?.cancel()
+        let outputs = PersonalAgentOutputs(roomID: agent.id.roomID)
+        if let state = conversations[agent.id], state.loaded {
+            outputs.noteRoom(state.messages)
+            outputs.noteConversation(before: state.before, loaded: true)
+        }
+        details.outputs = outputs
         let epoch = details.refreshEpoch
         // The shown list stays; its next page is the old read's, so "Show more" waits for the new first page.
         details.activityCursor = nil
@@ -442,6 +458,61 @@ final class PersonalAgentCenter {
         let failure = error as? PersonalAgentFailure ?? .network
         if failure == .accountChanged || failure == .signInRequired { accept(failure) }
         return failure
+    }
+
+    // MARK: Outputs
+
+    /// Begins reading the selected dot's Outputs, once, when they are first shown.
+    func startOutputs() {
+        guard let (outputs, agent, reader, isCurrent) = currentOutputs() else { return }
+        outputs.start(reader: reader, agent: agent, conversationBefore: conversation?.before, isCurrent: isCurrent,
+                      failed: { [weak self] in _ = self?.detailFailure($0) })
+    }
+
+    /// Reads further back: an earlier page of messages and more of the tasks' work.
+    func readEarlierOutputs() {
+        guard let (outputs, agent, reader, isCurrent) = currentOutputs() else { return }
+        outputs.readEarlier(reader: reader, agent: agent, conversationBefore: conversation?.before, isCurrent: isCurrent,
+                            failed: { [weak self] in _ = self?.detailFailure($0) })
+    }
+
+    func retryOutputs() {
+        guard let (outputs, agent, reader, isCurrent) = currentOutputs() else { return }
+        outputs.retry(reader: reader, agent: agent, conversationBefore: conversation?.before, isCurrent: isCurrent,
+                      failed: { [weak self] in _ = self?.detailFailure($0) })
+    }
+
+    private func currentOutputs() -> (PersonalAgentOutputs, PersonalAgent, any PersonalAgentClient, @MainActor () -> Bool)? {
+        guard let agent = selected, let reader = client, let details = detailsByAgent[agent.id],
+              let outputs = details.outputs else { return nil }
+        let current = generation
+        let isCurrent: @MainActor () -> Bool = { [weak self, weak details, weak outputs] in
+            guard let self, let details, let outputs, !Task.isCancelled else { return false }
+            return self.generation == current && self.selectedID == agent.id
+                && self.detailsByAgent[agent.id] === details && details.outputs === outputs
+        }
+        return (outputs, agent, reader, isCurrent)
+    }
+
+    /// The bytes of a file a task left on the dot's computer, for the dot shown on this connection.
+    func download(_ file: PersonalAgentRemoteFile, for identity: PersonalAgentIdentity) async throws -> PersonalAgentDownload {
+        guard let agent = selected, agent.id == identity, let client else { throw PersonalAgentFailure.stopped }
+        let current = generation
+        do {
+            let value = try await client.outputFile(file, for: agent)
+            guard current == generation, selectedID == identity else { throw PersonalAgentFailure.stopped }
+            return value
+        } catch let error as DotsRemoteFileError {
+            // The person is told what failed; the step and code stay with the transport's checks.
+            throw error.failure
+        } catch {
+            if current == generation { _ = detailFailure(error) }
+            throw error
+        }
+    }
+
+    private func cancelOutputs() {
+        for details in detailsByAgent.values { details.outputs?.cancel() }
     }
 
     // MARK: An Activity task's execution record
@@ -816,6 +887,7 @@ final class PersonalAgentCenter {
         uploads = [:]
         uploadQueues = [:]
         closeActivity()
+        cancelOutputs()
         events?.cancel()
         events = nil
         stopObserving()
@@ -855,6 +927,7 @@ final class PersonalAgentCenter {
         stopObserving()
         resumedSinceRead = []
         closeActivity()
+        cancelOutputs()
         agents = []
         selectedID = nil
         conversations = [:]
@@ -872,6 +945,7 @@ final class PersonalAgentCenter {
         if value == .accountChanged || value == .signInRequired {
             stopObserving()
             closeActivity()
+            cancelOutputs()
             agents = []
             selectedID = nil
             conversations = [:]

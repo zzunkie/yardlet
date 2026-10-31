@@ -186,9 +186,30 @@ struct PersonalAgentAttachment: Equatable, Sendable {
     let fileID: String?
     let name: String
     let type: String
+    /// The provider is still making or uploading the file (`status` `uploading` or `generating`).
+    var isLoading = false
+    /// A link's public web address, kept only when it passes the provider's own check (`publicLink`).
+    var url: URL? = nil
 
     /// A file Yardlet can read and preview; any other attachment is named only.
     var opensHere: Bool { type == "file" && fileID != nil }
+
+    /// A link the provider's room shows as one: HTTPS, no user or password, no signature or token in
+    /// its query, a title that is not blank, and no conversation it points into, which is a thread
+    /// reference instead. Its title is its name.
+    static func publicLink(_ raw: JSONValue) -> PersonalAgentAttachment? {
+        guard raw["type"]?.stringValue == "link",
+              raw["conversation_id"] == nil || raw["conversation_id"] == .null,
+              let title = raw["title"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty,
+              let text = raw["url"]?.stringValue, let components = URLComponents(string: text),
+              components.scheme?.lowercased() == "https", components.host?.isEmpty == false,
+              components.user == nil, components.password == nil,
+              !(components.queryItems ?? []).contains(where: {
+                  $0.name.range(of: "^(x-amz-|signature$|sig$|token$|se$|sp$|sv$)", options: [.regularExpression, .caseInsensitive]) != nil
+              }),
+              let url = components.url else { return nil }
+        return .init(fileID: nil, name: title, type: "link", url: url)
+    }
 }
 
 /// Where a dot's own surfaces are, outside Yardlet: the dot's page on the provider's website, and the
@@ -347,6 +368,16 @@ enum PersonalAgentFailure: Error, Equatable, Sendable {
     case attachmentLimit, uploadFailed, uploadInterrupted, filePreparation, attachmentsIncomplete, attachmentsNotAllowed
     /// The provider no longer has what was asked for, or this account cannot see it.
     case missing
+    /// A file on the dot's computer could not be read.
+    case remoteFile
+    /// The computer a file is on is not known or not available.
+    case computerUnavailable
+    /// The provider asked to verify the app before reading a file, which Yardlet cannot do.
+    case verificationUnsupported
+    /// A file is larger than Yardlet reads.
+    case fileTooLarge
+    /// A web address on the dot's computer, such as localhost, which is another place on this Mac.
+    case remoteAddress
     /// What was asked for is larger than a page can carry, even one item at a time.
     case tooLarge
     case repliesNotAllowed
@@ -373,6 +404,11 @@ enum PersonalAgentFailure: Error, Equatable, Sendable {
         case .attachmentsIncomplete: L10n.string("Nothing was sent because a file did not upload. Retry it or remove it.")
         case .attachmentsNotAllowed: L10n.string("Files cannot be sent in this conversation. Remove them to send the message.")
         case .missing: L10n.string("This task is no longer available.")
+        case .remoteFile: L10n.string("This file could not be read from the dot's computer. Open the dot on the web to see it.")
+        case .computerUnavailable: L10n.string("The computer this file is on is not available.")
+        case .verificationUnsupported: L10n.string("ChatGPT asked to verify this app before reading the file, which Yardlet cannot do. Open the dot on the web to see it.")
+        case .fileTooLarge: L10n.string("This file is too large to open here.")
+        case .remoteAddress: L10n.string("This address is on the dot's computer, so it cannot be opened on this Mac.")
         case .tooLarge: L10n.string("This part of the task is too large to show here.")
         case .repliesNotAllowed: L10n.string("Replies cannot be sent in this conversation. Your draft is still here.")
         }
@@ -419,6 +455,21 @@ protocol PersonalAgentClient: Actor {
     /// A page of one turn's items, in order, after `cursor`.
     func activityItems(_ threadID: String, turnID: String, cursor: String?,
                        for agent: PersonalAgent) async throws -> CodexItemPage
+    /// The dot's execution threads whose work its Outputs come from: its current root first, then
+    /// the threads its profile binds. Only these, and children verified under them, are read for it.
+    func outputThreads(for agent: PersonalAgent) async throws -> [String]
+    /// The metadata of a thread `outputThreads` named.
+    func outputThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState
+    /// A thread spawned from `parentID`, admitted only when its own metadata names that parent; nil when
+    /// its metadata, read, names another parent or none.
+    func outputChild(_ threadID: String, of parentID: String, for agent: PersonalAgent) async throws -> CodexThreadState?
+    /// A page of an admitted thread's turns, oldest first, as `activityTurns` reads them.
+    func outputTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage
+    /// A page of one turn's items in an admitted thread, as `activityItems` reads them.
+    func outputItems(_ threadID: String, turnID: String, cursor: String?,
+                     for agent: PersonalAgent) async throws -> CodexItemPage
+    /// The bytes of a file a task left on the dot's computer.
+    func outputFile(_ file: PersonalAgentRemoteFile, for agent: PersonalAgent) async throws -> PersonalAgentDownload
     func stop() async
 }
 
@@ -437,6 +488,25 @@ extension PersonalAgentClient {
     func respond(_ result: DotsInputResult, fingerprint: String, in messageID: String,
                  for agent: PersonalAgent) async throws -> DotsResponseOutcome {
         throw DotsResponseFailure.notDispatched(.unavailable)
+    }
+
+    /// A reader that knows no execution threads finds outputs only in the conversation.
+    func outputThreads(for agent: PersonalAgent) async throws -> [String] { [] }
+    func outputThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
+        throw PersonalAgentFailure.accessDenied
+    }
+    func outputChild(_ threadID: String, of parentID: String, for agent: PersonalAgent) async throws -> CodexThreadState? {
+        throw PersonalAgentFailure.accessDenied
+    }
+    func outputTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        throw PersonalAgentFailure.accessDenied
+    }
+    func outputItems(_ threadID: String, turnID: String, cursor: String?,
+                     for agent: PersonalAgent) async throws -> CodexItemPage {
+        throw PersonalAgentFailure.accessDenied
+    }
+    func outputFile(_ file: PersonalAgentRemoteFile, for agent: PersonalAgent) async throws -> PersonalAgentDownload {
+        throw PersonalAgentFailure.remoteFile
     }
 }
 
@@ -629,11 +699,14 @@ enum DotsProjection {
             let attachments: [PersonalAgentAttachment]
             if case let .array(values)? = item["content"]?["attachments"] {
                 attachments = values.map { value in
+                    if let link = PersonalAgentAttachment.publicLink(value) { return link }
                     let fileID = value["file_id"]?.stringValue ?? value["file"]?["file_id"]?.stringValue ?? value["file"]?["id"]?.stringValue
+                    let status = value["status"]?.stringValue ?? value["file"]?["status"]?.stringValue
                     return .init(fileID: fileID,
                           name: value["name"]?.stringValue ?? value["file"]?["name"]?.stringValue
                               ?? value["file"]?["file_name"]?.stringValue ?? value["filename"]?.stringValue ?? L10n.string("Attachment"),
-                          type: value["type"]?.stringValue ?? (fileID == nil ? "unknown" : "file"))
+                          type: value["type"]?.stringValue ?? (fileID == nil ? "unknown" : "file"),
+                          isLoading: status == "uploading" || status == "generating")
                 }
             } else { attachments = [] }
             let request = item["content"]?["elicitation"].flatMap { $0 == .null ? nil : $0 }

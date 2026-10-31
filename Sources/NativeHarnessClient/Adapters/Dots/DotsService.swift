@@ -44,11 +44,17 @@ actor DotsService: PersonalAgentClient {
     private var listedTasks: [PersonalAgentIdentity: Set<String>] = [:]
     /// The product each task's thread belongs to, as its read metadata says (`productSKU`).
     private var threadProducts: [PersonalAgentIdentity: [String: String]] = [:]
+    /// The threads each dot's Outputs may read: its root and bound threads as its profile listed them,
+    /// and the children whose metadata named one of those as parent, with that parent.
+    private var outputScopes: [PersonalAgentIdentity: Set<String>] = [:]
+    private var outputParents: [PersonalAgentIdentity: [String: String]] = [:]
+    private let makeDurableSocket: @Sendable (URLRequest, URLSession) -> any DotsEventSocket
 
     init(executable: URL, environmentManager: CodexEnvironmentManager?, connection: ProviderConnection?,
          transport: (any CodexTransport)? = nil, configuration: URLSessionConfiguration? = nil,
          liveTiming: DotsLiveTiming = .init(),
-         socket: (@Sendable (URL, URLSession) -> any DotsEventSocket)? = nil) {
+         socket: (@Sendable (URL, URLSession) -> any DotsEventSocket)? = nil,
+         durableSocket: (@Sendable (URLRequest, URLSession) -> any DotsEventSocket)? = nil) {
         self.transport = transport ?? CodexProcessTransport(executableURL: executable,
             environmentManager: connection?.codexEnvironmentManager() ?? environmentManager
                 ?? CodexEnvironmentManager(paths: .live()), environmentScope: .native,
@@ -75,6 +81,11 @@ actor DotsService: PersonalAgentClient {
         makeSocket = socket ?? { url, session in
             let task = session.webSocketTask(with: url)
             task.maximumMessageSize = 512 * 1024
+            return task
+        }
+        makeDurableSocket = durableSocket ?? { request, session in
+            let task = session.webSocketTask(with: request)
+            task.maximumMessageSize = DotsDurableFiles.maximumMessageBytes
             return task
         }
     }
@@ -364,12 +375,7 @@ actor DotsService: PersonalAgentClient {
 
     func activityThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
         try await verifyListed(threadID, for: agent)
-        let value = try await requestJSON("/v1/threads/" + component(threadID), origin: Self.historyOrigin,
-                                          product: productSKU(threadID, for: agent))
-        let thread = try PersonalAgentActivityHistory.thread(value, id: threadID)
-        try await verify(agent)
-        threadProducts[agent.id, default: [:]][threadID] = thread.raw["threadSource"]?.stringValue == "aeon" ? "aeon" : "codex"
-        return thread
+        return try await threadMetadata(threadID, for: agent)
     }
 
     /// A task this reader saw in the dot's own Activity, read under the same login.
@@ -388,6 +394,26 @@ actor DotsService: PersonalAgentClient {
 
     func activityTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
         try await verifyListed(threadID, for: agent)
+        return try await threadTurns(threadID, cursor: cursor, for: agent)
+    }
+
+    func activityItems(_ threadID: String, turnID: String, cursor: String?,
+                       for agent: PersonalAgent) async throws -> CodexItemPage {
+        try await verifyListed(threadID, for: agent)
+        return try await threadItems(threadID, turnID: turnID, cursor: cursor, for: agent)
+    }
+
+    /// A thread's metadata from the execution-history host, which must name the thread asked for.
+    private func threadMetadata(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
+        let value = try await requestJSON("/v1/threads/" + component(threadID), origin: Self.historyOrigin,
+                                          product: productSKU(threadID, for: agent))
+        let thread = try PersonalAgentActivityHistory.thread(value, id: threadID)
+        try await verify(agent)
+        threadProducts[agent.id, default: [:]][threadID] = thread.raw["threadSource"]?.stringValue == "aeon" ? "aeon" : "codex"
+        return thread
+    }
+
+    private func threadTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
         var query = [URLQueryItem(name: "limit", value: String(PersonalAgentActivityHistory.initialTurnCount)),
                      URLQueryItem(name: "sortDirection", value: "desc"), URLQueryItem(name: "itemsView", value: "notLoaded")]
         if let cursor { query.append(.init(name: "cursor", value: cursor)) }
@@ -400,9 +426,8 @@ actor DotsService: PersonalAgentClient {
 
     /// A page of one turn's items. A page too large to carry is asked for again from the same cursor
     /// with half as many items, down to one, as the provider's own app does.
-    func activityItems(_ threadID: String, turnID: String, cursor: String?,
-                       for agent: PersonalAgent) async throws -> CodexItemPage {
-        try await verifyListed(threadID, for: agent)
+    private func threadItems(_ threadID: String, turnID: String, cursor: String?,
+                             for agent: PersonalAgent) async throws -> CodexItemPage {
         var limit = PersonalAgentActivityHistory.itemPageSize
         while true {
             var query = [URLQueryItem(name: "turnId", value: turnID), URLQueryItem(name: "limit", value: String(limit)),
@@ -418,6 +443,108 @@ actor DotsService: PersonalAgentClient {
                 limit /= 2
             }
         }
+    }
+
+    // MARK: Outputs
+
+    /// The dot's execution threads its Outputs are read from: its current root, whose profile must
+    /// name this dot and this root, and the threads the profile binds. This list is apart from the
+    /// Activity's, which it never widens; a spawned thread joins it only through `outputChild`.
+    func outputThreads(for agent: PersonalAgent) async throws -> [String] {
+        try await verify(agent)
+        guard let root = agent.rootThreadID, !root.isEmpty, profileRoots[agent.id] == root else { return [] }
+        let profile = try await read("/tbo/by-thread/" + component(root))
+        guard profile["id"]?.stringValue == agent.id.agentID, profile["active_root_thread_id"]?.stringValue == root else {
+            throw PersonalAgentFailure.invalidResponse
+        }
+        var threads = [root], seen: Set<String> = [root], cursor: String?, cursors = Set<String>()
+        repeat {
+            var query = [URLQueryItem(name: "limit", value: "100"), URLQueryItem(name: "include_hidden", value: "false")]
+            if let cursor { query.append(.init(name: "cursor", value: cursor)) }
+            let page = try await read("/tbo/" + component(agent.id.agentID) + "/threads", query: query)
+            guard case let .array(items)? = page["items"] else { throw PersonalAgentFailure.invalidResponse }
+            for item in items {
+                guard let id = item["thread_id"]?.stringValue, !id.isEmpty else { throw PersonalAgentFailure.invalidResponse }
+                if seen.insert(id).inserted { threads.append(id) }
+            }
+            cursor = page["cursor"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
+            if let cursor, !cursors.insert(cursor).inserted { throw PersonalAgentFailure.invalidResponse }
+            guard threads.count <= 1_000 else { throw PersonalAgentFailure.invalidResponse }
+        } while cursor != nil
+        try await verify(agent)
+        outputScopes[agent.id, default: []].formUnion(threads)
+        return threads
+    }
+
+    private func verifyOutput(_ threadID: String, for agent: PersonalAgent) async throws {
+        try await verify(agent)
+        guard outputScopes[agent.id]?.contains(threadID) == true else { throw PersonalAgentFailure.accessDenied }
+    }
+
+    func outputThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
+        try await verifyOutput(threadID, for: agent)
+        return try await threadMetadata(threadID, for: agent)
+    }
+
+    func outputChild(_ threadID: String, of parentID: String, for agent: PersonalAgent) async throws -> CodexThreadState? {
+        try await verifyOutput(parentID, for: agent)
+        let thread = try await threadMetadata(threadID, for: agent)
+        // A thread whose metadata names another parent, or none, is not this one's child.
+        guard PersonalAgentOutputEnvironment.parent(of: thread.raw) == parentID else { return nil }
+        outputScopes[agent.id, default: []].insert(threadID)
+        outputParents[agent.id, default: [:]][threadID] = parentID
+        return thread
+    }
+
+    func outputTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        try await verifyOutput(threadID, for: agent)
+        return try await threadTurns(threadID, cursor: cursor, for: agent)
+    }
+
+    func outputItems(_ threadID: String, turnID: String, cursor: String?,
+                     for agent: PersonalAgent) async throws -> CodexItemPage {
+        try await verifyOutput(threadID, for: agent)
+        return try await threadItems(threadID, turnID: turnID, cursor: cursor, for: agent)
+    }
+
+    /// A file a task of the dot presented on its computer. The thread's computer is read again from
+    /// its metadata, or its verified parent's when it names none, and must be the one the file was
+    /// found on; the file is then read over the execution host's socket, never from this Mac. A failure
+    /// there is a `DotsRemoteFileError`, naming its step.
+    func outputFile(_ file: PersonalAgentRemoteFile, for agent: PersonalAgent) async throws -> PersonalAgentDownload {
+        try await verifyOutput(file.threadID, for: agent)
+        guard file.path.hasPrefix("/"), PersonalAgentOutputScan.normalized(file.path) == file.path else {
+            throw PersonalAgentFailure.remoteFile
+        }
+        var current = file.threadID, visited = Set<String>()
+        var environment = PersonalAgentOutputEnvironment.unavailable
+        while visited.insert(current).inserted {
+            let thread = try await threadMetadata(current, for: agent)
+            environment = PersonalAgentOutputEnvironment(thread: thread.raw)
+            guard environment == .parents, let parent = outputParents[agent.id]?[current] else { break }
+            current = parent
+        }
+        guard case let .computer(id, _) = environment, file.environmentID == nil || file.environmentID == id else {
+            throw PersonalAgentFailure.computerUnavailable
+        }
+        let auth = try await credentials()
+        guard auth.identity.account == agent.id.accountID, auth.identity.user == agent.id.userID else {
+            throw PersonalAgentFailure.accountChanged
+        }
+        let socket = makeDurableSocket(DotsDurableFiles.request(token: auth.token, account: auth.identity.account), streamSession)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+        let data = try await withThrowingTaskGroup(of: Data.self) { group in
+            group.addTask { try await DotsDurableFiles.read(file.path, environmentID: id, socket: socket, version: version) }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(DotsDurableFiles.timeout * 1_000_000_000))
+                throw PersonalAgentFailure.network
+            }
+            defer { group.cancelAll(); socket.cancel(with: .normalClosure, reason: nil) }
+            return try await group.next()!
+        }
+        // Bytes that outlive the login they were read under are not shown.
+        try await verify(agent)
+        return .init(data: data, name: file.name)
     }
 
     /// One bounded read of a file or picture. Only the provider API path gets the account credential;
