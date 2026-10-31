@@ -5,7 +5,8 @@ import Synchronization
 /// Writes the main thread's stack to `~/Library/Logs/Yardlet/hangs.log` whenever the main run loop
 /// stays busy longer than 250 ms, the threshold at which Apple's tools report a hang. Each entry
 /// has the time, how long the main thread was busy, and the stack at 250 ms and at each further
-/// second (up to five, after which a hang still going is written as it is); nothing of a
+/// second (up to five, after which a hang still going is written as it is); a deep stack keeps its
+/// innermost frames and its outermost, which say what started the work; nothing of a
 /// conversation, a setting or a credential. On by default; turn it off with
 ///
 ///     defaults write com.zzunkie.yardlet Yardlet.debug.hangLog -bool NO
@@ -68,6 +69,9 @@ struct MainThreadHang: Sendable {
         /// How long the main thread had been busy when the stack was taken.
         let after: Duration
         let frames: [String]
+        /// Frames of a deep stack left out between its innermost `MainThreadWatchdog.innerFrames`
+        /// and its outermost.
+        var omitted = 0
     }
 
     let began: Date
@@ -86,7 +90,11 @@ struct MainThreadHang: Sendable {
         for sample in samples {
             text += "  at \(sample.after.milliseconds) ms:\n"
             for (index, frame) in sample.frames.enumerated() {
-                text += "    \(index) \(frame)\n"
+                let inner = index < MainThreadWatchdog.innerFrames || sample.omitted == 0
+                if !inner, index == MainThreadWatchdog.innerFrames {
+                    text += "    ... \(sample.omitted) frames left out\n"
+                }
+                text += "    \(inner ? index : index + sample.omitted) \(frame)\n"
             }
         }
         return text
@@ -131,6 +139,8 @@ final class MainThreadWatchdog: @unchecked Sendable {
     private var observers: [CFRunLoopObserver] = []
 
     static let maximumFrames = 64
+    /// A deeper stack keeps this many of its innermost frames, and its outermost after them.
+    static let innerFrames = 48
     /// A hang is sampled again every `resampleInterval`, up to `maximumSamples` times.
     private let resampleInterval: Duration
     private let maximumSamples: Int
@@ -239,10 +249,20 @@ final class MainThreadWatchdog: @unchecked Sendable {
         var samples: [MainThreadHang.Sample] = []
         var hasEnded = false
         while !hasEnded, samples.count < maximumSamples {
-            let count = sampleMainThread(into: frames)
+            let (count, depth) = sampleMainThread(into: frames)
+            let omitted = depth - count
+            if omitted > 0 {
+                // The outermost frames went round in their part of the buffer; the oldest is where the next would go.
+                let outer = UnsafeMutableBufferPointer(rebasing: UnsafeMutableBufferPointer(
+                    start: frames, count: Self.maximumFrames)[Self.innerFrames...])
+                let start = (depth - Self.innerFrames) % outer.count
+                let ordered = Array(outer[start...]) + Array(outer[..<start])
+                for (index, frame) in ordered.enumerated() { outer[index] = frame }
+            }
             samples.append(MainThreadHang.Sample(
                 after: .nanoseconds(Int64(Self.now() &- since)),
-                frames: (0..<count).map { Self.describe(frames[$0], returnAddress: $0 > 0) }
+                frames: (0..<count).map { Self.describe(frames[$0], returnAddress: $0 > 0) },
+                omitted: omitted
             ))
             hasEnded = ended.wait(timeout: .now() + .nanoseconds(Int(resampleInterval.nanoseconds))) == .success
         }
@@ -258,11 +278,13 @@ final class MainThreadWatchdog: @unchecked Sendable {
     }
 
     /// Reads the main thread's program counter, link register and frame-pointer chain into
-    /// `frames` while it is suspended. Nothing between suspending and resuming allocates or takes
-    /// a lock the main thread could hold.
-    private func sampleMainThread(into frames: UnsafeMutablePointer<UInt>) -> Int {
+    /// `frames` while it is suspended: all of it when it fits, else its innermost `innerFrames`
+    /// and, going round in the rest of `frames`, the frames after them, which end with the
+    /// outermost. Returns how many frames it kept and how deep the stack was. Nothing between
+    /// suspending and resuming allocates or takes a lock the main thread could hold.
+    private func sampleMainThread(into frames: UnsafeMutablePointer<UInt>) -> (count: Int, depth: Int) {
         #if arch(arm64)
-        guard thread_suspend(mainThread) == KERN_SUCCESS else { return 0 }
+        guard thread_suspend(mainThread) == KERN_SUCCESS else { return (0, 0) }
         defer { thread_resume(mainThread) }
         var state = arm_thread_state64_t()
         var stateCount = mach_msg_type_number_t(
@@ -272,36 +294,38 @@ final class MainThreadWatchdog: @unchecked Sendable {
                 thread_get_state(mainThread, thread_state_flavor_t(ARM_THREAD_STATE64), $0, &stateCount)
             }
         }
-        guard read == KERN_SUCCESS else { return 0 }
-        var count = 0
-        frames[count] = Self.stripped(UInt(state.__pc))
-        count += 1
+        guard read == KERN_SUCCESS else { return (0, 0) }
+        var depth = 0
+        Self.keep(Self.stripped(UInt(state.__pc)), in: frames, depth: &depth)
         var framePointer = UInt(state.__fp)
         let linkRegister = Self.stripped(UInt(state.__lr))
         var first = true
         // Each frame record is the caller's frame pointer and the return address, on the main
         // thread's own stack; a frame pointer outside it ends the chain instead of being read.
-        while count < Self.maximumFrames, framePointer >= stackBottom, framePointer + 16 <= stackTop,
+        while framePointer >= stackBottom, framePointer + 16 <= stackTop,
               framePointer % 8 == 0, let record = UnsafePointer<UInt>(bitPattern: framePointer) {
             let previous = record[0]
             let returnAddress = Self.stripped(record[1])
             guard returnAddress != 0 else { break }
             // A function that has not saved its frame yet returns to the link register.
-            if first, linkRegister != 0, linkRegister != returnAddress, count < Self.maximumFrames - 1 {
-                frames[count] = linkRegister
-                count += 1
-            }
+            if first, linkRegister != 0, linkRegister != returnAddress { Self.keep(linkRegister, in: frames, depth: &depth) }
             first = false
-            frames[count] = returnAddress
-            count += 1
+            Self.keep(returnAddress, in: frames, depth: &depth)
             // Callers' frames sit higher on the stack.
             guard previous > framePointer else { break }
             framePointer = previous
         }
-        return count
+        return (min(depth, Self.maximumFrames), depth)
         #else
-        return 0
+        return (0, 0)
         #endif
+    }
+
+    /// Puts the frame at `depth` where `sampleMainThread` keeps it, past the innermost going round.
+    private static func keep(_ frame: UInt, in frames: UnsafeMutablePointer<UInt>, depth: inout Int) {
+        let outer = maximumFrames - innerFrames
+        frames[depth < maximumFrames ? depth : innerFrames + (depth - innerFrames) % outer] = frame
+        depth += 1
     }
 
     /// Return addresses saved by arm64e system code carry a pointer signature in their high bits.
