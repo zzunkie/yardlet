@@ -45,7 +45,8 @@ jobs:
         run: |
           for file in .build/Yardlet.app/Contents/MacOS/Yardlet .build/Yardlet.app/Contents/Helpers/*; do
             lipo -info "$file"
-            lipo "$file" -verify_arch arm64 x86_64
+            # lipo -verify_arch takes one architecture at a time.
+            for arch in arm64 x86_64; do lipo "$file" -verify_arch "$arch"; done
           done
       # ditto keeps the bundle's links and signature, which the artifact's own zip does not.
       - name: Pack
