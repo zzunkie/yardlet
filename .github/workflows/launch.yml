@@ -75,7 +75,6 @@ jobs:
           done
       # The browser panel's QA fixture is compiled into debug builds only.
       - name: Build the debug bundle for the browser check
-        if: matrix.arch == 'x86_64'
         run: |
           ./scripts/build-app.sh debug
           ditto -c -k --keepParent .build/Yardlet.app "Yardlet-debug-$YARDLET_ARCHS.zip"
@@ -147,17 +146,9 @@ jobs:
           sdk=$(DEVELOPER_DIR=/Applications/Xcode_16.0.app/Contents/Developer xcrun --sdk macosx15.0 --show-sdk-path)
           ./scripts/check-macos-symbols.sh "$RUNNER_TEMP/Applications/Yardlet.app" "$sdk"
       - name: Open the browser panel
-        if: ${{ !cancelled() && matrix.arch == 'x86_64' }}
+        if: ${{ !cancelled() }}
         run: |
-          system_profiler SPDisplaysDataType
-          # Chromium draws with Metal and ends the browser when its GPU process cannot start ("GPU process
-          # isn't usable"), as on a virtual Mac without a Metal device; every Mac Yardlet supports has one.
-          metal=$(xcrun swift -e 'import Metal; print(MTLCreateSystemDefaultDevice()?.name ?? "")')
-          if [[ -z "$metal" ]]; then
-            echo "::notice::This Mac has no Metal device, so Chromium cannot draw here; the browser check is left out."
-            exit 0
-          fi
-          echo "Metal device: $metal"
+          system_profiler SPDisplaysDataType | grep -E "Chipset Model|Metal"
           mkdir -p .build/browser-host-qa
           ditto -x -k "Yardlet-debug-${{ matrix.arch }}.zip" .build
           ./scripts/browser-host-qa/prepare-qa.sh .build/Yardlet.app .build/browser-host-qa/YardletQA.app com.zzunkie.yardletqa
@@ -165,14 +156,14 @@ jobs:
             --ui-fixture-browser-check-only=open
       # The browser host's and Chromium's logs are in the QA home, and crash reports where macOS keeps them.
       - name: Gather the browser check's logs
-        if: ${{ failure() && matrix.arch == 'x86_64' }}
+        if: ${{ failure() }}
         run: |
           out=.build/browser-host-qa/open
           mkdir -p "$out/logs" "$out/crash-reports"
           cp -R ".build/browser-host-qa/qa-home/Library/Application Support/Yardlet/Browser/Logs/." "$out/logs/" || true
           find ~/Library/Logs/DiagnosticReports -name 'Yardlet*' -newer "$out/.started" -exec cp {} "$out/crash-reports/" \; || true
       - name: Keep the browser check's output
-        if: ${{ failure() && matrix.arch == 'x86_64' }}
+        if: ${{ failure() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-check-${{ matrix.runner }}
