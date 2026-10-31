@@ -132,6 +132,14 @@ engine, as a check to read. `windows-app.yml`, for `windows-*` branches only, bu
 runner, measures it and types Korean into its composer through the Microsoft Korean IME
 (`Windows/scripts/check-window.ps1`).
 
+**Why the screens are Swift.** Before the app target, the same window (sidebar, conversation, composer) was built in
+Swift and in C# with WinUI 3 and opened on a GitHub Actions Windows runner (2026-10-31). Both held 28–30 MB of private
+memory idle and sent Korean typed through the Microsoft Korean IME as typed. C# with Native AOT shipped 6.6 MB and built
+in under a minute; Swift shipped a 50 MB executable with its bindings, plus the Swift runtime (56 MB, 37 MB of it ICU,
+which the engine needs in any case), and built in about five minutes. Swift was chosen because its screens share the
+engine's module and `@Observable` models; C# screens would need a layer that carries the engine's state and events,
+and would ship the Swift runtime all the same.
+
 **The generator's version.** `Windows/Bindings/swift-winrt.json` pins swift-winrt at commit `3b20c713`, six commits
 after its latest tag `v0.1.404` (`79ffa65c`); they fix dangling pointers in the include filter the bindings rely on
 and leaked ownership in generated bridges. `generate-bindings.ps1` builds swift-winrt from that commit, because its
