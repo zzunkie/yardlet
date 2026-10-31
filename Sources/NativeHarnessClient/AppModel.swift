@@ -4650,7 +4650,7 @@ final class AppModel {
     /// for display, which resumes nothing; Grok's persisted metadata remains read-only.
     func refreshConversationStatus(for session: SessionRecord) async {
         guard store.sessions.contains(where: { $0.id == session.id }) else { return }
-        prepareComposerModel(for: session)
+        await prepareComposerModel(for: session)
         await refreshNativeClaudeConversation(for: session)
         await refreshNativeAntigravityConversation(for: session)
         await refreshProviderTitle(for: session)
@@ -4814,9 +4814,9 @@ final class AppModel {
     }
 
     /// Rereads the settings files that name a task's default model. Files only: no runtime starts.
-    func prepareComposerModel(for session: SessionRecord) {
+    func prepareComposerModel(for session: SessionRecord) async {
         guard session.harness == .claudeCode || session.harness == .codex else { return }
-        modelCatalogs.refreshDefaults(for: session.harness, connection: session.connection,
+        await modelCatalogs.refreshDefaults(for: session.harness, connection: session.connection,
             scope: session.environmentScope, workspaceURL: session.workspaceURL)
     }
 

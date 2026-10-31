@@ -147,23 +147,23 @@ final class HarnessModelCatalogStore {
     }
 
     /// Rereads the account's settings files. Called when a composer appears, so an edit made in
-    /// the provider's own settings shows the next time a task or the new-task screen opens.
+    /// the provider's own settings shows the next time a task or the new-task screen opens. The files
+    /// are read off the main thread: a project's folder can be slow to read.
     @discardableResult
     func refreshDefaults(for harness: HarnessKind, connection: ProviderConnection?,
-                         scope: SessionEnvironmentScope = .native, workspaceURL: URL?) -> HarnessModelDefaults? {
-        guard let key = key(harness, connection, scope, workspaceURL),
+                         scope: SessionEnvironmentScope = .native, workspaceURL: URL?) async -> HarnessModelDefaults? {
+        guard harness == .claudeCode || harness == .codex,
+              let key = key(harness, connection, scope, workspaceURL),
               let folder = locations.folder(for: harness, connection: connection, scope: scope) else { return nil }
-        let value: HarnessModelDefaults
-        switch harness {
-        case .claudeCode:
-            // A saved account's process runs with only its own folder named, as the CLI is told.
-            value = HarnessModelDefaultsReader.claude(configDirectory: folder,
-                workspaceURL: workspaceURL?.standardizedFileURL, environment: environment)
-        case .codex:
-            value = HarnessModelDefaultsReader.codex(home: folder)
-        default:
-            return nil
-        }
+        let workspaceURL = workspaceURL?.standardizedFileURL
+        let environment = environment
+        let value = await Task.detached(priority: .userInitiated) {
+            harness == .claudeCode
+                // A saved account's process runs with only its own folder named, as the CLI is told.
+                ? HarnessModelDefaultsReader.claude(configDirectory: folder, workspaceURL: workspaceURL,
+                                                    environment: environment)
+                : HarnessModelDefaultsReader.codex(home: folder)
+        }.value
         if defaults[key] != value { defaults[key] = value }
         return value
     }

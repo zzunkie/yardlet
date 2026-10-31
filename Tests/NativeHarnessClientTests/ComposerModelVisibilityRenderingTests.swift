@@ -36,7 +36,7 @@ final class ComposerModelVisibilityRenderingTests: XCTestCase {
         }
     }
 
-    func testTheNewTaskComposerShowsTheModelAndAccountForEachHarness() throws {
+    func testTheNewTaskComposerShowsTheModelAndAccountForEachHarness() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "model-visibility-render-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let claudeHome = root.appending(path: "claude"), codexHome = root.appending(path: "codex")
@@ -67,7 +67,7 @@ final class ComposerModelVisibilityRenderingTests: XCTestCase {
             draft.projectID = project.id
             draft.harness = harness
             draft.text = harness == .codex ? "Fix the flaky test" : "Explain the build"
-            catalogs.refreshDefaults(for: harness, connection: nil, workspaceURL: workspace)
+            await catalogs.refreshDefaults(for: harness, connection: nil, workspaceURL: workspace)
             let menu = try XCTUnwrap(NewTaskModelProjection.menu(harness: harness, choice: nil, catalogs: catalogs,
                 connection: nil, workspaceURL: workspace))
             XCTAssertEqual(menu.title, harness == .codex ? "GPT-6-Astra · " + L10n.string("Extra high")

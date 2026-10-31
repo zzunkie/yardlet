@@ -801,8 +801,8 @@ private struct NewTaskComposer: View {
             .task(id: modelSettingsContext) {
                 // Files only: the account's settings name its default model. Nothing starts.
                 guard let context = modelSettingsContext, let models else { return }
-                models.catalogs.refreshDefaults(for: context.harness, connection: context.connection,
-                                                workspaceURL: context.workspace)
+                await models.catalogs.refreshDefaults(for: context.harness, connection: context.connection,
+                                                      workspaceURL: context.workspace)
             }
             .padding(.leading, 11)
             .padding(.trailing, 10)
