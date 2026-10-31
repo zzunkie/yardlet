@@ -33,7 +33,7 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: Windows/Bindings/.work/swift-winrt-*
-          key: swift-winrt-${{ hashFiles('Windows/Bindings/swift-winrt.json') }}
+          key: swift-winrt-${{ hashFiles('Windows/Bindings/swift-winrt.json', 'Windows/Bindings/swift-winrt-patches/**') }}
       - name: Generate the WinUI bindings
         shell: pwsh
         run: Windows/scripts/generate-bindings.ps1

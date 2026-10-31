@@ -30,8 +30,15 @@ function Import-DeveloperEnvironment {
     }
 }
 
-# swift-winrt publishes its builds to a package feed that needs signing in, so it is built from source.
-$tool = Join-Path $work "swift-winrt-$commit\swiftwinrt.exe"
+# swift-winrt publishes its builds to a package feed that needs signing in, so it is built from source:
+# the pinned commit, with the patches in Bindings/swift-winrt-patches applied in name order (fixes the
+# app needs before swift-winrt takes them).
+$patches = @(Get-ChildItem (Join-Path $bindings 'swift-winrt-patches') -Filter *.patch -ErrorAction SilentlyContinue | Sort-Object Name)
+$patchKey = if ($patches) {
+    $joined = ($patches | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash }) -join ''
+    '-' + [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::ASCII.GetBytes($joined))).Substring(0, 12)
+} else { '' }
+$tool = Join-Path $work "swift-winrt-$commit$patchKey\swiftwinrt.exe"
 if (-not (Test-Path $tool)) {
     $source = Join-Path $work 'generator-source'
     if (Test-Path $source) { Remove-Item -Recurse -Force $source }
@@ -41,6 +48,10 @@ if (-not (Test-Path $tool)) {
     git -C $source checkout -q --detach FETCH_HEAD
     $fetched = git -C $source rev-parse HEAD
     if ($fetched -ne $commit) { throw "swift-winrt is at $fetched, not the pinned $commit" }
+    foreach ($patch in $patches) {
+        git -C $source apply $patch.FullName
+        Write-Output "Applied $($patch.Name)"
+    }
     git -C $source submodule update -q --init --depth 1
     Import-DeveloperEnvironment
     # The generator's own folder, without the repository's tests; CMake 4 wants the minimum version
@@ -58,7 +69,7 @@ if (-not (Test-Path $tool)) {
     New-Item -ItemType Directory -Force (Split-Path $tool) | Out-Null
     Copy-Item (Join-Path $build 'swiftwinrt\swiftwinrt.exe') $tool
 }
-Write-Output "swift-winrt $commit"
+Write-Output "swift-winrt $commit$(if ($patches) { ' with ' + (($patches | ForEach-Object Name) -join ', ') })"
 
 # Microsoft's packages, as a native project restores them.
 $nuget = (Get-Command nuget -ErrorAction SilentlyContinue).Source

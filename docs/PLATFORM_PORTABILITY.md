@@ -139,8 +139,9 @@ builds are published to a package feed that needs a sign-in, and stops if the ch
 swift-winrt is still at v0.1, is maintained in practice by one company, and that company archived its prebuilt WinUI
 bindings (`swift-winui`, `swift-windowsappsdk`) in October 2025, so the version stays pinned and moves only on purpose.
 
-A fix the app needs before swift-winrt merges it goes on the pinned commit as a patch that `generate-bindings.ps1`
-applies, offered upstream as a pull request, and comes out once a pinned commit includes it.
+A fix the app needs before swift-winrt merges it goes on the pinned commit as a patch in
+`Windows/Bindings/swift-winrt-patches/`, which `generate-bindings.ps1` applies in name order, is offered upstream as a
+pull request, and comes out once a pinned commit includes it.
 
 **If swift-winrt stops being maintained,** in this order: keep the pinned version, which keeps generating the same
 bindings; fork it and keep only the fixes the app needs; as a last resort, write the screens in C# with WinUI 3 and

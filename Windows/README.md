@@ -6,7 +6,7 @@ What the Windows app is built from besides its sources in `Sources/NativeHarness
 | Path | What it is |
 | --- | --- |
 | `Bindings/projections.json` | The WinUI types the app uses, and the Microsoft packages, with their SHA-512 hashes, their bindings are generated from |
-| `Bindings/swift-winrt.json` | The swift-winrt commit that generates the bindings |
+| `Bindings/swift-winrt.json`, `Bindings/swift-winrt-patches/` | The swift-winrt commit that generates the bindings, and the fixes applied on it until swift-winrt has them |
 | `Bindings/Package.swift`, `Bindings/Sources/` | The bindings as Swift modules linked into the app, the bootstrapper's link, and `XamlApplication`, the application type the app derives from |
 | `scripts/generate-bindings.ps1` | Builds swift-winrt, restores the packages and generates the bindings into `Bindings/Generated/`, which git ignores |
 | `scripts/place-bootstrapper.ps1` | Puts the Windows App SDK's bootstrapper beside the app's executable |
