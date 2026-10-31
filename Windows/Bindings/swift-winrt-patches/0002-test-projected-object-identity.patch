@@ -73,6 +73,21 @@ index 26d20d9..8f7760c 100644
      ("testNotStrong", WeakReferenceTests.testNotStrong)
    ])
  ]
+diff --git a/tests/test_app/test_app.exe.manifest b/tests/test_app/test_app.exe.manifest
+index 30c009c..aedc682 100644
+--- a/tests/test_app/test_app.exe.manifest
++++ b/tests/test_app/test_app.exe.manifest
+@@ -70,6 +70,10 @@
+                   name="test_component.WeakReferencer"
+                   threadingModel="both"
+                   xmlns="urn:schemas-microsoft-com:winrt.v1" />
++            <activatableClass
++                  name="test_component.ReferenceTarget"
++                  threadingModel="both"
++                  xmlns="urn:schemas-microsoft-com:winrt.v1" />
+             <activatableClass
+                   name="test_component.ArrayMethods"
+                   threadingModel="both"
 diff --git a/tests/test_component/cpp/CMakeLists.txt b/tests/test_component/cpp/CMakeLists.txt
 index 56155b3..71cff7f 100644
 --- a/tests/test_component/cpp/CMakeLists.txt
