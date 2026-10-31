@@ -22,6 +22,16 @@ protocol OAuthLoopbackReceiving: Sendable {
 /// Which connectors the user turned off in which task: task ID → connector IDs.
 typealias ConnectorTaskChoices = [UUID: Set<UUID>]
 
+/// Everything a `ConnectorRepository` keeps, as the center reads it when it starts.
+struct ConnectorSavedSettings {
+    var connectors: [ConnectorRecord] = []
+    var taskChoices: ConnectorTaskChoices = [:]
+    var googleAppClientID: String?
+    var microsoftApp: MicrosoftOAuth.App?
+    /// False while the saved settings are there but cannot be read.
+    var canRead = true
+}
+
 /// Each save returns false when it kept nothing: the saved settings are there but cannot be read
 /// (`FileConnectorRepository`).
 @MainActor
@@ -40,6 +50,16 @@ protocol ConnectorRepository {
     /// directory are all there is, and none of it is secret.
     func loadMicrosoftApp() -> MicrosoftOAuth.App?
     @discardableResult func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) -> Bool
+    /// All of the above at once.
+    func loadSettings() -> ConnectorSavedSettings
+}
+
+extension ConnectorRepository {
+    func loadSettings() -> ConnectorSavedSettings {
+        ConnectorSavedSettings(connectors: load(), taskChoices: loadTaskChoices(),
+                               googleAppClientID: loadGoogleAppClientID(), microsoftApp: loadMicrosoftApp(),
+                               canRead: canRead())
+    }
 }
 
 @MainActor
@@ -119,8 +139,25 @@ struct FileConnectorRepository: ConnectorRepository {
     }
 
     func loadTaskChoices() -> ConnectorTaskChoices {
+        Self.taskChoices((try? snapshot())?.offInTasks)
+    }
+
+    /// The file read and decoded once: it holds every server's tool list and can be large.
+    func loadSettings() -> ConnectorSavedSettings {
+        do {
+            let snapshot = try snapshot()
+            return ConnectorSavedSettings(connectors: snapshot?.connectors ?? [],
+                                          taskChoices: Self.taskChoices(snapshot?.offInTasks),
+                                          googleAppClientID: snapshot?.googleOAuthClientID,
+                                          microsoftApp: snapshot?.microsoftOAuthApp)
+        } catch {
+            return ConnectorSavedSettings(canRead: false)
+        }
+    }
+
+    private static func taskChoices(_ offInTasks: [String: [String]]?) -> ConnectorTaskChoices {
         var choices: ConnectorTaskChoices = [:]
-        for (task, connectors) in (try? snapshot())?.offInTasks ?? [:] {
+        for (task, connectors) in offInTasks ?? [:] {
             guard let taskID = UUID(uuidString: task) else { continue }
             let ids = Set(connectors.compactMap(UUID.init(uuidString:)))
             if !ids.isEmpty { choices[taskID] = ids }
@@ -373,11 +410,12 @@ final class ConnectorCenter: ConnectorToolProviding {
         registry = MCPRegistryDirectory(client: environment.registries.map {
             MCPRegistryClient(endpoints: $0, http: environment.http, clientVersion: environment.clientVersion)
         }, now: environment.now)
-        connectors = environment.repository.load()
-        offInTasks = environment.repository.loadTaskChoices()
-        googleAppClientID = environment.repository.loadGoogleAppClientID()
-        microsoftApp = environment.repository.loadMicrosoftApp()
-        cannotReadSavedSettings = !environment.repository.canRead()
+        let saved = environment.repository.loadSettings()
+        connectors = saved.connectors
+        offInTasks = saved.taskChoices
+        googleAppClientID = saved.googleAppClientID
+        microsoftApp = saved.microsoftApp
+        cannotReadSavedSettings = !saved.canRead
         ConnectorToolLabels.shared.update(connectors)
         GmailDraftReader.shared.set { [weak self] tool, arguments in
             await self?.gmailDraftPreview(tool: tool, arguments: arguments)

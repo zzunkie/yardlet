@@ -284,7 +284,7 @@ final class ComposerModelVisibilityTests: XCTestCase {
         draft.workspaceURL = fixture.root
         draft.harness = .claudeCode
         fixture.model.modelCatalogs.recordClaude(ModelVisibilityFixtures.claudeModels, for: fixture.connection)
-        fixture.model.modelCatalogs.refreshDefaults(for: .claudeCode, connection: fixture.connection, workspaceURL: fixture.root)
+        await fixture.model.modelCatalogs.refreshDefaults(for: .claudeCode, connection: fixture.connection, workspaceURL: fixture.root)
 
         // Choosing on the new-task screen is remembered for the harness.
         let catalogs = fixture.model.modelCatalogs
@@ -321,7 +321,7 @@ final class ComposerModelVisibilityTests: XCTestCase {
         let catalogs = fixture.model.modelCatalogs
         catalogs.recordCodex([ModelVisibilityFixtures.codexModel("gpt-test", efforts: ["low", "high"], isDefault: true),
                               ModelVisibilityFixtures.codexModel("fast", efforts: ["low"])], for: nil)
-        catalogs.refreshDefaults(for: .codex, connection: nil, workspaceURL: nil)
+        await catalogs.refreshDefaults(for: .codex, connection: nil, workspaceURL: nil)
         let draft = NewTaskDraft()
         draft.text = "Build the feature"
         draft.workspaceURL = fixture.root

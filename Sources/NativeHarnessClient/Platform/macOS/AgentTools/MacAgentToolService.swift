@@ -30,9 +30,13 @@ final class MacAgentToolService: NativeSurfaceResource {
 
     private init() {
         let temporary = FileManager.default.temporaryDirectory
-        Self.removeDirectoriesOfEndedRuns(in: temporary)
-        AntigravityLeftoverFolder.removeIfPresent(
-            cachesDirectory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first)
+        // What earlier runs left goes in the background: the temporary folder can hold thousands of
+        // entries to list, and nothing this run does waits for them to go.
+        Task.detached(priority: .utility) {
+            Self.removeDirectoriesOfEndedRuns(in: temporary)
+            AntigravityLeftoverFolder.removeIfPresent(
+                cachesDirectory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first)
+        }
         let directory = temporary.appending(path: "\(Self.directoryPrefix)\(getpid())", directoryHint: .isDirectory)
         self.directory = directory
         let tabs = BrowserAgentTabs {
@@ -188,10 +192,10 @@ final class MacAgentToolService: NativeSurfaceResource {
         return false
     }
 
-    private static let directoryPrefix = "Yardlet-tools-"
+    private nonisolated static let directoryPrefix = "Yardlet-tools-"
 
     /// A run that crashed leaves its directory, with its socket and Claude config files, behind.
-    private static func removeDirectoriesOfEndedRuns(in temporary: URL) {
+    private nonisolated static func removeDirectoriesOfEndedRuns(in temporary: URL) {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: temporary.path(percentEncoded: false))) ?? []
         for name in names where name.hasPrefix(directoryPrefix) {
             guard let pid = Int32(name.dropFirst(directoryPrefix.count)), pid != getpid() else { continue }

@@ -77,7 +77,7 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
         XCTAssertEqual(value("claude", L10n.string("Context window"))?.hasSuffix("(60%)"), true)
     }
 
-    func testNewTaskComposersDrawInBothAppearances() throws {
+    func testNewTaskComposersDrawInBothAppearances() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "composer-unify-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let claudeHome = root.appending(path: "claude"), codexHome = root.appending(path: "codex")
@@ -107,7 +107,7 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
             draft.projectID = project.id
             draft.harness = harness
             draft.text = "Explain the build"
-            catalogs.refreshDefaults(for: harness, connection: nil, workspaceURL: ComposerUnificationFixtures.workspace)
+            await catalogs.refreshDefaults(for: harness, connection: nil, workspaceURL: ComposerUnificationFixtures.workspace)
             let scenario = ComposerUnificationFixtures.Scenario(name: "new-task-\(harness.rawValue)",
                                                                 size: NSSize(width: 860, height: 280)) {
                 AnyView(NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtimes,
