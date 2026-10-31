@@ -30,7 +30,7 @@ final class TranscriptProseRenderingTests: XCTestCase {
 
     ---
 
-    Nothing else changed.
+    Nothing else changed: a parse ~~still~~ took 240~400ms before and takes 110~150ms now.
 
     | Case | Before | After |
     |---|---|---|
@@ -62,7 +62,14 @@ final class TranscriptProseRenderingTests: XCTestCase {
         XCTAssertEqual(texts.count, 2)
         let first = try XCTUnwrap(texts.first)
         XCTAssertTrue(first.string.hasPrefix("What changed\n"))
-        XCTAssertTrue(first.string.contains("Nothing else changed."))
+        XCTAssertTrue(first.string.contains("Nothing else changed: a parse still took 240~400ms before and takes 110~150ms now."))
+        // Two tildes strike; one stays a tilde, as a range writes it.
+        let storage = try XCTUnwrap(first.textStorage)
+        var struck: [String] = []
+        storage.enumerateAttribute(.strikethroughStyle, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            if value != nil { struck.append(storage.attributedSubstring(from: range).string) }
+        }
+        XCTAssertEqual(struck, ["still"])
         XCTAssertEqual(texts.last?.string, "That is all.")
         XCTAssertGreaterThan(first.frame.height, 300, "The text is laid out whole")
     }
@@ -97,7 +104,7 @@ final class TranscriptProseRenderingTests: XCTestCase {
 
 
 
-        Nothing else changed.
+        Nothing else changed: a parse still took 240~400ms before and takes 110~150ms now.
         """)
     }
 

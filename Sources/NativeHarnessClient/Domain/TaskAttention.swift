@@ -1,7 +1,4 @@
 import Foundation
-#if !canImport(Darwin)
-import Markdown
-#endif
 import YardletAgentTools
 
 /// What a waiting task waits for, after the Codex app's two row chips: an approval
@@ -128,17 +125,8 @@ struct TaskAttentionDetail: Equatable, Sendable {
         guard let line = found else { return nil }
         let unmarked = blockMarks.stringByReplacingMatches(
             in: line, range: NSRange(line.startIndex..., in: line), withTemplate: "")
-        #if canImport(Darwin)
-        let inline = unmarked.contains(where: inlineMarks.contains)
-            ? (try? AttributedString(markdown: unmarked, options: .init(
-                interpretedSyntax: .inlineOnlyPreservingWhitespace))).map { String($0.characters) } ?? unmarked
-            : unmarked
-        #else
-        // Foundation elsewhere reads no Markdown; swift-markdown gives the same words.
-        let inline = unmarked.contains(where: inlineMarks.contains)
-            ? (Document(parsing: unmarked).child(at: 0) as? Paragraph)?.plainText ?? unmarked
-            : unmarked
-        #endif
+        // As the conversation reads it, not as Foundation does, which strikes between single tildes.
+        let inline = unmarked.contains(where: inlineMarks.contains) ? TranscriptInlineContent(line: unmarked).plainText : unmarked
         let words = inline.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !words.isEmpty else { return nil }
         return words.count > 240 ? String(words.prefix(240)) + "…" : words

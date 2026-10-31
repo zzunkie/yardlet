@@ -61,10 +61,9 @@ own sessions do.
 
 **Foundation outside Apple's platforms.** Where the engine uses something only Apple's Foundation has, it keeps that
 under `#if canImport(Darwin)` and says the same thing another way elsewhere: `L10n` takes plain string keys,
-`RelativeTime` uses `Date.RelativeFormatStyle`, `TaskAttention` reads Markdown with swift-markdown, `NSNumber` tells
-JSON booleans and fractions apart by `objCType` (`JSONNumberKind`), Gmail's charsets go through
-`String.Encoding(ianaName:)`. Files that use `URLSession` import `FoundationNetworking` when it exists, and files that
-use `@Observable` import `Observation`.
+`RelativeTime` uses `Date.RelativeFormatStyle`, `NSNumber` tells JSON booleans and fractions apart by `objCType`
+(`JSONNumberKind`), Gmail's charsets go through `String.Encoding(ianaName:)`. Files that use `URLSession` import
+`FoundationNetworking` when it exists, and files that use `@Observable` import `Observation`.
 
 **Cryptography.** The engine and the phone remote import `Crypto` from swift-crypto, which has CryptoKit's API: on
 macOS it re-exports CryptoKit and adds nothing to the app; elsewhere it builds BoringSSL.
@@ -237,7 +236,7 @@ location there (AppData, the registry and so on) is not confirmed.
 
 | Dependency | Engine use | Windows | Evidence | Recommended handling |
 | --- | --- | --- | --- | --- |
-| swift-markdown 0.8.0 (swift-cmark 0.8.0) | `Transcript/TranscriptInlineContent`, `Transcript/TranscriptMarkdownDocument`, `Diff/MarkdownReviewDiff`, `Domain/TaskAttention` off Apple's platforms | The manifest has Windows-specific settings. Builds on Linux (confirmed); Windows not confirmed | `CMARK_GFM_STATIC_DEFINE` `.when(platforms: [.windows])` in swift-markdown's `Package.swift`, `#if os(Windows)` in swift-cmark's `Package.swift` | Keep it in the engine |
+| swift-markdown 0.8.0 (swift-cmark 0.8.0) | `Transcript/TranscriptInlineContent`, `Transcript/TranscriptMarkdownDocument`, `Diff/MarkdownReviewDiff`, `Domain/TaskAttention` | The manifest has Windows-specific settings. Builds on Linux (confirmed); Windows not confirmed | `CMARK_GFM_STATIC_DEFINE` `.when(platforms: [.windows])` in swift-markdown's `Package.swift`, `#if os(Windows)` in swift-cmark's `Package.swift` | Keep it in the engine |
 | swift-crypto 5.0.3 (in place of CryptoKit) | `CodexEnvironmentManager`, `ClaudeSubagentTranscriptReader`, `YardletRemote` | Windows builds in its own CI; its README names ARM64 Windows. Not confirmed with Yardlet's build | Builds on Linux (confirmed) | Keep |
 | SwiftTerm 1.18.0 | None; the macOS layer and screens only | Only the terminal parser builds. No PTY or view (confirmed) | The manifest's `os(Windows)` branch leaves out the `Apple`, `Mac` and `iOS` sources, and `LocalProcess.swift`, `Pty.swift` and `HeadlessTerminal.swift` are under `#if !os(iOS) && !os(Windows)` | The Windows terminal uses ConPTY and a Windows view |
 | Sparkle 2.10.1 | None; only the macOS layer imports it (`Platform/macOS/YardletSparkle.swift`), and it is linked only on macOS (`.when(platforms: [.macOS])`) | Not used | `Package.swift` | Windows needs its own update mechanism |

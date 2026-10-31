@@ -47,8 +47,7 @@ struct AgentRunControls: View {
                         .lineLimit(1)
                 } else if let line = run.state.isFinished ? run.answerLine : run.progressLine {
                     // While it works, its latest step; once it ended, the first line of its answer.
-                    Text((try? AttributedString(markdown: line, options: .init(
-                        interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(line))
+                    Text(TranscriptInlineContent(line: line).attributed)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .foregroundStyle(.secondary)

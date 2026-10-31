@@ -18,6 +18,14 @@ struct TranscriptInlineContent: Equatable, Sendable, ExpressibleByStringLiteral 
         attributed = TranscriptAutolink.apply(to: Self.render(markup))
     }
 
+    /// One line of Markdown as a summary or a card shows it: its words with their inline styles and
+    /// links, without the marks that start a heading, quote or list item. A line that is no words to
+    /// Markdown, a fence or a rule, stays as written.
+    init(line: String) {
+        let content = Self(markup: Document(parsing: line, options: [.disableSmartOpts]))
+        self = content.attributed.characters.isEmpty ? Self(plainText: line) : content
+    }
+
     func resolved(relativeTo workspace: URL?) -> AttributedString {
         guard let workspace else { return attributed }
         var result = attributed
@@ -61,7 +69,12 @@ struct TranscriptInlineContent: Equatable, Sendable, ExpressibleByStringLiteral 
         switch markup {
         case is Emphasis: intent = .emphasized
         case is Strong: intent = .stronglyEmphasized
-        case is Strikethrough: intent = .strikethrough
+        case let strikethrough as Strikethrough:
+            // GFM strikes between one tilde as between two, but one more often writes a range
+            // ("240~400ms") or "about" ("~5"). Only two strike, as cmark-gfm reads Markdown with
+            // `CMARK_OPT_STRIKETHROUGH_DOUBLE_TILDE` and remark-gfm with `singleTilde: false`.
+            guard strikethrough.openingTildes != 1 else { return AttributedString("~") + result + AttributedString("~") }
+            intent = .strikethrough
         default: intent = []
         }
         if !intent.isEmpty {
@@ -77,6 +90,16 @@ struct TranscriptInlineContent: Equatable, Sendable, ExpressibleByStringLiteral 
             result.link = escaped.addingPercentEncoding(withAllowedCharacters: allowed).flatMap { URL(string: $0) }
         }
         return result
+    }
+}
+
+private extension Strikethrough {
+    /// The tildes it opens with: the columns from its start to its first child's. Both are on one line,
+    /// as the opening tildes are followed by no white space.
+    var openingTildes: Int? {
+        guard let start = range?.lowerBound, let first = child(at: 0)?.range?.lowerBound, first.line == start.line
+        else { return nil }
+        return first.column - start.column
     }
 }
 
