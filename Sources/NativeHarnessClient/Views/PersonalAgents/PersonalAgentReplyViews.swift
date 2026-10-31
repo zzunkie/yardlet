@@ -425,11 +425,15 @@ struct PersonalAgentReplyPanelMonitor: NSViewRepresentable {
     func updateNSView(_ view: MonitorView, context: Context) {
         view.keys = keys
         view.onOutside = onOutside
+        view.isEnabled = context.environment.isEnabled
     }
 
     final class MonitorView: NSView {
         var keys: PersonalAgentReplyKeys?
         var onOutside: () -> Void = {}
+        /// Whether the dialog takes input: under a view that covers it, a press elsewhere is not one
+        /// outside the dialog.
+        var isEnabled = true
         private var monitor: Any?
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -457,7 +461,7 @@ struct PersonalAgentReplyPanelMonitor: NSViewRepresentable {
 
         /// What the window's monitor hands over for each event; a test hands events here directly.
         func observe(_ event: NSEvent) {
-            guard let window, event.window === window else { return }
+            guard isEnabled, let window, event.window === window else { return }
             if event.type == .keyDown {
                 guard event.keyCode == 53 else { return }
                 let composing = (window.firstResponder as? NSTextView)?.hasMarkedText() == true
