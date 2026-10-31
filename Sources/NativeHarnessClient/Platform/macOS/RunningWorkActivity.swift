@@ -95,7 +95,7 @@ enum KeepScreenAwakePreference {
             // The person may have allowed the helper in System Settings.
             center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.lidHelper?.refreshStatus()
+                    self?.lidHelper?.refreshStatus { self?.refresh() }
                     self?.refresh()
                 }
             }
@@ -191,7 +191,7 @@ enum KeepScreenAwakePreference {
 
     /// The minute's check: the battery and the heat, and the helper's "working", said again.
     func checkAgain() {
-        if lidHelper?.status == .needsApproval { lidHelper?.refreshStatus() }
+        if lidHelper?.status == .needsApproval { lidHelper?.refreshStatus { [weak self] in self?.refresh() } }
         lidHelper?.renew()
         refresh()
     }

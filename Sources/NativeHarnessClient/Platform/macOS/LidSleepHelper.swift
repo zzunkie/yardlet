@@ -36,6 +36,8 @@ enum LidClosedWorkPreference {
     @ObservationIgnored var keepingAwakeChanged: (@MainActor () -> Void)?
     @ObservationIgnored private let backend: any LidSleepHelperBackend
     @ObservationIgnored private var wanted = false
+    /// Counts the status reads, so a read that ends off the main thread after a later one leaves the later one's.
+    @ObservationIgnored private var statusReads = 0
 
     init(backend: any LidSleepHelperBackend) {
         self.backend = backend
@@ -45,14 +47,28 @@ enum LidClosedWorkPreference {
 
     static func live() -> LidSleepHelper { LidSleepHelper(backend: ServiceManagementLidSleepHelper()) }
 
-    func refreshStatus() { status = backend.status() }
+    /// Reads the registration again off the main thread and calls `changed` when it changed:
+    /// `SMAppService.status` waits for macOS's service manager to answer, a quarter of a second at times,
+    /// and Yardlet asks each time it comes to the front.
+    func refreshStatus(changed: (@MainActor () -> Void)? = nil) {
+        statusReads += 1
+        let read = statusReads
+        Task {
+            let status = await backend.readStatus()
+            guard read == statusReads, status != self.status else { return }
+            self.status = status
+            changed?()
+        }
+    }
 
     /// Registers the helper. When the person just turned the setting on, System Settings opens where
     /// they allow it; Yardlet opening with the setting on registers it quietly again.
     func turnOn(opensSettings: Bool) {
         guard status != .unavailable else { return }
         if status == .off { backend.register() }
-        refreshStatus()
+        // Read here, since what follows depends on it.
+        statusReads += 1
+        status = backend.status()
         if opensSettings, status == .needsApproval { backend.openSystemSettings() }
     }
 
@@ -98,11 +114,17 @@ enum LidClosedWorkPreference {
     /// Gets each answer of the helper, and false when its connection ends.
     var answered: (@MainActor (Bool) -> Void)? { get set }
     func status() -> LidSleepHelper.Status
+    /// `status()`, read off the main thread where it waits for the system.
+    func readStatus() async -> LidSleepHelper.Status
     func register()
     func unregister(done: @escaping @MainActor () -> Void)
     func openSystemSettings()
     func send(keepsAwake: Bool)
     func disconnect()
+}
+
+extension LidSleepHelperBackend {
+    func readStatus() async -> LidSleepHelper.Status { status() }
 }
 
 /// The helper registered with `SMAppService.daemon` and reached over its Mach service. The
@@ -114,6 +136,7 @@ enum LidClosedWorkPreference {
     /// The helper's code requirement (`LidSleepHelperIdentity.peerRequirement`).
     private let requirement: String?
     private let service: SMAppService?
+    private let plistName: String?
     private var connection: NSXPCConnection?
     private var wanted = false
 
@@ -128,15 +151,28 @@ enum LidClosedWorkPreference {
             self.label = nil
             self.requirement = nil
             service = nil
+            plistName = nil
             return
         }
         self.label = label
         self.requirement = requirement
-        service = SMAppService.daemon(plistName: LidSleepHelperIdentity.plistName(appIdentifier: identifier))
+        let plistName = LidSleepHelperIdentity.plistName(appIdentifier: identifier)
+        self.plistName = plistName
+        service = SMAppService.daemon(plistName: plistName)
     }
 
     func status() -> LidSleepHelper.Status {
-        guard let service else { return .unavailable }
+        service.map { Self.status(of: $0) } ?? .unavailable
+    }
+
+    func readStatus() async -> LidSleepHelper.Status {
+        guard let plistName else { return .unavailable }
+        return await Task.detached(priority: .utility) {
+            Self.status(of: SMAppService.daemon(plistName: plistName))
+        }.value
+    }
+
+    private nonisolated static func status(of service: SMAppService) -> LidSleepHelper.Status {
         switch service.status {
         case .enabled: return .ready
         case .requiresApproval: return .needsApproval
