@@ -522,5 +522,16 @@ private actor InputRequestReader: PersonalAgentClient {
     func activity(for agent: PersonalAgent, cursor: String?) async throws -> PersonalAgentActivityPage { .init(items: [], cursor: nil) }
     func schedules(for agent: PersonalAgent) async throws -> [PersonalAgentSchedule] { [] }
     func computers(for agent: PersonalAgent) async throws -> [PersonalAgentComputer] { [] }
+    // These renders open no Activity task.
+    func activityThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
+        throw PersonalAgentFailure.accessDenied
+    }
+    func activityTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        throw PersonalAgentFailure.accessDenied
+    }
+    func activityItems(_ threadID: String, turnID: String, cursor: String?,
+                       for agent: PersonalAgent) async throws -> CodexItemPage {
+        throw PersonalAgentFailure.accessDenied
+    }
     func stop() {}
 }

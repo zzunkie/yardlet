@@ -3305,3 +3305,10 @@
 "Keep as a backup" = "Keep as a backup";
 "Keep the unreadable answer as a backup?" = "Keep the unreadable answer as a backup?";
 "The unreadable answer will be kept as a backup beside it. Nothing is sent." = "The unreadable answer will be kept as a backup beside it. Nothing is sent.";
+"Back to %@" = "Back to %@";
+"Refresh task" = "Refresh task";
+"Loading task…" = "Loading task…";
+"This task has no turns yet." = "This task has no turns yet.";
+"Some steps of this task could not be loaded." = "Some steps of this task could not be loaded.";
+"Earlier turns could not be loaded." = "Earlier turns could not be loaded.";
+"This part of the task is too large to show here." = "This part of the task is too large to show here.";

@@ -34,6 +34,13 @@ actor DotsService: PersonalAgentClient {
     var live: DotsRoomLive?
     /// Commands after the socket's own two (connect, then the messaging topic).
     var nextCommand: Int64 = 3
+    /// What this reader itself read for each dot: its profile's current root thread, and the tasks its
+    /// Activity listed. A task's execution record is read only for a task listed here, so a value made
+    /// elsewhere opens nothing.
+    private var profileRoots: [PersonalAgentIdentity: String] = [:]
+    private var listedTasks: [PersonalAgentIdentity: Set<String>] = [:]
+    /// The product each task's thread belongs to, as its read metadata says (`productSKU`).
+    private var threadProducts: [PersonalAgentIdentity: [String: String]] = [:]
 
     init(executable: URL, environmentManager: CodexEnvironmentManager?, connection: ProviderConnection?,
          transport: (any CodexTransport)? = nil, configuration: URLSessionConfiguration? = nil,
@@ -83,8 +90,11 @@ actor DotsService: PersonalAgentClient {
             guard items.count <= 1_000 else { throw PersonalAgentFailure.invalidResponse }
         } while cursor != nil
         let primary = try await read("/tbo/primary")
-        return try DotsProjection.agents(catalog: .object(["items": .array(items)]), primary: primary,
-                                        accountID: auth.identity.account, userID: auth.identity.user)
+        let agents = try DotsProjection.agents(catalog: .object(["items": .array(items)]), primary: primary,
+                                               accountID: auth.identity.account, userID: auth.identity.user)
+        profileRoots = Dictionary(agents.compactMap { agent in agent.rootThreadID.map { (agent.id, $0) } },
+                                  uniquingKeysWith: { first, _ in first })
+        return agents
     }
 
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
@@ -226,6 +236,8 @@ actor DotsService: PersonalAgentClient {
         var query = [URLQueryItem(name: "limit", value: "5")]
         if let cursor { query.append(.init(name: "cursor", value: cursor)) }
         let page = try DotsProjection.activity(try await read("/tbo/" + component(agent.id.agentID) + "/activity", query: query))
+        try await verify(agent)
+        listedTasks[agent.id, default: []].formUnion(page.items.map(\.id))
         return page.cursor == cursor ? .init(items: page.items, cursor: nil) : page
     }
 
@@ -313,6 +325,70 @@ actor DotsService: PersonalAgentClient {
 
     private func requestPath(_ messageID: String, for agent: PersonalAgent) -> String {
         "/messaging/rooms/" + component(agent.id.roomID) + "/messages/" + component(messageID) + "/elicitation"
+    }
+
+    // MARK: Activity history
+
+    /// Where the provider's own app reads a task's execution history: a host of its own, not the
+    /// ChatGPT API. Only these reads, and only this exact host, carry the credential there.
+    private static let historyOrigin = "https://codex-cloud-backend.chatgpt.com"
+
+    func activityThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
+        try await verifyListed(threadID, for: agent)
+        let value = try await requestJSON("/v1/threads/" + component(threadID), origin: Self.historyOrigin,
+                                          product: productSKU(threadID, for: agent))
+        let thread = try PersonalAgentActivityHistory.thread(value, id: threadID)
+        try await verify(agent)
+        threadProducts[agent.id, default: [:]][threadID] = thread.raw["threadSource"]?.stringValue == "aeon" ? "aeon" : "codex"
+        return thread
+    }
+
+    /// A task this reader saw in the dot's own Activity, read under the same login.
+    private func verifyListed(_ threadID: String, for agent: PersonalAgent) async throws {
+        try await verify(agent)
+        guard listedTasks[agent.id]?.contains(threadID) == true else { throw PersonalAgentFailure.accessDenied }
+    }
+
+    /// The product a read names for its thread, as the provider's own app names it: the dot's current
+    /// root is its own; another thread is unknown until its metadata says it is the dot's (`aeon`) or
+    /// not (`codex`). It is a label, never a permission: a refused read is not retried under another.
+    private func productSKU(_ threadID: String, for agent: PersonalAgent) -> String {
+        if profileRoots[agent.id] == threadID { return "aeon" }
+        return threadProducts[agent.id]?[threadID] ?? "unknown"
+    }
+
+    func activityTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        try await verifyListed(threadID, for: agent)
+        var query = [URLQueryItem(name: "limit", value: String(PersonalAgentActivityHistory.initialTurnCount)),
+                     URLQueryItem(name: "sortDirection", value: "desc"), URLQueryItem(name: "itemsView", value: "notLoaded")]
+        if let cursor { query.append(.init(name: "cursor", value: cursor)) }
+        let value = try await requestJSON("/v2/threads/" + component(threadID) + "/turns", query: query,
+                                          origin: Self.historyOrigin, product: productSKU(threadID, for: agent))
+        let page = try PersonalAgentActivityHistory.turnPage(value)
+        try await verify(agent)
+        return page
+    }
+
+    /// A page of one turn's items. A page too large to carry is asked for again from the same cursor
+    /// with half as many items, down to one, as the provider's own app does.
+    func activityItems(_ threadID: String, turnID: String, cursor: String?,
+                       for agent: PersonalAgent) async throws -> CodexItemPage {
+        try await verifyListed(threadID, for: agent)
+        var limit = PersonalAgentActivityHistory.itemPageSize
+        while true {
+            var query = [URLQueryItem(name: "turnId", value: turnID), URLQueryItem(name: "limit", value: String(limit)),
+                         URLQueryItem(name: "sortDirection", value: "asc")]
+            if let cursor { query.append(.init(name: "cursor", value: cursor)) }
+            do {
+                let value = try await requestJSON("/v2/threads/" + component(threadID) + "/items", query: query,
+                                                  origin: Self.historyOrigin, product: productSKU(threadID, for: agent))
+                let page = try PersonalAgentActivityHistory.itemPage(value, turnID: turnID)
+                try await verify(agent)
+                return page
+            } catch PersonalAgentFailure.tooLarge where limit > 1 {
+                limit /= 2
+            }
+        }
     }
 
     /// One bounded read of a file or picture. Only the provider API path gets the account credential;
@@ -440,12 +516,13 @@ actor DotsService: PersonalAgentClient {
         case multipart(Data, boundary: String)
     }
 
-    private func requestJSON(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: Body? = nil) async throws -> JSONValue {
+    private func requestJSON(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: Body? = nil,
+                             origin: String = "https://chatgpt.com/backend-api", product: String? = nil) async throws -> JSONValue {
         let writing = method != "GET"
         for attempt in 0...1 {
             try Task.checkCancellation()
             let auth = try await credentials(refresh: attempt == 1)
-            var components = URLComponents(string: "https://chatgpt.com/backend-api" + path)!
+            var components = URLComponents(string: origin + path)!
             if !query.isEmpty { components.queryItems = query }
             var request = URLRequest(url: components.url!)
             request.httpMethod = method
@@ -462,6 +539,7 @@ actor DotsService: PersonalAgentClient {
             request.setValue("Yardlet/PersonalAgents", forHTTPHeaderField: "User-Agent")
             request.setValue("Bearer " + auth.token, forHTTPHeaderField: "Authorization")
             request.setValue(auth.identity.account, forHTTPHeaderField: "ChatGPT-Account-Id")
+            if let product { request.setValue(product, forHTTPHeaderField: "X-OpenAI-Product-Sku") }
             let data: Data, response: URLResponse
             let transfer = if case .multipart? = body { uploadSession } else { session }
             do { (data, response) = try await transfer.data(for: request) }
@@ -474,12 +552,22 @@ actor DotsService: PersonalAgentClient {
             if http.statusCode == 401, attempt == 0 { continue }
             if http.statusCode == 401 { throw PersonalAgentFailure.signInRequired }
             if http.statusCode == 403 { throw writing ? PersonalAgentFailure.verificationRequired : .accessDenied }
+            if http.statusCode == 404, origin == Self.historyOrigin { throw PersonalAgentFailure.missing }
+            // The provider's own words for a page too large to decode; only these, in its structured error.
+            if origin == Self.historyOrigin, !(200...299).contains(http.statusCode),
+               let error = try? JSONDecoder().decode(JSONValue.self, from: data),
+               error["error"]?["message"]?.stringValue?.contains("decoded message length too large") == true {
+                throw PersonalAgentFailure.tooLarge
+            }
             guard (200...299).contains(http.statusCode) else {
                 if writing {
                     throw (400...499).contains(http.statusCode) && http.statusCode != 408
                         ? PersonalAgentFailure.sendRejected : .deliveryUnknown
                 }
                 throw PersonalAgentFailure.unavailable
+            }
+            if origin == Self.historyOrigin, data.count > PersonalAgentActivityHistory.maximumPageBytes {
+                throw PersonalAgentFailure.tooLarge
             }
             guard data.count <= 8 * 1024 * 1024, http.mimeType?.contains("json") == true,
                   let value = try? JSONDecoder().decode(JSONValue.self, from: data) else {

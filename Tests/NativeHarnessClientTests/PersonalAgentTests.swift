@@ -781,6 +781,236 @@ final class PersonalAgentTests: XCTestCase {
                   computerStatus: nil, activityType: "Working", activityLabel: label)])
     }
 
+    /// The two kinds of pages a task's record arrives in, and what makes one not the provider's history:
+    /// a turn page newest first, kept oldest first; items wrapped with their turn or bare; a wrapper of
+    /// another turn, a repeated or unmoving cursor, and metadata that names another thread or carries turns.
+    func testAnActivityRecordIsWholeOnlyWhenBothItsTurnsAndItemsRunOut() throws {
+        XCTAssertThrowsError(try PersonalAgentActivityHistory.thread(value(#"{"thread":{"id":"other"}}"#), id: "task"))
+        let thread = try PersonalAgentActivityHistory.thread(
+            value(#"{"thread":{"id":"task","parentThreadId":"root","name":"Plan","turns":[{"id":"hidden","items":[]}]}}"#),
+            id: "task")
+        XCTAssertTrue(thread.turns.isEmpty, "The metadata never stands for the record")
+        var history = PersonalAgentActivityHistory(threadID: "task")
+        history.begin(thread)
+        let newest = try PersonalAgentActivityHistory.turnPage(value("""
+            {"data":[{"id":"t3","status":"completed","items":[],"itemsView":"notLoaded"},
+                     {"id":"t2","status":"completed","items":[],"itemsView":"notLoaded"}],
+             "nextCursor":"older","backwardsCursor":null}
+            """))
+        XCTAssertEqual(try history.apply(turns: newest, after: nil), ["t2", "t3"])
+        XCTAssertEqual(history.turns.map(\.id), ["t2", "t3"])
+        XCTAssertFalse(history.isComplete)
+        // A turn's items: a wrapper must name its turn; a bare item is the turn's.
+        XCTAssertThrowsError(try PersonalAgentActivityHistory.itemPage(
+            value(#"{"data":[{"turnId":"t2","item":{"id":"i1","type":"agentMessage","text":"x"}}],"nextCursor":null,"backwardsCursor":null}"#),
+            turnID: "t3"))
+        // A page must name both its cursors, as strings or null: one it leaves out is not its end.
+        for page in [#"{"data":[],"nextCursor":3,"backwardsCursor":null}"#, #"{"data":[],"backwardsCursor":null}"#,
+                     #"{"data":[],"nextCursor":null}"#] {
+            XCTAssertThrowsError(try PersonalAgentActivityHistory.turnPage(value(page)), page)
+            XCTAssertThrowsError(try PersonalAgentActivityHistory.itemPage(value(page), turnID: "t3"), page)
+        }
+        let first = try PersonalAgentActivityHistory.itemPage(value("""
+            {"data":[{"turnId":"t3","item":{"id":"u","type":"userMessage","content":[{"type":"text","text":"Plan it"}]}},
+                     {"id":"a","type":"agentMessage","text":"Working on it."}],
+             "nextCursor":"i-next","backwardsCursor":null}
+            """), turnID: "t3")
+        try history.apply(items: first, of: "t3", after: nil)
+        XCTAssertEqual(history.turns.last?.items.map(\.id), ["u", "a"])
+        XCTAssertEqual(history.itemsToRead(of: "t3").cursor, "i-next")
+        // The same cursor again is not a next page; the record keeps what it read.
+        XCTAssertThrowsError(try history.apply(items: CodexItemPage(entries: first.entries, nextCursor: "i-next",
+                                                                    backwardsCursor: nil), of: "t3", after: "i-next"))
+        let last = try PersonalAgentActivityHistory.itemPage(value("""
+            {"data":[{"turnId":"t3","item":{"id":"done","type":"agentMessage","text":"Done.","phase":"final_answer"}},
+                     {"turnId":"t3","item":{"id":"shot","type":"imageView","path":"/mnt/data/screen.png"}},
+                     {"turnId":"t3","item":{"id":"widget","type":"realtimeSegment"}}],
+             "nextCursor":null,"backwardsCursor":null}
+            """), turnID: "t3")
+        try history.apply(items: last, of: "t3", after: "i-next")
+        XCTAssertNil(history.turns.last?.itemsNextCursor)
+        // A path on the provider's computer is never read on this Mac; an item Yardlet cannot draw stays, named.
+        let kinds = history.turns.last!.items.map(\.content)
+        XCTAssertTrue(kinds.contains(.unknown(type: "imageView", raw: last.entries[1].item.raw)))
+        XCTAssertTrue(kinds.contains { if case let .unknown(type, _) = $0, type == "realtimeSegment" { true } else { false } })
+        let fileImage = PersonalAgentActivityHistory.readOnly(CodexTaskDecoder().item(from: try value("""
+            {"id":"m","type":"userMessage","content":[{"type":"image","url":"file:///Users/example/photo.png"}]}
+            """), fallbackID: "m", lifecycle: .historical))
+        XCTAssertEqual(fileImage.content, .unknown(type: "userMessage", raw: fileImage.raw))
+        for (link, opens) in [("https://example.com/report", true), ("file:///mnt/data/report.pdf", false),
+                              ("/mnt/data/report.pdf", false), ("vscode://file/tmp/a", false)] {
+            XCTAssertEqual(PersonalAgentActivityHistory.opensLink(URL(string: link)!), opens, link)
+        }
+        history.itemFailures["t2"] = .network
+        XCTAssertTrue(history.isPartial)
+        try history.apply(items: .init(entries: [], nextCursor: nil, backwardsCursor: nil), of: "t2", after: nil)
+        XCTAssertFalse(history.isPartial)
+        XCTAssertFalse(history.isComplete, "Earlier turns are still to be read")
+        // An earlier page that adds nothing but names more is not the provider's history.
+        XCTAssertThrowsError(try history.apply(turns: .init(turns: newest.turns, nextCursor: "oldest", backwardsCursor: nil),
+                                               after: "older"))
+        // Items a turn page carries are not the turn's: only its item pages are.
+        let earlier = try PersonalAgentActivityHistory.turnPage(value(
+            #"{"data":[{"id":"t1","status":"failed","items":[{"id":"x","type":"imageView","path":"/mnt/data/a.png"}]}],"nextCursor":null,"backwardsCursor":null}"#))
+        XCTAssertEqual(earlier.turns.first?.items, [])
+        XCTAssertEqual(try history.apply(turns: earlier, after: "older"), ["t1"])
+        XCTAssertEqual(history.turns.map(\.id), ["t1", "t2", "t3"])
+        try history.apply(items: .init(entries: [], nextCursor: nil, backwardsCursor: nil), of: "t1", after: nil)
+        XCTAssertTrue(history.isComplete)
+    }
+
+    /// Opening a task of the dot's Activity reads its metadata, its newest turns and their first items,
+    /// and nothing else: no message, send or other thread. Only a listed task opens; another dot, a
+    /// closed task or a new connection drops a read that comes back late.
+    func testAnActivityTaskOpensOnlyFromItsDotAndDropsLateReads() async throws {
+        let center = PersonalAgentCenter()
+        let reader = FixturePersonalAgentReader(agents: [fixtureAgent()])
+        let task = PersonalAgentActivity(id: "task", title: "Prepare the plan", status: .completed, outcome: .succeeded,
+                                         updatedAt: nil, preview: nil)
+        await reader.setActivity(["": .init(items: [task], cursor: nil)])
+        let turn: (String) -> CodexTurnState = { CodexTaskDecoder().turn(from: .object(["id": .string($0)]), fallbackID: $0)! }
+        let item: (String) -> CodexItemPageEntry = { id in
+            .init(turnID: "t2", item: CodexTaskDecoder().item(from: .object(["id": .string(id), "type": .string("agentMessage"),
+                                                                              "text": .string("Step \(id)")]),
+                                                              fallbackID: id, lifecycle: .historical))
+        }
+        await reader.setHistory(turns: ["": .init(turns: [turn("t1"), turn("t2")], nextCursor: "older", backwardsCursor: nil),
+                                        "older": .init(turns: [turn("t0")], nextCursor: nil, backwardsCursor: nil)],
+                                items: ["t2:": .init(entries: [item("a")], nextCursor: "more", backwardsCursor: nil),
+                                        "t2:more": .init(entries: [item("b")], nextCursor: nil, backwardsCursor: nil)])
+        await reader.failHistory("items:t1:", with: .tooLarge)
+        await center.connect(sourceKey: "home") { reader }
+        try await waitUntil { center.details?.activity.value?.isEmpty == false }
+        let readsBefore = await reader.historyReads
+        center.openActivity("another-thread")
+        XCTAssertNil(center.activityReading, "Only a task the dot's Activity lists opens")
+        center.openActivity("task")
+        let reading = try XCTUnwrap(center.activityReading)
+        try await waitUntil {
+            reading.history.phase == .loaded && reading.history.loadingItems.isEmpty
+                && !reading.history.unreadTurns.contains("t2") && reading.history.itemFailures["t1"] != nil
+        }
+        XCTAssertTrue(readsBefore.isEmpty)
+        let opened = await reader.historyReads
+        XCTAssertEqual(Set(opened), ["thread:task", "turns:", "items:t2:", "items:t1:"])
+        XCTAssertEqual(reading.history.phase, .loaded)
+        XCTAssertTrue(reading.history.isPartial, "A turn whose items failed says so")
+        XCTAssertEqual(reading.history.itemFailures["t1"], .tooLarge)
+        XCTAssertTrue(reading.history.hasEarlierTurns)
+        // More of a turn, then the turns before, each only when asked.
+        center.loadActivityItems(of: "t2")
+        try await waitUntil { reading.history.turns.last?.items.map(\.id) == ["a", "b"] }
+        await reader.failHistory("items:t1:", with: nil)
+        center.retryActivityItems()
+        try await waitUntil { !reading.history.isPartial && reading.history.loadingItems.isEmpty }
+        // A page that is not the provider's history keeps what was read and its way to the earlier turns.
+        await reader.failHistory("turns:older", with: .invalidResponse)
+        center.loadEarlierActivityTurns()
+        try await waitUntil { reading.history.earlierTurnsFailure == .invalidResponse }
+        XCTAssertEqual(reading.history.turns.map(\.id), ["t1", "t2"])
+        XCTAssertTrue(reading.history.hasEarlierTurns)
+        XCTAssertFalse(reading.history.isComplete)
+        await reader.failHistory("turns:older", with: nil)
+        center.loadEarlierActivityTurns()
+        try await waitUntil { reading.history.turns.map(\.id) == ["t0", "t1", "t2"] && reading.history.loadingItems.isEmpty }
+        XCTAssertNil(reading.history.earlierTurnsFailure)
+        XCTAssertTrue(reading.history.isComplete)
+        let sends = await reader.sentRequests()
+        XCTAssertTrue(sends.isEmpty)
+
+        // A read still out when the task closes changes nothing.
+        center.openActivity("task")
+        XCTAssertTrue(center.activityReading === reading, "Opening the open task again reads nothing new")
+        await reader.holdHistory("turns:")
+        center.reloadActivity()
+        try await waitUntil { await reader.hasPendingHistory() }
+        center.closeActivity()
+        await reader.releaseHistory()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertNil(center.activityReading)
+        XCTAssertEqual(reading.history.phase, .loading)
+        XCTAssertTrue(reading.history.turns.isEmpty)
+        // Nor when a new connection closes it.
+        center.openActivity("task")
+        let reopened = try XCTUnwrap(center.activityReading)
+        await reader.holdHistory("turns:")
+        center.reloadActivity()
+        try await waitUntil { await reader.hasPendingHistory() }
+        await center.connect(sourceKey: "home") { reader }
+        XCTAssertNil(center.activityReading)
+        await reader.releaseHistory()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(reopened.history.phase, .loading)
+        XCTAssertNil(center.activityReading)
+
+        // A task the provider no longer has is not an empty one.
+        try await waitUntil { center.details?.activity.value?.isEmpty == false }
+        await reader.failHistory("thread:task", with: .missing)
+        center.openActivity("task")
+        try await waitUntil { center.activityReading?.history.phase == .missing }
+        await center.disconnect()
+        XCTAssertNil(center.activityReading)
+    }
+
+    /// An upload under way when an Activity task opens finishes in the draft it was added to while the
+    /// task is read, and coming back finds that draft with the same file and its provider file ID,
+    /// nothing sent and the words as they were.
+    func testAnUploadUnderWayFinishesInItsDraftWhileAnActivityTaskIsRead() async throws {
+        let (folder, original) = try chosenFile()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let center = PersonalAgentCenter()
+        let reader = FixturePersonalAgentReader(agents: [fixtureAgent()])
+        await reader.setActivity(["": .init(items: [.init(id: "task", title: "Prepare the plan", status: .completed,
+                                                         outcome: .succeeded, updatedAt: nil, preview: nil)], cursor: nil)])
+        await reader.holdUploads()
+        await center.connect(sourceKey: "account") { reader }
+        try await waitUntil { center.details?.activity.value?.isEmpty == false }
+        let draft = try XCTUnwrap(center.conversation?.draft)
+        draft.editor.text = "The plan, with the photo"
+        await center.attach([.init(url: original, declaredType: nil)], to: try XCTUnwrap(center.fileTarget()))
+        let file = try XCTUnwrap(draft.files.first)
+        try await waitUntil { await reader.hasPendingUpload() }
+        center.openActivity("task")
+        XCTAssertNotNil(center.activityReading)
+        await reader.releaseUpload()
+        try await waitUntil { draft.files.first?.uploaded != nil }
+        XCTAssertNotNil(center.activityReading, "The task is still open while the upload finishes")
+        center.closeActivity()
+        XCTAssertTrue(center.conversation?.draft === draft)
+        XCTAssertEqual(draft.files.map(\.id), [file.id])
+        XCTAssertEqual(draft.files.first?.uploaded?.fileID, "file-1")
+        XCTAssertEqual(draft.editor.text, "The plan, with the photo")
+        let sends = await reader.sentRequests()
+        XCTAssertTrue(sends.isEmpty)
+        let uploads = await reader.uploadCount()
+        XCTAssertEqual(uploads, 1)
+        await center.disconnect()
+    }
+
+    /// Bringing in earlier turns of a long record projects only the turns that arrived.
+    func testEarlierTurnsOfALongActivityRecordProjectOnlyWhatArrived() throws {
+        var history = PersonalAgentActivityHistory(threadID: "task")
+        history.begin(try PersonalAgentActivityHistory.thread(.object(["thread": .object(["id": .string("task")])]), id: "task"))
+        let decoder = CodexTaskDecoder()
+        let turns = (0..<2_000).map { index in
+            decoder.turn(from: .object(["id": .string("t\(index)"), "status": .string("completed"), "items": .array([
+                .object(["id": .string("u\(index)"), "type": .string("userMessage"),
+                         "content": .array([.object(["type": .string("text"), "text": .string("Request \(index)")])])]),
+                .object(["id": .string("a\(index)"), "type": .string("agentMessage"), "text": .string("Answer \(index)")])
+            ])]), fallbackID: "")!
+        }
+        try history.apply(turns: .init(turns: Array(turns[5...]), nextCursor: "older", backwardsCursor: nil), after: nil)
+        let cache = ConversationProjectionCache()
+        let url = URL(filePath: "/")
+        _ = cache.codex(history.state, workspaceURL: url, historySelection: nil)
+        let before = cache.counts
+        try history.apply(turns: .init(turns: Array(turns[..<5]), nextCursor: nil, backwardsCursor: nil), after: "older")
+        let presentation = cache.codex(history.state, workspaceURL: url, historySelection: nil)
+        XCTAssertEqual(presentation.turns.count, 2_000)
+        XCTAssertEqual(cache.counts.projected - before.projected, 5)
+        XCTAssertEqual(cache.counts.reused - before.reused, 1_995)
+    }
+
     private func fixtureAgent(account: String = "account") -> PersonalAgent {
         .init(id: .init(accountID: account, userID: "person", agentID: "dot", roomID: "room"),
               name: "Atlas", rootThreadID: "thread", isPaused: false, isPrimary: true)
@@ -927,6 +1157,39 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
     func releaseSchedules() { pendingSchedules?.resume(); pendingSchedules = nil }
     /// An optional part that fails, which must stay in its own part.
     func computers(for agent: PersonalAgent) async throws -> [PersonalAgentComputer] { throw PersonalAgentFailure.accessDenied }
+    // An Activity task's record: pages by cursor, each read recorded by its key.
+    private var turnPages: [String: CodexTurnPage] = [:]
+    private var itemPages: [String: CodexItemPage] = [:]
+    private var historyFailures: [String: PersonalAgentFailure] = [:]
+    private var heldHistoryRead: String?
+    private var pendingHistoryRead: CheckedContinuation<Void, Never>?
+    private(set) var historyReads: [String] = []
+    func setHistory(turns: [String: CodexTurnPage], items: [String: CodexItemPage]) { turnPages = turns; itemPages = items }
+    func failHistory(_ key: String, with failure: PersonalAgentFailure?) { historyFailures[key] = failure }
+    func holdHistory(_ key: String) { heldHistoryRead = key }
+    func hasPendingHistory() -> Bool { pendingHistoryRead != nil }
+    func releaseHistory() { pendingHistoryRead?.resume(); pendingHistoryRead = nil }
+    private func readHistory(_ key: String) async throws {
+        historyReads.append(key)
+        if heldHistoryRead == key {
+            heldHistoryRead = nil
+            await withCheckedContinuation { pendingHistoryRead = $0 }
+        }
+        if let failure = historyFailures[key] { throw failure }
+    }
+    func activityThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
+        try await readHistory("thread:" + threadID)
+        return try PersonalAgentActivityHistory.thread(.object(["thread": .object(["id": .string(threadID)])]), id: threadID)
+    }
+    func activityTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        try await readHistory("turns:" + (cursor ?? ""))
+        return turnPages[cursor ?? ""] ?? .init(turns: [], nextCursor: nil, backwardsCursor: nil)
+    }
+    func activityItems(_ threadID: String, turnID: String, cursor: String?,
+                       for agent: PersonalAgent) async throws -> CodexItemPage {
+        try await readHistory("items:\(turnID):\(cursor ?? "")")
+        return itemPages["\(turnID):\(cursor ?? "")"] ?? .init(entries: [], nextCursor: nil, backwardsCursor: nil)
+    }
     func stop() { stopped = true }
     func didStop() -> Bool { stopped }
     func hasPendingRead() -> Bool { pending != nil }

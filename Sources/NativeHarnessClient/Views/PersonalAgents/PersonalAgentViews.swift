@@ -135,11 +135,13 @@ private struct PersonalAgentLiveAvatar: View {
     let agent: PersonalAgent
     let data: Data?
     let sheet: PersonalAgentSpriteSheet?
+    /// Whether the pet plays: not in a header an Activity task covers.
+    var plays = true
     let size: CGFloat
 
     var body: some View {
         PersonalAgentAvatarView(name: agent.name, data: data, sheet: sheet,
-                                motion: live?.motion(for: agent) ?? .idle, size: size)
+                                motion: live?.motion(for: agent) ?? .idle, plays: plays, size: size)
     }
 }
 
@@ -260,34 +262,54 @@ struct PersonalAgentsContent: View {
         Group {
             if let agent = center.selected, let conversation = center.conversation {
                 HStack(spacing: 0) {
-                    PersonalAgentConversationView(agent: agent, conversation: conversation,
-                        avatar: center.avatar(for: agent),
-                        sheet: center.spriteSheet(for: agent),
-                        live: center,
-                        reconnecting: center.isReconnecting,
-                        connectionFailure: center.failure,
-                        showsDetails: showsDetailsBeside || showsDetailsRaised,
-                        isLoadingAttachment: loadingAttachment,
-                        attachmentFailure: attachmentFailure,
-                        send: { Task { await center.send() } },
-                        files: PersonalAgentComposerFiles(
-                            target: { center.fileTarget() },
-                            attach: { sources, target in Task { await center.attach(sources, to: target) } },
-                            attachImage: { encode, target in Task { await center.attachImage(to: target, encode: encode) } },
-                            retry: { center.retryUploads() },
-                            remove: { center.removeFile($0) }),
-                        open: open,
-                        refresh: {
-                            if center.failure != nil { onRetry() }
-                            else {
-                                Task { await center.refreshConversation() }
-                                center.refreshDetails()
-                            }
-                        },
-                        loadOlder: { Task { await center.refreshConversation(older: true) } },
-                        toggleDetails: toggleDetails,
-                        requestActions: requestActions)
-                        .id(agent.id)
+                    let reading = center.activityReading.flatMap { $0.agentID == agent.id ? $0 : nil }
+                    // The conversation stays under an open task, so it is where it was read when the
+                    // person comes back; it takes no input meanwhile.
+                    ZStack {
+                        PersonalAgentConversationView(agent: agent, conversation: conversation,
+                            avatar: center.avatar(for: agent),
+                            sheet: center.spriteSheet(for: agent),
+                            live: center,
+                            playsPet: reading == nil,
+                            reconnecting: center.isReconnecting,
+                            connectionFailure: center.failure,
+                            showsDetails: showsDetailsBeside || showsDetailsRaised,
+                            isLoadingAttachment: loadingAttachment,
+                            attachmentFailure: attachmentFailure,
+                            send: { Task { await center.send() } },
+                            files: PersonalAgentComposerFiles(
+                                target: { center.fileTarget() },
+                                attach: { sources, target in Task { await center.attach(sources, to: target) } },
+                                attachImage: { encode, target in Task { await center.attachImage(to: target, encode: encode) } },
+                                retry: { center.retryUploads() },
+                                remove: { center.removeFile($0) }),
+                            open: open,
+                            refresh: {
+                                if center.failure != nil { onRetry() }
+                                else {
+                                    Task { await center.refreshConversation() }
+                                    center.refreshDetails()
+                                }
+                            },
+                            loadOlder: { Task { await center.refreshConversation(older: true) } },
+                            toggleDetails: toggleDetails,
+                            requestActions: requestActions)
+                            .id(agent.id)
+                            .opacity(reading == nil ? 1 : 0)
+                            .disabled(reading != nil)
+                            .accessibilityHidden(reading != nil)
+                        if let reading {
+                            PersonalAgentActivityView(agent: agent, reading: reading,
+                                showsDetails: showsDetailsBeside || showsDetailsRaised,
+                                close: { center.closeActivity() },
+                                reload: { center.reloadActivity() },
+                                loadEarlierTurns: { center.loadEarlierActivityTurns() },
+                                loadItems: { center.loadActivityItems(of: $0) },
+                                retryItems: { center.retryActivityItems() },
+                                toggleDetails: toggleDetails)
+                                .id(reading.activity.id)
+                        }
+                    }
                     if showsDetailsBeside {
                         Rectangle().fill(ParityTheme.separator).frame(width: 1)
                         details(agent: agent, conversation: conversation)
@@ -349,6 +371,8 @@ struct PersonalAgentsContent: View {
             isLoadingAttachment: loadingAttachment, open: open,
             retry: { center.refreshDetails() },
             loadMoreActivity: { Task { await center.loadMoreActivity() } },
+            openedActivityID: center.activityReading?.activity.id,
+            openActivity: { center.openActivity($0) },
             close: close)
     }
 
@@ -412,6 +436,8 @@ struct PersonalAgentConversationView: View {
     /// The window's state, which only the header's picture and words read: what the dot is doing,
     /// as its room says, never redraws the conversation.
     var live: PersonalAgentCenter?
+    /// Whether the header's pet plays: not while an Activity task covers the conversation.
+    var playsPet = true
     var reconnecting = false
     var connectionFailure: PersonalAgentFailure?
     var showsDetails = false
@@ -440,7 +466,7 @@ struct PersonalAgentConversationView: View {
 #endif
         VStack(spacing: 0) {
             HStack(spacing: 9) {
-                PersonalAgentLiveAvatar(live: live, agent: agent, data: avatar, sheet: sheet, size: 24)
+                PersonalAgentLiveAvatar(live: live, agent: agent, data: avatar, sheet: sheet, plays: playsPet, size: 24)
                 Text(agent.name).font(.system(size: 14 * scale, weight: .semibold)).lineLimit(1)
                 PersonalAgentLiveLabel(live: live, agent: agent, reconnecting: reconnecting)
                 Spacer(minLength: 8)
@@ -722,6 +748,10 @@ struct PersonalAgentDetailsPanel: View {
     let open: (PersonalAgentAttachment) -> Void
     let retry: () -> Void
     let loadMoreActivity: () -> Void
+    /// The Activity task read in place of the conversation, if any.
+    var openedActivityID: String? = nil
+    /// Opens an Activity task's execution record.
+    var openActivity: (String) -> Void = { _ in }
     /// Hides the details raised over a narrow conversation.
     var close: (() -> Void)? = nil
     @Environment(\.yardletInterfaceScale) private var scale
@@ -813,15 +843,22 @@ struct PersonalAgentDetailsPanel: View {
         state(details?.activity, empty: L10n.string("No activity yet"), isEmpty: \.isEmpty) { items in
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(items) { item in
-                    SessionRailRow(systemName: Self.symbol(item), title: item.title) {
-                        if let date = item.updatedAt {
-                            Text(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
-                                .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                    Button { openActivity(item.id) } label: {
+                        SessionRailRow(systemName: Self.symbol(item), title: item.title) {
+                            if let date = item.updatedAt {
+                                Text(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
+                                    .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                            }
                         }
+                        .contentShape(Rectangle())
+                        .background(item.id == openedActivityID ? ParityTheme.selectedFill : .clear,
+                                    in: RoundedRectangle(cornerRadius: 6))
                     }
+                    .buttonStyle(.plain).parityPointer()
                     .help(item.preview ?? item.title)
-                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(item.title)
                     .accessibilityValue(Self.statusText(item))
+                    .accessibilityAddTraits(item.id == openedActivityID ? .isSelected : [])
                 }
                 if details?.activityCursor != nil {
                     Button(L10n.string("Show more"), action: loadMoreActivity)

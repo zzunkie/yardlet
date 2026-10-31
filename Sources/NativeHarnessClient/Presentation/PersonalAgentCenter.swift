@@ -57,6 +57,28 @@ struct PersonalAgentFileTarget {
     let generation: Int
 }
 
+/// A task from the selected dot's Activity, opened to read its execution record. It belongs to the
+/// dot and the reading that listed it: another dot, another connection or another login closes it,
+/// and a read that outlives it changes nothing.
+@MainActor @Observable
+final class PersonalAgentActivityReading {
+    let agentID: PersonalAgentIdentity
+    let activity: PersonalAgentActivity
+    var history: PersonalAgentActivityHistory
+    @ObservationIgnored fileprivate var tasks: [Task<Void, Never>] = []
+
+    init(agentID: PersonalAgentIdentity, activity: PersonalAgentActivity) {
+        self.agentID = agentID
+        self.activity = activity
+        history = PersonalAgentActivityHistory(threadID: activity.id)
+    }
+
+    fileprivate func cancel() {
+        tasks.forEach { $0.cancel() }
+        tasks = []
+    }
+}
+
 /// Window-owned reading state. Switching the shell does not modify the selected
 /// coding task, its draft, or provider history. Nothing here writes read receipts.
 @MainActor @Observable
@@ -83,6 +105,8 @@ final class PersonalAgentCenter {
     @ObservationIgnored let responses: any DotsResponseJournal
     private var conversations: [PersonalAgentIdentity: PersonalAgentConversation] = [:]
     private var detailsByAgent: [PersonalAgentIdentity: PersonalAgentDetails] = [:]
+    /// The Activity task open in place of the conversation, if any.
+    private(set) var activityReading: PersonalAgentActivityReading?
     /// Profile pictures read in this window, by dot and picture version; memory only.
     private var avatarData: [AvatarKey: Data] = [:]
     @ObservationIgnored private var unavailableAvatars: Set<AvatarKey> = []
@@ -234,6 +258,7 @@ final class PersonalAgentCenter {
 
     func select(_ id: PersonalAgentIdentity) async {
         guard agents.contains(where: { $0.id == id }), selectedID != id else { return }
+        closeActivity()
         events?.cancel()
         selectedID = id
         stopObserving()
@@ -402,6 +427,143 @@ final class PersonalAgentCenter {
         let failure = error as? PersonalAgentFailure ?? .network
         if failure == .accountChanged || failure == .signInRequired { accept(failure) }
         return failure
+    }
+
+    // MARK: An Activity task's execution record
+
+    /// Opens a task the selected dot's Activity lists. Only a task in that list opens: it is how the
+    /// provider's own app knows the task is the dot's, and no other thread is read.
+    func openActivity(_ id: String) {
+        guard let agent = selected, let details = detailsByAgent[agent.id],
+              let activity = details.activity.value?.first(where: { $0.id == id }) else { return }
+        if let open = activityReading, open.agentID == agent.id, open.activity.id == id { return }
+        closeActivity()
+        let reading = PersonalAgentActivityReading(agentID: agent.id, activity: activity)
+        activityReading = reading
+        startActivity(reading)
+    }
+
+    /// Back to the dot's conversation; reads still running are dropped.
+    func closeActivity() {
+        activityReading?.cancel()
+        activityReading = nil
+    }
+
+    /// Reads the open task again from its newest turns, as when it opened.
+    func reloadActivity() {
+        guard let reading = activityReading else { return }
+        reading.cancel()
+        reading.history = PersonalAgentActivityHistory(threadID: reading.activity.id)
+        startActivity(reading)
+    }
+
+    /// The turns before the ones read.
+    func loadEarlierActivityTurns() {
+        guard let (reading, agent, reader) = currentActivity(), !reading.history.isLoadingEarlierTurns,
+              let cursor = reading.history.state.thread?.turnsNextCursor else { return }
+        reading.history.isLoadingEarlierTurns = true
+        reading.history.earlierTurnsFailure = nil
+        runActivity(reading) { [weak self] isCurrent in
+            do {
+                let page = try await reader.activityTurns(reading.activity.id, cursor: cursor, for: agent)
+                guard isCurrent() else { return }
+                reading.history.isLoadingEarlierTurns = false
+                let added = try reading.history.apply(turns: page, after: cursor)
+                self?.readFirstItems(of: added, in: reading, agent: agent, reader: reader)
+            } catch {
+                guard isCurrent() else { return }
+                reading.history.isLoadingEarlierTurns = false
+                reading.history.earlierTurnsFailure = self?.detailFailure(error)
+            }
+        }
+    }
+
+    /// The next items of one turn: its first page if none were read, else the page after them.
+    func loadActivityItems(of turnID: String) {
+        guard let (reading, agent, reader) = currentActivity(), !reading.history.loadingItems.contains(turnID) else { return }
+        let next = reading.history.itemsToRead(of: turnID)
+        guard next.more else { return }
+        runActivity(reading) { [weak self] isCurrent in
+            await self?.readItems(of: turnID, after: next.cursor, in: reading, agent: agent, reader: reader, isCurrent: isCurrent)
+        }
+    }
+
+    /// Reads again every turn whose items could not be read.
+    func retryActivityItems() {
+        guard let reading = activityReading else { return }
+        for turnID in reading.history.turns.map(\.id) where reading.history.itemFailures[turnID] != nil {
+            loadActivityItems(of: turnID)
+        }
+    }
+
+    private func startActivity(_ reading: PersonalAgentActivityReading) {
+        guard let (_, agent, reader) = currentActivity() else { return }
+        let threadID = reading.activity.id
+        runActivity(reading) { [weak self] isCurrent in
+            do {
+                let thread = try await reader.activityThread(threadID, for: agent)
+                guard isCurrent() else { return }
+                let page = try await reader.activityTurns(threadID, cursor: nil, for: agent)
+                guard isCurrent() else { return }
+                var history = reading.history
+                history.begin(thread)
+                let added = try history.apply(turns: page, after: nil)
+                reading.history = history
+                self?.readFirstItems(of: added, in: reading, agent: agent, reader: reader)
+            } catch {
+                guard isCurrent() else { return }
+                let failure = self?.detailFailure(error) ?? .network
+                reading.history.phase = failure == .missing ? .missing : .failed(failure)
+            }
+        }
+    }
+
+    /// The first items of the turns a page added, newest first, each read on its own.
+    private func readFirstItems(of turnIDs: [String], in reading: PersonalAgentActivityReading, agent: PersonalAgent,
+                                reader: any PersonalAgentClient) {
+        for turnID in turnIDs.reversed() {
+            runActivity(reading) { [weak self] isCurrent in
+                await self?.readItems(of: turnID, after: nil, in: reading, agent: agent, reader: reader, isCurrent: isCurrent)
+            }
+        }
+    }
+
+    private func readItems(of turnID: String, after cursor: String?, in reading: PersonalAgentActivityReading,
+                           agent: PersonalAgent, reader: any PersonalAgentClient,
+                           isCurrent: @escaping @MainActor () -> Bool) async {
+        guard isCurrent(), !reading.history.loadingItems.contains(turnID) else { return }
+        reading.history.loadingItems.insert(turnID)
+        do {
+            let page = try await reader.activityItems(reading.activity.id, turnID: turnID, cursor: cursor, for: agent)
+            guard isCurrent() else { return }
+            var history = reading.history
+            history.loadingItems.remove(turnID)
+            try history.apply(items: page, of: turnID, after: cursor)
+            reading.history = history
+        } catch {
+            guard isCurrent() else { return }
+            reading.history.loadingItems.remove(turnID)
+            reading.history.itemFailures[turnID] = detailFailure(error)
+        }
+    }
+
+    private func currentActivity() -> (PersonalAgentActivityReading, PersonalAgent, any PersonalAgentClient)? {
+        guard let reading = activityReading, let agent = selected, agent.id == reading.agentID,
+              let reader = client else { return nil }
+        return (reading, agent, reader)
+    }
+
+    /// Runs a read of the open task. It applies only while the task is still open, on the same
+    /// connection, and was not cancelled.
+    private func runActivity(_ reading: PersonalAgentActivityReading,
+                             _ body: @escaping @MainActor (_ isCurrent: @escaping @MainActor () -> Bool) async -> Void) {
+        let current = generation
+        let isCurrent: @MainActor () -> Bool = { [weak self, weak reading] in
+            guard let self, let reading, !Task.isCancelled else { return false }
+            return self.generation == current && self.activityReading === reading && self.selectedID == reading.agentID
+        }
+        reading.tasks.removeAll { $0.isCancelled }
+        reading.tasks.append(Task { await body(isCurrent) })
     }
 
     private func loadAvatars(_ values: [PersonalAgent], from reader: any PersonalAgentClient, generation current: Int) {
@@ -622,6 +784,7 @@ final class PersonalAgentCenter {
         uploads.values.forEach { $0.cancel() }
         uploads = [:]
         uploadQueues = [:]
+        closeActivity()
         events?.cancel()
         events = nil
         stopObserving()
@@ -650,6 +813,7 @@ final class PersonalAgentCenter {
     private func clear() {
         stopObserving()
         resumedSinceRead = []
+        closeActivity()
         agents = []
         selectedID = nil
         conversations = [:]
@@ -666,6 +830,7 @@ final class PersonalAgentCenter {
         let value = error as? PersonalAgentFailure ?? .network
         if value == .accountChanged || value == .signInRequired {
             stopObserving()
+            closeActivity()
             agents = []
             selectedID = nil
             conversations = [:]

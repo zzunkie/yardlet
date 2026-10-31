@@ -305,6 +305,193 @@ final class PersonalAgentRenderingTests: XCTestCase {
         try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "personal-earlier-page.png"))
     }
 
+    /// A task from the dot's Activity opens in place of the conversation and reads only its record:
+    /// the newest turns first, earlier ones when asked, a failure where it happened. Going back finds
+    /// the conversation where it was read, with its draft.
+    func testAnActivityTaskReadsInPlaceOfTheConversation() async throws {
+        let (model, _) = try makeWindowModel()
+        let agents = [PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                    name: "Atlas", rootThreadID: "root", isPaused: false, isPrimary: true)]
+        let conversation = (1...40).map { index in
+            PersonalAgentMessage(id: "m\(index)", author: index.isMultiple(of: 2) ? .agent : .person,
+                                 text: "Message \(index) about the launch plan.", createdAt: nil, isDeleted: false,
+                                 attachments: index == 12 ? [.init(fileID: "f", name: "plan-notes.md", type: "file")] : [])
+        }
+        let task = "Prepare the launch checklist"
+        let directory = try WindowlessRender.directory("personal-agent-activity-qa")
+        for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 680)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let reader = RenderedPersonalAgentReader(agents: agents, messages: conversation)
+                let host = WindowlessRender.Host(MainWindow(model: model) { reader }
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .frame(width: size.width, height: size.height), size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Send message") } })
+                let compact = size.width < 1280
+                if compact { XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Show dot details"))) }
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == task } })
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: task))
+                if compact {
+                    XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Hide dot details")))
+                }
+                let back = L10n.format("Back to %@", "Atlas")
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Load more history") } })
+                // The newest turns' first items, each read on its own after the turns.
+                let request = "Check launch item 12 and note what is left."
+                await host.settle(until: { host.accessibilityElements().contains { $0.label.contains(request) || $0.value.contains(request) } })
+                host.settle(passes: 20)
+                let name = "\(Int(size.width))-\(appearance.suffix).png"
+                var capture = try host.capture()
+                XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6))
+                try WindowlessRender.writePNG(capture.bitmap, to: directory.appending(path: "activity-initial-\(name)"))
+                let visible = host.accessibilityElements(visibleOnly: true)
+                XCTAssertTrue(visible.contains { $0.label == back }, "The way back is on screen at \(size)")
+                XCTAssertFalse(visible.contains { $0.label == L10n.string("Send message") }, "The record has no composer")
+                // Earlier turns only when asked.
+                let readsBefore = await reader.earlierTurnReads
+                XCTAssertEqual(readsBefore, 0)
+                ViewBodyCensus.reset()
+                ViewBodyCensus.isEnabled = true
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Load more history")))
+                try await waitUntil { await reader.earlierTurnReads == 1 }
+                host.settle(passes: 30)
+                ViewBodyCensus.isEnabled = false
+                // The page and its turns' items draw the turns that arrived, not the ones already drawn.
+                let redrawnTurns = ViewBodyCensus[.conversationTurn], timelines = ViewBodyCensus[.conversationTimeline]
+                print("activity earlier page \(size) \(appearance): turns drawn \(redrawnTurns), timeline bodies \(timelines)")
+                XCTAssertLessThanOrEqual(redrawnTurns, 12)
+                capture = try host.capture()
+                try WindowlessRender.writePNG(capture.bitmap, to: directory.appending(path: "activity-earlier-\(name)"))
+                // A turn whose items fail says so; a task that cannot be read offers to try again.
+                await reader.failHistory(items: ["t11"])
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Refresh task")))
+                let partial = L10n.string("Some steps of this task could not be loaded.")
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == partial || $0.value == partial } })
+                host.settle(passes: 20)
+                try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: "activity-partial-\(name)"))
+                await reader.failHistory(thread: true)
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Refresh task")))
+                let failed = PersonalAgentFailure.unavailable.message
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == failed || $0.value == failed } })
+                host.settle(passes: 12)
+                try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: "activity-failed-\(name)"))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: back))
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Send message") } })
+            }
+        }
+    }
+
+    /// Reading a task and coming back leaves the conversation as it was: scrolled where the person
+    /// read it, with the draft they were writing, its files, and the answer they were filling in.
+    func testComingBackFromAnActivityTaskKeepsTheConversationsPlaceAndDraft() async throws {
+        let (model, _) = try makeWindowModel()
+        let agents = [PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                    name: "Atlas", rootThreadID: "root", isPaused: false, isPrimary: true)]
+        var conversation = (1...60).map { index in
+            PersonalAgentMessage(id: "m\(index)", author: index.isMultiple(of: 2) ? .agent : .person,
+                                 text: "Message \(index) about the launch plan, long enough to take a line or two of the conversation.",
+                                 createdAt: nil, isDeleted: false, attachments: [])
+        }
+        var form = PersonalAgentMessage(id: "form", author: .agent, text: "", createdAt: nil, isDeleted: false, attachments: [])
+        form.inputRequest = try JSONDecoder().decode(JSONValue.self, from: Data(
+            #"{"request_id":"form","thread_id":"thread","turn_id":null,"status":"pending","params":{"threadId":"thread","serverName":"codex_apps","mode":"form","message":"What should the team know?","requestedSchema":{"type":"object","properties":{"note":{"type":"string","title":"Note for the team","maxLength":80}},"required":[]},"_meta":null}}"#.utf8))
+        conversation.append(form)
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let sources = [folder.appending(path: "plan-notes.txt"), folder.appending(path: "budget.csv")]
+        for source in sources { try Data("synthetic".utf8).write(to: source) }
+        let drafts = PersonalAgentDrafts()
+        let reader = RenderedPersonalAgentReader(agents: agents, messages: conversation)
+        let size = NSSize(width: 1280, height: 800)
+        let host = WindowlessRender.Host(MainWindow(model: model, personalAgentDrafts: drafts) { reader }
+            .frame(width: size.width, height: size.height), size: size)
+        defer { host.close() }
+        host.settle()
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+        await host.settle(until: { host.accessibilityElements().contains { $0.label == "Prepare the launch checklist" } })
+        host.settle(passes: 20)
+        // Each field by the name it is read by; the composer is not whichever field comes first.
+        let composerName = L10n.string("Message your dot…"), noteName = "Note for the team"
+        func field(_ name: String) -> NSTextField? {
+            Self.views(NSTextField.self, in: host.hosting).first {
+                $0.isEditable && ($0.accessibilityLabel() == name || $0.placeholderString == name)
+            }
+        }
+        // Typed into the render's own window, which is never the person's key window.
+        func type(_ text: String, into field: NSTextField) throws {
+            XCTAssertTrue(host.window.makeFirstResponder(field))
+            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            editor.insertText(text, replacementRange: editor.selectedRange())
+            host.settle(passes: 6)
+        }
+        await host.settle(until: { field(noteName) != nil })
+        try type("Share the draft on Monday.", into: try XCTUnwrap(field(noteName)))
+        // Files the draft holds: one uploaded, one still uploading. Nothing is picked or sent.
+        let draft = try XCTUnwrap(drafts.opened.first)
+        let ids = await draft.addFiles(sources.map { .init(url: $0) })
+        XCTAssertEqual(ids.count, 2)
+        let uploaded = PersonalAgentUploadedFile(fileID: "file-kept", name: "plan-notes.txt", mimeType: "text/plain", sizeBytes: 9)
+        draft.setState(ids[0], .uploaded(uploaded))
+        draft.setState(ids[1], .uploading)
+        let states = draft.files.map(\.state)
+        let chips = ["plan-notes.txt", "budget.csv, " + L10n.string("Uploading")]
+        await host.settle(until: { chips.allSatisfy { chip in host.accessibilityElements().contains { $0.label == chip } } })
+        let composer = try XCTUnwrap(field(composerName))
+        try type("Keep this draft while I read the task.", into: composer)
+
+        func conversationScroll() throws -> NSScrollView {
+            try XCTUnwrap(Self.scrollViews(in: host.hosting).max {
+                ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)
+            })
+        }
+        func wheel(_ amount: Int32, times: Int, in scroll: NSScrollView) {
+            for _ in 0..<times {
+                guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0),
+                      let event = NSEvent(cgEvent: wheel) else { break }
+                scroll.scrollWheel(with: event)
+                host.settle(passes: 1)
+            }
+            host.settle(passes: 20)
+        }
+        let scroll = try conversationScroll()
+        wheel(160, times: 6, in: scroll)
+        let readAt = scroll.documentVisibleRect.minY
+        let bottom = (scroll.documentView?.frame.height ?? 0) - scroll.documentVisibleRect.height
+        XCTAssertGreaterThan(abs(bottom - readAt), 200, "The conversation is read away from its end")
+        let before = try host.capture()
+        // Opened while the person is still writing: the covered editor stops taking their typing.
+        XCTAssertTrue(host.window.makeFirstResponder(composer))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "Prepare the launch checklist"))
+        let back = L10n.format("Back to %@", "Atlas")
+        await host.settle(until: { host.accessibilityElements().contains { $0.label == back } })
+        host.settle(passes: 12)
+        XCTAssertFalse(composer.isEnabled, "The conversation under the task takes no input")
+        let responder = host.window.firstResponder
+        XCTAssertFalse(responder === composer || (responder as? NSText)?.delegate === composer,
+                       "The covered editor is not where typing goes")
+        XCTAssertFalse(host.accessibilityElements().contains { $0.label == L10n.string("Send message") })
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: back))
+        await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Send message") } })
+        host.settle(passes: 30)
+        let returned = try conversationScroll()
+        XCTAssertEqual(returned.documentVisibleRect.minY, readAt, accuracy: 2, "The conversation is where it was read")
+        XCTAssertEqual(try XCTUnwrap(field(composerName)).stringValue, "Keep this draft while I read the task.")
+        XCTAssertTrue(drafts.opened.first === draft)
+        XCTAssertEqual(draft.files.map(\.id), ids)
+        XCTAssertEqual(draft.files.map(\.state), states, "The files and their uploads are as they were")
+        for chip in chips { XCTAssertTrue(host.accessibilityElements().contains { $0.label == chip }, chip) }
+        let directory = try WindowlessRender.directory("personal-agent-activity-qa")
+        try WindowlessRender.writePNG(before.bitmap, to: directory.appending(path: "conversation-before-activity.png"))
+        try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: "conversation-after-activity.png"))
+        // The answer being filled in is still there below.
+        wheel(-400, times: 30, in: returned)
+        await host.settle(until: { field(noteName) != nil })
+        XCTAssertEqual(try XCTUnwrap(field(noteName)).stringValue, "Share the draft on Monday.")
+    }
+
     /// The pet's frames play on the layer only while the view can be seen, and change over time as
     /// they play: two renders of the layer as Core Animation shows it, some time apart, differ.
     func testADotsPetPlaysOnlyWhileItCanBeSeen() async throws {
@@ -414,6 +601,14 @@ final class PersonalAgentRenderingTests: XCTestCase {
         host.settle(passes: 10, interval: 0.02)
         XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "A playing pet drew the window again")
         XCTAssertEqual(ViewBodyCensus[.personalAgentAvatar], 0, "A playing pet worked out its picture again")
+
+        // A task from the Activity covers the conversation: its header's pet holds still, the others play.
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "Prepare the launch checklist"))
+        await host.settle(until: { Self.views(PersonalAgentSpriteView.self, in: host.hosting).count == 2 })
+        let shownWithTask = Self.views(PersonalAgentSpriteView.self, in: host.hosting)
+        XCTAssertTrue(shownWithTask.allSatisfy { view in pets.contains { $0 === view } && view.isPlaying })
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.format("Back to %@", "Atlas")))
+        await host.settle(until: { Self.views(PersonalAgentSpriteView.self, in: host.hosting).count == 3 })
     }
 
     /// A dot at work plays its working row where its name is: in the list, the conversation's header
@@ -1126,6 +1321,56 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
         ], cursor: nil)
     }
     func schedules(for agent: PersonalAgent) async throws -> [PersonalAgentSchedule] { [] }
+
+    // The record of "Prepare the launch checklist": twelve turns read five at a time, newest first; the
+    // latest turn's items in two pages, with a file on the provider's computer and an item Yardlet
+    // cannot draw.
+    private var failsThread = false
+    private var failingItems: Set<String> = []
+    private(set) var earlierTurnReads = 0
+    func failHistory(thread: Bool = false, items: Set<String> = []) { failsThread = thread; failingItems = items }
+    func activityThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
+        if failsThread { throw PersonalAgentFailure.unavailable }
+        return try PersonalAgentActivityHistory.thread(.object(["thread": .object(["id": .string(threadID)])]), id: threadID)
+    }
+    func activityTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        if cursor != nil { earlierTurnReads += 1 }
+        let end = cursor.flatMap(Int.init) ?? 12
+        let start = max(1, end - 4)
+        let started = Date().addingTimeInterval(-3_600).timeIntervalSince1970
+        let turns = (start...end).reversed().map { index -> String in
+            #"{"id":"t\#(index)","status":"completed","startedAt":\#(Int(started) + index * 60),"#
+                + #""completedAt":\#(Int(started) + index * 60 + 42),"durationMs":42000,"items":[],"itemsView":"notLoaded"}"#
+        }
+        let next = start > 1 ? #""\#(start - 1)""# : "null"
+        return try PersonalAgentActivityHistory.turnPage(
+            JSONDecoder().decode(JSONValue.self, from: Data(#"{"data":[\#(turns.joined(separator: ","))],"nextCursor":\#(next),"backwardsCursor":null}"#.utf8)))
+    }
+    func activityItems(_ threadID: String, turnID: String, cursor: String?,
+                       for agent: PersonalAgent) async throws -> CodexItemPage {
+        if failingItems.contains(turnID) { throw PersonalAgentFailure.network }
+        let index = Int(turnID.dropFirst()) ?? 0
+        var items = [
+            #"{"turnId":"\#(turnID)","item":{"id":"\#(turnID)-u","type":"userMessage","content":[{"type":"text","text":"Check launch item \#(index) and note what is left."}]}}"#,
+            #"{"turnId":"\#(turnID)","item":{"id":"\#(turnID)-c","type":"commandExecution","command":"cat checklist.md","cwd":"/workspace","status":"completed","aggregatedOutput":"- [x] Draft\n- [ ] Review","exitCode":0}}"#,
+            #"{"turnId":"\#(turnID)","item":{"id":"\#(turnID)-a","type":"agentMessage","phase":"final_answer","text":"Item \#(index) is checked.\n\n- The draft is ready.\n- The review is still open."}}"#
+        ]
+        var next = "null"
+        if index == 12 {
+            if cursor == nil {
+                items = Array(items.prefix(2))
+                next = #""more""#
+            } else {
+                items = [items[2],
+                         #"{"turnId":"t12","item":{"id":"t12-v","type":"imageView","path":"/mnt/data/checklist.png"}}"#,
+                         #"{"turnId":"t12","item":{"id":"t12-r","type":"realtimeSegment"}}"#]
+            }
+        }
+        return try PersonalAgentActivityHistory.itemPage(
+            JSONDecoder().decode(JSONValue.self, from: Data(#"{"data":[\#(items.joined(separator: ","))],"nextCursor":\#(next),"backwardsCursor":null}"#.utf8)),
+            turnID: turnID)
+    }
+
     func computers(for agent: PersonalAgent) async throws -> [PersonalAgentComputer] {
         [.init(id: "cloud", name: "Cloud computer", isCloud: true, isAttached: true, availability: .unknown),
          .init(id: "studio", name: "Studio Mac", isCloud: false, isAttached: true, availability: .offline)]

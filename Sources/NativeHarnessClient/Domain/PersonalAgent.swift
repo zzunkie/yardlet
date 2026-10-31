@@ -289,6 +289,10 @@ enum PersonalAgentFailure: Error, Equatable, Sendable {
     case unavailable, invalidResponse, network, stopped
     case deliveryUnknown, sendRejected, verificationRequired, draftStorage, attachmentUnavailable
     case attachmentLimit, uploadFailed, uploadInterrupted, filePreparation, attachmentsIncomplete, attachmentsNotAllowed
+    /// The provider no longer has what was asked for, or this account cannot see it.
+    case missing
+    /// What was asked for is larger than a page can carry, even one item at a time.
+    case tooLarge
 
     var message: String {
         switch self {
@@ -311,6 +315,8 @@ enum PersonalAgentFailure: Error, Equatable, Sendable {
         case .filePreparation: L10n.string("This photo could not be prepared for upload. Convert it to JPEG and try again.")
         case .attachmentsIncomplete: L10n.string("Nothing was sent because a file did not upload. Retry it or remove it.")
         case .attachmentsNotAllowed: L10n.string("Files cannot be sent in this conversation. Remove them to send the message.")
+        case .missing: L10n.string("This task is no longer available.")
+        case .tooLarge: L10n.string("This part of the task is too large to show here.")
         }
     }
 }
@@ -344,6 +350,14 @@ protocol PersonalAgentClient: Actor {
     /// Sends one answer to the input request in a message, once: it is never retried (`DotsResponseFailure`).
     func respond(_ result: DotsInputResult, fingerprint: String, in messageID: String,
                  for agent: PersonalAgent) async throws -> DotsResponseOutcome
+    /// A task's metadata, from the dot's Activity. It never holds the task's turns.
+    func activityThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState
+    /// A page of the task's turns, oldest first: the newest when `cursor` is nil, else those before it.
+    /// Each turn's items are read on their own.
+    func activityTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage
+    /// A page of one turn's items, in order, after `cursor`.
+    func activityItems(_ threadID: String, turnID: String, cursor: String?,
+                       for agent: PersonalAgent) async throws -> CodexItemPage
     func stop() async
 }
 
