@@ -21,6 +21,16 @@ body:
       placeholder: "macOS 26.1"
     validations:
       required: true
+  - type: dropdown
+    id: mac
+    attributes:
+      label: Mac
+      description: Apple menu > About This Mac shows the chip or processor.
+      options:
+        - Apple silicon (M1 or later)
+        - Intel
+    validations:
+      required: true
   - type: input
     id: agent
     attributes:

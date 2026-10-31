@@ -18,20 +18,18 @@ FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 
 # The CPU architectures the bundle's executables are built for: this Mac's by default, or
 # YARDLET_ARCHS, such as "x86_64" for Intel Macs or "arm64 x86_64" for a universal bundle, each
-# executable joined by lipo. The pinned CEF build is arm64 only, so a bundle for Intel is a debug
-# bundle built with YARDLET_WITHOUT_CEF=1.
+# executable joined by lipo. A bundle with CEF carries the CEF build of its one architecture, so a
+# universal bundle is a debug bundle built with YARDLET_WITHOUT_CEF=1.
 ARCHS=(${=YARDLET_ARCHS:-})
 
-# Chromium for the in-window browser (docs/BROWSER_HOST.md). Bundles carry this pinned CEF build,
-# verified before use: CEF's minimal distribution built from source with Chromium's H.264 and AAC
-# decoders, which CEF's own downloads leave out (scripts/build-cef.sh made it). YARDLET_WITHOUT_CEF=1
-# builds a debug bundle without it; its browser panel falls back to the WebKit preview, like a plain
-# `swift run`.
+# Chromium for the in-window browser (docs/BROWSER_HOST.md). Bundles carry a pinned CEF build of their
+# architecture, verified before use. Apple silicon: CEF's minimal distribution built from source with
+# Chromium's H.264 and AAC decoders, which CEF's own downloads leave out (scripts/build-cef.sh made it).
+# Intel: CEF's own minimal distribution of the same version, from CEF's download site, so the browser
+# plays no H.264 or AAC on Intel Macs. YARDLET_WITHOUT_CEF=1 builds a debug bundle without CEF; its
+# browser panel falls back to the WebKit preview, like a plain `swift run`. YARDLET_DOWNLOAD_CEF=1
+# downloads a missing archive from its pinned address instead of stopping.
 CEF_VERSION="154.0.28+g564dd6c+chromium-154.0.8037.58"
-CEF_NAME="cef_binary_${CEF_VERSION}_macosarm64_codecs_minimal"
-CEF_ARCHIVE_URL="https://github.com/zzunkie/yardlet/releases/download/cef-154.0.28-codecs/cef_binary_154.0.28%2Bg564dd6c%2Bchromium-154.0.8037.58_macosarm64_codecs_minimal.tar.bz2"
-CEF_ARCHIVE_SHA256="a44771fb3c5fbc3658320c3258f03e0b4d0ee7085d70c36d48c03ef08e44d0ad"
-CEF_FRAMEWORK_SHA256="02b51a9be1f8e4a4b97410bd4144a4d8063e8aa6f3fcd0a87f16c9b111a708eb"
 CEF_CACHE="$HOME/Library/Caches/Yardlet/CEF"
 CEF_DIR=""
 if [[ "${YARDLET_WITHOUT_CEF:-}" == 1 ]]; then
@@ -40,13 +38,36 @@ if [[ "${YARDLET_WITHOUT_CEF:-}" == 1 ]]; then
         exit 1
     fi
 else
-    if (( ${ARCHS[(Ie)x86_64]} )); then
-        echo "error: the pinned CEF build has no x86_64; build the bundle with YARDLET_WITHOUT_CEF=1" >&2
+    if (( ${#ARCHS} > 1 )); then
+        echo "error: a bundle with CEF has one architecture; build a universal bundle with YARDLET_WITHOUT_CEF=1" >&2
         exit 1
     fi
+    case ${ARCHS[1]:-$(/usr/bin/uname -m)} in
+        arm64)
+            CEF_NAME="cef_binary_${CEF_VERSION}_macosarm64_codecs_minimal"
+            CEF_ARCHIVE_URL="https://github.com/zzunkie/yardlet/releases/download/cef-154.0.28-codecs/cef_binary_154.0.28%2Bg564dd6c%2Bchromium-154.0.8037.58_macosarm64_codecs_minimal.tar.bz2"
+            CEF_ARCHIVE_SHA256="a44771fb3c5fbc3658320c3258f03e0b4d0ee7085d70c36d48c03ef08e44d0ad"
+            CEF_FRAMEWORK_SHA256="02b51a9be1f8e4a4b97410bd4144a4d8063e8aa6f3fcd0a87f16c9b111a708eb"
+            ;;
+        x86_64)
+            CEF_NAME="cef_binary_${CEF_VERSION}_macosx64_minimal"
+            CEF_ARCHIVE_URL="https://cef-builds.spotifycdn.com/cef_binary_154.0.28%2Bg564dd6c%2Bchromium-154.0.8037.58_macosx64_minimal.tar.bz2"
+            CEF_ARCHIVE_SHA256="0a4269342ed049ad571133eae93f90466cae6fea881872a3383c991c2945da11"
+            CEF_FRAMEWORK_SHA256="94026293641d1dfabccfb33d9cb35cf3bb263f73c7dd8620f8548a2c17843bad"
+            ;;
+        *)
+            echo "error: no CEF build is pinned for ${ARCHS[1]:-$(/usr/bin/uname -m)}" >&2
+            exit 1
+            ;;
+    esac
     CEF_DIR="$CEF_CACHE/$CEF_NAME"
     CEF_ARCHIVE="$CEF_CACHE/$CEF_NAME.tar.bz2"
     CEF_BINARY="$CEF_DIR/Release/Chromium Embedded Framework.framework/Chromium Embedded Framework"
+    if [[ ! -f "$CEF_BINARY" && ! -f "$CEF_ARCHIVE" && "${YARDLET_DOWNLOAD_CEF:-}" == 1 ]]; then
+        mkdir -p "$CEF_CACHE"
+        /usr/bin/curl -fL --retry 3 -o "$CEF_ARCHIVE.partial" "$CEF_ARCHIVE_URL"
+        /bin/mv "$CEF_ARCHIVE.partial" "$CEF_ARCHIVE"
+    fi
     if [[ ! -f "$CEF_BINARY" && -f "$CEF_ARCHIVE" ]]; then
         if [[ "$(/usr/bin/shasum -a 256 "$CEF_ARCHIVE" | cut -d' ' -f1)" != "$CEF_ARCHIVE_SHA256" ]]; then
             echo "error: $CEF_ARCHIVE does not match the pinned SHA-256 $CEF_ARCHIVE_SHA256" >&2
