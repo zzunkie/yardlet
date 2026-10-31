@@ -293,7 +293,12 @@ struct PersonalAgentsContent: View {
                             },
                             loadOlder: { Task { await center.refreshConversation(older: true) } },
                             toggleDetails: toggleDetails,
-                            requestActions: requestActions)
+                            requestActions: requestActions,
+                            replyActions: PersonalAgentReplyActions(
+                                open: { center.openReplies(to: $0, target: $1) },
+                                close: { center.closeReplies() },
+                                loadOlder: { Task { await center.loadOlderReplies() } },
+                                refresh: { Task { await center.refreshFocusedReplies() } }))
                             .id(agent.id)
                             .opacity(reading == nil ? 1 : 0)
                             .disabled(reading != nil)
@@ -450,8 +455,11 @@ struct PersonalAgentConversationView: View {
     let loadOlder: () -> Void
     var toggleDetails: () -> Void = {}
     var requestActions = PersonalAgentRequestActions()
+    var replyActions = PersonalAgentReplyActions()
     @Environment(\.yardletInterfaceScale) private var scale
     @Environment(\.personalAgentOriginalOpener) private var opener
+    /// The height of the history, which an open reply dialog never grows past.
+    @State private var historyHeight: CGFloat = 0
     /// The provider's app, where it is installed, looked up once the conversation shows.
     @State private var dotsApp: URL?
     @State private var openFailed = false
@@ -516,6 +524,7 @@ struct PersonalAgentConversationView: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollPosition(id: $conversation.anchor)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { historyHeight = $0 }
             if isLoadingAttachment || attachmentFailure != nil || openFailed {
                 HStack(spacing: 6) {
                     if isLoadingAttachment { ProgressView().controlSize(.small) }
@@ -531,8 +540,17 @@ struct PersonalAgentConversationView: View {
                     .padding(.horizontal, 24).padding(.top, 6)
                     .frame(maxWidth: .infinity)
             }
-            PersonalAgentComposer(draft: conversation.draft, send: send, files: files,
-                                  allowsFiles: conversation.allowsAttachments)
+            PersonalAgentReplyArea(conversation: conversation, viewportHeight: historyHeight, actions: replyActions,
+                                   rows: PersonalAgentReplyRows(
+                look: .init(agent: agent.id, name: agent.name,
+                            avatar: (agent.avatar?.version ?? "") + "|" + String(avatar?.count ?? -1),
+                            sheet: sheet.map(ObjectIdentifier.init), isLoadingAttachment: isLoadingAttachment),
+                inputs: { replyRowInputs($0, startsRun: $1) },
+                content: { AnyView(messageRow($0, startsRun: $1, inThread: true)) })) { focus, keys, escape in
+                PersonalAgentComposer(draft: conversation.draft, send: send, files: files,
+                                      allowsFiles: conversation.allowsAttachments, focusRequest: focus, replyKeys: keys,
+                                      onEscape: escape)
+            }
                 .frame(maxWidth: ParityTheme.contentWidth)
                 .padding(.horizontal, 24).padding(.top, 6).padding(.bottom, 16)
                 .frame(maxWidth: .infinity)
@@ -613,62 +631,106 @@ struct PersonalAgentConversationView: View {
         loadOlder()
     }
 
+    /// Whether the person can reply to `message` here: a message of the room, not deleted, in a room
+    /// that takes replies. Inside a thread no reply nests, as in the provider's app.
+    private func canReply(to message: PersonalAgentMessage, inThread: Bool) -> Bool {
+        !inThread && !message.isDeleted && conversation.allowsReplies
+    }
+
+    /// Above a reply in the room, what it answers, unless the message before is of its own thread.
     @ViewBuilder
-    private func messageRow(_ message: PersonalAgentMessage, startsRun: Bool) -> some View {
-        if message.author == .person {
-            VStack(alignment: .trailing, spacing: 6) {
-                SentUserMessage(copyText: message.isDeleted ? "" : message.text, images: [],
-                                minimumLeadingSpace: ConversationLayout.sentMessageLeadingSpace) {
-                    Group {
-                        if message.isDeleted {
-                            Text(L10n.string("Message deleted")).italic().foregroundStyle(.secondary)
-                        } else {
-                            Text(message.text).textSelection(.enabled)
-                        }
-                    }
-                    .font(ParityTheme.conversationFont(scale: scale))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(ConversationLayout.sentBubblePadding)
-                    .background(ParityTheme.selectedFill,
-                                in: RoundedRectangle(cornerRadius: ConversationLayout.sentBubbleCornerRadius))
-                    .frame(maxWidth: ConversationLayout.sentBubbleMaximumWidth, alignment: .trailing)
-                }
-                attachments(of: message)
-                unsupportedLink(message)
+    private func quote(of message: PersonalAgentMessage, inThread: Bool) -> some View {
+        if !inThread, conversation.replies.quoted.contains(message.id), let quote = conversation.replies.quote(for: message) {
+            PersonalAgentReplyQuoteView(quote: quote, alignsTrailing: message.author == .person) {
+                replyActions.open(message.id, message.replyToMessageID)
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .help(message.createdAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "")
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(L10n.string("You"))
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
-                if startsRun {
-                    HStack(spacing: 7) {
-                        PersonalAgentAvatarView(name: author(message.author),
-                                                data: message.author == .agent ? avatar : nil,
-                                                sheet: message.author == .agent ? sheet : nil, plays: false, size: 20)
-                        Text(author(message.author)).font(.system(size: 12.5 * scale, weight: .semibold))
-                        if let time = message.createdAt {
-                            Text(time.formatted(date: Calendar.current.isDateInToday(time) ? .omitted : .abbreviated,
-                                                time: .shortened))
-                                .font(.system(size: 11.5 * scale)).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                if message.isDeleted {
-                    Text(L10n.string("Message deleted")).foregroundStyle(.secondary).italic()
-                } else if !message.text.isEmpty {
-                    TranscriptMarkdownText(text: message.text)
-                        .font(ParityTheme.conversationFont(scale: scale))
-                        .textSelection(.enabled)
-                }
-                attachments(of: message)
-                requests(in: message)
-                unsupportedLink(message)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .contain)
         }
+    }
+
+    /// Under a message of the room with replies, their number or View replies.
+    @ViewBuilder
+    private func replyIndicator(of message: PersonalAgentMessage, inThread: Bool) -> some View {
+        if !inThread, let count = conversation.replies.indicators[message.id] {
+            PersonalAgentReplyIndicator(count: count) { replyActions.open(message.id, nil) }
+        }
+    }
+
+    @ViewBuilder
+    private func messageRow(_ message: PersonalAgentMessage, startsRun: Bool, inThread: Bool = false) -> some View {
+        let replies = canReply(to: message, inThread: inThread)
+        Group {
+            if message.author == .person { personRow(message, inThread: inThread) }
+            else { otherRow(message, startsRun: startsRun, inThread: inThread) }
+        }
+        .contextMenu {
+            if replies { Button(L10n.string("Reply")) { replyActions.open(message.id, nil) } }
+        }
+        .accessibilityActions {
+            if replies { Button(L10n.string("Reply")) { replyActions.open(message.id, nil) } }
+        }
+    }
+
+    @ViewBuilder
+    private func personRow(_ message: PersonalAgentMessage, inThread: Bool) -> some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            quote(of: message, inThread: inThread)
+            SentUserMessage(copyText: message.isDeleted ? "" : message.text, images: [],
+                            minimumLeadingSpace: ConversationLayout.sentMessageLeadingSpace) {
+                Group {
+                    if message.isDeleted {
+                        Text(L10n.string("Message deleted")).italic().foregroundStyle(.secondary)
+                    } else {
+                        Text(message.text).textSelection(.enabled)
+                    }
+                }
+                .font(ParityTheme.conversationFont(scale: scale))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(ConversationLayout.sentBubblePadding)
+                .background(ParityTheme.selectedFill,
+                            in: RoundedRectangle(cornerRadius: ConversationLayout.sentBubbleCornerRadius))
+                .frame(maxWidth: ConversationLayout.sentBubbleMaximumWidth, alignment: .trailing)
+            }
+            attachments(of: message)
+            unsupportedLink(message)
+            replyIndicator(of: message, inThread: inThread)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .help(message.createdAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "")
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(L10n.string("You"))
+    }
+
+    @ViewBuilder
+    private func otherRow(_ message: PersonalAgentMessage, startsRun: Bool, inThread: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if startsRun {
+                HStack(spacing: 7) {
+                    PersonalAgentAvatarView(name: author(message.author),
+                                            data: message.author == .agent ? avatar : nil,
+                                            sheet: message.author == .agent ? sheet : nil, plays: false, size: 20)
+                    Text(author(message.author)).font(.system(size: 12.5 * scale, weight: .semibold))
+                    if let time = message.createdAt {
+                        Text(time.formatted(date: Calendar.current.isDateInToday(time) ? .omitted : .abbreviated,
+                                            time: .shortened))
+                            .font(.system(size: 11.5 * scale)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            quote(of: message, inThread: inThread)
+            if message.isDeleted {
+                Text(L10n.string("Message deleted")).foregroundStyle(.secondary).italic()
+            } else if !message.text.isEmpty {
+                TranscriptMarkdownText(text: message.text)
+                    .font(ParityTheme.conversationFont(scale: scale))
+                    .textSelection(.enabled)
+            }
+            attachments(of: message)
+            requests(in: message)
+            unsupportedLink(message)
+            replyIndicator(of: message, inThread: inThread)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
     }
 
     /// Whether the question a waiting option answer replies to is drawn, with its own way to stop waiting.
@@ -687,17 +749,32 @@ struct PersonalAgentConversationView: View {
                 PersonalAgentRequestCard(item: item, actions: requestActions,
                                          openWeb: DotsLinks.web(for: agent).map { page in { openWeb(page) } })
             }
-            if let picker = DotsOptionPicker(metadata: message.metadata) {
-                let replies = conversation.visibleMessages.filter {
-                    !$0.isDeleted && $0.replyToMessageID == message.id && DotsOptionPicker.selection($0.metadata) != nil
-                }
-                let chosen = picker.selected.flatMap { $0 >= 0 ? $0 : nil }
-                    ?? replies.last.flatMap { DotsOptionPicker.selection($0.metadata) }
-                PersonalAgentOptionQuestion(messageID: message.id, picker: picker, chosen: chosen,
-                    isAnswered: picker.selected != nil || !replies.isEmpty, reply: conversation.optionReply,
-                    actions: requestActions)
+            if let option = optionState(of: message) {
+                PersonalAgentOptionQuestion(messageID: message.id, picker: option.picker, chosen: option.chosen,
+                    isAnswered: option.isAnswered, reply: conversation.optionReply, actions: requestActions)
             }
         }
+    }
+
+    /// An option question's options and what was chosen: the provider's record, or the last reply that
+    /// chose one, an answer read only in its reply thread counting as one read in the room.
+    private func optionState(of message: PersonalAgentMessage)
+        -> (picker: DotsOptionPicker, chosen: Int?, isAnswered: Bool)? {
+        guard let picker = DotsOptionPicker(metadata: message.metadata) else { return nil }
+        let replies = conversation.visibleMessages.filter {
+            !$0.isDeleted && $0.replyToMessageID == message.id && DotsOptionPicker.selection($0.metadata) != nil
+        } + conversation.replies.optionAnswers(to: message.id)
+        let chosen = picker.selected.flatMap { $0 >= 0 ? $0 : nil } ?? replies.last.flatMap { DotsOptionPicker.selection($0.metadata) }
+        return (picker, chosen, picker.selected != nil || !replies.isEmpty)
+    }
+
+    /// What a message drawn in the reply dialog shows, beyond the dialog's shared look: the row is drawn
+    /// again only when this changes, or when a card or an option it holds changes on its own.
+    private func replyRowInputs(_ message: PersonalAgentMessage, startsRun: Bool) -> PersonalAgentReplyRowInputs {
+        let option = message.isDeleted || message.author != .agent ? nil : optionState(of: message)
+        return .init(message: message, startsRun: startsRun,
+                     request: conversation.requests[message.id].map(ObjectIdentifier.init),
+                     optionChosen: option?.chosen, optionAnswered: option?.isAnswered ?? false)
     }
 
     @ViewBuilder
@@ -975,6 +1052,11 @@ private struct PersonalAgentComposer: View {
     var files = PersonalAgentComposerFiles()
     /// The room takes files; otherwise the file button and drops are off, and files already here wait.
     var allowsFiles = true
+    /// The reply thread just opened over the composer, whose opening gives the field focus.
+    var focusRequest: String? = nil
+    /// The reply dialog's record of where focus was before it opened.
+    var replyKeys: PersonalAgentReplyKeys? = nil
+    var onEscape: () -> Void = {}
     @FocusState private var focused: Bool
     @State private var confirmsEditing = false
     @State private var confirmsRecovery = false
@@ -1027,7 +1109,7 @@ private struct PersonalAgentComposer: View {
                 accessibilityHint: L10n.string("Press Return to send"), metrics: .task(),
                 input: nil, onExternalInput: externalInput, mentionRoots: [], commands: nil,
                 isCommandMenuOpen: false, isMenuOpen: false, showsChips: !draft.files.isEmpty,
-                isFocused: $focused, onSubmit: submit) {
+                isFocused: $focused, onSubmit: submit, onEscape: onEscape) {
                     EmptyView()
                 } chips: {
                     ForEach(draft.files) { file in
@@ -1053,6 +1135,11 @@ private struct PersonalAgentComposer: View {
                 // A pending result is resolved with the original request, text and files.
                 .disabled(draft.isSending || draft.pending != nil)
                 .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
+        }
+        // A thread opened over the composer gives its field focus, with the caret after the draft.
+        .background(PersonalAgentComposerFocus(request: focusRequest, keys: replyKeys).accessibilityHidden(true))
+        .onChange(of: focusRequest) { _, request in
+            if request != nil, !focused { focused = true }
         }
         .alert(L10n.string("Return to editing?"), isPresented: $confirmsEditing) {
             Button(L10n.string("Cancel"), role: .cancel) { }

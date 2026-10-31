@@ -58,7 +58,9 @@ final class PersonalAgentDraft {
     var needsRecovery: Bool { unreadable }
 
     /// Version 1 has no files. A draft without any is still written as version 1, which earlier
-    /// builds read; one with files is version 2.
+    /// builds read; one with files is version 2. A request waiting as an ordinary reply is version 3,
+    /// which builds that would send it as a plain message cannot read: they send nothing from it until
+    /// the person keeps it as a backup.
     private struct Record: Codable {
         var version = 1
         let text: String
@@ -81,7 +83,7 @@ final class PersonalAgentDraft {
             var readable = true
             do {
                 let record = try JSONDecoder().decode(Record.self, from: Data(contentsOf: file))
-                guard record.version == 1 || record.version == 2 else { throw CocoaError(.coderReadCorrupt) }
+                guard (1...3).contains(record.version) else { throw CocoaError(.coderReadCorrupt) }
                 editor.text = record.text
                 pending = record.pending
                 // An upload the app quit during did not finish; it waits for the person to retry it.
@@ -314,7 +316,8 @@ final class PersonalAgentDraft {
             // Only files the room accepted go; a file still uploading or failed stops the send.
             let chosen = intended.files.map { id in files.first { $0.id == id }?.uploaded }
             guard !chosen.contains(where: { $0 == nil }) else { return nil }
-            let submission = PersonalAgentSubmission(text: intended.text, attachments: chosen.compactMap { $0 })
+            var submission = PersonalAgentSubmission(text: intended.text, attachments: chosen.compactMap { $0 })
+            submission.replyTarget = intended.reply
             guard !submission.isEmpty else { return nil }
             pending = submission
         }
@@ -325,13 +328,20 @@ final class PersonalAgentDraft {
         return pending
     }
 
-    /// What Send takes: the words and the files in the draft at that moment.
+    /// What Send takes: the words and the files in the draft at that moment, and the message they
+    /// reply to when they are sent from a reply thread. Closing the thread or opening another after
+    /// Send was pressed does not change it.
     struct Intended: Equatable {
         let text: String
         let files: [UUID]
+        var reply: PersonalAgentReplyTarget? = nil
     }
 
-    var intended: Intended { .init(text: editor.text, files: files.map(\.id)) }
+    var intended: Intended { intended(replyingTo: nil) }
+
+    func intended(replyingTo reply: PersonalAgentReplyTarget?) -> Intended {
+        .init(text: editor.text, files: files.map(\.id), reply: reply)
+    }
 
     func accepted(_ requestID: String) {
         guard let submission = pending, submission.requestID == requestID else { return }
@@ -350,7 +360,8 @@ final class PersonalAgentDraft {
         self.failure = failure
         // These responses explicitly reject this attempt; its text is editable.
         // A rejection of a retry says nothing about the earlier uncertain send.
-        if !retry, failure == .sendRejected || failure == .verificationRequired || failure == .attachmentsNotAllowed {
+        if !retry, failure == .sendRejected || failure == .verificationRequired || failure == .attachmentsNotAllowed
+            || failure == .repliesNotAllowed {
             pending = nil
         }
         _ = save()
@@ -404,7 +415,8 @@ final class PersonalAgentDraft {
                           copyName: file.copy.lastPathComponent, uploaded: file.uploaded)
             }
             let attached = !saved.isEmpty || pending?.attachments.isEmpty == false
-            let record = Record(version: attached ? 2 : 1, text: editor.text, pending: pending, files: attached ? saved : nil)
+            let version = pending?.replyTarget != nil ? 3 : attached ? 2 : 1
+            let record = Record(version: version, text: editor.text, pending: pending, files: attached ? saved : nil)
             try JSONEncoder().encode(record).write(to: file, options: .atomic)
             try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
             storageFailed = false

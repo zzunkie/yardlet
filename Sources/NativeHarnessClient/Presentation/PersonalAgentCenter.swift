@@ -22,6 +22,13 @@ final class PersonalAgentConversation {
     var roomLifecycle: String?
     /// Whether the room takes files; the picker, a drop, a paste, a retry and Send all ask this.
     var allowsAttachments: Bool { DotsProjection.allowsAttachments(lifecycle: roomLifecycle) }
+    /// Whether a reply can be sent here: the provider gates replies on the same lifecycle as files.
+    /// Reading a thread never depends on it.
+    var allowsReplies: Bool { DotsProjection.allowsAttachments(lifecycle: roomLifecycle) }
+    /// The conversation's reply threads, counts and the reply dialog's focus.
+    let replies = PersonalAgentReplies()
+    /// The loaded window was last read through to the latest message.
+    @ObservationIgnored var hasCompleteTail = false
     @ObservationIgnored var loadID: UUID?
     var failure: PersonalAgentFailure?
     /// Why the last read of earlier messages failed; the conversation stays as it was.
@@ -286,6 +293,8 @@ final class PersonalAgentCenter {
                 case .reconnecting: self.isReconnecting = true
                 case let .failed(failure): self.accept(failure)
                 case .changed:
+                    // The open reply thread reads its latest page on the same signal; nothing polls.
+                    Task { await self.refreshFocusedReplies() }
                     // Coalesce updates while a bounded read is already in flight.
                     if self.conversation?.isLoading == true { self.pendingRefresh = true }
                     else { await self.refreshConversation() }
@@ -312,6 +321,7 @@ final class PersonalAgentCenter {
         }
         if older { state.olderFailure = nil } else { state.failure = nil }
         var succeeded = false
+        let epoch = state.replies.beginRead()
         do {
             let page = try await reader.messages(for: agent, before: before)
             guard current == generation, !Task.isCancelled else { return false }
@@ -338,6 +348,7 @@ final class PersonalAgentCenter {
                 }
             }
             state.messages = older ? DotsProjection.merge(state.messages, with: incoming, older: true) : incoming
+            state.replies.noteRoom(incoming, epoch: epoch)
             if !older, let lifecycle = page.roomLifecycle { state.roomLifecycle = lifecycle }
             let confirmed = Set(state.messages.map(\.id))
             // A successful latest read is authoritative even if an accepted
@@ -349,12 +360,16 @@ final class PersonalAgentCenter {
             }
             state.before = older && page.messages.allSatisfy({ previousIDs.contains($0.id) }) ? nil : cursor
             state.loaded = true
+            if !older { state.hasCompleteTail = true }
             succeeded = true
+            reconcileReplies(state)
             syncInputRequests(state, agent: agent)
         } catch {
             guard current == generation, !Task.isCancelled else { return false }
             let failure = error as? PersonalAgentFailure ?? .network
             if older { state.olderFailure = failure } else { state.failure = failure }
+            // A window not read through to the latest message counts no thread for certain.
+            if !older, state.hasCompleteTail { state.hasCompleteTail = false; reconcileReplies(state) }
             if failure == .accountChanged || failure == .signInRequired { accept(failure) }
         }
         state.isLoading = false
@@ -722,8 +737,14 @@ final class PersonalAgentCenter {
             guard !draft.isSending, !draft.isAddingFiles else { return }
             // Send during uploads sends this text and these files once they are in, as the provider's
             // composer does; the editor stays locked meanwhile, and a file that fails stops the send.
-            let pressed = draft.intended
+            // The reply target is the open thread's as Send is pressed, kept through the uploads below:
+            // closing the dialog or opening another thread meanwhile does not move it.
+            let pressed = draft.intended(replyingTo: state.replies.focus?.target)
             intended = pressed
+            if pressed.reply != nil, !state.allowsReplies {
+                draft.failure = .repliesNotAllowed
+                return
+            }
             if !pressed.files.isEmpty, !state.allowsAttachments {
                 draft.failure = .attachmentsNotAllowed
                 return
@@ -747,23 +768,33 @@ final class PersonalAgentCenter {
         draft.isSending = true
         draft.failure = nil
         var refreshAfterSend = false
+        let epoch = state.replies.beginRead()
         do {
-            let message = try await reader.send(submission, to: agent)
+            var message = try await reader.send(submission, to: agent)
+            // A reply the response does not describe as one still answers the message it was sent to.
+            if message.replyToMessageID == nil, let target = submission.replyTarget { message.replyToMessageID = target.messageID }
             // The old account's own draft may finish after navigation. It must
             // never clear the new account's input or append to its conversation.
             draft.accepted(submission.requestID)
             if current == generation {
                 state.sentMessages = DotsProjection.merge(state.sentMessages, with: [message], older: false)
-                state.anchor = message.id
+                state.replies.noteSent(message, epoch: epoch)
+                // A reply shows in its thread; the room stays where the person was reading.
+                if submission.replyTarget == nil { state.anchor = message.id }
+                reconcileReplies(state)
                 refreshAfterSend = selectedID == agent.id
             }
         } catch {
             let failure = error as? PersonalAgentFailure ?? .deliveryUnknown
             if draft.pending?.requestID == submission.requestID { draft.failed(failure, retry: retry) }
+            if current == generation { reconcileReplies(state) }
             if current == generation, failure == .accountChanged || failure == .signInRequired { accept(failure) }
         }
         // A slow history backfill must not hold the shared editor's send lock.
         draft.isSending = false
+        // A read that showed this request arrived while it was being sent settles it now, from what is
+        // already read: nothing is read or sent for it.
+        if current == generation, draft.pending?.requestID == submission.requestID { reconcileReplies(state) }
         if refreshAfterSend, current == generation, selectedID == agent.id {
             if state.isLoading { pendingRefresh = true }
             else { await refreshConversation() }
@@ -793,7 +824,17 @@ final class PersonalAgentCenter {
         pendingRefresh = false
         isLoading = false
         isReconnecting = false
-        for state in conversations.values { state.isLoading = false; state.loadID = nil }
+        for state in conversations.values {
+            state.isLoading = false
+            state.loadID = nil
+            // A reply page that answers after this is not the new connection's.
+            for thread in state.replies.threads.values {
+                thread.isLoadingOlder = false
+                thread.olderLoad = nil
+                thread.latestLoad = nil
+                thread.wantsLatest = false
+            }
+        }
         let old = client
         client = nil
         return old
@@ -852,7 +893,9 @@ final class PersonalAgentCenter {
             let state = PersonalAgentConversation()
             state.messages = messages
             state.loaded = true
+            state.hasCompleteTail = true
             conversations[selectedID] = state
+            reconcileReplies(state)
             if let agent = selected { syncInputRequests(state, agent: agent) }
         }
     }

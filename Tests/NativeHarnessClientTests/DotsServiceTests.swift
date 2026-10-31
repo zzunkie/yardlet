@@ -84,6 +84,84 @@ final class DotsServiceTests: XCTestCase {
         await changed.stop()
     }
 
+    /// An ordinary reply names only the message it answers; an option answer also names its choice;
+    /// any other mix, half an option answer included, sends nothing. A thread's pages read on their
+    /// own cursor, which ends where the provider names none or repeats one.
+    func testOrdinaryRepliesAndOptionAnswersAreSeparateAndThreadPagesEndOnTheirOwnCursor() async throws {
+        let fixture = DotsHTTPRecorder(postStatuses: [200, 200])
+        let service = makeService(fixture, broker: DotsTestBroker())
+        var reply = PersonalAgentSubmission(text: "Please check this section.")
+        reply.replyTarget = .init(messageID: "parent", rootID: "root")
+        _ = try await service.send(reply, to: agent)
+        var answer = PersonalAgentSubmission(text: "Tuesday")
+        answer.replyToMessageID = "question"
+        answer.optionSelection = 1
+        _ = try await service.send(answer, to: agent)
+        let bodies = try fixture.requests.filter { $0.httpMethod == "POST" }.map {
+            try JSONDecoder().decode(JSONValue.self, from: fixture.body($0))
+        }
+        XCTAssertEqual(bodies.map { $0["reply_to"] }, [.object(["message_id": .string("parent")]),
+                                                     .object(["message_id": .string("question")])])
+        XCTAssertNil(bodies[0]["message_metadata"], "An ordinary reply carries no option")
+        XCTAssertEqual(bodies[1]["message_metadata"], .object(["option_picker": .object(["selection": .integer(1)])]))
+        XCTAssertEqual(bodies[0]["idempotency_token"]?.stringValue, reply.requestID)
+
+        var mixed = reply
+        mixed.optionSelection = 0
+        var half = PersonalAgentSubmission(text: "Tuesday")
+        half.optionSelection = 1
+        var unchosen = PersonalAgentSubmission(text: "Tuesday")
+        unchosen.replyToMessageID = "question"
+        for refused in [mixed, half, unchosen] {
+            do { _ = try await service.send(refused, to: agent); XCTFail("Expected a refusal") }
+            catch { XCTAssertEqual(error as? PersonalAgentFailure, .sendRejected) }
+        }
+        XCTAssertEqual(fixture.requests.filter { $0.httpMethod == "POST" }.count, 2, "A mixed request is never posted")
+        await service.stop()
+
+        // A room only shared with the person takes no reply, as it takes no file; nothing is posted.
+        let shared = DotsHTTPRecorder(room: #"{"id":"room","aeon_id":"dot","type":"DM","app_source":"chatgpt:messaging","dm_lifecycle_state":"share_only","members":[]}"#)
+        let gated = makeService(shared, broker: DotsTestBroker())
+        do { _ = try await gated.send(reply, to: agent); XCTFail("Expected the room to refuse a reply") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .repliesNotAllowed) }
+        _ = try await gated.send(.init(text: "A plain message still goes"), to: agent)
+        XCTAssertEqual(shared.requests.filter { $0.httpMethod == "POST" }.count, 1)
+        await gated.stop()
+
+        // The latest page names its parent and its thread apart; the earlier page names no cursor, which
+        // ends the thread rather than falling back to its oldest message.
+        let item = { (id: String, extra: String) in
+            #"{"id":"\#(id)","account_user_id":"person","created_at":"2026-10-31T01:00:00Z","content":{"text":"\#(id)","attachments":[]}\#(extra)}"#
+        }
+        let threaded = DotsHTTPRecorder(pages: [
+            "": #"{"items":["# + item("r2", #","reply_root_message_id":"root","reply_to":{"message_id":"r1","message":{"id":"r1","deleted_at":"2026-10-31T01:05:00Z","content":{"text":"Gone","attachments":[]},"reply_to":{"message_id":"root"}}}"#)
+                + "," + item("r3", #","reply_root_message_id":"root","reply_to":{"message_id":"root","message":{"id":"root","content":{"text":"Question","attachments":[{"type":"file","file_id":"f"}]}}}"#)
+                + #"],"prev_cursor":"c1"}"#,
+            "c1": #"{"items":["# + item("r1", #","reply_root_message_id":"root","reply_to":{"message_id":"root"}"#) + #"],"prev_cursor":null}"#,
+            "loop": #"{"items":["# + item("r0", "") + #"],"prev_cursor":"loop"}"#
+        ])
+        let reader = makeService(threaded, broker: DotsTestBroker())
+        let latest = try await reader.replies(to: "root", for: agent, before: nil)
+        XCTAssertEqual(latest.messages.map(\.replyToMessageID), ["r1", "root"])
+        XCTAssertEqual(latest.messages.map(\.replyRootMessageID), ["root", "root"])
+        XCTAssertEqual(latest.messages[0].replyPreview, .init(messageID: "r1", text: "", hasAttachments: false, isDeleted: true),
+                       "A deleted parent's preview keeps nothing of what it said")
+        XCTAssertEqual(latest.messages[1].replyPreview, .init(messageID: "root", text: "Question", hasAttachments: true, isDeleted: false))
+        XCTAssertEqual(latest.before, "c1")
+        let query = try XCTUnwrap(URLComponents(url: try XCTUnwrap(threaded.requests.last?.url), resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(Set(query), [.init(name: "limit", value: "20"), .init(name: "reply_root_message_id", value: "root")])
+        let earlier = try await reader.replies(to: "root", for: agent, before: "c1")
+        XCTAssertEqual(earlier.messages.map(\.id), ["r1"])
+        XCTAssertNil(earlier.before, "A thread page without a cursor is the thread's first")
+        let repeated = try await reader.replies(to: "root", for: agent, before: "loop")
+        XCTAssertNil(repeated.before, "A cursor that comes back unchanged ends the thread")
+        XCTAssertFalse(threaded.requests.contains { $0.url?.query?.contains("after=") == true || $0.url?.query?.contains("around=") == true })
+        // The room's own pages keep their fallback to the oldest message.
+        let room = try await reader.messages(for: agent, before: "c1")
+        XCTAssertEqual(room.before, "r1")
+        await reader.stop()
+    }
+
     func testLoginLossAfterAcceptanceDoesNotPretendTheMessageWasRejected() async throws {
         let fixture = DotsHTTPRecorder()
         let service = makeService(fixture, broker: DotsTestBroker(signsOutAt: 5))
@@ -563,10 +641,14 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
     private var recorded: [URLRequest] = []
     private var statuses: [Int]
     private let room: String
+    /// Message pages by their `before` cursor, "" for the latest; none answers with the room.
+    private let pages: [String: String]
     init(postStatuses: [Int] = [200],
-         room: String = #"{"id":"room","aeon_id":"dot","type":"DM","app_source":"chatgpt:messaging","members":[{"account_user_id":"person","role":"user"}]}"#) {
+         room: String = #"{"id":"room","aeon_id":"dot","type":"DM","app_source":"chatgpt:messaging","members":[{"account_user_id":"person","role":"user"}]}"#,
+         pages: [String: String] = [:]) {
         statuses = postStatuses
         self.room = room
+        self.pages = pages
     }
     var requests: [URLRequest] { lock.withLock { recorded } }
     func body(_ request: URLRequest) -> Data { request.httpBody ?? Data() }
@@ -642,6 +724,11 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
             }
             if request.url?.path.hasSuffix("/elicitation") == true {
                 return (200, Data(#"{"elicitation":{"request_id":"request","thread_id":"thread","turn_id":null,"status":"pending","params":{"threadId":"thread","message":"Confirm"}},"can_respond":true,"runtime_status":"pending","request_fingerprint":"fingerprint"}"#.utf8))
+            }
+            if request.httpMethod == "GET", request.url?.path.hasSuffix("/messages") == true, !pages.isEmpty {
+                let before = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first { $0.name == "before" }?.value ?? ""
+                return (200, Data((pages[before] ?? #"{"items":[]}"#).utf8))
             }
             if request.httpMethod == "POST" {
                 let status = statuses.isEmpty ? 200 : statuses.removeFirst()

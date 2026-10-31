@@ -347,6 +347,263 @@ final class PersonalAgentTests: XCTestCase {
         try FileManager.default.removeItem(at: blocker)
         XCTAssertTrue(recoverable.save())
         XCTAssertNotNil(recoverable.prepare())
+
+        // A waiting reply keeps its target across a restart, in a record earlier builds refuse to read
+        // and keep as a backup; a draft without one is written as before.
+        let replyFile = directory.appending(path: "reply.json")
+        let replying = PersonalAgentDraft(file: replyFile)
+        replying.editor.text = "Looks right."
+        let target = PersonalAgentReplyTarget(messageID: "parent", rootID: "root")
+        let waiting = try XCTUnwrap(replying.prepare(replying.intended(replyingTo: target)))
+        XCTAssertEqual(waiting.replyTarget, target)
+        XCTAssertNil(waiting.replyToMessageID)
+        XCTAssertNil(waiting.optionSelection)
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: replyFile))["version"], .integer(3))
+        let reread = PersonalAgentDraft(file: replyFile)
+        XCTAssertEqual(reread.pending, waiting)
+        XCTAssertEqual(reread.failure, .deliveryUnknown)
+        reread.accepted(waiting.requestID)
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: replyFile))["version"], .integer(1))
+    }
+
+    /// A thread keeps its root and the message replied to apart and reads on its own cursor; Send fixes
+    /// its target before uploads end and a retry keeps it; a count is a number only while every reply
+    /// can be counted; and a read that answers late or for another account changes nothing it should not.
+    func testReplyThreadsKeepTheirTargetCursorAndFreshnessApartFromTheRoom() async throws {
+        let (folder, original) = try chosenFile()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        func message(_ id: String, _ author: PersonalAgentMessage.Author, parent: String? = nil, root: String? = nil,
+                     text: String? = nil, deleted: Bool = false) -> PersonalAgentMessage {
+            var value = PersonalAgentMessage(id: id, author: author, text: deleted ? "" : text ?? id, createdAt: nil,
+                                             isDeleted: deleted, attachments: [])
+            value.replyToMessageID = parent
+            value.replyRootMessageID = root
+            return value
+        }
+        let room = [message("q", .agent), message("a1", .person, parent: "q", root: "q"), message("x", .agent),
+                    message("a2", .agent, parent: "a1")]
+        let center = PersonalAgentCenter()
+        let reader = FixturePersonalAgentReader(agents: [fixtureAgent()], losesFirstSend: true)
+        await reader.setRoom(room, before: "room-cursor")
+        await reader.setThread(["": .init(messages: [room[3]], before: "c1"), "c1": .init(messages: [room[1]], before: nil)])
+        await center.connect(sourceKey: "account") { reader }
+        let state = try XCTUnwrap(center.conversation)
+        // Every reply to q is in the room's window, read through to the latest message: a number, shown
+        // because they do not all follow it. a2 follows another thread's message, so it quotes a1.
+        XCTAssertEqual(state.replies.indicators["q"], .some(2))
+        XCTAssertFalse(state.replies.indicators.keys.contains("x"), "A message without replies shows none")
+        XCTAssertEqual(state.replies.quoted, ["a2"])
+        XCTAssertEqual(state.replies.quote(for: room[3]), .text("a1"))
+
+        // Replying to a reply opens its thread's root, replying to the reply itself.
+        center.openReplies(to: "a2")
+        XCTAssertEqual(state.replies.focus, .init(rootID: "q", targetID: "a2"))
+        let thread = try XCTUnwrap(state.replies.threads["q"])
+        XCTAssertEqual(thread.messages.map(\.id), ["q", "a1", "a2"], "The thread shows what is read before its pages arrive")
+        try await waitUntil { thread.cursor == .before("c1") }
+        await center.loadOlderReplies()
+        XCTAssertEqual(thread.cursor, .end, "A thread page without a cursor ends the thread, with no fallback")
+        await center.loadOlderReplies()
+        var reads = await reader.replyReads
+        XCTAssertEqual(reads, ["", "c1"], "An ended thread reads nothing more")
+        XCTAssertEqual(state.before, "room-cursor", "The room keeps its own cursor")
+
+        // Reading the thread again reaches back to its earliest reply read, so a change to it is seen.
+        await reader.setThread(["": .init(messages: [room[3]], before: "c1"),
+                                "c1": .init(messages: [message("a1", .person, parent: "q", root: "q", text: "a1 edited")], before: nil)])
+        center.openReplies(to: "q")
+        await center.refreshFocusedReplies()
+        XCTAssertEqual(state.replies.message("a1")?.text, "a1 edited")
+        XCTAssertEqual(state.visibleMessages.first { $0.id == "a1" }?.text, "a1 edited", "The room shows the same read")
+        XCTAssertEqual(thread.cursor, .end)
+        // A cursor that comes back before the earliest reply is read once and ends the read unfinished;
+        // so does a page that fails. Either keeps what is shown and says so.
+        await reader.setThread(["": .init(messages: [room[3]], before: "loop"), "loop": .init(messages: [room[3]], before: "loop")])
+        await center.refreshFocusedReplies()
+        reads = await reader.replyReads
+        XCTAssertEqual(Array(reads.suffix(4)), ["", "c1", "", "loop"])
+        XCTAssertEqual(thread.latestFailure, .invalidResponse)
+        XCTAssertEqual(state.replies.message("a1")?.text, "a1 edited")
+        await reader.setThread(["": .init(messages: [room[3]], before: "gone")])
+        await center.refreshFocusedReplies()
+        XCTAssertEqual(thread.latestFailure, .network)
+        XCTAssertEqual(state.replies.message("a1")?.text, "a1 edited", "A failed read keeps what is shown")
+        await reader.setThread(["": .init(messages: [room[3]], before: "c1"),
+                                "c1": .init(messages: [message("a1", .person, parent: "q", root: "q", text: "a1 edited")], before: nil)])
+        await center.refreshFocusedReplies()
+        XCTAssertNil(thread.latestFailure, "Trying again clears the failure")
+        center.openReplies(to: "a2")
+
+        // Send pressed while a file uploads keeps the thread's target, whatever is opened meanwhile.
+        await reader.holdUploads()
+        let draft = state.draft
+        draft.editor.text = "Looks right."
+        await center.attach([.init(url: original, declaredType: nil)], to: try XCTUnwrap(center.fileTarget()))
+        try await waitUntil { await reader.hasPendingUpload() }
+        let sending = Task { await center.send() }
+        try await waitUntil { draft.waitsForUploads }
+        center.closeReplies()
+        center.openReplies(to: "x")
+        await reader.releaseUpload()
+        await sending.value
+        var sent = await reader.sentRequests()
+        XCTAssertEqual(sent.first?.replyTarget, .init(messageID: "a2", rootID: "q"))
+        XCTAssertEqual(sent.first?.attachments.map(\.fileID), ["file-1"])
+        XCTAssertNil(sent.first?.replyToMessageID)
+        XCTAssertNil(sent.first?.optionSelection)
+        XCTAssertEqual(draft.failure, .deliveryUnknown)
+        XCTAssertEqual(state.replies.indicators["q"], .some(nil), "A reply of unknown delivery leaves the count unknown")
+        XCTAssertEqual(state.replies.focus?.rootID, "x")
+        // The retry is the same request to the same message, though another thread is open now.
+        await center.send()
+        sent = await reader.sentRequests()
+        XCTAssertEqual(sent.count, 2)
+        XCTAssertEqual(sent[1], sent[0])
+        let uploads = await reader.uploadCount()
+        XCTAssertEqual(uploads, 1)
+        let reply = sent[0].requestID
+        try await waitUntil { state.replies.indicators["q"] == .some(3) }
+        XCTAssertEqual(thread.messages.map(\.id), ["q", "a1", "a2", reply])
+        XCTAssertTrue(draft.editor.text.isEmpty)
+
+        // A deletion the room read later stands over a thread page that answers late with the old words.
+        center.openReplies(to: "q")
+        await reader.setThread(["": .init(messages: [message("a1", .person, parent: "q", root: "q", text: "stale")], before: "c1")])
+        await reader.holdReplies(before: "")
+        let late = Task { await center.refreshFocusedReplies() }
+        try await waitUntil { await reader.hasPendingReplies() }
+        await reader.replaceInRoom(message("a1", .person, parent: "q", root: "q", deleted: true))
+        await center.refreshConversation()
+        await reader.releaseReplies()
+        await late.value
+        XCTAssertEqual(state.replies.message("a1")?.isDeleted, true)
+        XCTAssertEqual(state.visibleMessages.first { $0.id == "a1" }?.isDeleted, true)
+        XCTAssertEqual(state.replies.quote(for: room[3]), .deleted, "The parent's deletion stands over what was quoted")
+        XCTAssertEqual(thread.messages.first { $0.id == "a1" }?.isDeleted, true)
+        XCTAssertEqual(thread.cursor, .end, "A latest page keeps the earlier pages' cursor")
+        XCTAssertEqual(state.replies.indicators["q"], .some(2), "A deleted reply is not counted")
+
+        // Without the provider's times, the read that started later stands, whichever answers last.
+        await reader.setThread(["": .init(messages: [message("a2", .agent, parent: "a1", text: "edited")], before: nil)])
+        await center.refreshFocusedReplies()
+        XCTAssertEqual(state.replies.message("a2")?.text, "edited", "A thread read after the room's shows its later edit")
+        XCTAssertEqual(state.visibleMessages.first { $0.id == "a2" }?.text, "edited", "The room shows the thread's later read")
+        await reader.setThread(["": .init(messages: [message("a2", .agent, parent: "a1", text: "older edit")], before: nil)])
+        await reader.holdReplies(before: "")
+        let earlier = Task { await center.refreshFocusedReplies() }
+        try await waitUntil { await reader.hasPendingReplies() }
+        await reader.replaceInRoom(message("a2", .agent, parent: "a1", text: "newest edit"))
+        await center.refreshConversation()
+        await reader.releaseReplies()
+        await earlier.value
+        XCTAssertEqual(state.replies.message("a2")?.text, "newest edit")
+        XCTAssertEqual(state.visibleMessages.first { $0.id == "a2" }?.text, "newest edit")
+
+        // A thread read that outlives the account shows nothing in the next one.
+        await reader.holdReplies(before: "")
+        let switching = Task { await center.refreshFocusedReplies() }
+        try await waitUntil { await reader.hasPendingReplies() }
+        let other = FixturePersonalAgentReader(agents: [fixtureAgent(account: "another")])
+        await center.connect(sourceKey: "another") { other }
+        await reader.releaseReplies()
+        await switching.value
+        XCTAssertNil(center.conversation?.replies.focus)
+        XCTAssertEqual(center.conversation?.replies.threads.isEmpty, true)
+        reads = await other.replyReads
+        XCTAssertTrue(reads.isEmpty)
+        await center.disconnect()
+    }
+
+    /// A reply read that answers after the person moved to another dot ends there and leaves the thread
+    /// free to be read again on return, for earlier pages and the latest alike. A reply whose delivery
+    /// was uncertain, which a thread read shows under its request, is settled without sending again.
+    func testAReplyReadThatOutlivesItsDotEndsAndAnUncertainReplyTheThreadShowsIsSettled() async throws {
+        let first = fixtureAgent()
+        let second = PersonalAgent(id: .init(accountID: "account", userID: "person", agentID: "dot-2", roomID: "room-2"),
+                                   name: "Juniper", rootThreadID: nil, isPaused: false, isPrimary: false)
+        let question = PersonalAgentMessage(id: "q", author: .agent, text: "Which day?", createdAt: nil, isDeleted: false, attachments: [])
+        let other = PersonalAgentMessage(id: "x", author: .agent, text: "Noted.", createdAt: nil, isDeleted: false, attachments: [])
+        let center = PersonalAgentCenter()
+        let reader = FixturePersonalAgentReader(agents: [first, second], losesFirstSend: true)
+        await reader.setRoom([question, other])
+        await reader.setThread(["": .init(messages: [], before: "c1"), "c1": .init(messages: [], before: nil)])
+        await center.connect(sourceKey: "account") { reader }
+        let state = try XCTUnwrap(center.conversation)
+        await reader.holdReplies(before: "")
+        center.openReplies(to: "q")
+        let thread = try XCTUnwrap(state.replies.threads["q"])
+        try await waitUntil { await reader.hasPendingReplies() }
+        await center.select(second.id)
+        await reader.releaseReplies()
+        try await waitUntil { !thread.isLoadingOlder }
+        XCTAssertEqual(thread.cursor, .unread, "A page for a dot no longer shown is not kept")
+        await center.select(first.id)
+        XCTAssertTrue(center.conversation === state)
+        await center.loadOlderReplies()
+        try await waitUntil { thread.cursor == .before("c1") }
+
+        await reader.holdReplies(before: "")
+        let latest = Task { await center.refreshFocusedReplies() }
+        try await waitUntil { await reader.hasPendingReplies() }
+        await center.select(second.id)
+        await reader.releaseReplies()
+        await latest.value
+        await center.select(first.id)
+        let before = await reader.replyReads.count
+        await center.refreshFocusedReplies()
+        let after = await reader.replyReads.count
+        XCTAssertGreaterThan(after, before, "The thread can be read again on return")
+
+        // An uncertain reply that a thread read shows under its request has arrived: only its own draft
+        // is let go, nothing is sent or uploaded again, and the count is worked out without it waiting.
+        let draft = state.draft
+        draft.editor.text = "Tuesday works."
+        await center.send()
+        let pending = try XCTUnwrap(draft.pending)
+        XCTAssertEqual(pending.replyTarget, .init(messageID: "q", rootID: "q"))
+        XCTAssertEqual(state.replies.indicators["q"], nil, "Nothing read yet answers q")
+        var arrived = PersonalAgentMessage(id: "server-reply", author: .person, text: "Tuesday works.", createdAt: nil,
+                                           isDeleted: false, attachments: [], requestID: pending.requestID)
+        arrived.replyToMessageID = "q"
+        arrived.replyRootMessageID = "q"
+        await reader.setThread(["": .init(messages: [arrived], before: nil)])
+        await center.refreshFocusedReplies()
+        XCTAssertNil(draft.pending)
+        XCTAssertNil(draft.failure)
+        XCTAssertTrue(draft.editor.text.isEmpty)
+        XCTAssertNil(state.optionReply.pending)
+        let sent = await reader.sentRequests()
+        XCTAssertEqual(sent.count, 1, "Settled by reading, not by sending again")
+        let uploads = await reader.uploadCount()
+        XCTAssertEqual(uploads, 0)
+        XCTAssertEqual(state.replies.indicators["q"], .some(1))
+
+        // The other order: a read shows the request while it is still being sent, and the send then
+        // comes back uncertain. The draft is settled from that read, without another read or send.
+        draft.editor.text = "Wednesday also works."
+        await reader.holdAndLoseNextSend()
+        let sending = Task { await center.send() }
+        try await waitUntil { await reader.hasPendingSend() }
+        let racing = try XCTUnwrap(draft.pending)
+        var early = arrived
+        early = PersonalAgentMessage(id: "server-reply-2", author: .person, text: racing.text, createdAt: nil,
+                                     isDeleted: false, attachments: [], requestID: racing.requestID)
+        early.replyToMessageID = "q"
+        early.replyRootMessageID = "q"
+        await reader.setThread(["": .init(messages: [arrived, early], before: nil)])
+        await center.refreshFocusedReplies()
+        XCTAssertEqual(draft.pending, racing, "Still being sent: nothing is settled under it")
+        let readsBefore = await reader.replyReads.count
+        await reader.releaseSend()
+        await sending.value
+        XCTAssertNil(draft.pending, "Settled from the read that already showed it")
+        XCTAssertTrue(draft.editor.text.isEmpty)
+        let readsAfter = await reader.replyReads.count
+        XCTAssertEqual(readsAfter, readsBefore, "Settling read nothing more")
+        let resent = await reader.sentRequests()
+        XCTAssertEqual(resent.count, 2, "Nothing was sent again")
+        XCTAssertEqual(state.replies.indicators["q"], .some(2))
+        await center.disconnect()
     }
 
     func testHistoryRefreshRevalidatesOldMessagesAndDoesNotUseASendAsItsBoundary() async throws {
@@ -1047,6 +1304,7 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
             delayMessageRead = false
             await withCheckedContinuation { pendingMessageRead = $0 }
         }
+        if let room { return .init(messages: room, before: roomCursor) }
         if let history {
             let end = before.flatMap { id in history.firstIndex { $0.id == id } } ?? history.count
             let start = max(0, end - 1)
@@ -1078,10 +1336,14 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
     func send(_ submission: PersonalAgentSubmission, to agent: PersonalAgent) async throws -> PersonalAgentMessage {
         sends.append(submission)
         if delaysSend { await withCheckedContinuation { pendingSend = $0 } }
+        if holdsNextSend { holdsNextSend = false; await withCheckedContinuation { pendingSend = $0 } }
         if losesFirstSend, sends.count == 1 { throw PersonalAgentFailure.deliveryUnknown }
-        let message = PersonalAgentMessage(id: submission.requestID, author: .person, text: submission.text, createdAt: nil,
+        if losesNextSend { losesNextSend = false; throw PersonalAgentFailure.deliveryUnknown }
+        var message = PersonalAgentMessage(id: submission.requestID, author: .person, text: submission.text, createdAt: nil,
               isDeleted: false, attachments: [], requestID: submission.requestID)
         if history != nil { history?.append(message) }
+        message.replyToMessageID = submission.replyTarget?.messageID ?? submission.replyToMessageID
+        if room != nil { room?.append(message) }
         if delayAfterSend { delayMessageRead = true; delayAfterSend = false }
         return message
     }
@@ -1199,6 +1461,37 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
     func hasPendingSend() -> Bool { pendingSend != nil }
     func releaseSend() { pendingSend?.resume(); pendingSend = nil }
     func replaceHistory(_ messages: [PersonalAgentMessage]) { history = messages }
+    private var holdsNextSend = false
+    private var losesNextSend = false
+    /// The next send waits for `releaseSend`, then is lost.
+    func holdAndLoseNextSend() { holdsNextSend = true; losesNextSend = true }
+    /// The room as one page, with `before` as its earlier cursor.
+    private var room: [PersonalAgentMessage]?
+    private var roomCursor: String?
+    func setRoom(_ messages: [PersonalAgentMessage], before: String? = nil) { room = messages; roomCursor = before }
+    func replaceInRoom(_ message: PersonalAgentMessage) {
+        if let index = room?.firstIndex(where: { $0.id == message.id }) { room?[index] = message }
+    }
+    /// Reply pages by their cursor, "" for the latest; a held read answers with the page it read when it started.
+    private var threadPages: [String: PersonalAgentPage] = [:]
+    private var heldReplies: String?
+    private var pendingReplies: CheckedContinuation<Void, Never>?
+    private(set) var replyReads: [String] = []
+    func setThread(_ pages: [String: PersonalAgentPage]) { threadPages = pages }
+    func holdReplies(before: String) { heldReplies = before }
+    func hasPendingReplies() -> Bool { pendingReplies != nil }
+    func releaseReplies() { pendingReplies?.resume(); pendingReplies = nil }
+    func replies(to rootID: String, for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
+        let key = before ?? ""
+        replyReads.append(key)
+        let page = threadPages[key]
+        if heldReplies == key {
+            heldReplies = nil
+            await withCheckedContinuation { pendingReplies = $0 }
+        }
+        guard let page else { throw PersonalAgentFailure.network }
+        return page
+    }
     func delayNextMessageRead() { delayMessageRead = true }
     func delayReadAfterNextSend() { delayAfterSend = true }
     func hasPendingMessageRead() -> Bool { pendingMessageRead != nil }

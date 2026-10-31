@@ -23,6 +23,13 @@ enum ViewBodyCensus {
         case personalAgentConversation
         /// The words in a dot's header for what its room says it is doing.
         case personalAgentStatus
+        /// A message of a dot's reply dialog prepared for drawing: its inputs worked out and handed to
+        /// its hosting view, which may find nothing changed.
+        case personalAgentReplyRow
+        /// A message of a dot's reply dialog drawn again in its hosting view.
+        case personalAgentReplyRowGraph
+        /// A hosting view made for a message of a dot's reply dialog.
+        case personalAgentReplyRowHosting
     }
 
     static var isEnabled = false

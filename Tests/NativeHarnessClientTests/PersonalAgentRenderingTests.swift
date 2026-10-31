@@ -684,6 +684,891 @@ final class PersonalAgentRenderingTests: XCTestCase {
         XCTAssertEqual(ViewBodyCensus[.personalAgentAvatar], 0, "A new heading with the same motion drew a picture again")
     }
 
+    /// The Replies dialog opens over the composer from a message's replies in a long conversation and
+    /// reads its thread there without drawing the conversation again. The draft's words and files and
+    /// the room's place stay through opening and closing, and Escape closes it, except while an input
+    /// method still composes a character.
+    func testRepliesOpenOverTheComposerAndLeaveTheConversationAndDraftAsTheyWere() async throws {
+        let (model, _) = try makeWindowModel()
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        func message(_ id: String, _ author: PersonalAgentMessage.Author, _ text: String, parent: String? = nil) -> PersonalAgentMessage {
+            var value = PersonalAgentMessage(id: id, author: author, text: text, createdAt: nil, isDeleted: false, attachments: [])
+            value.replyToMessageID = parent
+            value.replyRootMessageID = parent == nil ? nil : "q"
+            return value
+        }
+        var messages = (0..<396).map { index in
+            message("m\(index)", index.isMultiple(of: 2) ? .person : .agent, "Message \(index) of a long conversation about the launch.")
+        }
+        messages += [message("q", .agent, "Which launch date should I put in the announcement?"),
+                     message("m396", .person, "Also keep the press list as it is."),
+                     message("a1", .person, "Keep the date we agreed in the review.", parent: "q"),
+                     message("m397", .agent, "The press list stays as it is."),
+                     message("a2", .agent, "The review agreed on the fourteenth. I will use that date.", parent: "a1"),
+                     message("m398", .person, "Thanks."), message("m399", .agent, "You are welcome.")]
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let form = folder.appending(path: "launch-checklist.pdf")
+        try Data("%PDF-1.4 synthetic".utf8).write(to: form)
+        let count = PersonalAgentReplyIndicator.title(2)
+        let close = L10n.string("Close replies")
+        let directory = try WindowlessRender.directory("dots-replies-qa")
+        defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+        for size in [NSSize(width: 1280, height: 920), NSSize(width: 920, height: 680)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let drafts = PersonalAgentDrafts()
+                let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages)
+                let window = MainWindow(model: model, personalAgentDrafts: drafts) { reader }
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .frame(width: size.width, height: size.height)
+                let host = WindowlessRender.Host(window, size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+                let shows = { (label: String) in host.accessibilityElements().contains { $0.label == label } }
+                await host.settle(until: { shows(count) })
+                let draft = try XCTUnwrap(drafts.opened.first)
+                let words = "현장 확인 뒤에 날짜를 정하겠습니다."
+                draft.editor.text = words
+                let ids = await draft.addFiles([.init(url: form)])
+                draft.setState(try XCTUnwrap(ids.first),
+                               .uploaded(.init(fileID: "file", name: "launch-checklist.pdf", mimeType: "application/pdf", sizeBytes: 18)))
+                host.settle(passes: 12)
+                // The room is read a little way above its end; that place is kept.
+                let scroll = try XCTUnwrap(Self.scrollViews(in: host.hosting).max {
+                    ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)
+                })
+                for _ in 0..<3 {
+                    guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 60, wheel2: 0, wheel3: 0),
+                          let event = NSEvent(cgEvent: wheel) else { break }
+                    scroll.scrollWheel(with: event)
+                    host.settle(passes: 1)
+                }
+                host.settle(passes: 12)
+                let place = scroll.contentView.bounds.origin.y
+
+                ViewBodyCensus.isEnabled = true
+                ViewBodyCensus.reset()
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: count))
+                await host.settle(until: { shows(close) })
+                try await waitUntil { await reader.replyReads > 0 }
+                host.settle(passes: 20)
+                XCTAssertEqual(ViewBodyCensus[.personalAgentConversation], 0, "Opening the thread drew the conversation again")
+                XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "Opening the thread drew the window again")
+                let focused = try XCTUnwrap(host.window.firstResponder as? NSTextView, "The dialog's composer takes focus")
+                XCTAssertEqual(focused.string, words)
+                XCTAssertEqual(focused.selectedRange(), NSRange(location: (words as NSString).length, length: 0),
+                               "Focus does not select the draft for the next key to replace")
+                let capture = try host.capture()
+                XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6))
+                try WindowlessRender.writePNG(capture.bitmap,
+                    to: directory.appending(path: "replies-\(Int(size.width))-\(appearance.suffix).png"))
+                let visible = host.accessibilityElements(visibleOnly: true)
+                for label in [close, L10n.string("Send message"), "launch-checklist.pdf"] {
+                    XCTAssertTrue(visible.contains { $0.label == label }, "\(label) is on screen at \(size)")
+                }
+                XCTAssertTrue(visible.contains { $0.label.contains("The review agreed on the fourteenth") || $0.value.contains("The review agreed on the fourteenth") })
+                XCTAssertEqual(draft.editor.text, words)
+                XCTAssertEqual(draft.files.map(\.id), ids)
+                XCTAssertEqual(scroll.contentView.bounds.origin.y, place, accuracy: 1, "The room behind keeps its place")
+
+                // Escape while an input method composes belongs to it; the next one closes the dialog.
+                let field = try XCTUnwrap(Self.views(NSTextField.self, in: host.hosting).first {
+                    $0.isEditable && $0.placeholderString == L10n.string("Message your dot…")
+                })
+                XCTAssertTrue(host.window.makeFirstResponder(field))
+                host.settle(passes: 4)
+                let editor = try XCTUnwrap(host.window.firstResponder as? NSTextView)
+                editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+                editor.setMarkedText("ㅎ", selectedRange: NSRange(location: 1, length: 0),
+                                     replacementRange: NSRange(location: NSNotFound, length: 0))
+                try pressEscape(in: host)
+                XCTAssertTrue(shows(close), "An Escape the input method takes leaves the dialog open")
+                editor.insertText("", replacementRange: editor.markedRange())
+                host.settle(passes: 4)
+                try pressEscape(in: host)
+                await host.settle(until: { !shows(close) })
+                XCTAssertFalse(shows(close))
+                host.settle(passes: 12)
+                XCTAssertEqual(draft.editor.text, words, "Closing keeps the words")
+                XCTAssertEqual(draft.files.map(\.id), ids, "Closing keeps the files")
+                XCTAssertEqual(scroll.contentView.bounds.origin.y, place, accuracy: 1)
+                XCTAssertEqual(ViewBodyCensus[.personalAgentConversation], 0, "Closing the thread drew the conversation again")
+                XCTAssertTrue(shows(count), "The room's indicator stays")
+                let sends = await reader.sends
+                XCTAssertTrue(sends.isEmpty, "Opening, reading and closing send nothing")
+                ViewBodyCensus.isEnabled = false
+            }
+        }
+    }
+
+    /// A long thread opens at its end and reads nothing earlier until its top is scrolled into view, then
+    /// once, keeping the reply being read in place; a reply that arrives while the person reads above
+    /// offers New replies without moving, and one that arrives at the end is followed. Closed by its
+    /// button or Escape, the dialog gives focus back where it was; closed by a press outside, it leaves
+    /// focus with what that press chose. A reply's quote and the row's Reply action open their threads.
+    func testALongThreadReadsEarlierRepliesAtItsTopAndFollowsNewOnesOnlyAtItsEnd() async throws {
+        let (model, _) = try makeWindowModel()
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        let start = Date(timeIntervalSince1970: 1_793_000_000)
+        func message(_ id: String, _ author: PersonalAgentMessage.Author, _ text: String, minute: Int,
+                     parent: String? = nil, root: String = "q") -> PersonalAgentMessage {
+            var value = PersonalAgentMessage(id: id, author: author, text: text, createdAt: start.addingTimeInterval(Double(minute) * 60),
+                                             isDeleted: false, attachments: [])
+            value.replyToMessageID = parent
+            value.replyRootMessageID = parent == nil ? nil : root
+            return value
+        }
+        // Replies of different lengths: a line, two, or a paragraph with a list.
+        func words(_ first: String, _ index: Int) -> String {
+            switch index % 3 {
+            case 0: first + "\n\nIt needs the press list, the venue and the stream settled first:\n\n- Press list\n- Venue\n- Stream"
+            case 1: first
+            default: first + " The venue has confirmed the room, and the stream needs one more check before the date can be final."
+            }
+        }
+        func reply(_ index: Int) -> PersonalAgentMessage {
+            message("r\(index)", index.isMultiple(of: 2) ? .agent : .person,
+                    words("Reply \(index) in the thread about the launch date.", index), minute: 100 + index,
+                    parent: index == 1 ? "q" : "r\(index - 1)")
+        }
+        func step(_ index: Int) -> PersonalAgentMessage {
+            message("s\(index)", index.isMultiple(of: 2) ? .agent : .person, words("Step \(index) of the plan.", index),
+                    minute: 300 + index, parent: index == 1 ? "q2" : "s\(index - 1)", root: "q2")
+        }
+        var latestReply = reply(40)
+        latestReply.replyPreview = .init(messageID: "r39", text: "Reply 39 in the thread about the launch date.",
+                                         hasAttachments: false, isDeleted: false)
+        let room = [message("m1", .person, "Please draft the announcement.", minute: 1),
+                    message("q", .agent, "Which launch date should I put in the announcement?", minute: 2),
+                    message("m2", .person, "Also keep the press list as it is.", minute: 3),
+                    message("q2", .agent, """
+                        Launch plan overview, for the review on Thursday.
+
+                        The second part of the plan covers the venue, the guest list and the order of the talks, \
+                        which the team agreed last week and which only the venue can still change.
+
+                        The third part covers the stream: who runs it, which cameras it uses and how the recording \
+                        reaches the press afterwards.
+
+                        The fourth part covers the announcement itself and the press list that receives it.
+                        """, minute: 4),
+                    latestReply]
+        let reader = RenderedPersonalAgentReader(agents: [agent], messages: room)
+        await reader.setThreadPages(["": .init(messages: (21...40).map(reply), before: "c1"),
+                                     "c1": .init(messages: (1...20).map(reply), before: nil)])
+        await reader.setThreadPages(["": .init(messages: (21...40).map(step), before: "d1"),
+                                     "d1": .init(messages: (1...20).map(step), before: nil)], root: "q2")
+        let drafts = PersonalAgentDrafts()
+        let size = NSSize(width: 920, height: 680)
+        let host = WindowlessRender.Host(MainWindow(model: model, personalAgentDrafts: drafts) { reader }
+            .frame(width: size.width, height: size.height), size: size)
+        defer { host.close() }
+        host.settle()
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+        let labels = { host.accessibilityElements().map(\.label) }
+        let shows = { (text: String) in host.accessibilityElements(visibleOnly: true).contains { $0.label.contains(text) || $0.value.contains(text) } }
+        let indicators = Set([PersonalAgentReplyIndicator.title(nil)] + (0...60).map { PersonalAgentReplyIndicator.title($0) })
+        let openThread = { host.hosting.pressAccessibilityElement(labelled: try XCTUnwrap(labels().first { indicators.contains($0) })) }
+        let close = L10n.string("Close replies")
+        await host.settle(until: { labels().contains { indicators.contains($0) } })
+        // The dialog's list: a row for every reply read, a view only for those in view.
+        let replyTable = { Self.views(NSTableView.self, in: host.hosting).first }
+
+        // Opened at its end: nothing earlier is read.
+        XCTAssertTrue(try openThread())
+        await host.settle(until: { (replyTable()?.numberOfRows ?? 0) >= 21 })
+        host.settle(passes: 30)
+        var older = await reader.olderReplyReads
+        XCTAssertEqual(older, 0, "A thread at its end reads nothing earlier")
+        let panel = try XCTUnwrap(replyTable()?.enclosingScrollView)
+        XCTAssertLessThan(Self.views(PersonalAgentReplyRowView.self, in: host.hosting).count, 21,
+                          "Only the rows in view have views")
+        let newReplies = L10n.string("New replies")
+
+        // Reading a little above the end, a new reply moves nothing; New replies goes to it.
+        // The wheel, as the person turns it, until well away from the end and not near the top.
+        for _ in 0..<12 {
+            let distance = (panel.documentView?.frame.height ?? 0) - panel.contentView.bounds.height - panel.contentView.bounds.origin.y
+            guard distance < 250 else { break }
+            guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 60, wheel2: 0, wheel3: 0),
+                  let event = NSEvent(cgEvent: wheel) else { break }
+            panel.scrollWheel(with: event)
+            host.settle(passes: 2)
+        }
+        host.settle(passes: 12)
+        let (early, earlyBefore) = try XCTUnwrap(Self.firstInView((21...40).map { "Reply \($0) in the thread" },
+                                                                  panel: panel, in: host.hosting))
+        await reader.setThreadPages(["": .init(messages: (21...41).map(reply), before: "c1"),
+                                     "c1": .init(messages: (1...20).map(reply), before: nil)])
+        await reader.signalChange()
+        await host.settle(until: { labels().contains(newReplies) })
+        host.settle(passes: 12)
+        let earlyAfter = try XCTUnwrap(Self.offset(of: early, panel: panel, in: host.hosting))
+        XCTAssertEqual(earlyAfter, earlyBefore, accuracy: 2, "\(early) stays where it was read as a new reply arrives")
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: newReplies))
+        await host.settle(until: { shows("Reply 41 in the thread") })
+        host.settle(passes: 12)
+        XCTAssertFalse(labels().contains(newReplies))
+
+        // The wheel to the top reads the earlier page once. Whatever was first in view as it was asked for
+        // stays at the same height in the dialog once the earlier replies are laid out above it, without
+        // another turn of the wheel.
+        let qa = try WindowlessRender.directory("dots-replies-qa")
+        await reader.holdReplies(before: "c1")
+        for _ in 0..<80 {
+            older = await reader.olderReplyReads
+            guard older == 0 else { break }
+            guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 80, wheel2: 0, wheel3: 0),
+                  let event = NSEvent(cgEvent: wheel) else { break }
+            panel.scrollWheel(with: event)
+            host.settle(passes: 2)
+        }
+        try await waitUntil { await reader.hasPendingReplies() }
+        host.settle(passes: 6)
+        let candidates = ["Which launch date should I put"] + (21...41).map { "Reply \($0) in the thread" }
+        let (read, before) = try XCTUnwrap(Self.firstInView(candidates, panel: panel, in: host.hosting))
+        try WindowlessRender.writePNG(host.capture().bitmap, to: qa.appending(path: "long-thread-before-earlier.png"))
+        await reader.releaseReplies()
+        await host.settle(until: { !labels().contains(L10n.string("Loading earlier replies…")) })
+        host.settle(passes: 30)
+        older = await reader.olderReplyReads
+        XCTAssertEqual(older, 1, "Reaching the top reads the earlier page once")
+        // The start and 41 replies, with the top row kept blank while it is in view.
+        XCTAssertTrue([42, 43].contains(replyTable()?.numberOfRows ?? 0), "The page read is in the list as it arrives")
+        try WindowlessRender.writePNG(host.capture().bitmap, to: qa.appending(path: "long-thread-after-earlier.png"))
+        let after = try XCTUnwrap(Self.offset(of: read, panel: panel, in: host.hosting), "\(read) is still drawn")
+        XCTAssertEqual(after, before, accuracy: 2, "\(read) stays where it was read while earlier replies arrive above it")
+        if read != candidates[0] {
+            XCTAssertFalse(shows("Reply 1 in the thread"), "Reading the replies, the dialog does not jump to the thread's start")
+        }
+
+        // Reading above the end, a new reply offers New replies and moves nothing.
+        let inView = (1...41).map { "Reply \($0) in the thread" }.filter(shows)
+        XCTAssertFalse(inView.isEmpty)
+        await reader.setThreadPages(["": .init(messages: (21...42).map(reply), before: "c1"),
+                                     "c1": .init(messages: (1...20).map(reply), before: nil)])
+        await reader.signalChange()
+        await host.settle(until: { labels().contains(newReplies) })
+        XCTAssertTrue(labels().contains(newReplies))
+        host.settle(passes: 12)
+        for reply in inView { XCTAssertTrue(shows(reply), "\(reply) stays in view when a new reply arrives") }
+        XCTAssertFalse(shows("Reply 42 in the thread"), "The new reply waits below")
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: newReplies))
+        await host.settle(until: { shows("Reply 42 in the thread") })
+        host.settle(passes: 12)
+        XCTAssertFalse(labels().contains(newReplies))
+        // At the end, the next reply is followed.
+        await reader.setThreadPages(["": .init(messages: (21...43).map(reply), before: "c1"),
+                                     "c1": .init(messages: (1...20).map(reply), before: nil)])
+        await reader.signalChange()
+        await host.settle(until: { shows("Reply 43 in the thread") })
+        XCTAssertTrue(shows("Reply 43 in the thread"), "Followed to the end; in view: \((1...43).filter { shows("Reply \($0) in the thread") }), "
+                      + "at \(panel.contentView.bounds.origin.y) of \(panel.documentView?.frame.height ?? 0)")
+        XCTAssertFalse(labels().contains(newReplies))
+
+        // Focus goes back where it was on Close and on Escape, not over what a press outside chose.
+        let field = try XCTUnwrap(Self.views(NSTextField.self, in: host.hosting).first {
+            $0.isEditable && $0.placeholderString == L10n.string("Message your dot…")
+        })
+        let earlierField = NSTextField(frame: NSRect(x: 4, y: 4, width: 80, height: 22))
+        let chosenField = NSTextField(frame: NSRect(x: 90, y: 4, width: 80, height: 22))
+        host.hosting.addSubview(earlierField)
+        host.hosting.addSubview(chosenField)
+        func owner() -> NSResponder? {
+            let responder = host.window.firstResponder
+            if let editor = responder as? NSTextView, editor.isFieldEditor { return editor.delegate as? NSResponder }
+            return responder
+        }
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: close))
+        await host.settle(until: { !labels().contains(close) })
+        for closing in ["button", "escape", "outside"] {
+            XCTAssertTrue(host.window.makeFirstResponder(earlierField))
+            XCTAssertTrue(try openThread())
+            await host.settle(until: { labels().contains(close) && owner() === field })
+            XCTAssertTrue(owner() === field, "The dialog gives its composer focus (\(closing))")
+            switch closing {
+            case "button": XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: close))
+            case "escape": try pressEscape(in: host)
+            default:
+                let monitor = try XCTUnwrap(Self.views(PersonalAgentReplyPanelMonitor.MonitorView.self, in: host.hosting).first)
+                let press = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 120, y: 15),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: host.window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+                monitor.observe(press)
+                // What the press lands on takes focus, as the window's own dispatch would give it.
+                XCTAssertTrue(host.window.makeFirstResponder(chosenField))
+            }
+            await host.settle(until: { !labels().contains(close) })
+            host.settle(passes: 6)
+            XCTAssertFalse(labels().contains(close), closing)
+            XCTAssertTrue(owner() === (closing == "outside" ? chosenField : earlierField), "Focus after closing by \(closing)")
+        }
+        earlierField.removeFromSuperview()
+        chosenField.removeFromSuperview()
+
+        // A reply's quote opens its thread replying to the quoted message; a row's Reply action replies to
+        // the row. Each is checked by what Send would send to this fixture, never to a provider.
+        let draft = try XCTUnwrap(drafts.opened.first)
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Reply to")))
+        await host.settle(until: { labels().contains(close) })
+        draft.editor.text = "Use the fourteenth."
+        host.settle(passes: 4)
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Send message")))
+        try await waitUntil { await reader.sends.count == 1 }
+        var sends = await reader.sends
+        XCTAssertEqual(sends.last?.replyTarget, .init(messageID: "r39", rootID: "q"))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: close))
+        await host.settle(until: { !labels().contains(close) })
+        XCTAssertTrue(Self.performCustomAction(L10n.string("Reply"), onElementContaining: "Also keep the press list", in: host.hosting))
+        await host.settle(until: { labels().contains(close) })
+        draft.editor.text = "Keep it."
+        host.settle(passes: 4)
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Send message")))
+        try await waitUntil { await reader.sends.count == 2 }
+        sends = await reader.sends
+        XCTAssertEqual(sends.last?.replyTarget, .init(messageID: "m2", rootID: "m2"))
+
+        // Reading a long first message as earlier replies are read keeps it where it was, though the
+        // row offering them above it goes, rather than moving to its first reply.
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: close))
+        await host.settle(until: { !labels().contains(close) })
+        XCTAssertTrue(Self.performCustomAction(L10n.string("Reply"), onElementContaining: "Launch plan overview", in: host.hosting))
+        await host.settle(until: { labels().contains(close) && shows("Step 40 of the plan") })
+        host.settle(passes: 20)
+        let longPanel = try XCTUnwrap(replyTable()?.enclosingScrollView)
+        await reader.holdReplies(before: "d1")
+        longPanel.contentView.scroll(to: NSPoint(x: 0, y: 60))
+        longPanel.reflectScrolledClipView(longPanel.contentView)
+        try await waitUntil { await reader.hasPendingReplies() }
+        host.settle(passes: 6)
+        let paragraph = "The second part of the plan covers the venue"
+        let rootBefore = try XCTUnwrap(Self.offset(of: paragraph, panel: longPanel, in: host.hosting))
+        try WindowlessRender.writePNG(host.capture().bitmap, to: qa.appending(path: "long-root-before-earlier.png"))
+        await reader.releaseReplies()
+        await host.settle(until: { !labels().contains(L10n.string("Loading earlier replies…")) })
+        host.settle(passes: 30)
+        try WindowlessRender.writePNG(host.capture().bitmap, to: qa.appending(path: "long-root-after-earlier.png"))
+        let rootAfter = try XCTUnwrap(Self.offset(of: paragraph, panel: longPanel, in: host.hosting))
+        XCTAssertEqual(rootAfter, rootBefore, accuracy: 2, "The first message being read stays where it was")
+    }
+
+    /// The reply list draws only the messages in view, each in a view of its own: an answer that arrives,
+    /// a deletion and the option it chooses draw only the messages they change. A form scrolled out of
+    /// view and back shows the words its request keeps, and a field being typed in keeps its control,
+    /// selection and composition while its row is out of view, as the table keeps an edited row in use.
+    func testReplyRowsDrawOnlyWhatChangedAndAFieldBeingTypedInKeepsItsComposition() async throws {
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        func reply(_ index: Int) -> PersonalAgentMessage {
+            var value = PersonalAgentMessage(id: "r\(index)", author: index.isMultiple(of: 2) ? .agent : .person,
+                                             text: "Thread reply \(index) about the launch.", createdAt: nil,
+                                             isDeleted: false, attachments: [])
+            value.replyToMessageID = "q"
+            value.replyRootMessageID = "q"
+            return value
+        }
+        let form = try JSONDecoder().decode(JSONValue.self, from: Data(
+            #"{"request_id":"note","thread_id":"thread","turn_id":null,"status":"pending","params":{"threadId":"thread","serverName":"codex_apps","mode":"form","message":"Anything to add?","requestedSchema":{"type":"object","properties":{"note":{"type":"string","title":"Note for the team","maxLength":80},"owner":{"type":"string","title":"Who sends it","maxLength":80}},"required":[]},"_meta":null}}"#.utf8))
+        var replies = (1...30).map(reply)
+        replies[3].inputRequest = form
+        replies[27].metadata = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"option_picker":{"options":["Monday","Tuesday"]}}"#.utf8))
+        let root = PersonalAgentMessage(id: "q", author: .agent, text: "Which launch date should I put in the announcement?",
+                                        createdAt: nil, isDeleted: false, attachments: [])
+        let center = PersonalAgentCenter()
+        center.useFixture(agents: [agent], messages: [root])
+        let state = try XCTUnwrap(center.conversation)
+        let thread = state.replies.thread("q")
+        func read(_ messages: [PersonalAgentMessage]) {
+            thread.ingest(messages, epoch: state.replies.beginRead())
+            center.reconcileReplies(state)
+            center.syncInputRequests(state, agent: agent)
+        }
+        read(replies)
+        thread.cursor = .end
+        // The form can be answered, as a read of its request would say.
+        let request = try XCTUnwrap(state.requests["r4"])
+        request.history = .none
+        request.inspection = try DotsRequestInspection(.object(["elicitation": form, "can_respond": .bool(true),
+            "runtime_status": .string("pending"), "request_fingerprint": .string("fingerprint")]))
+        state.replies.focus = .init(rootID: "q", targetID: "q")
+        let size = NSSize(width: 920, height: 680)
+        let host = WindowlessRender.Host(PersonalAgentsContent(center: center, onRetry: {}, onAccounts: {})
+            .frame(width: size.width, height: size.height), size: size)
+        defer { host.close() }
+        let labels = { host.accessibilityElements().map { $0.label + " " + $0.value } }
+        let drawn = { (text: String) in labels().contains { $0.contains(text) } }
+        let rowViews = { Self.views(PersonalAgentReplyRowView.self, in: host.hosting) }
+        let row = { (id: String) in rowViews().first { $0.messageID == id } }
+        await host.settle(until: { drawn("Thread reply 30 about") })
+        host.settle(passes: 12)
+        let table = try XCTUnwrap(Self.views(NSTableView.self, in: host.hosting).first)
+        let panel = try XCTUnwrap(table.enclosingScrollView)
+        XCTAssertEqual(table.numberOfRows, 31, "Every reply read is in the list with its start")
+        XCTAssertLessThan(rowViews().count, 20, "Only the rows in view have views")
+        XCTAssertNil(row("r4"), "A reply out of view has no view")
+        ViewBodyCensus.isEnabled = true
+        defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+
+        // An answer to the option arrives: the question and the answer are drawn, no other message.
+        ViewBodyCensus.reset()
+        var answer = PersonalAgentMessage(id: "answer", author: .person, text: "Tuesday", createdAt: nil, isDeleted: false,
+                                          attachments: [])
+        answer.replyToMessageID = "r28"
+        answer.replyRootMessageID = "q"
+        answer.metadata = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"option_picker":{"selection":1}}"#.utf8))
+        read([answer])
+        await host.settle(until: { Self.isSelected("Tuesday", in: host.hosting) })
+        host.settle(passes: 12)
+        XCTAssertTrue(Self.isSelected("Tuesday", in: host.hosting), "The question shows the answer chosen")
+        XCTAssertEqual(ViewBodyCensus[.personalAgentReplyRowGraph], 2, "Only the question and its answer were drawn again")
+        XCTAssertLessThanOrEqual(ViewBodyCensus[.personalAgentReplyRowHosting], 1, "At most the answer's row took a new view")
+
+        // A reply deleted since draws that reply alone again.
+        ViewBodyCensus.reset()
+        read([PersonalAgentMessage(id: "r29", author: .person, text: "", createdAt: nil, isDeleted: true, attachments: [])])
+        await host.settle(until: { !drawn("Thread reply 29 about") })
+        host.settle(passes: 12)
+        XCTAssertTrue(drawn(L10n.string("Message deleted")))
+        XCTAssertEqual(ViewBodyCensus[.personalAgentReplyRowGraph], 1, "Only the deleted reply was drawn again")
+
+        // The form far above: its words are its request's, shown again after it leaves the view.
+        func scroll(to y: CGFloat) {
+            panel.contentView.scroll(to: NSPoint(x: 0, y: y))
+            panel.reflectScrolledClipView(panel.contentView)
+            host.settle(passes: 10)
+        }
+        let bottom = { max(0, table.frame.height - panel.contentView.bounds.height + 8) }
+        scroll(to: -8)
+        await host.settle(until: { row("r4") != nil })
+        let words = "Send it after the review"
+        request.formInput["note"] = .text(words)
+        await host.settle(until: { drawn(words) })
+        scroll(to: bottom())
+        await host.settle(until: { row("r4") == nil })
+        scroll(to: -8)
+        await host.settle(until: { drawn(words) })
+        XCTAssertTrue(drawn(words), "The form shows its words again")
+
+        // Typing in the form's second field, mid-composition: its row scrolled out of view and back keeps
+        // the same field, editor, selection and composition.
+        let cell = try XCTUnwrap(row("r4"))
+        let fields = Self.views(NSTextField.self, in: cell).filter(\.isEditable)
+        XCTAssertEqual(fields.count, 2, "The form's two fields")
+        let field = try XCTUnwrap(fields.last)
+        XCTAssertTrue(host.window.makeFirstResponder(field))
+        host.settle(passes: 4)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        XCTAssertTrue(editor === host.window.firstResponder)
+        editor.insertText("Ana", replacementRange: NSRange(location: 0, length: 0))
+        editor.setMarkedText("ㅁ", selectedRange: NSRange(location: 1, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        let marked = editor.markedRange(), selected = editor.selectedRange()
+        func composition() -> String { editor.attributedSubstring(forProposedRange: editor.markedRange(), actualRange: nil)?.string ?? "" }
+        XCTAssertEqual(composition(), "ㅁ")
+        let hosting = cell.hosting
+        func check(_ moment: String) {
+            XCTAssertTrue(field.currentEditor() === host.window.firstResponder, "The same field is being edited \(moment)")
+            XCTAssertTrue(field.window === host.window, "The field is still in the window \(moment)")
+            XCTAssertTrue(field.currentEditor() === editor, moment)
+            XCTAssertTrue(editor.hasMarkedText(), "The composition goes on \(moment)")
+            XCTAssertEqual(editor.markedRange(), marked, moment)
+            XCTAssertEqual(composition(), "ㅁ", moment)
+            XCTAssertEqual(editor.selectedRange(), selected, moment)
+            XCTAssertTrue(row("r4") === cell && cell.hosting === hosting, "The row keeps its view and hosting \(moment)")
+            print("[R6a] \(moment): field kept \(field.currentEditor() === host.window.firstResponder), "
+                  + "in window \(field.window === host.window), marked \(editor.markedRange()) '\(composition())', "
+                  + "selected \(editor.selectedRange()), row view kept \(row("r4") === cell), views \(rowViews().count)")
+        }
+        scroll(to: bottom())
+        check("out of view")
+        XCTAssertLessThan(rowViews().count, 20, "Keeping the edited row keeps no others")
+        scroll(to: -8)
+        check("back in view")
+        editor.unmarkText()
+        host.window.makeFirstResponder(nil)
+    }
+
+    private static func isSelected(_ label: String, in view: NSView) -> Bool {
+        WindowlessRender.withAccessibilityTree {
+            func visit(_ node: AnyObject) -> Bool? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if (child.accessibilityLabel?() ?? nil) == label { return child.isAccessibilitySelected?() ?? false }
+                    if let found = visit(child) { return found }
+                }
+                return nil
+            }
+            return visit(view) ?? false
+        }
+    }
+
+    /// What a reply dialog costs as its thread grows, every reply read being in its list: opening it on
+    /// a thread of 20, 200 and 500 replies (short lines, longer sentences and Markdown lists), one new
+    /// reply at the end, one reply in view changed and one out of view changed; with 500, a new reply and
+    /// changes in and out of view again while reading the middle. Each is the main thread's wall and CPU
+    /// time and the process's CPU time through the update drawn, and for that update the messages
+    /// prepared for drawing, the ones drawn again in their own hosting views, the hosting views made and
+    /// those alive after. The replies arrive as a thread read hands them over; making them, waiting
+    /// between updates and moving the list are left out. Runs only with `NHC_PERF_BENCH=1`
+    /// (`NHC_PERF_BENCH_ROUNDS`, default 3) and prints `[perf]` lines; nothing is asserted about the times.
+    func testBenchmarkAReplyDialogAsItsThreadGrows() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(environment["NHC_PERF_BENCH"] == "1", "Set NHC_PERF_BENCH=1 to run the benchmark")
+        let rounds = Int(environment["NHC_PERF_BENCH_ROUNDS"] ?? "") ?? 3
+        let order = (environment["NHC_PERF_BENCH_SIZES"] ?? "20,200,500").split(separator: ",").compactMap { Int($0) }
+        ViewBodyCensus.isEnabled = true
+        defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+        let before = PersonalAgentReplyRowHosting.alive
+        for count in order {
+            var samples: [String: PerfSamples] = [:]
+            var names: [String] = []
+            for round in 0...rounds {
+                // Each round's window, dialog and views end with the round, before the next is measured.
+                let taken = try autoreleasepool { try benchRound(count: count) }
+                let ended = ContinuousClock.now
+                try await waitUntil { PersonalAgentReplyRowHosting.alive == before }
+                print("[perf] dots-replies-\(count) round \(round) ended: views alive \(PersonalAgentReplyRowHosting.alive - before) "
+                      + "after \(ContinuousClock.now - ended)")
+                guard round > 0 else { continue }
+                for (name, sample) in taken {
+                    if samples[name] == nil { names.append(name) }
+                    samples[name, default: PerfSamples()].add(sample)
+                }
+            }
+            for name in names {
+                print("[perf] dots-replies-\(count) \(name) (\(rounds) rounds): " + (samples[name] ?? PerfSamples()).summary)
+            }
+        }
+    }
+
+    /// One round of the benchmark in a window of its own, closed when the round ends.
+    private func benchRound(count: Int) throws -> [(String, PerfSamples.Sample)] {
+        let (center, state, thread, agent) = try Self.replyFixture(count: count)
+        _ = agent
+        let size = NSSize(width: 920, height: 680)
+        let host = WindowlessRender.Host(PersonalAgentsContent(center: center, onRetry: {}, onAccounts: {})
+            .frame(width: size.width, height: size.height), size: size)
+        defer { host.close() }
+        host.settle(passes: 6)
+        var taken: [(String, PerfSamples.Sample)] = []
+        func take(_ name: String, _ change: () -> Void) {
+            taken.append((name, PerfSamples.measure(host, change)))
+            host.settle(passes: 6)
+        }
+        func change(_ message: PersonalAgentMessage) {
+            thread.ingest([message], epoch: state.replies.beginRead())
+            center.reconcileReplies(state)
+        }
+        take("open") { state.replies.focus = .init(rootID: "q", targetID: "q") }
+        take("add one at the end") { change(Self.benchReply(count + 1)) }
+        take("edit one in view") { change(Self.benchReply(count + 1, edit: " (edited)")) }
+        take("edit one out of view") { change(Self.benchReply(count / 2, edit: " (edited)")) }
+        if count == 500 {
+            // Reading the middle of a thread whose 500 replies are all in the list; the list's rows are
+            // the start then the replies in order, so row n shows reply n.
+            let table = try XCTUnwrap(Self.views(NSTableView.self, in: host.hosting).first)
+            let clip = try XCTUnwrap(table.enclosingScrollView?.contentView)
+            clip.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: 250).minY))
+            table.enclosingScrollView?.reflectScrolledClipView(clip)
+            host.settle(passes: 10)
+            let rows = table.rows(in: table.visibleRect)
+            let shown = max(1, min(rows.location + rows.length / 2, count))
+            take("reading the middle: add one") { change(Self.benchReply(count + 2)) }
+            take("reading the middle: edit one in view") { change(Self.benchReply(shown, edit: " (edited)")) }
+            take("reading the middle: edit one out of view") { change(Self.benchReply(10, edit: " (edited)")) }
+        }
+        return taken
+    }
+
+    /// The list's heights as the table has them: a row's height stays what the table was told until the
+    /// table is told it changed, however other rows are measured meanwhile, and the estimate for rows not
+    /// drawn yet does not grow as rows are drawn again at the same height or in another look. A message
+    /// read partway that becomes short stays in view.
+    func testTheReplyListKeepsTheHeightsItGaveTheTableAndTheMessageReadInViewAsRowsChange() throws {
+        let (center, state, thread, _) = try Self.replyFixture(count: 200)
+        let size = NSSize(width: 920, height: 680)
+        let host = WindowlessRender.Host(PersonalAgentsContent(center: center, onRetry: {}, onAccounts: {})
+            .frame(width: size.width, height: size.height), size: size)
+        defer { host.close() }
+        host.settle(passes: 6)
+        state.replies.focus = .init(rootID: "q", targetID: "q")
+        host.settle(passes: 12)
+        let table = try XCTUnwrap(Self.views(NSTableView.self, in: host.hosting).first)
+        let clip = try XCTUnwrap(table.enclosingScrollView?.contentView)
+        let delegate = try XCTUnwrap(table.delegate)
+        // Rows are the start, then the replies in order: row n shows reply n.
+        func height(_ row: Int) -> CGFloat { table.rect(ofRow: row).height - table.intercellSpacing.height }
+        var disagreements: [String] = []
+        func agree(_ moment: String) {
+            for row in 0..<table.numberOfRows {
+                let told = delegate.tableView?(table, heightOfRow: row) ?? 0
+                if abs(told - height(row)) > 0.01 {
+                    disagreements.append("\(moment): row \(row) gives \(told), the table has \(height(row))")
+                }
+            }
+        }
+        // Checked between every turn of the run loop, where a height measured waits to be told.
+        let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.allActivities.rawValue, true, 0) { _, _ in
+            MainActor.assumeIsolated { agree("between turns") }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        defer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        func change(_ message: PersonalAgentMessage) {
+            thread.ingest([message], epoch: state.replies.beginRead())
+            center.reconcileReplies(state)
+            host.settle(passes: 8)
+        }
+        func reply(_ index: Int, _ text: String) -> PersonalAgentMessage { Self.benchReply(index, text: text) }
+        clip.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: 100).minY))
+        table.enclosingScrollView?.reflectScrolledClipView(clip)
+        host.settle(passes: 10)
+        agree("reading the middle")
+
+        // The same reply edited again and again at the same height, then the list in another look and
+        // back: a reply arriving out of view gets the same estimate after as before, within the heights drawn.
+        let drawnRows = { Self.views(PersonalAgentReplyRowView.self, in: host.hosting).filter { $0.messageID.hasPrefix("r") } }
+        let line = try XCTUnwrap(drawnRows().compactMap { Int($0.messageID.dropFirst()) }.filter { $0 % 3 == 1 }.min())
+        change(Self.benchReply(201))
+        let estimate = height(201)
+        for round in 0..<10 { change(reply(line, "Reply \(line) in the thread" + (round.isMultiple(of: 2) ? "!" : "?"))) }
+        change(Self.benchReply(202))
+        XCTAssertEqual(height(202), estimate, accuracy: 0.5, "Drawing a reply again at its height leaves the estimate as it was")
+        ViewBodyCensus.isEnabled = true
+        defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+        ViewBodyCensus.reset()
+        host.window.appearance = NSAppearance(named: .darkAqua)
+        host.settle(passes: 10)
+        XCTAssertGreaterThan(ViewBodyCensus[.personalAgentReplyRowGraph], 0, "The rows in view are drawn in the other look")
+        host.window.appearance = NSAppearance(named: .aqua)
+        host.settle(passes: 10)
+        change(Self.benchReply(203))
+        let drawnHeights = drawnRows().map { height(table.row(for: $0)) }
+        print("[R6b] estimate before \(estimate), after edits \(height(202)), after looks \(height(203)), "
+              + "drawn \(drawnHeights.min() ?? 0)...\(drawnHeights.max() ?? 0)")
+        XCTAssertGreaterThanOrEqual(height(203), (drawnHeights.min() ?? 0) - 0.5, "The estimate is one of the heights drawn, on average")
+        XCTAssertLessThanOrEqual(height(203), (drawnHeights.max() ?? 0) + 0.5, "The estimate is one of the heights drawn, on average")
+
+        // A reply in view grows, which changes the estimate: a row not drawn yet keeps the height it was given.
+        let notDrawn = 150
+        XCTAssertFalse(drawnRows().contains { $0.messageID == "r\(notDrawn)" })
+        let given = height(notDrawn)
+        change(reply(line, Array(repeating: "A longer reply that takes many lines in the list.", count: 30).joined(separator: "\n\n")))
+        XCTAssertEqual(height(notDrawn), given, "A row not drawn keeps its height")
+        XCTAssertEqual(delegate.tableView?(table, heightOfRow: notDrawn) ?? 0, given, accuracy: 0.01)
+
+        // Reading 500 points into a long reply that then becomes short: that reply stays in view, and the
+        // replies after it are enough for the view to stay anywhere.
+        let long = 120
+        func scroll(into row: Int, by distance: CGFloat) {
+            clip.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: row).minY + distance))
+            table.enclosingScrollView?.reflectScrolledClipView(clip)
+            host.settle(passes: 10)
+        }
+        change(reply(long, Array(repeating: "A long reply read from its middle, line after line.", count: 60).joined(separator: "\n\n")))
+        scroll(into: long, by: 0)
+        XCTAssertGreaterThan(height(long), 900, "The long reply is drawn at its height")
+        scroll(into: long, by: 500)
+        XCTAssertEqual(clip.bounds.minY - table.rect(ofRow: long).minY, 500, accuracy: 1, "Reading 500 points into it")
+        change(reply(long, "Short now."))
+        let cell = try XCTUnwrap(drawnRows().first { $0.messageID == "r\(long)" }, "The reply is drawn")
+        let drawnAt = cell.convert(cell.bounds, to: clip)
+        let shown = drawnAt.intersection(clip.bounds)
+        print("[R6b] the short reply: drawn at \(drawnAt), view \(clip.bounds), shown \(shown.height)")
+        XCTAssertLessThan(cell.bounds.height, 100, "The reply is short now")
+        XCTAssertEqual(shown.height, cell.bounds.height, accuracy: 0.5, "The reply that became short is in view, all of it")
+        agree("at the end")
+        XCTAssertEqual(disagreements.count, 0, disagreements.prefix(5).joined(separator: "\n"))
+    }
+
+    /// A reply dialog whose views are let go: a window's, once it closes, and a dialog's, once it closes
+    /// with its window still shown. Each round ends its window and its references, then waits for what it
+    /// made to be let go; the counts are printed as they are. Leaks found here are the
+    /// product's: the test keeps no reference past its round.
+    func testAReplyDialogLetsGoOfItsViewsWhenItClosesAndWhenItsWindowCloses() async throws {
+        let before = PersonalAgentReplyRowHosting.alive
+        struct Gone {
+            weak var host: AnyObject?
+            weak var window: NSWindow?
+            weak var hosting: NSView?
+            weak var controller: PersonalAgentReplyTableController?
+            weak var row: PersonalAgentReplyRowHosting?
+            weak var center: PersonalAgentCenter?
+        }
+        for round in 1...4 {
+            let gone: Gone = try autoreleasepool {
+                let (center, state, _, _) = try Self.replyFixture(count: 200)
+                let host = WindowlessRender.Host(PersonalAgentsContent(center: center, onRetry: {}, onAccounts: {})
+                    .frame(width: 920, height: 680), size: NSSize(width: 920, height: 680))
+                host.settle(passes: 6)
+                state.replies.focus = .init(rootID: "q", targetID: "q")
+                host.settle(passes: 12)
+                let table = try XCTUnwrap(Self.views(NSTableView.self, in: host.hosting).first)
+                let gone = Gone(host: host, window: host.window, hosting: host.hosting,
+                                controller: table.delegate as? PersonalAgentReplyTableController,
+                                row: Self.views(PersonalAgentReplyRowView.self, in: host.hosting).first?.hosting, center: center)
+                XCTAssertNotNil(gone.controller)
+                XCTAssertNotNil(gone.row)
+                host.close()
+                return gone
+            }
+            let closed = ContinuousClock.now
+            try await waitUntil {
+                gone.host == nil && gone.window == nil && gone.hosting == nil && gone.controller == nil && gone.row == nil
+                    && gone.center == nil && PersonalAgentReplyRowHosting.alive == before
+            }
+            print("[lifetime] window round \(round): views alive \(PersonalAgentReplyRowHosting.alive - before), "
+                  + "host \(gone.host != nil), window \(gone.window != nil), hosting \(gone.hosting != nil), "
+                  + "list \(gone.controller != nil), row \(gone.row != nil), center \(gone.center != nil), after \(ContinuousClock.now - closed)")
+        }
+
+        // The dialog opened and closed again in a window that stays: each closed dialog lets go of its list
+        // and rows, and the views alive do not grow with the times it was opened.
+        let (center, state, _, _) = try Self.replyFixture(count: 200)
+        let host = WindowlessRender.Host(PersonalAgentsContent(center: center, onRetry: {}, onAccounts: {})
+            .frame(width: 920, height: 680), size: NSSize(width: 920, height: 680))
+        defer { host.close() }
+        host.settle(passes: 6)
+        let shown = PersonalAgentReplyRowHosting.alive
+        for round in 1...4 {
+            struct Closed { weak var controller: PersonalAgentReplyTableController?; weak var row: PersonalAgentReplyRowHosting? }
+            let closed: Closed = try autoreleasepool {
+                state.replies.focus = .init(rootID: "q", targetID: "q")
+                host.settle(passes: 12)
+                let table = try XCTUnwrap(Self.views(NSTableView.self, in: host.hosting).first)
+                let closed = Closed(controller: table.delegate as? PersonalAgentReplyTableController,
+                                    row: Self.views(PersonalAgentReplyRowView.self, in: host.hosting).first?.hosting)
+                XCTAssertNotNil(closed.controller)
+                state.replies.focus = nil
+                host.settle(passes: 12)
+                return closed
+            }
+            let ended = ContinuousClock.now
+            try await waitUntil { closed.controller == nil && closed.row == nil && PersonalAgentReplyRowHosting.alive == shown }
+            print("[lifetime] dialog round \(round): views alive \(PersonalAgentReplyRowHosting.alive - shown), "
+                  + "list \(closed.controller != nil), row \(closed.row != nil), after \(ContinuousClock.now - ended)")
+        }
+    }
+
+    private static let benchStart = Date(timeIntervalSince1970: 1_793_000_000)
+
+    private static func benchReply(_ index: Int, edit: String = "", text written: String? = nil) -> PersonalAgentMessage {
+        let text = if let written { written } else {
+            switch index % 3 {
+            case 0: "Reply \(index)\(edit): the plan needs three things settled first.\n\n- The press list\n- The venue\n- **The stream**, with `one more check`"
+            case 1: "Reply \(index)\(edit) in the thread."
+            default: "Reply \(index)\(edit): the venue has confirmed the room, and the stream needs one more check before the date can be final for everyone."
+            }
+        }
+        var value = PersonalAgentMessage(id: "r\(index)", author: index.isMultiple(of: 2) ? .agent : .person, text: text,
+                                         createdAt: benchStart.addingTimeInterval(Double(index) * 60), isDeleted: false, attachments: [])
+        value.replyToMessageID = index == 1 ? "q" : "r\(index - 1)"
+        value.replyRootMessageID = "q"
+        return value
+    }
+
+    /// A dot whose thread `q` holds `count` replies, all read, its dialog not yet open.
+    private static func replyFixture(count: Int) throws
+        -> (PersonalAgentCenter, PersonalAgentConversation, PersonalAgentReplyThread, PersonalAgent) {
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        let root = PersonalAgentMessage(id: "q", author: .agent, text: "Which launch date should I put in the announcement?",
+                                        createdAt: benchStart, isDeleted: false, attachments: [])
+        let center = PersonalAgentCenter()
+        center.useFixture(agents: [agent], messages: [root])
+        let state = try XCTUnwrap(center.conversation)
+        let thread = state.replies.thread("q")
+        thread.ingest((1...count).map { benchReply($0) }, epoch: state.replies.beginRead())
+        thread.cursor = .end
+        center.reconcileReplies(state)
+        return (center, state, thread, agent)
+    }
+
+    /// How far below the top of `panel` the top of the drawn text containing `text` is, read through the
+    /// panel's own accessibility, so the same words in the room behind it do not count.
+    private static func offset(of text: String, panel: NSScrollView, in view: NSView) -> CGFloat? {
+        drawn(text, panel: panel, in: view)?.top
+    }
+
+    /// The same, with how tall the text is drawn.
+    private static func drawn(_ text: String, panel: NSScrollView, in view: NSView) -> (top: CGFloat, height: CGFloat)? {
+        guard let window = panel.window else { return nil }
+        let area = window.convertToScreen(panel.convert(panel.bounds, to: nil))
+        return WindowlessRender.withAccessibilityTree {
+            func scrollArea(_ node: AnyObject) -> AnyObject? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    // The panel's scroll area, inside its insets.
+                    if (child.accessibilityRole?() ?? nil) == .scrollArea, let frame = child.accessibilityFrame?(),
+                       abs(frame.minX - area.minX) < 2, abs(frame.width - area.width) < 2,
+                       frame.minY >= area.minY - 1, frame.maxY <= area.maxY + 1 { return child }
+                    if let found = scrollArea(child) { return found }
+                }
+                return nil
+            }
+            func frame(_ node: AnyObject) -> NSRect? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    let label = (child.accessibilityLabel?() ?? nil) ?? ""
+                    let value = ((child.accessibilityValue?() as Any??) ?? nil) as? String ?? ""
+                    if label.contains(text) || value.contains(text), let found = child.accessibilityFrame?(), found.height > 0 {
+                        return found
+                    }
+                    if let found = frame(child) { return found }
+                }
+                return nil
+            }
+            guard let root = scrollArea(view), let found = frame(root) else { return nil }
+            return (area.maxY - found.maxY, found.height)
+        }
+    }
+
+    /// The first of `candidates`, in order, drawn within `panel`'s visible height, with its offset.
+    private static func firstInView(_ candidates: [String], panel: NSScrollView, in view: NSView) -> (String, CGFloat)? {
+        for text in candidates {
+            if let drawn = drawn(text, panel: panel, in: view), drawn.top + drawn.height > 0,
+               drawn.top < panel.bounds.height { return (text, drawn.top) }
+        }
+        return nil
+    }
+
+    /// Performs the accessibility action `name` of the element that holds `text`, as an assistive app does.
+    private static func performCustomAction(_ name: String, onElementContaining text: String, in view: NSView) -> Bool {
+        WindowlessRender.withAccessibilityTree { customAction(name, onElementContaining: text, in: view) }
+    }
+
+    private static func customAction(_ name: String, onElementContaining text: String, in view: NSView) -> Bool {
+        func holds(_ node: AnyObject) -> Bool {
+            let label = (node.accessibilityLabel?() ?? nil) ?? ""
+            let value = (node.accessibilityValue?() as Any??).flatMap { $0 } as? String ?? ""
+            if label.contains(text) || value.contains(text) { return true }
+            return ((node.accessibilityChildren?() ?? nil) ?? []).contains { holds($0 as AnyObject) }
+        }
+        func visit(_ node: AnyObject) -> NSAccessibilityCustomAction? {
+            for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                if let action = ((child.accessibilityCustomActions?() ?? nil) ?? []).first(where: { $0.name == name }), holds(child) {
+                    return action
+                }
+                if let found = visit(child) { return found }
+            }
+            return nil
+        }
+        guard let action = visit(view) else { return false }
+        if let handler = action.handler { return handler() }
+        guard let target = action.target as? NSObject, let selector = action.selector else { return false }
+        _ = target.perform(selector, with: action)
+        return true
+    }
+
+    private func pressEscape<Content: View>(in host: WindowlessRender.Host<Content>) throws {
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: host.window.windowNumber, context: nil, characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        host.window.sendEvent(event)
+        host.settle()
+    }
+
     private func renderDotAtWork(size: NSSize, reduceMotion motions: [Bool]) async throws {
         let (model, _) = try makeWindowModel()
         let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
@@ -1216,6 +2101,61 @@ final class PersonalAgentRenderingTests: XCTestCase {
     }
 }
 
+/// One update's cost, as the reply benchmark reads it: wall and main-thread CPU time, the process's CPU
+/// time, and the rows the reply dialog drew.
+@MainActor
+private struct PerfSamples {
+    struct Sample {
+        let wall: Double, mainCPU: Double, processCPU: Double
+        /// Messages prepared for drawing, drawn again in their own views, views made for them, and the
+        /// views alive once the update is drawn.
+        let prepared: Int, drawn: Int, made: Int, alive: Int
+    }
+    private var samples: [Sample] = []
+
+    mutating func add(_ sample: Sample) { samples.append(sample) }
+
+    /// `change` and the layout it causes, through the run loop's turn that draws it.
+    static func measure<Content: View>(_ host: WindowlessRender.Host<Content>, _ change: () -> Void) -> Sample {
+        ViewBodyCensus.reset()
+        let wall = Date(), main = threadCPU(), process = processCPU()
+        change()
+        host.hosting.layoutSubtreeIfNeeded()
+        // Heights measured as rows are drawn are noted in the same turn of the run loop.
+        RunLoop.main.run(until: Date())
+        host.hosting.layoutSubtreeIfNeeded()
+        host.hosting.displayIfNeeded()
+        return .init(wall: Date().timeIntervalSince(wall), mainCPU: threadCPU() - main, processCPU: processCPU() - process,
+                     prepared: ViewBodyCensus[.personalAgentReplyRow], drawn: ViewBodyCensus[.personalAgentReplyRowGraph],
+                     made: ViewBodyCensus[.personalAgentReplyRowHosting], alive: PersonalAgentReplyRowHosting.alive)
+    }
+
+    var summary: String {
+        func median(_ values: [Double]) -> String {
+            String(format: "%.1f", values.isEmpty ? 0 : values.sorted()[values.count / 2] * 1_000)
+        }
+        func count(_ values: [Int]) -> Int { values.isEmpty ? 0 : values.sorted()[values.count / 2] }
+        return "wall median \(median(samples.map(\.wall))) ms, main thread CPU median \(median(samples.map(\.mainCPU))) ms, "
+            + "process CPU median \(median(samples.map(\.processCPU))) ms, messages prepared \(count(samples.map(\.prepared))), "
+            + "drawn again \(count(samples.map(\.drawn))), views made \(count(samples.map(\.made))), "
+            + "views alive \(count(samples.map(\.alive))) "
+            + "(each round: \(samples.map { String(format: "%.1f", $0.mainCPU * 1_000) }.joined(separator: ", ")) ms main CPU)"
+    }
+
+    private static func threadCPU() -> Double {
+        var time = timespec()
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time)
+        return Double(time.tv_sec) + Double(time.tv_nsec) / 1e9
+    }
+
+    private static func processCPU() -> Double {
+        var usage = rusage()
+        getrusage(RUSAGE_SELF, &usage)
+        return Double(usage.ru_utime.tv_sec) + Double(usage.ru_utime.tv_usec) / 1e6
+            + Double(usage.ru_stime.tv_sec) + Double(usage.ru_stime.tv_usec) / 1e6
+    }
+}
+
 /// Fixed agents, one page of messages and their details; a send or an answer is only recorded, and
 /// downloading is not part of these renders. The picture is drawn here, not a provider's.
 private actor RenderedPersonalAgentReader: PersonalAgentClient {
@@ -1276,7 +2216,39 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
         olderReads += 1
         return .init(messages: older, before: nil)
     }
-    func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate> { AsyncStream { $0.finish() } }
+    private var changes: AsyncStream<PersonalAgentUpdate>.Continuation?
+    func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate> {
+        let pair = AsyncStream<PersonalAgentUpdate>.makeStream()
+        changes = pair.continuation
+        return pair.stream
+    }
+    /// What the room's subscription says when something in it changed.
+    func signalChange() { changes?.yield(.changed) }
+    private(set) var replyReads = 0
+    private(set) var olderReplyReads = 0
+    /// A thread's pages by cursor, "" for the latest; without them a thread is the page's messages
+    /// that name it, all in one page. A held read answers when released.
+    private var threadPages: [String: [String: PersonalAgentPage]] = [:]
+    private var heldReplies: String?
+    private var pendingReplies: CheckedContinuation<Void, Never>?
+    func setThreadPages(_ pages: [String: PersonalAgentPage], root: String = "q") { threadPages[root] = pages }
+    func holdReplies(before: String) { heldReplies = before }
+    func hasPendingReplies() -> Bool { pendingReplies != nil }
+    func releaseReplies() { pendingReplies?.resume(); pendingReplies = nil }
+    func replies(to rootID: String, for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
+        replyReads += 1
+        if before != nil { olderReplyReads += 1 }
+        if let pages = threadPages[rootID] {
+            let key = before ?? ""
+            if heldReplies == key {
+                heldReplies = nil
+                await withCheckedContinuation { pendingReplies = $0 }
+            }
+            guard let page = pages[key] else { throw PersonalAgentFailure.network }
+            return page
+        }
+        return .init(messages: page.filter { $0.replyRootMessageID == rootID }, before: nil)
+    }
     func send(_ submission: PersonalAgentSubmission, to agent: PersonalAgent) async throws -> PersonalAgentMessage {
         sends.append(submission)
         if losesSend { losesSend = false; throw PersonalAgentFailure.deliveryUnknown }
