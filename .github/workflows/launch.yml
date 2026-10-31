@@ -149,6 +149,15 @@ jobs:
       - name: Open the browser panel
         if: ${{ !cancelled() && matrix.arch == 'x86_64' }}
         run: |
+          system_profiler SPDisplaysDataType
+          # Chromium draws with Metal and ends the browser when its GPU process cannot start ("GPU process
+          # isn't usable"), as on a virtual Mac without a Metal device; every Mac Yardlet supports has one.
+          metal=$(xcrun swift -e 'import Metal; print(MTLCreateSystemDefaultDevice()?.name ?? "")')
+          if [[ -z "$metal" ]]; then
+            echo "::notice::This Mac has no Metal device, so Chromium cannot draw here; the browser check is left out."
+            exit 0
+          fi
+          echo "Metal device: $metal"
           mkdir -p .build/browser-host-qa
           ditto -x -k "Yardlet-debug-${{ matrix.arch }}.zip" .build
           ./scripts/browser-host-qa/prepare-qa.sh .build/Yardlet.app .build/browser-host-qa/YardletQA.app com.zzunkie.yardletqa
