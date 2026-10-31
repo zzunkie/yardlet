@@ -30,29 +30,45 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Without the fixes the patches' tests fail, which shows what they reproduce.
-          - variant: tests only
+          # As swift-winrt's own pull request check builds: Swift 6.2, debug.
+          - variant: tests only, Swift 6.2 debug
             patches: 0002-test-projected-object-identity.patch
             expect: fail
-          - variant: fixes and tests
+            swift: '6.2'
+            configuration: debug
+          - variant: fixes and tests, Swift 6.2 debug
             patches: 0001-pass-projected-objects-as-themselves.patch,0002-test-projected-object-identity.patch
             expect: pass
+            swift: '6.2'
+            configuration: debug
+          # As the Windows app builds: Swift 6.4.1.
+          - variant: tests only, Swift 6.4.1 release
+            patches: 0002-test-projected-object-identity.patch
+            expect: fail
+            swift: 6.4.1
+            configuration: release
+          - variant: fixes and tests, Swift 6.4.1 release
+            patches: 0001-pass-projected-objects-as-themselves.patch,0002-test-projected-object-identity.patch
+            expect: pass
+            swift: 6.4.1
+            configuration: release
     steps:
       - name: Allow long paths
         run: git config --global core.longpaths true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Swift 6.4.1
+      - name: Install Swift ${{ matrix.swift }}
         shell: pwsh
-        run: Windows/scripts/install-swift.ps1 -Version 6.4.1
+        run: Windows/scripts/install-swift.ps1 -Version ${{ matrix.swift }}
       - name: Build and test
         shell: pwsh
         env:
           PATCHES: ${{ matrix.patches }}
           EXPECT: ${{ matrix.expect }}
+          CONFIGURATION: ${{ matrix.configuration }}
         run: |
-          Windows/scripts/test-swift-winrt.ps1 -Patches ($env:PATCHES -split ',') -Regenerated regenerated.patch 2>&1 | Tee-Object -FilePath test.log
+          Windows/scripts/test-swift-winrt.ps1 -Patches ($env:PATCHES -split ',') -Regenerated regenerated.patch -Configuration $env:CONFIGURATION 2>&1 | Tee-Object -FilePath test.log
           $code = $LASTEXITCODE
           if ($env:EXPECT -eq 'fail') {
             if ($code -eq 0) { throw 'The tests passed without the fixes, so they do not reproduce anything' }

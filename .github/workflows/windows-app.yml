@@ -67,3 +67,45 @@ jobs:
             window-check
             build.log
           if-no-files-found: ignore
+
+  # How code swift-winrt generates behaves at run time (Windows/Probes/SwiftWinRT).
+  probe:
+    name: Probe swift-winrt
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Allow long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Swift 6.4.1
+        shell: pwsh
+        run: Windows/scripts/install-swift.ps1 -Version 6.4.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: Windows/Bindings/.work/swift-winrt-*
+          key: swift-winrt-${{ hashFiles('Windows/Bindings/swift-winrt.json', 'Windows/Bindings/swift-winrt-patches/**') }}
+      - name: Generate the WinUI bindings
+        shell: pwsh
+        run: Windows/scripts/generate-bindings.ps1
+      - name: Install the Windows App Runtime 1.7
+        shell: pwsh
+        run: Windows/scripts/install-windows-app-runtime.ps1 -Url https://aka.ms/windowsappsdk/1.7/1.7.250909003/windowsappruntimeinstall-x64.exe
+      - name: Run the probe
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'swift-winrt-probe.txt'
+          Windows/scripts/run-swift-winrt-probe.ps1 -Output $output 2>&1 | Tee-Object -FilePath probe.log
+          if (Test-Path $output) {
+            $text = ((Get-Content $output) -join "`n") -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+            Write-Output "::notice title=swift-winrt probe::$text"
+          }
+      - name: Report a failure
+        if: failure()
+        shell: pwsh
+        run: |
+          if (Test-Path probe.log) {
+            $text = ((Get-Content probe.log -Tail 60) -join "`n") -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+            Write-Output "::notice title=probe log::$text"
+          }
