@@ -398,6 +398,15 @@ final class PersonalAgentRenderingTests: XCTestCase {
         form.inputRequest = try JSONDecoder().decode(JSONValue.self, from: Data(
             #"{"request_id":"form","thread_id":"thread","turn_id":null,"status":"pending","params":{"threadId":"thread","serverName":"codex_apps","mode":"form","message":"What should the team know?","requestedSchema":{"type":"object","properties":{"note":{"type":"string","title":"Note for the team","maxLength":80}},"required":[]},"_meta":null}}"#.utf8))
         conversation.append(form)
+        // A thread whose reply asks a question of its own, answered in the replies dialog.
+        conversation.append(PersonalAgentMessage(id: "venue-question", author: .agent, text: "Which venue should the launch use?",
+                                                 createdAt: nil, isDeleted: false, attachments: []))
+        var venue = PersonalAgentMessage(id: "venue", author: .agent, text: "", createdAt: nil, isDeleted: false, attachments: [])
+        venue.replyToMessageID = "venue-question"
+        venue.replyRootMessageID = "venue-question"
+        venue.inputRequest = try JSONDecoder().decode(JSONValue.self, from: Data(
+            #"{"request_id":"venue","thread_id":"thread","turn_id":null,"status":"pending","params":{"threadId":"thread","serverName":"codex_apps","mode":"form","message":"Where should it be?","requestedSchema":{"type":"object","properties":{"venue":{"type":"string","title":"Venue note","maxLength":80}},"required":[]},"_meta":null}}"#.utf8))
+        conversation.append(venue)
         let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -490,6 +499,63 @@ final class PersonalAgentRenderingTests: XCTestCase {
         wheel(-400, times: 30, in: returned)
         await host.settle(until: { field(noteName) != nil })
         XCTAssertEqual(try XCTUnwrap(field(noteName)).stringValue, "Share the draft on Monday.")
+
+        // The replies dialog open over the composer, its question's answer being typed: the task covers
+        // both, the dialog takes no key, press or assistive action meanwhile, and comes back as it was.
+        let close = L10n.string("Close replies"), venueName = "Venue note"
+        XCTAssertTrue(Self.performCustomAction(L10n.string("Reply"), onElementContaining: "Which venue should the launch use?",
+                                               in: host.hosting))
+        await host.settle(until: { host.accessibilityElements().contains { $0.label == close } })
+        let table = try XCTUnwrap(Self.views(PersonalAgentReplyTableView.self, in: host.hosting).first)
+        func venueField() -> NSTextField? {
+            Self.views(NSTextField.self, in: table).first {
+                $0.isEditable && ($0.accessibilityLabel() == venueName || $0.placeholderString == venueName)
+            }
+        }
+        await host.settle(until: { venueField() != nil })
+        try type("Book the hall on the river.", into: try XCTUnwrap(venueField()))
+        let typing = try XCTUnwrap(venueField())
+        XCTAssertTrue(host.window.firstResponder === typing.currentEditor(), "The answer in the dialog is being typed")
+        let composing = try XCTUnwrap(field(composerName)).stringValue
+        let monitor = try XCTUnwrap(Self.views(PersonalAgentReplyPanelMonitor.MonitorView.self, in: host.hosting).first)
+        // The thread read to its start, and the heights the list measured meanwhile told to it.
+        await host.settle(until: { !Self.views(PersonalAgentReplyRowView.self, in: table).contains { $0.entry == .earlier } })
+        await Task.yield()
+        host.settle(passes: 6)
+        let dialogBefore = try host.capture()
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "Prepare the launch checklist"))
+        await host.settle(until: { host.accessibilityElements().contains { $0.label == back } })
+        host.settle(passes: 12)
+        let dialogCovered = try host.capture()
+        let covered = try XCTUnwrap(venueField(), "The dialog's rows stay under the task")
+        XCTAssertFalse(covered.isEnabled, "The dialog's answer under the task takes no input")
+        let typingTo = host.window.firstResponder
+        XCTAssertFalse(typingTo === covered || (typingTo as? NSText)?.delegate === covered, "The covered answer is not where typing goes")
+        XCTAssertFalse(host.accessibilityElements().contains {
+            $0.label == close || $0.label == venueName || $0.value.contains("Book the hall")
+        }, "Assistive apps read the task, not the dialog under it")
+        // A press on the task is not a press outside the dialog.
+        let pressOnTask = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 120, y: 15),
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: host.window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        monitor.observe(pressOnTask)
+        // The dialog closes, if it does, once the main queue runs again: nothing to wait for but time.
+        try await Task.sleep(for: .milliseconds(200))
+        host.settle(passes: 6)
+        XCTAssertFalse(Self.views(PersonalAgentReplyTableView.self, in: host.hosting).isEmpty, "The dialog stays open under the task")
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: back))
+        await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Send message") } })
+        host.settle(passes: 12)
+        XCTAssertTrue(host.accessibilityElements().contains { $0.label == close }, "The dialog is still open")
+        let answer = try XCTUnwrap(venueField())
+        XCTAssertTrue(answer.isEnabled, "The dialog takes input again")
+        XCTAssertEqual(answer.stringValue, "Book the hall on the river.")
+        XCTAssertEqual(try XCTUnwrap(field(composerName)).stringValue, composing)
+        XCTAssertTrue(drafts.opened.first === draft)
+        XCTAssertEqual(draft.files.map(\.state), states, "The files and their uploads are as they were")
+        try WindowlessRender.writePNG(dialogBefore.bitmap, to: directory.appending(path: "replies-before-activity.png"))
+        try WindowlessRender.writePNG(dialogCovered.bitmap, to: directory.appending(path: "replies-under-activity.png"))
+        try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: "replies-after-activity.png"))
     }
 
     /// The pet's frames play on the layer only while the view can be seen, and change over time as
