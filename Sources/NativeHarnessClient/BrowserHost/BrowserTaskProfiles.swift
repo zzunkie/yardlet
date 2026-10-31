@@ -34,6 +34,9 @@ final class BrowserTaskProfiles {
     let root: URL
     /// A task profile's folder name is this and its key (the host's `TaskProfiles` names it the same).
     nonisolated static let folderPrefix = "Task-"
+    /// The folder in the root cache that removed profiles go to, to be deleted off the main thread (`removeFolders`).
+    nonisolated static let removingFolderName = "Removed task profiles"
+    private nonisolated static let deleting = DispatchQueue(label: "Yardlet.browser.removed-profiles", qos: .utility)
     private static let savedFile = "TaskProfiles.json"
     private let defaults: UserDefaults
     /// The task a task was started from (`create_task`): a new task's profile starts from its parent's.
@@ -200,6 +203,10 @@ final class BrowserTaskProfiles {
 
     /// Removes the profile folders no kept task uses (archived and deleted tasks, a new-task screen's
     /// profile it no longer has). Only while the host is not running, which holds the folders open.
+    ///
+    /// Each folder is moved out of the profiles at once and deleted off the main thread: deleting a profile
+    /// with a large cache took seconds, and the host ends, which removes them, as the app quits. What a quit
+    /// cut short is deleted at the next removal.
     @discardableResult
     func removeFolders(keeping tasks: Set<UUID>) -> [String] {
         let kept = Set(tasks.map(key(for:))).union([draftKey])
@@ -213,14 +220,32 @@ final class BrowserTaskProfiles {
         save()
         // Only task profiles: the root cache also holds the default profile and Chromium's own folders.
         let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path(percentEncoded: false))) ?? []
+        let removing = root.appending(path: Self.removingFolderName, directoryHint: .isDirectory)
         var removed: [String] = []
         for name in names where name.hasPrefix(Self.folderPrefix) {
             let key = String(name.dropFirst(Self.folderPrefix.count))
             guard UUID(uuidString: key) != nil, !kept.contains(key) else { continue }
-            if (try? FileManager.default.removeItem(at: folder(for: key))) != nil { removed.append(key) }
+            try? FileManager.default.createDirectory(at: removing, withIntermediateDirectories: true)
+            // A move within the root cache is one rename, however much the profile holds.
+            if (try? FileManager.default.moveItem(at: folder(for: key), to: removing.appending(path: UUID().uuidString))) != nil {
+                removed.append(key)
+            }
         }
         forgetMissingProfiles()
+        Self.deleteRemovedFolders(in: removing)
         return removed
+    }
+
+    private nonisolated static func deleteRemovedFolders(in removing: URL) {
+        deleting.async {
+            let manager = FileManager.default
+            let path = removing.path(percentEncoded: false)
+            for name in (try? manager.contentsOfDirectory(atPath: path)) ?? [] {
+                try? manager.removeItem(at: removing.appending(path: name))
+            }
+            // A folder moved in meanwhile waits for its own deletion, which comes next.
+            if (try? manager.contentsOfDirectory(atPath: path))?.isEmpty == true { try? manager.removeItem(atPath: path) }
+        }
     }
 
     /// Chromium lists every profile it opened in the root cache's `Local State` (`profile.info_cache`,

@@ -24,7 +24,7 @@ final class BrowserTaskProfilesTests: XCTestCase {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
 
-    func testATaskStartsFromItsParentTakesTheDraftsProfileAndKeepsOnlyKeptFolders() throws {
+    func testATaskStartsFromItsParentTakesTheDraftsProfileAndKeepsOnlyKeptFolders() async throws {
         let profiles = BrowserTaskProfiles(root: folder, defaults: defaults)
         let parent = UUID(), child = UUID(), started = UUID(), archived = UUID()
         profiles.parentOf = { $0 == child ? parent : nil }
@@ -60,8 +60,12 @@ final class BrowserTaskProfilesTests: XCTestCase {
             "variations_google_groups": [gone: groups, stays: groups], "browser": ["enabled_labs_experiments": groups]
         ]
         try JSONSerialization.data(withJSONObject: localState).write(to: folder.appending(path: "Local State"))
+        try Data("cache".utf8).write(to: profiles.folder(for: archived.uuidString).appending(path: "Cache"))
         let removed = profiles.removeFolders(keeping: [parent, child, started])
         XCTAssertEqual(removed, [archived.uuidString])
+        XCTAssertFalse(profiles.folderExists(archived.uuidString), "the profile is gone at once")
+        let removing = folder.appending(path: BrowserTaskProfiles.removingFolderName).path(percentEncoded: false)
+        try await waitUntil { !FileManager.default.fileExists(atPath: removing) }
         for kept in [parent.uuidString, child.uuidString, draftKey] {
             XCTAssertTrue(profiles.folderExists(kept), kept)
         }
