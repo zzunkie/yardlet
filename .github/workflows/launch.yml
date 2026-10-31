@@ -148,7 +148,7 @@ jobs:
       - name: Open the browser panel
         if: ${{ !cancelled() }}
         run: |
-          system_profiler SPDisplaysDataType | grep -E "Chipset Model|Metal"
+          system_profiler SPDisplaysDataType | grep -E "Chipset Model|Metal" || true
           mkdir -p .build/browser-host-qa
           ditto -x -k "Yardlet-debug-${{ matrix.arch }}.zip" .build
           ./scripts/browser-host-qa/prepare-qa.sh .build/Yardlet.app .build/browser-host-qa/YardletQA.app com.zzunkie.yardletqa
