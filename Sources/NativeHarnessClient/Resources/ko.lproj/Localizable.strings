@@ -3342,3 +3342,10 @@
 "Month" = "월";
 "Year" = "연도";
 "Nickname" = "별명";
+"Back to %@" = "%@ 대화로 돌아가기";
+"Refresh task" = "작업 새로고침";
+"Loading task…" = "작업을 불러오는 중…";
+"This task has no turns yet." = "이 작업에는 아직 실행 기록이 없습니다.";
+"Some steps of this task could not be loaded." = "이 작업의 일부 단계를 불러오지 못했습니다.";
+"Earlier turns could not be loaded." = "이전 기록을 불러오지 못했습니다.";
+"This part of the task is too large to show here." = "작업의 이 부분은 너무 커서 여기서 보여 줄 수 없습니다.";

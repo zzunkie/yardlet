@@ -450,6 +450,97 @@ final class DotsServiceTests: XCTestCase {
         return String(decoding: try! JSONEncoder().encode(frame), as: UTF8.self)
     }
 
+    /// A task's execution record is read from the provider's history host, only for a task this reader
+    /// saw in the dot's own Activity, under the same login, with GETs only and nothing else: no cookie,
+    /// no message, no write. Each read names the thread's product as the provider's app does, and a
+    /// reply that names another thread, or none, is not the record.
+    func testActivityHistoryReadsOnlyListedTasksFromTheHistoryHost() async throws {
+        let fixture = DotsHTTPRecorder()
+        let service = makeService(fixture, broker: DotsTestBroker())
+        do { _ = try await service.activityThread("task", for: agent); XCTFail("Nothing listed yet") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .accessDenied) }
+        XCTAssertTrue(fixture.requests.isEmpty)
+        let dots = try await service.agents()
+        let dot = try XCTUnwrap(dots.first)
+        _ = try await service.activity(for: dot, cursor: nil)
+
+        let thread = try await service.activityThread("task", for: dot)
+        XCTAssertTrue(thread.turns.isEmpty, "The metadata's turns never stand for the record")
+        let turns = try await service.activityTurns("task", cursor: nil, for: dot)
+        XCTAssertEqual(turns.turns.map(\.id), ["t1", "t2"], "Asked newest first, kept oldest first")
+        let items = try await service.activityItems("task", turnID: "t2", cursor: nil, for: dot)
+        XCTAssertEqual(items.entries.map(\.item.id), ["i"])
+        _ = try await service.activityTurns("root", cursor: nil, for: dot)
+        _ = try await service.activityThread("plain", for: dot)
+        _ = try await service.activityTurns("plain", cursor: nil, for: dot)
+
+        let history = fixture.requests.filter { $0.url?.host == "codex-cloud-backend.chatgpt.com" }
+        XCTAssertEqual(history.map { $0.url!.path }, ["/v1/threads/task", "/v2/threads/task/turns", "/v2/threads/task/items",
+                                                     "/v2/threads/root/turns", "/v1/threads/plain", "/v2/threads/plain/turns"])
+        XCTAssertEqual(history.map { $0.value(forHTTPHeaderField: "X-OpenAI-Product-Sku") },
+                       ["unknown", "aeon", "aeon", "aeon", "unknown", "codex"])
+        func query(_ request: URLRequest) -> [String: String] {
+            Dictionary(uniqueKeysWithValues: (URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? [])
+                .map { ($0.name, $0.value ?? "") })
+        }
+        XCTAssertEqual(query(history[1]), ["limit": "5", "sortDirection": "desc", "itemsView": "notLoaded"])
+        XCTAssertEqual(query(history[2]), ["turnId": "t2", "limit": "100", "sortDirection": "asc"])
+        for request in fixture.requests {
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+            XCTAssertFalse(request.url!.path.contains("/messaging/"))
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization") != nil,
+                           ["chatgpt.com", "codex-cloud-backend.chatgpt.com"].contains(request.url!.host), "\(request.url!)")
+        }
+
+        // Another thread's metadata, a missing task, another dot's or account's task.
+        do { _ = try await service.activityThread("other-task", for: dot); XCTFail("Another thread's metadata") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .invalidResponse) }
+        do { _ = try await service.activityThread("gone", for: dot); XCTFail("A task the provider no longer has") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .missing) }
+        let otherDot = PersonalAgent(id: .init(accountID: "account", userID: "person", agentID: "dot-2", roomID: "room-2"),
+                                     name: "Juniper", rootThreadID: nil, isPaused: false, isPrimary: false)
+        let otherAccount = PersonalAgent(id: .init(accountID: "elsewhere", userID: "person", agentID: "dot", roomID: "room"),
+                                         name: "Atlas", rootThreadID: "root", isPaused: false, isPrimary: true)
+        let before = fixture.requests.count
+        for (forged, expected) in [(otherDot, PersonalAgentFailure.accessDenied), (otherAccount, .accountChanged)] {
+            do { _ = try await service.activityItems("task", turnID: "t2", cursor: nil, for: forged); XCTFail("\(forged.id)") }
+            catch { XCTAssertEqual(error as? PersonalAgentFailure, expected) }
+        }
+        XCTAssertEqual(fixture.requests.count, before, "Nothing is asked for a task this reader did not list")
+        await service.stop()
+    }
+
+    /// A page of items too large to carry, by the provider's own words or by its size, is asked for
+    /// again from the same cursor with half as many items, down to one; past that the read fails as
+    /// too large. No other refusal is asked again.
+    func testATooLargeItemPageIsAskedForInHalvesAndNothingElseIsRetried() async throws {
+        let fixture = DotsHTTPRecorder()
+        let service = makeService(fixture, broker: DotsTestBroker())
+        let dots = try await service.agents()
+        let dot = try XCTUnwrap(dots.first)
+        _ = try await service.activity(for: dot, cursor: nil)
+        func limits(_ thread: String) -> [String] {
+            fixture.requests.filter { $0.url?.path == "/v2/threads/\(thread)/items" }.map { request in
+                let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                XCTAssertEqual(items.first { $0.name == "cursor" }?.value, "same", "Every attempt asks from the same cursor")
+                return items.first { $0.name == "limit" }?.value ?? ""
+            }
+        }
+        let big = try await service.activityItems("big", turnID: "t2", cursor: "same", for: dot)
+        XCTAssertEqual(big.entries.map(\.item.id), ["i"])
+        XCTAssertEqual(limits("big"), ["100", "50", "25"])
+        _ = try await service.activityItems("bulky", turnID: "t2", cursor: "same", for: dot)
+        XCTAssertEqual(limits("bulky"), ["100", "50"])
+        do { _ = try await service.activityItems("huge", turnID: "t2", cursor: "same", for: dot); XCTFail("Too large at one item") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .tooLarge) }
+        XCTAssertEqual(limits("huge"), ["100", "50", "25", "12", "6", "3", "1"])
+        do { _ = try await service.activityItems("refused", turnID: "t2", cursor: "same", for: dot); XCTFail("Refused") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .unavailable) }
+        XCTAssertEqual(limits("refused"), ["100"])
+        await service.stop()
+    }
+
     private var agent: PersonalAgent {
         .init(id: .init(accountID: "account", userID: "person", agentID: "dot", roomID: "room"),
               name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
@@ -499,6 +590,39 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
                 return (200, Data((["/avatar", "/sheet"].contains(request.url?.path) ? "PNG" : "Preview text").utf8))
             }
             if request.url?.host == "cdn.openai.com" { return (200, Data("PNG".utf8)) }
+            if request.url?.host == "codex-cloud-backend.chatgpt.com" {
+                let bodies: [String: String] = [
+                    "/v1/threads/task": #"{"thread":{"id":"task","threadSource":"aeon","turns":[{"id":"hidden"}]}}"#,
+                    "/v1/threads/plain": #"{"thread":{"id":"plain"}}"#,
+                    "/v1/threads/other-task": #"{"thread":{"id":"another"}}"#,
+                    "/v2/threads/task/items": #"{"data":[{"turnId":"t2","item":{"id":"i","type":"agentMessage","text":"Done."}}],"nextCursor":null,"backwardsCursor":null}"#
+                ]
+                let path = request.url?.path ?? ""
+                if path == "/v1/threads/gone" { return (404, Data("{}".utf8)) }
+                let limit = Int(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?
+                    .first { $0.name == "limit" }?.value ?? "") ?? 0
+                let tooLarge = Data(#"{"error":{"code":"internal","message":"decoded message length too large: 9000000"}}"#.utf8)
+                let small = Data(#"{"data":[{"turnId":"t2","item":{"id":"i","type":"agentMessage","text":"Done."}}],"nextCursor":null,"backwardsCursor":null}"#.utf8)
+                switch path {
+                case "/v2/threads/big/items": return limit > 25 ? (400, tooLarge) : (200, small)
+                case "/v2/threads/huge/items": return (400, tooLarge)
+                case "/v2/threads/bulky/items": return limit == 100 ? (200, Data(repeating: 0x20, count: 8 * 1024 * 1024 + 1)) : (200, small)
+                case "/v2/threads/refused/items": return (400, Data(#"{"error":{"code":"bad_request","message":"Bad request"}}"#.utf8))
+                default: break
+                }
+                if path.hasSuffix("/turns") {
+                    return (200, Data(#"{"data":[{"id":"t2","status":"completed"},{"id":"t1","status":"completed"}],"nextCursor":null,"backwardsCursor":null}"#.utf8))
+                }
+                return (200, Data((bodies[path] ?? "{}").utf8))
+            }
+            switch request.url?.path {
+            case "/backend-api/tbo":
+                return (200, Data(#"{"items":[{"id":"dot","aeon_kind":"orbit","messaging_room_id":"room","active_root_thread_id":"root"}]}"#.utf8))
+            case "/backend-api/tbo/primary": return (200, Data(#"{"profile":{"id":"dot"}}"#.utf8))
+            case "/backend-api/tbo/dot/activity":
+                return (200, Data(#"{"data":[{"thread_id":"task"},{"thread_id":"root"},{"thread_id":"plain"},{"thread_id":"gone"},{"thread_id":"other-task"},{"thread_id":"big"},{"thread_id":"huge"},{"thread_id":"bulky"},{"thread_id":"refused"}],"next_cursor":null}"#.utf8))
+            default: break
+            }
             if request.url?.path == "/backend-api/pets" {
                 return (200, Data((request.url?.query?.contains("cursor=next") == true
                     ? #"{"pets":[{"id":"pet","artwork_revision":"2","updated_at":"2026-10-29T06:00:00Z","spritesheet_url":"https://files.oaiusercontent.com/sheet"}]}"#

@@ -25,10 +25,12 @@ final class ConversationConveniencesTests: XCTestCase {
     private struct Message: View {
         var scheme: ColorScheme = .light
         var opened: (URL) -> Void = { _ in }
+        var opensLocalFiles = true
         var body: some View {
             ConversationAgentMessage(itemID: "answer", harness: .claudeCode, text: ConversationConveniencesTests.message,
                                      isCommentary: false, isStreaming: false)
                 .environment(\.transcriptWorkspaceURL, URL(filePath: "/tmp/yardlet-conveniences"))
+                .environment(\.transcriptOpensLocalFiles, opensLocalFiles)
                 .environment(\.openURL, OpenURLAction { url in
                     opened(url)
                     return .handled
@@ -95,6 +97,26 @@ final class ConversationConveniencesTests: XCTestCase {
         XCTAssertEqual(pasteboard.string(forType: .string), "let answer = 42\nprint(answer)")
         try menuItems(at: "and", in: text).first { $0.title == L10n.string("Copy message") }.map(perform)
         XCTAssertEqual(pasteboard.string(forType: .string), Self.message)
+    }
+
+    /// A record of work on another computer names that computer's files: a file link there offers only
+    /// its path, and a click on it opens nothing on this Mac. Web links are as before. Only the menu is
+    /// built; nothing is shown or opened in Finder.
+    func testAFileOnAnotherComputerIsNamedNotOpened() throws {
+        var opened: [URL] = []
+        let host = makeHost(Message(opened: { opened.append($0) }, opensLocalFiles: false))
+        defer { host.close() }
+        let text = try text(in: host)
+        let file = try menu(at: "the parser", in: text)
+        XCTAssertEqual(Array(file.prefix(2)), [L10n.string("Copy path"), L10n.string("Copy message")], "\(file)")
+        XCTAssertFalse(file.contains(L10n.string("Open file")) || file.contains(L10n.string("Reveal in Finder")), "\(file)")
+        let link = try menu(at: "the docs", in: text)
+        XCTAssertEqual(Array(link.prefix(2)), [L10n.string("Open in default browser"), L10n.string("Copy link")], "\(link)")
+        let container = try XCTUnwrap(text.superview as? TranscriptProseContainerView)
+        container.open(URL(filePath: "/mnt/data/report.pdf"))
+        XCTAssertTrue(opened.isEmpty)
+        container.open(URL(string: "https://example.com/docs")!)
+        XCTAssertEqual(opened, [URL(string: "https://example.com/docs")!])
     }
 
     private func perform(_ item: NSMenuItem) {

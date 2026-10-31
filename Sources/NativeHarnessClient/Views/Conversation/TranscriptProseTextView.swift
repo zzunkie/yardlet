@@ -27,6 +27,7 @@ struct TranscriptProseText: NSViewRepresentable {
         view.fullSource = fullSource
         view.dialect = dialect
         view.openURL = environment.openURL
+        view.opensLocalFiles = environment.transcriptOpensLocalFiles
         view.pauseFollowing = environment.pauseTranscriptFollowing
         view.textView.copyDetails = copyDetails
         view.segmentKey = segmentKey
@@ -63,6 +64,8 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     var fullSource = ""
     var dialect: TranscriptMarkdownDialect = .standard
     var openURL: OpenURLAction?
+    /// The text's file links are on this Mac (`transcriptOpensLocalFiles`).
+    var opensLocalFiles = true
     var pauseFollowing: () -> Void = {}
     var segmentKey: ConversationFindSegmentKey?
     var fitsWidth = false
@@ -534,6 +537,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     /// Opens `url` as a click on it does: through SwiftUI's `openURL`, which shows a file in the
     /// task's files.
     func open(_ url: URL) {
+        guard opensLocalFiles || !url.isFileURL else { return }
         if let openURL { openURL(url) } else { NSWorkspace.shared.open(url) }
     }
 
@@ -542,7 +546,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
         guard let url else { return false }
-        if let openURL { openURL(url) } else { NSWorkspace.shared.open(url) }
+        open(url)
         return true
     }
 }
@@ -875,7 +879,8 @@ private struct TranscriptFullCodeButton: View {
 /// The conversation's items at the top of a message's menu, as the Claude and Codex apps put them
 /// there: "Copy code" over a code block; over a web link, which a click opens in the task's browser
 /// (decision of 2026-10-22: the Yardlet browser is the default), open it in the default browser and
-/// copy it; over a file link, open it in the task's files, show it in Finder and copy its path; and
+/// copy it; over a file link, open it in the task's files, show it in Finder and copy its path (only
+/// the path for a file on another computer, `transcriptOpensLocalFiles`); and
 /// "Copy message" for the whole message.
 @MainActor
 enum TranscriptProseMenu {
@@ -886,10 +891,13 @@ enum TranscriptProseMenu {
         }
         if let link {
             if link.isFileURL {
-                items.append(item(L10n.string("Open file")) { [weak container] in container?.open(link) })
-                items.append(item(L10n.string("Reveal in Finder")) {
-                    NSWorkspace.shared.activateFileViewerSelecting([link])
-                })
+                // A file on another computer is named, not opened or shown here.
+                if container.opensLocalFiles {
+                    items.append(item(L10n.string("Open file")) { [weak container] in container?.open(link) })
+                    items.append(item(L10n.string("Reveal in Finder")) {
+                        NSWorkspace.shared.activateFileViewerSelecting([link])
+                    })
+                }
                 items.append(item(L10n.string("Copy path")) { TranscriptClipboard.copy(link.path(percentEncoded: false)) })
             } else {
                 if ConversationLinkRoute(link) == .taskBrowser {

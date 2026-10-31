@@ -77,6 +77,39 @@ provider says so. The attachments are the files in the loaded messages, not ever
 output the dot has produced. Nothing here starts work, connects a computer, runs a
 schedule or changes the dot.
 
+## Reading an Activity task
+
+Choosing a task in **Activity** shows its execution record in place of the
+conversation, in the same conversation view as a coding task, with no composer.
+It only reads: it does not resume, stop, answer or start the task. Back returns
+to the conversation where it was left: its scroll position, draft, attached files
+and any answer being given stay, because the conversation stays under the task,
+still and taking no input; uploads already under way carry on. A task opens only from the Activity the transport itself read
+for that dot and account; no other thread is read.
+
+The record arrives in two kinds of pages. The task's metadata never stands for its
+turns. Opening reads the newest five turns, then the first hundred items of each,
+one turn at a time. Earlier turns are read when the person scrolls to the top or
+chooses **Load more history**; more of a turn's items when its work is shown and
+the person chooses **Load more items**. A record is complete only when both the
+earlier turns and every turn's items have run out. A page too large to carry is
+asked for again from the same place with half as many items, down to one; past
+that the turn says it is too large.
+
+Failures stay where they happened. A task the provider no longer has says so and
+is not shown as empty; a task with no turns says it has none. If some turns' items
+cannot be read, the others show and a line above the record offers **Try again**;
+an earlier page that fails keeps the turns read and its way back to them. A page
+that repeats or omits its cursor, or names another thread or turn, is refused
+rather than taken for the end. Items Yardlet cannot draw are named, not hidden.
+The task ran on the provider's computer: its web links open, but paths and file
+links name that computer's files and are never opened, shown in Finder or read
+on this Mac.
+
+The record is read when the task opens and when the person refreshes it; a task
+that is still running does not update by itself. Its subagent threads are not
+followed.
+
 While the personal-agent section is open, a native WebSocket subscription
 invalidates the displayed conversation when its room changes. Reconnection reads
 the displayed range again, including edits, deletions and any missing pages.
@@ -282,10 +315,13 @@ broker method of the installed Codex runtime. They may change independently of
 Yardlet. The runtime owns sign-in and token renewal; the transport keeps access
 credentials in memory and never exposes them to the presentation layer or logs.
 Requests use native URLSession with no cookies or browser process, no redirects,
-and an account binding checked before results are displayed.
+and an account binding checked before results are displayed. An Activity task's
+record is read with GET requests from the provider's execution-history host, the
+only other host that receives the account credential; each request names the
+thread's product as the provider's app does, as a label and never as a permission.
 
-Opening or refreshing the section only reads and subscribes; it starts no model
-turn. The room observer's registration sends nothing but the account's credential:
+Opening or refreshing the section, or an Activity task, only reads and subscribes;
+it starts no model turn. The room observer's registration sends nothing but the account's credential:
 no message, approval, pause or resume. A person's explicit send or answer can start cloud work on their existing dot. The
 transport does not read authentication files, change the runtime's configuration,
 copy credentials between account homes, or fabricate service-verification data.

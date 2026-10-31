@@ -57,6 +57,58 @@ final class PersonalAgentLiveTests: XCTestCase {
         }
     }
 
+    /// Reads one existing Activity task's record of the primary dot as the window reads it, GETs only:
+    /// its Activity's first page, the task's metadata (another than the root where there is one), its
+    /// newest turns and the first items of its newest turn. No socket, receipt, resume or write. Only
+    /// counts and whether the task is the root are printed; no identifier, token or text. A task with
+    /// no turns or items is a skip that says how far the read went, not a pass.
+    func testExistingDotsActivityRecordReadsOnly() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["YARDLET_DOTS_LIVE_ACTIVITY"] == "1", let runtime = env["YARDLET_DOTS_RUNTIME"] else {
+            throw XCTSkip("Set YARDLET_DOTS_LIVE_ACTIVITY and YARDLET_DOTS_RUNTIME for a read-only Activity record check.")
+        }
+        let reader = DotsService(executable: URL(filePath: runtime),
+                                 environmentManager: CodexEnvironmentManager(paths: .live()), connection: nil)
+        let timeout = Task {
+            try? await Task.sleep(for: .seconds(90))
+            if !Task.isCancelled { await reader.stop() }
+        }
+        defer { timeout.cancel() }
+        do {
+            let agents = try await reader.agents()
+            guard let agent = agents.first(where: \.isPrimary) ?? agents.first else {
+                await reader.stop()
+                throw XCTSkip("This account has no existing dot; no Activity record was read.")
+            }
+            let activity = try await reader.activity(for: agent, cursor: nil)
+            guard let task = activity.items.first(where: { $0.id != agent.rootThreadID }) ?? activity.items.first else {
+                await reader.stop()
+                throw XCTSkip("The primary dot's Activity is empty; no task record was read.")
+            }
+            let isRoot = task.id == agent.rootThreadID
+            // The transport refuses metadata of another thread; nothing here compares identifiers in the open.
+            let thread = try await reader.activityThread(task.id, for: agent)
+            XCTAssertTrue(thread.turns.isEmpty, "The metadata carries no turns")
+            let turns = try await reader.activityTurns(task.id, cursor: nil, for: agent)
+            print("Dots activity record: activity \(activity.items.count), root \(isRoot), metadata read, "
+                  + "turns \(turns.turns.count), earlier turns \(turns.nextCursor != nil)")
+            guard let newest = turns.turns.last else {
+                await reader.stop()
+                throw XCTSkip("Metadata and the turn page read; the task has no turns, so no item page was read.")
+            }
+            let items = try await reader.activityItems(task.id, turnID: newest.id, cursor: nil, for: agent)
+            await reader.stop()
+            print("Dots activity record: newest turn items \(items.entries.count), more items \(items.nextCursor != nil)")
+            guard !items.entries.isEmpty else {
+                throw XCTSkip("Metadata, turns and an item page read; the newest turn's first page was empty.")
+            }
+            XCTAssertTrue(items.entries.allSatisfy { $0.turnID == newest.id }, "Every item is the newest turn's")
+        } catch {
+            await reader.stop()
+            throw error
+        }
+    }
+
     func testExistingDotsNativeReadsAndSubscription() async throws {
         let env = ProcessInfo.processInfo.environment
         guard env["YARDLET_DOTS_LIVE"] == "1", let runtime = env["YARDLET_DOTS_RUNTIME"] else {

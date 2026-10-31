@@ -5,10 +5,21 @@ private struct TranscriptWorkspaceURLKey: EnvironmentKey {
     static let defaultValue: URL? = nil
 }
 
+private struct TranscriptOpensLocalFilesKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
 extension EnvironmentValues {
     var transcriptWorkspaceURL: URL? {
         get { self[TranscriptWorkspaceURLKey.self] }
         set { self[TranscriptWorkspaceURLKey.self] = newValue }
+    }
+
+    /// Whether the files a transcript names are on this Mac. A record of work done on another computer
+    /// names that computer's files: its file links offer no opening or showing in Finder here.
+    var transcriptOpensLocalFiles: Bool {
+        get { self[TranscriptOpensLocalFilesKey.self] }
+        set { self[TranscriptOpensLocalFilesKey.self] = newValue }
     }
 }
 
