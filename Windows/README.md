@@ -10,5 +10,6 @@ What the Windows app is built from besides its sources in `Sources/NativeHarness
 | `Bindings/Package.swift`, `Bindings/Sources/` | The bindings as Swift modules linked into the app, the bootstrapper's link, and `XamlApplication`, the application type the app derives from |
 | `scripts/generate-bindings.ps1` | Builds swift-winrt, restores the packages and generates the bindings into `Bindings/Generated/`, which git ignores |
 | `scripts/place-bootstrapper.ps1` | Puts the Windows App SDK's bootstrapper beside the app's executable |
+| `scripts/test-swift-winrt.ps1` | Builds swift-winrt with the patches and runs its own tests, as its CI does (`.github/workflows/swift-winrt-tests.yml`) |
 | `scripts/check-window.ps1` | Opens a build, measures its memory, idle processor time and what it loads, and types Korean into its composer through the Microsoft Korean IME |
 | `scripts/install-swift.ps1`, `scripts/install-windows-app-runtime.ps1`, `scripts/report.ps1` | The CI runner's Swift and Windows App Runtime, and a run's annotations |

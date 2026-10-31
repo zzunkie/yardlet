@@ -1,0 +1,79 @@
+name: swift-winrt tests
+
+# swift-winrt's own tests at the pinned commit with Yardlet's patches on it
+# (docs/PLATFORM_PORTABILITY.md, "The Windows app"): once with only the patches' tests, which show what
+# they reproduce, and once with the fixes too. It runs when the pin or the patches change on a
+# windows-* branch, and by hand.
+on:
+  push:
+    branches: ['windows-*']
+    paths:
+      - 'Windows/Bindings/swift-winrt.json'
+      - 'Windows/Bindings/swift-winrt-patches/**'
+      - 'Windows/scripts/test-swift-winrt.ps1'
+      - '.github/workflows/swift-winrt-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swift-winrt-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: swift-winrt tests (${{ matrix.variant }})
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Without the fixes the patches' tests fail, which shows what they reproduce.
+          - variant: tests only
+            patches: 0002-test-projected-object-identity.patch
+            expect: fail
+          - variant: fixes and tests
+            patches: 0001-pass-projected-objects-as-themselves.patch,0002-test-projected-object-identity.patch
+            expect: pass
+    steps:
+      - name: Allow long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Swift 6.4.1
+        shell: pwsh
+        run: Windows/scripts/install-swift.ps1 -Version 6.4.1
+      - name: Build and test
+        shell: pwsh
+        env:
+          PATCHES: ${{ matrix.patches }}
+          EXPECT: ${{ matrix.expect }}
+        run: |
+          Windows/scripts/test-swift-winrt.ps1 -Patches ($env:PATCHES -split ',') -Regenerated regenerated.patch 2>&1 | Tee-Object -FilePath test.log
+          $code = $LASTEXITCODE
+          if ($env:EXPECT -eq 'fail') {
+            if ($code -eq 0) { throw 'The tests passed without the fixes, so they do not reproduce anything' }
+            Write-Output "The tests fail without the fixes, as expected"
+            exit 0
+          }
+          exit $code
+      - name: Report
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path test.log) {
+            $lines = Get-Content test.log | Where-Object { $_ -match "failed|passed|Executed|error:|Applied|Copied|Installed:|cannot find|test_app exit" } | Select-Object -Last 60
+            $text = ($lines -join "`n") -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+            Write-Output "::notice title=swift-winrt tests::$text"
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: swift-winrt-tests-${{ strategy.job-index }}
+          path: |
+            test.log
+            regenerated.patch
+          if-no-files-found: ignore

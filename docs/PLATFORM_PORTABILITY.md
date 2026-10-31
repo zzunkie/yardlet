@@ -152,7 +152,9 @@ A fix the app needs before swift-winrt merges it goes on the pinned commit as a 
 pull request, and comes out once a pinned commit includes it. The patches carry one fix now: a projected object passed
 where WinRT takes an `Object` goes as itself rather than as a wrapper made for the call, so the callee sees its COM
 identity (without it, `IVector<Object>.IndexOf` does not find an item appended through the bindings, such as one in
-`NavigationView.MenuItems`); the second patch is its test in swift-winrt's own test app.
+`NavigationView.MenuItems`); the second patch is its test in swift-winrt's own test app. When the pin or the patches
+change on a `windows-*` branch, `swift-winrt-tests.yml` builds swift-winrt and runs its tests twice: with the tests
+alone, which must fail and so show what the fixes are for, and with the fixes, which must pass.
 
 **If swift-winrt stops being maintained,** in this order: keep the pinned version, which keeps generating the same
 bindings; fork it and keep only the fixes the app needs; as a last resort, write the screens in C# with WinUI 3 and
