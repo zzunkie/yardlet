@@ -149,7 +149,10 @@ bindings (`swift-winui`, `swift-windowsappsdk`) in October 2025, so the version 
 
 A fix the app needs before swift-winrt merges it goes on the pinned commit as a patch in
 `Windows/Bindings/swift-winrt-patches/`, which `generate-bindings.ps1` applies in name order, is offered upstream as a
-pull request, and comes out once a pinned commit includes it.
+pull request, and comes out once a pinned commit includes it. The patches carry one fix now: a projected object passed
+where WinRT takes an `Object` goes as itself rather than as a wrapper made for the call, so the callee sees its COM
+identity (without it, `IVector<Object>.IndexOf` does not find an item appended through the bindings, such as one in
+`NavigationView.MenuItems`); the second patch is its test in swift-winrt's own test app.
 
 **If swift-winrt stops being maintained,** in this order: keep the pinned version, which keeps generating the same
 bindings; fork it and keep only the fixes the app needs; as a last resort, write the screens in C# with WinUI 3 and
