@@ -109,6 +109,77 @@ final class PersonalAgentLiveTests: XCTestCase {
         }
     }
 
+    /// Reads at most one existing output of the primary dot as the Outputs read it: the room's latest
+    /// page and the first look at its tasks' work, then one file found there, a file on the dot's
+    /// computer before a file of its room, read into memory and dropped. GETs and the execution host's
+    /// read-only socket only: no message, typing, receipt, resume, start, answer or new computer. Only
+    /// counts, whether each part was found, a refusal's kind and the bytes read are printed; no name,
+    /// path, identifier, token or content. A refusal ends the check; nothing is tried another way.
+    @MainActor
+    func testExistingDotsOutputReadsOnly() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["YARDLET_DOTS_LIVE_OUTPUTS"] == "1", let runtime = env["YARDLET_DOTS_RUNTIME"] else {
+            throw XCTSkip("Set YARDLET_DOTS_LIVE_OUTPUTS and YARDLET_DOTS_RUNTIME for a read-only Outputs check.")
+        }
+        // The product's own socket, handed through unchanged; only the fixed words below are noted from
+        // a small error frame, never the host's message, a path, an identifier or a credential.
+        let hints = DotsRemoteErrorHints()
+        let reader = DotsService(executable: URL(filePath: runtime),
+                                 environmentManager: CodexEnvironmentManager(paths: .live()), connection: nil,
+                                 durableSocket: { request, session in
+                                     let task = session.webSocketTask(with: request)
+                                     task.maximumMessageSize = DotsDurableFiles.maximumMessageBytes
+                                     return DotsHintingSocket(task: task, hints: hints)
+                                 })
+        let timeout = Task {
+            try? await Task.sleep(for: .seconds(90))
+            if !Task.isCancelled { await reader.stop() }
+        }
+        defer { timeout.cancel() }
+        do {
+            let agents = try await reader.agents()
+            guard let agent = agents.first(where: \.isPrimary) ?? agents.first else {
+                await reader.stop()
+                throw XCTSkip("This account has no existing dot; no output was read.")
+            }
+            let outputs = PersonalAgentOutputs(roomID: agent.id.roomID)
+            let page = try await reader.messages(for: agent, before: nil)
+            outputs.noteRoom(page.messages)
+            var failures: [PersonalAgentFailure] = []
+            outputs.start(reader: reader, agent: agent, conversationBefore: page.before, isCurrent: { !Task.isCancelled },
+                          failed: { failures.append($0 as? PersonalAgentFailure ?? .network) })
+            try await waitUntil(timeout: .seconds(60)) { !outputs.isReading && outputs.scope != .idle && outputs.scope != .loading }
+            let remote = outputs.items.first { if case .remoteFile = $0.kind { true } else { false } }
+            let room = outputs.items.first { if case .messageFile = $0.kind { true } else { false } }
+            print("Dots outputs: room messages \(page.messages.count), scope read \(outputs.scope == .loaded), "
+                  + "tasks checked \(outputs.checkedTasks), outputs \(outputs.items.count), remote file \(remote != nil), "
+                  + "room file \(room != nil), partial \(!failures.isEmpty)")
+            let data: Data
+            switch (remote ?? room)?.kind {
+            case let .remoteFile(file, _)?:
+                do { data = try await reader.outputFile(file, for: agent).data }
+                catch {
+                    await reader.stop()
+                    // The step, the kind of failure and the host's numeric code only.
+                    let reason = (error as? DotsRemoteFileError)?.description ?? (error as? PersonalAgentFailure).map { "\($0)" } ?? "other"
+                    print("Dots outputs: remote error hints: \(hints.names)")
+                    throw XCTSkip("The remote file was not read: \(reason).")
+                }
+            case let .messageFile(attachment)?:
+                data = try await reader.download(attachment, for: agent).data
+            default:
+                await reader.stop()
+                throw XCTSkip("No file output was found in the room's latest page or the first look at the tasks' work.")
+            }
+            await reader.stop()
+            print("Dots outputs: \(remote != nil ? "remote" : "room") file read, bytes \(data.count)")
+            XCTAssertLessThanOrEqual(data.count, DotsDurableFiles.maximumBytes)
+        } catch {
+            await reader.stop()
+            throw error
+        }
+    }
+
     func testExistingDotsNativeReadsAndSubscription() async throws {
         let env = ProcessInfo.processInfo.environment
         guard env["YARDLET_DOTS_LIVE"] == "1", let runtime = env["YARDLET_DOTS_RUNTIME"] else {
@@ -223,4 +294,45 @@ final class PersonalAgentLiveTests: XCTestCase {
             throw error
         }
     }
+}
+
+/// The fixed technical words looked for in the host's error message. Only which of them appear is kept.
+private final class DotsRemoteErrorHints: @unchecked Sendable {
+    static let words = ["invalid utf-8", "utf8", "encoding", "binary", "base64", "permission denied", "forbidden",
+                        "not authorized", "no such file", "not found", "environment", "executor", "offline",
+                        "disconnected", "not supported", "not implemented", "too large", "limit", "timeout",
+                        "attestation", "invalid params"]
+    private let lock = NSLock()
+    private var found = Set<String>()
+    var names: [String] { lock.withLock { Self.words.filter(found.contains) } }
+
+    /// Notes the words a small JSON error frame's message holds; any other frame is passed over.
+    func note(_ message: URLSessionWebSocketTask.Message) {
+        let data: Data
+        switch message {
+        case let .data(value): data = value
+        case let .string(value): data = Data(value.utf8)
+        @unknown default: return
+        }
+        guard data.count <= 64 * 1024, let value = try? JSONDecoder().decode(JSONValue.self, from: data),
+              let text = value["error"]?["message"]?.stringValue?.lowercased() else { return }
+        let words = Self.words.filter { text.contains($0) }
+        lock.withLock { found.formUnion(words) }
+    }
+}
+
+/// The product's socket with nothing changed: every call is the task's own, and what it receives is
+/// handed on as it arrived, after `hints` looked at it.
+private final class DotsHintingSocket: DotsEventSocket, @unchecked Sendable {
+    let task: URLSessionWebSocketTask
+    let hints: DotsRemoteErrorHints
+    init(task: URLSessionWebSocketTask, hints: DotsRemoteErrorHints) { self.task = task; self.hints = hints }
+    func resume() { task.resume() }
+    func send(_ message: URLSessionWebSocketTask.Message) async throws { try await task.send(message) }
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        let message = try await task.receive()
+        hints.note(message)
+        return message
+    }
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) { task.cancel(with: closeCode, reason: reason) }
 }

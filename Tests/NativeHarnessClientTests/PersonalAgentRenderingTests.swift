@@ -191,7 +191,9 @@ final class PersonalAgentRenderingTests: XCTestCase {
                   createdAt: nil, isDeleted: false, attachments: []),
             .init(id: "m4", author: .agent, text: "The announcement is still a draft. I will wait for your decision.",
                   createdAt: nil, isDeleted: false,
-                  attachments: [.init(fileID: "file", name: "announcement-draft.md", type: "file")]),
+                  attachments: [.init(fileID: "file", name: "announcement-draft.md", type: "file"),
+                                .init(fileID: nil, name: "Launch brief", type: "link",
+                                      url: URL(string: "https://example.com/launch-brief"))]),
             .init(id: "m5", author: .agent, text: L10n.string("This message cannot be displayed yet."), createdAt: nil,
                   isDeleted: false, attachments: [], isUnsupported: true)
         ]
@@ -221,7 +223,9 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 await host.settle(until: { host.accessibilityElements().contains { $0.label == "announcement-draft.md" } })
                 // The details and the picture arrive on their own after the conversation.
                 let showsActivity = { host.accessibilityElements().contains { $0.label.contains("Prepare the launch checklist") } }
-                if size.width >= 1280 { await host.settle(until: showsActivity) }
+                // The Outputs read the root's work once shown: the report it cited and the chart it saved.
+                let showsOutputs = { host.accessibilityElements().contains { $0.label == "launch-plan.pdf" } }
+                if size.width >= 1280 { await host.settle(until: { showsActivity() && showsOutputs() }) }
                 try await waitUntil { await reader.avatarReads > 0 }
                 try await waitUntil { await reader.sheetReads > 0 }
                 // Atlas plays its pet once the sheet is decoded; Juniper, with none, keeps its initial.
@@ -242,14 +246,40 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Open This Dot on the Web")))
                 XCTAssertEqual(opened, [DotsLinks.web(for: agents[0])!])
                 opened = []
+                // A link the dot attached opens in the browser, from its message, not as a file.
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "Launch brief"))
+                XCTAssertEqual(opened, [URL(string: "https://example.com/launch-brief")!])
+                opened = []
                 let showsDetails = { host.accessibilityElements(visibleOnly: true).contains { $0.label == L10n.string("Dot details") } }
                 if size.width >= 1280 {
                     XCTAssertTrue(showsDetails(), "A wide window keeps the dot's details beside the conversation")
+                    for label in ["launch-plan.pdf", "launch-chart.png", "announcement-draft.md", L10n.string("Outputs")] {
+                        XCTAssertTrue(visible.contains { $0.label == label }, "\(label) is among the Outputs at \(size)")
+                    }
+                    // A reading of a file that another dot's selection replaced shows nothing when it ends,
+                    // and leaves the Outputs ready to open again.
+                    if appearance == .light {
+                        await reader.holdNextFile()
+                        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "launch-plan.pdf"))
+                        try await waitUntil { await reader.hasPendingFile() }
+                        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "Juniper"))
+                        await host.settle(until: { !host.accessibilityElements().contains { $0.label == "launch-plan.pdf" } })
+                        await reader.releaseFile()
+                        host.settle(passes: 12)
+                        let refused = PersonalAgentFailure.verificationUnsupported.message
+                        XCTAssertFalse(host.accessibilityElements().contains { $0.label == refused || $0.value == refused })
+                        XCTAssertNil(host.window.attachedSheet)
+                        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "Atlas"))
+                        await host.settle(until: showsOutputs)
+                        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "launch-plan.pdf"))
+                        try await waitUntil { await reader.fileReads == 2 }
+                        await host.settle(until: { host.accessibilityElements().contains { $0.label == refused || $0.value == refused } })
+                    }
                 } else {
                     // A compact window keeps the conversation's width; the details come over it on request.
                     XCTAssertFalse(showsDetails())
                     XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Show dot details")))
-                    await host.settle(until: showsActivity)
+                    await host.settle(until: { showsActivity() && showsOutputs() })
                     host.settle(passes: 12)
                     try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "personal-details-\(name)"))
                     // The raised details close from their own button; the conversation and its editor stay.
@@ -348,6 +378,21 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 try WindowlessRender.writePNG(capture.bitmap, to: directory.appending(path: "activity-initial-\(name)"))
                 let visible = host.accessibilityElements(visibleOnly: true)
                 XCTAssertTrue(visible.contains { $0.label == back }, "The way back is on screen at \(size)")
+                // An output that does not open says why in the Outputs, where it was chosen, though the
+                // task covers the conversation, and can be tried again there.
+                if !compact {
+                    await host.settle(until: { host.accessibilityElements().contains { $0.label == "launch-plan.pdf" } })
+                    XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "launch-plan.pdf"))
+                    let refused = PersonalAgentFailure.verificationUnsupported.message
+                    await host.settle(until: {
+                        host.accessibilityElements(visibleOnly: true).contains { $0.label == refused || $0.value == refused }
+                    })
+                    host.settle(passes: 8)
+                    try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: "activity-output-refused-\(name)"))
+                    let reads = await reader.fileReads
+                    XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Try again")))
+                    try await waitUntil { await reader.fileReads == reads + 1 }
+                }
                 XCTAssertFalse(visible.contains { $0.label == L10n.string("Send message") }, "The record has no composer")
                 // Earlier turns only when asked.
                 let readsBefore = await reader.earlierTurnReads
@@ -733,6 +778,9 @@ final class PersonalAgentRenderingTests: XCTestCase {
         XCTAssertGreaterThan(ViewBodyCensus[.personalAgentContent], 0)
         XCTAssertGreaterThan(ViewBodyCensus[.personalAgentConversation], 0)
         XCTAssertGreaterThan(ViewBodyCensus[.personalAgentStatus], 0)
+        await host.settle(until: { host.accessibilityElements().contains { $0.label == "launch-plan.pdf" } })
+        XCTAssertGreaterThan(ViewBodyCensus[.personalAgentOutputs], 0)
+        host.settle(passes: 6)
 
         ViewBodyCensus.reset()
         let headings = ["Checking the dates", "Comparing the drafts", "Writing the summary", "Reviewing the list",
@@ -744,8 +792,9 @@ final class PersonalAgentRenderingTests: XCTestCase {
         }
         host.settle(passes: 6)
         XCTAssertGreaterThanOrEqual(ViewBodyCensus[.personalAgentStatus], headings.count, "Each heading drew the words")
-        XCTAssertEqual(ViewBodyCensus[.personalAgentContent], 0, "A new heading gathered the messages and attachments again")
+        XCTAssertEqual(ViewBodyCensus[.personalAgentContent], 0, "A new heading drew the content again")
         XCTAssertEqual(ViewBodyCensus[.personalAgentConversation], 0, "A new heading drew the conversation again")
+        XCTAssertEqual(ViewBodyCensus[.personalAgentOutputs], 0, "A new heading drew the Outputs again")
         XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "A new heading drew the window again")
         XCTAssertEqual(ViewBodyCensus[.personalAgentAvatar], 0, "A new heading with the same motion drew a picture again")
     }
@@ -868,6 +917,143 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 ViewBodyCensus.isEnabled = false
             }
         }
+    }
+
+    /// Every message a dot sends says when it was sent, also one that follows another of the dot's, in the
+    /// room and in its Replies: just above the words, with its day including today, and nothing
+    /// when the provider gave no time. The dot's name and picture stay on the first of a run.
+    func testEachMessageOfADotSaysWhenItWasSentInTheRoomAndInReplies() async throws {
+        let (model, _) = try makeWindowModel()
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        let today = Calendar.current.startOfDay(for: Date())
+        func at(_ minutes: Int) -> Date { today.addingTimeInterval(Double(minutes) * 60) }
+        func message(_ id: String, _ author: PersonalAgentMessage.Author, _ text: String, _ sent: Date?,
+                     parent: String? = nil) -> PersonalAgentMessage {
+            var value = PersonalAgentMessage(id: id, author: author, text: text, createdAt: sent, isDeleted: false, attachments: [])
+            value.replyToMessageID = parent
+            value.replyRootMessageID = parent == nil ? nil : "q"
+            return value
+        }
+        let long = "The deposit clause asks for three months up front, which is more than the usual two. "
+            + "The repair terms leave the boiler and the roof to us, and the notice period runs for ninety days. "
+            + "I have marked each of these in the draft so the landlord can answer them in one reply."
+        let messages = [
+            message("d1", .agent, "I read the contract draft last night.", at(-120)),
+            message("q", .agent, "Which clause should I raise with the landlord first?", at(9 * 60)),
+            message("p1", .person, "Start with the deposit.", at(9 * 60 + 2)),
+            message("r1", .agent, "The deposit clause comes first, then the repair terms.", at(9 * 60 + 3), parent: "q"),
+            message("d2", .agent, long, at(9 * 60 + 5)),
+            message("d3", .agent, "This note came without a time.", nil),
+            message("r2", .agent, "I will draft the deposit question now.", at(9 * 60 + 7), parent: "r1"),
+            message("r3", .agent, "This reply came without a time.", nil, parent: "r2"),
+            message("p2", .person, "Thanks.", at(9 * 60 + 10))
+        ]
+        func time(_ minutes: Int) -> String {
+            let date = at(minutes)
+            return Calendar.current.isDateInToday(date)
+                ? L10n.format("Today %@", date.formatted(date: .omitted, time: .shortened))
+                : date.formatted(date: .abbreviated, time: .shortened)
+        }
+        let directory = try WindowlessRender.directory("dots-message-times-qa")
+        for size in [NSSize(width: 1280, height: 920), NSSize(width: 920, height: 680)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages)
+                let window = MainWindow(model: model) { reader }
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .frame(width: size.width, height: size.height)
+                let host = WindowlessRender.Host(window, size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+                let count = PersonalAgentReplyIndicator.title(3)
+                let shows = { (text: String) in host.accessibilityElements().contains { $0.label == text || $0.value == text } }
+                await host.settle(until: { shows(count) && shows(time(9 * 60 + 5)) })
+                host.settle(passes: 12)
+                let name = "\(Int(size.width))-\(appearance.suffix).png"
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "room-\(name)"))
+
+                // The room: d1 and r1 start a run; q (on a new day), d2 and r2 follow and keep their own time,
+                // each between the message before and its own words.
+                let room = try XCTUnwrap(Self.scrollViews(in: host.hosting).max {
+                    ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)
+                })
+                var rows = Self.texts(in: room, of: host.window)
+                let sent: [(previous: String, text: String, time: String)] = [
+                    ("I read the contract draft", "Which clause should I raise", time(9 * 60)),
+                    ("Start with the deposit.", "The deposit clause comes first", time(9 * 60 + 3)),
+                    ("The deposit clause comes first", "The deposit clause asks", time(9 * 60 + 5)),
+                    ("This note came without a time.", "I will draft the deposit question", time(9 * 60 + 7))
+                ]
+                XCTAssertTrue(rows.contains { $0.text == time(-120) }, "Yesterday's message shows its day at \(size)")
+                for (previous, text, label) in sent {
+                    try Self.assertTime(label, between: previous, and: text, in: rows, at: size)
+                }
+                try Self.assertNothing(between: "The deposit clause asks", and: "This note came without a time.", in: rows)
+                try Self.assertNothing(between: "I will draft the deposit question", and: "This reply came without a time.",
+                                       in: rows)
+
+                // Replies draws the thread with the same rows: q starts it, r1 and r2 follow with their times.
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: count))
+                await host.settle(until: { shows(L10n.string("Close replies")) })
+                try await waitUntil { await reader.replyReads > 0 }
+                await host.settle(until: {
+                    Self.views(PersonalAgentReplyTableView.self, in: host.hosting).first.map {
+                        Self.texts(in: $0, of: host.window).contains { $0.text.hasPrefix("This reply came without a time.") }
+                    } ?? false
+                })
+                host.settle(passes: 20)
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "replies-\(name)"))
+                let table = try XCTUnwrap(Self.views(PersonalAgentReplyTableView.self, in: host.hosting).first)
+                rows = Self.texts(in: table, of: host.window)
+                try Self.assertTime(time(9 * 60 + 3), between: "Which clause should I raise",
+                                    and: "The deposit clause comes first", in: rows, at: size)
+                try Self.assertTime(time(9 * 60 + 7), between: "The deposit clause comes first",
+                                    and: "I will draft the deposit question", in: rows, at: size)
+                try Self.assertNothing(between: "I will draft the deposit question", and: "This reply came without a time.",
+                                       in: rows)
+            }
+        }
+    }
+
+    /// The texts of the accessibility tree under `root`, each with its frame from `window`'s top-left.
+    private static func texts(in root: NSView, of window: NSWindow) -> [(text: String, frame: NSRect)] {
+        root.layoutSubtreeIfNeeded()
+        return WindowlessRender.withAccessibilityTree {
+            var found: [(text: String, frame: NSRect)] = []
+            func visit(_ node: AnyObject) {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    let label = (child.accessibilityLabel?() ?? nil) ?? ""
+                    let value = ((child.accessibilityValue?() as Any??) ?? nil) as? String ?? ""
+                    if let screen = child.accessibilityFrame?(), screen.height > 0, !(label + value).isEmpty {
+                        found.append((label.isEmpty ? value : label,
+                                      NSRect(x: screen.minX - window.frame.minX, y: window.frame.maxY - screen.maxY,
+                                             width: screen.width, height: screen.height)))
+                    }
+                    visit(child)
+                }
+            }
+            visit(root)
+            return found
+        }
+    }
+
+    /// `time` is shown below the words that start with `previous` and above those that start with `text`.
+    private static func assertTime(_ time: String, between previous: String, and text: String,
+                                   in rows: [(text: String, frame: NSRect)], at size: NSSize, line: UInt = #line) throws {
+        let top = try XCTUnwrap(rows.first { $0.text.hasPrefix(previous) }, "“\(previous)” at \(size)", line: line)
+        let words = try XCTUnwrap(rows.first { $0.text.hasPrefix(text) }, "“\(text)” at \(size)", line: line)
+        XCTAssertTrue(rows.contains { $0.text == time && $0.frame.minY >= top.frame.maxY - 1 && $0.frame.maxY <= words.frame.minY + 1 },
+                      "\(time) above “\(text)” at \(size): \(rows.map(\.text))", line: line)
+    }
+
+    /// No text lies between the words that start with `upper` and those that start with `lower`.
+    private static func assertNothing(between upper: String, and lower: String, in rows: [(text: String, frame: NSRect)],
+                                      line: UInt = #line) throws {
+        let top = try XCTUnwrap(rows.first { $0.text.hasPrefix(upper) }, line: line)
+        let bottom = try XCTUnwrap(rows.first { $0.text.hasPrefix(lower) }, line: line)
+        let between = rows.filter { $0.frame.minY >= top.frame.maxY - 1 && $0.frame.maxY <= bottom.frame.minY + 1 }
+        XCTAssertTrue(between.isEmpty, "Nothing above “\(lower)”: \(between.map(\.text))", line: line)
     }
 
     /// A long thread opens at its end and reads nothing earlier until its top is scrolled into view, then
@@ -2407,6 +2593,42 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
         return try PersonalAgentActivityHistory.itemPage(
             JSONDecoder().decode(JSONValue.self, from: Data(#"{"data":[\#(items.joined(separator: ","))],"nextCursor":\#(next),"backwardsCursor":null}"#.utf8)),
             turnID: turnID)
+    }
+
+    // The dot's Outputs: one turn of its root that cites a report and saved a chart on its computer,
+    // whose host refuses to read files for an app it cannot verify.
+    private(set) var fileReads = 0
+    private var holdsFile = false
+    private var pendingFile: CheckedContinuation<Void, Never>?
+    func holdNextFile() { holdsFile = true }
+    func hasPendingFile() -> Bool { pendingFile != nil }
+    func releaseFile() { pendingFile?.resume(); pendingFile = nil }
+    func outputThreads(for agent: PersonalAgent) async throws -> [String] { agent.rootThreadID.map { [$0] } ?? [] }
+    func outputThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
+        try PersonalAgentActivityHistory.thread(.object(["thread": .object(["id": .string(threadID), "environments": .array([
+            .object(["environmentId": .string("env"), "cwd": .string("/mnt/data")])])])]), id: threadID)
+    }
+    func outputTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        let done = Int(Date().addingTimeInterval(-7_200).timeIntervalSince1970)
+        return try PersonalAgentActivityHistory.turnPage(JSONDecoder().decode(JSONValue.self, from: Data(
+            #"{"data":[{"id":"o1","status":"completed","completedAt":\#(done)}],"nextCursor":null,"backwardsCursor":null}"#.utf8)))
+    }
+    func outputItems(_ threadID: String, turnID: String, cursor: String?,
+                     for agent: PersonalAgent) async throws -> CodexItemPage {
+        let items = [
+            #"{"turnId":"o1","item":{"id":"o1-i","type":"imageGeneration","status":"completed","result":"","savedPath":"/mnt/data/launch-chart.png"}}"#,
+            #"{"turnId":"o1","item":{"id":"o1-a","type":"agentMessage","phase":"final_answer","text":"The plan is in :codex-file-citation{path=\"launch-plan.pdf\"}."}}"#
+        ]
+        return try PersonalAgentActivityHistory.itemPage(JSONDecoder().decode(JSONValue.self, from: Data(
+            #"{"data":[\#(items.joined(separator: ","))],"nextCursor":null,"backwardsCursor":null}"#.utf8)), turnID: turnID)
+    }
+    func outputFile(_ file: PersonalAgentRemoteFile, for agent: PersonalAgent) async throws -> PersonalAgentDownload {
+        fileReads += 1
+        if holdsFile {
+            holdsFile = false
+            await withCheckedContinuation { pendingFile = $0 }
+        }
+        throw PersonalAgentFailure.verificationUnsupported
     }
 
     func computers(for agent: PersonalAgent) async throws -> [PersonalAgentComputer] {

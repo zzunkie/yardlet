@@ -1119,6 +1119,287 @@ final class PersonalAgentTests: XCTestCase {
     /// Opening a task of the dot's Activity reads its metadata, its newest turns and their first items,
     /// and nothing else: no message, send or other thread. Only a listed task opens; another dot, a
     /// closed task or a new connection drops a read that comes back late.
+    /// What becomes an output, by the provider's rules: a citation or a file link a completed turn's
+    /// answer presents, not one it names as a source or puts in code; a picture saved on the dot's
+    /// computer, not one known only by its file ID; a connector's resources it says it created or
+    /// updated, and nothing guessed when that metadata does not read; the ready files and links a dot
+    /// sends, not a person's. The same path on two computers is two files, and a picture stands over
+    /// the plain file at its place.
+    func testOutputsAreWhatTheDotAndItsTasksPresented() throws {
+        func item(_ raw: [String: JSONValue]) -> CodexItemState {
+            let id = raw["id"]?.stringValue ?? "item"
+            return CodexTaskDecoder().item(from: .object(raw), fallbackID: id, lifecycle: .historical)
+        }
+        func turn(_ id: String, status: String = "completed") -> CodexTurnState {
+            CodexTaskDecoder().turn(from: .object(["id": .string(id), "status": .string(status), "completedAt": .integer(1_800_000_000)]),
+                                    fallbackID: id)!
+        }
+        let answer = """
+        Here is :codex-file-citation{path="/mnt/data/report.pdf" purpose="output"} and :codex-file-citation{path="/mnt/data/input.csv" purpose="source"}.
+        See [the chart](charts/sales.png), [notes](sandbox:/mnt/data/notes.md), [site](https://example.com) and ![shot](/mnt/data/shot.png).
+        The [input](/mnt/data/input.csv) is where the numbers came from.
+        Shared as :codex-file-citation{path="https://docs.google.com/document/d/abc/edit" title="Plan doc"},         :codex-file-citation{path="https://example.com/notes" purpose="source"},         :codex-file-citation{path="/pages/brief" page_id="page_1"} and         :codex-file-citation{path="/mnt/data/deck.pptx" mode="live" artifact_kind="presentation"}.
+        `:codex-file-citation{path="/mnt/data/inline.txt"}`
+        ```
+        [code](/mnt/data/code.txt)
+        ```
+        <div>
+        :codex-file-citation{path="/mnt/data/example.pdf" purpose="output"}
+        </div>
+
+        <script>
+        [run](/mnt/data/run.js)
+        </script>
+        Written by <b>the dot</b>.
+        """
+        let resources: (JSONValue) -> CodexItemState = { meta in
+            item(["id": .string("mcp"), "type": .string("mcpToolCall"), "status": .string("completed"), "error": .null,
+                  "server": .string("drive"), "tool": .string("create"),
+                  "result": .object(["content": .array([.object(["type": .string("text"), "text": .string("https://guess.example")])]),
+                                     "_meta": .object(["openai/resourceActivities": meta])])])
+        }
+        let valid: JSONValue = .object(["version": .integer(1), "resources": .array([
+            .object(["id": .string("made"), "url": .string("https://docs.example.com/d/1"), "title": .string("Plan"),
+                     "activities": .array([.string("created")])]),
+            .object(["id": .string("seen"), "url": .string("https://docs.example.com/d/2"), "activities": .array([.string("read")])])
+        ])])
+        let items = [
+            item(["id": .string("a"), "type": .string("agentMessage"), "phase": .string("final_answer"), "text": .string(answer)]),
+            item(["id": .string("c"), "type": .string("agentMessage"), "phase": .string("commentary"),
+                  "text": .string(":codex-file-citation{path=\"/mnt/data/draft.txt\"}")]),
+            item(["id": .string("img"), "type": .string("imageGeneration"), "status": .string("completed"), "failure": .null,
+                  "result": .string(""), "savedPath": .string("/mnt/data/report.pdf")]),
+            item(["id": .string("fid"), "type": .string("imageGeneration"), "status": .string("completed"), "fileId": .string("file_1"),
+                  "result": .string("")]),
+            item(["id": .string("drawn"), "type": .string("imageGeneration"), "status": .string("completed"), "failure": .null,
+                  "result": .string("/mnt/data/drawn.png")]),
+            item(["id": .string("pixels"), "type": .string("imageGeneration"), "status": .string("completed"),
+                  "result": .string("/9j/4AAQSkZJRgABAQ/AAAAAAAD")]),
+            resources(valid),
+            item(["id": .string("bad"), "type": .string("mcpToolCall"), "status": .string("completed"),
+                  "result": .object(["_meta": .object(["openai/resourceActivities": .object(["version": .integer(1),
+                    "resources": .array([.object(["id": .string("x"), "url": .string("https://user:pw@docs.example.com"),
+                                                  "activities": .array([.string("created")])])])])])])])
+        ]
+        let found = PersonalAgentOutputScan.outputs(of: turn("t1"), items: items, threadID: "root",
+                                                    environment: .computer(id: "env", cwd: "/workspace"))
+        XCTAssertEqual(found.map(\.title), ["report.pdf", "the chart", "notes", "Plan doc", "report.pdf", "drawn.png", "Plan"],
+                       "A source, its link, code, HTML blocks, a file ID and picture data are no outputs")
+        let paths = found.compactMap { if case let .remoteFile(file, _) = $0.kind { file.path } else { nil } }
+        XCTAssertEqual(paths, ["/mnt/data/report.pdf", "/workspace/charts/sales.png", "/mnt/data/notes.md", "/mnt/data/report.pdf",
+                               "/mnt/data/drawn.png"])
+        XCTAssertTrue(found.allSatisfy { if case let .remoteFile(file, _) = $0.kind { file.environmentID == "env" } else { true } })
+        // A web document cited as output is a link; a cited source, a provider Page by its ID and a live
+        // document are neither a file nor a link.
+        XCTAssertEqual(found.compactMap { if case let .link(url) = $0.kind { url.absoluteString } else { nil } },
+                       ["https://docs.google.com/document/d/abc/edit", "https://docs.example.com/d/1"])
+        XCTAssertTrue(PersonalAgentOutputScan.outputs(of: turn("t2", status: "inProgress"), items: [items[0]], threadID: "root",
+                                                      environment: .unavailable).isEmpty, "An answer counts once its turn completed")
+        XCTAssertTrue(PersonalAgentOutputScan.outputs(of: turn("t3"), items: [items[0]], threadID: "root", environment: .unavailable)
+            .allSatisfy { if case let .remoteFile(file, _) = $0.kind { file.path.hasPrefix("/mnt/") } else { true } },
+                      "A relative path waits for a known working folder")
+
+        // The same place on another computer is another file; a picture stands over the plain file.
+        let outputs = PersonalAgentOutputs(roomID: "room")
+        _ = outputs
+        let elsewhere = PersonalAgentOutputScan.outputs(of: turn("t1"), items: [items[0]], threadID: "other",
+                                                        environment: .computer(id: "env-2", cwd: nil))
+        XCTAssertNotEqual(elsewhere.first?.id, found.first?.id)
+        XCTAssertEqual(found[0].id, found[4].id)
+        // A turn that says only when it started gives its outputs no time.
+        let started = try XCTUnwrap(CodexTaskDecoder().turn(from: .object(["id": .string("t4"), "status": .string("completed"),
+                                                                           "startedAt": .integer(1_800_000_000)]), fallbackID: "t4"))
+        let undated = PersonalAgentOutputScan.outputs(of: started, items: [items[0]], threadID: "root",
+                                                      environment: .computer(id: "env", cwd: "/workspace"))
+        XCTAssertFalse(undated.isEmpty)
+        XCTAssertTrue(undated.allSatisfy { $0.producedAt == nil })
+
+        // Environments: the first; a managed one with one connected computer; an empty list is none,
+        // and only a list never given leaves it to the parent.
+        XCTAssertEqual(PersonalAgentOutputEnvironment(thread: .object(["environments": .array([])])), .unavailable)
+        XCTAssertEqual(PersonalAgentOutputEnvironment(thread: .object([:])), .parents)
+        XCTAssertEqual(PersonalAgentOutputEnvironment(thread: .object([
+            "environments": .array([.object(["environmentId": .string("managed")])]),
+            "connectedEnvironmentIds": .array([.string("a"), .string("b")])])), .unavailable)
+        XCTAssertEqual(PersonalAgentOutputEnvironment.parent(of: .object(["source": .string("subAgent")])), nil)
+
+        // A dot's ready file and links; a person's upload and a file still being made are not.
+        let file = PersonalAgentAttachment(fileID: "f1", name: "deck.key", type: "file")
+        let making = PersonalAgentAttachment(fileID: "f2", name: "draft.key", type: "file", isLoading: true)
+        let sent = PersonalAgentMessage(id: "m1", author: .agent, text: "Read [the brief](https://example.com/brief/#top).",
+                                        createdAt: Date(timeIntervalSince1970: 10), isDeleted: false, attachments: [file, making])
+        let upload = PersonalAgentMessage(id: "m2", author: .person, text: "[mine](https://example.com/mine)",
+                                          createdAt: Date(timeIntervalSince1970: 20), isDeleted: false, attachments: [file])
+        XCTAssertEqual(PersonalAgentOutputScan.outputs(of: sent, roomID: "room").map(\.title), ["deck.key", "the brief"])
+
+        // A link the dot attached is its own output, once with the same page its words link; only a
+        // public HTTPS link with a title, no signature or token and no thread it points into is one.
+        func link(_ fields: [String: JSONValue]) -> PersonalAgentAttachment? {
+            PersonalAgentAttachment.publicLink(.object(fields.merging(["type": .string("link")]) { $1 }))
+        }
+        let brief = try XCTUnwrap(link(["url": .string("https://example.com/brief/"), "title": .string("Brief")]))
+        for refused: [String: JSONValue] in [
+            ["url": .string("http://example.com/brief"), "title": .string("Brief")],
+            ["url": .string("https://example.com/brief"), "title": .string("  ")],
+            ["url": .string("https://example.com/file?X-Amz-Signature=1"), "title": .string("File")],
+            ["url": .string("https://example.com/file?sig=1"), "title": .string("File")],
+            ["url": .string("https://example.com/brief"), "title": .string("Brief"), "conversation_id": .string("thread")]
+        ] { XCTAssertNil(link(refused), "\(refused)") }
+        let linked = PersonalAgentMessage(id: "m3", author: .agent, text: "See [the brief](https://example.com/brief).",
+                                          createdAt: nil, isDeleted: false, attachments: [brief])
+        XCTAssertEqual(PersonalAgentOutputScan.outputs(of: linked, roomID: "room").map(\.title), ["Brief"])
+        let room: JSONValue = .object(["id": .string("room"), "aeon_id": .string("dot"), "members": .array([])])
+        let projected = try DotsProjection.messages(.object(["items": .array([.object(["id": .string("m"), "content": .object([
+            "text": .string("Ready."), "attachments": .array([.object(["type": .string("link"), "url": .string("https://example.com/r"),
+                                                                      "title": .string("Report")])])])])])]),
+            room: room, agent: fixtureAgent())
+        XCTAssertEqual(projected.messages.first?.attachments.first?.url, URL(string: "https://example.com/r"))
+        XCTAssertFalse(projected.messages.first?.attachments.first?.opensHere ?? true, "A link is never a file to download")
+        XCTAssertTrue(PersonalAgentOutputScan.outputs(of: upload, roomID: "room").isEmpty)
+
+        // The dot's computer's own addresses are not this Mac's.
+        for raw in ["http://localhost:3000", "http://127.0.0.1/x", "http://[::1]:8080", "http://app.localhost", "http://0.0.0.0"] {
+            XCTAssertTrue(PersonalAgentOutputScan.namesItsOwnComputer(try XCTUnwrap(URL(string: raw))), raw)
+        }
+        XCTAssertFalse(PersonalAgentOutputScan.namesItsOwnComputer(try XCTUnwrap(URL(string: "https://example.com"))))
+    }
+
+    /// A deleted message's outputs are gone for good: a later page that still has its old copy, or an
+    /// older read of a message since changed, never brings them back. A page that leaves a message out
+    /// does not delete it.
+    @MainActor
+    func testOutputsOfADeletedMessageDoNotComeBack() {
+        let outputs = PersonalAgentOutputs(roomID: "room")
+        let file = PersonalAgentAttachment(fileID: "f1", name: "deck.key", type: "file")
+        func message(_ id: String, deleted: Bool = false, at seconds: TimeInterval, files: [PersonalAgentAttachment]) -> PersonalAgentMessage {
+            var message = PersonalAgentMessage(id: id, author: .agent, text: "", createdAt: Date(timeIntervalSince1970: 1),
+                                               isDeleted: deleted, attachments: files)
+            message.updatedAt = Date(timeIntervalSince1970: seconds)
+            return message
+        }
+        outputs.noteRoom([message("m1", at: 1, files: [file]), message("m2", at: 1, files: [.init(fileID: "f2", name: "b.txt", type: "file")])])
+        XCTAssertEqual(outputs.items.count, 2)
+        outputs.noteRoom([message("m2", at: 2, files: [])])
+        XCTAssertEqual(outputs.items.map(\.title), ["deck.key"], "A changed message keeps only what it has now")
+        outputs.noteRoom([message("m2", at: 1, files: [.init(fileID: "f2", name: "b.txt", type: "file")])])
+        XCTAssertEqual(outputs.items.map(\.title), ["deck.key"], "An older read changes nothing")
+        outputs.noteRoom([message("m1", deleted: true, at: 3, files: [])])
+        outputs.noteRoom([message("m1", at: 4, files: [file])])
+        XCTAssertTrue(outputs.items.isEmpty, "A deletion stands")
+        outputs.noteRoom([])
+        XCTAssertTrue(outputs.items.isEmpty)
+    }
+
+    /// The Outputs read the dot's threads a page at a time when first shown: the root and bound threads,
+    /// and children only once verified. A part that fails says so and is read again by Try again; more
+    /// work and earlier messages are read only when the person looks further back, from their own
+    /// cursors, without moving the conversation; a changed connection drops a late page.
+    func testOutputsReadTheDotsWorkAPartAtATime() async throws {
+        let center = PersonalAgentCenter()
+        let reader = FixturePersonalAgentReader(agents: [fixtureAgent()])
+        let turn: (String) -> CodexTurnState = {
+            CodexTaskDecoder().turn(from: .object(["id": .string($0), "status": .string("completed")]), fallbackID: $0)!
+        }
+        func entry(_ turnID: String, _ raw: [String: JSONValue]) -> CodexItemPageEntry {
+            .init(turnID: turnID, item: CodexTaskDecoder().item(from: .object(raw), fallbackID: raw["id"]!.stringValue!, lifecycle: .historical))
+        }
+        await reader.setOutputs(
+            scope: ["root", "bound", "listed"],
+            metadata: ["root": .object(["id": .string("root"), "environments": .array([.object(["environmentId": .string("env"),
+                                                                                                "cwd": .string("/w")])])]),
+                       "child": .object(["id": .string("child"), "parentThreadId": .string("root")]),
+                       "listed": .object(["id": .string("listed"), "source": .object(["subAgent": .object([
+                           "thread_spawn": .object(["parent_thread_id": .string("root")])])])]),
+                       "stray": .object(["id": .string("stray"), "parentThreadId": .string("elsewhere")])],
+            turns: ["root:": .init(turns: [turn("r1")], nextCursor: "older", backwardsCursor: nil),
+                    "root:older": .init(turns: [turn("r0")], nextCursor: nil, backwardsCursor: nil),
+                    "child:": .init(turns: [turn("c1")], nextCursor: nil, backwardsCursor: nil),
+                    "listed:": .init(turns: [turn("l1")], nextCursor: nil, backwardsCursor: nil)],
+            items: ["root:r1:": .init(entries: [entry("r1", ["id": .string("a"), "type": .string("agentMessage"),
+                                                              "text": .string(":codex-file-citation{path=\"/w/report.pdf\"}")])],
+                                      nextCursor: "p2", backwardsCursor: nil),
+                    "root:r1:p2": .init(entries: [entry("r1", ["id": .string("s"), "type": .string("collabAgentToolCall"),
+                                                                "tool": .string("spawnAgent"),
+                                                                "receiverThreadIds": .array([.string("child"), .string("stray"), .string("denied")])])],
+                                        nextCursor: nil, backwardsCursor: nil),
+                    "root:r0:": .init(entries: [entry("r0", ["id": .string("b"), "type": .string("agentMessage"),
+                                                              "text": .string("[old](/w/old.txt)")])], nextCursor: nil, backwardsCursor: nil),
+                    "listed:l1:": .init(entries: [entry("l1", ["id": .string("l"), "type": .string("agentMessage"),
+                                                                "text": .string("[listed](notes/listed.txt)")])],
+                                        nextCursor: nil, backwardsCursor: nil),
+                    "child:c1:": .init(entries: [entry("c1", ["id": .string("i"), "type": .string("imageGeneration"),
+                                                               "status": .string("completed"), "savedPath": .string("/w/chart.png")])],
+                                       nextCursor: nil, backwardsCursor: nil)])
+        await reader.failOutputs("turns:bound:", with: .unavailable)
+        // A child whose metadata cannot be read is missing, not ruled out.
+        await reader.failOutputs("child:denied", with: .accessDenied)
+        await reader.setRoom([.init(id: "m1", author: .agent, text: "", createdAt: nil, isDeleted: false,
+                                    attachments: [.init(fileID: "f1", name: "deck.key", type: "file")])], before: "m1")
+        await center.connect(sourceKey: "home") { reader }
+        let outputs = try XCTUnwrap(center.details?.outputs)
+        try await waitUntil { center.conversation?.loaded == true }
+        XCTAssertEqual(outputs.items.map(\.title), ["deck.key"], "The conversation's page feeds the Outputs before any task is read")
+        let readsBefore = await reader.outputReads
+        XCTAssertTrue(readsBefore.isEmpty, "Nothing is read until the Outputs are shown")
+
+        center.startOutputs()
+        try await waitUntil { !outputs.isReading && outputs.scope == .loaded }
+        XCTAssertEqual(Set(outputs.items.map(\.title)), ["deck.key", "report.pdf", "chart.png", "listed"])
+        XCTAssertTrue(outputs.hasEarlier)
+        XCTAssertEqual(outputs.checkedTasks, 3)
+        // A bound thread that is also the root's child works on the root's computer, in its folder.
+        let listed = try XCTUnwrap(outputs.items.first { $0.title == "listed" })
+        guard case let .remoteFile(listedFile, false) = listed.kind else { return XCTFail("A file on the dot's computer") }
+        XCTAssertEqual(listedFile.environmentID, "env")
+        XCTAssertEqual(listedFile.path, "/w/notes/listed.txt")
+        XCTAssertNotNil(outputs.failure)
+        let image = try XCTUnwrap(outputs.items.first { $0.title == "chart.png" })
+        guard case let .remoteFile(file, true) = image.kind else { return XCTFail("A picture on the dot's computer") }
+        XCTAssertEqual(file.environmentID, "env", "A child naming no computer works on its verified parent's")
+        var reads = await reader.outputReads
+        XCTAssertFalse(reads.contains { $0.hasPrefix("turns:stray") }, "A child naming another parent is not read")
+        XCTAssertFalse(reads.contains("turns:root:older"), "Earlier work waits for the person")
+        XCTAssertFalse(reads.contains { $0.hasPrefix("thread:child") })
+
+        let anchor = center.conversation?.anchor
+        await reader.failOutputs("turns:bound:", with: nil)
+        await reader.failOutputs("child:denied", with: nil)
+        center.retryOutputs()
+        try await waitUntil { !outputs.isReading }
+        reads = await reader.outputReads
+        XCTAssertEqual(reads.filter { $0 == "turns:bound:" }.count, 2)
+        XCTAssertEqual(reads.filter { $0 == "child:denied" }.count, 2, "Try again reads the child that could not be read")
+        XCTAssertEqual(reads.filter { $0 == "child:stray" }.count, 1, "A child of another parent is not read again")
+        XCTAssertNil(outputs.failure)
+        // An earlier page of messages that fails is read again by Try again.
+        await reader.failNextOlderRead()
+        center.readEarlierOutputs()
+        try await waitUntil { !outputs.isReading }
+        XCTAssertTrue(outputs.items.contains { $0.title == "old" })
+        XCTAssertEqual(outputs.failure, .network)
+        center.retryOutputs()
+        try await waitUntil { !outputs.isReading }
+        let olderReads = await reader.olderMessageReads
+        XCTAssertEqual(olderReads, 2)
+        XCTAssertNil(outputs.failure)
+        XCTAssertEqual(center.conversation?.anchor, anchor, "Looking further back does not move the conversation")
+        XCTAssertEqual(center.conversation?.messages.map(\.id), ["m1"])
+
+        // A page that arrives after the connection changed shows nothing.
+        let next = FixturePersonalAgentReader(agents: [fixtureAgent()])
+        await next.setOutputs(scope: ["root"], metadata: [:], turns: [:], items: [:])
+        await next.holdOutputs("threads")
+        await center.connect(sourceKey: "home") { next }
+        let fresh = try XCTUnwrap(center.details?.outputs)
+        center.startOutputs()
+        try await waitUntil { await next.hasPendingOutputs() }
+        await center.disconnect()
+        await next.releaseOutputs()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertNotEqual(fresh.scope, .loaded)
+        XCTAssertFalse(fresh.items.contains { $0.title == "report.pdf" })
+    }
+
     func testAnActivityTaskOpensOnlyFromItsDotAndDropsLateReads() async throws {
         let center = PersonalAgentCenter()
         let reader = FixturePersonalAgentReader(agents: [fixtureAgent()])
@@ -1300,6 +1581,10 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
         return values
     }
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
+        if before != nil {
+            olderMessageReads += 1
+            if failsNextOlderRead { failsNextOlderRead = false; throw PersonalAgentFailure.network }
+        }
         if delayMessageRead {
             delayMessageRead = false
             await withCheckedContinuation { pendingMessageRead = $0 }
@@ -1492,7 +1777,63 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
         guard let page else { throw PersonalAgentFailure.network }
         return page
     }
+    // The dot's Outputs: its threads, their metadata and pages, each read recorded by its key.
+    private var outputScope: [String] = []
+    private var outputMetadata: [String: JSONValue] = [:]
+    private var outputTurnPages: [String: CodexTurnPage] = [:]
+    private var outputItemPages: [String: CodexItemPage] = [:]
+    private var outputFailures: [String: PersonalAgentFailure] = [:]
+    private var heldOutputRead: String?
+    private var pendingOutputRead: CheckedContinuation<Void, Never>?
+    private(set) var outputReads: [String] = []
+    func setOutputs(scope: [String], metadata: [String: JSONValue], turns: [String: CodexTurnPage],
+                    items: [String: CodexItemPage]) {
+        outputScope = scope; outputMetadata = metadata; outputTurnPages = turns; outputItemPages = items
+    }
+    func failOutputs(_ key: String, with failure: PersonalAgentFailure?) { outputFailures[key] = failure }
+    func holdOutputs(_ key: String) { heldOutputRead = key }
+    func hasPendingOutputs() -> Bool { pendingOutputRead != nil }
+    func releaseOutputs() { pendingOutputRead?.resume(); pendingOutputRead = nil }
+    private func readOutputs(_ key: String) async throws {
+        outputReads.append(key)
+        if heldOutputRead == key {
+            heldOutputRead = nil
+            await withCheckedContinuation { pendingOutputRead = $0 }
+        }
+        if let failure = outputFailures[key] { throw failure }
+    }
+    func outputThreads(for agent: PersonalAgent) async throws -> [String] {
+        try await readOutputs("threads")
+        return outputScope
+    }
+    private func metadata(_ id: String) throws -> CodexThreadState {
+        try PersonalAgentActivityHistory.thread(.object(["thread": outputMetadata[id] ?? .object(["id": .string(id)])]), id: id)
+    }
+    func outputThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
+        try await readOutputs("thread:" + threadID)
+        return try metadata(threadID)
+    }
+    func outputChild(_ threadID: String, of parentID: String, for agent: PersonalAgent) async throws -> CodexThreadState? {
+        try await readOutputs("child:" + threadID)
+        let thread = try metadata(threadID)
+        guard PersonalAgentOutputEnvironment.parent(of: thread.raw) == parentID else { return nil }
+        return thread
+    }
+    func outputTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        let key = "\(threadID):\(cursor ?? "")"
+        try await readOutputs("turns:" + key)
+        return outputTurnPages[key] ?? .init(turns: [], nextCursor: nil, backwardsCursor: nil)
+    }
+    func outputItems(_ threadID: String, turnID: String, cursor: String?,
+                     for agent: PersonalAgent) async throws -> CodexItemPage {
+        let key = "\(threadID):\(turnID):\(cursor ?? "")"
+        try await readOutputs("items:" + key)
+        return outputItemPages[key] ?? .init(entries: [], nextCursor: nil, backwardsCursor: nil)
+    }
     func delayNextMessageRead() { delayMessageRead = true }
+    private var failsNextOlderRead = false
+    private(set) var olderMessageReads = 0
+    func failNextOlderRead() { failsNextOlderRead = true }
     func delayReadAfterNextSend() { delayAfterSend = true }
     func hasPendingMessageRead() -> Bool { pendingMessageRead != nil }
     func releaseMessageRead() { pendingMessageRead?.resume(); pendingMessageRead = nil }

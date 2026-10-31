@@ -241,6 +241,13 @@ struct PersonalAgentsContent: View {
     let onAccounts: () -> Void
     @State private var preview: PersonalAgentPreviewFile?
     @State private var attachmentFailure: PersonalAgentFailure?
+    /// Why the output last opened from the Outputs did not open, shown there, where it was chosen.
+    @State private var outputFailure: PersonalAgentOutputFailure?
+    /// The file being read for a preview, and which reading it is: one that a later one, another dot or
+    /// another connection replaced changes nothing when it ends.
+    @State private var opening: Task<Void, Never>?
+    @State private var openingEpoch = 0
+    @Environment(\.personalAgentOriginalOpener) private var opener
     @State private var loadingAttachment = false
     @State private var width: CGFloat = 0
     /// The person hid the details beside a conversation wide enough for them.
@@ -366,14 +373,21 @@ struct PersonalAgentsContent: View {
         .sheet(item: $preview) { file in
             PersonalAgentAttachmentPreview(file: file) { preview = nil }
         }
+        // A reading for another dot or connection is not this one's.
+        .onChange(of: center.selected?.id) { _, _ in stopOpening() }
+        .onChange(of: center.isLoading) { _, loading in if loading { stopOpening() } }
     }
 
     private func details(agent: PersonalAgent, conversation: PersonalAgentConversation,
                          close: (() -> Void)? = nil) -> some View {
         PersonalAgentDetailsPanel(agent: agent, avatar: center.avatar(for: agent), sheet: center.spriteSheet(for: agent),
                                   live: center, accountTitle: accountTitle,
-            details: center.details, attachments: PersonalAgentDetailsPanel.attachments(in: conversation.visibleMessages),
-            isLoadingAttachment: loadingAttachment, open: open,
+            details: center.details,
+            isLoadingAttachment: loadingAttachment,
+            outputActions: PersonalAgentOutputActions(open: openOutput, start: { center.startOutputs() },
+                                                      readEarlier: { center.readEarlierOutputs() },
+                                                      retry: { center.retryOutputs() }),
+            outputFailure: outputFailure,
             retry: { center.refreshDetails() },
             loadMoreActivity: { Task { await center.loadMoreActivity() } },
             openedActivityID: center.activityReading?.activity.id,
@@ -397,14 +411,58 @@ struct PersonalAgentsContent: View {
 
     /// Reads a file attachment and shows it in a native preview; saving it stays the person's action.
     private func open(_ attachment: PersonalAgentAttachment) {
-        guard let agent = center.selected, !loadingAttachment else { return }
+        guard let agent = center.selected else { return }
+        preview(for: agent, failed: { attachmentFailure = $0 }) { try await center.download(attachment, for: agent.id) }
+    }
+
+    /// Opens an output from where it came from: a room file as an attachment is, a file on the dot's
+    /// computer read from there into the same preview, a web page in the browser. Nothing on this Mac
+    /// is read for a file on the dot's computer.
+    private func openOutput(_ output: PersonalAgentOutput) {
+        guard let agent = center.selected else { return }
+        outputFailure = nil
+        let failed: (PersonalAgentFailure) -> Void = { outputFailure = .init(output: output, failure: $0) }
+        switch output.kind {
+        case let .messageFile(attachment): preview(for: agent, failed: failed) { try await center.download(attachment, for: agent.id) }
+        case let .remoteFile(file, _): preview(for: agent, failed: failed) { try await center.download(file, for: agent.id) }
+        case let .link(url):
+            // Localhost on the dot's computer is another service on this Mac.
+            if PersonalAgentOutputScan.namesItsOwnComputer(url) { failed(.remoteAddress) }
+            else if !(opener ?? .live).openWeb(url) { failed(.unavailable) }
+        }
+    }
+
+    /// Shows what `read` returns in a preview, or says why it could not through `failed`, only while
+    /// the same reading, dot and connection are current when it ends.
+    private func preview(for agent: PersonalAgent, failed: @escaping (PersonalAgentFailure) -> Void,
+                         _ read: @escaping @MainActor () async throws -> PersonalAgentDownload) {
+        guard !loadingAttachment else { return }
         loadingAttachment = true
         attachmentFailure = nil
-        Task {
-            defer { loadingAttachment = false }
-            do { preview = try PersonalAgentPreviewFile(download: await center.download(attachment, for: agent.id)) }
-            catch { attachmentFailure = error as? PersonalAgentFailure ?? .attachmentUnavailable }
+        openingEpoch += 1
+        let epoch = openingEpoch
+        let generation = center.generation
+        let isCurrent = { openingEpoch == epoch && center.generation == generation && center.selected?.id == agent.id }
+        opening = Task {
+            do {
+                let download = try await read()
+                guard isCurrent(), !Task.isCancelled else { return }
+                preview = try PersonalAgentPreviewFile(download: download)
+            } catch {
+                guard isCurrent(), !Task.isCancelled else { return }
+                failed(error as? PersonalAgentFailure ?? .attachmentUnavailable)
+            }
+            if isCurrent() { loadingAttachment = false; opening = nil }
         }
+    }
+
+    /// Ends the reading under way: nothing it returns is shown, and another can start.
+    private func stopOpening() {
+        opening?.cancel()
+        opening = nil
+        openingEpoch += 1
+        loadingAttachment = false
+        outputFailure = nil
     }
 }
 
@@ -593,7 +651,7 @@ struct PersonalAgentConversationView: View {
     /// Under something Yardlet does not show yet, a way to it on the dot's page.
     @ViewBuilder
     private func unsupportedLink(_ message: PersonalAgentMessage) -> some View {
-        if !message.isDeleted, message.isUnsupported || message.attachments.contains(where: { !$0.opensHere }),
+        if !message.isDeleted, message.isUnsupported || message.attachments.contains(where: { !$0.opensHere && $0.url == nil }),
            let page = DotsLinks.web(for: agent) {
             Button(L10n.string("Open This Dot on the Web")) { openWeb(page) }
                 .buttonStyle(.link)
@@ -709,12 +767,11 @@ struct PersonalAgentConversationView: View {
                                             data: message.author == .agent ? avatar : nil,
                                             sheet: message.author == .agent ? sheet : nil, plays: false, size: 20)
                     Text(author(message.author)).font(.system(size: 12.5 * scale, weight: .semibold))
-                    if let time = message.createdAt {
-                        Text(time.formatted(date: Calendar.current.isDateInToday(time) ? .omitted : .abbreviated,
-                                            time: .shortened))
-                            .font(.system(size: 11.5 * scale)).foregroundStyle(.secondary)
-                    }
+                    sentTime(of: message)
                 }
+            } else {
+                // A message that follows another from the same author keeps its own time, without the name.
+                sentTime(of: message)
             }
             quote(of: message, inThread: inThread)
             if message.isDeleted {
@@ -731,6 +788,18 @@ struct PersonalAgentConversationView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+    }
+
+    /// When a message was sent, with its day even today so a new morning cannot read as the prior day.
+    /// Nothing is shown when the provider gave no time.
+    @ViewBuilder
+    private func sentTime(of message: PersonalAgentMessage) -> some View {
+        if let time = message.createdAt {
+            Text(Calendar.current.isDateInToday(time)
+                 ? L10n.format("Today %@", time.formatted(date: .omitted, time: .shortened))
+                 : time.formatted(date: .abbreviated, time: .shortened))
+                .font(.system(size: 11.5 * scale)).foregroundStyle(.secondary)
+        }
     }
 
     /// Whether the question a waiting option answer replies to is drawn, with its own way to stop waiting.
@@ -787,6 +856,12 @@ struct PersonalAgentConversationView: View {
                             Label(attachment.name, systemImage: "paperclip").lineLimit(1).truncationMode(.middle)
                         }
                         .buttonStyle(.borderless).parityPointer().disabled(isLoadingAttachment)
+                    } else if let url = attachment.url {
+                        // A link the dot attached opens in the browser, as a link in its words does.
+                        Button { openWeb(url) } label: {
+                            Label(attachment.name, systemImage: "link").lineLimit(1).truncationMode(.middle)
+                        }
+                        .buttonStyle(.borderless).parityPointer().help(url.absoluteString)
                     } else {
                         Label(attachment.name, systemImage: "paperclip").foregroundStyle(.secondary)
                             .help(L10n.string("This attachment cannot be opened here yet."))
@@ -808,8 +883,8 @@ struct PersonalAgentConversationView: View {
 }
 
 /// What the stock app shows beside a dot's conversation, as far as Yardlet reads it: the dot, its
-/// Activity, its schedules, the computers its root thread can use, and the files in the conversation
-/// loaded here. Every part reads only; none starts work, connects a computer or changes the dot.
+/// Activity, its schedules, the computers its root thread can use, and its Outputs as far as they were
+/// read. Every part reads only; none starts work, connects a computer or changes the dot.
 struct PersonalAgentDetailsPanel: View {
     static let width: CGFloat = SessionRailPlacement.width
 
@@ -820,9 +895,10 @@ struct PersonalAgentDetailsPanel: View {
     var live: PersonalAgentCenter?
     let accountTitle: String?
     let details: PersonalAgentDetails?
-    let attachments: [PersonalAgentAttachment]
     let isLoadingAttachment: Bool
-    let open: (PersonalAgentAttachment) -> Void
+    let outputActions: PersonalAgentOutputActions
+    /// Why an output chosen here did not open.
+    var outputFailure: PersonalAgentOutputFailure? = nil
     let retry: () -> Void
     let loadMoreActivity: () -> Void
     /// The Activity task read in place of the conversation, if any.
@@ -833,15 +909,6 @@ struct PersonalAgentDetailsPanel: View {
     var close: (() -> Void)? = nil
     @Environment(\.yardletInterfaceScale) private var scale
 
-    /// The openable files of the loaded messages, newest first, each once.
-    static func attachments(in messages: [PersonalAgentMessage]) -> [PersonalAgentAttachment] {
-        var seen = Set<String>()
-        return messages.reversed().filter { !$0.isDeleted }.flatMap(\.attachments).filter { attachment in
-            guard attachment.type == "file", let id = attachment.fileID else { return false }
-            return seen.insert(id).inserted
-        }
-    }
-
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 22) {
@@ -851,7 +918,12 @@ struct PersonalAgentDetailsPanel: View {
                 if agent.rootThreadID != nil {
                     section(L10n.string("Computers")) { computers }
                 }
-                section(L10n.string("Conversation attachments")) { conversationFiles }
+                if let outputs = details?.outputs {
+                    section(L10n.string("Outputs")) {
+                        PersonalAgentOutputsList(outputs: outputs, isOpening: isLoadingAttachment, actions: outputActions,
+                                                 openFailure: outputFailure)
+                    }
+                }
             }
             .font(.system(size: 12 * scale))
             .padding(.horizontal, 16)
@@ -978,30 +1050,6 @@ struct PersonalAgentDetailsPanel: View {
                 }
             }
         }
-    }
-
-    private var conversationFiles: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if attachments.isEmpty {
-                Text(L10n.string("No files in the loaded messages")).foregroundStyle(.secondary)
-            } else {
-                SessionRailLimitedList(items: attachments.map(IdentifiedAttachment.init), limit: 6) { item in
-                    Button { open(item.attachment) } label: {
-                        SessionRailRow(systemName: SessionRailOutputsCard.symbol(URL(filePath: item.attachment.name.isEmpty ? "file" : item.attachment.name)),
-                                       title: item.attachment.name)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain).parityPointer().disabled(isLoadingAttachment)
-                }
-            }
-            Text(L10n.string("Only files in the messages loaded here."))
-                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 2)
-        }
-    }
-
-    private struct IdentifiedAttachment: Identifiable {
-        let attachment: PersonalAgentAttachment
-        var id: String { attachment.fileID ?? attachment.name }
     }
 
     static func symbol(_ item: PersonalAgentActivity) -> String {

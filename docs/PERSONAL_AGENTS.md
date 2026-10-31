@@ -15,7 +15,10 @@ account, user, profile, messaging room and root coding thread are separate ident
 
 ## Reading
 
-The native conversation shows text and attachments, with the dot's picture. In the
+The native conversation shows text and attachments, with the dot's picture. Each
+message from the dot shows its sent time, including consecutive messages: today's
+times say **Today**, and other days include the date. Missing times stay absent.
+In the
 agent list, the conversation's header and the dot's details, the picture is the
 dot's pet moving as it does in the provider's app: the pet its profile names, read
 from the account's pets, plays its idle motion, and its working motion while the
@@ -39,7 +42,8 @@ next earlier page once, keeping the message you were reading in place; a failure
 waits for **Try again**, and **Load earlier messages** reads another page by hand.
 Yardlet does not download the whole history in advance, and reading sends no read
 receipt. File attachments open in a native preview, with an explicit save action.
-Other attachment types are named but cannot be opened here yet. Reacting,
+A link the dot attached opens in the browser when chosen; other attachment types are
+named but cannot be opened here yet. Reacting,
 pausing an agent and changing its settings are not implemented. Files and photos
 are added from the composer, replies are read and sent in a dialog over it, and
 approvals, forms and option questions are answered where the message asks them
@@ -63,8 +67,8 @@ handed on; a failure says so under the conversation.
 
 Beside the conversation, where the window has room, the dot's details show its
 picture, name, account and whether it is paused; its **Activity**; its
-**Scheduled** tasks; the **Computers** its root thread can use; and the
-**Conversation attachments** of the messages loaded so far. In a narrower window
+**Scheduled** tasks; the **Computers** its root thread can use; and its **Outputs**
+(below). In a narrower window
 the conversation keeps its width and the details button in its header raises them
 over it, below the header; their close button, the same header button or Escape
 hides them again. Each part loads and fails on its own, so a part that cannot be read never
@@ -73,9 +77,66 @@ holds up the conversation; a changed account clears them all.
 These parts only read. Activity is the dot's own task list, empty until it has
 tasks; it is not the list of its execution threads. A computer being attached
 means the dot may use it; it is shown as connected or offline only when the
-provider says so. The attachments are the files in the loaded messages, not every
-output the dot has produced. Nothing here starts work, connects a computer, runs a
-schedule or changes the dot.
+provider says so. Nothing here starts work, connects a computer, runs a schedule or
+changes the dot.
+
+## Outputs
+
+**Outputs** lists what the dot produced, newest first, three at a time with **Show
+more**: the files and links the dot sent in its conversation, and what its tasks
+presented as results. A task's results are the files its completed answers cite as
+output (`:codex-file-citation`, a file or a web address, not those cited as a source) or
+link as files, the
+pictures it saved, and the pages a connector says it created or updated
+(`openai/resourceActivities`). Files a person uploaded, pages only read, files only
+edited, and anything inside code or raw HTML are not outputs. An output without a time
+from the provider is listed after the dated ones and is not given one.
+
+The tasks read are the dot's own: its current root, once the dot's profile names that
+root (`GET /tbo/by-thread/{root}`), the threads its profile binds
+(`GET /tbo/{dot}/threads`), and threads they spawned whose metadata names them as
+parent. This list is apart from Activity's and does not widen it; no account-wide
+thread list or file library is read. When the list is first shown, the first page of
+each task's turns is read with every item of those turns, from the execution-history
+host, as an Activity task is read; messages come from the conversation's own pages as
+they are read. **Look further back** reads the next pages of the tasks' work and an
+earlier page of messages from the list's own cursor, without moving the conversation.
+Yardlet reads the conversation's and the tasks' pages a part at a time, so the line under
+the list says what was checked (the messages read so far or all of them, and recent or all work of so
+many tasks); it never says all when it was not. A part that could not be read says so,
+keeps what was found and is read again by **Try again**. A deleted message's outputs
+are removed and do not come back from an older read.
+
+Choosing an output opens it from where it came from. A file of the conversation opens
+as an attachment does. A link opens in the browser; an address on the dot's computer,
+such as localhost, is not opened on this Mac. A file on the dot's computer is read
+from that computer, never from the same path on this Mac: its thread's metadata names
+the computer (a thread that names none uses its verified parent's), and Yardlet
+connects to the provider's execution host under its own name (`yardlet`), declaring
+no app verification, then asks for the file's metadata and bytes
+(`fs/getMetadata`, `fs/readFile`) and closes the connection. The file opens in the
+same native preview, with **Save…**. A file larger than 64 MiB is refused whole,
+never cut short. If the host asks to verify the app, or sends any other request, the
+read stops and says so; Yardlet answers none and does not try again another way. Why
+an output did not open is shown under the Outputs, with **Try again**, also while an
+Activity task covers the conversation. A reading that another dot, account or
+connection replaced shows nothing when it ends.
+
+Synthetic responses cover collecting outputs, opening files and handling failures.
+A read-only check against the provider also read an existing dot's output list and
+reached the remote file's metadata using Yardlet's own client identity. The file's
+contents could not be read: `fs/readFile` returned an internal error (`-32603`).
+Remote file opening is therefore not yet verified against the provider, and the
+dot's web page remains an alternative. This check does not establish whether other
+accounts or environments accept the connection.
+
+Any page, a site or pull request among them, that the dot attached or linked, that a
+connector says it created or updated, or that a task's answer cites as output at a web
+address, is listed as a link and opens in the browser. Not listed yet: a web address
+a task's answer only links in its text (the provider's app picks pull requests and one
+local site from there), a live document session, a citation of a provider Page by its
+ID alone, and the results of sites and other connectors that do not report
+`openai/resourceActivities`. Pages and sites have no viewer or editor here.
 
 ## Reading an Activity task
 
@@ -372,9 +433,11 @@ Yardlet. The runtime owns sign-in and token renewal; the transport keeps access
 credentials in memory and never exposes them to the presentation layer or logs.
 Requests use native URLSession with no cookies or browser process, no redirects,
 and an account binding checked before results are displayed. An Activity task's
-record is read with GET requests from the provider's execution-history host, the
-only other host that receives the account credential; each request names the
-thread's product as the provider's app does, as a label and never as a permission.
+record and the Outputs' task pages are read with GET requests from the provider's
+execution-history host, the only other host that receives the account credential;
+each request names the thread's product as the provider's app does, as a label and
+never as a permission. A file on the dot's computer is read over that host's socket,
+whose connection carries the credential in its protocol header and nothing else.
 
 Opening or refreshing the section, or an Activity task, only reads and subscribes;
 it starts no model turn. The room observer's registration sends nothing but the account's credential:

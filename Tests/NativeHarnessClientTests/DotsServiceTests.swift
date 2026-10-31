@@ -589,6 +589,139 @@ final class DotsServiceTests: XCTestCase {
         await service.stop()
     }
 
+    /// The Outputs read only the dot's own threads: its root, once its profile names this dot and root,
+    /// the threads the profile binds, and a child whose metadata names one of them as its parent, by
+    /// `parentThreadId` or its subagent spawn. Nothing widens the Activity's list, and a thread outside
+    /// these is refused before anything is asked.
+    func testOutputsReadOnlyTheDotsBoundThreadsAndVerifiedChildren() async throws {
+        let fixture = DotsHTTPRecorder()
+        let service = makeService(fixture, broker: DotsTestBroker())
+        let dots = try await service.agents()
+        let dot = try XCTUnwrap(dots.first)
+        let threads = try await service.outputThreads(for: dot)
+        XCTAssertEqual(threads, ["root", "bound", "plain"], "The root first, each bound thread once, across pages")
+        XCTAssertEqual(fixture.requests.filter { $0.url!.path == "/backend-api/tbo/dot/threads" }
+            .map { URLComponents(url: $0.url!, resolvingAgainstBaseURL: false)!.queryItems!.first { $0.name == "cursor" }?.value },
+                       [nil, "next"])
+        _ = try await service.outputTurns("bound", cursor: nil, for: dot)
+        let child = try await service.outputChild("child", of: "bound", for: dot)
+        XCTAssertEqual(child?.id, "child")
+        _ = try await service.outputItems("child", turnID: "t2", cursor: nil, for: dot)
+        let stranger = try await service.outputChild("stranger", of: "bound", for: dot)
+        XCTAssertNil(stranger, "A thread naming another parent is not this one's child")
+        let before = fixture.requests.count
+        do { _ = try await service.outputTurns("stranger", cursor: nil, for: dot); XCTFail("Not admitted") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .accessDenied) }
+        do { _ = try await service.activityTurns("bound", cursor: nil, for: dot); XCTFail("The Activity's list is its own") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .accessDenied) }
+        XCTAssertEqual(fixture.requests.count, before, "Nothing is asked for a thread outside the dot's")
+        XCTAssertTrue(fixture.requests.allSatisfy { $0.httpMethod == "GET" && $0.value(forHTTPHeaderField: "Cookie") == nil })
+
+        // A profile that names another root is not this dot's.
+        let moved = DotsHTTPRecorder(profile: #"{"id":"dot","active_root_thread_id":"elsewhere"}"#)
+        let other = makeService(moved, broker: DotsTestBroker())
+        let others = try await other.agents()
+        let same = try XCTUnwrap(others.first)
+        do { _ = try await other.outputThreads(for: same); XCTFail("Another root") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .invalidResponse) }
+        XCTAssertFalse(moved.requests.contains { $0.url!.path == "/backend-api/tbo/dot/threads" })
+        await service.stop()
+        await other.stop()
+    }
+
+    /// A file on the dot's computer is read over the execution host's socket as Yardlet: its own name,
+    /// no app verification, metadata then bytes, on the computer its thread's metadata names, or its
+    /// verified parent's when it names none. Asked to verify the app, it refuses and stops; a file too
+    /// large is refused whole; a computer that cannot be told opens no socket.
+    func testRemoteOutputFilesAreReadOverTheExecutionSocketAsYardlet() async throws {
+        let fixture = DotsHTTPRecorder()
+        let durable = DotsDurableSockets()
+        let service = makeService(fixture, broker: DotsTestBroker(), durable: durable)
+        let dots = try await service.agents()
+        let dot = try XCTUnwrap(dots.first)
+        _ = try await service.outputThreads(for: dot)
+        _ = try await service.outputChild("child", of: "bound", for: dot)
+
+        durable.script = .file(Data("report".utf8))
+        let file = PersonalAgentRemoteFile(path: "/mnt/data/report.pdf", threadID: "root", environmentID: "env")
+        let download = try await service.outputFile(file, for: dot)
+        XCTAssertEqual(download.data, Data("report".utf8))
+        XCTAssertEqual(download.name, "report.pdf")
+        let first = try XCTUnwrap(durable.sockets.first)
+        XCTAssertEqual(first.sent.map { $0["method"]?.stringValue }, ["initialize", "fs/getMetadata", "fs/readFile"])
+        XCTAssertEqual(first.sent[0]["params"]?["clientInfo"]?["name"]?.stringValue, "yardlet")
+        XCTAssertEqual(first.sent[0]["params"]?["capabilities"], .object(["experimentalApi": .bool(true), "requestAttestation": .bool(false)]))
+        XCTAssertEqual(first.sent[2]["params"], .object(["environmentId": .string("env"), "path": .string("/mnt/data/report.pdf")]))
+        XCTAssertNil(first.sent.first { $0["method"]?.stringValue == "initialized" }, "No separate initialized notice")
+        let request = try XCTUnwrap(durable.requests.first)
+        XCTAssertEqual(request.url, DotsDurableFiles.endpoint)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "ChatGPT-Account-Id"), "account")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"), "The credential rides only in the socket's protocol")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+        XCTAssertTrue(first.closed)
+
+        // A child whose metadata names no computer reads on its verified parent's.
+        durable.script = .file(Data())
+        let empty = try await service.outputFile(.init(path: "/mnt/data/empty.txt", threadID: "child", environmentID: "bound-env"), for: dot)
+        XCTAssertEqual(empty.data, Data(), "An empty file is empty, not missing")
+        XCTAssertEqual(durable.sockets.last?.sent.last?["params"]?["environmentId"]?.stringValue, "bound-env")
+
+        // Asked to verify the app, before or after the host is ready: refused, and the read ends.
+        for early in [true, false] {
+            durable.script = .attestation(early: early)
+            do { _ = try await service.outputFile(file, for: dot); XCTFail("Verification is not supported") }
+            catch {
+                XCTAssertEqual(error as? DotsRemoteFileError,
+                               .init(stage: early ? .initialize : .metadata, code: nil, failure: .verificationUnsupported))
+            }
+            let socket = try XCTUnwrap(durable.sockets.last)
+            XCTAssertEqual(socket.sent.last?["error"]?["code"], .integer(-32601))
+            XCTAssertFalse(socket.sent.contains { $0["method"]?.stringValue == "fs/readFile" })
+            XCTAssertTrue(socket.closed)
+        }
+        durable.script = .encoded(String(repeating: "A", count: (DotsDurableFiles.maximumBytes + 2) / 3 * 4 + 4))
+        do { _ = try await service.outputFile(file, for: dot); XCTFail("Too large") }
+        catch { XCTAssertEqual(error as? DotsRemoteFileError, .init(stage: .contents, code: nil, failure: .fileTooLarge)) }
+        durable.script = .encoded("not base64!")
+        do { _ = try await service.outputFile(file, for: dot); XCTFail("Not Base64") }
+        catch { XCTAssertEqual(error as? DotsRemoteFileError, .init(stage: .contents, code: nil, failure: .invalidResponse)) }
+
+        // The host's refusal at any step is a failed read at that step with its code, never a missing
+        // file, and its words are not kept; an answer out of turn is not taken for the file.
+        for (method, stage, code) in [("initialize", DotsRemoteFileError.Stage.initialize, Int64(-32600)),
+                                      ("fs/getMetadata", .metadata, -32601), ("fs/readFile", .contents, -32000)] {
+            durable.script = .refuse(method: method, code: code)
+            do { _ = try await service.outputFile(file, for: dot); XCTFail(method) }
+            catch {
+                let failure = try XCTUnwrap(error as? DotsRemoteFileError, method)
+                XCTAssertEqual(failure, .init(stage: stage, code: code, failure: .remoteFile))
+                XCTAssertFalse(failure.description.contains("secret"))
+            }
+        }
+        durable.script = .outOfTurn
+        do { _ = try await service.outputFile(file, for: dot); XCTFail("Out of turn") }
+        catch { XCTAssertEqual(error as? DotsRemoteFileError, .init(stage: .metadata, code: nil, failure: .invalidResponse)) }
+        XCTAssertFalse(durable.sockets.last?.sent.contains { $0["method"]?.stringValue == "fs/readFile" } ?? true)
+        durable.script = .directory
+        do { _ = try await service.outputFile(file, for: dot); XCTFail("A directory") }
+        catch { XCTAssertEqual(error as? DotsRemoteFileError, .init(stage: .metadata, code: nil, failure: .remoteFile)) }
+
+        // Another computer than the one the file was found on, or one that cannot be told, opens nothing.
+        let opened = durable.sockets.count
+        for (thread, environment) in [("root", "elsewhere"), ("plain", nil)] {
+            do {
+                _ = try await service.outputFile(.init(path: "/mnt/data/report.pdf", threadID: thread, environmentID: environment), for: dot)
+                XCTFail("\(thread)")
+            } catch { XCTAssertEqual(error as? PersonalAgentFailure, .computerUnavailable, thread) }
+        }
+        do { _ = try await service.outputFile(.init(path: "/mnt/../etc/passwd", threadID: "root", environmentID: "env"), for: dot); XCTFail("Path") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .remoteFile) }
+        do { _ = try await service.outputFile(.init(path: "/mnt/data/report.pdf", threadID: "stranger", environmentID: nil), for: dot); XCTFail("Scope") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .accessDenied) }
+        XCTAssertEqual(durable.sockets.count, opened)
+        await service.stop()
+    }
+
     /// A page of items too large to carry, by the provider's own words or by its size, is asked for
     /// again from the same cursor with half as many items, down to one; past that the read fails as
     /// too large. No other refusal is asked again.
@@ -625,14 +758,17 @@ final class DotsServiceTests: XCTestCase {
     }
 
     private func makeService(_ fixture: DotsHTTPRecorder, broker: DotsTestBroker, sockets: DotsSocketFactory? = nil,
-                             timing: DotsLiveTiming = .init()) -> DotsService {
+                             timing: DotsLiveTiming = .init(), durable: DotsDurableSockets? = nil) -> DotsService {
         DotsHTTPProtocol.current = fixture
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [DotsHTTPProtocol.self]
         var socket: (@Sendable (URL, URLSession) -> any DotsEventSocket)?
         if let sockets { socket = { _, _ in sockets.make() } }
+        var durableSocket: (@Sendable (URLRequest, URLSession) -> any DotsEventSocket)?
+        if let durable { durableSocket = { request, _ in durable.make(request) } }
         return DotsService(executable: URL(filePath: "/usr/bin/false"), environmentManager: nil, connection: nil,
-                           transport: broker, configuration: configuration, liveTiming: timing, socket: socket)
+                           transport: broker, configuration: configuration, liveTiming: timing, socket: socket,
+                           durableSocket: durableSocket)
     }
 }
 
@@ -643,10 +779,12 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
     private let room: String
     /// Message pages by their `before` cursor, "" for the latest; none answers with the room.
     private let pages: [String: String]
-    init(postStatuses: [Int] = [200],
+    private let profile: String
+    init(postStatuses: [Int] = [200], profile: String = #"{"id":"dot","active_root_thread_id":"root"}"#,
          room: String = #"{"id":"room","aeon_id":"dot","type":"DM","app_source":"chatgpt:messaging","members":[{"account_user_id":"person","role":"user"}]}"#,
          pages: [String: String] = [:]) {
         statuses = postStatuses
+        self.profile = profile
         self.room = room
         self.pages = pages
     }
@@ -674,6 +812,11 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
             if request.url?.host == "cdn.openai.com" { return (200, Data("PNG".utf8)) }
             if request.url?.host == "codex-cloud-backend.chatgpt.com" {
                 let bodies: [String: String] = [
+                    "/v1/threads/root": #"{"thread":{"id":"root","environments":[{"environmentId":"env","cwd":"/workspace"}]}}"#,
+                    "/v1/threads/bound": #"{"thread":{"id":"bound","environments":[{"environmentId":"managed"}],"connectedEnvironmentIds":["bound-env"]}}"#,
+                    "/v1/threads/child": #"{"thread":{"id":"child","source":{"subAgent":{"thread_spawn":{"parent_thread_id":"bound"}}}}}"#,
+                    "/v1/threads/stranger": #"{"thread":{"id":"stranger","parentThreadId":"root"}}"#,
+                    "/v2/threads/child/items": #"{"data":[],"nextCursor":null,"backwardsCursor":null}"#,
                     "/v1/threads/task": #"{"thread":{"id":"task","threadSource":"aeon","turns":[{"id":"hidden"}]}}"#,
                     "/v1/threads/plain": #"{"thread":{"id":"plain"}}"#,
                     "/v1/threads/other-task": #"{"thread":{"id":"another"}}"#,
@@ -701,6 +844,11 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
             case "/backend-api/tbo":
                 return (200, Data(#"{"items":[{"id":"dot","aeon_kind":"orbit","messaging_room_id":"room","active_root_thread_id":"root"}]}"#.utf8))
             case "/backend-api/tbo/primary": return (200, Data(#"{"profile":{"id":"dot"}}"#.utf8))
+            case "/backend-api/tbo/by-thread/root": return (200, Data(profile.utf8))
+            case "/backend-api/tbo/dot/threads":
+                return (200, Data((request.url?.query?.contains("cursor=next") == true
+                    ? #"{"items":[{"thread_id":"plain"},{"thread_id":"bound"}],"cursor":null}"#
+                    : #"{"items":[{"thread_id":"root"},{"thread_id":"bound"}],"cursor":"next"}"#).utf8))
             case "/backend-api/tbo/dot/activity":
                 return (200, Data(#"{"data":[{"thread_id":"task"},{"thread_id":"root"},{"thread_id":"plain"},{"thread_id":"gone"},{"thread_id":"other-task"},{"thread_id":"big"},{"thread_id":"huge"},{"thread_id":"bulky"},{"thread_id":"refused"}],"next_cursor":null}"#.utf8))
             default: break
@@ -874,6 +1022,92 @@ private final class DotsFakeSocket: DotsEventSocket, @unchecked Sendable {
     }
 
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) { drop() }
+}
+
+/// The execution host's socket as a test stands in for it: it answers each request Yardlet sends as
+/// the script says, and records what was sent and whether it was closed.
+private final class DotsDurableSockets: @unchecked Sendable {
+    enum Script {
+        case file(Data), encoded(String), attestation(early: Bool)
+        /// The host answers `method` with an error of `code`.
+        case refuse(method: String, code: Int64)
+        /// After initializing, the host answers the read Yardlet has not asked for yet.
+        case outOfTurn
+        case directory
+    }
+    private let lock = NSLock()
+    private var made: [DotsDurableSocket] = []
+    private var madeRequests: [URLRequest] = []
+    var script: Script = .file(Data())
+    var sockets: [DotsDurableSocket] { lock.withLock { made } }
+    var requests: [URLRequest] { lock.withLock { madeRequests } }
+    func make(_ request: URLRequest) -> DotsDurableSocket {
+        let socket = DotsDurableSocket(script: script)
+        lock.withLock { made.append(socket); madeRequests.append(request) }
+        return socket
+    }
+}
+
+private final class DotsDurableSocket: DotsEventSocket, @unchecked Sendable {
+    private let lock = NSLock()
+    private let script: DotsDurableSockets.Script
+    private var recorded: [JSONValue] = []
+    private var incoming: [JSONValue] = []
+    private var waiter: CheckedContinuation<URLSessionWebSocketTask.Message, Error>?
+    private var isClosed = false
+    init(script: DotsDurableSockets.Script) { self.script = script }
+    var sent: [JSONValue] { lock.withLock { recorded } }
+    var closed: Bool { lock.withLock { isClosed } }
+
+    func resume() { }
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+        guard case let .string(text) = message, let value = try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8)) else { return }
+        lock.withLock { recorded.append(value) }
+        let id = value["id"] ?? .null
+        let attestation: JSONValue = .object(["id": .string("server-1"), "method": .string("attestation/generate"), "params": .object([:])])
+        if case let .refuse(method, code) = script, value["method"]?.stringValue == method {
+            return push(.object(["id": id, "error": .object(["code": .integer(code), "message": .string("Refused at /secret/path")])]))
+        }
+        switch (value["method"]?.stringValue, script) {
+        case ("initialize", .attestation(early: true)): push(attestation)
+        case ("initialize", .outOfTurn):
+            push(.object(["id": id, "result": .object([:])]))
+            push(.object(["id": .string(DotsDurableFiles.readID), "result": .object(["dataBase64": .string("ZXhhbXBsZQ==")])]))
+        case ("fs/getMetadata", .directory): push(.object(["id": id, "result": .object(["isFile": .bool(false), "isDirectory": .bool(true)])]))
+        case ("initialize", _): push(.object(["id": id, "result": .object(["userAgent": .string("host")])]))
+        case ("fs/getMetadata", .attestation(early: false)): push(attestation)
+        case ("fs/getMetadata", _): push(.object(["id": id, "result": .object(["isFile": .bool(true), "isDirectory": .bool(false)])]))
+        case let ("fs/readFile", .file(data)): push(.object(["id": id, "result": .object(["dataBase64": .string(data.base64EncodedString())])]))
+        case let ("fs/readFile", .encoded(text)): push(.object(["id": id, "result": .object(["dataBase64": .string(text)])]))
+        default: break
+        }
+    }
+
+    private func push(_ value: JSONValue) {
+        let text = String(decoding: try! JSONEncoder().encode(value), as: UTF8.self)
+        lock.withLock {
+            if let waiter { self.waiter = nil; waiter.resume(returning: .string(text)) } else { incoming.append(value) }
+        }
+    }
+
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.withLock {
+                if !incoming.isEmpty {
+                    continuation.resume(returning: .string(String(decoding: try! JSONEncoder().encode(incoming.removeFirst()), as: UTF8.self)))
+                } else if isClosed { continuation.resume(throwing: URLError(.networkConnectionLost)) }
+                else { waiter = continuation }
+            }
+        }
+    }
+
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        lock.withLock {
+            isClosed = true
+            waiter?.resume(throwing: URLError(.networkConnectionLost))
+            waiter = nil
+        }
+    }
 }
 
 private final class DotsSocketFactory: @unchecked Sendable {
