@@ -1,2 +1,3 @@
 # Patches on swift-winrt keep the line endings of the files they change.
 Bindings/swift-winrt-patches/*.patch -text
+Bindings/swift-winrt-check-patches/*.patch -text
