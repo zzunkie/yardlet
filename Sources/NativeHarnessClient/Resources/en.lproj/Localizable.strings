@@ -3374,12 +3374,6 @@
 "Could not check the dot's tasks." = "Could not check the dot's tasks.";
 "Some outputs could not be checked." = "Some outputs could not be checked.";
 "Look further back" = "Look further back";
-"Checked all messages." = "Checked all messages.";
-"Checked the messages read so far." = "Checked the messages read so far.";
-"Checked all messages and the recent work of the dot's tasks (%lld)." = "Checked all messages and the recent work of the dot's tasks (%lld).";
-"Checked the messages read so far and the recent work of the dot's tasks (%lld)." = "Checked the messages read so far and the recent work of the dot's tasks (%lld).";
-"Checked all messages and all work of the dot's tasks (%lld)." = "Checked all messages and all work of the dot's tasks (%lld).";
-"Checked the messages read so far and all work of the dot's tasks (%lld)." = "Checked the messages read so far and all work of the dot's tasks (%lld).";
 "On the dot's computer: %@" = "On the dot's computer: %@";
 "Sent in the conversation" = "Sent in the conversation";
 "Sent in the conversation: %@" = "Sent in the conversation: %@";
