@@ -351,7 +351,8 @@ final class PersonalAgentRenderingTests: XCTestCase {
         let directory = try WindowlessRender.directory("personal-agent-activity-qa")
         for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 680)] {
             for appearance in WindowlessRender.Appearance.allCases {
-                let reader = RenderedPersonalAgentReader(agents: agents, messages: conversation)
+                let reader = RenderedPersonalAgentReader(agents: agents, messages: conversation,
+                    outputError: .init(stage: .contents, code: -32603, failure: .remoteFile))
                 let host = WindowlessRender.Host(MainWindow(model: model) { reader }
                     .environment(\.colorScheme, appearance.colorScheme)
                     .frame(width: size.width, height: size.height), size: size, appearance: appearance)
@@ -380,18 +381,24 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 XCTAssertTrue(visible.contains { $0.label == back }, "The way back is on screen at \(size)")
                 // An output that does not open says why in the Outputs, where it was chosen, though the
                 // task covers the conversation, and can be tried again there.
-                if !compact {
+                do {
+                    if compact { XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Show dot details"))) }
                     await host.settle(until: { host.accessibilityElements().contains { $0.label == "launch-plan.pdf" } })
                     XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "launch-plan.pdf"))
-                    let refused = PersonalAgentFailure.verificationUnsupported.message
+                    let refused = PersonalAgentFailure.remoteFile.message
                     await host.settle(until: {
                         host.accessibilityElements(visibleOnly: true).contains { $0.label == refused || $0.value == refused }
                     })
                     host.settle(passes: 8)
-                    try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: "activity-output-refused-\(name)"))
+                    try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: "activity-output-remote-error-\(name)"))
                     let reads = await reader.fileReads
                     XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Try again")))
                     try await waitUntil { await reader.fileReads == reads + 1 }
+                    await host.settle(until: {
+                        host.accessibilityElements(visibleOnly: true).contains { $0.label == refused || $0.value == refused }
+                    })
+                    XCTAssertNil(host.window.attachedSheet)
+                    if compact { XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Hide dot details"))) }
                 }
                 XCTAssertFalse(visible.contains { $0.label == L10n.string("Send message") }, "The record has no composer")
                 // Earlier turns only when asked.
@@ -2415,6 +2422,7 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
     private(set) var page: [PersonalAgentMessage]
     let older: [PersonalAgentMessage]
     let live: PersonalAgentLiveState?
+    let outputError: DotsRemoteFileError?
     /// Messages whose input request cannot be read, which then shows its status as unknown.
     let unreadable: Set<String>
     private(set) var olderReads = 0
@@ -2424,8 +2432,9 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
     func loseNextSend() { losesSend = true }
     func setPage(_ messages: [PersonalAgentMessage]) { page = messages }
     init(agents: [PersonalAgent], messages: [PersonalAgentMessage], older: [PersonalAgentMessage] = [],
-         live: PersonalAgentLiveState? = nil, unreadable: Set<String> = []) {
+         live: PersonalAgentLiveState? = nil, unreadable: Set<String> = [], outputError: DotsRemoteFileError? = nil) {
         values = agents; page = messages; self.older = older; self.live = live; self.unreadable = unreadable
+        self.outputError = outputError
     }
     private(set) var liveRequests = 0
     private(set) var liveRepeats = 0
@@ -2628,6 +2637,7 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
             holdsFile = false
             await withCheckedContinuation { pendingFile = $0 }
         }
+        if let outputError { throw outputError }
         throw PersonalAgentFailure.verificationUnsupported
     }
 
