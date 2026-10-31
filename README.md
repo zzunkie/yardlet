@@ -253,6 +253,11 @@ built with `YARDLET_WITHOUT_CEF=1`. CI builds the universal one and starts it on
 silicon and on Intel (`.github/workflows/launch.yml`): on `main`, by hand, and on pull requests that
 change how the bundle is built.
 
+An API that a newer SDK adds without marking it newer than macOS 15 links strongly, and the app stops
+before `main` on a macOS 15 release that lacks it. `./scripts/check-macos-symbols.sh <app> <SDK>`
+checks a bundle's imports from macOS against an older SDK; CI checks them against the macOS 15.0 SDK
+of Xcode 16.0, since its macOS 15 images run the latest 15.x.
+
 ### Screenshots and demo videos
 
 Debug builds carry a showcase scene for public screenshots and videos: made-up projects, people and

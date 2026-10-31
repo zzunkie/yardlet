@@ -2,10 +2,12 @@ name: Universal build and launch
 
 # A reference check, not one a pull request needs to merge. It builds the app for Intel Macs as well
 # as Apple silicon (a universal debug bundle without the browser host, whose pinned CEF build is arm64
-# only), then starts it on the oldest macOS Yardlet supports, on Apple silicon and on Intel. An API
-# the oldest macOS lacks can stop the app in dyld before `main`, which neither the build nor the tests
-# on the newest macOS notice. It runs on `main`, by hand, and on a pull request that changes how the
-# bundle is built.
+# only), then starts it on macOS 15, the oldest major version Yardlet supports, on Apple silicon and
+# on Intel. An API the oldest macOS lacks can stop the app in dyld before `main`, which neither the
+# build nor the tests on the newest macOS notice. GitHub's macOS 15 images run its latest point
+# release, which may already have an API that 15.0 lacks, so the bundle's imports are also checked
+# against the macOS 15.0 SDK (scripts/check-macos-symbols.sh). It runs on `main`, by hand, and on a
+# pull request that changes how the bundle is built.
 on:
   push:
     branches: [main]
@@ -17,6 +19,7 @@ on:
       - Package.resolved
       - Packaging/**
       - scripts/build-app.sh
+      - scripts/check-macos-symbols.sh
       - scripts/sign-app.sh
 
 permissions:
@@ -72,6 +75,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/check-macos-symbols.sh
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: yardlet-universal
@@ -93,3 +101,9 @@ jobs:
           fi
           kill "$pid"
           echo "Yardlet was still running after 30 seconds"
+      # Both architectures' imports, so once is enough. Xcode 16.0 carries the macOS 15.0 SDK.
+      - name: Check the imports against the macOS 15.0 SDK
+        if: ${{ !cancelled() && matrix.runner == 'macos-15' }}
+        run: |
+          sdk=$(DEVELOPER_DIR=/Applications/Xcode_16.0.app/Contents/Developer xcrun --sdk macosx15.0 --show-sdk-path)
+          ./scripts/check-macos-symbols.sh Yardlet.app "$sdk"
