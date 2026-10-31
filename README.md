@@ -159,9 +159,10 @@ Three helpers in the app bundle do work outside the main process:
 ## Known limitations
 
 - The Intel version is new and has not been tried on an Intel Mac by hand. CI starts it on Intel
-  macOS 15 and 26 with every change to `main` and opens the built-in browser there, but those Macs
-  have no GPU, so the browser has not been seen drawing with an Intel Mac's own graphics. If you use
-  Yardlet on an Intel Mac, please tell us how it goes: a
+  macOS 15 and 26 with every change to `main`, and there the built-in browser starts and loads pages.
+  Those Macs have only a virtual GPU, on which the browser often stops before it draws, so how it
+  draws with an Intel Mac's own graphics is not known yet. If you use Yardlet on an Intel Mac, please
+  tell us how it goes, especially if the built-in browser closes or stays blank: a
   [bug report](../../issues/new?template=bug_report.yml) with "Intel" chosen, or a note in
   [Discussions](../../discussions).
 - On Intel Macs the built-in browser plays no H.264 video or AAC audio, such as many sites' MP4
@@ -263,9 +264,10 @@ The bundle is built for the Mac that builds it. `YARDLET_ARCHS=x86_64` builds it
 the Intel CEF build. `YARDLET_ARCHS="arm64 x86_64"` builds a universal bundle, each executable joined
 with `lipo`; it is a debug bundle built with `YARDLET_WITHOUT_CEF=1`, since each CEF build has one
 architecture. CI builds the release bundle of each architecture in a disk image, starts it on macOS 15
-on Apple silicon and on Intel and on macOS 26 on Intel, and opens the browser panel on Intel with a
-debug bundle (`.github/workflows/launch.yml`): on `main`, by hand, and on pull requests that change
-how the bundle is built.
+on Apple silicon and on Intel and on macOS 26 on Intel, and opens the browser panel there with a debug
+bundle of the same architecture (`.github/workflows/launch.yml`): on `main`, by hand, and on pull
+requests that change how the bundle is built. On Intel the browser check only reports: GitHub's Intel
+Macs have a virtual GPU on which Chromium often cannot start drawing.
 
 An API that a newer SDK adds without marking it newer than macOS 15 links strongly, and the app stops
 before `main` on a macOS 15 release that lacks it. `./scripts/check-macos-symbols.sh <app> <SDK>`
