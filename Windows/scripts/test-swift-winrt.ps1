@@ -34,6 +34,8 @@ Push-Location $source
 try {
     $swift = (Get-Command swift).Source
     $version = ((swift --version 2>&1 | Select-String -Pattern 'Swift version (\d+\.\d+(\.\d+)?)').Matches[0].Groups[1].Value)
+    # swift-winrt's CMake names XCTest's folder by a three-part version, as Swift's installer does (6.2.0).
+    if ($version.Split('.').Count -eq 2) { $version = "$version.0" }
     # swift-winrt's CMake installs the test app from where SwiftPM's native build system puts it; Swift
     # Build, the default since Swift 6.4, puts it elsewhere.
     cmake --preset $Configuration "-DSWIFT_VERSION=$version" "-DSWIFT_EXE=$swift" "-DSWIFT_BUILD_ARGS=--build-system;native"
