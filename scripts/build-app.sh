@@ -16,6 +16,12 @@ MACOS_ICON="$ICON_WORK_DIR/AppIcon-1024.png"
 
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 
+# The CPU architectures the bundle's executables are built for: this Mac's by default, or
+# YARDLET_ARCHS, such as "x86_64" for Intel Macs or "arm64 x86_64" for a universal bundle, each
+# executable joined by lipo. The pinned CEF build is arm64 only, so a bundle for Intel is a debug
+# bundle built with YARDLET_WITHOUT_CEF=1.
+ARCHS=(${=YARDLET_ARCHS:-})
+
 # Chromium for the in-window browser (docs/BROWSER_HOST.md). Bundles carry this pinned CEF build,
 # verified before use: CEF's minimal distribution built from source with Chromium's H.264 and AAC
 # decoders, which CEF's own downloads leave out (scripts/build-cef.sh made it). YARDLET_WITHOUT_CEF=1
@@ -34,6 +40,10 @@ if [[ "${YARDLET_WITHOUT_CEF:-}" == 1 ]]; then
         exit 1
     fi
 else
+    if (( ${ARCHS[(Ie)x86_64]} )); then
+        echo "error: the pinned CEF build has no x86_64; build the bundle with YARDLET_WITHOUT_CEF=1" >&2
+        exit 1
+    fi
     CEF_DIR="$CEF_CACHE/$CEF_NAME"
     CEF_ARCHIVE="$CEF_CACHE/$CEF_NAME.tar.bz2"
     CEF_BINARY="$CEF_DIR/Release/Chromium Embedded Framework.framework/Chromium Embedded Framework"
@@ -63,16 +73,39 @@ fi
 export YARDLET_CEF_DIR="$CEF_DIR"
 
 cd "$PROJECT_ROOT"
-swift build --build-system "$BUILD_SYSTEM" -c "$CONFIGURATION" --product NativeHarnessClient
+# swift build once for this Mac, or once for each of YARDLET_ARCHS.
+swift_build() {
+    if (( ${#ARCHS} == 0 )); then
+        swift build --build-system "$BUILD_SYSTEM" -c "$CONFIGURATION" "$@"
+        return
+    fi
+    local arch
+    for arch in $ARCHS; do
+        swift build --build-system "$BUILD_SYSTEM" -c "$CONFIGURATION" --arch "$arch" "$@"
+    done
+}
+swift_build --product NativeHarnessClient
 # The Yardlet MCP server harnesses start over stdio (docs/AGENT_BROWSER_TOOLS.md).
-swift build --build-system "$BUILD_SYSTEM" -c "$CONFIGURATION" --product yardlet-mcp
+swift_build --product yardlet-mcp
 # The launch daemon behind "Keep tasks working with the lid closed" (docs/REMOTE_V2_DESIGN.md §6.5).
-swift build --build-system "$BUILD_SYSTEM" -c "$CONFIGURATION" --product yardlet-lid-helper
+swift_build --product yardlet-lid-helper
 if [[ -n "$CEF_DIR" ]]; then
-    swift build --build-system "$BUILD_SYSTEM" -c "$CONFIGURATION" --product YardletCEFHelper
-    swift build --build-system "$BUILD_SYSTEM" -c "$CONFIGURATION" --product YardletBrowserHost
+    swift_build --product YardletCEFHelper
+    swift_build --product YardletBrowserHost
 fi
-BIN_DIR=$(swift build --build-system "$BUILD_SYSTEM" -c "$CONFIGURATION" --show-bin-path)
+BIN_DIRS=("${(@f)$(swift_build --show-bin-path)}")
+# Resources are the same for every architecture and come from the first.
+BIN_DIR=$BIN_DIRS[1]
+# Puts a built executable in the bundle: one architecture's as built, several joined by lipo.
+install_executable() {
+    local name=$1 destination=$2
+    if (( ${#BIN_DIRS} > 1 )); then
+        /usr/bin/lipo -create -output "$destination" "${^BIN_DIRS[@]}/$name"
+    else
+        cp "$BIN_DIR/$name" "$destination"
+    fi
+    chmod 755 "$destination"
+}
 
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$PROJECT_ROOT/Packaging/Info.plist" "$CONTENTS_DIR/Info.plist"
@@ -157,8 +190,7 @@ if [[ -n "$RELAY_URL" ]]; then
 else
     echo "Relay: none built in (Packaging/RelayURL is absent)" >&2
 fi
-cp "$BIN_DIR/NativeHarnessClient" "$MACOS_DIR/Yardlet"
-chmod 755 "$MACOS_DIR/Yardlet"
+install_executable NativeHarnessClient "$MACOS_DIR/Yardlet"
 
 [[ "$ICON_WORK_DIR" == "$PROJECT_ROOT/.build/YardletIconAssets" ]]
 if [[ -e "$ICON_WORK_DIR" ]]; then
@@ -214,12 +246,10 @@ rm -f "$RESOURCES_DIR/CHROMIUM_CREDITS.html"
 
 HELPERS_DIR="$CONTENTS_DIR/Helpers"
 mkdir -p "$HELPERS_DIR"
-cp "$BIN_DIR/yardlet-mcp" "$HELPERS_DIR/yardlet-mcp"
-chmod 755 "$HELPERS_DIR/yardlet-mcp"
+install_executable yardlet-mcp "$HELPERS_DIR/yardlet-mcp"
 # The lid helper and its launchd property list, named from the bundle identifier
 # (LidSleepHelperIdentity), which SMAppService.daemon(plistName:) finds in Contents/Library/LaunchDaemons.
-cp "$BIN_DIR/yardlet-lid-helper" "$HELPERS_DIR/yardlet-lid-helper"
-chmod 755 "$HELPERS_DIR/yardlet-lid-helper"
+install_executable yardlet-lid-helper "$HELPERS_DIR/yardlet-lid-helper"
 LAUNCH_DAEMONS_DIR="$CONTENTS_DIR/Library/LaunchDaemons"
 rm -rf "$LAUNCH_DAEMONS_DIR"
 mkdir -p "$LAUNCH_DAEMONS_DIR"
@@ -271,8 +301,7 @@ if [[ -n "$CEF_DIR" ]]; then
         identifier_suffix=${${suffix//[() ]/}:l}
         helper_identifier="$BASE_IDENTIFIER.helper${identifier_suffix:+.$identifier_suffix}"
         mkdir -p "$helper_app/Contents/MacOS"
-        cp "$BIN_DIR/YardletCEFHelper" "$helper_app/Contents/MacOS/$helper_name"
-        chmod 755 "$helper_app/Contents/MacOS/$helper_name"
+        install_executable YardletCEFHelper "$helper_app/Contents/MacOS/$helper_name"
         sed -e "s|@EXECUTABLE_NAME@|$helper_name|g" \
             -e "s|@BUNDLE_IDENTIFIER@|$helper_identifier|g" \
             -e "s|@SHORT_VERSION@|$SHORT_VERSION|g" \
@@ -280,8 +309,7 @@ if [[ -n "$CEF_DIR" ]]; then
             "$PROJECT_ROOT/Packaging/CEF/Helper-Info.plist" > "$helper_app/Contents/Info.plist"
     done
 
-    cp "$BIN_DIR/YardletBrowserHost" "$HOST_APP/Contents/MacOS/Yardlet Browser Host"
-    chmod 755 "$HOST_APP/Contents/MacOS/Yardlet Browser Host"
+    install_executable YardletBrowserHost "$HOST_APP/Contents/MacOS/Yardlet Browser Host"
     sed -e "s|@BUNDLE_IDENTIFIER@|$HOST_IDENTIFIER|g" \
         -e "s|@SHORT_VERSION@|$SHORT_VERSION|g" \
         -e "s|@BUNDLE_VERSION@|$BUNDLE_VERSION|g" \

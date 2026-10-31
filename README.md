@@ -246,6 +246,13 @@ its hash, and stops with the download command when it is missing. A debug bundle
 it with `YARDLET_WITHOUT_CEF=1`; `swift build`, `swift run`, and `swift test` never need CEF and fall
 back to the WebKit preview. See [docs/BROWSER_HOST.md](docs/BROWSER_HOST.md).
 
+The bundle is built for the Mac that builds it. `YARDLET_ARCHS` names other architectures:
+`YARDLET_ARCHS=x86_64` for Intel Macs, or `YARDLET_ARCHS="arm64 x86_64"` for a universal bundle, each
+executable joined with `lipo`. The pinned CEF build is arm64 only, so such a bundle is a debug bundle
+built with `YARDLET_WITHOUT_CEF=1`. CI builds the universal one and starts it on macOS 15 on Apple
+silicon and on Intel (`.github/workflows/launch.yml`): on `main`, by hand, and on pull requests that
+change how the bundle is built.
+
 ### Screenshots and demo videos
 
 Debug builds carry a showcase scene for public screenshots and videos: made-up projects, people and
