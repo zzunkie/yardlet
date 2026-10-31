@@ -39,7 +39,8 @@ try {
     cmake --build --preset release
     cmake --build --preset release --target install
     git add -N .
-    git diff -- tests/test_component/Sources | Set-Content $Regenerated -Encoding utf8
+    # Written by git itself, so each file keeps its own line endings.
+    git diff --binary --output=$Regenerated -- tests/test_component/Sources
     # swift-winrt installs the test app with test_component.dll; with Swift 6.4 the modules that DLL uses
     # are DLLs of their own, beside it where SwiftPM built them.
     $built = Join-Path $source 'build\release\tests\x86_64-unknown-windows-msvc\release'
