@@ -53,7 +53,11 @@ struct ConversationTurnHost: NSViewRepresentable, Equatable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
-        context.coordinator.hosting?.size(forWidth: proposal.width ?? nsView.bounds.width)
+        guard let size = context.coordinator.hosting?.size(forWidth: proposal.width ?? nsView.bounds.width) else { return nil }
+        // A new turn's view takes the size it was measured at until it is placed: laid out at no size
+        // first, its messages were laid out whole at a width they never show at, then again at theirs.
+        if nsView.frame.isEmpty, size.width > 0, size.width.isFinite { nsView.frame.size = size }
+        return size
     }
 
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
