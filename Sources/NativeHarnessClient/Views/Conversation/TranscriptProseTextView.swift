@@ -602,7 +602,7 @@ final class TranscriptProseTextView: NSTextView {
         let resigned = super.resignFirstResponder()
         if resigned, ConversationSelection.spans(self) {
             ConversationSelection.clear()
-            if ConversationSelection.log.isEnabled(type: .debug) {
+            if ConversationSelection.logHandle.isEnabled(type: .debug) {
                 // The responder taking focus is the window's once this returns.
                 DispatchQueue.main.async { [weak window] in
                     ConversationSelection.log.debug("""

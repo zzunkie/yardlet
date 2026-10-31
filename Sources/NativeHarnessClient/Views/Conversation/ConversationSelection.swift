@@ -84,8 +84,12 @@ enum ConversationSelection {
     /// (2026-10-25) is confirmed fixed in the installed app: view classes and counts, never the words.
     /// Debug level; the app's `OSLogPreferences` keeps this category on disk, so a drag can be read
     /// afterwards with `log show --debug`.
-    static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.zzunkie.yardlet",
-                            category: "conversation-selection")
+    static let log = Logger(logHandle)
+    /// Asked whether debug messages are kept (`logHandle.isEnabled(type:)`, the C library's
+    /// `os_log_type_enabled`, which every macOS has): `Logger.isEnabled(type:)` is a symbol newer SDKs
+    /// link that macOS 15 does not have, and an app linking it does not start there.
+    static let logHandle = OSLog(subsystem: Bundle.main.bundleIdentifier ?? "com.zzunkie.yardlet",
+                                 category: "conversation-selection")
 
     /// Whether `view` holds part of the selection, whose copy is the selection's.
     static func spans(_ view: NSView) -> Bool {
@@ -360,7 +364,7 @@ enum ConversationSelection {
         guard pressLog == nil else { return }
         pressLog = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
             MainActor.assumeIsolated {
-                guard log.isEnabled(type: .debug), let window = event.window, let content = window.contentView,
+                guard logHandle.isEnabled(type: .debug), let window = event.window, let content = window.contentView,
                       let text = proseText(at: event.locationInWindow, in: content) else { return }
                 let root = content.superview ?? content
                 let hit = root.hitTest(root.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow)
