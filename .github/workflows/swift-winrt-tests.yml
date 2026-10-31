@@ -47,6 +47,12 @@ jobs:
             expect: fail
             swift: '6.2'
             configuration: debug
+          # The second version, without the weak reference change, on the new tests.
+          - variant: fixes without the weak reference change and tests, Swift 6.2 debug
+            patches: ..\swift-winrt-check-patches\0001-without-weak-reference-fix.patch,0002-test-projected-object-identity.patch
+            expect: fail
+            swift: '6.2'
+            configuration: debug
           # As the Windows app builds: Swift 6.4.1.
           - variant: tests only, Swift 6.4.1 release
             patches: 0002-test-projected-object-identity.patch

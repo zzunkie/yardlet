@@ -1,5 +1,5 @@
 diff --git a/tests/test_app/ValueBoxingTests.swift b/tests/test_app/ValueBoxingTests.swift
-index 2246c28..125a99b 100644
+index 2246c28..ad54ae1 100644
 --- a/tests/test_app/ValueBoxingTests.swift
 +++ b/tests/test_app/ValueBoxingTests.swift
 @@ -43,6 +43,20 @@ class ValueBoxingTests : XCTestCase {
@@ -23,7 +23,7 @@ index 2246c28..125a99b 100644
    }
  
    public func testInSwiftStruct() {
-@@ -92,6 +106,12 @@ class ValueBoxingTests : XCTestCase {
+@@ -92,6 +106,14 @@ class ValueBoxingTests : XCTestCase {
  
      anyObj = try! classy.returnObject()
      XCTAssertEqual(anyObj as! Person, person)
@@ -31,12 +31,14 @@ index 2246c28..125a99b 100644
 +    // A Swift class derived from a projected one comes back as itself
 +    let appDerived = AppDerived()
 +    _ = try! classy.inObject(appDerived)
++    try! classy.outObject(&anyObj)
++    XCTAssertIdentical(anyObj as? AppDerived, appDerived)
 +    anyObj = try! classy.returnObject()
 +    XCTAssertIdentical(anyObj as? AppDerived, appDerived)
    }
  }
  
-@@ -101,6 +121,7 @@ var valueBoxingTests: [XCTestCaseEntry] = [
+@@ -101,6 +123,7 @@ var valueBoxingTests: [XCTestCaseEntry] = [
      ("InInt", ValueBoxingTests.testInInt),
      ("InString", ValueBoxingTests.testInString),
      ("InWinRTClass", ValueBoxingTests.testInWinRTClass),
@@ -44,6 +46,78 @@ index 2246c28..125a99b 100644
      ("InSwiftStruct", ValueBoxingTests.testInSwiftStruct),
      ("OutInterface", ValueBoxingTests.testOutInterface),
      ("testInAppImplemented", ValueBoxingTests.testInAppImplemented),
+diff --git a/tests/test_app/WeakReferenceTests.swift b/tests/test_app/WeakReferenceTests.swift
+index 26d20d9..8f7760c 100644
+--- a/tests/test_app/WeakReferenceTests.swift
++++ b/tests/test_app/WeakReferenceTests.swift
+@@ -16,6 +16,14 @@ class WeakReferenceTests : XCTestCase {
+     XCTAssertIdentical(roundtripped, original)
+   }
+ 
++  public func testResolveProjectedClass() throws {
++    // A projected class passed as an interface it implements
++    let original = ReferenceTarget()
++    let weakReferencer = WeakReferencer(original)
++    let roundtripped = try XCTUnwrap(weakReferencer.resolve())
++    try roundtripped.method()
++  }
++
+   public func testNotStrong() throws {
+     var original: Target! = Target()
+     let weakReferencer = WeakReferencer(original)
+@@ -27,6 +35,7 @@ class WeakReferenceTests : XCTestCase {
+ var weakReferenceTests: [XCTestCaseEntry] = [
+   testCase([
+     ("testCreateAndResolve", WeakReferenceTests.testCreateAndResolve),
++    ("testResolveProjectedClass", WeakReferenceTests.testResolveProjectedClass),
+     ("testNotStrong", WeakReferenceTests.testNotStrong)
+   ])
+ ]
+diff --git a/tests/test_component/cpp/CMakeLists.txt b/tests/test_component/cpp/CMakeLists.txt
+index 56155b3..71cff7f 100644
+--- a/tests/test_component/cpp/CMakeLists.txt
++++ b/tests/test_component/cpp/CMakeLists.txt
+@@ -136,6 +136,7 @@ target_sources(test_component_cpp PRIVATE
+     NoopClosable.cpp
+     NullValues.cpp
+     pch.cpp
++    ReferenceTarget.cpp
+     Simple.cpp
+     UnsealedDerived.cpp
+     UnsealedDerived2.cpp
+diff --git a/tests/test_component/cpp/ReferenceTarget.cpp b/tests/test_component/cpp/ReferenceTarget.cpp
+new file mode 100644
+index 0000000..f346249
+--- /dev/null
++++ b/tests/test_component/cpp/ReferenceTarget.cpp
+@@ -0,0 +1,3 @@
++#include "pch.h"
++#include "ReferenceTarget.h"
++#include "ReferenceTarget.g.cpp"
+diff --git a/tests/test_component/cpp/ReferenceTarget.h b/tests/test_component/cpp/ReferenceTarget.h
+new file mode 100644
+index 0000000..9011a57
+--- /dev/null
++++ b/tests/test_component/cpp/ReferenceTarget.h
+@@ -0,0 +1,18 @@
++#pragma once
++#include "ReferenceTarget.g.h"
++
++namespace winrt::test_component::implementation
++{
++    struct ReferenceTarget : ReferenceTargetT<ReferenceTarget>
++    {
++        ReferenceTarget() = default;
++
++        void Method() {}
++    };
++}
++namespace winrt::test_component::factory_implementation
++{
++    struct ReferenceTarget : ReferenceTargetT<ReferenceTarget, implementation::ReferenceTarget>
++    {
++    };
++}
 diff --git a/tests/test_component/cpp/StaticClass.cpp b/tests/test_component/cpp/StaticClass.cpp
 index 8baf2ba..39c105a 100644
 --- a/tests/test_component/cpp/StaticClass.cpp
@@ -71,6 +145,22 @@ index 376e338..0b968bf 100644
  
          private:
          static test_component::Fruit s_fruit;
+diff --git a/tests/test_component/cpp/WeakReferencer.idl b/tests/test_component/cpp/WeakReferencer.idl
+index 300bd16..3489ee9 100644
+--- a/tests/test_component/cpp/WeakReferencer.idl
++++ b/tests/test_component/cpp/WeakReferencer.idl
+@@ -5,6 +5,11 @@ namespace test_component
+         void Method();
+     }
+ 
++    runtimeclass ReferenceTarget : [default] IReferenceTarget
++    {
++        ReferenceTarget();
++    }
++
+     runtimeclass WeakReferencer
+     {
+         WeakReferencer(IReferenceTarget object);
 diff --git a/tests/test_component/cpp/test_component.idl b/tests/test_component/cpp/test_component.idl
 index df3d50b..42f764c 100644
 --- a/tests/test_component/cpp/test_component.idl

@@ -1,5 +1,5 @@
 diff --git a/swiftwinrt/Resources/Support/IInspectable.swift b/swiftwinrt/Resources/Support/IInspectable.swift
-index f026059..8715af4 100644
+index f026059..c886728 100644
 --- a/swiftwinrt/Resources/Support/IInspectable.swift
 +++ b/swiftwinrt/Resources/Support/IInspectable.swift
 @@ -62,6 +62,11 @@ public enum __ABI_ {
@@ -14,14 +14,53 @@ index f026059..8715af4 100644
          } else {
              return try super.toABI(body)
          }
-@@ -118,7 +123,9 @@ public enum __ABI_ {
+@@ -118,7 +123,12 @@ public enum __ABI_ {
          },
  
          GetRuntimeClassName: {
 -            guard let instance = AnyWrapper.tryUnwrapFrom(raw: $0) else { return E_INVALIDARG }
 +            guard var instance = AnyWrapper.tryUnwrapFrom(raw: $0) else { return E_INVALIDARG }
-+            // A Swift class derived from a composable class without overrides is held by a weak reference
-+            if let weakRef = instance as? AnyObjectWrapper, let obj = weakRef.obj { instance = obj }
++            // A Swift class derived from a composable class with no overrides interface is held by a weak reference
++            if let weakRef = instance as? AnyObjectWrapper {
++                guard let obj = weakRef.obj else { return E_INVALIDARG }
++                instance = obj
++            }
              guard let winrtClass = instance as? WinRTClass else {
                let string = String(reflecting: type(of: instance))
                $1!.pointee = try! HString(string).detach()
+diff --git a/swiftwinrt/Resources/Support/IWeakReference.swift b/swiftwinrt/Resources/Support/IWeakReference.swift
+index 1cec899..900583e 100644
+--- a/swiftwinrt/Resources/Support/IWeakReference.swift
++++ b/swiftwinrt/Resources/Support/IWeakReference.swift
+@@ -37,7 +37,7 @@ fileprivate class WeakReferenceWrapper: WinRTAbiBridgeWrapper<IWeakReferenceBrid
+         default:
+             guard let obj = WeakReferenceWrapper.tryUnwrapFromBase(raw: pUnk) else { return E_NOINTERFACE }
+             let anyWrapper = __ABI_.AnyWrapper(obj)!
+-            return __ABI_.AnyWrapper.queryInterface(try! anyWrapper.toABI { $0 }, riid, ppvObject)
++            return try! anyWrapper.toABI { $0.pointee.lpVtbl.pointee.QueryInterface($0, riid, ppvObject) }
+         }
+     }
+ }
+@@ -76,7 +76,8 @@ fileprivate func Resolve(
+ 
+     let anyWrapper = __ABI_.AnyWrapper(target)!
+     var rawObject: UnsafeMutableRawPointer? = nil
+-    let result = __ABI_.AnyWrapper.queryInterface(try! anyWrapper.toABI { $0 }, riid, &rawObject)
++    // Query the object toABI gives, which can be a WinRT object rather than a Swift wrapper
++    let result = try! anyWrapper.toABI { $0.pointee.lpVtbl.pointee.QueryInterface($0, riid, &rawObject) }
+     ppvObject.pointee = rawObject?.bindMemory(to: C_IInspectable.self, capacity: 1)
+     return result
+ }
+diff --git a/swiftwinrt/Resources/Support/IWeakReferenceSource.swift b/swiftwinrt/Resources/Support/IWeakReferenceSource.swift
+index 015d810..ec7b327 100644
+--- a/swiftwinrt/Resources/Support/IWeakReferenceSource.swift
++++ b/swiftwinrt/Resources/Support/IWeakReferenceSource.swift
+@@ -30,7 +30,7 @@ fileprivate class WeakReferenceSourceWrapper: WinRTAbiBridgeWrapper<IWeakReferen
+         default:
+             guard let obj = WeakReferenceSourceWrapper.tryUnwrapFromBase(raw: pUnk) else { return E_NOINTERFACE }
+             let anyWrapper = __ABI_.AnyWrapper(obj)!
+-            return __ABI_.AnyWrapper.queryInterface(try! anyWrapper.toABI { $0 }, riid, ppvObject)
++            return try! anyWrapper.toABI { $0.pointee.lpVtbl.pointee.QueryInterface($0, riid, ppvObject) }
+         }
+     }
+ }
