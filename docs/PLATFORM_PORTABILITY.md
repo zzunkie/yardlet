@@ -152,10 +152,10 @@ A fix the app needs before swift-winrt merges it goes on the pinned commit as a 
 pull request, and comes out once a pinned commit includes it. The patches carry one fix now: a projected object passed
 where WinRT takes an `Object` goes as itself rather than as a wrapper made for the call, so the callee sees its COM
 identity (without it, `IVector<Object>.IndexOf` does not find an item appended through the bindings, such as one in
-`NavigationView.MenuItems`), and a Swift subclass of a class without overridable methods, which then reaches WinRT
-through swift-winrt's shared `IInspectable` code, still reports its base's runtime class name; the second patch is
-their tests in swift-winrt's own test app. When the pin or the patches
-change on a `windows-*` branch, `swift-winrt-tests.yml` builds swift-winrt and runs its tests twice: with the tests
+`NavigationView.MenuItems`). The same patch keeps what that change would otherwise break: the runtime class name of a
+Swift subclass of a class without overridable methods, and resolving a weak reference that WinRT holds to a projected
+object. The second patch is their tests in swift-winrt's own test app. When the pin or the patches change on a
+`windows-*` branch, `swift-winrt-tests.yml` builds swift-winrt and runs its tests twice: with the tests
 alone, which must fail and so show what the fixes are for, and with the fixes, which must pass.
 
 **If swift-winrt stops being maintained,** in this order: keep the pinned version, which keeps generating the same
