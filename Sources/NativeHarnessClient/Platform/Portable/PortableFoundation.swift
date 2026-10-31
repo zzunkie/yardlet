@@ -45,6 +45,16 @@ extension AttributeDynamicLookup {
 /// An object whose changes a screen follows (Combine's `ObservableObject`); nothing follows it here.
 protocol ObservableObject: AnyObject {}
 
+extension ObservableObject {
+    /// What the object announces before it changes (Combine's `objectWillChange`); no one hears it here.
+    var objectWillChange: ObservableObjectPublisher { ObservableObjectPublisher() }
+}
+
+/// Combine's `ObservableObjectPublisher`, which sends to no one here.
+struct ObservableObjectPublisher {
+    func send() {}
+}
+
 /// A property whose changes a screen follows (Combine's `Published`); here it only holds the value.
 @propertyWrapper
 struct Published<Value> {
