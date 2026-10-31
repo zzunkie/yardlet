@@ -239,6 +239,8 @@ struct ConversationTimeline: View {
             if placement.paintsCanvas { ParityTheme.canvas }
         }
         .task(id: revealed.progress) { await revealArrivedTurns(revealed.progress) }
+        // Shown again in kept views (`TaskSurfaceHost`), a history result is gone to as on a first show.
+        .onDisappear { handledInitialSearch = false }
         .sheet(isPresented: $showsFileRewind) {
             if let rewindActions = actions.rewind { ClaudeFileRewindSheet(actions: rewindActions) }
         }

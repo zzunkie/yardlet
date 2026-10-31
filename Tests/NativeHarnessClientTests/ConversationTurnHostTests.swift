@@ -138,6 +138,71 @@ final class ConversationTurnHostTests: XCTestCase {
         XCTAssertTrue(texts.contains { $0.string.contains("Done in turn 3") }, "The kept turns are in the window again")
     }
 
+    @Observable
+    final class Shown {
+        var taskID = UUID()
+        var showsElsewhere = false
+    }
+
+    /// The window's view of a task, kept while another task is shown (`TaskSurfaceHost`), beside a
+    /// second view of the same conversation (another task's side panel shows it as a tab).
+    private struct KeptHost: View {
+        let shown: Shown
+        let taskID: UUID
+        let entries: [TranscriptEntry]
+        let renderState: ConversationRenderState
+        let hostings: TaskSurfaceHostings
+
+        var body: some View {
+            HStack(spacing: 0) {
+                TaskSurfaceHost(taskID: shown.taskID, hostings: hostings, content: AnyView(Group {
+                    if shown.taskID == taskID { conversation } else { Color.clear }
+                }))
+                if shown.showsElsewhere { conversation }
+            }
+            .frame(width: 900, height: 700)
+        }
+
+        private var conversation: some View {
+            TaskConversationView(harness: .claudeCode, workspaceURL: LongConversationFixture.workspace,
+                                 entries: entries, sessionStatus: .completed, renderState: renderState)
+        }
+    }
+
+    /// Another view of a conversation whose turns the window keeps in a hidden task's views makes turn
+    /// views of its own, and the task shown again still draws its turns.
+    func testAConversationShownElsewhereLeavesTheKeptViewsTheirTurns() {
+        let shown = Shown()
+        let taskID = shown.taskID
+        let host = WindowlessRender.Host(
+            KeptHost(shown: shown, taskID: taskID, entries: LongConversationFixture.claude(turns: 9),
+                     renderState: ConversationRenderState(), hostings: TaskSurfaceHostings()),
+            size: NSSize(width: 900, height: 700), appearance: .light)
+        defer { host.close() }
+        host.settle(passes: 20)
+        func texts() -> Int {
+            TranscriptProseRenderingTests.proseTextViews(in: host.hosting).filter { $0.string.contains("Done in turn") }.count
+        }
+        let drawn = texts()
+        XCTAssertGreaterThan(drawn, 0)
+
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        defer {
+            ViewBodyCensus.isEnabled = false
+            ViewBodyCensus.reset()
+        }
+        shown.taskID = UUID()
+        shown.showsElsewhere = true
+        host.settle(passes: 10)
+        XCTAssertEqual(ViewBodyCensus[.conversationTurnHosting], 9, "The second view built its own nine turns")
+
+        shown.showsElsewhere = false
+        shown.taskID = taskID
+        host.settle(passes: 10)
+        XCTAssertEqual(texts(), drawn, "The task shown again draws its turns")
+    }
+
     func testAChangeInLookReachesEveryTurn() {
         let (feed, host, _) = makeHost(finishedTurns: 9)
         feed.scheme = .dark

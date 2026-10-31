@@ -40,6 +40,9 @@ final class TranscriptReadingTracker {
     @ObservationIgnored private var followsLatest = true
     @ObservationIgnored private var wasHidden = false
     @ObservationIgnored private var hasStarted = false
+    /// The bookmark as it was when the conversation left the window in views kept to show again
+    /// (`TaskSurfaceHost`), until it shows again.
+    @ObservationIgnored private var bookmarkWhenHidden: TranscriptReadingBookmark?
     @ObservationIgnored private var geometryTask: Task<Void, Never>?
     @ObservationIgnored private var anchorAttempts = 0
     @ObservationIgnored private var needsCapture = false
@@ -78,6 +81,25 @@ final class TranscriptReadingTracker {
             request = .latest
         }
         scheduleGeometry()
+    }
+
+    /// The conversation leaves the window, its views kept to show again.
+    func hide() {
+        guard hasStarted else { return }
+        bookmarkWhenHidden = record?.bookmark ?? .init()
+    }
+
+    /// Whether the conversation, shown again in the views it kept, goes on from where they are. It
+    /// does unless its bookmark moved while it was hidden (another view of the task read on); reading
+    /// then starts again from the bookmark (`start`), as it does in new views.
+    func resumes(record: TranscriptReadingPosition?) -> Bool {
+        guard hasStarted, let hidden = bookmarkWhenHidden else { return false }
+        bookmarkWhenHidden = nil
+        if record === self.record, (record?.bookmark ?? .init()) == hidden { return true }
+        hasStarted = false
+        pending = nil
+        deferred = nil
+        return false
     }
 
     /// - Parameter resolve: reads a saved place in `ids`. With it, a place kept since reading started,

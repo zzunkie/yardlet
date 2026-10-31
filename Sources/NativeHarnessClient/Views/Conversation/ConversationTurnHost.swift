@@ -34,8 +34,9 @@ struct ConversationTurnHost: NSViewRepresentable, Equatable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     /// The turn's own hosting view, kept with the task or made for it, in a view that takes the presses
-    /// the turn's content hands on (`ConversationPressSurface`). A kept one is not in a window (another
-    /// conversation view showing the same turn makes its own).
+    /// the turn's content hands on (`ConversationPressSurface`). A kept one is in no other turn view:
+    /// another conversation view showing the same turn makes its own, also while a task's views the
+    /// window keeps out of it (`TaskSurfaceHost`) hold the kept one.
     func makeNSView(context: Context) -> NSView {
         let hosting = renderState?.hosting(for: turn.id) ?? ConversationTurnHosting(turnID: turn.id)
         context.coordinator.hosting = hosting
@@ -62,6 +63,10 @@ struct ConversationTurnHost: NSViewRepresentable, Equatable {
 
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
         coordinator.hosting?.onResize = {}
+        // The turn view is gone: its hosting is free for the next view of the turn.
+        if let content = coordinator.hosting?.controller.view, content.superview === view {
+            content.removeFromSuperview()
+        }
     }
 }
 
@@ -328,10 +333,10 @@ final class ConversationRenderState {
 
     init() {}
 
-    /// The turn's hosting, kept unless another conversation view shows it now.
+    /// The turn's hosting, kept unless another turn view holds it now.
     func hosting(for turnID: String) -> ConversationTurnHosting {
         Self.touch(self)
-        if let hosting = hostings[turnID], hosting.controller.view.window == nil {
+        if let hosting = hostings[turnID], hosting.controller.view.superview == nil {
             return hosting
         }
         let hosting = ConversationTurnHosting(turnID: turnID)
@@ -348,7 +353,7 @@ final class ConversationRenderState {
     }
 
     private func releaseHostings() {
-        hostings = hostings.filter { $0.value.controller.view.window != nil }
+        hostings = hostings.filter { $0.value.controller.view.superview != nil }
     }
 
     private static func touch(_ state: ConversationRenderState) {
