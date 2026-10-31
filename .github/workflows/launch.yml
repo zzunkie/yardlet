@@ -7,11 +7,13 @@ name: Launch on macOS 15 and Intel
 # oldest macOS lacks can stop the app in dyld before `main`, which neither the build nor the tests on
 # the newest macOS notice. GitHub's macOS 15 images run its latest point release, which may already
 # have an API that 15.0 lacks, so the bundle's imports are also checked against the macOS 15.0 SDK
-# (scripts/check-macos-symbols.sh). On Intel a debug bundle also opens the browser panel on a QA page
-# (scripts/browser-host-qa, `--ui-fixture-browser-check-only=open`): the browser host and CEF start
-# and a frame arrives. GitHub's Intel Macs have no GPU, so this is Chromium's software rendering, not
-# what an Intel Mac's own graphics draw. It runs on `main`, by hand, and on a pull request that changes
-# how the bundle is built.
+# (scripts/check-macos-symbols.sh). A debug bundle of each architecture also opens the browser panel on
+# a QA page (scripts/browser-host-qa, `--ui-fixture-browser-check-only=open`): the browser host and CEF
+# start, the page loads and a frame arrives. GitHub's Intel Macs have only a paravirtual GPU (Metal 2),
+# on which Chromium's GPU process fails to start; Chromium draws there only when its fallback takes
+# over in time, and otherwise ends the browser host ("GPU process isn't usable"). So on Intel the
+# browser check reports without failing the job, and it shows nothing of what an Intel Mac's own
+# graphics draw. It runs on `main`, by hand, and on a pull request that changes how the bundle is built.
 on:
   push:
     branches: [main]
@@ -146,7 +148,9 @@ jobs:
           sdk=$(DEVELOPER_DIR=/Applications/Xcode_16.0.app/Contents/Developer xcrun --sdk macosx15.0 --show-sdk-path)
           ./scripts/check-macos-symbols.sh "$RUNNER_TEMP/Applications/Yardlet.app" "$sdk"
       - name: Open the browser panel
+        id: browser
         if: ${{ !cancelled() }}
+        continue-on-error: ${{ matrix.arch == 'x86_64' }}
         run: |
           system_profiler SPDisplaysDataType | grep -E "Chipset Model|Metal" || true
           mkdir -p .build/browser-host-qa
@@ -156,14 +160,14 @@ jobs:
             --ui-fixture-browser-check-only=open
       # The browser host's and Chromium's logs are in the QA home, and crash reports where macOS keeps them.
       - name: Gather the browser check's logs
-        if: ${{ failure() }}
+        if: ${{ !cancelled() && steps.browser.outcome == 'failure' }}
         run: |
           out=.build/browser-host-qa/open
           mkdir -p "$out/logs" "$out/crash-reports"
           cp -R ".build/browser-host-qa/qa-home/Library/Application Support/Yardlet/Browser/Logs/." "$out/logs/" || true
           find ~/Library/Logs/DiagnosticReports -name 'Yardlet*' -newer "$out/.started" -exec cp {} "$out/crash-reports/" \; || true
       - name: Keep the browser check's output
-        if: ${{ failure() }}
+        if: ${{ !cancelled() && steps.browser.outcome == 'failure' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-check-${{ matrix.runner }}
