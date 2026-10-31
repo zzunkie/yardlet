@@ -154,6 +154,14 @@ jobs:
           ./scripts/browser-host-qa/prepare-qa.sh .build/Yardlet.app .build/browser-host-qa/YardletQA.app com.zzunkie.yardletqa
           ./scripts/browser-host-qa/run-check.sh .build/browser-host-qa/YardletQA.app "$PWD/.build/browser-host-qa/open" \
             --ui-fixture-browser-check-only=open
+      # The browser host's and Chromium's logs are in the QA home, and crash reports where macOS keeps them.
+      - name: Gather the browser check's logs
+        if: ${{ failure() && matrix.arch == 'x86_64' }}
+        run: |
+          out=.build/browser-host-qa/open
+          mkdir -p "$out/logs" "$out/crash-reports"
+          cp -R ".build/browser-host-qa/qa-home/Library/Application Support/Yardlet/Browser/Logs/." "$out/logs/" || true
+          find ~/Library/Logs/DiagnosticReports -name 'Yardlet*' -newer "$out/.started" -exec cp {} "$out/crash-reports/" \; || true
       - name: Keep the browser check's output
         if: ${{ failure() && matrix.arch == 'x86_64' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -21,7 +21,9 @@ mkdir -p "$out/samples" "$out/server"
 
 python3 "$TOOLS/form-server.py" --output-dir "$out/server" >"$out/server/stdout.log" 2>&1 &
 server_pid=$!
-for _ in {1..50}; do [[ -s "$out/server/port" ]] && break; sleep 0.1; done
+# The page server can take seconds to start on a slow Mac, such as CI's.
+for _ in {1..300}; do [[ -s "$out/server/port" ]] && break; sleep 0.1; done
+[[ -s "$out/server/port" ]] || { echo "the QA page server did not start" >&2; kill "$server_pid"; exit 1; }
 port=$(<"$out/server/port")
 echo "QA pages on http://127.0.0.1:$port/ (pid $server_pid)"
 
