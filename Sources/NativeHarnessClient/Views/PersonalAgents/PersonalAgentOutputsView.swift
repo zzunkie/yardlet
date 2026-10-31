@@ -15,8 +15,8 @@ struct PersonalAgentOutputFailure: Equatable {
 }
 
 /// The dot's Outputs beside its conversation, as the provider's app lists them: the newest three,
-/// three more at a time, each with its kind, name and when it was made. Below them, what was checked:
-/// it never says all when it was not all, and a part that failed says so with Try again.
+/// three more at a time, each with its kind, name and when it was made. A failure stays with its file;
+/// earlier pages and failed reads can be requested below the list.
 struct PersonalAgentOutputsList: View {
     let outputs: PersonalAgentOutputs
     let isOpening: Bool
@@ -31,8 +31,9 @@ struct PersonalAgentOutputsList: View {
 #if DEBUG
         let _ = ViewBodyCensus.note(.personalAgentOutputs)
 #endif
+        let count = displayedCount
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(outputs.items.prefix(shown)) { output in
+            ForEach(outputs.items.prefix(count)) { output in
                 Button { actions.open(output) } label: {
                     SessionRailRow(systemName: Self.symbol(output), title: output.title) {
                         if let date = output.producedAt {
@@ -46,21 +47,21 @@ struct PersonalAgentOutputsList: View {
                 .help(Self.origin(output))
                 .accessibilityLabel(output.title)
                 .accessibilityValue(Self.origin(output))
+                if let openFailure, openFailure.output.id == output.id {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(openFailure.failure.message).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(L10n.string("Try again")) { actions.open(output) }
+                            .buttonStyle(.borderless).font(.caption).parityPointer().disabled(isOpening)
+                    }
+                    .padding(.bottom, 4)
+                    .accessibilityElement(children: .contain)
+                }
             }
-            if outputs.items.count > shown {
-                Button(L10n.string("Show more")) { shown += Self.step }
+            if outputs.items.count > count {
+                Button(L10n.string("Show more")) { shown = count + Self.step }
                     .buttonStyle(.plain).foregroundStyle(.secondary).font(.caption).parityPointer()
                     .padding(.top, 2)
-            }
-            if let openFailure {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(openFailure.failure.message).font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button(L10n.string("Try again")) { actions.open(openFailure.output) }
-                        .buttonStyle(.borderless).font(.caption).parityPointer().disabled(isOpening)
-                }
-                .padding(.top, 4)
-                .accessibilityElement(children: .contain)
             }
             status.padding(.top, outputs.items.isEmpty ? 0 : 4)
         }
@@ -86,7 +87,6 @@ struct PersonalAgentOutputsList: View {
                 } else if let failure = outputs.failure {
                     failed(L10n.string("Some outputs could not be checked."), help: failure.message)
                 }
-                Text(scopeText).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if outputs.hasEarlier {
                     Button(L10n.string("Look further back"), action: actions.readEarlier)
                         .buttonStyle(.plain).foregroundStyle(.secondary).font(.caption).parityPointer()
@@ -102,17 +102,10 @@ struct PersonalAgentOutputsList: View {
         }
     }
 
-    /// What the list covers: the messages read, and the tasks whose work was looked through.
-    private var scopeText: String {
-        let all = outputs.checkedAllMessages
-        let tasks = Int64(outputs.checkedTasks)
-        if tasks == 0 { return all ? L10n.string("Checked all messages.") : L10n.string("Checked the messages read so far.") }
-        if outputs.hasEarlier || outputs.failure != nil {
-            return all ? L10n.format("Checked all messages and the recent work of the dot's tasks (%lld).", tasks)
-                       : L10n.format("Checked the messages read so far and the recent work of the dot's tasks (%lld).", tasks)
-        }
-        return all ? L10n.format("Checked all messages and all work of the dot's tasks (%lld).", tasks)
-                   : L10n.format("Checked the messages read so far and all work of the dot's tasks (%lld).", tasks)
+    /// New outputs can move the failed file past Show more. Keep its row and retry visible together.
+    private var displayedCount: Int {
+        guard let openFailure, let index = outputs.items.firstIndex(where: { $0.id == openFailure.output.id }) else { return shown }
+        return max(shown, index + 1)
     }
 
     static func symbol(_ output: PersonalAgentOutput) -> String {

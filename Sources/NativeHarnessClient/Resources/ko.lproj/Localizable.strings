@@ -3374,12 +3374,6 @@
 "Could not check the dot's tasks." = "Dot의 작업을 확인하지 못했습니다.";
 "Some outputs could not be checked." = "일부 결과물을 확인하지 못했습니다.";
 "Look further back" = "이전 결과물 더 확인";
-"Checked all messages." = "모든 메시지를 확인했습니다.";
-"Checked the messages read so far." = "지금까지 읽은 메시지를 확인했습니다.";
-"Checked all messages and the recent work of the dot's tasks (%lld)." = "모든 메시지와 Dot 작업(%lld개)의 최근 기록을 확인했습니다.";
-"Checked the messages read so far and the recent work of the dot's tasks (%lld)." = "지금까지 읽은 메시지와 Dot 작업(%lld개)의 최근 기록을 확인했습니다.";
-"Checked all messages and all work of the dot's tasks (%lld)." = "모든 메시지와 Dot 작업(%lld개)의 전체 기록을 확인했습니다.";
-"Checked the messages read so far and all work of the dot's tasks (%lld)." = "지금까지 읽은 메시지와 Dot 작업(%lld개)의 전체 기록을 확인했습니다.";
 "On the dot's computer: %@" = "Dot의 컴퓨터에 있음: %@";
 "Sent in the conversation" = "대화에서 보냄";
 "Sent in the conversation: %@" = "대화에서 보냄: %@";

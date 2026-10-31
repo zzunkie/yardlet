@@ -390,6 +390,15 @@ final class PersonalAgentRenderingTests: XCTestCase {
                         host.accessibilityElements(visibleOnly: true).contains { $0.label == refused || $0.value == refused }
                     })
                     host.settle(passes: 8)
+                    let rows = Self.texts(in: host.hosting, of: host.window)
+                    let fileRow = try XCTUnwrap(rows.first { $0.text == "launch-plan.pdf" })
+                    let errorRow = try XCTUnwrap(rows.first { $0.text == refused })
+                    let retryRow = try XCTUnwrap(rows.first { $0.text == L10n.string("Try again") })
+                    let nextRow = try XCTUnwrap(rows.first { $0.text == "plan-notes.md" })
+                    XCTAssertGreaterThanOrEqual(errorRow.frame.minY, fileRow.frame.maxY - 1)
+                    XCTAssertGreaterThanOrEqual(retryRow.frame.minY, errorRow.frame.maxY - 1)
+                    XCTAssertLessThanOrEqual(retryRow.frame.maxY, nextRow.frame.minY + 1,
+                                             "The failure and retry stay below their file, before the next output")
                     try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: "activity-output-remote-error-\(name)"))
                     let reads = await reader.fileReads
                     XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Try again")))
@@ -398,6 +407,23 @@ final class PersonalAgentRenderingTests: XCTestCase {
                         host.accessibilityElements(visibleOnly: true).contains { $0.label == refused || $0.value == refused }
                     })
                     XCTAssertNil(host.window.attachedSheet)
+                    if !compact && appearance == .light {
+                        // Newer results push the failed file past the initial three. It remains drawn
+                        // with its retry, and Show more advances beyond that automatically revealed row.
+                        let newMessage = PersonalAgentMessage(id: "new-outputs", author: .agent, text: "More results.",
+                            createdAt: Date(), isDeleted: false, attachments: (1...3).map {
+                                .init(fileID: "recent-\($0)", name: "recent-\($0).txt", type: "file")
+                            })
+                        await reader.setPage(conversation + [newMessage])
+                        await reader.signalChange()
+                        await host.settle(until: { host.accessibilityElements().contains { $0.label == "recent-3.txt" } })
+                        let changed = host.accessibilityElements()
+                        XCTAssertTrue(changed.contains { $0.label == "launch-plan.pdf" })
+                        XCTAssertTrue(changed.contains { $0.label == refused || $0.value == refused })
+                        XCTAssertFalse(changed.contains { $0.label == "plan-notes.md" })
+                        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Show more")))
+                        await host.settle(until: { host.accessibilityElements().contains { $0.label == "plan-notes.md" } })
+                    }
                     if compact { XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Hide dot details"))) }
                 }
                 XCTAssertFalse(visible.contains { $0.label == L10n.string("Send message") }, "The record has no composer")

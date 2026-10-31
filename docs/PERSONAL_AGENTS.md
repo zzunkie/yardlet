@@ -101,10 +101,9 @@ each task's turns is read with every item of those turns, from the execution-his
 host, as an Activity task is read; messages come from the conversation's own pages as
 they are read. **Look further back** reads the next pages of the tasks' work and an
 earlier page of messages from the list's own cursor, without moving the conversation.
-Yardlet reads the conversation's and the tasks' pages a part at a time, so the line under
-the list says what was checked (the messages read so far or all of them, and recent or all work of so
-many tasks); it never says all when it was not. A part that could not be read says so,
-keeps what was found and is read again by **Try again**. A deleted message's outputs
+The list is read a part at a time; **Look further back** is available while more pages
+remain. A part that could not be read says so, keeps what was found and is read again
+by **Try again**. A deleted message's outputs
 are removed and do not come back from an older read.
 
 Choosing an output opens it from where it came from. A file of the conversation opens
@@ -118,8 +117,9 @@ no app verification, then asks for the file's metadata and bytes
 same native preview, with **Save…**. A file larger than 64 MiB is refused whole,
 never cut short. If the host asks to verify the app, or sends any other request, the
 read stops and says so; Yardlet answers none and does not try again another way. Why
-an output did not open is shown under the Outputs, with **Try again**, also while an
-Activity task covers the conversation. A reading that another dot, account or
+an output did not open is shown directly below its file, with **Try again**, also
+while an Activity task covers the conversation. If newer outputs move that file
+past **Show more**, the list includes it so its retry remains beside the file. A reading that another dot, account or
 connection replaced shows nothing when it ends.
 
 Synthetic responses cover collecting outputs, opening files and handling failures.
