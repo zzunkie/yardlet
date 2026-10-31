@@ -87,8 +87,17 @@ final class Probe: XamlApplication {
         let foundTyped = panel.children.indexOf(block, &index)
         report("IVector<UIElement>.indexOf (a typed parameter): \(foundTyped ? "found at \(index)" : "not found")")
 
+        report("IVector<Object>.getAt is == to the object appended: \((stored as? NavigationViewItemBase).map { $0 == (second as NavigationViewItemBase) } ?? false)")
+
         navigation.selectedItem = second
         report("NavigationView.selectedItem is the item set: \((navigation.selectedItem as AnyObject?) === second)")
+
+        // A Swift subclass of a composable class is aggregated: its COM identity is the Swift object.
+        let derived = DerivedItem()
+        navigation.menuItems.append(derived)
+        let storedDerived = navigation.menuItems.getAt(2)
+        report("Swift subclass: getAt returns the same Swift object: \((storedDerived as AnyObject?) === derived)")
+        report("Swift subclass: IVector<Object>.indexOf: \(navigation.menuItems.indexOf(derived, &index) ? "found at \(index)" : "not found")")
     }
 
     // MARK: Boxed values
@@ -108,3 +117,6 @@ final class Probe: XamlApplication {
         return "\(type(of: value)) (as String: \((value as? String).map { "\"\($0)\"" } ?? "no"))"
     }
 }
+
+/// A Swift subclass of a composable XAML class, which swift-winrt aggregates.
+final class DerivedItem: NavigationViewItem {}
