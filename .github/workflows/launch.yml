@@ -1,13 +1,17 @@
-name: Universal build and launch
+name: Launch on macOS 15 and Intel
 
-# A reference check, not one a pull request needs to merge. It builds the app for Intel Macs as well
-# as Apple silicon (a universal debug bundle without the browser host, whose pinned CEF build is arm64
-# only), then starts it on macOS 15, the oldest major version Yardlet supports, on Apple silicon and
-# on Intel. An API the oldest macOS lacks can stop the app in dyld before `main`, which neither the
-# build nor the tests on the newest macOS notice. GitHub's macOS 15 images run its latest point
-# release, which may already have an API that 15.0 lacks, so the bundle's imports are also checked
-# against the macOS 15.0 SDK (scripts/check-macos-symbols.sh). It runs on `main`, by hand, and on a
-# pull request that changes how the bundle is built.
+# A reference check, not one a pull request needs to merge. It builds the release bundle of each
+# architecture as scripts/release.sh does, with that architecture's CEF build (signed ad hoc and without
+# Sparkle's feed), in a disk image. Then macOS 15, the oldest major version Yardlet supports, on Apple
+# silicon and on Intel, and macOS 26 on Intel copy the app out of the image and start it. An API the
+# oldest macOS lacks can stop the app in dyld before `main`, which neither the build nor the tests on
+# the newest macOS notice. GitHub's macOS 15 images run its latest point release, which may already
+# have an API that 15.0 lacks, so the bundle's imports are also checked against the macOS 15.0 SDK
+# (scripts/check-macos-symbols.sh). On Intel a debug bundle also opens the browser panel on a QA page
+# (scripts/browser-host-qa, `--ui-fixture-browser-check-only=open`): the browser host and CEF start
+# and a frame arrives. GitHub's Intel Macs have no GPU, so this is Chromium's software rendering, not
+# what an Intel Mac's own graphics draw. It runs on `main`, by hand, and on a pull request that changes
+# how the bundle is built.
 on:
   push:
     branches: [main]
@@ -21,6 +25,7 @@ on:
       - scripts/build-app.sh
       - scripts/check-macos-symbols.sh
       - scripts/sign-app.sh
+      - scripts/browser-host-qa/**
 
 permissions:
   contents: read
@@ -30,65 +35,94 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  universal-bundle:
-    name: Universal bundle
-    # GitHub's Xcode 27 image is arm64 only; it builds the x86_64 half as well.
+  bundle:
+    name: ${{ matrix.arch }} bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
+    # GitHub's Xcode 27 image is arm64 only; it builds the x86_64 bundle as well.
     runs-on: xcode-27
-    timeout-minutes: 60
+    timeout-minutes: 90
+    env:
+      YARDLET_ARCHS: ${{ matrix.arch }}
+      YARDLET_DOWNLOAD_CEF: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Build
-        env:
-          YARDLET_ARCHS: arm64 x86_64
-          YARDLET_WITHOUT_CEF: "1"
-        run: ./scripts/build-app.sh debug
-      - name: Check that every executable has both architectures
+      - name: Build the release bundle
+        run: ./scripts/build-app.sh release
+      - name: Check that every executable is ${{ matrix.arch }} alone
         run: |
-          for file in .build/Yardlet.app/Contents/MacOS/Yardlet .build/Yardlet.app/Contents/Helpers/*; do
-            lipo -info "$file"
-            # lipo -verify_arch takes one architecture at a time.
-            for arch in arm64 x86_64; do lipo "$file" -verify_arch "$arch"; done
-          done
-      # ditto keeps the bundle's links and signature, which the artifact's own zip does not.
-      - name: Pack
-        run: ditto -c -k --keepParent .build/Yardlet.app .build/Yardlet.zip
+          # Sparkle's own executables are universal as Sparkle ships them.
+          find .build/Yardlet.app -type f -not -path '*/Sparkle.framework/*' -print0 |
+            while IFS= read -r -d '' file; do
+              archs=$(lipo -archs "$file" 2>/dev/null) || continue
+              [[ "$archs" == "$YARDLET_ARCHS" ]] || { echo "::error::$file is $archs"; exit 1; }
+            done
+      # As release.sh makes it with --skip-notarize: the app beside a link to /Applications.
+      - name: Make the disk image
+        run: |
+          mkdir -p "$RUNNER_TEMP/image"
+          ditto .build/Yardlet.app "$RUNNER_TEMP/image/Yardlet.app"
+          ln -s /Applications "$RUNNER_TEMP/image/Applications"
+          hdiutil create -volname Yardlet -srcfolder "$RUNNER_TEMP/image" -format UDZO "Yardlet-$YARDLET_ARCHS.dmg"
+      # The browser panel's QA fixture is compiled into debug builds only.
+      - name: Build the debug bundle for the browser check
+        if: matrix.arch == 'x86_64'
+        run: |
+          ./scripts/build-app.sh debug
+          ditto -c -k --keepParent .build/Yardlet.app "Yardlet-debug-$YARDLET_ARCHS.zip"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: yardlet-universal
-          path: .build/Yardlet.zip
+          name: yardlet-${{ matrix.arch }}
+          path: |
+            Yardlet-${{ matrix.arch }}.dmg
+            Yardlet-debug-${{ matrix.arch }}.zip
           retention-days: 3
           if-no-files-found: error
 
   launch:
     name: Launch on ${{ matrix.name }}
-    needs: universal-bundle
+    needs: bundle
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: macOS 15, Apple silicon
             runner: macos-15
+            arch: arm64
           - name: macOS 15, Intel
             runner: macos-15-intel
+            arch: x86_64
+          - name: macOS 26, Intel
+            runner: macos-26-intel
+            arch: x86_64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: scripts/check-macos-symbols.sh
+          sparse-checkout: |
+            scripts/check-macos-symbols.sh
+            scripts/browser-host-qa
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: yardlet-universal
-      - name: Launch
+          name: yardlet-${{ matrix.arch }}
+      - name: Copy the app out of the disk image
         run: |
           sw_vers
           uname -m
-          ditto -x -k Yardlet.zip .
-          ./Yardlet.app/Contents/MacOS/Yardlet > launch.log 2>&1 &
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/image" "Yardlet-${{ matrix.arch }}.dmg"
+          mkdir -p "$RUNNER_TEMP/Applications"
+          ditto "$RUNNER_TEMP/image/Yardlet.app" "$RUNNER_TEMP/Applications/Yardlet.app"
+          hdiutil detach "$RUNNER_TEMP/image"
+      - name: Launch
+        run: |
+          "$RUNNER_TEMP/Applications/Yardlet.app/Contents/MacOS/Yardlet" > launch.log 2>&1 &
           pid=$!
           # A missing symbol ends the process before main; one still running after this has started.
           sleep 30
@@ -101,9 +135,25 @@ jobs:
           fi
           kill "$pid"
           echo "Yardlet was still running after 30 seconds"
-      # Both architectures' imports, so once is enough. Xcode 16.0 carries the macOS 15.0 SDK.
+      # Xcode 16.0 carries the macOS 15.0 SDK on both macOS 15 images.
       - name: Check the imports against the macOS 15.0 SDK
-        if: ${{ !cancelled() && matrix.runner == 'macos-15' }}
+        if: ${{ !cancelled() && startsWith(matrix.runner, 'macos-15') }}
         run: |
           sdk=$(DEVELOPER_DIR=/Applications/Xcode_16.0.app/Contents/Developer xcrun --sdk macosx15.0 --show-sdk-path)
-          ./scripts/check-macos-symbols.sh Yardlet.app "$sdk"
+          ./scripts/check-macos-symbols.sh "$RUNNER_TEMP/Applications/Yardlet.app" "$sdk"
+      - name: Open the browser panel
+        if: ${{ !cancelled() && matrix.arch == 'x86_64' }}
+        run: |
+          mkdir -p .build/browser-host-qa
+          ditto -x -k "Yardlet-debug-${{ matrix.arch }}.zip" .build
+          ./scripts/browser-host-qa/prepare-qa.sh .build/Yardlet.app .build/browser-host-qa/YardletQA.app com.zzunkie.yardletqa
+          ./scripts/browser-host-qa/run-check.sh .build/browser-host-qa/YardletQA.app "$PWD/.build/browser-host-qa/open" \
+            --ui-fixture-browser-check-only=open
+      - name: Keep the browser check's output
+        if: ${{ failure() && matrix.arch == 'x86_64' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-check-${{ matrix.runner }}
+          path: .build/browser-host-qa/open
+          retention-days: 7
+          if-no-files-found: ignore

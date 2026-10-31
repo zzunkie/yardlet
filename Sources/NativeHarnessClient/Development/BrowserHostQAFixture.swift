@@ -107,6 +107,17 @@ private final class BrowserHostQARunner {
             "downloads": .string(MacBrowserHost.shared.paths.downloads.path(percentEncoded: false))
         ])
         try? await Task.sleep(for: .seconds(3))
+        // `--ui-fixture-browser-check-only=open` only opens the panel on the QA page: the host starts, the page
+        // loads and a frame arrives. CI runs it on Intel Macs, which have no GPU there.
+        if BrowserHostQAFixture.argument("ui-fixture-browser-check-only") == "open" {
+            if let controller = await openPanel(label: "open", address: base) {
+                let loaded = await waitUntil(.seconds(30)) { controller.title == "Browser QA" && !controller.isLoading }
+                check("open: the QA page loads", loaded, "title \"\(controller.title)\"")
+                await closePanel()
+                client.closeTabs(forSession: session)
+            }
+            return await finish()
+        }
         // `--ui-fixture-browser-check-only=rail-preview` runs the session rail's preview alone.
         if BrowserHostQAFixture.argument("ui-fixture-browser-check-only") == "rail-preview" {
             await exerciseRailPreview()
