@@ -26,6 +26,54 @@ final class ConversationSwitchFrameTests: XCTestCase {
         window.report()
     }
 
+    /// A task shown again in the views the window kept for it (`TaskSurfaceHost`): its turns are not
+    /// built or drawn again and the reader is where they left it, the task shown in between is at its
+    /// own place, and the window keeps the views of its latest four tasks only.
+    func testATaskShownAgainKeepsItsOwnViewsAndPlace() throws {
+        let window = try ConversationBlankFrameTests.makeWindow(
+            [.claude("Latest", turns: 40), .claude("Reading", turns: 40)]
+                + (0..<4).map { .claude("Other \($0)", turns: 2) }, for: self)
+        defer { window.close() }
+        // Each step lets go of what it autoreleased, as the app's run loop does, so a task's views
+        // that nothing keeps are gone at once.
+        func show(_ index: Int) { autoreleasepool { window.show(index) } }
+        show(0)
+        // The reader left the second task partway up its conversation.
+        let reading = window.tasks[1].id
+        let request = try XCTUnwrap(window.model.transcriptBySessionID[reading]?.dropLast(12).last { entry in
+            if case .user = entry.content { return true }
+            return false
+        })
+        window.model.taskWorkspaces.state(for: reading).transcript.bookmark = .init(
+            anchorID: request.id.uuidString, fraction: 0, followsLatest: false)
+        show(1)
+        weak var kept: NSScrollView?
+        let place = autoreleasepool {
+            kept = window.conversation
+            return window.distanceFromEnd
+        }
+        XCTAssertGreaterThan(place, 48, "The reader is above the end")
+        XCTAssertNotNil(kept)
+
+        show(0)
+        XCTAssertLessThanOrEqual(autoreleasepool { window.distanceFromEnd }, 48,
+                                 "The task shown in between is at its own end")
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        defer {
+            ViewBodyCensus.isEnabled = false
+            ViewBodyCensus.reset()
+        }
+        show(1)
+        XCTAssertTrue(autoreleasepool { window.conversation === kept }, "The task's own views are shown again")
+        XCTAssertEqual(ViewBodyCensus[.conversationTurnHosting], 0, "No turn view was built again")
+        XCTAssertEqual(ViewBodyCensus[.conversationTurn], 0, "No turn was drawn again")
+        XCTAssertEqual(autoreleasepool { window.distanceFromEnd }, place, accuracy: 2, "The reader is where they left it")
+
+        for index in 2..<6 { show(index) }
+        XCTAssertNil(kept, "The views of a fifth task back are let go")
+    }
+
     /// A Claude Code task opened for the first time this launch, with nothing in Yardlet's reading
     /// cache: its conversation is read from Claude Code's file. Until it arrives the conversation
     /// says it is loading — never "Start a conversation", which reads as an empty task — and the read

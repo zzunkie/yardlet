@@ -31,6 +31,8 @@ struct MainWindow: View {
     /// The width the person set by dragging the sidebar's line (`SidebarWidth`), kept across launches.
     /// Only the sidebar's column and the title bar read it, so a drag does not rebuild the window.
     @State private var sidebarWidth = SidebarWidthState()
+    /// The views of the tasks this window showed alone last, kept to show again (`TaskSurfaceHost`).
+    @State private var taskSurfaceHostings = TaskSurfaceHostings()
     /// The task rows' hover card, drawn over the sidebar and the content beside it.
     @State private var sidebarHoverCard = SidebarHoverCardState()
     /// The shown task's place in the sidebar while the list is scrolled away from its top. The window
@@ -561,8 +563,12 @@ struct MainWindow: View {
                 .environment(\.taskAreaHeader, titleBarHeader(for: item))
         case let .session(id):
             if let session = sessionRecord(id) {
-                TaskObservationScope { taskContent(for: session) }
-                    .environment(\.taskAreaHeader, titleBarHeader(for: item))
+                TaskSurfaceHost(taskID: id, hostings: taskSurfaceHostings, content: AnyView(
+                    TaskSurfaceFocusScope { focusedSurface in
+                        TaskObservationScope { taskContent(for: session, focusedSurface: focusedSurface) }
+                            .environment(\.taskAreaHeader, titleBarHeader(for: item, focusedSurface: focusedSurface))
+                    }
+                ))
                     .modifier(PaneDropTarget(sessionID: id) { dropped, direction in
                         placeDroppedTask(dropped, beside: nil, direction: direction)
                     })
@@ -1207,10 +1213,14 @@ struct MainWindow: View {
         )
     }
 
-    /// - Parameter homeReply: the home answers the task in its composer's place (`NewTaskHome`): the
-    ///   composer's Escape and Tab and every send or answer go to the home too.
+    /// - Parameters:
+    ///   - homeReply: the home answers the task in its composer's place (`NewTaskHome`): the
+    ///     composer's Escape and Tab and every send or answer go to the home too.
+    ///   - focusedSurface: the focus of the title bar's panel buttons where the task has a view graph of
+    ///     its own (`TaskSurfaceHost`); the window's otherwise.
     private func taskContent(for session: SessionRecord, conversationOnly: Bool = false, filePanelOwnerID: UUID? = nil,
-                             homeReply: NewTaskHomeReplyHooks? = nil) -> some View {
+                             homeReply: NewTaskHomeReplyHooks? = nil,
+                             focusedSurface: FocusState<TaskSurface?>.Binding? = nil) -> some View {
         let workspace = model.taskWorkspaces.state(for: session.id, initialSurface: model.initialTaskSurface)
         return TaskPresentationBoundary(
             conversationOnly: conversationOnly,
@@ -1221,7 +1231,7 @@ struct MainWindow: View {
             composerDraft: model.composerDrafts.tasks.draft(for: session.id),
             workspaceState: workspace,
             panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
-            focusedSurface: $focusedTaskSurface,
+            focusedSurface: focusedSurface ?? $focusedTaskSurface,
             entries: model.transcriptBySessionID[session.id] ?? [],
             isReadingSavedConversation: model.isReadingSavedConversation(session.id),
             errorMessage: model.errorBySessionID[session.id],
@@ -1957,7 +1967,7 @@ struct MainWindow: View {
     /// The title bar beside the sidebar for what the tab shows: `item` is the window's item the title bar
     /// heads (the shown task, the split view or the new-task screen), nil for a screen in its place
     /// (scheduled tasks, restoring), which shows neither a task's header nor the tabs.
-    private func titleBar(for item: WindowItem?) -> IntegratedTitleBar {
+    private func titleBar(for item: WindowItem?, focusedSurface: FocusState<TaskSurface?>.Binding? = nil) -> IntegratedTitleBar {
         let session = item.flatMap { item -> SessionRecord? in
             guard case let .session(id) = item else { return nil }
             return sessionRecord(id)
@@ -1971,7 +1981,7 @@ struct MainWindow: View {
             onToggleSessionRail: toggleSessionRail,
             sessionRail: sessionRail,
             panelState: taskPanelState,
-            focusedSurface: $focusedTaskSurface,
+            focusedSurface: focusedSurface ?? $focusedTaskSurface,
             onToggleSidebar: toggleSidebar,
             onNewTask: showNewTask,
             onResume: { session in Task { await model.resume(session) } },
@@ -2053,8 +2063,9 @@ struct MainWindow: View {
     }
 
     /// The title bar as the header of the area that shows the tab's task or new-task screen.
-    private func titleBarHeader(for item: WindowItem) -> TaskAreaHeader {
-        TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true, content: AnyView(titleBar(for: item)))
+    private func titleBarHeader(for item: WindowItem, focusedSurface: FocusState<TaskSurface?>.Binding? = nil) -> TaskAreaHeader {
+        TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true,
+                       content: AnyView(titleBar(for: item, focusedSurface: focusedSurface)))
     }
 
     /// The title bar's rail button, the View menu and ⌃⌘I: the shown task's rail (the focused pane's

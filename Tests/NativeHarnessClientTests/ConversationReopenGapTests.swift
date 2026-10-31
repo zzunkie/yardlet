@@ -249,7 +249,8 @@ final class ConversationReopenGapWindowTests: XCTestCase {
 
     /// What opening a task whose turns were let go costs (four other tasks opened since): every turn
     /// the window draws is built and measured anew. Run with `NHC_PERF_BENCH=1`; it prints the numbers
-    /// and checks nothing else.
+    /// and checks nothing else. `NHC_PERF_BENCH_ACCESSIBILITY=1` opens it with the accessibility tree
+    /// built.
     func testBenchmarkOpeningATaskWhoseTurnsWereLetGo() throws {
         guard ProcessInfo.processInfo.environment["NHC_PERF_BENCH"] == "1" else {
             throw XCTSkip("Set NHC_PERF_BENCH=1 to run the benchmark")
@@ -260,15 +261,26 @@ final class ConversationReopenGapWindowTests: XCTestCase {
         ], for: self)
         defer { window.close() }
         var lines: [String] = []
-        for round in 0..<4 {
-            for (index, name) in [(0, "20 turns"), (1, "300 turns")] {
-                for other in 2...5 { window.show(other) }
-                let cost = window.switchCost(to: index)
-                if round > 0 {
-                    lines.append("\(name): \(cost)")
-                    cost.record("reopen-\(name.replacingOccurrences(of: " ", with: "-"))-let-go")
+        func measure() {
+            for round in 0..<4 {
+                for (index, name) in [(0, "20 turns"), (1, "300 turns")] {
+                    // Each step lets go of what it autoreleased, as the app's run loop does.
+                    for other in 2...5 { autoreleasepool { window.show(other) } }
+                    let cost = autoreleasepool { window.switchCost(to: index) }
+                    if round > 0 {
+                        lines.append("\(name): \(cost)")
+                        cost.record("reopen-\(name.replacingOccurrences(of: " ", with: "-"))-let-go")
+                    }
                 }
             }
+        }
+        if ProcessInfo.processInfo.environment["NHC_PERF_BENCH_ACCESSIBILITY"] == "1" {
+            WindowlessRender.withAccessibilityTree {
+                _ = WindowlessRender.accessibilityElements(in: window.host.hosting)
+                measure()
+            }
+        } else {
+            measure()
         }
         for line in lines { print("[reopen-cost] \(line)") }
     }

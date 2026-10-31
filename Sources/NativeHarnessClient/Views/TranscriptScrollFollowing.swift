@@ -205,11 +205,13 @@ struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
                     blankMonitor.note("opened")
                     blankMonitor.observe(itemCount: readingItemIDs.count)
                 }
+                guard readingTracker?.resumes(record: readingPosition) != true else { return }
                 state.isFollowing = readingPosition?.bookmark.followsLatest ?? true
                 readingTracker?.start(record: readingPosition, itemIDs: readingItemIDs,
                                       startingAt: readingAnchors?.start(), resolve: readingAnchors?.resolve)
                 applyRestoration(readingTracker?.request)
             }
+            .onDisappear { readingTracker?.hide() }
             .onChange(of: readingItemIDs) { old, ids in
                 // Read from the layout before the change, which the items now in view still have.
                 let arrived = keepsPlaceAsEarlierItemsArrive && !state.isFollowing

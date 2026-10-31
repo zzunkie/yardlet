@@ -244,7 +244,8 @@ struct SessionRailVisibility: Equatable, Sendable {
     var isShown = true
     /// The task whose rail is raised over its content, while one is.
     private(set) var raisedTaskID: UUID?
-    /// The tasks on screen whose area has room for the rail beside the conversation.
+    /// The tasks whose area had room for the rail beside the conversation when last on screen. A task
+    /// that shows tells it again (`setFits`).
     private(set) var fittingTaskIDs: Set<UUID> = []
 
     init(isShown: Bool = true) {
@@ -291,9 +292,10 @@ struct SessionRailVisibility: Equatable, Sendable {
     /// Escape or a click outside the raised rail.
     mutating func dismissRaised() { raisedTaskID = nil }
 
-    /// A task left the screen.
+    /// A task left the screen: a rail raised over it goes. Whether its area has room stays until it
+    /// shows again and tells it, so a task whose views the window keeps (`TaskSurfaceHost`) changes
+    /// nothing its rail reads on the way out.
     mutating func forget(_ taskID: UUID) {
-        fittingTaskIDs.remove(taskID)
         if raisedTaskID == taskID { raisedTaskID = nil }
     }
 }
@@ -320,7 +322,10 @@ final class SessionRailWindowState {
         visibility.dismissRaised()
     }
 
-    func forget(_ taskID: UUID) { visibility.forget(taskID) }
+    func forget(_ taskID: UUID) {
+        guard visibility.raisedTaskID == taskID else { return }
+        visibility.forget(taskID)
+    }
 
     /// "Hide session rail" while it is on screen for the task, otherwise "Show session rail"
     /// (the Claude app's `U0R7oYkTM1`, `JYaBivMdHH`).

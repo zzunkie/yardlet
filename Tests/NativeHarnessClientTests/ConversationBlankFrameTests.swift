@@ -27,22 +27,39 @@ final class ConversationBlankFrameTests: XCTestCase {
     /// What opening a long conversation again costs: from choosing it to the first frame that draws
     /// it, the window's layout passes until it settles, and the main thread's time for both, beside a
     /// short and a middling one. Run with `NHC_PERF_BENCH=1`; it prints the numbers and checks nothing
-    /// else.
+    /// else. `NHC_PERF_BENCH_ACCESSIBILITY=1` switches with the accessibility tree built, as when an
+    /// assistive app or a window manager is attached, `NHC_PERF_BENCH_SIDEBAR_TASKS` lists that many
+    /// more tasks in the sidebar (default none), and `NHC_PERF_BENCH_ROUNDS` sets the rounds measured
+    /// (default 3).
     func testBenchmarkSwitchingToALongConversation() throws {
-        guard ProcessInfo.processInfo.environment["NHC_PERF_BENCH"] == "1" else {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["NHC_PERF_BENCH"] == "1" else {
             throw XCTSkip("Set NHC_PERF_BENCH=1 to run the task switch benchmark")
         }
+        let rounds = Int(environment["NHC_PERF_BENCH_ROUNDS"] ?? "") ?? 3
+        let sidebarTasks = Int(environment["NHC_PERF_BENCH_SIDEBAR_TASKS"] ?? "") ?? 0
         let window = try makeWindow([.claude("Short", turns: 2), .claude("Middling", turns: 20),
-                                     .claude("Long", turns: 300)])
+                                     .claude("Long", turns: 300)]
+                                    + (0..<sidebarTasks).map { .claude("Listed \($0)", turns: 1) })
         defer { window.close() }
-        window.show(0)
         var costs: [String: [Window.SwitchCost]] = [:]
-        for round in 0..<4 {
-            for (index, name) in [(1, "20 turns"), (2, "300 turns")] {
-                window.show(0)
-                let cost = window.switchCost(to: index)
-                if round > 0 { costs[name, default: []].append(cost) }
+        func measure() {
+            window.show(0)
+            for round in 0...rounds {
+                for (index, name) in [(1, "20 turns"), (2, "300 turns")] {
+                    window.show(0)
+                    let cost = window.switchCost(to: index)
+                    if round > 0 { costs[name, default: []].append(cost) }
+                }
             }
+        }
+        if environment["NHC_PERF_BENCH_ACCESSIBILITY"] == "1" {
+            WindowlessRender.withAccessibilityTree {
+                _ = WindowlessRender.accessibilityElements(in: window.host.hosting)
+                measure()
+            }
+        } else {
+            measure()
         }
         for name in ["20 turns", "300 turns"] {
             for cost in costs[name] ?? [] {
@@ -729,7 +746,7 @@ final class ConversationBlankFrameTests: XCTestCase {
             }
         }
 
-        private var conversation: NSScrollView? {
+        var conversation: NSScrollView? {
             BlankFrameProbe.conversationScrollView(in: host.hosting, minX: SidebarWidth.minimum)
         }
 

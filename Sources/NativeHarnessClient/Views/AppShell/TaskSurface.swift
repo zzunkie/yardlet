@@ -86,6 +86,15 @@ struct TaskDetail: View {
                 workspaceState.leaveTerminal()
                 railServices?.window.forget(session.id)
             }
+            // A task shown again in the views the window kept (`TaskSurfaceHost`) starts as it does in new
+            // ones: a draft brought back into the composer is not brought back over what was typed since,
+            // and a subtask the side panel showed closes.
+            editingDraft = nil
+            selectedSubtaskID = nil
+            subtaskReturnSurfaceID = nil
+            stoppingSubtaskIDs = []
+            subtaskErrors = [:]
+            stoppingTerminalIDs = []
         }
     }
 

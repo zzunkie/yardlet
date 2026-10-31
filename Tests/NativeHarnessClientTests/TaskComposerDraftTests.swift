@@ -1,3 +1,6 @@
+import AppKit
+import Observation
+import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
@@ -130,5 +133,75 @@ final class TaskComposerDraftTests: XCTestCase {
         restored.apply(before)
         XCTAssertEqual(restored.text, draft.text)
         XCTAssertNil(restored.selection)
+    }
+
+    @Observable
+    final class ShownTask {
+        var id: UUID
+        init(_ id: UUID) { self.id = id }
+    }
+
+    /// The window's single-task area: each task in the views the window keeps for it (`TaskSurfaceHost`).
+    private struct TaskArea: View {
+        let shown: ShownTask
+        let tasks: [SessionRecord]
+        let drafts: TaskComposerDraftStore
+        let workspaces: [UUID: TaskWorkspaceState]
+        let queue: [CodexQueuedSubmission]
+        let hostings = TaskSurfaceHostings()
+
+        var body: some View {
+            let task = tasks.first { $0.id == shown.id }!
+            let workspace = workspaces[task.id]!
+            TaskSurfaceHost(taskID: task.id, hostings: hostings, content: AnyView(
+                TaskSurfaceFocusScope { focusedSurface in
+                    TaskDetail(
+                        session: task, composerDraft: drafts.draft(for: task.id), workspaceState: workspace,
+                        panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
+                        focusedSurface: focusedSurface, entries: [], errorMessage: nil, codexTaskState: nil,
+                        codexHistorySelection: nil, codexQueue: queue, codexCapabilities: .empty,
+                        providerCapabilities: nil, providerUsage: nil, isProviderAttached: false,
+                        onShowCodexCapabilities: {}, conversationActions: ConversationActions(),
+                        composerActions: ComposerActions(removeQueued: { _ in }, retryQueued: { _ in },
+                                                         editQueued: { id in queue.first { $0.id == id }?.draft })
+                    )
+                    .environment(\.taskKeyboardFocus, workspace.keyboardFocus)
+                }
+            ))
+            .frame(width: 900, height: 600)
+        }
+    }
+
+    /// A queued message brought back into the composer is brought back once: the task shown again in
+    /// the views the window kept keeps what was typed into it since, and the task shown in between keeps
+    /// its own draft.
+    func testReturningToATaskKeepsWhatWasTypedIntoAMessageBroughtBack() {
+        let tasks = ["Queue", "Other"].map {
+            SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/draft-project"),
+                          runtimeExecutableURL: URL(filePath: "/tmp/no-runtime"), title: $0, status: .running)
+        }
+        let queued = CodexQueuedSubmission(draft: CodexComposerDraft(inputs: [.text("Then update the README")]))
+        let drafts = TaskComposerDraftStore()
+        let shown = ShownTask(tasks[0].id)
+        let host = WindowlessRender.Host(
+            TaskArea(shown: shown, tasks: tasks, drafts: drafts,
+                     workspaces: Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, TaskWorkspaceState()) }),
+                     queue: [queued]),
+            size: NSSize(width: 900, height: 600), appearance: .light)
+        defer { host.close() }
+        host.settle(passes: 20)
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Edit message")))
+        host.settle(passes: 10)
+        let draft = drafts.draft(for: tasks[0].id)
+        XCTAssertEqual(draft.text, "Then update the README")
+        draft.text = "Then update the README and the changelog"
+
+        shown.id = tasks[1].id
+        host.settle(passes: 10)
+        drafts.draft(for: tasks[1].id).text = "A separate task"
+        shown.id = tasks[0].id
+        host.settle(passes: 10)
+        XCTAssertEqual(draft.text, "Then update the README and the changelog")
+        XCTAssertEqual(drafts.draft(for: tasks[1].id).text, "A separate task")
     }
 }

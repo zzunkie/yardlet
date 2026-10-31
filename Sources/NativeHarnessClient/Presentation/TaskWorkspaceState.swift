@@ -369,8 +369,8 @@ final class TaskWorkspaceState {
     /// Leaving the task leaves its terminal's shell running; nothing waits to be typed or started in it
     /// on the next visit.
     func leaveTerminal() {
-        terminalStartRequested = false
-        terminalHandoff = nil
+        if terminalStartRequested { terminalStartRequested = false }
+        if terminalHandoff != nil { terminalHandoff = nil }
     }
 
     /// Shows an agent's conversation or a background task's output in the side panel, over its tabs.
