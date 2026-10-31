@@ -217,9 +217,9 @@ it never touches the installed app. Install Update… asks for confirmation, qui
 normal quit path (which warns about running tasks), and a detached installer swaps the bundle once the
 app has exited, keeps the previous one in `Updates/Previous`, and reopens Yardlet. Tasks, drafts and
 history live outside the bundle. The installer log is `Updates/install.log`. While tasks run, Install Update…
-also offers **Restart When Tasks Finish**: Yardlet waits until no task has run for a few seconds, checks that the
-staged build is still the one chosen, and installs through the same quit; the Yardlet menu shows the wait and
-**Cancel Update** ends it.
+also offers **Restart When Tasks Finish**: Yardlet waits until no task or subagent has run for a few seconds, checks
+that the staged build is still the one chosen, and installs through the same quit; the Yardlet menu shows the wait
+and **Cancel Update** ends it.
 
 Yardlet shows a staged build without being asked, as the Claude app shows a downloaded update: **Restart to
 update** above the account button at the bottom of the sidebar, and the same line above Quit in the menu bar

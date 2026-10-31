@@ -71,6 +71,7 @@ extension AppModel {
                            depth: caller.depth + 1, permission: permission)
         run.accountStart = account
         let background = Self.bool(arguments["background"]) == true
+        run.isBackground = background
         run.notifiesCaller = background && Self.bool(arguments["notify"]) == true
         run.state = .queued
         sessionTools.add(run)
@@ -392,7 +393,8 @@ extension AppModel {
         sessionTools.dequeue(run.id)
         let started = run.state != .queued
         run.state = state
-        run.answer = run.latestAnswer ?? run.answer
+        // One the quit cut off answered nothing yet; what it said last is its answer so far.
+        run.answer = run.latestAnswer ?? (state == .interrupted ? run.lastWords : nil) ?? run.answer
         for consumer in run.consumers { consumer.cancel() }
         run.consumers = []
         agentTools?.releaseAgentTools(for: run.id)
@@ -407,6 +409,44 @@ extension AppModel {
         sessionToolApprovalsChanged(in: run.hostTaskID)
         // Its browser tab, if it drove one, is no longer one a turn is using.
         BrowserAgentUse.shared.endTurn(session: run.id)
+    }
+
+    // MARK: - Quitting and opening again
+
+    /// Ends, as interrupted, the subagents the quit cuts off, those waiting for room too, and writes
+    /// them down for the next launch. Unlike a task's turn, a subagent's cannot be continued: its
+    /// harness keeps no history of it (`HarnessHistoryFreeSessionConfiguring`), and its runtime goes
+    /// with the quit. Each is kept with its host task, its answer so far included, as any that ended.
+    func interruptAgentRunsForQuit(now: Date = Date()) {
+        let cut = sessionTools.runs.values.filter { !$0.state.isFinished && !$0.isEvaluationJudge }
+            .sorted { $0.startedAt < $1.startedAt }
+        for run in cut { finishAgentRun(run, state: .interrupted) }
+        sessionTools.noteInterrupted(cut.map { run in
+            SessionToolCenter.InterruptedRun(id: run.id, hostTaskID: run.hostTaskID, interruptedAt: now,
+                tellsCaller: run.callerID == run.hostTaskID && (!run.isBackground || run.notifiesCaller))
+        })
+    }
+
+    /// The subagents the last quit cut off, held again as they were kept, so that `wait_tasks`, the
+    /// Agents card and the subagent's card find them by the IDs their callers hold. Read once. Returns
+    /// those whose caller waited for their answer.
+    func restoreAgentRunsCutOffByQuit() -> [SessionToolCenter.InterruptedRun] {
+        var waitedFor: [SessionToolCenter.InterruptedRun] = []
+        for interrupted in sessionTools.takeInterrupted() {
+            guard sessionTools.run(interrupted.id) == nil,
+                  store.sessions.contains(where: { $0.id == interrupted.hostTaskID }),
+                  let kept = sessionTools.keptRun(interrupted.id, hostTaskID: interrupted.hostTaskID) else { continue }
+            let run = AgentRun(id: kept.id, callerID: kept.callerID, hostTaskID: interrupted.hostTaskID,
+                               harness: HarnessKind(rawValue: kept.harness), model: kept.model, prompt: kept.prompt,
+                               workspaceURL: URL(filePath: kept.workspacePath, directoryHint: .isDirectory),
+                               depth: sessionTools.depth(of: kept.callerID) + 1, startedAt: kept.startedAt)
+            run.state = .interrupted
+            run.answer = kept.answer
+            run.entries = kept.entries
+            sessionTools.add(run)
+            if interrupted.tellsCaller { waitedFor.append(interrupted) }
+        }
+        return waitedFor
     }
 
     // MARK: - Routing evaluation judges

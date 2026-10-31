@@ -30,7 +30,8 @@ extension AppModel {
 
     /// A `run_agent` subagent ended.
     func recordAgentRunForRoutingEvaluation(_ run: AgentRun, state: AgentRun.State, at endedAt: Date = Date()) {
-        guard let evaluation = routingEvaluation, evaluation.isEnabled else { return }
+        // One a quit cut off ended on nothing of its own to weigh.
+        guard let evaluation = routingEvaluation, evaluation.isEnabled, state != .interrupted else { return }
         let outcome: RoutingLedgerEntry.Outcome = switch state {
         case .stopped: .stopped
         case .failed: .failed

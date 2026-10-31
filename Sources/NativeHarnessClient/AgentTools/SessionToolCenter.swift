@@ -154,10 +154,14 @@ final class AgentRun: Identifiable {
         case completed
         case failed(String)
         case stopped
+        /// Yardlet quit while it waited for room or worked. It keeps no history with its harness
+        /// (`keepsNoProviderHistory`), so nothing is left to continue; its caller is told instead
+        /// (`AppModel.interruptAgentRunsForQuit`).
+        case interrupted
 
         var isFinished: Bool {
             switch self {
-            case .completed, .failed, .stopped: true
+            case .completed, .failed, .stopped, .interrupted: true
             case .queued, .starting, .running, .waitingForApproval: false
             }
         }
@@ -171,6 +175,7 @@ final class AgentRun: Identifiable {
             case .completed: "completed"
             case .failed: "failed"
             case .stopped: "stopped"
+            case .interrupted: "interrupted when Yardlet quit; it cannot continue"
             }
         }
     }
@@ -190,6 +195,9 @@ final class AgentRun: Identifiable {
     let permission: TaskPermissionLevel
     /// When it started: when it was asked for, or when it left the line for room.
     var startedAt: Date
+    /// `run_agent` returned at once and the caller picks the answer up later; a foreground call waits
+    /// inside the call for it.
+    var isBackground = false
     var notifiesCaller = false
     /// The harness keeps this session out of its own history (Claude Code
     /// `--no-session-persistence`, an ephemeral Codex thread, Pi `--no-session`); false where it
@@ -314,6 +322,21 @@ final class AgentRun: Identifiable {
     var latestAnswer: String? {
         if let codexThread { return CodexConversationProjection.latestAnswer(in: codexThread, workspaceURL: workspaceURL) }
         return AppModel.latestAnswer(in: presentation())
+    }
+
+    /// What it said last in its latest turn, a working note too: the answer so far of one that ended
+    /// before it answered.
+    var lastWords: String? {
+        guard let turn = presentation().turns.last else { return nil }
+        for item in (turn.work + turn.answers).reversed() {
+            switch item.kind {
+            case let .answer(text, _), let .commentary(text, _):
+                if !text.isEmpty { return text }
+            default:
+                continue
+            }
+        }
+        return nil
     }
 
     /// Its name where it is shown: what it was asked, as its card and the rail's Agents card name it.
@@ -512,7 +535,8 @@ final class SessionToolCenter {
     }
 
     /// The child tasks that waited when the app last ran, in request order: a quit or a restart does
-    /// not lose their first message. A subagent does not outlive the app, so none is kept.
+    /// not lose their first message. A subagent does not outlive the app: the quit interrupts one that
+    /// waits as it interrupts one that works (`noteInterrupted`).
     func keptQueuedChildren() -> [(id: UUID, callerID: UUID, firstMessage: String, laterMessages: [String])] {
         (defaults.array(forKey: queueKey) as? [[String: Any]] ?? []).compactMap { item in
             guard let id = (item["id"] as? String).flatMap(UUID.init(uuidString:)),
@@ -594,6 +618,33 @@ final class SessionToolCenter {
             FileManager.default.createFile(atPath: url.path(percentEncoded: false), contents: data,
                                            attributes: [.posixPermissions: 0o600])
         } catch {}
+    }
+}
+
+extension SessionToolCenter {
+    /// A subagent a quit cut off, as the quit writes it down for the next launch.
+    struct InterruptedRun: Codable, Equatable {
+        var id: UUID
+        var hostTaskID: UUID
+        var interruptedAt: Date
+        /// Its caller is a task that waited for its answer: inside the `run_agent` call, or by `notify`.
+        var tellsCaller: Bool
+    }
+
+    private static let interruptedKey = "Yardlet.sessionTools.interrupted"
+
+    /// Writes down the subagents a quit cut off (each already kept with its host task) for the next
+    /// launch to read once (`takeInterrupted`). A quit that cut none off writes nothing.
+    func noteInterrupted(_ runs: [InterruptedRun]) {
+        guard !runs.isEmpty, let data = try? JSONEncoder().encode(runs) else { return }
+        defaults.set(data, forKey: Self.interruptedKey)
+    }
+
+    /// What the last quit wrote down, read once.
+    func takeInterrupted() -> [InterruptedRun] {
+        defer { defaults.removeObject(forKey: Self.interruptedKey) }
+        guard let data = defaults.data(forKey: Self.interruptedKey) else { return [] }
+        return (try? JSONDecoder().decode([InterruptedRun].self, from: data)) ?? []
     }
 }
 

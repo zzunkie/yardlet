@@ -1603,6 +1603,8 @@ extension AppModel: SessionToolHandling {
             let deadline = clock.now + SessionToolPolicy.notificationWatchLimit
             while clock.now < deadline {
                 if let run = self.sessionTools.run(id) {
+                    // One the quit cut off is told of at the next launch (`interruptAgentRunsForQuit`).
+                    if run.state == .interrupted { return }
                     if run.state.isFinished { break }
                 } else if let session = self.store.sessions.first(where: { $0.id == id }) {
                     if !Self.isWorking(session), self.followUps.queue(for: id).isEmpty,
@@ -1612,15 +1614,20 @@ extension AppModel: SessionToolHandling {
                 }
                 try? await Task.sleep(for: .seconds(1))
             }
-            guard let host = self.store.sessions.first(where: { $0.id == caller.hostTaskID }) else { return }
-            let outcome = self.sessionToolOutcome(of: id)
-            let name = outcome.kind == "agent"
-                ? L10n.format("%@ agent", outcome.title ?? "") : (outcome.title ?? "")
-            let body = "Finished (\(outcome.state)). Its id is \(id.uuidString)."
-                + (outcome.answer.map { "\n\n" + $0 } ?? "")
-            _ = await self.deliverTaskMessage(TaskMessage(senderID: id.uuidString, senderName: name, body: body),
-                                              to: host)
+            await self.notifyCaller(of: id, hostTaskID: caller.hostTaskID)
         }
+    }
+
+    /// The message that tells a task a child or subagent it waited for has ended, from it, with where
+    /// it stands and its latest answer.
+    func notifyCaller(of id: UUID, hostTaskID: UUID) async {
+        guard let host = store.sessions.first(where: { $0.id == hostTaskID }) else { return }
+        let outcome = sessionToolOutcome(of: id)
+        let name = outcome.kind == "agent"
+            ? L10n.format("%@ agent", outcome.title ?? "") : (outcome.title ?? "")
+        let body = "Ended (\(outcome.state)). Its id is \(id.uuidString)."
+            + (outcome.answer.map { "\n\n" + $0 } ?? "")
+        _ = await deliverTaskMessage(TaskMessage(senderID: id.uuidString, senderName: name, body: body), to: host)
     }
 
     // MARK: - The person's words
