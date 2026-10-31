@@ -29,18 +29,9 @@ index f026059..c886728 100644
                let string = String(reflecting: type(of: instance))
                $1!.pointee = try! HString(string).detach()
 diff --git a/swiftwinrt/Resources/Support/IWeakReference.swift b/swiftwinrt/Resources/Support/IWeakReference.swift
-index 1cec899..900583e 100644
+index 1cec899..1f69216 100644
 --- a/swiftwinrt/Resources/Support/IWeakReference.swift
 +++ b/swiftwinrt/Resources/Support/IWeakReference.swift
-@@ -37,7 +37,7 @@ fileprivate class WeakReferenceWrapper: WinRTAbiBridgeWrapper<IWeakReferenceBrid
-         default:
-             guard let obj = WeakReferenceWrapper.tryUnwrapFromBase(raw: pUnk) else { return E_NOINTERFACE }
-             let anyWrapper = __ABI_.AnyWrapper(obj)!
--            return __ABI_.AnyWrapper.queryInterface(try! anyWrapper.toABI { $0 }, riid, ppvObject)
-+            return try! anyWrapper.toABI { $0.pointee.lpVtbl.pointee.QueryInterface($0, riid, ppvObject) }
-         }
-     }
- }
 @@ -76,7 +76,8 @@ fileprivate func Resolve(
  
      let anyWrapper = __ABI_.AnyWrapper(target)!
@@ -50,17 +41,4 @@ index 1cec899..900583e 100644
 +    let result = try! anyWrapper.toABI { $0.pointee.lpVtbl.pointee.QueryInterface($0, riid, &rawObject) }
      ppvObject.pointee = rawObject?.bindMemory(to: C_IInspectable.self, capacity: 1)
      return result
- }
-diff --git a/swiftwinrt/Resources/Support/IWeakReferenceSource.swift b/swiftwinrt/Resources/Support/IWeakReferenceSource.swift
-index 015d810..ec7b327 100644
---- a/swiftwinrt/Resources/Support/IWeakReferenceSource.swift
-+++ b/swiftwinrt/Resources/Support/IWeakReferenceSource.swift
-@@ -30,7 +30,7 @@ fileprivate class WeakReferenceSourceWrapper: WinRTAbiBridgeWrapper<IWeakReferen
-         default:
-             guard let obj = WeakReferenceSourceWrapper.tryUnwrapFromBase(raw: pUnk) else { return E_NOINTERFACE }
-             let anyWrapper = __ABI_.AnyWrapper(obj)!
--            return __ABI_.AnyWrapper.queryInterface(try! anyWrapper.toABI { $0 }, riid, ppvObject)
-+            return try! anyWrapper.toABI { $0.pointee.lpVtbl.pointee.QueryInterface($0, riid, ppvObject) }
-         }
-     }
  }
