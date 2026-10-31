@@ -117,13 +117,35 @@ actor DotsService: PersonalAgentClient {
         return projected
     }
 
-    func send(_ submission: PersonalAgentSubmission, to agent: PersonalAgent) async throws -> PersonalAgentMessage {
-        guard !submission.isEmpty else { throw PersonalAgentFailure.sendRejected }
+    /// One page of a reply thread, read as the provider's room reads it: the room's binding is
+    /// checked, and only `before` pages back. An unchanged cursor ends the thread, as a missing one does.
+    func replies(to rootID: String, for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
+        guard !rootID.isEmpty else { throw PersonalAgentFailure.invalidResponse }
         try await verify(agent)
         let path = "/messaging/rooms/" + component(agent.id.roomID)
         let room = try await read(path)
-        // Check the room binding, and for files that the room takes them, before the only message-writing request.
-        if submission.attachments.isEmpty {
+        var query = [URLQueryItem(name: "limit", value: "20"), URLQueryItem(name: "reply_root_message_id", value: rootID)]
+        if let before { query.append(.init(name: "before", value: before)) }
+        let page = try await read(path + "/messages", query: query)
+        let projected = try DotsProjection.messages(page, room: room, agent: agent, thread: true)
+        if let before, projected.before == before {
+            return .init(messages: projected.messages, before: nil, roomLifecycle: projected.roomLifecycle)
+        }
+        return projected
+    }
+
+    func send(_ submission: PersonalAgentSubmission, to agent: PersonalAgent) async throws -> PersonalAgentMessage {
+        // An ordinary reply and an option answer are told apart before anything is read; a request
+        // that is neither, or half of one, is not sent.
+        guard !submission.isEmpty, let reply = submission.reply else { throw PersonalAgentFailure.sendRejected }
+        try await verify(agent)
+        let path = "/messaging/rooms/" + component(agent.id.roomID)
+        let room = try await read(path)
+        // Check the room binding, and for files or an ordinary reply that the room takes them, before
+        // the only message-writing request. The provider gates both on the same lifecycle.
+        if case .ordinary = reply {
+            try DotsProjection.attachmentRoom(room, agent: agent, refusal: .repliesNotAllowed)
+        } else if submission.attachments.isEmpty {
             _ = try DotsProjection.messages(.object(["items": .array([])]), room: room, agent: agent)
         } else {
             try DotsProjection.attachmentRoom(room, agent: agent)
@@ -136,10 +158,14 @@ actor DotsService: PersonalAgentClient {
             "request_id": .string(submission.requestID), "idempotency_token": .string(submission.requestID),
             "timezone_offset_min": .integer(Int64(submission.timezoneOffsetMinutes))
         ]
+        switch reply {
+        case .message: break
+        // An ordinary reply names the message it answers, and nothing else.
+        case let .ordinary(parent):
+            body["reply_to"] = .object(["message_id": .string(parent)])
         // An option question's answer replies to it, naming the option chosen; nothing else is passed through.
-        if let reply = submission.replyToMessageID {
-            guard let selection = submission.optionSelection, selection >= 0 else { throw PersonalAgentFailure.sendRejected }
-            body["reply_to"] = .object(["message_id": .string(reply)])
+        case let .option(question, selection):
+            body["reply_to"] = .object(["message_id": .string(question)])
             body["message_metadata"] = .object(["option_picker": .object(["selection": .integer(Int64(selection))])])
         }
         let result = try await requestJSON(path + "/messages", method: "POST", body: .json(.object(body)))

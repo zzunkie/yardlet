@@ -40,10 +40,10 @@ waits for **Try again**, and **Load earlier messages** reads another page by han
 Yardlet does not download the whole history in advance, and reading sends no read
 receipt. File attachments open in a native preview, with an explicit save action.
 Other attachment types are named but cannot be opened here yet. Reacting,
-replying to a message other than by choosing a question's option, pausing an
-agent and changing its settings are not implemented. Files and photos are added
-from the composer, and approvals, forms and option questions are answered where
-the message asks them (both below).
+pausing an agent and changing its settings are not implemented. Files and photos
+are added from the composer, replies are read and sent in a dialog over it, and
+approvals, forms and option questions are answered where the message asks them
+(all below).
 
 ## Opening the dot where the provider shows it
 
@@ -223,6 +223,56 @@ when the message that carried them is confirmed or the file is removed.
 Uploading and sending files act on the provider account. Their behavior here was
 checked with synthetic responses, not against the provider.
 
+## Replies
+
+A message of the room offers **Reply** in its context menu. A reply in the room
+shows a line of the message it answers above it, unless the message before it is
+of the same thread; a message with replies shows **View replies** under it, or
+their number when it can be counted. Choosing any of these opens the **Replies**
+dialog over the conversation, anchored on the composer, as the provider's app shows
+it: the thread's first message, when it is known, then its replies. A thread is the
+chain back to its first message, so a reply to a reply answers that reply while it
+belongs to the same thread. The dialog reads the thread's own pages
+(`GET …/messages?reply_root_message_id=…`), the latest first and earlier ones as its
+top comes into view, apart from the room's; a thread whose page names no earlier
+cursor has no earlier replies, and a repeated cursor ends it too. A failed page waits
+for **Try again**. While the room's subscription reports a change, the open thread
+is read again from its latest page back to the earliest reply read before, so a change
+to any reply shown is seen; a failure keeps what is shown and offers **Try again**.
+Nothing polls, and what a page leaves out is never taken as deleted. The room, the
+thread and a message's card all show the same read of a message, and a reply whose
+delivery was uncertain counts as arrived once any read shows it under its request.
+
+A count is a number only while the room's loaded history reaches from that message
+to the latest one and no reply to it is waiting to be sent or confirmed; otherwise
+**View replies** says nothing about how many there are. A message deleted since it
+was quoted shows as deleted, even where the reply embedded its earlier words. When
+two reads of a message disagree, a deletion stands, then the provider's later change,
+then the read that started later.
+
+The dialog's composer is the conversation's own, with the same draft, files and
+upload state; opening, closing or switching threads moves nothing between drafts,
+and the room behind keeps its place. Its close button, a click outside it and Escape
+close it; an Escape an input method takes while composing does not. Closed by its
+button or Escape, it gives focus back where it was; a click outside leaves focus with
+what the click chose. Opening it puts the caret after the draft rather than selecting
+it. A long thread draws only the replies in view and reads its earlier replies when its
+top comes into view, keeping the reply being read in place, also when that reply
+becomes shorter than where the view started in it; a new reply moves it to
+its end only while the person reads there, and otherwise offers **New replies**. Send from the dialog fixes the message it replies to at that
+moment: closing the dialog or opening another thread while files finish uploading
+does not change it, and an uncertain reply is retried only by the person, with the
+same words, files, target and request identity. Such a pending reply is saved in a
+draft format earlier versions cannot read: they send nothing from it and keep the
+editor locked until the person chooses **Start a new draft**, which keeps the saved
+draft as a backup, so it is never sent as an ordinary message. A reply carries only
+`reply_to.message_id`.
+A room only shared with the person, or waiting on a message request, takes no reply,
+as it takes no file; its threads can still be read.
+
+Replying acts on the provider account. It was checked with synthetic responses, not
+against the provider.
+
 ## Requests and questions
 
 A dot's message can carry an input request (`content.elicitation`). Yardlet keeps it
@@ -287,15 +337,21 @@ after a change the room's subscription reports. Reads of one request are coalesc
 and nothing polls.
 
 An option question (`message_metadata.option_picker`) shows its options under the
-message. Choosing one first reads the displayed range of the conversation again. The
-question must still be there, undeleted, with the same option text and no answer, or
-nothing is sent; a read that fails sends nothing either. The answer is an ordinary reply
+message, in the room or in a reply thread. Choosing one first reads again, in that
+moment, where the question and its answers are: the displayed range of the
+conversation for a question there, and the reply thread it belongs to, or heads,
+from its latest page back to the question. The question must still be there,
+undeleted, with the same option text and no answer, or nothing is sent; a read that
+fails sends nothing either. The answer is an ordinary reply
 to the question carrying the option's exact text and
 `message_metadata.option_picker.selection`. It is kept with its request identity beside
 the draft, apart from the draft and its text, which stay as they were. If delivery is
 uncertain, only **Send the same answer again** with the same request identity, or
 **Stop waiting** after confirming that it may have arrived, continues. Sending again
-checks the question as choosing did. If the question is deleted or loses its options
+checks the question as choosing did, in the thread it was first read in. An answer
+to a question in a thread is saved in a format earlier versions cannot read: they
+send nothing and lock the options until the person keeps it as a backup, rather than
+check it against the room alone. If the question is deleted or loses its options
 meanwhile, a line above the editor says an answer could not be confirmed and offers
 **Stop waiting**, without showing the question; until then other questions wait.
 An answer that cannot be saved is not sent, and the same line says so, with **Try

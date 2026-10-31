@@ -145,6 +145,41 @@ struct PersonalAgentMessage: Identifiable, Equatable, Sendable {
     var metadata: JSONValue? = nil
     /// The message this one replies to.
     var replyToMessageID: String? = nil
+    /// The thread this reply belongs to, when the provider names it (`reply_root_message_id`); it
+    /// may differ from the message replied to.
+    var replyRootMessageID: String? = nil
+    /// What the provider embedded of the message replied to (`reply_to.message`): optional, bounded
+    /// and never a history of its own. The message itself, where it is read, comes first.
+    var replyPreview: PersonalAgentReplyPreview? = nil
+    /// When the provider last changed the message (`updated_at`), which orders two reads of it.
+    var updatedAt: Date? = nil
+
+    /// Whether this read of a message, made by a read that started at `epoch`, should stand over
+    /// `other`, made by one that started at `otherEpoch`: a deletion stands over any copy, a later
+    /// change over an earlier one, and where the provider's times do not tell them apart, the read
+    /// that started later. No source is preferred for being the room or a thread, and what a page
+    /// left out never counts as a deletion.
+    func supersedes(_ other: PersonalAgentMessage, epoch: Int, otherEpoch: Int) -> Bool {
+        if isDeleted != other.isDeleted { return isDeleted }
+        if let mine = updatedAt, let theirs = other.updatedAt, mine != theirs { return mine > theirs }
+        return epoch > otherEpoch
+    }
+}
+
+/// The quoted parent a reply carries, one level deep.
+struct PersonalAgentReplyPreview: Equatable, Sendable {
+    static let characterLimit = 280
+    let messageID: String
+    let text: String
+    let hasAttachments: Bool
+    let isDeleted: Bool
+}
+
+/// An ordinary reply's target: the message it answers, and the thread that message belongs to. The
+/// two differ when the person replies to a reply.
+struct PersonalAgentReplyTarget: Codable, Hashable, Sendable {
+    let messageID: String
+    let rootID: String
 }
 
 struct PersonalAgentAttachment: Equatable, Sendable {
@@ -186,8 +221,11 @@ struct PersonalAgentSubmission: Codable, Equatable, Sendable {
     /// Files the room already accepted for this message, in the order they were added.
     let attachments: [PersonalAgentUploadedFile]
     /// The question this message answers, with the option chosen there; nil for an ordinary message.
+    /// The two go together, and never with `replyTarget`.
     var replyToMessageID: String? = nil
     var optionSelection: Int? = nil
+    /// The message an ordinary reply answers, fixed when Send was pressed; nil for any other message.
+    var replyTarget: PersonalAgentReplyTarget? = nil
 
     init(text: String, attachments: [PersonalAgentUploadedFile] = [], requestID: String = UUID().uuidString) {
         self.requestID = requestID
@@ -197,7 +235,7 @@ struct PersonalAgentSubmission: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case requestID, text, timezoneOffsetMinutes, attachments, replyToMessageID, optionSelection
+        case requestID, text, timezoneOffsetMinutes, attachments, replyToMessageID, optionSelection, replyTarget
     }
 
     /// A request saved before attachments or option replies existed carries neither.
@@ -209,6 +247,24 @@ struct PersonalAgentSubmission: Codable, Equatable, Sendable {
         attachments = try container.decodeIfPresent([PersonalAgentUploadedFile].self, forKey: .attachments) ?? []
         replyToMessageID = try container.decodeIfPresent(String.self, forKey: .replyToMessageID)
         optionSelection = try container.decodeIfPresent(Int.self, forKey: .optionSelection)
+        replyTarget = try container.decodeIfPresent(PersonalAgentReplyTarget.self, forKey: .replyTarget)
+    }
+
+    /// What the request says beside its words and files: nothing (a message), an ordinary reply, or
+    /// an option question's answer. Any other combination is not a request this app sends.
+    enum Reply: Equatable {
+        case message
+        case ordinary(parentID: String)
+        case option(questionID: String, selection: Int)
+    }
+
+    var reply: Reply? {
+        switch (replyTarget, replyToMessageID, optionSelection) {
+        case (nil, nil, nil): return .message
+        case let (target?, nil, nil): return target.messageID.isEmpty ? nil : .ordinary(parentID: target.messageID)
+        case let (nil, question?, selection?): return question.isEmpty || selection < 0 ? nil : .option(questionID: question, selection: selection)
+        default: return nil
+        }
     }
 
     /// Words or a file: an attachment alone is a message.
@@ -293,6 +349,7 @@ enum PersonalAgentFailure: Error, Equatable, Sendable {
     case missing
     /// What was asked for is larger than a page can carry, even one item at a time.
     case tooLarge
+    case repliesNotAllowed
 
     var message: String {
         switch self {
@@ -317,6 +374,7 @@ enum PersonalAgentFailure: Error, Equatable, Sendable {
         case .attachmentsNotAllowed: L10n.string("Files cannot be sent in this conversation. Remove them to send the message.")
         case .missing: L10n.string("This task is no longer available.")
         case .tooLarge: L10n.string("This part of the task is too large to show here.")
+        case .repliesNotAllowed: L10n.string("Replies cannot be sent in this conversation. Your draft is still here.")
         }
     }
 }
@@ -328,6 +386,9 @@ enum PersonalAgentUpdate: Sendable {
 protocol PersonalAgentClient: Actor {
     func agents() async throws -> [PersonalAgent]
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage
+    /// A page of one reply thread (`reply_root_message_id`), the latest when `before` is nil. A nil
+    /// cursor in the result ends the thread's earlier pages.
+    func replies(to rootID: String, for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage
     func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate>
     /// The dot's room as its provider observes it: each bound state, nil while there is none. Asking
     /// for another dot's ends the first; ending the stream ends the observation.
@@ -362,6 +423,10 @@ protocol PersonalAgentClient: Actor {
 }
 
 extension PersonalAgentClient {
+    func replies(to rootID: String, for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
+        throw PersonalAgentFailure.unavailable
+    }
+
     /// A reader that observes no room shows every dot idle.
     func liveState(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentLiveUpdate> { AsyncStream { $0.finish() } }
 
@@ -532,15 +597,18 @@ enum DotsProjection {
 
     /// The room a file is written to, checked as the provider's room reader checks it: this dot's
     /// room, a direct messaging room, and one that takes files now.
-    static func attachmentRoom(_ room: JSONValue, agent: PersonalAgent) throws {
+    static func attachmentRoom(_ room: JSONValue, agent: PersonalAgent,
+                               refusal: PersonalAgentFailure = .attachmentsNotAllowed) throws {
         _ = try messages(.object(["items": .array([])]), room: room, agent: agent)
         guard room["type"]?.stringValue == "DM", room["app_source"]?.stringValue == "chatgpt:messaging" else {
             throw PersonalAgentFailure.invalidResponse
         }
-        guard allowsAttachments(lifecycle: roomLifecycle(room)) else { throw PersonalAgentFailure.attachmentsNotAllowed }
+        guard allowsAttachments(lifecycle: roomLifecycle(room)) else { throw refusal }
     }
 
-    static func messages(_ page: JSONValue, room: JSONValue, agent: PersonalAgent) throws -> PersonalAgentPage {
+    /// A page of the room, or with `thread` a page of one reply thread, whose only earlier cursor is
+    /// the one the provider gives.
+    static func messages(_ page: JSONValue, room: JSONValue, agent: PersonalAgent, thread: Bool = false) throws -> PersonalAgentPage {
         guard room["id"]?.stringValue == agent.id.roomID, room["aeon_id"]?.stringValue == agent.id.agentID,
               case let .array(members)? = room["members"], case let .array(items)? = page["items"] else {
             throw PersonalAgentFailure.invalidResponse
@@ -572,18 +640,33 @@ enum DotsProjection {
             // A request whose identity cannot be read is shown as something Yardlet cannot display yet.
             let unsupported = !deleted && text.isEmpty && attachments.isEmpty && request.flatMap(DotsInputRequest.init) == nil
             if unsupported { text = L10n.string("This message cannot be displayed yet.") }
+            let parent = item["reply_to"]?["message_id"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
             return PersonalAgentMessage(id: id, author: author, text: deleted ? "" : text,
                 createdAt: date(item["created_at"]?.stringValue), isDeleted: deleted, attachments: deleted ? [] : attachments,
                 requestID: item["request_id"]?.stringValue, isUnsupported: unsupported,
                 inputRequest: deleted ? nil : request,
                 metadata: item["message_metadata"].flatMap { $0 == .null ? nil : $0 },
-                replyToMessageID: item["reply_to"]?["message_id"]?.stringValue)
+                replyToMessageID: parent,
+                replyRootMessageID: item["reply_root_message_id"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 },
+                replyPreview: parent.flatMap { replyPreview(item["reply_to"]?["message"], parentID: $0) },
+                updatedAt: date(item["updated_at"]?.stringValue) ?? epoch(item["updated_at"]))
         }
         guard Set(messages.map(\.id)).count == messages.count else { throw PersonalAgentFailure.invalidResponse }
-        // The provider's room client also uses the oldest item when prev_cursor
-        // is absent; an empty page ends backfill.
-        return .init(messages: messages, before: messages.isEmpty ? nil : page["prev_cursor"]?.stringValue ?? messages.first?.id,
+        let cursor = page["prev_cursor"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
+        // The provider's room client also uses the oldest item when prev_cursor is absent, but never
+        // for a reply thread, where its absence ends the thread. An empty page ends backfill.
+        return .init(messages: messages, before: messages.isEmpty ? nil : thread ? cursor : cursor ?? messages.first?.id,
                      roomLifecycle: roomLifecycle(room))
+    }
+
+    /// The embedded parent, if it is the one named: deeper nesting is not read, and a deleted one
+    /// keeps nothing of what it said.
+    private static func replyPreview(_ value: JSONValue?, parentID: String) -> PersonalAgentReplyPreview? {
+        guard let value, case .object = value, value["id"]?.stringValue == parentID else { return nil }
+        let deleted = value["deleted_at"] != nil && value["deleted_at"] != .null
+        let attached = if case let .array(items)? = value["content"]?["attachments"] { !items.isEmpty } else { false }
+        let text = deleted ? "" : String((value["content"]?["text"]?.stringValue ?? "").prefix(PersonalAgentReplyPreview.characterLimit))
+        return .init(messageID: parentID, text: text, hasAttachments: !deleted && attached, isDeleted: deleted)
     }
 
     static func merge(_ existing: [PersonalAgentMessage], with incoming: [PersonalAgentMessage], older: Bool) -> [PersonalAgentMessage] {

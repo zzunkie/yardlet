@@ -105,6 +105,9 @@ final class PersonalAgentOptionReply {
     }
 
     private(set) var pending: PersonalAgentSubmission?
+    /// The reply thread the question was read in, which sending the waiting answer again reads
+    /// afresh; nil for a question read only in the room.
+    private(set) var threadRootID: String?
     private(set) var storageFailed = false
     var isSending = false
     var problem: Problem?
@@ -113,9 +116,13 @@ final class PersonalAgentOptionReply {
     @ObservationIgnored private let file: URL?
     @ObservationIgnored private var unreadable = false
 
+    /// Version 1 has no thread. An answer to a question read in a reply thread is version 2, which
+    /// earlier builds, that would check it against the room alone, cannot read: they answer nothing
+    /// until the person keeps it as a backup.
     private struct Record: Codable {
         var version = 1
         let pending: PersonalAgentSubmission?
+        var threadRootID: String? = nil
     }
 
     init(file: URL? = nil) {
@@ -123,24 +130,29 @@ final class PersonalAgentOptionReply {
         guard let file else { return }
         do {
             let record = try JSONDecoder().decode(Record.self, from: Data(contentsOf: file))
-            guard record.version == 1 else { throw CocoaError(.coderReadCorrupt) }
+            guard record.version == 1 || record.version == 2 && record.threadRootID != nil else {
+                throw CocoaError(.coderReadCorrupt)
+            }
             pending = record.pending
+            threadRootID = record.pending == nil ? nil : record.threadRootID
             if pending != nil { problem = .failure(.deliveryUnknown) }
         } catch CocoaError.fileReadNoSuchFile {
         } catch { unreadable = true; storageFailed = true }
     }
 
     /// Keeps the answer before it is sent; false when it cannot be kept, and then it is not sent.
-    func prepare(_ submission: PersonalAgentSubmission) -> Bool {
+    func prepare(_ submission: PersonalAgentSubmission, threadRootID: String? = nil) -> Bool {
         guard pending == nil, !unreadable else { return false }
         pending = submission
-        guard save() else { pending = nil; return false }
+        self.threadRootID = threadRootID
+        guard save() else { pending = nil; self.threadRootID = nil; return false }
         return true
     }
 
     func accepted(_ requestID: String) {
         guard pending?.requestID == requestID else { return }
         pending = nil
+        threadRootID = nil
         problem = nil
         _ = save()
     }
@@ -148,7 +160,7 @@ final class PersonalAgentOptionReply {
     func failed(_ failure: PersonalAgentFailure, retry: Bool) {
         problem = .failure(failure)
         // These answers explicitly reject this first attempt; a rejected retry says nothing of the first.
-        if !retry, failure == .sendRejected || failure == .verificationRequired { pending = nil }
+        if !retry, failure == .sendRejected || failure == .verificationRequired { pending = nil; threadRootID = nil }
         _ = save()
     }
 
@@ -156,9 +168,10 @@ final class PersonalAgentOptionReply {
     /// arrived. A confirmation given for an answer that has since been settled lets no later one go.
     func discard(requestID: String) {
         guard !isSending, pending?.requestID == requestID else { return }
-        let previous = pending
+        let previous = (pending, threadRootID)
         pending = nil
-        guard save() else { pending = previous; return }
+        threadRootID = nil
+        guard save() else { (pending, threadRootID) = previous; return }
         problem = nil
     }
 
@@ -197,7 +210,8 @@ final class PersonalAgentOptionReply {
             let directory = file.deletingLastPathComponent()
             try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             if let pending {
-                try JSONEncoder().encode(Record(pending: pending)).write(to: file, options: .atomic)
+                let record = Record(version: threadRootID == nil ? 1 : 2, pending: pending, threadRootID: threadRootID)
+                try JSONEncoder().encode(record).write(to: file, options: .atomic)
                 try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
             } else if manager.fileExists(atPath: file.path) {
                 try manager.removeItem(at: file)
@@ -213,7 +227,9 @@ extension PersonalAgentCenter {
     /// the conversation. A request whose message closes it, or that is being read, is not read again.
     func syncInputRequests(_ state: PersonalAgentConversation, agent: PersonalAgent) {
         var next: [String: PersonalAgentInputRequest] = [:]
-        for message in state.messages where message.author == .agent && !message.isDeleted {
+        // The room's window and the messages read only in reply threads: a room read keeps the
+        // requests of the threads, and each message keeps one request state wherever it shows.
+        for message in state.messages + state.replies.threadOnlyMessages where message.author == .agent && !message.isDeleted {
             guard let value = message.inputRequest, let request = DotsInputRequest(value) else { continue }
             if let existing = state.requests[message.id], existing.request == request {
                 next[message.id] = existing
@@ -224,7 +240,8 @@ extension PersonalAgentCenter {
         }
         state.requests = next
         if let reply = state.optionReply.pending,
-           state.messages.contains(where: { $0.author == .person && $0.requestID == reply.requestID }) {
+           state.messages.contains(where: { $0.author == .person && $0.requestID == reply.requestID })
+            || state.replies.hasSent(requestID: reply.requestID) {
             state.optionReply.accepted(reply.requestID)
         }
         for item in next.values {
@@ -356,16 +373,18 @@ extension PersonalAgentCenter {
         if state.optionReply.pending?.replyToMessageID == question.id { return true }
         return state.visibleMessages.contains {
             !$0.isDeleted && $0.replyToMessageID == question.id && DotsOptionPicker.selection($0.metadata) != nil
-        }
+        } || !state.replies.optionAnswers(to: question.id).isEmpty
     }
 
-    /// Answers an option question with the exact text of option `index`, as a reply to it. The
-    /// conversation's displayed range is read again first; the question must still be there, unchanged,
-    /// undeleted and unanswered. The ordinary draft is not touched.
+    /// Answers an option question with the exact text of option `index`, as a reply to it. What the
+    /// question and its answers can be read in is read again first, in this call: the room's displayed
+    /// range for a question there, and the reply thread it belongs to, or heads with replies, from the
+    /// latest page back to it. The question must still be there, unchanged, undeleted and unanswered.
+    /// The ordinary draft is not touched.
     func chooseOption(_ index: Int, in messageID: String) async {
         guard let agent = selected, let state = conversation, state.optionReply.pending == nil,
               !state.optionReply.isSending, !state.optionReply.storageFailed,
-              let shown = state.messages.first(where: { $0.id == messageID }),
+              let shown = state.messages.first(where: { $0.id == messageID }) ?? state.replies.message(messageID),
               let shownPicker = DotsOptionPicker(metadata: shown.metadata), shownPicker.options.indices.contains(index)
         else { return }
         let reply = state.optionReply
@@ -374,19 +393,51 @@ extension PersonalAgentCenter {
         reply.problem = nil
         reply.question = messageID
         defer { reply.isSending = false }
-        guard await refreshDisplayedRange(), current == generation, selectedID == agent.id else {
+        let thread = threadScope(of: messageID, in: state)
+        guard let read = await readQuestion(messageID, thread: thread, in: state, agent: agent) else {
             if current == generation { reply.problem = .unchecked }
             return
         }
-        guard let picker = openQuestion(messageID, index: index, text: shownPicker.options[index], in: state) else {
+        guard let picker = openQuestion(read.question, index: index, text: shownPicker.options[index], among: read.related) else {
             reply.problem = .changed
             return
         }
         var submission = PersonalAgentSubmission(text: picker.options[index])
         submission.replyToMessageID = messageID
         submission.optionSelection = index
-        guard reply.prepare(submission) else { reply.problem = .failure(.draftStorage); return }
+        guard reply.prepare(submission, threadRootID: thread) else { reply.problem = .failure(.draftStorage); return }
+        reconcileReplies(state)
         await deliverOptionReply(submission, retry: false, agent: agent, state: state)
+    }
+
+    /// The reply thread a question's answers are read in afresh: the one it belongs to, or its own
+    /// when it heads replies already read; nil for a question with neither.
+    private func threadScope(of messageID: String, in state: PersonalAgentConversation) -> String? {
+        let root = state.replies.rootOf(messageID)
+        if root != state.replies.canonical(messageID) { return root }
+        return state.replies.hasReplies(root) ? root : nil
+    }
+
+    /// The question and what may answer it, as read in this call: the room's displayed range when
+    /// the question is there or no thread is named, and thread `thread` back to the question. Nil
+    /// when a read failed, the window moved on, or the thread did not reach the question.
+    private func readQuestion(_ messageID: String, thread: String?, in state: PersonalAgentConversation,
+                              agent: PersonalAgent) async -> (question: PersonalAgentMessage?, related: [PersonalAgentMessage])? {
+        let current = generation
+        var question: PersonalAgentMessage?
+        var related = state.sentMessages
+        if thread == nil || state.messages.contains(where: { $0.id == messageID }) {
+            guard await refreshDisplayedRange(), current == generation, selectedID == agent.id, conversation === state else { return nil }
+            question = state.messages.first { $0.id == messageID }
+            related = state.visibleMessages
+        }
+        if let thread {
+            guard let read = await readThread(thread, until: messageID), current == generation,
+                  selectedID == agent.id, conversation === state else { return nil }
+            question = question ?? read.first { $0.id == messageID }
+            related += read
+        }
+        return (question, related)
     }
 
     /// Sends the waiting answer again with the same request identity and payload, only when asked.
@@ -399,28 +450,30 @@ extension PersonalAgentCenter {
         reply.isSending = true
         defer { reply.isSending = false }
         // The earlier attempt may have arrived: a read that shows it settles the answer without sending.
-        guard await refreshDisplayedRange(), current == generation, selectedID == agent.id else {
+        // The thread is the one the question was read in, not whichever is open now.
+        let thread = reply.threadRootID ?? threadScope(of: messageID, in: state)
+        guard let read = await readQuestion(messageID, thread: thread, in: state, agent: agent) else {
             if current == generation { reply.problem = .unchecked }
             return
         }
         guard reply.pending == submission else { return }
         // A question deleted, answered or changed since is not answered again; the waiting answer stays.
-        guard openQuestion(messageID, index: index, text: submission.text, in: state) != nil else {
+        guard openQuestion(read.question, index: index, text: submission.text, among: read.related) != nil else {
             reply.problem = .changed
             return
         }
         await deliverOptionReply(submission, retry: true, agent: agent, state: state)
     }
 
-    /// The question as the displayed range now reads it, when it can still take option `index` with
-    /// `text`: there, undeleted, asked by the dot, with no recorded option and no reply that chose one.
-    private func openQuestion(_ messageID: String, index: Int, text: String,
-                              in state: PersonalAgentConversation) -> DotsOptionPicker? {
-        guard let question = state.messages.first(where: { $0.id == messageID }), !question.isDeleted,
+    /// The question as this call read it, when it can still take option `index` with `text`: there,
+    /// undeleted, asked by the dot, with no recorded option and no reply among `related` that chose one.
+    private func openQuestion(_ question: PersonalAgentMessage?, index: Int, text: String,
+                              among related: [PersonalAgentMessage]) -> DotsOptionPicker? {
+        guard let question, !question.isDeleted,
               question.author == .agent, let picker = DotsOptionPicker(metadata: question.metadata),
               picker.selected == nil, picker.options.indices.contains(index), picker.options[index] == text,
-              !state.visibleMessages.contains(where: {
-                  !$0.isDeleted && $0.replyToMessageID == messageID && DotsOptionPicker.selection($0.metadata) != nil
+              !related.contains(where: {
+                  !$0.isDeleted && $0.replyToMessageID == question.id && DotsOptionPicker.selection($0.metadata) != nil
               }) else { return nil }
         return picker
     }
@@ -429,11 +482,14 @@ extension PersonalAgentCenter {
                                     state: PersonalAgentConversation) async {
         guard let reader = client else { return }
         let current = generation
+        let epoch = state.replies.beginRead()
         do {
             let message = try await reader.send(submission, to: agent)
             state.optionReply.accepted(submission.requestID)
             if current == generation {
                 state.sentMessages = DotsProjection.merge(state.sentMessages, with: [message], older: false)
+                state.replies.noteSent(message, epoch: epoch)
+                reconcileReplies(state)
                 if selectedID == agent.id { await refreshConversation() }
             }
         } catch {

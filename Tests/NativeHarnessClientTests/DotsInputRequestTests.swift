@@ -370,6 +370,90 @@ final class DotsInputRequestTests: XCTestCase {
         await stored.disconnect()
     }
 
+    /// An option question read only in a reply thread is answered there: choosing reads that thread
+    /// afresh back to the question, an answer read only there counts, and a waiting answer keeps the
+    /// thread it was read in across a restart, in a record earlier builds keep as a backup.
+    func testAnOptionQuestionInAReplyThreadIsCheckedAgainstAFreshReadOfThatThread() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "thread-answers-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let root = PersonalAgentMessage(id: "root", author: .agent, text: "Shall I plan the launch?", createdAt: nil,
+                                        isDeleted: false, attachments: [])
+        var question = PersonalAgentMessage(id: "question", author: .agent, text: "Which day?", createdAt: nil,
+                                            isDeleted: false, attachments: [])
+        question.metadata = try value(#"{"option_picker":{"options":["Monday","Tuesday"]}}"#)
+        question.replyToMessageID = "root"
+        let reader = InputRequestReader(messages: [root])
+        await reader.setThread([question])
+        let drafts = PersonalAgentDrafts(directory: folder)
+        let center = PersonalAgentCenter(drafts: drafts)
+        await center.connect(sourceKey: "home") { reader }
+        let state = try XCTUnwrap(center.conversation)
+        state.draft.editor.text = "An unrelated draft"
+        center.openReplies(to: "root")
+        let thread = try XCTUnwrap(state.replies.threads["root"])
+        try await waitUntil { thread.hasRead }
+        XCTAssertEqual(thread.messages.map(\.id), ["root", "question"])
+
+        // A thread that cannot be read again is no check of the question, whatever was read before.
+        await reader.failReplies(true)
+        await center.chooseOption(1, in: "question")
+        XCTAssertEqual(state.optionReply.problem, .unchecked)
+        var sends = await reader.sends
+        XCTAssertTrue(sends.isEmpty)
+        await reader.failReplies(false)
+        await reader.loseNextSend()
+        await center.chooseOption(1, in: "question")
+        let pending = try XCTUnwrap(state.optionReply.pending)
+        XCTAssertEqual([pending.text, pending.replyToMessageID], ["Tuesday", "question"])
+        XCTAssertEqual(pending.optionSelection, 1)
+        XCTAssertNil(pending.replyTarget, "An option's answer is no ordinary reply")
+        XCTAssertEqual(state.optionReply.threadRootID, "root")
+        XCTAssertEqual(state.draft.editor.text, "An unrelated draft")
+        let record = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+            .first { $0.lastPathComponent.hasSuffix("option-reply.json") })
+        let saved = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: record))
+        XCTAssertEqual(saved["version"], .integer(2))
+        XCTAssertEqual(saved["threadRootID"], .string("root"))
+        let restarted = PersonalAgentDrafts(directory: folder).optionReply(source: "home", identity: reader.agent.id)
+        XCTAssertEqual(restarted.pending, pending)
+        XCTAssertEqual(restarted.threadRootID, "root")
+
+        // The first attempt arrived, as only the thread shows: the retry's fresh read settles it.
+        var answer = PersonalAgentMessage(id: "answer", author: .person, text: "Tuesday", createdAt: nil, isDeleted: false,
+                                          attachments: [], requestID: pending.requestID)
+        answer.replyToMessageID = "question"
+        answer.metadata = try value(#"{"option_picker":{"selection":1}}"#)
+        await reader.setThread([question, answer])
+        await center.retryOptionReply()
+        XCTAssertNil(state.optionReply.pending)
+        sends = await reader.sends
+        XCTAssertEqual(sends.count, 1, "An answer the thread shows is not sent again")
+        // That answer, read only in the thread, closes the question to another choice.
+        XCTAssertTrue(center.isAnswered(question, in: state))
+        await center.chooseOption(0, in: "question")
+        XCTAssertEqual(state.optionReply.problem, .changed)
+        sends = await reader.sends
+        XCTAssertEqual(sends.count, 1)
+
+        // A request in the room that a thread read shows deleted loses its card and shows deleted in the
+        // room too; a later room read of the old copy does not bring either back.
+        var ask = message("ask", try request(params()))
+        ask.replyToMessageID = "root"
+        await reader.setMessages([root, ask])
+        await center.refreshConversation()
+        XCTAssertNotNil(state.requests["ask"])
+        var deleted = PersonalAgentMessage(id: "ask", author: .agent, text: "", createdAt: nil, isDeleted: true, attachments: [])
+        deleted.replyToMessageID = "root"
+        await reader.setThread([question, answer, deleted])
+        await center.refreshFocusedReplies()
+        XCTAssertNil(state.requests["ask"], "The deleted request's card is gone")
+        XCTAssertEqual(state.visibleMessages.first { $0.id == "ask" }?.isDeleted, true)
+        await center.refreshConversation()
+        XCTAssertNil(state.requests["ask"])
+        XCTAssertEqual(state.visibleMessages.first { $0.id == "ask" }?.isDeleted, true)
+        await center.disconnect()
+    }
+
     // MARK: - Fixtures
 
     private func value(_ text: String) throws -> JSONValue {
@@ -470,6 +554,19 @@ private actor InputRequestReader: PersonalAgentClient {
     func failReads(_ value: Bool) { readsFail = value }
     func loseNextSend() { losesSend = true }
     func setMessages(_ messages: [PersonalAgentMessage]) { history = messages }
+    /// Messages read only in reply threads; a thread's page is these and the room's replies to its root.
+    private var threadOnly: [PersonalAgentMessage] = []
+    private var repliesFail = false
+    func setThread(_ messages: [PersonalAgentMessage]) { threadOnly = messages }
+    func failReplies(_ value: Bool) { repliesFail = value }
+    func replies(to rootID: String, for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
+        if repliesFail { throw PersonalAgentFailure.network }
+        let ids = Set(threadOnly.map(\.id))
+        let replies = threadOnly + history.filter {
+            !ids.contains($0.id) && ($0.replyToMessageID == rootID || $0.replyRootMessageID == rootID)
+        }
+        return .init(messages: replies, before: nil)
+    }
 
     func agents() async throws -> [PersonalAgent] { [agent, other] }
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
