@@ -162,6 +162,44 @@ final class StreamedTextTests: XCTestCase {
         XCTAssertEqual(summaryValue(), L10n.string("Expanded"))
     }
 
+    /// A message's text is laid out at the width it shows at, and only there: the window measures its
+    /// smallest size with less room than the conversation has, and a new turn's view could be laid out at
+    /// no size before it was placed. Each other width laid the whole message out, then again at its own,
+    /// as the conversation opened and for every fragment of an answer being written.
+    func testAMessageIsLaidOutOnlyAtTheWidthItShowsAt() throws {
+        let long = (0..<20).map { "Paragraph \($0) of an answer long enough to wrap across several lines of the conversation." }
+            .joined(separator: "\n\n")
+        // Beside a sidebar, in a window whose smallest size leaves the conversation less room than it has.
+        func window(_ entries: [TranscriptEntry]) -> some View {
+            HStack(spacing: 0) {
+                Color.clear.frame(width: 280)
+                ConversationTimeline(source: .transcript(entries: entries, harness: .claudeCode, status: .running,
+                                                         latestTurnIsComplete: false),
+                                     actions: ConversationActions())
+            }
+            .frame(minWidth: 760, minHeight: 560)
+        }
+        let host = WindowlessRender.Host(window([user, writing(long)]), size: NSSize(width: 1300, height: 800),
+                                         appearance: .light)
+        defer { host.close() }
+        host.settle()
+        func answer() throws -> TranscriptProseContainerView {
+            try XCTUnwrap(TranscriptProseRenderingTests.proseTextViews(in: host.hosting)
+                .first { $0.string.hasPrefix("Paragraph 0") }?.superview as? TranscriptProseContainerView)
+        }
+        XCTAssertEqual(try answer().newWidthLayouts, 1, "The answer was laid out at other widths as it opened")
+
+        var text = long
+        for fragment in 0..<8 {
+            text += " word\(fragment)"
+            host.hosting.rootView = window([user, writing(text)])
+            host.settle(passes: 1, interval: 0.005)
+        }
+        host.settle(passes: 2)
+        XCTAssertTrue(try answer().textView.string.hasSuffix(" word7"), "The answer reads its latest words")
+        XCTAssertEqual(try answer().newWidthLayouts, 1, "A fragment laid the answer out whole at another width")
+    }
+
     /// Words streamed into a list's last item read, build, lay out and draw again only that item: the
     /// list is one block, and the items before it keep the blocks they were read into and their layout.
     /// The text still reads as the message read and built afresh does, after an item is added and when

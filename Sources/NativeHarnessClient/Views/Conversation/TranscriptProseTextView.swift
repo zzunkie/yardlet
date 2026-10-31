@@ -228,8 +228,15 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     /// lay out again only the lines in view, placed after lines still laid out for the width measured
     /// last, and draw them higher or lower than the height its frame took — an empty band under a
     /// turn's answer, above the next request.
+    ///
+    /// Offered no width at all, as a window measures its smallest size, it answers without laying out:
+    /// the text wraps to any width it is given, and a long message laid out whole at widths it never
+    /// shows at, then at its own again, held the main thread for most of a second.
     func size(forWidth proposed: CGFloat?) -> CGSize {
-        guard let width = proposed, width.isFinite, width > 0 else {
+        if let width = proposed, width <= 0 {
+            return CGSize(width: 0, height: wholeLayoutWidth.flatMap { sizes[$0]?.height } ?? 0)
+        }
+        guard let width = proposed, width.isFinite else {
             let size = laidOut(atWidth: 100_000)
             layOutAtOwnWidthBeforeDrawing()
             return size
@@ -255,6 +262,9 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
         guard let layout = textView.textLayoutManager, let container = textView.textContainer else { return }
         if container.size.width != width {
             container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+#if DEBUG
+            newWidthLayouts += 1
+#endif
         }
         guard wholeLayoutWidth != width else { return }
         layout.ensureLayout(for: layout.documentRange)
@@ -281,6 +291,9 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     }
 
 #if DEBUG
+    /// How many times the text was laid out at a width other than its last, each time whole, for the tests.
+    private(set) var newWidthLayouts = 0
+
     /// The height the text is laid out at now, which is what it draws, for the tests.
     var laidOutHeight: CGFloat {
         guard let layout = textView.textLayoutManager, (textView.textStorage?.length ?? 0) > 0 else { return 0 }

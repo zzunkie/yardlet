@@ -233,6 +233,7 @@ struct ConversationTimeline: View {
                     }
                 }
             }
+            .takesOfferedSize()
         }
         .background {
             if placement.paintsCanvas { ParityTheme.canvas }
@@ -503,6 +504,33 @@ struct ConversationTimeline: View {
             .padding(.top, 96)
         }
     }
+}
+
+/// The conversation's column takes the size it is offered without measuring its turns, as its scroll
+/// view would answer after measuring them: the window measures its smallest size on every update
+/// (`NSHostingView.minSize`), and the turn rail's stack measures the column with no room and with all of
+/// it. Each turn measured there laid its long messages out whole at widths they never show at, and again
+/// at their own. Asked its ideal size, it asks its content as before.
+private struct OfferedSizeLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        if let width = proposal.width, let height = proposal.height { return CGSize(width: width, height: height) }
+        return subviews.first?.sizeThatFits(proposal) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+
+    // The column has no alignment guides of its own; the default answer places the scroll view to look.
+    func explicitAlignment(of guide: HorizontalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+}
+
+private extension View {
+    func takesOfferedSize() -> some View { OfferedSizeLayout { self } }
 }
 
 /// "The latest request", which following moves to whenever it changes. A conversation that renames
