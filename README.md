@@ -124,6 +124,48 @@ busy for more than 250 ms, it writes the time and the stack (function names only
 launch. See the
 [privacy policy](https://yardlet.app/privacy.html).
 
+## Permissions
+
+Yardlet is not sandboxed. The agents it starts run as you, as they would in a terminal, under their
+own approval and sandbox settings. Yardlet uses the access below only for the feature named, and
+macOS asks you the first time:
+
+- **Camera and microphone:** a site you allow in the built-in browser, or a command running in a
+  task, such as an agent's voice dictation or a program in the terminal.
+- **Bluetooth and USB:** passkeys from your phone or tablet, and security keys, in the built-in
+  browser.
+- **Automation (Apple Events):** a command running in a task that asks to control another app.
+- **Calendars, Reminders and Contacts:** the Apple Calendar, Reminders and Contacts connectors, once
+  you turn them on.
+- **Local network:** your phone finding this Mac on the same Wi-Fi, when the phone remote is on.
+
+Three helpers in the app bundle do work outside the main process:
+
+- **The browser host** runs the built-in Chromium (CEF) browser in its own processes, with its
+  profiles under `~/Library/Application Support/Yardlet`.
+- **`yardlet-mcp`** is a small stdio MCP server that Yardlet adds to each agent session it starts,
+  through that agent's per-session option, never its settings files. It forwards the agent's calls
+  to browser tools, connectors and session tools to the running Yardlet over a local socket.
+- **The lid helper** runs only while **Settings > General > Keep tasks working with the lid closed**
+  is on, which it is not by default. It is a launch daemon that runs as root, because the system
+  setting that keeps a Mac awake with its lid closed needs it. It turns that setting on only while
+  tasks are working, and puts it back when they finish, when Yardlet quits or crashes, and whenever
+  the Mac starts. Turning the option off unregisters the helper.
+
+## Known limitations
+
+- Yardlet runs on macOS 15 or later on Apple silicon only.
+- Connectors, browser tools and session tools reach Codex, Claude Code and the agents that use ACP
+  (OpenCode, Kimi Code, Grok Build, Hermes). Cursor Agent, Antigravity CLI, Pi and Muse Code have
+  no way to add an MCP server to one session, so their tasks run without them.
+- Scheduled tasks run only while Yardlet is open. A run missed while it was closed runs once when it
+  opens again, within 7 days.
+- The built-in browser cannot use passkeys saved in iCloud Keychain
+  ([docs/BROWSER_HOST.md](docs/BROWSER_HOST.md)).
+- Personal agents have limits of their own ([docs/PERSONAL_AGENTS.md](docs/PERSONAL_AGENTS.md)).
+- Yardlet is maintained by one person, and only the latest release receives fixes
+  ([SECURITY.md](SECURITY.md)).
+
 ## Roadmap and feedback
 
 What's being worked on and what comes next is on the [roadmap](https://github.com/users/zzunkie/projects/1),
