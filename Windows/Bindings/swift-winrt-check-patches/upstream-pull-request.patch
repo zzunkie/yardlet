@@ -1,0 +1,412 @@
+diff --git a/swiftwinrt/Resources/Support/IInspectable.swift b/swiftwinrt/Resources/Support/IInspectable.swift
+index f026059..c886728 100644
+--- a/swiftwinrt/Resources/Support/IInspectable.swift
++++ b/swiftwinrt/Resources/Support/IInspectable.swift
+@@ -62,6 +62,11 @@ public enum __ABI_ {
+         if let swiftAbi = swiftObj as? IInspectable {
+            let abi: UnsafeMutablePointer<C_IInspectable> = RawPointer(swiftAbi)
+            return try body(abi)
++        } else if let winrtClass = swiftObj as? WinRTClass,
++                  let abi: UnsafeMutablePointer<C_IInspectable> = winrtClass._getABI() {
++            // Pass a projected object as itself, as a parameter of its own type does, so the callee
++            // sees its COM identity rather than that of a wrapper made for this call.
++            return try body(abi)
+         } else {
+             return try super.toABI(body)
+         }
+@@ -118,7 +123,12 @@ public enum __ABI_ {
+         },
+ 
+         GetRuntimeClassName: {
+-            guard let instance = AnyWrapper.tryUnwrapFrom(raw: $0) else { return E_INVALIDARG }
++            guard var instance = AnyWrapper.tryUnwrapFrom(raw: $0) else { return E_INVALIDARG }
++            // A Swift class derived from a composable class with no overrides interface is held by a weak reference
++            if let weakRef = instance as? AnyObjectWrapper {
++                guard let obj = weakRef.obj else { return E_INVALIDARG }
++                instance = obj
++            }
+             guard let winrtClass = instance as? WinRTClass else {
+               let string = String(reflecting: type(of: instance))
+               $1!.pointee = try! HString(string).detach()
+diff --git a/swiftwinrt/Resources/Support/IWeakReference.swift b/swiftwinrt/Resources/Support/IWeakReference.swift
+index 1cec899..1f69216 100644
+--- a/swiftwinrt/Resources/Support/IWeakReference.swift
++++ b/swiftwinrt/Resources/Support/IWeakReference.swift
+@@ -76,7 +76,8 @@ fileprivate func Resolve(
+ 
+     let anyWrapper = __ABI_.AnyWrapper(target)!
+     var rawObject: UnsafeMutableRawPointer? = nil
+-    let result = __ABI_.AnyWrapper.queryInterface(try! anyWrapper.toABI { $0 }, riid, &rawObject)
++    // Query the object toABI gives, which can be a WinRT object rather than a Swift wrapper
++    let result = try! anyWrapper.toABI { $0.pointee.lpVtbl.pointee.QueryInterface($0, riid, &rawObject) }
+     ppvObject.pointee = rawObject?.bindMemory(to: C_IInspectable.self, capacity: 1)
+     return result
+ }
+diff --git a/tests/test_app/ValueBoxingTests.swift b/tests/test_app/ValueBoxingTests.swift
+index 2246c28..ad54ae1 100644
+--- a/tests/test_app/ValueBoxingTests.swift
++++ b/tests/test_app/ValueBoxingTests.swift
+@@ -43,6 +43,20 @@ class ValueBoxingTests : XCTestCase {
+     let classy = Class()
+     let result = try! classy.inObject(derived)
+     XCTAssertEqual(NSStringFromClass(Derived.self), result)
++
++    // and the class name of the WinRT base for a Swift class derived from one without overrides
++    XCTAssertEqual("test_component.BaseNoOverrides", try! classy.inObject(AppDerivedNoOverrides()))
++  }
++
++  public func testInWinRTClassKeepsIdentity() throws {
++    // The same projected object passed as two Objects reaches WinRT as one COM object
++    let classy = Class()
++    XCTAssertTrue(try StaticClass.isSameObject(classy, classy))
++    XCTAssertFalse(try StaticClass.isSameObject(classy, Class()))
++
++    // as does a Swift class derived from a projected one
++    let appDerived = AppDerived()
++    XCTAssertTrue(try StaticClass.isSameObject(appDerived, appDerived))
+   }
+ 
+   public func testInSwiftStruct() {
+@@ -92,6 +106,14 @@ class ValueBoxingTests : XCTestCase {
+ 
+     anyObj = try! classy.returnObject()
+     XCTAssertEqual(anyObj as! Person, person)
++
++    // A Swift class derived from a projected one comes back as itself
++    let appDerived = AppDerived()
++    _ = try! classy.inObject(appDerived)
++    try! classy.outObject(&anyObj)
++    XCTAssertIdentical(anyObj as? AppDerived, appDerived)
++    anyObj = try! classy.returnObject()
++    XCTAssertIdentical(anyObj as? AppDerived, appDerived)
+   }
+ }
+ 
+@@ -101,6 +123,7 @@ var valueBoxingTests: [XCTestCaseEntry] = [
+     ("InInt", ValueBoxingTests.testInInt),
+     ("InString", ValueBoxingTests.testInString),
+     ("InWinRTClass", ValueBoxingTests.testInWinRTClass),
++    ("InWinRTClassKeepsIdentity", ValueBoxingTests.testInWinRTClassKeepsIdentity),
+     ("InSwiftStruct", ValueBoxingTests.testInSwiftStruct),
+     ("OutInterface", ValueBoxingTests.testOutInterface),
+     ("testInAppImplemented", ValueBoxingTests.testInAppImplemented),
+diff --git a/tests/test_app/WeakReferenceTests.swift b/tests/test_app/WeakReferenceTests.swift
+index 26d20d9..8f7760c 100644
+--- a/tests/test_app/WeakReferenceTests.swift
++++ b/tests/test_app/WeakReferenceTests.swift
+@@ -16,6 +16,14 @@ class WeakReferenceTests : XCTestCase {
+     XCTAssertIdentical(roundtripped, original)
+   }
+ 
++  public func testResolveProjectedClass() throws {
++    // A projected class passed as an interface it implements
++    let original = ReferenceTarget()
++    let weakReferencer = WeakReferencer(original)
++    let roundtripped = try XCTUnwrap(weakReferencer.resolve())
++    try roundtripped.method()
++  }
++
+   public func testNotStrong() throws {
+     var original: Target! = Target()
+     let weakReferencer = WeakReferencer(original)
+@@ -27,6 +35,7 @@ class WeakReferenceTests : XCTestCase {
+ var weakReferenceTests: [XCTestCaseEntry] = [
+   testCase([
+     ("testCreateAndResolve", WeakReferenceTests.testCreateAndResolve),
++    ("testResolveProjectedClass", WeakReferenceTests.testResolveProjectedClass),
+     ("testNotStrong", WeakReferenceTests.testNotStrong)
+   ])
+ ]
+diff --git a/tests/test_app/test_app.exe.manifest b/tests/test_app/test_app.exe.manifest
+index 30c009c..aedc682 100644
+--- a/tests/test_app/test_app.exe.manifest
++++ b/tests/test_app/test_app.exe.manifest
+@@ -70,6 +70,10 @@
+                   name="test_component.WeakReferencer"
+                   threadingModel="both"
+                   xmlns="urn:schemas-microsoft-com:winrt.v1" />
++            <activatableClass
++                  name="test_component.ReferenceTarget"
++                  threadingModel="both"
++                  xmlns="urn:schemas-microsoft-com:winrt.v1" />
+             <activatableClass
+                   name="test_component.ArrayMethods"
+                   threadingModel="both"
+diff --git a/tests/test_component/Sources/CWinRT/include/test_component.h b/tests/test_component/Sources/CWinRT/include/test_component.h
+index ed4610e..d30805d 100644
+--- a/tests/test_component/Sources/CWinRT/include/test_component.h
++++ b/tests/test_component/Sources/CWinRT/include/test_component.h
+@@ -4502,6 +4502,10 @@ struct __x_ABI_Ctest__component_CStructWithIReference
+         HSTRING* result);
+     HRESULT (STDMETHODCALLTYPE* TakeBase)(__x_ABI_Ctest__component_CIStaticClassStatics* This,
+         __x_ABI_Ctest__component_CIBase* base);
++    HRESULT (STDMETHODCALLTYPE* IsSameObject)(__x_ABI_Ctest__component_CIStaticClassStatics* This,
++        IInspectable* first,
++        IInspectable* second,
++        boolean* result);
+ 
+         END_INTERFACE
+     } __x_ABI_Ctest__component_CIStaticClassStaticsVtbl;
+diff --git a/tests/test_component/Sources/WindowsFoundation/Support/iinspectable.swift b/tests/test_component/Sources/WindowsFoundation/Support/iinspectable.swift
+index fde3739..122e1af 100644
+--- a/tests/test_component/Sources/WindowsFoundation/Support/iinspectable.swift
++++ b/tests/test_component/Sources/WindowsFoundation/Support/iinspectable.swift
+@@ -62,6 +62,11 @@ public enum __ABI_ {
+         if let swiftAbi = swiftObj as? IInspectable {
+            let abi: UnsafeMutablePointer<C_IInspectable> = RawPointer(swiftAbi)
+            return try body(abi)
++        } else if let winrtClass = swiftObj as? WinRTClass,
++                  let abi: UnsafeMutablePointer<C_IInspectable> = winrtClass._getABI() {
++            // Pass a projected object as itself, as a parameter of its own type does, so the callee
++            // sees its COM identity rather than that of a wrapper made for this call.
++            return try body(abi)
+         } else {
+             return try super.toABI(body)
+         }
+@@ -118,7 +123,12 @@ public enum __ABI_ {
+         },
+ 
+         GetRuntimeClassName: {
+-            guard let instance = AnyWrapper.tryUnwrapFrom(raw: $0) else { return E_INVALIDARG }
++            guard var instance = AnyWrapper.tryUnwrapFrom(raw: $0) else { return E_INVALIDARG }
++            // A Swift class derived from a composable class with no overrides interface is held by a weak reference
++            if let weakRef = instance as? AnyObjectWrapper {
++                guard let obj = weakRef.obj else { return E_INVALIDARG }
++                instance = obj
++            }
+             guard let winrtClass = instance as? WinRTClass else {
+               let string = String(reflecting: type(of: instance))
+               $1!.pointee = try! HString(string).detach()
+diff --git a/tests/test_component/Sources/WindowsFoundation/Support/iweakreference.swift b/tests/test_component/Sources/WindowsFoundation/Support/iweakreference.swift
+index c2c6422..f7ad74d 100644
+--- a/tests/test_component/Sources/WindowsFoundation/Support/iweakreference.swift
++++ b/tests/test_component/Sources/WindowsFoundation/Support/iweakreference.swift
+@@ -76,7 +76,8 @@ fileprivate func Resolve(
+ 
+     let anyWrapper = __ABI_.AnyWrapper(target)!
+     var rawObject: UnsafeMutableRawPointer? = nil
+-    let result = __ABI_.AnyWrapper.queryInterface(try! anyWrapper.toABI { $0 }, riid, &rawObject)
++    // Query the object toABI gives, which can be a WinRT object rather than a Swift wrapper
++    let result = try! anyWrapper.toABI { $0.pointee.lpVtbl.pointee.QueryInterface($0, riid, &rawObject) }
+     ppvObject.pointee = rawObject?.bindMemory(to: C_IInspectable.self, capacity: 1)
+     return result
+ }
+diff --git a/tests/test_component/Sources/test_component/test_component.swift b/tests/test_component/Sources/test_component/test_component.swift
+index 76ab800..f8f0fea 100644
+--- a/tests/test_component/Sources/test_component/test_component.swift
++++ b/tests/test_component/Sources/test_component/test_component.swift
+@@ -6092,6 +6092,66 @@ extension __ABI_test_component {
+ 
+     }
+ 
++}
++// MARK: - ReferenceTarget
++
++public final class ReferenceTarget : WinRTClass, IReferenceTarget {
++    private typealias SwiftABI = __ABI_test_component.IReferenceTarget
++    private typealias CABI = __x_ABI_Ctest__component_CIReferenceTarget
++    private lazy var _default: SwiftABI! = getInterfaceForCaching()
++    @_spi(WinRTInternal)
++    override public func _getABI<T>() -> UnsafeMutablePointer<T>? {
++        if T.self == CABI.self {
++            return RawPointer(_default)
++        }
++        return super._getABI()
++    }
++
++    @_spi(WinRTInternal)
++    public init(fromAbi: WindowsFoundation.IInspectable) {
++        super.init(fromAbi)
++    }
++
++    override public func queryInterface(_ iid: WindowsFoundation.IID) -> IUnknownRef? {
++        return super.queryInterface(iid)
++    }
++    private static let _defaultFactory: WindowsFoundation.IActivationFactory = try! RoGetActivationFactory("test_component.ReferenceTarget")
++    override public init() {
++        super.init(try! Self._defaultFactory.ActivateInstance())
++    }
++
++    public func method() throws {
++        try _default.Method()
++    }
++
++    deinit {
++        _default = nil
++    }
++}
++
++// MARK: - ReferenceTarget Internals
++
++@_spi(WinRTInternal)
++extension __IMPL_test_component {
++    public enum ReferenceTargetBridge: AbiBridge {
++        public typealias SwiftProjection = ReferenceTarget
++        public typealias CABI = __x_ABI_Ctest__component_CIReferenceTarget
++        public static func from(abi: consuming ComPtr<__x_ABI_Ctest__component_CIReferenceTarget>?) -> ReferenceTarget? {
++            guard let abi = abi else { return nil }
++            return .init(fromAbi: WindowsFoundation.IInspectable(abi))
++        }
++    }
++
++}
++@_spi(WinRTInternal)
++public class ReferenceTargetMaker: MakeFromAbi {
++    public typealias SwiftType = ReferenceTarget
++    public static func from(abi: WindowsFoundation.IInspectable) -> SwiftType {
++        return ReferenceTarget(fromAbi: abi)
++    }
++}
++@_spi(WinRTInternal)
++extension __ABI_test_component {
+ }
+ // MARK: - Simple
+ 
+@@ -6734,6 +6794,10 @@ public final class StaticClass {
+         try _IStaticClassStatics.TakeBase(base)
+     }
+ 
++    public static func isSameObject(_ first: Any!, _ second: Any!) throws -> Bool {
++        return try _IStaticClassStatics.IsSameObject(first, second)
++    }
++
+     public static var enumProperty : Fruit {
+         get { try! _IStaticClassStatics.get_EnumProperty() }
+         set { try! _IStaticClassStatics.put_EnumProperty(newValue) }
+@@ -6746,7 +6810,7 @@ public final class StaticClass {
+ @_spi(WinRTInternal)
+ extension __ABI_test_component {
+     private static let IID___x_ABI_Ctest__component_CIStaticClassStatics: WindowsFoundation.IID = .init(
+-        Data1: 0x92E618EF, Data2: 0xFF6E, Data3: 0x5975, Data4: ( 0x86,0x8C,0x99,0xAD,0xC1,0x1D,0x36,0xDE ) // 92E618EF-FF6E-5975-868C-99ADC11D36DE
++        Data1: 0x8AB6B0FF, Data2: 0x05F8, Data3: 0x5DB2, Data4: ( 0xB5,0x5C,0x8C,0x0D,0x75,0xB1,0xB8,0x1B ) // 8AB6B0FF-05F8-5DB2-B55C-8C0D75B1B81B
+     ) 
+ 
+     public class IStaticClassStatics: WindowsFoundation.IInspectable {
+@@ -6795,6 +6859,18 @@ extension __ABI_test_component {
+             }
+         }
+ 
++        public func IsSameObject(_ first: Any?, _ second: Any?) throws -> Bool {
++            var result: boolean = 0
++            let firstWrapper = __ABI_.AnyWrapper(first)
++            let _first = try! firstWrapper?.toABI { $0 }
++            let secondWrapper = __ABI_.AnyWrapper(second)
++            let _second = try! secondWrapper?.toABI { $0 }
++            _ = try perform(as: __x_ABI_Ctest__component_CIStaticClassStatics.self) { pThis in
++                try CHECKED(pThis.pointee.lpVtbl.pointee.IsSameObject(pThis, _first, _second, &result))
++            }
++            return .init(from: result)
++        }
++
+     }
+ 
+ }
+diff --git a/tests/test_component/cpp/CMakeLists.txt b/tests/test_component/cpp/CMakeLists.txt
+index 56155b3..47d09ad 100644
+--- a/tests/test_component/cpp/CMakeLists.txt
++++ b/tests/test_component/cpp/CMakeLists.txt
+@@ -97,7 +97,7 @@ add_custom_command(
+   COMMAND ${MIDLRT_EXE_PATH} /metadata_dir $ENV{SystemRoot}/system32/winmetadata /winrt /winmd ${WINMD_FILE} /h ${H_FILE} /ns_prefix /nomidl ${MIDL_FILE}
+   COMMAND ${CPPWINRT_EXE_PATH} -input ${WINMD_FILE} -comp ${CPP_WINRT_OUTPUT_DIR} -output ${CPP_WINRT_OUTPUT_DIR} -include test_component -include external_base -include Microsoft.UI.Xaml.Interop -verbose -opt -lib test -overwrite -reference ${CMAKE_SYSTEM_VERSION} -name test_component
+   COMMAND ${CPPWINRT_EXE_PATH} -output ${CPP_WINRT_OUTPUT_DIR} -include Windows.Foundation -opt -verbose -reference ${CMAKE_SYSTEM_VERSION}
+-  DEPENDS ${MIDL_FILE} NullValues.idl Keywords.idl EventTester.idl CollectionTester.idl BufferTests.idl ArrayTester.idl Types.idl
++  DEPENDS ${MIDL_FILE} NullValues.idl Keywords.idl EventTester.idl CollectionTester.idl BufferTests.idl ArrayTester.idl Types.idl WeakReferencer.idl
+   MAIN_DEPENDENCY ${MIDL_FILE}
+   VERBATIM
+ )
+@@ -136,6 +136,7 @@ target_sources(test_component_cpp PRIVATE
+     NoopClosable.cpp
+     NullValues.cpp
+     pch.cpp
++    ReferenceTarget.cpp
+     Simple.cpp
+     UnsealedDerived.cpp
+     UnsealedDerived2.cpp
+diff --git a/tests/test_component/cpp/ReferenceTarget.cpp b/tests/test_component/cpp/ReferenceTarget.cpp
+new file mode 100644
+index 0000000..f346249
+--- /dev/null
++++ b/tests/test_component/cpp/ReferenceTarget.cpp
+@@ -0,0 +1,3 @@
++#include "pch.h"
++#include "ReferenceTarget.h"
++#include "ReferenceTarget.g.cpp"
+diff --git a/tests/test_component/cpp/ReferenceTarget.h b/tests/test_component/cpp/ReferenceTarget.h
+new file mode 100644
+index 0000000..9011a57
+--- /dev/null
++++ b/tests/test_component/cpp/ReferenceTarget.h
+@@ -0,0 +1,18 @@
++#pragma once
++#include "ReferenceTarget.g.h"
++
++namespace winrt::test_component::implementation
++{
++    struct ReferenceTarget : ReferenceTargetT<ReferenceTarget>
++    {
++        ReferenceTarget() = default;
++
++        void Method() {}
++    };
++}
++namespace winrt::test_component::factory_implementation
++{
++    struct ReferenceTarget : ReferenceTargetT<ReferenceTarget, implementation::ReferenceTarget>
++    {
++    };
++}
+diff --git a/tests/test_component/cpp/StaticClass.cpp b/tests/test_component/cpp/StaticClass.cpp
+index 8baf2ba..39c105a 100644
+--- a/tests/test_component/cpp/StaticClass.cpp
++++ b/tests/test_component/cpp/StaticClass.cpp
+@@ -42,4 +42,10 @@ namespace winrt::test_component::implementation
+     {
+         base.DoTheThing();
+     }
++
++    bool StaticClass::IsSameObject(Windows::Foundation::IInspectable const& first, Windows::Foundation::IInspectable const& second)
++    {
++        // C++/WinRT's == compares the objects' COM identity.
++        return first == second;
++    }
+ }
+diff --git a/tests/test_component/cpp/StaticClass.h b/tests/test_component/cpp/StaticClass.h
+index 376e338..0b968bf 100644
+--- a/tests/test_component/cpp/StaticClass.h
++++ b/tests/test_component/cpp/StaticClass.h
+@@ -12,6 +12,7 @@ namespace winrt::test_component::implementation
+         static hstring InEnum(test_component::Signed const& value);
+         static hstring InNonBlittableStruct(test_component::NonBlittableStruct const& value);
+         static void TakeBase(test_component::Base const& base);
++        static bool IsSameObject(Windows::Foundation::IInspectable const& first, Windows::Foundation::IInspectable const& second);
+ 
+         private:
+         static test_component::Fruit s_fruit;
+diff --git a/tests/test_component/cpp/WeakReferencer.idl b/tests/test_component/cpp/WeakReferencer.idl
+index 300bd16..3489ee9 100644
+--- a/tests/test_component/cpp/WeakReferencer.idl
++++ b/tests/test_component/cpp/WeakReferencer.idl
+@@ -5,6 +5,11 @@ namespace test_component
+         void Method();
+     }
+ 
++    runtimeclass ReferenceTarget : [default] IReferenceTarget
++    {
++        ReferenceTarget();
++    }
++
+     runtimeclass WeakReferencer
+     {
+         WeakReferencer(IReferenceTarget object);
+diff --git a/tests/test_component/cpp/test_component.idl b/tests/test_component/cpp/test_component.idl
+index df3d50b..42f764c 100644
+--- a/tests/test_component/cpp/test_component.idl
++++ b/tests/test_component/cpp/test_component.idl
+@@ -273,6 +273,7 @@ namespace test_component
+             static String InNonBlittableStruct(NonBlittableStruct value);
+ 
+             static void TakeBase(Base base);
++            static Boolean IsSameObject(Object first, Object second);
+         }
+         //namespace Structs
+         //
