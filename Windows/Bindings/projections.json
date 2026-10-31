@@ -1,0 +1,42 @@
+{
+  "packages": [
+    {
+      "id": "Microsoft.WindowsAppSDK",
+      "version": "1.7.250909003",
+      "sha512": "TquAx6P4taXpBnXGVXUcFlHxofWHy6qbRUsv/JInAGzzaEVG1ep8+wEP4ewu+d8pJVyTf7PqOncsCp5uIyrqZw=="
+    },
+    {
+      "id": "Microsoft.Windows.SDK.Contracts",
+      "version": "10.0.18362.2005",
+      "sha512": "f7UkvieQbht+cTgwpSYAaLKl+WE6ZTk6mWHaBMWVBrG4RgA4SxKJwH8kFb+D5gG+ByQqPLk2JDCZ0PtLZRAPQA=="
+    },
+    {
+      "id": "Microsoft.Web.WebView2",
+      "version": "1.0.2903.40",
+      "sha512": "pDLSrpyma3xyOGXlw3Aowy7XceBdeJbukZzKLVdPCFvyfnn8PrCLylMn6c456ja0TcOOal8IdQCVONDRU2OGkw=="
+    }
+  ],
+  "include": [
+    "Microsoft.UI.Xaml.Application",
+    "Microsoft.UI.Xaml.Window",
+    "Microsoft.UI.Xaml.Controls.Grid",
+    "Microsoft.UI.Xaml.Controls.RowDefinition",
+    "Microsoft.UI.Xaml.Controls.ColumnDefinition",
+    "Microsoft.UI.Xaml.Controls.StackPanel",
+    "Microsoft.UI.Xaml.Controls.ScrollViewer",
+    "Microsoft.UI.Xaml.Controls.TextBlock",
+    "Microsoft.UI.Xaml.Controls.TextBox",
+    "Microsoft.UI.Xaml.Controls.Button",
+    "Microsoft.UI.Xaml.Controls.ListView",
+    "Microsoft.UI.Xaml.Controls.ListViewItem",
+    "Microsoft.UI.Xaml.Controls.NavigationView",
+    "Microsoft.UI.Xaml.Controls.NavigationViewItem",
+    "Microsoft.UI.Xaml.Controls.XamlControlsResources",
+    "Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider",
+    "Microsoft.UI.Xaml.Markup.IXamlMetadataProvider",
+    "Microsoft.UI.Xaml.Hosting.WindowsXamlManager",
+    "Microsoft.UI.Dispatching.DispatcherQueueController",
+    "Microsoft.UI.Windowing.AppWindow"
+  ],
+  "exclude": []
+}

@@ -738,3 +738,67 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## The Windows app
+
+The Windows app (docs/PLATFORM_PORTABILITY.md, "The Windows app") is built on WinUI bindings that are generated
+before each build and not kept in the repository.
+
+### In the Windows app
+
+#### Swift/WinRT (swift-winrt), commit 3b20c713a672c7a1e728ebbf2d99f4d09e53595f
+
+Source: https://github.com/thebrowsercompany/swift-winrt
+
+The WinUI bindings linked into the Windows app are code swift-winrt writes, with its support files
+(`Support/`, `CWinRT/`) copied in.
+
+```
+BSD 3-Clause License
+
+Copyright (c) 2023, The Browser Company
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+#### Windows App SDK 1.7.250909003 (NuGet package Microsoft.WindowsAppSDK)
+
+Source: https://www.nuget.org/packages/Microsoft.WindowsAppSDK/1.7.250909003
+
+© Microsoft Corporation. The Windows app carries `Microsoft.WindowsAppRuntime.Bootstrap.dll` beside its executable
+and links the package's import library for it, as distributable code under the Microsoft Software License Terms for
+the Windows App SDK (the package's `license.txt`). The WinUI bindings are generated from the package's metadata. The
+Windows App Runtime itself is installed on its own and is not part of the app.
+
+### Used only to build the Windows app
+
+- **swift-winrt** (above), built from source to generate the bindings, with
+  [winmd](https://github.com/microsoft/winmd) (MIT License, © Microsoft Corporation) as its metadata reader.
+- **Windows SDK contracts 10.0.18362.2005** (NuGet package Microsoft.Windows.SDK.Contracts, © Microsoft Corporation,
+  https://aka.ms/WinSDKLicenseURL) and **WebView2 1.0.2903.40** (NuGet package Microsoft.Web.WebView2, © Microsoft
+  Corporation, the package's `LICENSE.txt`): metadata the bindings are generated from.
+- **NuGet** (`nuget.exe`, © .NET Foundation and contributors), which restores the packages above.

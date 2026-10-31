@@ -31,14 +31,23 @@ let cefTargets: [Target] = cefDirectory == nil ? [] : [
     )
 ]
 
-// The engine is every folder of the app target outside the screen and macOS layers
+// The engine is every folder of the app target outside the screen and platform layers
 // (docs/PLATFORM_PORTABILITY.md). With YARDLET_ENGINE_ONLY=1 the app target compiles the engine alone,
-// as a library without the macOS layers and their dependencies: the build that Windows makes, and the
-// check that the engine still stands on its own.
+// as a library without the screens, the platform layers and their dependencies: the check that the
+// engine still stands on its own, on any platform. On Windows the app target is the Windows app: the
+// engine, Platform/Portable, Platform/Windows and the WinUI screens, on the WinUI bindings that
+// Windows/scripts/generate-bindings.ps1 generates into Windows/Bindings.
 let engineOnly = Context.environment["YARDLET_ENGINE_ONLY"] == "1"
+#if os(Windows)
+let windowsApp = !engineOnly
+#else
+let windowsApp = false
+#endif
 let macOSLayers = ["Views", "Browser", "Development", "Platform/macOS", "NativeHarnessClientApp.swift"]
+let windowsLayers = ["WinUI", "Platform/Windows"]
 // Platform/Portable holds Foundation versions of what each platform layer provides under the same
-// names, for the engine-only build; the Mac app has its own in Platform/macOS.
+// names, for the engine-only build and for what the Windows layer does not provide yet; the Mac app
+// has its own in Platform/macOS.
 let otherPlatformLayers = ["Platform/Portable"]
 
 // The phone remote's listeners and interface addresses use Network.framework and BSD sockets; a
@@ -59,7 +68,29 @@ let sqliteTarget: Target = .target(
 let sqliteTarget: Target = .systemLibrary(name: "CSQLite")
 #endif
 
-let appTarget: Target = engineOnly
+let appTarget: Target = windowsApp
+    ? .executableTarget(
+        name: "NativeHarnessClient",
+        dependencies: [
+            "CSQLite",
+            "YardletAgentTools",
+            "YardletRemote",
+            .product(name: "Crypto", package: "swift-crypto"),
+            .product(name: "Markdown", package: "swift-markdown"),
+            .product(name: "WinUIBindings", package: "Bindings")
+        ],
+        exclude: macOSLayers,
+        resources: [
+            .process("Resources")
+        ],
+        // A release build is a windowed application with no console; a debug build keeps one for
+        // print.
+        linkerSettings: [
+            .unsafeFlags(["-Xlinker", "/SUBSYSTEM:WINDOWS", "-Xlinker", "/ENTRY:mainCRTStartup"],
+                         .when(platforms: [.windows], configuration: .release))
+        ]
+    )
+    : engineOnly
     ? .target(
         name: "NativeHarnessClient",
         dependencies: [
@@ -69,7 +100,7 @@ let appTarget: Target = engineOnly
             .product(name: "Crypto", package: "swift-crypto"),
             .product(name: "Markdown", package: "swift-markdown")
         ],
-        exclude: macOSLayers,
+        exclude: macOSLayers + windowsLayers,
         resources: [
             .process("Resources")
         ]
@@ -87,7 +118,7 @@ let appTarget: Target = engineOnly
             .product(name: "SwiftTerm", package: "SwiftTerm"),
             .product(name: "Sparkle", package: "Sparkle", condition: .when(platforms: [.macOS]))
         ],
-        exclude: otherPlatformLayers,
+        exclude: otherPlatformLayers + windowsLayers,
         resources: [
             .process("Resources")
         ],
@@ -133,7 +164,9 @@ let package = Package(
             url: "https://github.com/apple/swift-crypto.git",
             exact: "5.0.3"
         )
-    ] + (engineOnly ? [] : [
+    ] + (windowsApp ? [
+        .package(path: "Windows/Bindings")
+    ] : []) + (engineOnly || windowsApp ? [] : [
         .package(
             url: "https://github.com/migueldeicaza/SwiftTerm.git",
             exact: "1.18.0"
@@ -202,7 +235,7 @@ let package = Package(
             ]
         ),
         appTarget
-    ] + (engineOnly ? [] : [
+    ] + (engineOnly || windowsApp ? [] : [
         // The tests build against the Mac app, SwiftTerm included.
         .testTarget(
             name: "NativeHarnessClientTests",

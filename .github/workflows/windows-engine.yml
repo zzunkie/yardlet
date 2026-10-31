@@ -1,8 +1,9 @@
 name: Windows engine
 
 # The engine built on its own on Windows (docs/PLATFORM_PORTABILITY.md, "Building the engine on its
-# own"), for every pull request, main and the branches that port it. It informs and is not a required
-# check: a pull request that breaks it can still be merged.
+# own"), and the Windows app built on it ("The Windows app"), for every pull request, main and the
+# branches that port it. They inform and are not required checks: a pull request that breaks them can
+# still be merged.
 on:
   push:
     branches: [main, 'windows-*']
@@ -89,4 +90,47 @@ jobs:
           if (Test-Path build.log) {
             Report 'Build errors' (Select-String -Path build.log -Pattern 'error:' | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique | Select-Object -First 150)
             Report 'Build log' (Get-Content build.log -Tail 60)
+          }
+
+  # The Windows app: the engine, Platform/Windows and the WinUI screens, on WinUI bindings generated
+  # first. A debug build, which shows whether the app compiles without a release's optimizer time.
+  app:
+    name: Build the Windows app
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Allow long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Swift 6.4.1
+        shell: pwsh
+        run: Windows/scripts/install-swift.ps1 -Version 6.4.1
+      # swift-winrt, built from the commit Windows/Bindings/swift-winrt.json pins.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: Windows/Bindings/.work/swift-winrt-*
+          key: swift-winrt-${{ hashFiles('Windows/Bindings/swift-winrt.json') }}
+      - name: Generate the WinUI bindings
+        shell: pwsh
+        run: Windows/scripts/generate-bindings.ps1 2>&1 | Tee-Object -FilePath generate.log
+      - name: Build
+        shell: pwsh
+        run: |
+          swift build --product NativeHarnessClient --force-resolved-versions -Xswiftc -continue-building-after-errors 2>&1 |
+            Tee-Object -FilePath build.log
+          exit $LASTEXITCODE
+      - name: Report a failure
+        if: failure()
+        shell: pwsh
+        run: |
+          function Report([string] $title, [string[]] $lines) {
+            $text = ($lines -join "`n") -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+            Write-Output "::notice title=$title::$text"
+          }
+          if (Test-Path generate.log) { Report 'Generation log' (Get-Content generate.log -Tail 40) }
+          if (Test-Path build.log) {
+            Report 'App build errors' (Select-String -Path build.log -Pattern 'error:' | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique | Select-Object -First 150)
+            Report 'App build log' (Get-Content build.log -Tail 60)
           }

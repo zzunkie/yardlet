@@ -1,7 +1,8 @@
 # Engine portability
 
-Yardlet runs on macOS. Windows is planned: the engine is kept in cross-platform Swift, and each platform gets its own
-screens. The engine builds on its own on macOS, Linux and Windows; nothing has run on Windows yet. For
+Yardlet runs on macOS. Windows is in progress: the engine is kept in cross-platform Swift, and each platform gets its
+own screens. The engine builds on its own on macOS, Linux and Windows, and the Windows app, the engine with WinUI 3
+screens, builds and opens its window on Windows ("The Windows app" below); it does not run harnesses yet. For
 dependencies and Foundation behavior on Windows, what was checked in the official source or a build is marked
 "confirmed"; the rest is "not confirmed".
 
@@ -10,14 +11,15 @@ dependencies and Foundation behavior on Windows, what was checked in the officia
 - **Engine:** every Swift file of the `NativeHarnessClient` target and of `YardletAgentTools` (the library the app
   shares with the Yardlet MCP server, `yardlet-mcp`), except the screen and platform layers below. New folders count as
   engine by default.
-- **Screen and platform layers (outside the check):** `Views/`, `Browser/` (the WebKit preview), `Development/` (visual
-  fixtures and QA), `Platform/` and `NativeHarnessClientApp.swift`.
+- **Screen and platform layers (outside the check):** `Views/`, `WinUI/` (the Windows app's screens), `Browser/` (the
+  WebKit preview), `Development/` (visual fixtures and QA), `Platform/` and `NativeHarnessClientApp.swift`.
 - Engine code names the platform's parts directly, and each platform defines them under the same names in its own
-  folder: `Platform/macOS/` for the Mac app, and `Platform/Portable/` for a build of the engine on its own. Some parts
+  folder: `Platform/macOS/` for the Mac app, `Platform/Windows/` for the Windows app, and `Platform/Portable/` for a
+  build of the engine on its own and for what the Windows layer does not provide yet. Some parts
   are protocols the engine owns with a platform's implementation (`LocalSystemNotificationCenter` implements
   `SystemNotificationCenter`, `LiveProcessTable` implements `ProcessTableReading`); others are types or extensions the
   engine calls by name. The app's model is put together in `Platform/macOS/AppModel+Live.swift`, which hands the engine
-  the Mac's browser host.
+  the Mac's browser host; the Windows app's in `Platform/Windows/AppModel+Live.swift`.
 
 ## Building the engine on its own
 
@@ -25,9 +27,9 @@ dependencies and Foundation behavior on Windows, what was checked in the officia
 YARDLET_ENGINE_ONLY=1 swift build --build-system native --target NativeHarnessClient --force-resolved-versions
 ```
 
-With `YARDLET_ENGINE_ONLY=1`, `Package.swift` turns the app target into a library that leaves out `Views/`, `Browser/`,
-`Development/`, `Platform/macOS/` and `NativeHarnessClientApp.swift`, and drops the SwiftTerm and Sparkle packages and
-the test target. This is the build a platform other than macOS makes, and on a Mac it checks that the engine still
+With `YARDLET_ENGINE_ONLY=1`, `Package.swift` turns the app target into a library that leaves out `Views/`, `WinUI/`,
+`Browser/`, `Development/`, `Platform/macOS/`, `Platform/Windows/` and `NativeHarnessClientApp.swift`, and drops the
+SwiftTerm and Sparkle packages and the test target. This is the build a platform other than macOS makes, and on a Mac it checks that the engine still
 stands without the screens. `--force-resolved-versions` keeps `Package.resolved` as the full build pins it; without
 it, the build rewrites the file without the packages it leaves out.
 
@@ -89,6 +91,62 @@ stand in for it: Apple's platforms have names the others lack (Combine's `object
 **Why one target per platform.** A separate engine library would need every declaration the screens and tests use
 opened with the `package` access level, a change to nearly every engine file. Choosing the platform's folder in
 `Package.swift` keeps one module on each platform, so engine code and `@testable import` stay as they are.
+
+## The Windows app
+
+On Windows, without `YARDLET_ENGINE_ONLY`, `Package.swift` makes the app target the Windows app: the engine,
+`Platform/Portable/`, `Platform/Windows/` and the screens in `WinUI/`, in one module as on the Mac. The Mac's build and
+the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Windows layer comes to provide one of
+`Platform/Portable/`'s parts, the Windows app leaves that portable file out.
+
+- **Assembly.** `Platform/Windows/AppModel+Live.swift` makes the model with its stores in `%LOCALAPPDATA%\Yardlet`
+  and no browser host. `WinUI/YardletApp.swift` makes it once WinUI has started and opens `WinUI/MainWindow.swift`:
+  the store's tasks in the sidebar, followed through Observation, and a composer that sends through the model.
+- **Application and message loop.** `Windows/Bindings/Sources/WinUIApplication/XamlApplication.swift` is the
+  application type the app derives from. Its `main()` starts the Windows App Runtime through the Windows App SDK's
+  bootstrapper, creates the application as the type `@main` names, and runs the thread's message loop. Between
+  messages the loop waits for the next one, the main dispatch queue's event or Foundation's next timer, so Swift's
+  main actor runs on the window's thread and an idle window uses no processor time.
+- **The WinUI bindings.** [swift-winrt](https://github.com/thebrowsercompany/swift-winrt) generates them from the
+  metadata (.winmd) in Microsoft's NuGet packages (the Windows App SDK 1.7.250909003, the Windows SDK contracts and
+  WebView2), whose versions and SHA-512 hashes `Windows/Bindings/projections.json` pins. It projects the types that
+  file includes and every type their members reach, into `Windows/Bindings/Generated/`, which git ignores; the
+  bindings are generated before a build, not kept in the repository. `Windows/Bindings/Package.swift` links them
+  into the executable, not into DLLs, and a release build optimizes them for size without reflection metadata.
+  swift-winrt's exclusions are not used: it still writes members whose generic arguments name an excluded type.
+- **The bootstrapper.** The app links the Windows App SDK package's x64 import library for
+  `Microsoft.WindowsAppRuntime.Bootstrap.dll`, and `Windows/scripts/place-bootstrapper.ps1` puts the DLL from the
+  same package beside the executable, as the Windows App SDK's build targets do. The Windows App Runtime 1.7 is
+  installed on its own, as for any unpackaged WinUI app.
+
+On Windows, with Swift 6.4.1 and Visual Studio's C++ tools (swift-winrt is C++):
+
+```powershell
+Windows/scripts/generate-bindings.ps1
+swift build --product NativeHarnessClient --force-resolved-versions
+Windows/scripts/place-bootstrapper.ps1 -Binaries (swift build --show-bin-path)
+```
+
+`windows-engine.yml` builds the Windows app for every pull request, `main` and `windows-*` branches, beside the
+engine, as a check to read. `windows-app.yml`, for `windows-*` branches only, builds a release, opens it on the
+runner, measures it and types Korean into its composer through the Microsoft Korean IME
+(`Windows/scripts/check-window.ps1`).
+
+**The generator's version.** `Windows/Bindings/swift-winrt.json` pins swift-winrt at commit `3b20c713`, six commits
+after its latest tag `v0.1.404` (`79ffa65c`); they fix dangling pointers in the include filter the bindings rely on
+and leaked ownership in generated bridges. `generate-bindings.ps1` builds swift-winrt from that commit, because its
+builds are published to a package feed that needs a sign-in, and stops if the checkout is at any other commit.
+swift-winrt is still at v0.1, is maintained in practice by one company, and that company archived its prebuilt WinUI
+bindings (`swift-winui`, `swift-windowsappsdk`) in October 2025, so the version stays pinned and moves only on purpose.
+
+**If swift-winrt stops being maintained,** in this order: keep the pinned version, which keeps generating the same
+bindings; fork it and keep only the fixes the app needs; as a last resort, write the screens in C# with WinUI 3 and
+keep the engine in Swift, which needs a layer that carries the engine's state and events to the C# screens.
+
+**What the Windows app does not have yet:** a Windows layer for what `Platform/Portable/` stands in for, beginning
+with `NativeProcessTree` (a job object, so a harness and what it starts end together), the ConPTY terminal for sign-in
+and the terminal panel, notifications, credential storage for the vault and Antigravity, and the harnesses' icons
+(`HarnessKind.symbolName` names SF Symbols); the task's transcript in the conversation; and a browser host.
 
 ## The check that blocks new violations
 

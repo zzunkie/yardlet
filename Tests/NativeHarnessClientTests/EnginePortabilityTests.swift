@@ -7,7 +7,7 @@ import XCTest
 final class EnginePortabilityTests: XCTestCase {
     /// Screen and platform layers. Everything else under the app target is engine code.
     private static let nonEnginePaths = [
-        "Views/", "Browser/", "Development/", "Platform/", "NativeHarnessClientApp.swift"
+        "Views/", "WinUI/", "Browser/", "Development/", "Platform/", "NativeHarnessClientApp.swift"
     ]
 
     /// Existing engine violations, by file. Remove an entry when its file stops matching,
