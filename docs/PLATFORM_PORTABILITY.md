@@ -81,9 +81,10 @@ tar --exclude ./.build --exclude ./.git --exclude ./docs -cf - . | docker run -i
 ```
 
 On Windows (x64, Swift 6.4.1 from swift.org's installer) in GitHub Actions (confirmed, 2026-10-31):
-`.github/workflows/windows-engine.yml` makes the same build for `windows-*` branches and by hand, apart from the checks
-a pull request needs. A run's logs need a GitHub sign-in, so a failed run also reports its compiler errors in the check
-run's annotations, which the API gives without one.
+`.github/workflows/windows-engine.yml` makes the same build for every pull request, `main` and `windows-*` branches.
+It is a check to read, not a required one. A run's logs need a GitHub sign-in, so a failed run also reports its
+compiler errors in the check run's annotations, which the API gives without one. The macOS engine-only build cannot
+stand in for it: Apple's platforms have names the others lack (Combine's `objectWillChange`, for one).
 
 **Why one target per platform.** A separate engine library would need every declaration the screens and tests use
 opened with the `package` access level, a change to nearly every engine file. Choosing the platform's folder in
@@ -103,7 +104,7 @@ opened with the `package` access level, a change to nearly every engine file. Ch
 - A violation in a file that is not on the allow list, or a new kind of violation in an allowed file, fails.
 - Path assumptions and `Process` semantics (below) are string and behavior problems, so they are not in the check.
 - The engine-only build is the stronger check: it fails on any engine reference to a screen or macOS-layer name, which
-  the scan cannot see. It is not in the pull request checks yet.
+  the scan cannot see. Every pull request makes it on Windows (`windows-engine.yml`), as a check to read.
 
 ## What a Windows layer needs
 

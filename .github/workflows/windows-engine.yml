@@ -1,10 +1,12 @@
 name: Windows engine
 
 # The engine built on its own on Windows (docs/PLATFORM_PORTABILITY.md, "Building the engine on its
-# own"). It runs for the branches that port it and by hand, apart from the checks a pull request needs.
+# own"), for every pull request, main and the branches that port it. It informs and is not a required
+# check: a pull request that breaks it can still be merged.
 on:
   push:
-    branches: ['windows-*']
+    branches: [main, 'windows-*']
+  pull_request:
   workflow_dispatch:
 
 permissions:
