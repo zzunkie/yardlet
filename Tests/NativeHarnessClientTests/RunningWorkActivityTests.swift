@@ -46,7 +46,7 @@ import YardletLidSleep
     /// its lid closed says so once and keeps working; a critical heat or a low battery lets it sleep and
     /// says so once, until it cools down or is on power; turning the setting off ends the connection
     /// and removes the helper (§13.78).
-    func testTheLidStaysAwakeOnlyWhileWorkingWithTheHelperAllowedAndSaysWhenItCannot() throws {
+    func testTheLidStaysAwakeOnlyWhileWorkingWithTheHelperAllowedAndSaysWhenItCannot() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RunningWorkActivity")))
         var conditions = PowerConditions(onBattery: true, batteryPercent: 80)
         var lidClosed = false
@@ -59,7 +59,7 @@ import YardletLidSleep
 
         activity.update(isWorking: true)
         XCTAssertEqual(backend.calls, ["disconnect", "unregister"], "Off, so a helper an earlier run left registered goes")
-        XCTAssertEqual(helper.status, .off)
+        try await waitUntil { helper.status == .off }
 
         defaults.set(true, forKey: LidClosedWorkPreference.key)
         activity.refresh()
@@ -69,7 +69,8 @@ import YardletLidSleep
 
         backend.current = .ready
         activity.checkAgain()
-        XCTAssertEqual(backend.sent, [true])
+        // The status is read off the main thread, and the lid kept awake once it says allowed.
+        try await waitUntil { backend.sent == [true] }
         XCTAssertTrue(helper.isKeepingAwake)
         XCTAssertTrue(activity.isHolding, "The idle-sleep assertion stays as before")
         activity.checkAgain()
@@ -118,7 +119,7 @@ import YardletLidSleep
         defaults.set(false, forKey: LidClosedWorkPreference.key)
         activity.refresh()
         XCTAssertEqual(backend.calls.suffix(2), ["disconnect", "unregister"])
-        XCTAssertEqual(helper.status, .off)
+        try await waitUntil { helper.status == .off }
         XCTAssertFalse(helper.isKeepingAwake)
     }
 }
