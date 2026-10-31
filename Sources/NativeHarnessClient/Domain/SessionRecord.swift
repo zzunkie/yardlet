@@ -87,10 +87,18 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
     /// from another (`TaskLineage`). The sidebar nests the task under that one. It is the same for
     /// every harness; nil is a top-level task.
     var parentTaskID: UUID?
-    /// The person took the task out of the family it was listed in ("Detach to top level", as the
-    /// Claude app's `lineageDetached`): it stays at the top level, and links read later from a
-    /// harness or another app are not recorded for it.
+    /// The person placed the task in the sidebar's families: detached it to the top level ("Detach
+    /// to top level", as the Claude app's `lineageDetached`) or moved it under another task
+    /// (`TaskNesting`). It stays where the person put it, links read later from a harness or another
+    /// app are not recorded for it, and its parent is no longer the task it was started from
+    /// (`startedFromTaskID`).
     var isLineageDetached: Bool
+
+    /// The task this one was started from, as far as Yardlet knows: its parent, unless the person
+    /// placed it (`isLineageDetached`). What follows from who started a task reads this rather than
+    /// where the sidebar lists it: the sender a message names, the child tasks an agent's own
+    /// archive takes along, the browser profile a new task starts from.
+    var startedFromTaskID: UUID? { isLineageDetached ? nil : parentTaskID }
 
     var additionalRootURLs: [URL] {
         additionalRoots.map { URL(filePath: $0, directoryHint: .isDirectory).standardizedFileURL }

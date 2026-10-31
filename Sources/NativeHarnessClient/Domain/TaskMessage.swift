@@ -5,7 +5,7 @@ import Foundation
 /// that draws it as the sending task's message rather than the person's (docs/AGENT_BROWSER_TOOLS.md, "Session tools").
 ///
 /// Every harness gets Yardlet's envelope and one sentence of fact: who sent it (`Relation`: the task
-/// the receiver was started from, its `parentTaskID`, or another task) and that the person did not
+/// the receiver was started from, its `startedFromTaskID`, or another task) and that the person did not
 /// type it (decision of 2026-10-24: Yardlet adds nothing of its own beyond the facts). It tells the
 /// receiver nothing about what to do with it, as a Codex agent's own `followup_task` and
 /// `send_message` reach their target with the sender, the recipient and the text alone; what the
@@ -80,11 +80,12 @@ struct TaskMessage: Equatable, Sendable {
         "A peer session sent a message while you were working:"
     ]
 
-    /// The sender is the task the receiver was started from, by the receiver's lineage as it stands.
+    /// The sender is the task the receiver was started from, by the receiver's lineage as it stands:
+    /// a task the person moved under another in the sidebar names no task that started it.
     static func relation(of senderID: String, to receiver: SessionRecord) -> Relation {
         guard let sender = UUID(uuidString: senderID) else { return .task }
         if sender == receiver.id { return .itself }
-        return receiver.parentTaskID == sender ? .parent : .task
+        return receiver.startedFromTaskID == sender ? .parent : .task
     }
 
     /// The text the receiving task reads, Yardlet's envelope with the sender's relation to it.

@@ -1776,7 +1776,8 @@ final class SessionToolTests: XCTestCase {
 
     /// Child tasks follow the Claude app's side session rule: one in this task's folder goes with it,
     /// and holds the archive back while it still works; a finished one elsewhere goes with it; one
-    /// elsewhere that still works stays in the sidebar.
+    /// elsewhere that still works stays in the sidebar. One the person moved in the sidebar's families
+    /// stays too, as a session the person detached in the Claude app does not go with its parent.
     func testChildTasksGoWithItOrStayAsTheClaudeAppsSideSessionsDo() async throws {
         let fixture = try Fixture(callerOptions: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions])
         defer { fixture.tearDown() }
@@ -1801,6 +1802,9 @@ final class SessionToolTests: XCTestCase {
         try await model.store.updateSession(id: finished.id, status: .ready)
         let working = try await child("Rebuild the site", project: "site")
         XCTAssertTrue(model.store.sessions.first { $0.id == working.id }.map(AppModel.isWorking) == true)
+        let placed = try await child("Keep the release notes")
+        try await model.store.updateSession(id: placed.id, status: .ready)
+        await model.nest(placed.id, under: here.id)
 
         let result = await call(model, "archive_task", ["task_ids": ["self"]], from: fixture.caller)
         XCTAssertFalse(result.isError, result.text)
@@ -1818,6 +1822,7 @@ final class SessionToolTests: XCTestCase {
         XCTAssertFalse(listed.contains(here.id))
         XCTAssertFalse(listed.contains(finished.id))
         XCTAssertTrue(listed.contains(working.id), "Still working elsewhere: it stays, at the top level")
+        XCTAssertTrue(listed.contains(placed.id), "Placed by the person: it stays where they put it")
         await model.shutdown()
     }
 

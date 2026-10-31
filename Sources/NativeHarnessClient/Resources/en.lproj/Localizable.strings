@@ -2028,6 +2028,8 @@
 "Resize sidebar" = "Resize sidebar";
 "Account menu, %@" = "Account menu, %@";
 "Detach to top level" = "Detach to top level";
+"Move up one level" = "Move up one level";
+"Move under task" = "Move under task";
 "Open pull request #%@" = "Open pull request #%@";
 
 /* Continuing work a quit or an update cut off (Settings › General, the line above the composer). */

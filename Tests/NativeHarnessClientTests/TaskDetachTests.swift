@@ -5,21 +5,37 @@ import XCTest
 /// "Detach to top level" (the Claude app's row menu item, `XP5vxiZixk`): a task listed under the
 /// task it was started from moves to the top level and stays there. Yardlet's index keeps the mark
 /// (`SessionRecord.isLineageDetached`, column `lineage_detached`), so no later link from a harness
-/// or another app nests it again. Nothing is written outside the index.
+/// or another app nests it again. Moving a task one level up or under another task in the sidebar
+/// (`TaskNesting`) keeps the same mark. Nothing is written outside the index.
 @MainActor
 final class TaskDetachTests: XCTestCase {
     private let folder = URL(filePath: "/tmp/detach-qa/project", directoryHint: .isDirectory)
     private let clock = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func task(_ title: String, harness: HarnessKind = .claudeCode, parent: SessionRecord? = nil,
-                      minutesAgo: Double, providerSessionID: String? = nil) -> SessionRecord {
-        SessionRecord(harness: harness, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/agent"),
+                      minutesAgo: Double, providerSessionID: String? = nil, in workspace: URL? = nil) -> SessionRecord {
+        SessionRecord(harness: harness, workspaceURL: workspace ?? folder, runtimeExecutableURL: URL(filePath: "/tmp/agent"),
                       title: title, titleOrigin: .provider, updatedAt: clock.addingTimeInterval(-minutesAgo * 60),
                       providerSessionID: providerSessionID ?? UUID().uuidString.lowercased(), parentTaskID: parent?.id)
     }
 
     private func titles(_ rows: [SidebarRow]) -> [String] {
         rows.flatMap(\.rowsWithChildren).map { ($0.isNestedChild ? "  " : "") + $0.title }
+    }
+
+    /// Each row of the first project as "title@depth", in the order shown.
+    private func placed(_ store: SessionStore, other: [SessionRecord] = []) -> [String] {
+        layout(store, other: other).sections[0].rows.flatMap(\.rowsWithChildren)
+            .map { "\($0.title)@\($0.familyPlace?.depth ?? 0)" }
+    }
+
+    /// The sidebar of the store's tasks in this test's project, and `other` in a second project.
+    private func layout(_ store: SessionStore, other: [SessionRecord] = []) -> SidebarProjection.Layout {
+        let groups = [WorkspaceGroup(workspaceURL: folder, sessions: store.sessions.filter { $0.workspaceURL == folder }),
+                      WorkspaceGroup(workspaceURL: other.first?.workspaceURL ?? folder, sessions: other)]
+            .filter { !$0.sessions.isEmpty }
+        return SidebarProjection.layout(visibleGroups: groups, allGroups: groups, splits: [], isFiltering: false,
+                                        archivedParents: store.archivedParentIDs)
     }
 
     /// Detaching takes the task out of its family to the top level, where its own family follows it.
@@ -43,6 +59,108 @@ final class TaskDetachTests: XCTestCase {
         XCTAssertEqual(store.sessions.first { $0.id == grandchild.id }?.parentTaskID, child.id,
                        "The tasks started from it stay with it")
         XCTAssertEqual(layoutTitles(), ["Tag the build", "  Check the tag", "Plan the release"])
+    }
+
+    /// Moving a task in the sidebar's families, as Finder and Mail move a folder: its row's menu offers
+    /// one level up, the top level and the tasks of its list it can go under; a drop on a row puts it
+    /// under that row's task, and on the row's top or bottom edge beside it, at that row's level. It
+    /// never goes under itself or a task under it, nor into another project's list. The tasks under
+    /// it go with it, the move is not activity, and no link read later moves it back.
+    func testATaskMovesUpALevelUnderAnotherOrBesideARowButNeverUnderItself() async throws {
+        let plan = task("Plan the release", minutesAgo: 30)
+        let tag = task("Tag the build", parent: plan, minutesAgo: 10)
+        let check = task("Check the tag", parent: tag, minutesAgo: 20)
+        let notes = task("Write the notes", minutesAgo: 40)
+        let elsewhere = task("Elsewhere", minutesAgo: 5,
+                             in: URL(filePath: "/tmp/detach-qa/other", directoryHint: .isDirectory))
+        let store = SessionStore(sessions: [plan, tag, check, notes])
+        XCTAssertEqual(placed(store), ["Plan the release@0", "Tag the build@1", "Check the tag@2", "Write the notes@0"])
+
+        // The menu: one level up and the tasks it can go under, in the order shown.
+        var shown = layout(store, other: [elsewhere])
+        XCTAssertEqual(TaskNesting.options(for: check.id, in: shown),
+                       TaskNesting.Options(levelUp: plan.id, isNested: true,
+                                           parents: [.init(id: plan.id, title: "Plan the release"),
+                                                     .init(id: notes.id, title: "Write the notes")]))
+        XCTAssertEqual(TaskNesting.options(for: tag.id, in: shown).levelUp, nil, "Detach to top level is that move")
+        XCTAssertEqual(TaskNesting.options(for: plan.id, in: shown),
+                       TaskNesting.Options(parents: [.init(id: notes.id, title: "Write the notes")]),
+                       "Not under the tasks under it")
+        XCTAssertEqual(TaskNesting.options(for: elsewhere.id, in: shown).parents, [], "Only its own project's tasks")
+
+        // Drops: the middle of a row is under it, its top and bottom quarters beside it.
+        XCTAssertEqual([2, 15, 28].map { TaskNesting.drop(at: $0, height: 30) }, [.above, .under, .below])
+        XCTAssertEqual(TaskNesting.parent(of: check.id, dropped: .above, on: tag.id, in: shown), .some(plan.id))
+        XCTAssertEqual(TaskNesting.parent(of: notes.id, dropped: .under, on: check.id, in: shown), .some(check.id))
+        XCTAssertEqual(TaskNesting.parent(of: tag.id, dropped: .below, on: notes.id, in: shown), .some(nil))
+        XCTAssertNil(TaskNesting.parent(of: check.id, dropped: .under, on: tag.id, in: shown), "Already there")
+        XCTAssertNil(TaskNesting.parent(of: notes.id, dropped: .above, on: plan.id, in: shown), "Already there")
+        XCTAssertNil(TaskNesting.parent(of: plan.id, dropped: .under, on: check.id, in: shown), "Under a task under it")
+        XCTAssertNil(TaskNesting.parent(of: plan.id, dropped: .below, on: check.id, in: shown), "Beside a task under it")
+        XCTAssertNil(TaskNesting.parent(of: check.id, dropped: .under, on: check.id, in: shown))
+        XCTAssertNil(TaskNesting.parent(of: elsewhere.id, dropped: .under, on: plan.id, in: shown), "Another project")
+
+        // One level up: the task goes beside its parent, under its parent's parent.
+        let moved = try await store.nest(id: check.id, under: plan.id)
+        XCTAssertEqual(moved?.isLineageDetached, true)
+        XCTAssertNil(moved?.startedFromTaskID, "The person placed it: no task is known to have started it")
+        XCTAssertEqual(moved?.updatedAt, check.updatedAt, "Moving is not activity")
+        XCTAssertEqual(placed(store), ["Plan the release@0", "Tag the build@1", "Check the tag@1", "Write the notes@0"])
+
+        // A top-level task under another, with the tasks under it.
+        try await store.nest(id: tag.id, under: notes.id)
+        XCTAssertEqual(placed(store), ["Write the notes@0", "Tag the build@1", "Plan the release@0", "Check the tag@1"])
+        try await store.nest(id: notes.id, under: check.id)
+        XCTAssertEqual(placed(store), ["Plan the release@0", "Check the tag@1", "Write the notes@2", "Tag the build@2"])
+        shown = layout(store)
+        XCTAssertEqual(TaskNesting.options(for: tag.id, in: shown).levelUp, check.id)
+
+        // Never under itself or a task under it, and no link read later replaces the person's.
+        let underItsOwn = try await store.nest(id: plan.id, under: tag.id)
+        let underItself = try await store.nest(id: notes.id, under: notes.id)
+        XCTAssertNil(underItsOwn)
+        XCTAssertNil(underItself)
+        XCTAssertNil(store.sessions.first { $0.id == plan.id }?.parentTaskID)
+        let linked = try await store.linkParents([check.id: tag.id, tag.id: plan.id])
+        XCTAssertEqual(linked, [])
+        XCTAssertEqual(placed(store), ["Plan the release@0", "Check the tag@1", "Write the notes@2", "Tag the build@2"])
+    }
+
+    /// A move is kept in the index across a restart, a task under an archived one is still under it
+    /// (so nothing goes under a task it is itself above), and a task the person placed names no task
+    /// that started it: a message from its new parent reads as another task's.
+    func testAMoveIsKeptAcrossARestartAndNamesNoTaskThatStartedIt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "nest-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appending(path: "session-index.sqlite3")
+        let plan = task("Plan the release", minutesAgo: 30)
+        let tag = task("Tag the build", parent: plan, minutesAgo: 10)
+        let check = task("Check the tag", parent: tag, minutesAgo: 20)
+        let notes = task("Write the notes", minutesAgo: 40)
+        let repository = try SQLiteSessionRepository(databaseURL: database)
+        for session in [plan, tag, check, notes] { try await repository.upsert(session) }
+        try await repository.archive(id: tag.id)
+        let store = SessionStore(repository: repository)
+        try await store.restore()
+        XCTAssertEqual(placed(store), ["Plan the release@0", "Check the tag@1", "Write the notes@0"])
+        XCTAssertEqual(TaskMessage.relation(of: tag.id.uuidString, to: check), .parent)
+
+        let refused = try await store.nest(id: plan.id, under: check.id)
+        XCTAssertNil(refused, "Check the tag is under it, through the archived task")
+        try await store.nest(id: notes.id, under: check.id)
+        try await store.nest(id: check.id, under: nil)
+        XCTAssertEqual(placed(store), ["Check the tag@0", "Write the notes@1", "Plan the release@0"])
+
+        let reopened = SessionStore(repository: try SQLiteSessionRepository(databaseURL: database))
+        try await reopened.restore()
+        XCTAssertEqual(placed(reopened), ["Check the tag@0", "Write the notes@1", "Plan the release@0"])
+        let saved = try XCTUnwrap(reopened.sessions.first { $0.id == notes.id })
+        XCTAssertEqual(saved.parentTaskID, check.id)
+        XCTAssertTrue(saved.isLineageDetached)
+        XCTAssertEqual(TaskMessage.relation(of: check.id.uuidString, to: saved), .task)
+        let unplaced = try XCTUnwrap(reopened.sessions.first { $0.id == plan.id })
+        XCTAssertFalse(unplaced.isLineageDetached, "A task the person did not move keeps no mark")
     }
 
     /// A detached task is never linked again: not by a link pass over imported conversations or
@@ -112,6 +230,10 @@ final class TaskDetachTests: XCTestCase {
         let saved = try await repository.loadSessions().first { $0.id == child.id }
         XCTAssertNil(saved?.parentTaskID)
         XCTAssertEqual(saved?.isLineageDetached, true)
+        // And back under it from the row's menu or a drop.
+        await model.nest(child.id, under: parent.id)
+        let nested = try await repository.loadSessions().first { $0.id == child.id }
+        XCTAssertEqual(nested?.parentTaskID, parent.id)
         XCTAssertNil(model.bootstrapError)
         await model.shutdown()
     }

@@ -98,6 +98,9 @@ struct SidebarFamilyPlace: Hashable, Sendable {
     /// with no shallower row between, or, at level 1, to the line counting what a collapsed family
     /// hides.
     var continuingLevels: Set<Int> = []
+    /// The task it is listed under: the nearest task it was started through that the list shows,
+    /// which a move beside it in the sidebar's families puts a task under too (`TaskNesting`).
+    var parentID: UUID?
 }
 
 /// One project in the sidebar with the task rows nested under it.
@@ -396,7 +399,7 @@ enum SidebarProjection {
         // From the bottom up: a level's line runs on past a row while a later row sits at that level
         // with nothing shallower between.
         var open: Set<Int> = endsInSummary ? [1] : []
-        var places = depths.map { SidebarFamilyPlace(depth: $0) }
+        var places = zip(shown, depths).map { SidebarFamilyPlace(depth: $1, parentID: parents[$0.id]) }
         for index in depths.indices.reversed() {
             let depth = depths[index]
             places[index].continuingLevels = open.filter { $0 <= depth }

@@ -2769,8 +2769,15 @@ final class AppModel {
     /// index changes (`SessionStore.detachFromParent`); the provider's history and the other app's
     /// files stay as they are.
     func detachFromParent(_ session: SessionRecord) async {
+        await nest(session.id, under: nil)
+    }
+
+    /// Moves a task in the sidebar's families, under `parent` or to the top level (nil), from a row's
+    /// menu or a drop (`TaskNesting`). Only Yardlet's index changes (`SessionStore.nest`); the
+    /// provider's history, other apps' files and what the task runs with stay as they are.
+    func nest(_ taskID: UUID, under parent: UUID?) async {
         do {
-            try await store.detachFromParent(id: session.id)
+            try await store.nest(id: taskID, under: parent)
         } catch {
             bootstrapError = error.localizedDescription
         }

@@ -482,8 +482,8 @@ Sidebar nesting records the task a task was started from in that task's index ro
   the conversation context of side chats and forks (a value there changes the send and edit paths), and
   `provider_options` is not used because it holds the harness's launch arguments. The provider session ID, storage
   scope, account, task folder, history, drafts and recent activity stay as they are.
-- **When it is written:** when a task is created (fork, subagent, opening the original, import), or when
-  `SessionStore.linkParents` fills in empty links only. An existing link is not overwritten, and a link to the task
+- **When it is written:** when a task is created (fork, subagent, opening the original, import), when
+  `SessionStore.linkParents` fills in empty links only, or when the person moves the task in the sidebar (below). An existing link is not overwritten, and a link to the task
   itself or one that makes a cycle is dropped. A link is not activity, so the task keeps its place. Archive and
   unarchive leave the link as it is. Restoring the index also reads the archived rows' links
   (`SessionStore.archivedParentIDs`), so the sidebar nests a task whose parent is archived under the nearest ancestor
@@ -509,14 +509,30 @@ Sidebar nesting records the task a task was started from in that task's index ro
   `parentThreadId` when a thread is read (`thread/read`, `thread/resume`, fork). There are no extra requests.
 - Nothing is written to native history, Claude app files or Codex threads, and there is no model turn, attach or
   authentication change.
-- **Detaching to the top level:** the row menu item "Detach to top level" clears `parent_task_id` and sets the column
-  `sessions.lineage_detached INTEGER NOT NULL DEFAULT 0` to 1 (`SessionRecord.isLineageDetached`,
-  `SessionStore.detachFromParent`). `linkParents` and `TaskLineage.links` do not link a task with 1 again (import,
-  reading Claude app files and reading Codex threads alike). Existing rows are 0, earlier builds that do not know the
-  column do not read it, and their saves do not clear the value. Re-linking by such an earlier build cannot be prevented
-  (that build does not know the mark). Detaching is not activity either, and archive and unarchive leave the mark as it
-  is. Sessions detached in the Claude app (`lineageDetached`) are imported without a link, but tasks that already have a
-  link in Yardlet stay as they are (links are not overwritten).
+- **Moving a task in the sidebar's families:** a task row's menu has "Move up one level" (for a task listed under a
+  task that is itself nested: it goes under that task's parent), "Detach to top level" (for any nested task) and "Move
+  under task" (the tasks of the same list it can go under, in the order shown), and a task row dragged onto another
+  task row goes under that task, while one dragged onto the top or bottom quarter of a row goes beside it, at that row's
+  level, as Finder and Mail move a folder in their sidebars (`TaskNesting`). The row shows where: an outline for under
+  it, a line from the row's level for beside it, nothing where it cannot go. A task moves only within the list that
+  shows it (a project, Chats, Pinned), because the sidebar nests a task only under a task of its own list and going to
+  another project is its own command, which changes the roots its harness gets (`TaskProjectMove`); it never goes under
+  itself or a task under it, archived tasks in between included. The tasks under it go with it.
+- **What a move writes:** `parent_task_id` becomes the new parent (NULL for the top level) and the column
+  `sessions.lineage_detached INTEGER NOT NULL DEFAULT 0` becomes 1 (`SessionRecord.isLineageDetached`,
+  `SessionStore.nest`, `SessionStore.detachFromParent`). `linkParents` and `TaskLineage.links` do not link a task with 1
+  again (import, reading Claude app files and reading Codex threads alike). Existing rows are 0, earlier builds that do
+  not know the column do not read it, and their saves do not clear the value. Re-linking by such an earlier build cannot
+  be prevented (that build does not know the mark). A move is not activity, and archive and unarchive leave the link and
+  the mark as they are. Sessions detached in the Claude app (`lineageDetached`) are imported without a link, but tasks
+  that already have a link in Yardlet stay as they are (links are not overwritten).
+- **Where the sidebar lists a task and who started it:** the link is where the sidebar, the phone app (`parentTaskId`),
+  `list_tasks`, `read_task`'s `childTaskIds` and the Agents card list the task. What follows from who started it reads
+  `SessionRecord.startedFromTaskID`, the link unless the mark is 1: the sentence naming a message's sender as "the
+  Yardlet task that started this one", the child tasks that go with an agent's own `archive_task` (a task the person
+  placed stays, as a session detached in the Claude app does not go with its parent), the browser profile a new task's
+  cookies start from, and the routing ledger's origin. `create_task`'s `notify` reports to the task that called it,
+  wherever either task is listed later.
 
 ## Outcomes of task suggestions
 
