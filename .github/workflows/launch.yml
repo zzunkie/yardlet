@@ -1,0 +1,94 @@
+name: Universal build and launch
+
+# A reference check, not one a pull request needs to merge. It builds the app for Intel Macs as well
+# as Apple silicon (a universal debug bundle without the browser host, whose pinned CEF build is arm64
+# only), then starts it on the oldest macOS Yardlet supports, on Apple silicon and on Intel. An API
+# the oldest macOS lacks can stop the app in dyld before `main`, which neither the build nor the tests
+# on the newest macOS notice. It runs on `main`, by hand, and on a pull request that changes how the
+# bundle is built.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/launch.yml
+      - Package.swift
+      - Package.resolved
+      - Packaging/**
+      - scripts/build-app.sh
+      - scripts/sign-app.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: launch-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  universal-bundle:
+    name: Universal bundle
+    # GitHub's Xcode 27 image is arm64 only; it builds the x86_64 half as well.
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        env:
+          YARDLET_ARCHS: arm64 x86_64
+          YARDLET_WITHOUT_CEF: "1"
+        run: ./scripts/build-app.sh debug
+      - name: Check that every executable has both architectures
+        run: |
+          for file in .build/Yardlet.app/Contents/MacOS/Yardlet .build/Yardlet.app/Contents/Helpers/*; do
+            lipo -info "$file"
+            lipo "$file" -verify_arch arm64 x86_64
+          done
+      # ditto keeps the bundle's links and signature, which the artifact's own zip does not.
+      - name: Pack
+        run: ditto -c -k --keepParent .build/Yardlet.app .build/Yardlet.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: yardlet-universal
+          path: .build/Yardlet.zip
+          retention-days: 3
+          if-no-files-found: error
+
+  launch:
+    name: Launch on ${{ matrix.name }}
+    needs: universal-bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS 15, Apple silicon
+            runner: macos-15
+          - name: macOS 15, Intel
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: yardlet-universal
+      - name: Launch
+        run: |
+          sw_vers
+          uname -m
+          ditto -x -k Yardlet.zip .
+          ./Yardlet.app/Contents/MacOS/Yardlet > launch.log 2>&1 &
+          pid=$!
+          # A missing symbol ends the process before main; one still running after this has started.
+          sleep 30
+          if ! kill -0 "$pid" 2>/dev/null; then
+            status=0
+            wait "$pid" || status=$?
+            cat launch.log
+            echo "::error::Yardlet exited with status $status within 30 seconds"
+            exit 1
+          fi
+          kill "$pid"
+          echo "Yardlet was still running after 30 seconds"
