@@ -113,6 +113,7 @@ private final class BrowserHostQARunner {
             if let controller = await openPanel(label: "open", address: base) {
                 let loaded = await waitUntil(.seconds(30)) { controller.title == "Browser QA" && !controller.isLoading }
                 check("open: the QA page loads", loaded, "title \"\(controller.title)\"")
+                if let view = controller.view { capturePanel(view, named: "open.png") }
                 await closePanel()
                 client.closeTabs(forSession: session)
             }

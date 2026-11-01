@@ -158,11 +158,12 @@ Three helpers in the app bundle do work outside the main process:
 
 ## Known limitations
 
-- The Intel version is new and has not been tried on an Intel Mac by hand. CI starts it on Intel
-  macOS 15 and 26 with every change to `main`, and there the built-in browser starts and loads pages.
-  Those Macs have only a virtual GPU, on which the browser often stops before it draws, so how it
-  draws with an Intel Mac's own graphics is not known yet. If you use Yardlet on an Intel Mac, please
-  tell us how it goes, especially if the built-in browser closes or stays blank: a
+- The Intel version is new. It has been tried on one Intel Mac, a 2018 Mac mini with Intel UHD
+  Graphics 630 on macOS 15.8, where it starts, streams a task and draws the built-in browser; other
+  Intel graphics (Iris, AMD Radeon) and macOS 26 on Intel have not been tried. CI starts it on Intel
+  macOS 15 and 26 with every change to `main`, but those Macs have only a virtual GPU, on which the
+  built-in browser often stops before it draws. If you use Yardlet on an Intel Mac, please tell us how
+  it goes, especially if the built-in browser closes or stays blank: a
   [bug report](../../issues/new?template=bug_report.yml) with "Intel" chosen, or a note in
   [Discussions](../../discussions).
 - On Intel Macs the built-in browser plays no H.264 video or AAC audio, such as many sites' MP4

@@ -463,6 +463,13 @@ private final class PerfBenchRunner {
         ]
         if let probe { entry["frames"] = probe.summary(seconds: elapsed) }
         phases.append(entry)
+        // What the window held at the phase's end, for a person to look at; AppKit draws it, the browser's
+        // pages included, so it needs no screen recording and nothing measured waits for it.
+        if let content = window?.contentView,
+           let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+            content.cacheDisplay(in: content.bounds, to: bitmap)
+            try? bitmap.representation(using: .png, properties: [:])?.write(to: output.appending(path: "\(marker).png"))
+        }
         try? Data().write(to: markers.appending(path: "\(marker).done"))
     }
 
