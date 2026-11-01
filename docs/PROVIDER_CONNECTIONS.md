@@ -270,8 +270,9 @@ the address shortens in the middle. The plan line no longer repeats the organiza
 ### Removing an account
 
 A saved account row's context menu in Settings › Accounts has two items. The default sign-in (`~/.claude`, `~/.codex`)
-keeps only the harness page's sign-out, as before. That sign-out applies only to the default sign-in
-(`AccountCenterModel.logout` runs with a broker that has no connection) and never reaches a saved account's folder.
+is not removed; its row signs it out instead ("Signing the default sign-in out" below). That sign-out applies only to
+the default sign-in (`AccountCenterModel.logout` runs with a broker that has no connection) and never reaches a saved
+account's folder.
 
 - **Remove from List…:** clears only Yardlet's record of the connection, its last reading, the new-task account choice
   and its automatic-assignment answer (`ProviderConnectionStore.remove`). The sign-in and folder stay. Tasks on that
@@ -309,6 +310,29 @@ keeps only the harness page's sign-out, as before. That sign-out applies only to
   `<UUID>` folder to the Trash. When the sign-out fails, nothing changes. When tasks use the folder, the confirmation
   offers only Remove from List. The shared originals (`~/.claude` and the like) and Session Switch folders have no way to
   be deleted from Yardlet.
+
+### Signing the default sign-in out
+
+While the default sign-in's last reading says its CLI can sign out, its row's context menu in Settings › Accounts offers
+what the Harnesses page offers beside it (`AccountListProjection.defaultLoginActions`): **Sign Out…** (**Disconnect
+Provider…** for OpenCode and Pi, which connect model providers, where connecting another needs no sign-out) and, for an
+account sign-in, **Sign In With Another Account…**. A harness that keeps its sign-in in one place and cannot have a
+separate account folder (Antigravity CLI's keychain item, `HarnessConnectionCapabilities.supportsSeparateHome`)
+changes account only this way.
+
+- Both confirm first, then run the harness's own sign-out command in the sign-in console
+  (`HarnessAccountBroker.logoutCommand`), as the Harnesses page does.
+- A sign-out that exits (`claude auth logout`, `codex logout`) is finished when it exits with 0. One the CLI does in
+  its own terminal and stays open after (`/logout` in Antigravity CLI, Kimi Code and Pi) is finished when the harness's
+  credential-free probe reads the default sign-in signed out; the console then stops the CLI, and that reading becomes
+  the sign-in's reading.
+- Sign In With Another Account then starts the harness's sign-in in a new terminal of the same console. A sign-out that
+  fails or is cancelled starts nothing.
+- No file, folder, task binding or saved account changes.
+
+The Antigravity CLI row names no address: `agy` 1.4.12 has no status command and no settings file that names the
+signed-in account (only its interactive header shows it), and Yardlet checks only that the keychain item exists, never
+its value, so the row says "Unknown account".
 
 ### Importing conversations from other folders
 
@@ -356,6 +380,12 @@ for the sign-out), `AccountIdentityTests` (the organization), and
 `AccountListRenderingTests.testSettingsNamesOrganizationsAndOffersFoldersFound` (Settings › Accounts and the sheet, light
 and dark, `.build/account-list-qa/manage-found-*` and `share-sheet-*`). The confirmations are AppKit alerts that a
 windowless render cannot draw, so only their text is given above.
+
+Signing the default sign-in out: `AccountListTests.testSettingsListsEveryFilteredHarnessGroupedByAccountAndSearchable`
+(which rows offer which items) and `AccountListRenderingTests.testTheDefaultLoginSignsOutOrInWithAnotherAccountFromItsRow`
+(the row's menu as a right click builds it; a fake `agy` that stays open after `/logout` with a fake probe, signing out
+alone and then signing in with another account; a fake `claude` whose `auth logout` exits; light and dark,
+`.build/account-list-qa/default-login-*`).
 
 Moving the tasks first: `ClaudeAccountFolderTests.testMovingAnAccountsTasksKeepsTheirSessionsAndRemovesItOnceAllMoved`
 (fake account folders and CLI: which folders qualify, a target whose CLI reports another address takes nothing, not even

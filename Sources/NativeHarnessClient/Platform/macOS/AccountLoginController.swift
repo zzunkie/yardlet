@@ -15,6 +15,9 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
     private(set) var operation: AccountConnectionOperation = .connect
     private(set) var interaction: AccountConnectionInteraction = .guided
     private(set) var wasCancelled = false
+    /// Changes with each command, so the console makes its terminal anew for the next one (a
+    /// sign-in that follows a sign-out in the same console).
+    private(set) var commandID = UUID()
     private var connectionVerified = false
 
     @ObservationIgnored private(set) var processIdentifier: pid_t?
@@ -57,6 +60,7 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
         interaction = command.interaction
         wasCancelled = false
         terminalOutputPrefix = output
+        commandID = UUID()
         pendingCommand = command
         pendingInitialInput = command.initialInput
         pendingInitialInputTrigger = command.initialInputTrigger
@@ -128,11 +132,11 @@ final class AccountLoginController: NSObject, @MainActor LocalProcessTerminalVie
         stopProcess(clearOutcome: false)
     }
 
-    /// A read-only provider probe can finish a login whose TUI stays open after
-    /// saving authentication. Stop only the login-owned process, without inventing
-    /// a successful process exit or relying on terminal success text.
+    /// A read-only provider probe can finish a sign-in or sign-out whose TUI stays
+    /// open after changing authentication. Stop only the console-owned process, without
+    /// inventing a successful process exit or relying on terminal success text.
     func completeVerifiedConnection() {
-        guard isRunning, !wasCancelled, operation == .connect else { return }
+        guard isRunning, !wasCancelled else { return }
         connectionVerified = true
         stopProcess(clearOutcome: false)
         detectedURL = nil

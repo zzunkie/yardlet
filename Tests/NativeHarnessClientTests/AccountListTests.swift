@@ -123,6 +123,31 @@ import XCTest
         let scope = AccountListProjection.checkScope(.manage, choices: all, manageHarnesses: harnesses)
         XCTAssertEqual(scope.defaults, harnesses)
         XCTAssertEqual(scope.saved, harnesses)
+
+        // A default login signs out, or out and in with another account, where the Harnesses page
+        // signs it out; saved accounts leave through their own items, and only Settings offers either.
+        let codex = store.choice(for: .codex, connection: nil)
+        XCTAssertEqual(AccountListProjection.defaultLoginActions(codex, mode: .manage),
+                       [.signInWithAnotherAccount, .signOut])
+        XCTAssertEqual(AccountListProjection.defaultLoginActions(codex, mode: .newTask(.codex)), [])
+        XCTAssertTrue(all.filter { $0.connection != nil }
+            .allSatisfy { AccountListProjection.defaultLoginActions($0, mode: .manage).isEmpty })
+        XCTAssertEqual(AccountListProjection.defaultLoginActions(store.choice(for: .claudeCode, connection: nil),
+            mode: .manage), [], "A signed-out default login offers its sign-in instead")
+        // A login the harness keeps in one place, with no address to show, still signs out; a
+        // harness that connects model providers disconnects one, since adding another needs no sign-out.
+        store.publishDefaults([
+            HarnessAccountSnapshot(id: "antigravity-cli", harness: .antigravityCLI, providerID: nil, state: .signedIn,
+                accountLabel: nil, detail: "", credentialOwner: "", checkedAt: Date(), usage: [], canLogin: false,
+                canLogout: true),
+            signedIn("codex@example.test", harness: .openCode, provider: "openai-codex", left: 0.7)
+        ])
+        let antigravity = store.choice(for: .antigravityCLI, connection: nil)
+        XCTAssertTrue(AccountListProjection.accountLine(antigravity).contains(L10n.string("Unknown account")))
+        XCTAssertEqual(AccountListProjection.defaultLoginActions(antigravity, mode: .manage),
+                       [.signInWithAnotherAccount, .signOut])
+        XCTAssertEqual(AccountListProjection.defaultLoginActions(store.choice(for: .openCode, connection: nil),
+            mode: .manage), [.signOut])
     }
 
     // MARK: One row

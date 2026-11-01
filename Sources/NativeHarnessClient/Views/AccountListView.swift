@@ -24,6 +24,8 @@ struct AccountList: View {
     var onShare: ((ProviderConnection) -> Void)? = nil
     var onRemove: ((ProviderConnection, AccountRemoval) -> Void)? = nil
     var onAddFound: ((DiscoveredAccountHome) -> Void)? = nil
+    /// Settings only: signing a harness's default login out, alone or to sign in with another account.
+    var onSignOut: ((HarnessKind, DefaultLoginAction) -> Void)? = nil
     /// Settings › Accounts' harness filter, and how harnesses are used for its default scope. Nil
     /// usage lists every available harness.
     var harnessFilter: Binding<HarnessKind?> = .constant(nil)
@@ -124,7 +126,7 @@ struct AccountList: View {
                 ForEach(groups) { group in
                     AccountListSection(group: group, mode: mode, store: store,
                         showsHarness: mode == .manage, onChoose: onChoose,
-                        onConnect: onConnect, onShare: onShare, onRemove: onRemove)
+                        onConnect: onConnect, onShare: onShare, onRemove: onRemove, onSignOut: onSignOut)
                 }
                 if let onAddFound, !found.isEmpty {
                     DiscoveredAccountsSection(homes: found, onAdd: onAddFound)
@@ -199,6 +201,7 @@ struct AccountListSection: View {
     var onConnect: ((AccountChoice) -> Void)? = nil
     var onShare: ((ProviderConnection) -> Void)? = nil
     var onRemove: ((ProviderConnection, AccountRemoval) -> Void)? = nil
+    var onSignOut: ((HarnessKind, DefaultLoginAction) -> Void)? = nil
 
     var body: some View {
         if group.choices.count == 1, let choice = group.choices.first {
@@ -236,11 +239,21 @@ struct AccountListSection: View {
             },
             onSetAutomaticAssignment: mode == .manage ? { store.setInAutomaticAssignment($0, for: choice) } : nil,
             onShare: sharing(choice),
-            onRemove: removals(choice))
+            onRemove: removals(choice),
+            onSignOut: signOuts(choice))
+    }
+
+    /// The default login's sign-out, alone or to sign in with another account, where the harness
+    /// offers it (`AccountListProjection.defaultLoginActions`).
+    private func signOuts(_ choice: AccountChoice) -> [DefaultLoginAction: () -> Void] {
+        guard let onSignOut else { return [:] }
+        return Dictionary(uniqueKeysWithValues: AccountListProjection.defaultLoginActions(choice, mode: mode).map { action in
+            (action, { onSignOut(choice.harness, action) })
+        })
     }
 
     /// A saved account can leave the list; one in a folder Yardlet made can also be signed out
-    /// and deleted. The default login keeps its own sign-out.
+    /// and deleted.
     private func removals(_ choice: AccountChoice) -> [AccountRemoval: () -> Void] {
         guard let onRemove, let connection = choice.connection else { return [:] }
         var actions: [AccountRemoval: () -> Void] = [.fromList: { onRemove(connection, .fromList) }]
@@ -286,6 +299,8 @@ struct AccountRow: View {
     /// The row's menu items that link its folder with the default folder and remove the account.
     var onShare: (() -> Void)? = nil
     var onRemove: [AccountRemoval: () -> Void] = [:]
+    /// The default login's menu items that sign it out, alone or to sign in with another account.
+    var onSignOut: [DefaultLoginAction: () -> Void] = [:]
 
     var body: some View {
         HStack(spacing: 12) {
@@ -305,7 +320,14 @@ struct AccountRow: View {
                     get: { automaticAssignment }, set: { onSetAutomaticAssignment($0) }))
             }
             if let onShare { Button(L10n.string("Share With the Default Folder…"), action: onShare) }
-            if !onRemove.isEmpty { Divider() }
+            if let signIn = onSignOut[.signInWithAnotherAccount] {
+                Button(L10n.string("Sign In With Another Account…"), action: signIn)
+            }
+            if !onRemove.isEmpty || onSignOut[.signOut] != nil { Divider() }
+            if let signOut = onSignOut[.signOut] {
+                Button(L10n.string(AccountConnectionPresentation.usesProviderLanguage(choice.harness)
+                    ? "Disconnect Provider…" : "Sign Out…"), role: .destructive, action: signOut)
+            }
             if let remove = onRemove[.fromList] { Button(L10n.string("Remove from List…"), action: remove) }
             if let delete = onRemove[.signOutAndDelete] {
                 Button(L10n.string("Sign Out and Delete…"), role: .destructive, action: delete)
