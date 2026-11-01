@@ -104,7 +104,11 @@ CLI Updates offers a newer install found elsewhere. Installs are looked for in t
 person's shell would find them, not only in Yardlet's own `PATH`, which has only the system's folders when Yardlet
 opens from the Dock: `~/.local/bin`, the package managers' folders (bun, Volta, Cargo, Deno, `~/.npm-global/bin`,
 pnpm, each Node version of nvm), Homebrew, `/usr/local/bin`, `PATH` and the system. The same account can see different models depending on the
-runtime's version: the App Server's `model/list` answered one user's older Codex without the GPT-6.1 models. Creating a
+runtime's version: the App Server's `model/list` answered one user's older Codex without the GPT-6.1 models. The
+versions are read off the main thread at launch, only for installs that changed since the last launch; until then the
+choice rests on the versions read before. The window and the task list do not wait for the read, but the launch's
+work that starts a runtime does (work a quit cut off, scheduled tasks, following the Claude app's and Codex's lists),
+so it neither starts an older install nor keeps that install's App Server for the session. Creating a
 task records its runtime on the task only; it does not become the harness's choice. Choosing a runtime with Choose…
 under Runtime and connection details checks the accounts again with `restart`.
 
