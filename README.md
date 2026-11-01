@@ -156,8 +156,9 @@ Three helpers in the app bundle do work outside the main process:
 
 - Yardlet runs on macOS 15 or later on Apple silicon only.
 - Connectors, browser tools and session tools reach Codex, Claude Code and the agents that use ACP
-  (OpenCode, Kimi Code, Grok Build, Hermes). Cursor Agent, Antigravity CLI, Pi and Muse Code have
-  no way to add an MCP server to one session, so their tasks run without them.
+  (OpenCode, Antigravity CLI 1.4.11 or later, Kimi Code, Grok Build, Hermes). Cursor Agent, Pi,
+  Muse Code and earlier Antigravity CLI versions have no way to add an MCP server to one session,
+  so their tasks run without them.
 - Scheduled tasks run only while Yardlet is open. A run missed while it was closed runs once when it
   opens again, within 7 days.
 - The built-in browser cannot use passkeys saved in iCloud Keychain

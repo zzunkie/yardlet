@@ -181,6 +181,16 @@ is deleted at the end. The response's `limits` rows (`session` for 5 hours, `wee
 group is not shown as a limit. `rate_limits_available: false` (API keys and the like) or a failed lookup shows "Claude
 Code did not report plan limits for this login." and is not turned into 0.
 
+## Antigravity plan limit lookup
+
+When Antigravity CLI is signed in (its keychain item exists), Yardlet runs `agy --print /usage --output-format json`
+(`AntigravityUsage`). The CLI answers this command without a model turn and keeps no conversation for it (`num_turns`
+0, an empty `conversation_id`); like any `agy` run it writes its own log. The models share limits by group ("Gemini
+Models", "Claude and GPT models"), and each group lists buckets with the share left (`remaining_fraction`) and when it
+refills (`reset_time`). Each bucket is one row, named by its group without the word "models" and by its window
+("Gemini · 7 day limit"). An answer
+that is not `SUCCESS`, or none, shows no rows rather than 0. AI credits (`/credits`) are not read.
+
 ## Usage limit resets
 
 A Codex account can hold banked resets of its plan limits. The App Server reports them in the

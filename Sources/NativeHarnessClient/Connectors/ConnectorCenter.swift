@@ -1532,7 +1532,6 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// the task's harness when it injected the server; nil (as for a task not started yet) only
     /// applies the user's choice.
     func state(of record: ConnectorRecord, inTask taskID: UUID?, scope: ConnectorTaskScope?) -> ConnectorTaskState {
-        if let scope, !scope.carriesConnectors { return .unsupportedHarness }
         if let scope {
             let address = MCPServerAddress.canonical(record.serverURL)
             if scope.nativeServerURLs.contains(address), !scope.yardletServedURLs.contains(address) { return .harnessHasIt }
@@ -1575,7 +1574,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// that is not connected, or needs a new sign-in, leaves the harness's server in place; a
     /// change applies from the task's next start.
     func withYardletStandIns(_ scope: ConnectorTaskScope) -> ConnectorTaskScope {
-        guard ConnectorTaskScope.canLeaveOutNativeServers(scope.harness), scope.carriesConnectors else { return scope }
+        guard ConnectorTaskScope.canLeaveOutNativeServers(scope.harness) else { return scope }
         var scope = scope
         scope.yardletServedURLs = Set(connectors.filter { $0.status == .connected && $0.localService == nil }
             .map { MCPServerAddress.canonical($0.serverURL) }).intersection(scope.nativeServerURLs)
@@ -1636,8 +1635,6 @@ final class ConnectorCenter: ConnectorToolProviding {
         case .harnessHasIt:
             return .failure("This task's harness has its own \(record.name) server; use that one's tools.", .refused,
                             retry: .withChanges)
-        case .unsupportedHarness:
-            return .failure("Yardlet's connectors are not offered to this harness.", .refused, retry: .no)
         }
         switch record.status {
         case .connected:

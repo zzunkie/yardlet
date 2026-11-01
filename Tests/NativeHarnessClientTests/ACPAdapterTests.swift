@@ -242,6 +242,91 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertTrue(methods.contains("session/set_config_option"))
     }
 
+    /// Antigravity over ACP keeps the option names its print mode saved, and its permission mode is
+    /// how Yardlet answers what the agent asks: Default shows the request, Bypass permissions
+    /// answers yes and Plan answers no.
+    func testAntigravityKeepsItsOptionNamesAndAnswersApprovalsByItsPermissionMode() async throws {
+        let transport = FakeACPTransport(exposesAntigravity: true)
+        let adapter = ACPAdapter(kind: .antigravityCLI, executableURL: URL(filePath: "/tmp/agy"),
+                                 launchArguments: ["acp"], transport: transport)
+        let localID = UUID()
+        // A print-mode task that never ran a turn kept its local ID; it starts a conversation.
+        let handle = try await adapter.resumeSession(providerSessionID: localID.uuidString.lowercased(),
+                                                     localSessionID: localID, workspaceURL: URL(filePath: "/tmp/project"))
+        XCTAssertEqual(handle.providerSessionID, "acp-session-1")
+        let afterAttach = await transport.requestMethods
+        XCTAssertEqual(afterAttach, ["initialize", "session/new"])
+
+        let initial = try await adapter.providerCapabilities(for: handle)
+        XCTAssertEqual(initial.selectors.map(\.id), ["model", StructuredHeadlessOptionID.reasoningEffort,
+                                                     AntigravityPermissionMode.optionID])
+        XCTAssertEqual(initial.selectors.last?.choices.map(\.value),
+                       [AntigravityPermissionMode.standard, AntigravityPermissionMode.bypass])
+        let models = await adapter.advertisedModels(for: localID)
+        XCTAssertEqual(models?.map(\.value), ["gemini-3.8-flash"])
+        XCTAssertEqual(models?.first?.effortLevels, ["low", "medium", "high"])
+
+        // A variant saved in print mode is its model with that effort.
+        let chosen = try await adapter.setProviderOption(id: "model", value: "gemini-3.8-flash-low", in: handle)
+        let sentOptions = await transport.requestValues.filter { $0["method"]?.stringValue == "session/set_config_option" }
+        XCTAssertEqual(sentOptions.compactMap { $0["params"]?["configId"]?.stringValue }, ["model", "thought_level"])
+        XCTAssertEqual(chosen.selectors.first { $0.id == StructuredHeadlessOptionID.reasoningEffort }?.currentValue, "low")
+        // Print mode's own choices, and a default, change nothing; a model it does not offer is said.
+        for (id, value) in [(StructuredHeadlessOptionID.reasoningEffort, "default"), (StructuredHeadlessOptionID.agent, "x")] {
+            _ = try await adapter.setProviderOption(id: id, value: value, in: handle)
+        }
+        let requestCount = await transport.requestMethods.count
+        XCTAssertEqual(requestCount, 4)
+        do {
+            _ = try await adapter.setProviderOption(id: "model", value: "claude-sonnet-4-6", in: handle)
+            XCTFail("A model the session does not offer was accepted")
+        } catch HarnessAdapterError.capabilityUnavailable {}
+        let accepting = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID,
+                                                            value: AntigravityPermissionMode.acceptEdits, in: handle)
+        XCTAssertEqual(accepting.selectors.last?.currentValue, AntigravityPermissionMode.standard)
+
+        let recorder = ACPPayloadRecorder()
+        let collector = Task { for await event in await adapter.events(for: handle) { await recorder.append(event.payload) } }
+        func ask(_ rpcID: String) async {
+            await transport.emit(.object([
+                "jsonrpc": .string("2.0"), "id": .string(rpcID), "method": .string("session/request_permission"),
+                "params": .object([
+                    "sessionId": .string(handle.providerSessionID),
+                    "toolCall": .object(["toolCallId": .string(rpcID), "title": .string("hello.txt")]),
+                    "options": .array([
+                        .object(["optionId": .string("allow-once"), "name": .string("Allow"), "kind": .string("allow_once")]),
+                        .object(["optionId": .string("reject-once"), "name": .string("Reject"), "kind": .string("reject_once")])
+                    ])
+                ])
+            ]))
+        }
+        func answer(_ rpcID: String) async -> String? {
+            await transport.sentMessages.first { $0["id"]?.stringValue == rpcID }?["result"]?["outcome"]?["optionId"]?.stringValue
+        }
+        _ = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID, value: AntigravityPermissionMode.bypass, in: handle)
+        await ask("bypass-1")
+        try await waitUntil { await answer("bypass-1") != nil }
+        let bypassAnswer = await answer("bypass-1")
+        XCTAssertEqual(bypassAnswer, "allow-once")
+        _ = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID, value: AntigravityPermissionMode.plan, in: handle)
+        await ask("plan-1")
+        try await waitUntil { await answer("plan-1") != nil }
+        let planAnswer = await answer("plan-1")
+        XCTAssertEqual(planAnswer, "reject-once")
+        _ = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID, value: AntigravityPermissionMode.standard, in: handle)
+        await ask("ask-1")
+        try await waitUntil {
+            await recorder.payloads.contains { if case .permissionRequested = $0 { return true }; return false }
+        }
+        let payloads = await recorder.payloads
+        XCTAssertEqual(payloads.filter { if case .permissionRequested = $0 { return true }; return false }.count, 1)
+        let askAnswer = await answer("ask-1")
+        XCTAssertNil(askAnswer)
+        collector.cancel()
+        await adapter.close(handle)
+    }
+
+
     func testGrokSeparatesWorkMessagesFromFinalAnswerAndRoutesLiveControls() async throws {
         let transport = FakeACPTransport(exposesGrokModels: true)
         let adapter = ACPAdapter(
@@ -642,6 +727,11 @@ actor FakeACPTransport: ACPTransport {
     private let exposesGrokModels: Bool
     private let canLoadSession: Bool
     private let advertisesImagePrompts: Bool
+    /// Answers as `agy acp` does: a model and thinking level in `configOptions` and the model
+    /// variants in `models.availableModels`.
+    private let exposesAntigravity: Bool
+    private var antigravityModel = "gemini-3.8-flash"
+    private var antigravityEffort = "high"
     private(set) var configuration: ACPLaunchConfiguration?
     private(set) var requestMethods: [String] = []
     private(set) var requestValues: [JSONValue] = []
@@ -654,7 +744,8 @@ actor FakeACPTransport: ACPTransport {
         exposesConfig: Bool = false,
         exposesGrokModels: Bool = false,
         canLoadSession: Bool = true,
-        advertisesImagePrompts: Bool = false
+        advertisesImagePrompts: Bool = false,
+        exposesAntigravity: Bool = false
     ) {
         let pair = AsyncStream<ACPRawFrame>.makeStream()
         stream = pair.stream
@@ -664,6 +755,7 @@ actor FakeACPTransport: ACPTransport {
         self.exposesGrokModels = exposesGrokModels
         self.canLoadSession = canLoadSession
         self.advertisesImagePrompts = advertisesImagePrompts
+        self.exposesAntigravity = exposesAntigravity
     }
 
     var pendingPromptCount: Int { promptContinuations.count }
@@ -689,7 +781,13 @@ actor FakeACPTransport: ACPTransport {
             var result: [String: JSONValue] = ["sessionId": .string("acp-session-1")]
             if exposesConfig { result["configOptions"] = configOptions(current: "ask") }
             if exposesGrokModels { result["models"] = grokModels(current: "grok-4.6") }
+            if exposesAntigravity { result.merge(antigravitySession()) { _, new in new } }
             return .object(result)
+        case "session/set_config_option" where exposesAntigravity:
+            let configValue = value["params"]?["value"]?.stringValue ?? ""
+            if value["params"]?["configId"]?.stringValue == "model" { antigravityModel = configValue }
+            if value["params"]?["configId"]?.stringValue == "thought_level" { antigravityEffort = configValue }
+            return .object(["configOptions": antigravityConfigOptions()])
         case "session/set_config_option":
             return .object(["configOptions": configOptions(current: value["params"]?["value"]?.stringValue ?? "ask")])
         case "session/set_model":
@@ -697,7 +795,7 @@ actor FakeACPTransport: ACPTransport {
                 value["params"]?["modelId"]?.stringValue ?? "grok-4.6"
             )])])
         case "session/load":
-            return .object([:])
+            return exposesAntigravity ? .object(antigravitySession()) : .object([:])
         case "session/prompt":
             return try await withCheckedThrowingContinuation { continuation in
                 promptContinuations.append(continuation)
@@ -721,6 +819,31 @@ actor FakeACPTransport: ACPTransport {
                 .object(["value": .string("code"), "name": .string("Code")])
             ])
         ])])
+    }
+
+    private func antigravitySession() -> [String: JSONValue] {
+        let variant = { (effort: String) -> JSONValue in
+            .object(["modelId": .string("gemini-3.8-flash-\(effort)"),
+                     "name": .string("Gemini 3.8 Flash (\(effort.capitalized))")])
+        }
+        return [
+            "configOptions": antigravityConfigOptions(),
+            "models": .object(["currentModelId": .string("gemini-3.8-flash-high"),
+                               "availableModels": .array(["high", "medium", "low"].map(variant))])
+        ]
+    }
+
+    private func antigravityConfigOptions() -> JSONValue {
+        .array([
+            .object(["id": .string("model"), "name": .string("Model"), "category": .string("model"),
+                     "type": .string("select"), "currentValue": .string(antigravityModel),
+                     "options": .array([.object(["value": .string("gemini-3.8-flash"), "name": .string("Gemini 3.8 Flash")])])]),
+            .object(["id": .string("thought_level"), "name": .string("Thinking Level"), "category": .string("thought_level"),
+                     "type": .string("select"), "currentValue": .string(antigravityEffort),
+                     "options": .array(["low", "medium", "high"].map {
+                         .object(["value": .string($0), "name": .string($0.capitalized)])
+                     })])
+        ])
     }
 
     private func grokModels(current: String) -> JSONValue {

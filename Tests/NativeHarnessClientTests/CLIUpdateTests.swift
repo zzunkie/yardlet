@@ -532,6 +532,24 @@ final class CLIUpdateTests: XCTestCase {
         let signedOut = try script("agy-signed-out", "echo 'not signed in' >&2; exit 1")
         result = await probe.verify(.antigravityCLI, executable: signedOut)
         XCTAssertEqual(result, .failed("not signed in"))
+        // From the version Yardlet runs over ACP, `agy acp` has to answer `initialize` too.
+        let agyACP = try script("agy-acp", #"""
+            if [ "$1" = --version ]; then echo 1.4.12; exit 0; fi
+            if [ "$1" = models ]; then printf 'gemini-3.8-flash-low\tGemini 3.8 Flash (low)\n'; exit 0; fi
+            [ "$1" = acp ] || exit 2
+            read -r line; case "$line" in *'"method":"initialize"'*) ;; *) exit 3;; esac
+            echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true}}}'
+            read -r line
+            """#)
+        result = await probe.verify(.antigravityCLI, executable: agyACP)
+        XCTAssertEqual(result, .passed)
+        let agyWithoutACP = try script("agy-without-acp", #"""
+            if [ "$1" = --version ]; then echo 1.4.12; exit 0; fi
+            if [ "$1" = models ]; then printf 'gemini-3.8-flash-low\tGemini 3.8 Flash (low)\n'; exit 0; fi
+            echo "unknown subcommand: $1" >&2; exit 2
+            """#)
+        result = await probe.verify(.antigravityCLI, executable: agyWithoutACP)
+        guard case .failed = result else { return XCTFail("\(result)") }
 
         let opencode = try script("opencode", #"""
             if [ "$1" = --version ]; then echo 1.2.0; exit 0; fi

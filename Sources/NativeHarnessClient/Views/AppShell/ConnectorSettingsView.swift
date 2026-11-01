@@ -18,7 +18,7 @@ struct ConnectorSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Text(L10n.string("Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account. Antigravity isn't supported."))
+            Text(L10n.string("Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account."))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

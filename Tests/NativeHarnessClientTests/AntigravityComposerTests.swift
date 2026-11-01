@@ -18,7 +18,9 @@ final class AntigravityComposerTests: XCTestCase {
 
     // MARK: - Permission
 
-    func testEveryAntigravityPermissionMenuOffersTheCLIsModesAndAsksBeforeTheBypass() throws {
+    /// Over ACP the agent asks, so every Antigravity menu offers Default and Bypass permissions, and
+    /// a task keeps Plan where it had it; Accept edits and Auto, which ACP has no counterpart for, ask.
+    func testEveryAntigravityPermissionMenuOffersAskingAndBypassAndAsksBeforeTheBypass() throws {
         let attached = try XCTUnwrap(ComposerSessionOptionsProjection.make(
             harness: .antigravityCLI, session: Fixtures.session(.antigravityCLI),
             providerCapabilities: Self.liveCapabilities(mode: "default"), providerUsage: nil, isAttached: true).permission)
@@ -28,15 +30,20 @@ final class AntigravityComposerTests: XCTestCase {
         let newTask = try XCTUnwrap(ComposerSessionOptionsProjection.newTask(
             harness: .antigravityCLI, choice: nil, catalogs: Self.catalogs(), connection: nil, workspaceURL: nil).permission)
         for (name, slot) in [("attached", attached), ("detached", detached), ("new task", newTask)] {
-            XCTAssertEqual(slot.selector?.choices.map(\.value), ["default", "accept-edits", "plan", "bypass"], name)
+            XCTAssertEqual(slot.selector?.choices.map(\.value), ["default", "bypass"], name)
             XCTAssertEqual(slot.selector?.choices.last?.name, L10n.string("Bypass permissions"), name)
             XCTAssertEqual(slot.confirmations, ["bypass": Self.expectedConfirmation], name)
             XCTAssertEqual(slot.apply.choice(id: "permissionMode", value: "bypass"),
                            .providerOption(id: "permissionMode", value: "bypass"), name)
             XCTAssertFalse(slot.isElevated, name)
         }
-        // Before it connects, the menu names the mode saved under the earlier key and reads the rest.
-        XCTAssertEqual(detached.title, L10n.string("Accept edits"))
+        // Before it connects, the menu reads the mode saved under the earlier key: Accept edits asks.
+        XCTAssertEqual(detached.title, L10n.string("Default"))
+        let plan = try XCTUnwrap(ComposerSessionOptionsProjection.make(
+            harness: .antigravityCLI, session: Fixtures.session(.antigravityCLI, options: ["permissionMode": "plan"]),
+            providerCapabilities: nil, providerUsage: nil, isAttached: false).permission)
+        XCTAssertEqual(plan.selector?.choices.map(\.value), ["default", "plan", "bypass"])
+        XCTAssertEqual(plan.title, L10n.string("Plan"))
         XCTAssertFalse(detached.canChoose)
         XCTAssertTrue(detached.preparesBeforeOpening)
         XCTAssertTrue(attached.canChoose)
@@ -59,7 +66,7 @@ final class AntigravityComposerTests: XCTestCase {
         let content = HarnessSettingsSheetProjection.providerContent(Self.liveCapabilities(mode: "default"), canBranch: false)
         let control = try XCTUnwrap(content.controls.first { $0.id == "option.permissionMode" })
         guard case let .selector(_, choices) = control.kind else { return XCTFail("The mode is a selector") }
-        XCTAssertEqual(choices.map(\.id), ["default", "accept-edits", "plan", "bypass"])
+        XCTAssertEqual(choices.map(\.id), ["default", "bypass"])
         XCTAssertEqual(choices.last?.confirmation, Self.expectedConfirmation)
         XCTAssertTrue(choices.dropLast().allSatisfy { $0.confirmation == nil })
     }
@@ -141,8 +148,19 @@ final class AntigravityComposerTests: XCTestCase {
             XCTAssertTrue(drawing.elements.contains { $0.role == "AXGroup" && $0.label == L10n.string("You") })
         }
 
+        // The permission menu as it opens, over ACP: Default and Bypass permissions.
+        for appearance in WindowlessRender.Appearance.allCases {
+            let menu = ComposerProviderOptionMenu(selector: AntigravityPermissionMode.askingSelector(current: "default"),
+                                                  isEnabled: true, onSelect: { _, _ in }, onDismiss: {})
+                .frame(width: 264).environment(\.colorScheme, appearance.colorScheme)
+            let image = try WindowlessRender.image(menu)
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            XCTAssertTrue(WindowlessRender.drawsContent(bitmap, step: 5, from: 10))
+            try WindowlessRender.writePNG(bitmap, to: directory.appending(path: "permission-menu-\(appearance.suffix).png"))
+        }
+
         var orange: [String: Int] = [:]
-        for mode in ["accept-edits", "bypass"] {
+        for mode in ["default", "bypass"] {
             let captures = try WindowlessRender.hostedInBothAppearances("composer-\(mode)", in: directory,
                                                                         size: NSSize(width: 760, height: 150)) {
                 PromptComposer(harness: .antigravityCLI, composerDraft: Fixtures.draft("Run the tests"),
@@ -157,7 +175,7 @@ final class AntigravityComposerTests: XCTestCase {
             }
         }
         for appearance in WindowlessRender.Appearance.allCases {
-            XCTAssertEqual(orange["accept-edits-\(appearance.suffix)"], 0, appearance.suffix)
+            XCTAssertEqual(orange["default-\(appearance.suffix)"], 0, appearance.suffix)
             XCTAssertGreaterThan(orange["bypass-\(appearance.suffix)"] ?? 0, 20, appearance.suffix)
         }
     }
@@ -215,7 +233,7 @@ final class AntigravityComposerTests: XCTestCase {
                           .init(value: "low", name: L10n.string("Low"), description: nil),
                           .init(value: "medium", name: L10n.string("Medium"), description: nil),
                           .init(value: "high", name: L10n.string("High"), description: nil)]),
-            AntigravityPermissionMode.selector(current: mode, includesAuto: false),
+            AntigravityPermissionMode.askingSelector(current: mode),
             ProviderCapabilitySelector(id: "sandbox", name: L10n.string("Sandbox mode"), description: nil, category: "mode",
                 currentValue: "default",
                 choices: [.init(value: "default", name: L10n.string("Default"), description: nil),

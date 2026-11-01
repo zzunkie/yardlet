@@ -126,6 +126,19 @@ final class YHPCompatibilityAdapterTests: XCTestCase {
             executableURL: executable
         )
         XCTAssertTrue(legacyClaude is ClaudeAdapter)
+
+        // Antigravity CLI runs over ACP from the version that serves `agy acp`, in print mode before
+        // it, and in print mode when no version was read.
+        let agy = FileManager.default.temporaryDirectory.appending(path: "yardlet-routing-agy-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: agy.path(percentEncoded: false), contents: Data())
+        defer { try? FileManager.default.removeItem(at: agy) }
+        for (version, servesACP) in [("1.4.12", true), ("1.4.11", true), ("1.4.10", false), (nil, false)] {
+            let registry = HarnessRegistry(routingPolicy: .legacy,
+                                           versions: RuntimeVersionCache(defaults: nil, read: { _ in version }))
+            let adapter = await registry.adapter(for: .antigravityCLI, executableURL: agy)
+            XCTAssertEqual(adapter is ACPAdapter, servesACP, version ?? "unread")
+            XCTAssertEqual(adapter is StructuredHeadlessAdapter, !servesACP, version ?? "unread")
+        }
     }
 
     private func runCompletedTurn(

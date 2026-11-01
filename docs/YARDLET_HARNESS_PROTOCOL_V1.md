@@ -14,7 +14,8 @@ The distributable schema, CLI runner, and sample live in
 ## Where YHP runs
 
 **Built-in harnesses, in the app process.** `HarnessRegistry` builds the adapter for each built-in harness family
-(Codex, Claude Code, MSP, ACP, Pi RPC, and the structured headless family of Cursor Agent and Antigravity CLI). Its
+(Codex, Claude Code, MSP, ACP, Pi RPC, and the structured headless family of Cursor Agent and Antigravity CLI before
+1.4.11, which runs over ACP from that version). Its
 default routing (`HarnessRoutingPolicy.productDefault`) wraps every family adapter in `YHPCodexCompatibilityAdapter`
 (Codex) or `YHPProviderCompatibilityAdapter` (the others). Both rest on `YHPCompatibilityAdapter`, which creates a
 `LegacyHarnessProtocolBridge` around the family adapter and hands it each request as a typed `HarnessProtocolRequest`,

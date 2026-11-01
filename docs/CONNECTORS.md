@@ -23,7 +23,7 @@ section of this document by its title.
   entries separately for each config folder (`CLAUDE_CONFIG_DIR`), so with several Claude accounts each account has
   different connections. Yardlet adds its connectors per process (Claude `--mcp-config`, the Codex thread `config`, ACP
   `mcpServers`), so a task in any harness and account gets the same connectors. Nothing is written to the user's
-  settings files, so removing Yardlet leaves no trace. Antigravity tasks do not get them.
+  settings files, so removing Yardlet leaves no trace.
 - Tokens never leave the Yardlet process. The harness calls through `yardlet-mcp`, and Yardlet is the one that sends
   requests to the remote server. Tokens are not written to harness settings files either.
 - Connecting and managing happen in Settings → Connectors; turning a connector on or off per task and reconnecting
@@ -480,12 +480,13 @@ not kept.
 
 ### Antigravity
 
-Antigravity tasks get no connectors (`ConnectorTaskScope.carriesConnectors`). The broker leaves them out of lists and
-calls, and the composer list and the settings text say that Antigravity is not supported.
+Antigravity CLI from 1.4.11 runs over ACP (`agy acp`) and gets connectors as the other ACP agents do, through
+`mcpServers` of `session/new` and `session/load`. An earlier version runs in print mode, which takes no MCP server, so its
+tasks run without them.
 
 ## 7. UI
 
-- **Settings → Connectors:** a one-paragraph introduction (every harness and account, except Antigravity) → "Your
+- **Settings → Connectors:** a one-paragraph introduction (every harness and account) → "Your
   connectors" and "Add connector" (when empty, a single one inside the empty state) → "You use these elsewhere" → "Set
   up in one go" (Google, Microsoft 365, Slack and Zoom, two to a row) → the claude.ai account connectors switch.
   - Your connectors: connected first, then in progress, needs sign-in and error (with a red reason line). The state is a
@@ -592,7 +593,7 @@ What the person does (per service):
 Gmail, Google Calendar, Google Drive, Google Analytics and Google Ads are not remote MCP servers but servers that Yardlet
 runs inside the app.
 Harnesses get them through the `yardlet` MCP server (`yardlet-mcp` → socket → app) like other connectors, so tokens do
-not leave Yardlet, and injection, the per-task switch and the Antigravity exclusion are the same. Tool names and
+not leave Yardlet, and injection and the per-task switch are the same. Tool names and
 arguments follow Google's official MCP servers (the ones claude.ai's Google connectors use). The Google Drive connector
 also provides tools that read and edit the structure inside Docs, Sheets and Slides files (see "Tools" below).
 
@@ -925,7 +926,7 @@ that organization only.
 App Store Connect, the Mac's calendars, reminders and contacts, and Xcode are not remote MCP servers either, but servers
 that Yardlet runs inside the app (`appStoreConnect`, `appleCalendar`, `appleReminders`, `appleContacts` and `xcode` of
 `LocalConnectorService`). Like Google, they go into the tasks of every harness and account through the one `yardlet` MCP
-server, and the per-task switch, tool row labels and the Antigravity exclusion work as for other connectors.
+server, and the per-task switch and tool row labels work as for other connectors.
 
 ### Structure
 
@@ -1310,7 +1311,7 @@ and real metadata shapes, and rendering tests draw without a screen.
 Outlook Mail, Outlook Calendar, OneDrive and Microsoft Teams are servers that Yardlet runs inside the app on Microsoft
 Graph v1.0 (`outlookMail`, `outlookCalendar`, `oneDrive` and `teams` of `LocalConnectorService`, `accountProvider`
 `.microsoft`). Like Google's, they go into the tasks of every harness and account through the one `yardlet` MCP server,
-tokens stay in Yardlet, and the per-task switch, tool row labels and the Antigravity exclusion work as for other
+tokens stay in Yardlet, and the per-task switch and tool row labels work as for other
 connectors. Each Microsoft account signs in once for the services turned on for it, with the same account machinery as
 Google's (the "Google" section, "Accounts and services").
 

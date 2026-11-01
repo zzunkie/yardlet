@@ -195,6 +195,25 @@ final class ProviderUsageTests: XCTestCase {
         XCTAssertEqual(signedIn.checkedAt, Date(timeIntervalSince1970: 1_790_435_000))
     }
 
+    /// Antigravity CLI 1.4.12's `agy --print /usage --output-format json`: a row per bucket, named by
+    /// its model group, from what is left; an answer that failed, or none, is no rows.
+    func testAntigravityUsageNamesEachBucketByItsGroupAndFailsClosed() throws {
+        let answer = #"{"conversation_id":"","status":"SUCCESS","response":"","num_turns":0,"command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[{"id":"gemini-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":0.75,"reset_time":"2026-11-02T14:06:40Z"}]},{"name":"Claude and GPT models","buckets":[{"id":"3p-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":1,"reset_time":"2026-11-08T18:59:05Z"}]}]}}}"#
+        let week = L10n.format("%.0f day limit", 7.0)
+        XCTAssertEqual(AntigravityUsage.metrics(fromOutput: "A newer version is available.\n" + answer), [
+            AccountUsageMetric(id: "antigravity:gemini-weekly", label: "Gemini · \(week)", usedFraction: 0.25,
+                               detail: L10n.format("%.0f%% remaining", 75.0),
+                               resetsAt: Date(timeIntervalSince1970: 1_793_628_400), evidence: .exactQuota,
+                               windowMinutes: 10_080),
+            AccountUsageMetric(id: "antigravity:3p-weekly", label: "Claude and GPT · \(week)", usedFraction: 0,
+                               detail: L10n.format("%.0f%% remaining", 100.0),
+                               resetsAt: Date(timeIntervalSince1970: 1_794_164_345), evidence: .exactQuota,
+                               windowMinutes: 10_080)
+        ])
+        XCTAssertNil(AntigravityUsage.metrics(fromOutput: #"{"status":"ERROR","num_turns":0}"#))
+        XCTAssertNil(AntigravityUsage.metrics(fromOutput: "not signed in"))
+    }
+
     func testClaudeAndPiManifestsDeclareUsageSoTheBridgeCanRelayIt() {
         XCTAssertTrue(HarnessProtocolCompatibilityManifest.claude().supports(.usage))
         XCTAssertTrue(HarnessProtocolCompatibilityManifest.piRPC(.pi).supports(.usage))

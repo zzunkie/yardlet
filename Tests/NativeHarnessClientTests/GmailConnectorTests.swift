@@ -777,7 +777,7 @@ final class GmailConnectorTests: XCTestCase {
 
     // MARK: - Reaching each harness
 
-    func testTheToolsReachClaudeCodexAndACPTasksButNotAntigravity() async throws {
+    func testTheToolsReachClaudeCodexAndACPTasks() async throws {
         let (center, _) = try await signedIn()
         let broker = AgentToolBroker(
             environment: AgentToolBroker.Environment(executableURL: try makeExecutable(), endpoint: "/tmp/unused.sock",
@@ -788,6 +788,7 @@ final class GmailConnectorTests: XCTestCase {
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .claudeCode), .claudeMCPConfig)
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .codex), .codexThreadConfig)
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .openCode), .acpSessionMCPServers)
+        XCTAssertEqual(AgentToolInjectionRoute.route(for: .antigravityCLI), .acpSessionMCPServers)
 
         for harness in [HarnessKind.claudeCode, .codex, .openCode, .antigravityCLI] {
             let task = UUID()
@@ -799,14 +800,9 @@ final class GmailConnectorTests: XCTestCase {
             let gmail = list.tools.compactMap { $0["name"]?.stringValue }.filter { $0.hasPrefix("gmail_") }
             let call = await broker.handle(AgentToolCall(token: token, session: task.uuidString,
                                                          tool: "gmail_list_labels", arguments: .object([:])))
-            if harness == .antigravityCLI {
-                XCTAssertEqual(gmail, [], "Antigravity gets no connectors")
-                XCTAssertTrue(call.isError)
-            } else {
-                XCTAssertEqual(gmail.count, 9, harness.rawValue)
-                XCTAssertFalse(call.isError, "\(harness.rawValue): \(call.text)")
-                XCTAssertTrue(call.text.contains("\"labels\""), call.text)
-            }
+            XCTAssertEqual(gmail.count, 9, harness.rawValue)
+            XCTAssertFalse(call.isError, "\(harness.rawValue): \(call.text)")
+            XCTAssertTrue(call.text.contains("\"labels\""), call.text)
         }
 
         // Claude's document and ACP's server carry only the launch; the token never goes to a harness.

@@ -47,7 +47,7 @@ enum ConversationSessionStatusProjection {
         switch HarnessCatalog.descriptor(for: harness)?.transport {
         case .codexAppServer, .claudeStreamJSON, .msp, .acp, .piRPC:
             return true
-        case .cursorStreamJSON, .antigravityStreamJSON, nil:
+        case .cursorStreamJSON, nil:
             return false
         }
     }

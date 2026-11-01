@@ -479,12 +479,6 @@ final class ConnectorDirectoryTests: XCTestCase {
                                                      session: duplicated.uuidString, tool: "example_whoami", arguments: .object([:])))
         XCTAssertTrue(call.isError)
         XCTAssertTrue(call.text.contains("its own Example server"), call.text)
-
-        // Antigravity tasks get none.
-        let antigravity = try await names(UUID(), scope: ConnectorTaskScope(harness: .antigravityCLI))
-        XCTAssertEqual(antigravity, [])
-        XCTAssertEqual(center.state(of: record, inTask: nil, scope: ConnectorTaskScope(harness: .antigravityCLI)),
-                       .unsupportedHarness)
     }
 
     /// A connected Yardlet connector stands in for Claude Code's own server at the same address:

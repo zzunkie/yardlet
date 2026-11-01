@@ -343,13 +343,12 @@ struct ComposerConnectorsMenu: View {
 
     static func footnotes(list: ComposerConnectorList, switches: Bool) -> [String] {
         var notes: [String] = []
-        if let note = list.note { notes.append(note) }
         if switches, list.rows.contains(where: { $0.state == .offInTask }) {
             notes.append(list.toolListFollowsNextTurn
                 ? L10n.string("A connector turned off here stops at once; the task's tool list follows from its next turn.")
                 : L10n.string("A connector turned off here stops at once; the task's tool list follows when it next starts or resumes."))
         }
-        if list.rows.isEmpty, list.note == nil {
+        if list.rows.isEmpty {
             notes.append(L10n.string("No connectors yet."))
         }
         return notes

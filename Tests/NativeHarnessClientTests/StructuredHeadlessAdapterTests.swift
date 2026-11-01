@@ -814,7 +814,8 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
         XCTAssertFalse(environment.contains { $0.uppercased().hasPrefix("YARDLET_MCP") || $0.contains("mcp_config") })
         XCTAssertFalse(environment.contains { $0.hasPrefix("YARDLET_TOOLS_") })
         XCTAssertFalse(invocation.contains("--add-dir"))
-        XCTAssertNil(AgentToolInjectionRoute.route(for: .antigravityCLI))
+        // Print mode takes no Yardlet server: the adapter has no surface for one.
+        XCTAssertNil((adapter as any HarnessAdapter) as? any HarnessAgentToolConfiguring)
         await adapter.close(handle)
     }
 

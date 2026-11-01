@@ -280,22 +280,18 @@ final class ComposerContextAndConnectorsTests: XCTestCase {
         XCTAssertEqual(list?.rows.map(\.name), ["figma", "linear", "broken", "docs", "bank"])
     }
 
-    /// Every harness that takes the Yardlet MCP server per session lists Yardlet's connectors,
-    /// except Antigravity, whose list only says it gets none; one that takes no server and reports
-    /// none has no list.
+    /// Every harness that takes the Yardlet MCP server per session lists Yardlet's connectors
+    /// (Antigravity among them, over ACP); one that takes no server and reports none has no list.
     func testWhichHarnessesListConnectors() {
         for harness in HarnessCatalog.builtIns.map(\.id) {
             let options = ComposerSessionOptionsProjection.make(harness: harness, session: nil, providerCapabilities: nil,
                                                                 providerUsage: nil, isAttached: true)
-            let carries = AgentToolInjectionRoute.route(for: harness) != nil && harness != .antigravityCLI
+            let carries = AgentToolInjectionRoute.route(for: harness) != nil
             XCTAssertEqual(options.connectors?.carriesYardletConnectors ?? false, carries, harness.rawValue)
             let list = ComposerConnectorList.make(options.connectors, connectors: Self.yardletConnectors)
-            XCTAssertEqual(list != nil, carries || harness == .antigravityCLI, harness.rawValue)
-            if harness == .antigravityCLI {
-                XCTAssertEqual(list?.rows, [])
-                XCTAssertEqual(list?.note, L10n.string("Antigravity tasks don't get Yardlet's connectors."))
-            }
+            XCTAssertEqual(list != nil, carries, harness.rawValue)
         }
+        XCTAssertEqual(AgentToolInjectionRoute.route(for: .antigravityCLI), .acpSessionMCPServers)
         XCTAssertNil(ComposerSessionOptionsProjection.make(harness: .pi, session: nil, providerCapabilities: nil,
                                                            providerUsage: nil, isAttached: true).connectors)
         XCTAssertNotNil(ComposerSessionOptionsProjection.make(harness: .openCode, session: nil, providerCapabilities: nil,
