@@ -91,6 +91,22 @@ import XCTest
         XCTAssertEqual(values["HOME"], "/tmp/native")
         XCTAssertEqual(values["CLAUDE_CONFIG_DIR"], "/tmp/account-b")
         XCTAssertThrowsError(try connection.validate(for: .pi))
+
+        // Kimi Code and Grok Build move their login and history with one variable each; Cursor
+        // Agent and Antigravity CLI keep their login in one fixed Keychain item, so they take none.
+        for (harness, variable) in [(HarnessKind.kimiCode, "KIMI_CODE_HOME"), (.grokBuild, "GROK_HOME")] {
+            let account = ProviderConnection(id: "\(harness.rawValue)-b", name: "B", harness: harness,
+                providerID: nil, homePath: "/tmp/account-b", credentialSelector: nil)
+            XCTAssertNoThrow(try account.validate(for: harness))
+            let launched = RuntimeProcessEnvironment.values(executableURL: URL(filePath: "/tmp/cli"),
+                base: base.merging(["XAI_API_KEY": "dummy"]) { $1 }, overrides: account.environment)
+            XCTAssertEqual(launched[variable], "/tmp/account-b")
+            XCTAssertNil(launched["XAI_API_KEY"])
+        }
+        for harness in [HarnessKind.cursorAgent, .antigravityCLI, .museCode] {
+            XCTAssertThrowsError(try ProviderConnection(id: "b", name: "B", harness: harness, providerID: nil,
+                homePath: "/tmp/account-b", credentialSelector: nil).validate(for: harness))
+        }
     }
 
     func testAccountLoginAndProbeReceiveSamePiProviderAndHome() async throws {

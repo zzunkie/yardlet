@@ -6838,7 +6838,8 @@ final class AppModel {
                let providerSessionID = session.providerSessionID,
                let repaired = GrokTranscriptSnapshotProjection.repairedEntries(
                    providerSessionID: providerSessionID,
-                   existing: entries
+                   existing: entries,
+                   grokSessionsRoot: ProviderSessionTitlePaths.live().forAccount(session.connection).grokSessionsRoot
                ) {
                 transcriptSnapshots.saveNow(repaired, for: session.id)
                 entries = repaired
@@ -6859,8 +6860,9 @@ final class AppModel {
     private func refreshPersistedGrokSessionMetadata(for session: SessionRecord) async {
         guard session.harness == .grokBuild,
               let providerSessionID = session.providerSessionID else { return }
+        let root = ProviderSessionTitlePaths.live().forAccount(session.connection).grokSessionsRoot
         let snapshot = await Task.detached(priority: .utility) {
-            GrokSessionMetadataProjection.snapshot(providerSessionID: providerSessionID)
+            GrokSessionMetadataProjection.snapshot(providerSessionID: providerSessionID, grokSessionsRoot: root)
         }.value
         guard store.sessions.contains(where: { $0.id == session.id }),
               let snapshot else { return }

@@ -20,7 +20,9 @@ struct HarnessConnectionCapabilities: Sendable {
 
     static func capabilities(for harness: HarnessKind) -> Self {
         let external: Set<HarnessKind> = [.pi, .openCode, .hermes]
-        let separate: Set<HarnessKind> = [.codex, .claudeCode, .pi, .openCode, .hermes]
+        // Each keeps its login and history in a folder its CLI officially moves (`environment`). A
+        // CLI whose login sits in one fixed Keychain item (Cursor Agent, Antigravity CLI) cannot.
+        let separate: Set<HarnessKind> = [.codex, .claudeCode, .pi, .openCode, .hermes, .kimiCode, .grokBuild]
         return Self(
             access: external.contains(harness) ? .externalProvider
                 : [.codex, .claudeCode].contains(harness) ? .configuredProvider : .includedService,
@@ -66,6 +68,8 @@ struct ProviderConnection: Identifiable, Codable, Hashable, Sendable {
         case .claudeCode: values = ["CLAUDE_CONFIG_DIR": homePath]
         case .pi: values = ["PI_CODING_AGENT_DIR": homePath]
         case .hermes: values = ["HERMES_HOME": homePath]
+        case .kimiCode: values = ["KIMI_CODE_HOME": homePath]
+        case .grokBuild: values = ["GROK_HOME": homePath]
         case .openCode:
             values = ["XDG_DATA_HOME": homePath + "/data", "XDG_CONFIG_HOME": homePath + "/config",
                     "XDG_STATE_HOME": homePath + "/state", "XDG_CACHE_HOME": homePath + "/cache"]
@@ -553,7 +557,9 @@ final class ProviderConnectionStore {
     // MARK: - Removing
 
     /// The command that signs a harness's own login out of an account folder without asking.
-    private static let signOutArguments: [HarnessKind: [String]] = [.claudeCode: ["auth", "logout"], .codex: ["logout"]]
+    private static let signOutArguments: [HarnessKind: [String]] = [
+        .claudeCode: ["auth", "logout"], .codex: ["logout"], .grokBuild: ["logout"]
+    ]
 
     /// Takes a saved account off Yardlet's list: its record, its remembered reading, the new-task
     /// choice and its automatic-assignment answer. The login and its folder stay, and tasks keep

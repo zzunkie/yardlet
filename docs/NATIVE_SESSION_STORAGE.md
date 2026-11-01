@@ -60,8 +60,8 @@ tasks do not move. Unless the person says otherwise, assignment uses the default
 their conversation history in the same place (`ProviderConnectionStore.isInAutomaticAssignmentByDefault`). A child task
 started under a Claude account folder whose `projects` links to the default `~/.claude/projects`, as Session Switch's
 account folders do, therefore stays in the same history whichever account it uses, and the account switch above still
-works for it. A Codex sign-in with a separate `CODEX_HOME` has its own history, so it is not used until the person
-includes it. An account whose tasks are moving to another of its folders before it leaves the list is not used either.
+works for it. A Codex, Kimi Code or Grok Build sign-in in a separate folder (`CODEX_HOME`, `KIMI_CODE_HOME`,
+`GROK_HOME`) has its own history, so it is not used until the person includes it. An account whose tasks are moving to another of its folders before it leaves the list is not used either.
 No authentication or history files are copied and no account folder changes. The reason for each
 assignment is kept in the Yardlet file `~/.yardlet/account-assignments.json` (task ID → account ID, window and time).
 
@@ -85,7 +85,7 @@ neither clears nor changes a task's `connection_binding`: the task goes on in th
 scope. "Sign Out and Delete" is offered only for a folder Yardlet made, and only when no task uses it. Importing a
 conversation from a found folder (another `CLAUDE_CONFIG_DIR` or `CODEX_HOME`) saves that folder as an account first;
 the new task points at the native session ID with that binding and the `.native` scope, and the history stays in its
-folder. Codex account folders keep their own history.
+folder. Codex, Kimi Code and Grok Build account folders keep their own history.
 
 ## Yardlet's own records
 

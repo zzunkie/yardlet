@@ -239,8 +239,28 @@ final class ProviderSessionTitleResolverTests: XCTestCase {
         ))
     }
 
-    func testKimiSessionsFollowKimiCodeHomeWhenItIsSet() {
+    func testKimiAndGrokSessionsFollowTheirHomeAndATasksAccountFolder() {
         let home = URL(filePath: "/Users/example", directoryHint: .isDirectory)
+        XCTAssertEqual(
+            ProviderSessionTitlePaths.live(homeURL: home, environment: ["GROK_HOME": "/Volumes/work/grok"])
+                .grokSessionsRoot.path(percentEncoded: false),
+            "/Volumes/work/grok/sessions/"
+        )
+        // A saved account's sessions are in its own folder, where its harness ran.
+        let paths = ProviderSessionTitlePaths.live(homeURL: home, environment: [:])
+        for (harness, expected) in [(HarnessKind.kimiCode, "/accounts/b/sessions/"), (.grokBuild, "/accounts/b/sessions/"),
+                                    (.claudeCode, "/accounts/b/projects/"), (.openCode, "/accounts/b/data/opencode/opencode.db")] {
+            let scoped = paths.forAccount(ProviderConnection(id: "b", name: "B", harness: harness, providerID: nil,
+                homePath: "/accounts/b", credentialSelector: nil))
+            let read = switch harness {
+            case .kimiCode: scoped.kimiSessionsRoot
+            case .grokBuild: scoped.grokSessionsRoot
+            case .claudeCode: scoped.claudeProjectsRoot
+            default: scoped.openCodeDatabaseURL
+            }
+            XCTAssertEqual(read.path(percentEncoded: false), expected, harness.rawValue)
+        }
+        XCTAssertEqual(paths.forAccount(nil).grokSessionsRoot, paths.grokSessionsRoot)
         XCTAssertEqual(
             ProviderSessionTitlePaths.live(homeURL: home, environment: [:])
                 .kimiSessionsRoot.path(percentEncoded: false),

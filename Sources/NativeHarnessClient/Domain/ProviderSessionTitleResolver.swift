@@ -20,10 +20,10 @@ enum ProviderTitleSource: Equatable, Sendable {
 }
 
 struct ProviderSessionTitlePaths: Sendable {
-    let grokSessionsRoot: URL
-    let claudeProjectsRoot: URL
-    let openCodeDatabaseURL: URL
-    let kimiSessionsRoot: URL
+    var grokSessionsRoot: URL
+    var claudeProjectsRoot: URL
+    var openCodeDatabaseURL: URL
+    var kimiSessionsRoot: URL
     /// Antigravity CLI's data folder, whose conversation index has the titles it generates.
     var antigravityRoot: URL = AntigravityConversationStore.live.root
 
@@ -31,18 +31,38 @@ struct ProviderSessionTitlePaths: Sendable {
         homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Self {
-        // Kimi Code resolves its data directory from `KIMI_CODE_HOME` before `~/.kimi-code`, and
-        // the runtime Yardlet launches inherits this process's environment.
-        let kimiHome = environment["KIMI_CODE_HOME"]
-            .flatMap { $0.hasPrefix("/") ? URL(filePath: $0, directoryHint: .isDirectory) : nil }
-            ?? homeURL.appending(path: ".kimi-code", directoryHint: .isDirectory)
+        // Kimi Code resolves its data directory from `KIMI_CODE_HOME` before `~/.kimi-code`, Grok
+        // Build from `GROK_HOME` before `~/.grok`, and the runtime Yardlet launches inherits this
+        // process's environment.
+        func folder(_ variable: String, else fallback: String) -> URL {
+            environment[variable].flatMap { $0.hasPrefix("/") ? URL(filePath: $0, directoryHint: .isDirectory) : nil }
+                ?? homeURL.appending(path: fallback, directoryHint: .isDirectory)
+        }
+        let kimiHome = folder("KIMI_CODE_HOME", else: ".kimi-code")
         return Self(
-            grokSessionsRoot: homeURL.appending(path: ".grok/sessions", directoryHint: .isDirectory),
+            grokSessionsRoot: folder("GROK_HOME", else: ".grok").appending(path: "sessions", directoryHint: .isDirectory),
             claudeProjectsRoot: homeURL.appending(path: ".claude/projects", directoryHint: .isDirectory),
             openCodeDatabaseURL: homeURL.appending(path: ".local/share/opencode/opencode.db"),
             kimiSessionsRoot: kimiHome.appending(path: "sessions", directoryHint: .isDirectory),
             antigravityRoot: homeURL.appending(path: ".gemini/antigravity-cli", directoryHint: .isDirectory)
         )
+    }
+
+    /// These places for a task's account: a saved account's harness keeps its history in the
+    /// account's own folder (`ProviderConnection.environment`), so a session is read where it was
+    /// saved. The default login's stay as found.
+    func forAccount(_ connection: ProviderConnection?) -> Self {
+        guard let connection, let path = connection.homePath else { return self }
+        let home = URL(filePath: path, directoryHint: .isDirectory)
+        var paths = self
+        switch connection.harness {
+        case .grokBuild: paths.grokSessionsRoot = home.appending(path: "sessions", directoryHint: .isDirectory)
+        case .claudeCode: paths.claudeProjectsRoot = home.appending(path: "projects", directoryHint: .isDirectory)
+        case .openCode: paths.openCodeDatabaseURL = home.appending(path: "data/opencode/opencode.db")
+        case .kimiCode: paths.kimiSessionsRoot = home.appending(path: "sessions", directoryHint: .isDirectory)
+        default: break
+        }
+        return paths
     }
 }
 
@@ -52,16 +72,14 @@ enum ProviderSessionTitleResolver {
         paths: ProviderSessionTitlePaths = .live()
     ) -> String? {
         guard let providerSessionID = safePathComponent(session.providerSessionID) else { return nil }
+        let paths = paths.forAccount(session.connection)
         switch session.harness {
         case .grokBuild:
             return grokTitle(providerSessionID: providerSessionID, root: paths.grokSessionsRoot)
         case .claudeCode:
-            return claudeTitle(providerSessionID: providerSessionID, root: session.connection?.homePath.map { URL(filePath: $0).appending(path: "projects") } ?? paths.claudeProjectsRoot)
+            return claudeTitle(providerSessionID: providerSessionID, root: paths.claudeProjectsRoot)
         case .openCode:
-            return openCodeTitle(
-                providerSessionID: providerSessionID,
-                databaseURL: session.connection?.homePath.map { URL(filePath: $0).appending(path: "data/opencode/opencode.db") } ?? paths.openCodeDatabaseURL
-            )
+            return openCodeTitle(providerSessionID: providerSessionID, databaseURL: paths.openCodeDatabaseURL)
         case .kimiCode:
             return kimiTitle(providerSessionID: providerSessionID, root: paths.kimiSessionsRoot)
         case .antigravityCLI:
