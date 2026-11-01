@@ -154,7 +154,8 @@ final class ProviderUsageTests: XCTestCase {
         let store = MuseSubscriptionUsageStore()
         let broker = HarnessAccountBroker(museUsageStore: store)
 
-        // Before a session has read anything there is no usage row and no guessed quota.
+        // Before a session has read anything there is no usage row and no guessed quota; a runtime
+        // that cannot answer `muse usage` leaves the login unknown.
         let before = await broker.snapshot(for: descriptor, executableURL: executable)
         XCTAssertEqual(before.state, .unknown)
         XCTAssertEqual(before.usage, [])
@@ -170,6 +171,28 @@ final class ProviderUsageTests: XCTestCase {
         ])
         XCTAssertEqual(blocks.map(\.metrics), [after.usage])
         XCTAssertEqual(blocks.first?.checkedAt, usage.observedAt)
+
+        // `muse usage --json` is the login's evidence: "not logged in" (as Muse 1.4.14 prints it)
+        // is signed out, and an answer is signed in with the allowance it read, newer than the
+        // session's.
+        func answer(_ script: String) throws {
+            try ("#!/bin/sh\n[ \"$1 $2\" = \"usage --json\" ] || exit 9\n" + script).write(to: executable, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        }
+        try answer("echo 'muse usage: not logged in: run `muse login` first' >&2\nexit 1\n")
+        let signedOut = await broker.snapshot(for: descriptor, executableURL: executable)
+        XCTAssertEqual(signedOut.state, .signedOut)
+        XCTAssertTrue(signedOut.canLogin)
+        XCTAssertFalse(signedOut.canLogout)
+        let fresh = Self.museUsageRead.replacingOccurrences(of: "1790430000000", with: "1790435000000")
+            .replacingOccurrences(of: #""usedPercent":42"#, with: #""usedPercent":10"#)
+        try answer("cat <<'EOF'\n\(fresh)\nEOF\n")
+        let signedIn = await broker.snapshot(for: descriptor, executableURL: executable)
+        XCTAssertEqual(signedIn.state, .signedIn)
+        XCTAssertFalse(signedIn.canLogin)
+        XCTAssertTrue(signedIn.canLogout)
+        XCTAssertEqual(signedIn.usage.first?.usedFraction, 0.10)
+        XCTAssertEqual(signedIn.checkedAt, Date(timeIntervalSince1970: 1_790_435_000))
     }
 
     func testClaudeAndPiManifestsDeclareUsageSoTheBridgeCanRelayIt() {
