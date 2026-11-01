@@ -79,45 +79,76 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
     }
 
     /// In the conversation, only the latest entry's limit card offers to continue, the armed one
-    /// shows its switch on, and compactions read where they happened.
+    /// shows its switch on, and compactions read where they happened. Once the latest limit has
+    /// reset, as for a task the person comes back to after it, that card offers Resume in place of
+    /// the switch, and Resume continues from that card.
     func testTheConversationOffersToContinueOnlyFromTheLatestLimit() throws {
         let directory = try WindowlessRender.directory("claude-provider-notices-qa")
         let earlier = TranscriptEntry(content: .usageLimit(HarnessRateLimit(
             status: .rejected, window: .session, resetsAt: Date().addingTimeInterval(-3_600),
             message: "You've hit your session limit · resets 1pm"
         )))
-        let latest = TranscriptEntry(content: .usageLimit(HarnessRateLimit(
+        let waiting = TranscriptEntry(content: .usageLimit(HarnessRateLimit(
             status: .rejected, window: .weekly, resetsAt: Date().addingTimeInterval(2 * 86_400)
         )))
-        let entries = [
-            TranscriptEntry(content: .user(text: "Summarize the open issues")),
-            TranscriptEntry(content: .assistant(text: "Reading the tracker.", isStreaming: false)),
-            earlier,
-            TranscriptEntry(content: .user(text: "Continue")),
-            TranscriptEntry(content: .compaction(HarnessContextCompaction(phase: .completed, tokensBefore: 167_012,
-                                                                          tokensAfter: 41_230))),
-            TranscriptEntry(content: .assistant(text: "There are three open issues.", isStreaming: false)),
-            latest
-        ]
-        let notices = TaskProviderNotices(autoContinueEntryID: latest.id, canContinue: true)
-        for appearance in WindowlessRender.Appearance.allCases {
-            let drawing = try ConversationDrawing.draw(
-                TaskConversationView(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/yardlet"),
-                                     entries: entries, sessionStatus: .ready,
-                                     actions: ConversationActions(providerNotices: notices)),
-                size: NSSize(width: 720, height: 760), appearance: appearance
-            )
-            try WindowlessRender.writePNG(drawing.capture.bitmap,
-                                          to: directory.appending(path: "conversation-\(appearance.suffix).png"))
-            let listed = drawing.elements.map(\.description).joined(separator: "\n")
-            // The switch reads as one check box named by its label, as the parity switch does.
-            let switches = drawing.elements.filter { $0.role == "AXCheckBox" }
-            XCTAssertEqual(switches.count, 1, listed)
-            XCTAssertEqual(switches.first?.value, "1", "the latest card is the armed one")
-            XCTAssertEqual(switches.first?.label, L10n.string("Auto-continue when limits reset"), listed)
-            // Both cards report their limit, and the compaction reads between them.
-            let images = drawing.elements.filter { $0.role == "AXImage" }.count
-            XCTAssertEqual(images, 2, listed)
+        let reset = TranscriptEntry(content: .usageLimit(HarnessRateLimit(
+            status: .rejected, window: .session, resetsAt: Date().addingTimeInterval(-600),
+            message: "You've hit your session limit · resets 3pm"
+        )))
+        func entries(endingWith latest: TranscriptEntry) -> [TranscriptEntry] {
+            [
+                TranscriptEntry(content: .user(text: "Summarize the open issues")),
+                TranscriptEntry(content: .assistant(text: "Reading the tracker.", isStreaming: false)),
+                earlier,
+                TranscriptEntry(content: .user(text: "Continue")),
+                TranscriptEntry(content: .compaction(HarnessContextCompaction(phase: .completed, tokensBefore: 167_012,
+                                                                              tokensAfter: 41_230))),
+                TranscriptEntry(content: .assistant(text: "There are three open issues.", isStreaming: false)),
+                latest
+            ]
         }
+        var resumed: [UUID] = []
+        let notices = TaskProviderNotices(autoContinueEntryID: waiting.id, canContinue: true,
+                                          continueAfterReset: { resumed.append($0) })
+        func conversation(endingWith latest: TranscriptEntry) -> TaskConversationView {
+            TaskConversationView(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/yardlet"),
+                                 entries: entries(endingWith: latest), sessionStatus: .ready,
+                                 actions: ConversationActions(providerNotices: notices))
+        }
+        let sizes = [NSSize(width: 1_280, height: 920), NSSize(width: 920, height: 920)]
+        for (latest, name) in [(waiting, "conversation"), (reset, "conversation-reset")] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                for size in sizes {
+                    let drawing = try ConversationDrawing.draw(conversation(endingWith: latest), size: size,
+                                                               appearance: appearance)
+                    try WindowlessRender.writePNG(drawing.capture.bitmap, to: directory.appending(
+                        path: "\(name)-\(Int(size.width))-\(appearance.suffix).png"))
+                    let listed = drawing.elements.map(\.description).joined(separator: "\n")
+                    // The switch reads as one check box named by its label, as the parity switch does.
+                    let switches = drawing.elements.filter { $0.role == "AXCheckBox" }
+                    let resumes = drawing.elements.filter { $0.role == "AXButton" && $0.label == L10n.string("Resume") }
+                    if latest.id == waiting.id {
+                        XCTAssertEqual(switches.count, 1, listed)
+                        XCTAssertEqual(switches.first?.value, "1", "the latest card is the armed one")
+                        XCTAssertEqual(switches.first?.label, L10n.string("Auto-continue when limits reset"), listed)
+                        XCTAssertTrue(resumes.isEmpty, "Nothing resumes before the reset\n\(listed)")
+                    } else {
+                        XCTAssertTrue(switches.isEmpty, "A reset that passed has nothing to wait for\n\(listed)")
+                        XCTAssertEqual(resumes.count, 1, "Only the latest card resumes\n\(listed)")
+                    }
+                    // Both cards report their limit, and the compaction reads between them.
+                    let images = drawing.elements.filter { $0.role == "AXImage" }.count
+                    XCTAssertEqual(images, 2, listed)
+                }
+            }
+        }
+
+        let host = WindowlessRender.Host(
+            conversation(endingWith: reset).frame(width: sizes[0].width, height: sizes[0].height, alignment: .top),
+            size: sizes[0], appearance: .light)
+        defer { host.close() }
+        host.settle()
+        XCTAssertTrue(host.hosting.pressButton(labeled: L10n.string("Resume")))
+        XCTAssertEqual(resumed, [reset.id])
     }
 }

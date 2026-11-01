@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The card a turn shows when a plan limit stopped it: which limit, when it resets, the windows the
 /// report measured as limit window rows, and, on the latest card of an idle task, using a reset the
-/// task's account holds, continuing under another account or once the limit resets.
+/// task's account holds, continuing under another account, and continuing once the limit resets:
+/// on its own if armed before the reset, or on Resume after it.
 struct UsageLimitCard: View {
     let entryID: UUID
     let limit: HarnessRateLimit
@@ -11,6 +12,8 @@ struct UsageLimitCard: View {
     /// The task's notices and limit actions; without them the card only reports the limit.
     var notices: TaskProviderNotices? = nil
     @State private var showsAccounts = false
+    /// When the card last looked at the clock: as it appeared, and again at the reset.
+    @State private var now = Date()
 
     var body: some View {
         // Read while drawing, so a saved or removed account shows or hides the button.
@@ -69,7 +72,9 @@ struct UsageLimitCard: View {
                                 .padding(16).frame(width: 610)
                         }
                     }
-                    if let resetsAt = limit.resetsAt, resetsAt > Date() {
+                    // Before the reset the task can wait for it; once it has passed, as when the
+                    // person comes back after it, the task continues where it stopped on a press.
+                    if let resetsAt = limit.resetsAt, resetsAt > now {
                         Toggle(L10n.string("Auto-continue when limits reset"), isOn: Binding(
                             get: { isArmed },
                             set: { notices.setAutoContinue($0, entryID, resetsAt) }
@@ -77,6 +82,11 @@ struct UsageLimitCard: View {
                         .toggleStyle(.paritySwitch)
                         .controlSize(.mini)
                         .fixedSize()
+                    } else if limit.resetsAt != nil, let resume = notices.continueAfterReset {
+                        Button(L10n.string("Resume")) { resume(entryID) }
+                            .buttonStyle(.borderless)
+                            .fixedSize()
+                            .parityPointer()
                     }
                 }
                 .font(.callout.weight(.medium))
@@ -96,6 +106,13 @@ struct UsageLimitCard: View {
         .task(id: offersActions) {
             guard offersActions, let notices else { return }
             await notices.refreshAccounts()
+        }
+        .task(id: offersActions ? limit.resetsAt : nil) {
+            // The continuous clock keeps counting while the Mac sleeps, so a reset that passed
+            // during sleep shows at wake.
+            guard let resetsAt = limit.resetsAt, resetsAt > now else { return }
+            try? await Task.sleep(for: .seconds(max(0, resetsAt.timeIntervalSinceNow)))
+            if !Task.isCancelled { now = Date() }
         }
     }
 

@@ -20,6 +20,9 @@ struct TaskProviderNotices {
     var refreshAccounts: @MainActor () async -> Void = {}
     var continueWithAccount: @MainActor (ProviderConnection) -> Void = { _ in }
     var setAutoContinue: @MainActor (_ enabled: Bool, _ entryID: UUID, _ resetsAt: Date) -> Void = { _, _, _ in }
+    /// Continues the task under its own account from a limit card whose reset has passed; nil where
+    /// its harness has no such continue.
+    var continueAfterReset: (@MainActor (_ entryID: UUID) -> Void)?
     /// The account the task runs under, for a limit card to offer its resets; nil where its
     /// harness reports none.
     var usageReset: @MainActor () -> (choice: AccountChoice, context: UsageResetContext)? = { nil }

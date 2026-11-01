@@ -70,6 +70,33 @@ import XCTest
         XCTAssertEqual(model.transcriptBySessionID[task.id]?.last?.content, .user(text: UsageLimitContinuation.afterReset))
     }
 
+    /// Coming back after the reset, the card's Resume asks Claude to pick up under the task's own
+    /// account and runtime; before the reset it sends nothing.
+    func testResumeAfterTheResetAsksClaudeToPickUpUnderTheSameAccount() async throws {
+        let fixture = try makeFixture()
+        let model = fixture.model
+        // The CLI names the reset in whole seconds.
+        let task = try await limitedTask(in: fixture, resetsAt: Date().addingTimeInterval(2))
+        let transport = try XCTUnwrap(fixture.transports.all.first)
+        let card = try await waitForLimitCard(in: model, task: task)
+        guard case let .usageLimit(limit)? = model.transcriptBySessionID[task.id]?.last?.content,
+              let resetsAt = limit.resetsAt else { return XCTFail("The card names its reset") }
+
+        await model.continueAfterUsageLimitReset(entryID: card, for: task)
+        let early = await transport.sentValues.count
+        XCTAssertEqual(early, 0, "Nothing is sent before the reset")
+
+        try await waitUntil { Date() > resetsAt }
+        await model.continueAfterUsageLimitReset(entryID: card, for: task)
+        try await waitUntil { await !transport.sentValues.isEmpty }
+        let sent = await transport.sentValues.compactMap { $0["message"]?["content"]?.stringValue }
+        XCTAssertEqual(sent, [UsageLimitContinuation.afterReset])
+        XCTAssertEqual(fixture.transports.all.count, 1, "The same runtime continues")
+        XCTAssertEqual(model.store.sessions.first?.connection, fixture.first)
+        XCTAssertEqual(model.store.sessions.first?.providerSessionID, task.providerSessionID)
+        XCTAssertEqual(model.transcriptBySessionID[task.id]?.last?.content, .user(text: UsageLimitContinuation.afterReset))
+    }
+
     func testTheAutomaticContinueStaysQuietWhenTheTaskChangedMeanwhile() async throws {
         let fixture = try makeFixture()
         let model = fixture.model
@@ -241,12 +268,13 @@ import XCTest
             signedOut: connection(signedOut), transports: transports)
     }
 
-    private func limitedTask(in fixture: Fixture) async throws -> SessionRecord {
+    private func limitedTask(in fixture: Fixture, resetsAt: Date = Date().addingTimeInterval(3_600)) async throws
+        -> SessionRecord {
         let created = await fixture.model.createSession(harness: .claudeCode, workspaceURL: fixture.shared,
             runtimeExecutableURL: fixture.cli, title: "Limit", connection: fixture.first)
         _ = try XCTUnwrap(created, fixture.model.errorBySessionID.values.first ?? "Missing task")
         let transport = try XCTUnwrap(fixture.transports.all.first)
-        for frame in limitFrames(resetsAt: Date().addingTimeInterval(3_600)) { await transport.emit(frame) }
+        for frame in limitFrames(resetsAt: resetsAt) { await transport.emit(frame) }
         try await waitUntil { fixture.model.store.sessions.first?.status == .failed }
         return try XCTUnwrap(fixture.model.store.sessions.first)
     }

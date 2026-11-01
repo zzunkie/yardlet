@@ -1179,6 +1179,9 @@ struct MainWindow: View {
             setAutoContinue: { enabled, entryID, resetsAt in
                 model.setUsageLimitAutoContinue(enabled, entryID: entryID, resetsAt: resetsAt, for: session)
             },
+            continueAfterReset: { entryID in
+                Task { await model.continueAfterUsageLimitReset(entryID: entryID, for: session) }
+            },
             usageReset: usageReset
         )
     }

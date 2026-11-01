@@ -5266,17 +5266,33 @@ final class AppModel {
         if usageLimitAutoContinue[sessionID] != nil { usageLimitAutoContinue.removeValue(forKey: sessionID) }
     }
 
-    /// The continue message goes only to the task exactly as it was left: the same conversation
-    /// and account, idle, nothing after the limit card, and no message being edited.
     private func continueAfterUsageLimitReset(_ sessionID: UUID, armed: UsageLimitAutoContinue) async {
         guard usageLimitAutoContinue[sessionID] == armed else { return }
         usageLimitAutoContinue.removeValue(forKey: sessionID)
         usageLimitAutoContinueTasks.removeValue(forKey: sessionID)
+        await sendContinueAfterReset(to: sessionID, leftAs: armed)
+    }
+
+    /// A limit card's Resume once its limit has reset, for a task the person comes back to: the
+    /// message the armed continue sends at the reset, sent now under the task's own account. The
+    /// card must still be the task's last entry and its reset time past.
+    func continueAfterUsageLimitReset(entryID: UUID, for session: SessionRecord) async {
+        flushTranscriptDeltas(for: session.id)
+        guard let current = store.sessions.first(where: { $0.id == session.id }), current.harness == .claudeCode,
+              let card = transcriptBuilders[current.id]?.entries.last, card.id == entryID,
+              case let .usageLimit(limit) = card.content, let resetsAt = limit.resetsAt, resetsAt <= Date() else { return }
+        await sendContinueAfterReset(to: current.id, leftAs: UsageLimitAutoContinue(entryID: entryID,
+            resetsAt: resetsAt, providerSessionID: current.providerSessionID, connection: current.connection))
+    }
+
+    /// The continue message goes only to the task exactly as it was left: the same conversation
+    /// and account, idle, nothing after the limit card, and no message being edited.
+    private func sendContinueAfterReset(to sessionID: UUID, leftAs left: UsageLimitAutoContinue) async {
         flushTranscriptDeltas(for: sessionID)
         guard let session = store.sessions.first(where: { $0.id == sessionID }),
-              session.providerSessionID == armed.providerSessionID, session.connection == armed.connection,
+              session.providerSessionID == left.providerSessionID, session.connection == left.connection,
               session.status != .running, session.status != .waitingForApproval,
-              transcriptBuilders[sessionID]?.entries.last?.id == armed.entryID,
+              transcriptBuilders[sessionID]?.entries.last?.id == left.entryID,
               composerDrafts.tasks.draft(for: sessionID).editState == nil,
               !switchingAccounts.contains(sessionID), !sessionMutations.contains(sessionID) else { return }
         await send(HarnessUserInput(text: UsageLimitContinuation.afterReset), to: session)
