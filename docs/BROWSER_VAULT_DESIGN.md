@@ -954,6 +954,8 @@ the vendors' help pages; these may differ from released builds).
 | When it is saved | On acceptance (presave); "Clear the username value if there are already saved credentials with the same username in order to prevent overwriting." Committed without a prompt when the submission succeeds; an update may still prompt. Emptying the field deletes the presave ([password_generation_manager.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_generation_manager.cc), [password_manager.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_manager.cc)) | With the sign-up; the exact moment is unconfirmed | Into the generator history at once; the login when the person saves ([help](https://support.1password.com/recover-unsaved-password/)) | Into the generator history at once (up to 200); the login after the person confirms |
 | Old passwords | Not kept | — | Item history | The last 5 per item ([help](https://bitwarden.com/help/password-and-generator-history/)) |
 | A form the page sends with its own script | After a request the page made succeeds or a same-document navigation, the form or formless field the person last used counts as sent once it is removed or all its fields are hidden; no click is weighed (`CanInferFormSubmitted`, `XHR_SUCCEEDED`, `SAME_DOCUMENT_NAVIGATION` in [form_submission_tracker.cc](https://github.com/chromium/chromium/blob/main/components/autofill/content/renderer/form_submission_tracker.cc), read 2026-10-30) | — | — | — |
+| A password sent with no username | Updates a saved password: the one equal to it (then nothing is asked), else the one with no username, else the site's first; its update bubble's username box lists the site's other saved usernames, and choosing one not saved makes it a save (`GetMatchForUpdating` in [password_manager_util.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_manager_util.cc), `PopulateAlternativeUsernames` in [password_save_manager_impl.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_save_manager_impl.cc), [save_update_bubble_controller.cc](https://github.com/chromium/chromium/blob/main/chrome/browser/ui/passwords/bubble_controllers/save_update_bubble_controller.cc), read 2026-11-01) | Not public: AutoFill is Safari's own code, and WebKit only tells it of form submissions, text changes and formless fields (`willSubmitForm`, `textDidChangeInTextField`, `didAssociateFormControls` in [APIInjectedBundleFormClient.h](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/WebProcess/InjectedBundle/APIInjectedBundleFormClient.h)); Apple's page asks sites to mark change forms `new-password` ([Apple](https://developer.apple.com/documentation/security/enabling-password-autofill-on-an-html-input-element)) | — | — |
+| A password the page shows as text | A text field that has been a password field still counts as one ("Show password"; `HasBeenPasswordField` and `FormControlTypeForAutofill` in [html_form_control_element.cc](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/html/forms/html_form_control_element.cc), read 2026-11-01) | — | — | — |
 
 `passwordrules` is Apple's proposal to the HTML standard: `required:`, `allowed:`, `max-consecutive:`, `minlength:` and
 `maxlength:` rules separated by `;`, with the classes `upper`, `lower`, `digit`, `special` (ASCII punctuation and the
@@ -985,8 +987,9 @@ space), `ascii-printable`, `unicode` and custom ones in brackets, where `-` come
   the one filled; after the change is submitted, the save bar asks "Update the saved password for github.com?", and
   updating gives the saved item the new password and deletes the item beside it. A form that shows no username (a change
   dialog, a recovery's new password page) leaves the new item without one; once it is sent, the bar asks to update the
-  site's one item with a password, if it has exactly one, and otherwise asks nothing. Choosing again on the same page
-  replaces the password in the same item.
+  item a password sent with no username updates (below), and its menu offers the site's other items or keeps the new
+  item as it is; a site with no other item asks nothing. Choosing again on the same page replaces the password in the
+  same item.
 - **A made password stays unless the page certainly took nothing:** Yardlet deletes the item made for it only when
   the fill put nothing in for sure: the page had moved to another document before the fill was sent, or the fill
   stopped before writing because the field was no password field or the page was on another origin. A fill the page
@@ -1013,7 +1016,18 @@ space), `ascii-printable`, `unicode` and custom ones in brackets, where `-` come
   or Korean) does not count, nor one before the password or marked `aria-disabled`; a field emptied but still shown, as
   after an error, does not count, nor a form redrawn with the password still in it; and a sign-in's lone password field
   is not watched this way. What follows is the same as for a submitted form: the username, the update bar, the save bar
-  for a typed password.
+  for a typed password. A click on a `button` or submit input counts at once, in a form or not (a dialog of a React
+  design system sends from a formless `<button type=submit>`), unless it says it cancels, closes, goes back, skips or
+  is "not now", or is marked `aria-disabled` (2026-11-01; before, a formless Cancel button offered to save the
+  password). A field the page shows as text with its own "Show password" still counts as a password field, as in
+  Chrome, so a password typed while shown is offered and never kept as one of the form's other fields.
+- **A password sent with no username (2026-11-01):** a reset or change dialog that names the account only in its heading,
+  or a password-only step, updates the site's item Chrome would update: none when an item holds that password already
+  (only new fields are offered then), else its item with no username, else its item used last. The bar names the item
+  ("Update the saved password of “Console sign-in” for …"), and when the site has more than one item its arrow lists
+  them to update another instead, or saves a new item, as Chrome's update bubble lists the site's saved usernames. The
+  item updated keeps the password it had among its previous passwords. Before, such a password updated the first item
+  with no username, or was offered as a new item beside a site's items that all had usernames.
 - **Previous passwords:** whenever an item's password is replaced (the update bar, the item sheet, a made password), the
   old one stays in the item, the last five with when each was replaced (Bitwarden keeps five). The item sheet shows them
   after Touch ID. So a change the site refused, then updated by mistake, loses nothing.
@@ -1093,6 +1107,16 @@ address guard before it goes in; submitted only when the form is safe; and the u
   same way; on the recovery form the bar asked to update the site's one sign-in. The PNG
   `vault-panel-password-dialog-update` was checked by eye. The same fixture with the earlier behavior put back lost the
   item in both the unanswered fill and the emptied confirmation, while the page still held the password.
+- A dialog with no form and no username (2026-11-01). Unit and render: `VaultTests.testOtherFieldsTellAccountsOfOneUsernameApart`
+  pins the item a password sent with no username updates (the one that holds it, then one with no username, then the
+  one used last; the page's fields narrow them; none on another site), and `VaultSettingsRenderingTests.testTheSaveBarDraws`
+  the bar that names that item, with its arrow, in light and dark. Real CEF QA (`com.zzunkie.yardlet.vaultqa` run as
+  above; 100 checks passed) on the QA server's `/vault/reset-dialog`, served at an https `.test` address, with sign-ins
+  saved for the site with and without a username: Cancel and Close modal sent nothing; Reset password asked to update
+  the sign-in with no username used last and listed all three; the one picked from the list took the new password and
+  kept its old one, the others unchanged; a password typed while "Show password" was on was offered with no other
+  field. The same QA with the earlier watch failed two checks: Cancel offered to save, and the password typed while
+  shown raised no bar. The PNG `vault-panel-reset-dialog-update` was checked by eye.
 
 ## 16. Finding and picking an item (2026-10-30)
 

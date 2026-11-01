@@ -215,6 +215,16 @@ struct VaultRefusal: Error, Equatable {
 /// An item whose sites or agent policy in `items.json` are not the ones saved with its secret.
 struct VaultChangedOutside: Error {}
 
+/// Where a password sent with no username goes (`VaultCenter.update(forUnnamed:origin:fields:excluding:)`).
+struct VaultUnnamedUpdate: Equatable {
+    /// The item updating takes; nil when the page has none, and a new item is saved.
+    var item: VaultItem?
+    /// `item` holds the password already, so nothing is asked.
+    var holdsIt: Bool
+    /// The page's items the person may update instead, `item` among them.
+    var choices: [VaultItem]
+}
+
 /// The vault for agents (docs/BROWSER_VAULT_DESIGN.md): the person's items, whether the vault is on,
 /// the decision for each fill, and the usage log. The page work is `BrowserAgentTools`'s.
 @MainActor
@@ -602,6 +612,21 @@ final class VaultCenter: ObservableObject {
     func items(for origin: String) -> [VaultItem] {
         guard environment.isAllowedBuild, isEnabled else { return [] }
         return items.filter { item in item.sites.contains { VaultSite.matches($0, origin: origin) } }
+    }
+
+    /// The item a password sent with no username updates (design §15, a reset or change dialog, a password-only step),
+    /// as Chrome's password manager matches such a form (`GetMatchForUpdating`): the page's item that holds it already,
+    /// else its item with no username, else its item with a password, the one used last first. The page's other items
+    /// are the choices the person may update instead, as Chrome's update bubble lists the site's saved usernames.
+    func update(forUnnamed password: String, origin: String, fields: [VaultFormField] = [],
+                excluding: UUID? = nil) -> VaultUnnamedUpdate {
+        let here = items(for: origin).filter { $0.id != excluding && $0.admits(fields) }
+            .sorted { ($0.lastUsedAt ?? $0.createdAt) > ($1.lastUsedAt ?? $1.createdAt) }
+        if let holding = here.first(where: { secret(of: $0.id)?.password == password }) {
+            return VaultUnnamedUpdate(item: holding, holdsIt: true, choices: here)
+        }
+        return VaultUnnamedUpdate(item: here.first { $0.username.isEmpty } ?? here.first(where: \.hasPassword) ?? here.first,
+                                  holdsIt: false, choices: here)
     }
 
     /// The two-factor codes with no site yet whose name names the page's site (`Vercel` on vercel.com), as an

@@ -1907,12 +1907,14 @@ struct BrowserHostViewRepresentable: NSViewRepresentable {
     }
 }
 
-/// The save bar over the page (design §8.3, §17), as Chrome's save and update bubbles: save the sign-in, update a saved
-/// one (naming its account), or add the username or other fields to one; "Not for This Site", or close it for now.
+/// The save bar over the page (design §8.3, §15, §17), as Chrome's save and update bubbles: save the sign-in, update a
+/// saved one (naming its account), or add the username or other fields to one; "Not for This Site", or close it for now.
+/// A password sent with no username updates the item the bar names, and the arrow updates another of the site's items
+/// or saves a new one, as Chrome's update bubble offers the site's saved usernames.
 struct BrowserVaultSaveBar: View {
     let offer: BrowserVaultSaveOffer
     let neverSave: () -> Void
-    let accept: () -> Void
+    let accept: (BrowserVaultTarget?) -> Void
     let close: () -> Void
 
     var body: some View {
@@ -1922,15 +1924,30 @@ struct BrowserVaultSaveBar: View {
             let host = VaultSite.host(of: offer.origin)
             Text(offer.updates == nil ? L10n.format("Save the password for %@?", host)
                  : offer.addsAccount ? L10n.format("Add %@ to the saved password for %@?", offer.account, host)
-                 : offer.account.isEmpty ? L10n.format("Update the saved password for %@?", host)
                  : L10n.format("Update the saved password of %@ for %@?", offer.account, host))
                 .font(.callout)
                 .lineLimit(2)
             Spacer(minLength: 8)
             Button(L10n.string("Not for This Site"), action: neverSave)
                 .controlSize(.small)
-            Button(offer.updates == nil || offer.addsAccount ? L10n.string("Save") : L10n.string("Update"), action: accept)
+            if offer.updates != nil, !offer.addsAccount, offer.choices.count > 1 {
+                Menu {
+                    ForEach(offer.choices) { item in
+                        Button(item.identity.isEmpty ? item.name : "\(item.name) · \(item.identity)") { accept(.item(item)) }
+                    }
+                    Divider()
+                    Button(L10n.string("New Item")) { accept(.newItem) }
+                } label: {
+                    Text(L10n.string("Update"))
+                } primaryAction: {
+                    accept(nil)
+                }
                 .controlSize(.small)
+                .fixedSize()
+            } else {
+                Button(offer.updates == nil || offer.addsAccount ? L10n.string("Save") : L10n.string("Update")) { accept(nil) }
+                    .controlSize(.small)
+            }
             ParityIconButton(systemName: "xmark", help: L10n.string("Close"), action: close)
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
