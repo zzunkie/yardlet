@@ -300,7 +300,7 @@ enum RestartContinuation {
     /// The Claude app 4.29's retry of a turn an error ended (`retryLastTurn`, its `retryNudge`), which
     /// the person asks for on the error card: "Try again" in the app's language, sent as the person's
     /// message.
-    static var claudeRetry: String { L10n.string("Retry message") }
+    static var claudeRetry: String { L10n.string("Claude retry message") }
     /// The Codex app's empty `turn/start` after an update (`COl`: `continuationInput: []`). Its
     /// app has no continuation after a plain quit, so that one is classified the same way: the
     /// app opened again and continued on its own.
